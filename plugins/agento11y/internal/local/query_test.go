@@ -175,6 +175,281 @@ func TestListConversations_Aggregates(t *testing.T) {
 	}
 }
 
+func TestToolUsagePairsCallsAndResults(t *testing.T) {
+	call := func(id, name string) agento11y.Generation {
+		return agento11y.Generation{Output: []agento11y.Message{{
+			Role: agento11y.RoleAssistant,
+			Parts: []agento11y.Part{{
+				Kind:     agento11y.PartKindToolCall,
+				ToolCall: &agento11y.ToolCall{ID: id, Name: name},
+			}},
+		}}}
+	}
+	result := func(id, name string, failed bool) agento11y.Generation {
+		return agento11y.Generation{Input: []agento11y.Message{{
+			Role: agento11y.RoleTool,
+			Parts: []agento11y.Part{{
+				Kind:       agento11y.PartKindToolResult,
+				ToolResult: &agento11y.ToolResult{ToolCallID: id, Name: name, IsError: failed},
+			}},
+		}}}
+	}
+	cases := []struct {
+		name        string
+		generations []agento11y.Generation
+		want        []ToolUsage
+	}{
+		{
+			name:        "pairs a failed result across generations",
+			generations: []agento11y.Generation{call("call-1", "Bash"), result("call-1", "Bash", true)},
+			want:        []ToolUsage{{Name: "Bash", Calls: 1, Failures: 1}},
+		},
+		{
+			name: "dedupes a cumulative result by call id",
+			generations: []agento11y.Generation{
+				call("call-1", "Bash"),
+				result("call-1", "Bash", true),
+				result("call-1", "Bash", true),
+			},
+			want: []ToolUsage{{Name: "Bash", Calls: 1, Failures: 1}},
+		},
+		{
+			name:        "duplicate call ids remain distinct without results",
+			generations: []agento11y.Generation{call("call-1", "Bash"), call("call-1", "Bash")},
+			want:        []ToolUsage{{Name: "Bash", Calls: 2}},
+		},
+		{
+			name: "duplicate Cursor ids pair results FIFO",
+			generations: []agento11y.Generation{
+				call("call-1", "Bash"),
+				call("call-1", "Bash"),
+				result("call-1", "Bash", true),
+				result("call-1", "Bash", false),
+			},
+			want: []ToolUsage{{Name: "Bash", Calls: 2, Failures: 1}},
+		},
+		{
+			name: "reused Cursor id ignores old cumulative result",
+			generations: []agento11y.Generation{
+				call("call-1", "Bash"),
+				result("call-1", "Bash", true),
+				call("call-1", "Bash"),
+				result("call-1", "Bash", true),
+			},
+			want: []ToolUsage{{Name: "Bash", Calls: 2, Failures: 1}},
+		},
+		{
+			name: "reused Cursor id pairs only the new cumulative result",
+			generations: []agento11y.Generation{
+				call("call-1", "Bash"),
+				result("call-1", "Bash", false),
+				call("call-1", "Bash"),
+				{Input: []agento11y.Message{{Parts: []agento11y.Part{
+					{ToolResult: &agento11y.ToolResult{ToolCallID: "call-1", Name: "Bash"}},
+					{ToolResult: &agento11y.ToolResult{ToolCallID: "call-1", Name: "Bash", IsError: true}},
+				}}}},
+			},
+			want: []ToolUsage{{Name: "Bash", Calls: 2, Failures: 1}},
+		},
+		{
+			name: "Pi output result pairs in part order",
+			generations: []agento11y.Generation{{Output: []agento11y.Message{{
+				Role: agento11y.RoleAssistant,
+				Parts: []agento11y.Part{
+					{Kind: agento11y.PartKindToolCall, ToolCall: &agento11y.ToolCall{ID: "pi-1", Name: "Read"}},
+					{Kind: agento11y.PartKindToolResult, ToolResult: &agento11y.ToolResult{ToolCallID: "pi-1", Name: "Read", IsError: true}},
+				},
+			}}}},
+			want: []ToolUsage{{Name: "Read", Calls: 1, Failures: 1}},
+		},
+		{
+			name: "anonymous same-name failures all count",
+			generations: []agento11y.Generation{
+				{Output: []agento11y.Message{{Parts: []agento11y.Part{
+					{ToolCall: &agento11y.ToolCall{Name: "Bash"}},
+					{ToolCall: &agento11y.ToolCall{Name: "Bash"}},
+				}}}},
+				{Input: []agento11y.Message{{Parts: []agento11y.Part{
+					{ToolResult: &agento11y.ToolResult{Name: "Bash", IsError: true}},
+					{ToolResult: &agento11y.ToolResult{Name: "Bash", IsError: true}},
+				}}}},
+			},
+			want: []ToolUsage{{Name: "Bash", Calls: 2, Failures: 2}},
+		},
+		{
+			name:        "uses the result name when the call is absent",
+			generations: []agento11y.Generation{result("missing-call", "Read", true)},
+			want:        []ToolUsage{{Name: "Read", Calls: 1, Failures: 1}},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStorage(t)
+			for i, generation := range tc.generations {
+				writeGen(t, s, "conv-tools", "g"+strconv.Itoa(i+1), generation, "2026-05-21T10:00:00Z")
+			}
+			rows, err := s.ToolUsage(ConversationListOptions{})
+			require.NoError(t, err)
+			require.Len(t, rows, 1)
+			assert.Equal(t, "conv-tools", rows[0].ID)
+			assert.Equal(t, tc.want, rows[0].Tools)
+		})
+	}
+}
+
+func TestConversationMetricsPeriodClipping(t *testing.T) {
+	s := newStorage(t)
+	writeGen(t, s, "conv-span", "old", agento11y.Generation{
+		ConversationTitle: "Lifetime title",
+		AgentName:         "old-agent",
+		Model:             agento11y.ModelRef{Name: "old-model"},
+		StartedAt:         mustParse(t, "2026-05-21T09:30:00Z"),
+		Usage:             agento11y.TokenUsage{InputTokens: 9},
+		CallError:         "old error",
+		Tags:              map[string]string{"cwd": "/repo", "git.branch": "main"},
+	}, "2026-05-21T09:30:00Z")
+	// Exact lower boundary and zero tokens: it still counts as a call.
+	writeGen(t, s, "conv-span", "lower", agento11y.Generation{
+		AgentName: "pi/child",
+		Model:     agento11y.ModelRef{Name: "zero-model"},
+		StartedAt: mustParse(t, "2026-05-21T10:00:00Z"),
+	}, "2026-05-21T10:00:00Z")
+	writeGen(t, s, "conv-span", "inside", agento11y.Generation{
+		AgentName: "pi",
+		Model:     agento11y.ModelRef{Name: "current-model"},
+		StartedAt: mustParse(t, "2026-05-21T10:30:00Z"),
+		Usage:     agento11y.TokenUsage{InputTokens: 20, OutputTokens: 3},
+	}, "2026-05-21T10:30:00Z")
+	// Exact upper boundary is excluded.
+	writeGen(t, s, "conv-span", "upper", agento11y.Generation{
+		AgentName: "future-agent",
+		Model:     agento11y.ModelRef{Name: "future-model"},
+		StartedAt: mustParse(t, "2026-05-21T11:00:00Z"),
+		Usage:     agento11y.TokenUsage{InputTokens: 1000},
+	}, "2026-05-21T11:00:00Z")
+	writeGen(t, s, "conv-other", "other", agento11y.Generation{
+		AgentName:   "pi",
+		CompletedAt: mustParse(t, "2026-05-21T10:45:00Z"),
+		Tags:        map[string]string{"cwd": "/other"},
+	}, "2026-05-21T10:45:00Z")
+	writeGen(t, s, "conv-unknown", "unknown", agento11y.Generation{
+		AgentName: "pi",
+		StartedAt: mustParse(t, "2026-05-21T10:40:00Z"),
+	}, "2026-05-21T10:40:00Z")
+
+	since := mustParse(t, "2026-05-21T10:00:00Z")
+	before := mustParse(t, "2026-05-21T11:00:00Z")
+	rows, matched, aggregate, err := s.ConversationMetrics(ConversationListOptions{Limit: 1, Since: since, Before: before})
+	require.NoError(t, err)
+	assert.Equal(t, 3, matched, "coverage is counted before the limit")
+	assert.Equal(t, 4, aggregate.Calls, "aggregate is calculated before the limit")
+	assert.Equal(t, 1, aggregate.Agents, "subagents collapse into their host")
+	assert.Equal(t, 3, aggregate.Workspaces, "unknown workspace has its own group")
+	assert.Equal(t, TokenBuckets{FreshInput: 20, Output: 3}, aggregate.TokenBuckets)
+	assert.Equal(t, []string{"current-model", "zero-model"}, aggregate.Models)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "conv-other", rows[0].ID, "clipped newest activity controls order")
+	assert.Equal(t, mustParse(t, "2026-05-21T10:45:00Z"), rows[0].StartedAt, "missing start uses generation time")
+	assert.Equal(t, rows[0].StartedAt, rows[0].LastActivity)
+
+	workspace := "/repo"
+	rows, matched, aggregate, err = s.ConversationMetrics(ConversationListOptions{Since: since, Before: before, Workspace: &workspace})
+	require.NoError(t, err)
+	assert.Equal(t, 1, matched)
+	require.Len(t, rows, 1)
+	got := rows[0]
+	assert.Equal(t, "Lifetime title", got.Title)
+	assert.Equal(t, "/repo", got.Workspace)
+	assert.Equal(t, "main", got.Branch)
+	assert.Equal(t, 2, got.Calls)
+	assert.Equal(t, int64(20), got.InputTokens)
+	assert.Equal(t, int64(3), got.OutputTokens)
+	assert.Equal(t, int64(23), got.TotalTokens)
+	assert.Equal(t, TokenBuckets{FreshInput: 20, Output: 3}, got.TokenBuckets)
+	assert.Equal(t, map[string]TokenBuckets{
+		"current-model": {FreshInput: 20, Output: 3},
+		"zero-model":    {},
+	}, got.TokenBucketsByModel)
+	assert.Equal(t, []string{"pi", "pi/child"}, got.Agents)
+	assert.Equal(t, []string{"current-model", "zero-model"}, got.Models)
+	assert.Equal(t, "ok", got.Status, "an error outside the period does not leak into status")
+	assert.Equal(t, 1, got.Subagents)
+	assert.Equal(t, since, got.StartedAt)
+	assert.Equal(t, mustParse(t, "2026-05-21T10:30:00Z"), got.LastActivity)
+
+	assert.Equal(t, 2, aggregate.Calls)
+	assert.Equal(t, map[string]TokenBuckets{
+		"current-model": {FreshInput: 20, Output: 3},
+		"zero-model":    {},
+	}, aggregate.TokenBucketsByModel)
+
+	blank := ""
+	rows, matched, _, err = s.ConversationMetrics(ConversationListOptions{Since: since, Before: before, Workspace: &blank})
+	require.NoError(t, err)
+	assert.Equal(t, 1, matched)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "conv-unknown", rows[0].ID)
+
+	previous, matched, previousAggregate, err := s.ConversationMetrics(ConversationListOptions{
+		Since: mustParse(t, "2026-05-21T09:00:00Z"), Before: since, Workspace: &workspace,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, matched, "a spanning conversation independently matches the previous period")
+	require.Len(t, previous, 1)
+	assert.Equal(t, 1, previous[0].Calls)
+	assert.Equal(t, 1, previousAggregate.Calls)
+	assert.Equal(t, 1, previousAggregate.Errored)
+	assert.Equal(t, int64(9), previous[0].InputTokens)
+	assert.Equal(t, []string{"old-agent"}, previous[0].Agents)
+	assert.Equal(t, "err", previous[0].Status)
+}
+
+func TestToolUsagePeriodClippingAttributesResultsToCalls(t *testing.T) {
+	s := newStorage(t)
+	callAt := mustParse(t, "2026-05-21T10:00:00Z")
+	resultAt := mustParse(t, "2026-05-21T11:00:00Z")
+	writeGen(t, s, "conv-tools", "call", agento11y.Generation{
+		StartedAt: callAt,
+		Tags:      map[string]string{"cwd": "/repo"},
+		Output: []agento11y.Message{{Parts: []agento11y.Part{{
+			ToolCall: &agento11y.ToolCall{ID: "id", Name: "Bash"},
+		}}}},
+	}, callAt.Format(time.RFC3339))
+	writeGen(t, s, "conv-tools", "result", agento11y.Generation{
+		StartedAt: resultAt,
+		Input: []agento11y.Message{{Parts: []agento11y.Part{{
+			ToolResult: &agento11y.ToolResult{ToolCallID: "id", Name: "Bash", IsError: true},
+		}}}},
+	}, resultAt.Format(time.RFC3339))
+
+	workspace := "/repo"
+	rows, err := s.ToolUsage(ConversationListOptions{Since: callAt, Before: resultAt, Workspace: &workspace})
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, []ToolUsage{{Name: "Bash", Calls: 1, Failures: 1}}, rows[0].Tools)
+
+	rows, err = s.ToolUsage(ConversationListOptions{Since: resultAt, Before: resultAt.Add(time.Hour), Workspace: &workspace})
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "the result generation still matches the conversation period")
+	assert.Empty(t, rows[0].Tools, "the matched result is attributed to the earlier call timestamp")
+
+	writeGen(t, s, "conv-orphan", "result", agento11y.Generation{
+		StartedAt: resultAt,
+		Tags:      map[string]string{"cwd": "/orphan"},
+		Input: []agento11y.Message{{Parts: []agento11y.Part{{
+			ToolResult: &agento11y.ToolResult{ToolCallID: "missing", Name: "Read", IsError: true},
+		}}}},
+	}, resultAt.Format(time.RFC3339))
+	orphanWorkspace := "/orphan"
+	rows, err = s.ToolUsage(ConversationListOptions{
+		Since: resultAt, Before: resultAt.Add(time.Hour), Workspace: &orphanWorkspace,
+	})
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, []ToolUsage{{Name: "Read", Calls: 1, Failures: 1}}, rows[0].Tools,
+		"an orphan result uses its own generation timestamp")
+}
+
 func TestConversationQueriesUseLatestGenerationRecord(t *testing.T) {
 	s := newStorage(t)
 
@@ -363,6 +638,15 @@ func TestListConversations_SkipsMessageTrees(t *testing.T) {
 			assert.Equal(t, int64(15), got[0].TotalTokens)
 			assert.Equal(t, []string{"claude-sonnet-4"}, got[0].Models)
 			assert.Equal(t, "/repo", got[0].Workspace)
+
+			period, matched, _, err := s.ConversationMetrics(ConversationListOptions{
+				Since:  mustParse(t, "2026-08-03T10:00:00Z"),
+				Before: mustParse(t, "2026-08-03T11:00:00Z"),
+			})
+			require.NoError(t, err)
+			assert.Equal(t, 1, matched)
+			require.Len(t, period, 1)
+			assert.Equal(t, 1, period[0].Calls, "malformed message trees retain the period projection")
 
 			// The detail view accepts every line the list counted, so a row
 			// in the list always opens.
@@ -1086,8 +1370,8 @@ func TestInputSemanticsMarkerSurvivesTheStore(t *testing.T) {
 
 // TestTokenUsagePoints seeds generations across conversations and checks
 // the flattened, time-sorted points: provider-aware buckets, model and
-// provider tagging, the received_at timestamp fallback, and that
-// zero-token generations and timestamps bucketing cannot place are dropped.
+// provider tagging, call counts, the received_at timestamp fallback, and that
+// timestamps bucketing cannot place are dropped.
 func TestTokenUsagePoints(t *testing.T) {
 	s := newStorage(t)
 
@@ -1112,7 +1396,7 @@ func TestTokenUsagePoints(t *testing.T) {
 		Usage: agento11y.TokenUsage{InputTokens: 5, OutputTokens: 3},
 	}, "2026-05-21T12:00:00Z")
 
-	// Zero tokens: must be dropped entirely.
+	// Zero tokens: retained because the generation is still a model call.
 	writeGen(t, s, "conv-D", "g4", agento11y.Generation{
 		Model:     agento11y.ModelRef{Provider: "anthropic", Name: "claude-opus-4-7"},
 		StartedAt: mustParse(t, "2026-05-21T08:00:00Z"),
@@ -1131,31 +1415,73 @@ func TestTokenUsagePoints(t *testing.T) {
 	points, interval, err := s.TokenUsagePoints(TokenUsageOptions{Interval: time.Minute})
 	require.NoError(t, err)
 	assert.Equal(t, time.Minute, interval)
-	require.Len(t, points, 3, "zero-token and unplaceable generations should be dropped")
+	require.Len(t, points, 4, "only the unplaceable generation should be dropped")
 
-	// Sorted oldest-first: g2 (09:00) → g1 (10:00) → g3 (12:00 received_at).
-	assert.Equal(t, "gpt-5-omni", points[0].Model)
-	assert.Equal(t, "claude-sonnet-4", points[1].Model)
-	assert.Equal(t, "claude-opus-4-7", points[2].Model)
+	// Sorted oldest-first: g4 (08:00) → g2 (09:00) → g1 (10:00) → g3 (12:00 received_at).
+	assert.Equal(t, "claude-opus-4-7", points[0].Model)
+	assert.Equal(t, "gpt-5-omni", points[1].Model)
+	assert.Equal(t, "claude-sonnet-4", points[2].Model)
+	assert.Equal(t, "claude-opus-4-7", points[3].Model)
+	assert.Equal(t, 1, points[0].Calls)
+	assert.Equal(t, TokenBuckets{}, points[0].TokenBuckets)
 
 	// g2 OpenAI: cache_read carved out of input, reasoning out of output.
 	assert.Equal(t, TokenUsagePoint{
 		Timestamp:    mustParse(t, "2026-05-21T09:00:00Z"),
 		Model:        "gpt-5-omni",
 		Provider:     "openai",
+		Calls:        1,
 		TokenBuckets: TokenBuckets{FreshInput: 70, CacheRead: 30, Output: 40, Reasoning: 10},
-	}, points[0])
+	}, points[1])
 
 	// g1 Anthropic: cache stays additive; the point carries its bucket start.
 	assert.Equal(t, TokenUsagePoint{
 		Timestamp:    mustParse(t, "2026-05-21T10:00:00Z"),
 		Model:        "claude-sonnet-4",
 		Provider:     "anthropic",
+		Calls:        1,
 		TokenBuckets: TokenBuckets{FreshInput: 100, CacheRead: 30, CacheWrite: 20, Output: 50},
-	}, points[1])
+	}, points[2])
 
 	// g3 timestamp falls back to received_at.
-	assert.Equal(t, mustParse(t, "2026-05-21T12:00:00Z"), points[2].Timestamp)
+	assert.Equal(t, mustParse(t, "2026-05-21T12:00:00Z"), points[3].Timestamp)
+	assert.Equal(t, 1, points[3].Calls)
+}
+
+func TestTokenUsagePointsBeforeAndWorkspace(t *testing.T) {
+	s := newStorage(t)
+	for _, seed := range []struct {
+		conv, when, workspace string
+		tokens                int64
+	}{
+		{conv: "repo-inside", when: "2026-05-21T10:00:00Z", workspace: "/repo", tokens: 10},
+		{conv: "repo-upper", when: "2026-05-21T11:00:00Z", workspace: "/repo", tokens: 100},
+		{conv: "other", when: "2026-05-21T10:30:00Z", workspace: "/other", tokens: 1000},
+		{conv: "unknown", when: "2026-05-21T10:15:00Z", tokens: 7},
+	} {
+		writeGen(t, s, seed.conv, "g", agento11y.Generation{
+			StartedAt: mustParse(t, seed.when),
+			Usage:     agento11y.TokenUsage{InputTokens: seed.tokens},
+			Tags:      map[string]string{"cwd": seed.workspace},
+		}, seed.when)
+	}
+	since := mustParse(t, "2026-05-21T10:00:00Z")
+	before := mustParse(t, "2026-05-21T11:00:00Z")
+	repo := "/repo"
+	points, _, err := s.TokenUsagePoints(TokenUsageOptions{
+		Since: since, Before: before, Workspace: &repo, Interval: time.Hour,
+	})
+	require.NoError(t, err)
+	require.Len(t, points, 1)
+	assert.Equal(t, int64(10), points[0].FreshInput, "before is exclusive and other workspaces are excluded")
+
+	blank := ""
+	points, _, err = s.TokenUsagePoints(TokenUsageOptions{
+		Since: since, Before: before, Workspace: &blank, Interval: time.Hour,
+	})
+	require.NoError(t, err)
+	require.Len(t, points, 1)
+	assert.Equal(t, int64(7), points[0].FreshInput, "present blank selects unknown workspace")
 }
 
 // TestTokenUsagePoints_InvertedTimestampsStayInRange covers a generation
@@ -1223,9 +1549,9 @@ func TestTokenUsagePoints_Buckets(t *testing.T) {
 			opts:         TokenUsageOptions{Interval: time.Hour},
 			wantInterval: time.Hour,
 			wantPoints: []TokenUsagePoint{
-				{Timestamp: mustParse(t, "2026-08-03T10:00:00Z"), Model: "model-a", TokenBuckets: TokenBuckets{FreshInput: 30}},
-				{Timestamp: mustParse(t, "2026-08-03T10:00:00Z"), Model: "model-b", TokenBuckets: TokenBuckets{FreshInput: 7}},
-				{Timestamp: mustParse(t, "2026-08-03T11:00:00Z"), Model: "model-a", TokenBuckets: TokenBuckets{FreshInput: 5}},
+				{Timestamp: mustParse(t, "2026-08-03T10:00:00Z"), Model: "model-a", Calls: 2, TokenBuckets: TokenBuckets{FreshInput: 30}},
+				{Timestamp: mustParse(t, "2026-08-03T10:00:00Z"), Model: "model-b", Calls: 1, TokenBuckets: TokenBuckets{FreshInput: 7}},
+				{Timestamp: mustParse(t, "2026-08-03T11:00:00Z"), Model: "model-a", Calls: 1, TokenBuckets: TokenBuckets{FreshInput: 5}},
 			},
 		},
 		{
@@ -1234,7 +1560,7 @@ func TestTokenUsagePoints_Buckets(t *testing.T) {
 			opts:         TokenUsageOptions{Interval: time.Hour, Since: mustParse(t, "2026-08-03T11:00:00Z")},
 			wantInterval: time.Hour,
 			wantPoints: []TokenUsagePoint{
-				{Timestamp: mustParse(t, "2026-08-03T11:00:00Z"), Model: "model-a", TokenBuckets: TokenBuckets{FreshInput: 5}},
+				{Timestamp: mustParse(t, "2026-08-03T11:00:00Z"), Model: "model-a", Calls: 1, TokenBuckets: TokenBuckets{FreshInput: 5}},
 			},
 		},
 		{
@@ -1250,7 +1576,7 @@ func TestTokenUsagePoints_Buckets(t *testing.T) {
 			opts:         TokenUsageOptions{Since: mustParse(t, "2026-08-03T09:00:00Z")},
 			wantInterval: 10 * time.Second,
 			wantPoints: []TokenUsagePoint{
-				{Timestamp: mustParse(t, "2026-08-03T10:00:00Z"), Model: "model-a", TokenBuckets: TokenBuckets{FreshInput: 5}},
+				{Timestamp: mustParse(t, "2026-08-03T10:00:00Z"), Model: "model-a", Calls: 1, TokenBuckets: TokenBuckets{FreshInput: 5}},
 			},
 		},
 		{
@@ -1263,8 +1589,8 @@ func TestTokenUsagePoints_Buckets(t *testing.T) {
 			// next ladder step is used.
 			wantInterval: 2 * time.Hour,
 			wantPoints: []TokenUsagePoint{
-				{Timestamp: mustParse(t, "2026-07-04T00:00:00Z"), Model: "model-a", TokenBuckets: TokenBuckets{FreshInput: 1}},
-				{Timestamp: mustParse(t, "2026-08-03T00:00:00Z"), Model: "model-a", TokenBuckets: TokenBuckets{FreshInput: 2}},
+				{Timestamp: mustParse(t, "2026-07-04T00:00:00Z"), Model: "model-a", Calls: 1, TokenBuckets: TokenBuckets{FreshInput: 1}},
+				{Timestamp: mustParse(t, "2026-08-03T00:00:00Z"), Model: "model-a", Calls: 1, TokenBuckets: TokenBuckets{FreshInput: 2}},
 			},
 		},
 	}
@@ -1340,10 +1666,13 @@ func TestTokenUsagePoints_ScaleFollowsBucketsNotGenerations(t *testing.T) {
 	assert.LessOrEqual(t, len(points), 6*len(models), "points follow buckets times models")
 
 	var total int64
+	var calls int
 	for _, p := range points {
 		total += p.FreshInput
+		calls += p.Calls
 	}
 	assert.Equal(t, int64(generations), total, "bucketing must preserve every token")
+	assert.Equal(t, generations, calls, "bucketing must preserve every call")
 
 	body, err := json.Marshal(map[string]any{"points": points, "interval_seconds": 3600})
 	require.NoError(t, err)

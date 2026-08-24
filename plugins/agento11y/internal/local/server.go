@@ -130,6 +130,8 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /conversations/{id}/{$}", s.handleIndex)
 	mux.HandleFunc("GET /settings", s.handleIndex)
 	mux.HandleFunc("GET /settings/{$}", s.handleIndex)
+	mux.HandleFunc("GET /analytics", s.handleIndex)
+	mux.HandleFunc("GET /analytics/{$}", s.handleIndex)
 	mux.HandleFunc("GET /assets/app.css", s.handleAppCSS)
 	mux.HandleFunc("GET /assets/app.js", s.handleAppJS)
 	mux.HandleFunc("GET /assets/vendor/{file}", s.handleVendorAsset)
@@ -139,7 +141,9 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/v1/search", s.handleSearch)
 	mux.HandleFunc("GET /api/v1/search/capabilities", s.handleSearchCapabilities)
 	mux.HandleFunc("GET /api/v1/events", s.handleEvents)
+	mux.HandleFunc("GET /api/v1/metrics/conversations", s.handleConversationMetrics)
 	mux.HandleFunc("GET /api/v1/metrics/tokens", s.handleTokenMetrics)
+	mux.HandleFunc("GET /api/v1/metrics/tools", s.handleToolMetrics)
 	mux.HandleFunc("GET /api/v1/config", s.handleGetConfig)
 	mux.HandleFunc("POST /api/v1/config:preview", s.handlePreviewConfig)
 	mux.HandleFunc("PUT /api/v1/config", s.handleSaveConfig)
@@ -823,7 +827,7 @@ func (s *Server) handleSearchCapabilities(w http.ResponseWriter, _ *http.Request
 // server bucket never straddles two of them. An empty store returns an
 // empty array, never null.
 func (s *Server) handleTokenMetrics(w http.ResponseWriter, r *http.Request) {
-	since, ok := sinceParam(w, r)
+	since, before, workspace, ok := metricsPeriodParams(w, r)
 	if !ok {
 		return
 	}
@@ -836,7 +840,9 @@ func (s *Server) handleTokenMetrics(w http.ResponseWriter, r *http.Request) {
 		}
 		interval = time.Duration(seconds) * time.Second
 	}
-	points, used, err := s.storage.TokenUsagePoints(TokenUsageOptions{Since: since, Interval: interval})
+	points, used, err := s.storage.TokenUsagePoints(TokenUsageOptions{
+		Since: since, Before: before, Workspace: workspace, Interval: interval,
+	})
 	if err != nil {
 		s.logger.Printf("local: token metrics: %v", err)
 		http.Error(w, "token metrics: "+err.Error(), http.StatusInternalServerError)
@@ -850,6 +856,100 @@ func (s *Server) handleTokenMetrics(w http.ResponseWriter, r *http.Request) {
 		"interval_seconds": int64(used.Seconds()),
 	})
 	s.warmSummariesInBackground()
+}
+
+// handleConversationMetrics returns lifetime conversation identity metadata
+// with all analytic fields clipped to the requested generation-time period.
+func (s *Server) handleConversationMetrics(w http.ResponseWriter, r *http.Request) {
+	limit, ok := limitParam(w, r, conversationListLimit)
+	if !ok {
+		return
+	}
+	since, before, workspace, ok := metricsPeriodParams(w, r)
+	if !ok {
+		return
+	}
+	rows, matched, aggregate, err := s.storage.ConversationMetrics(ConversationListOptions{
+		Limit: limit, Since: since, Before: before, Workspace: workspace,
+	})
+	if err != nil {
+		s.logger.Printf("local: conversation metrics: %v", err)
+		http.Error(w, "conversation metrics: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if rows == nil {
+		rows = []ConversationSummary{}
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"aggregate":             aggregate,
+		"conversations":         rows,
+		"matched_conversations": matched,
+	})
+	s.warmSummariesInBackground()
+}
+
+// handleToolMetrics returns period-clipped tool counts and failures per
+// matching conversation.
+func (s *Server) handleToolMetrics(w http.ResponseWriter, r *http.Request) {
+	limit, ok := limitParam(w, r, conversationListLimit)
+	if !ok {
+		return
+	}
+	since, before, workspace, ok := metricsPeriodParams(w, r)
+	if !ok {
+		return
+	}
+	rows, err := s.storage.ToolUsage(ConversationListOptions{
+		Limit: limit, Since: since, Before: before, Workspace: workspace,
+	})
+	if err != nil {
+		s.logger.Printf("local: tool metrics: %v", err)
+		http.Error(w, "tool metrics: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if rows == nil {
+		rows = []ConversationToolUsage{}
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"conversations": rows})
+	s.warmSummariesInBackground()
+}
+
+// metricsPeriodParams reads the half-open generation-time bounds and the
+// presence-sensitive workspace filter shared by all metrics endpoints.
+func metricsPeriodParams(w http.ResponseWriter, r *http.Request) (time.Time, time.Time, *string, bool) {
+	parse := func(name string) (time.Time, bool) {
+		values, present := r.URL.Query()[name]
+		if !present {
+			return time.Time{}, true
+		}
+		raw := ""
+		if len(values) > 0 {
+			raw = values[0]
+		}
+		value, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			http.Error(w, "invalid "+name+": want an RFC 3339 timestamp", http.StatusBadRequest)
+			return time.Time{}, false
+		}
+		return value, true
+	}
+	since, ok := parse("since")
+	if !ok {
+		return time.Time{}, time.Time{}, nil, false
+	}
+	before, ok := parse("before")
+	if !ok {
+		return time.Time{}, time.Time{}, nil, false
+	}
+	var workspace *string
+	if values, present := r.URL.Query()["workspace"]; present {
+		value := ""
+		if len(values) > 0 {
+			value = values[0]
+		}
+		workspace = &value
+	}
+	return since, before, workspace, true
 }
 
 // sinceParam reads the shared ?since= lower bound. RFC 3339 is the only

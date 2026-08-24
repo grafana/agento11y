@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { canonicalizePriceModel, conversationCost, liveModelCost } from '../internal/local/web/src/formatters';
-import type { ModelPrices, TokenBuckets } from '../internal/local/web/src/types';
+import {
+  canonicalizePriceModel,
+  conversationCost,
+  conversationCostByModel,
+  conversationCostEstimateByModel,
+  liveModelCost,
+  tokenPointCost,
+} from '../internal/local/web/src/formatters';
+import type { ModelPrices, TokenBuckets, TokenUsagePoint } from '../internal/local/web/src/types';
 
 // Cursor records a Grok turn under an id of its own, with the reasoning effort
 // and the speed tier appended. models.dev prices the xAI model, so the id has
@@ -45,5 +52,107 @@ describe('conversationCost', () => {
 
   it('reports no cost when the catalog is empty', () => {
     expect(conversationCost({ models: ['cursor-grok-4.6-high-fast'], token_buckets: buckets }, {})).toBeNull();
+  });
+});
+
+describe('per-model conversation cost', () => {
+  it('prices each model bucket at that model rate', () => {
+    const mixedPrices: ModelPrices = {
+      'model-a': { input: 2, output: 4 },
+      'model-b': { input: 3, output: 9 },
+    };
+    const empty: TokenBuckets = { fresh_input: 0, cache_read: 0, cache_write: 0, output: 0, reasoning: 0 };
+    expect(
+      conversationCostByModel(
+        {
+          models: ['model-a', 'model-b'],
+          token_buckets: { ...empty, fresh_input: 3e6 },
+          token_buckets_by_model: {
+            'model-a': { ...empty, fresh_input: 1e6 },
+            'model-b': { ...empty, fresh_input: 2e6 },
+          },
+        },
+        mixedPrices,
+      ),
+    ).toBe(8);
+  });
+
+  it('falls back to the conversation model for an older daemon', () => {
+    const conversation = { models: ['grok-4.6'], token_buckets: buckets };
+    expect(conversationCostByModel(conversation, prices)).toBe(conversationCost(conversation, prices));
+  });
+
+  it('marks a mixed priced and unpriced subtotal as incomplete', () => {
+    expect(
+      conversationCostEstimateByModel(
+        {
+          token_buckets: buckets,
+          token_buckets_by_model: {
+            'grok-4.6': buckets,
+            unknown: buckets,
+          },
+        },
+        prices,
+      ),
+    ).toEqual({ value: 2, complete: false });
+  });
+
+  it.each([
+    ['an unknown model', { unknown: buckets }],
+    ['unlabeled usage', { '': buckets }],
+  ])('reports an unknown estimate for %s', (_name, token_buckets_by_model) => {
+    expect(conversationCostEstimateByModel({ token_buckets: buckets, token_buckets_by_model }, prices)).toEqual({
+      value: null,
+      complete: false,
+    });
+  });
+
+  it('keeps zero usage compatible across daemon schemas', () => {
+    const zero = { ...buckets, fresh_input: 0 };
+    const legacy = { models: ['grok-4.6'], token_buckets: zero };
+    const split = {
+      ...legacy,
+      token_buckets_by_model: { 'grok-4.6': zero },
+    };
+    expect(conversationCostEstimateByModel(legacy, prices)).toEqual({ value: 0, complete: true });
+    expect(conversationCostEstimateByModel(split, prices)).toEqual({ value: 0, complete: true });
+  });
+
+  it('rejects a positive aggregate whose model buckets are empty', () => {
+    expect(
+      conversationCostEstimateByModel(
+        {
+          models: ['grok-4.6'],
+          token_buckets: buckets,
+          token_buckets_by_model: { 'grok-4.6': { ...buckets, fresh_input: 0 } },
+        },
+        prices,
+      ),
+    ).toEqual({ value: null, complete: false });
+  });
+
+  it('keeps a zero-priced model complete', () => {
+    expect(
+      conversationCostEstimateByModel(
+        {
+          token_buckets: buckets,
+          token_buckets_by_model: { free: buckets },
+        },
+        { free: { input: 0, output: 0 } },
+      ),
+    ).toEqual({ value: 0, complete: true });
+  });
+});
+
+describe('tokenPointCost', () => {
+  const point: TokenUsagePoint = { t: '2026-08-20T12:00:00Z', model: 'grok-4.6', calls: 1, ...buckets };
+
+  it('prices the point model', () => {
+    expect(tokenPointCost(point, prices)).toBe(2);
+  });
+
+  it('reports no cost when the point has no model', () => {
+    const { model: _, ...withoutModel } = point;
+    expect(tokenPointCost(withoutModel, prices)).toBeNull();
   });
 });

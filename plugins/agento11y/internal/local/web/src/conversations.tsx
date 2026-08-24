@@ -76,15 +76,17 @@ function ChartSwitch({ value, onChange }: ChartSwitchProps) {
 // slots keep the flex columns aligned with the bars above them.
 interface ChartXLabelsProps {
   data: ReadonlyArray<{ t: string }>;
+  gutter?: number;
 }
 
-function ChartXLabels({ data }: ChartXLabelsProps) {
+export function ChartXLabels({ data, gutter = 0 }: ChartXLabelsProps) {
   const step = Math.max(1, Math.ceil(data.length / 5));
   return (
     <div
       style={{
         display: 'flex',
         marginLeft: 44,
+        marginRight: gutter,
         marginTop: 6,
         fontSize: 10,
         color: 'var(--fg3)',
@@ -112,32 +114,34 @@ function ChartXLabels({ data }: ChartXLabelsProps) {
   );
 }
 
-// ChartYAxis renders the three right-aligned scale labels (max, mid, 0)
-// in the 44px gutter to the left of the plot. The plot is 130px tall, so
-// the labels pin to the top, middle (65px), and baseline (130px).
+// ChartYAxis renders max, midpoint, and zero labels beside a plot.
 interface ChartYAxisProps {
   top: string;
   mid: string;
+  height?: number;
+  side?: 'left' | 'right';
+  color?: string;
 }
 
-function ChartYAxis({ top, mid }: ChartYAxisProps) {
+export function ChartYAxis({ top, mid, height = 130, side = 'left', color = 'var(--fg3)' }: ChartYAxisProps) {
   const label: React.CSSProperties = {
     position: 'absolute',
-    left: 0,
+    left: side === 'left' ? 0 : undefined,
+    right: side === 'right' ? 0 : undefined,
     width: 34,
-    textAlign: 'right',
+    textAlign: side === 'left' ? 'right' : 'left',
     transform: 'translateY(-50%)',
     fontSize: 10,
     lineHeight: '10px',
-    color: 'var(--fg3)',
+    color,
     fontFamily: 'var(--fontFamilyMonospace)',
     pointerEvents: 'none',
   };
   return (
     <Fragment>
       <div style={{ ...label, top: 0 }}>{top}</div>
-      <div style={{ ...label, top: 65 }}>{mid}</div>
-      <div style={{ ...label, top: 130 }}>0</div>
+      <div style={{ ...label, top: height / 2 }}>{mid}</div>
+      <div style={{ ...label, top: height }}>0</div>
     </Fragment>
   );
 }
@@ -606,7 +610,7 @@ interface TimeRangePickerProps {
   ranges?: TimeRangeOption[];
 }
 
-function TimeRangePicker({ value, onChange, ranges = TIME_RANGES }: TimeRangePickerProps) {
+export function TimeRangePicker({ value, onChange, ranges = TIME_RANGES }: TimeRangePickerProps) {
   const [open, setOpen] = useState(false);
   // TIME_RANGES is never empty, so the last fallback always resolves.
   const selected = (ranges.find((r) => r.value === value) ||
@@ -727,7 +731,7 @@ interface WorkspaceTotals {
 }
 
 /** One row of the workspace facet: cost is null when nothing in it could be priced. */
-interface WorkspaceAggregate extends Omit<WorkspaceTotals, 'cost'> {
+export interface WorkspaceAggregate extends Omit<WorkspaceTotals, 'cost'> {
   cost: number | null;
 }
 
@@ -741,7 +745,7 @@ interface WorkspaceFacetProps {
   rangeLabel: string;
 }
 
-function WorkspaceFacet({
+export function WorkspaceFacet({
   workspaces,
   selected,
   onSelect,
@@ -2177,9 +2181,8 @@ function KpiTile({ label, value, valueColor, sub, dot, bar, tooltip }: KpiTilePr
 // KpiStrip surfaces the headline numbers for the in-view set: counts
 // from the range + search conversations, token and cache rate from the
 // chart's series (so they honour the model dropdown and legend
-// toggles). "Tool calls" is the per-generation call count; "Errored
-// conversations" counts conversations with a call error, since the
-// list API exposes no per-tool-call breakdown.
+// toggles). "Model calls" is the per-generation call count. "Errored
+// conversations" counts conversations with a call error.
 /** The headline numbers the KPI strip renders, derived from the in-view set. */
 interface KpiSummary {
   conversations: number;
@@ -2222,7 +2225,7 @@ function KpiStrip({ kpi }: KpiStripProps) {
         value={kpi.cachePct == null ? '\u2014' : `${kpi.cachePct}%`}
         bar={kpi.cachePct == null ? 0 : kpi.cachePct}
       />
-      <KpiTile label="Tool calls" value={kpi.calls} sub={`${avg} avg / session`} />
+      <KpiTile label="Model calls" value={kpi.calls} sub={`${avg} avg / session`} />
       <KpiTile
         label="Errored sessions"
         value={kpi.errConvs}
@@ -2569,14 +2572,22 @@ export function ConversationsView({
   // survives navigating into a conversation and back; a model that
   // disappears from the store falls back to "all" by derivation.
   const points = tokenPoints || [];
-  const tokenModels = useMemo(
-    () => Array.from(new Set(points.map((p) => p.model).filter((m): m is string => Boolean(m)))).sort(),
+  const tokenUsagePoints = useMemo(
+    () => points.filter((point) => TOKEN_SERIES.some((series) => point[series.key] > 0)),
     [points],
+  );
+  const tokenModels = useMemo(
+    () =>
+      Array.from(
+        new Set(tokenUsagePoints.map((point) => point.model).filter((model): model is string => Boolean(model))),
+      ).sort(),
+    [tokenUsagePoints],
   );
   const effectiveModel = tokenModels.includes(tokenModel) ? tokenModel : 'all';
   const tokenFiltered = useMemo(
-    () => (effectiveModel === 'all' ? points : points.filter((p) => p.model === effectiveModel)),
-    [points, effectiveModel],
+    () =>
+      effectiveModel === 'all' ? tokenUsagePoints : tokenUsagePoints.filter((point) => point.model === effectiveModel),
+    [tokenUsagePoints, effectiveModel],
   );
   // Legend visibility is shared with the KPI strip so hiding a series
   // rescales the chart and drops it from the headline tokens in step.

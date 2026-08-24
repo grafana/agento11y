@@ -299,6 +299,102 @@ func TestServer_HookEvaluate_InvalidJSONReturns400(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "hooks should not be persisted")
 }
 
+func TestServer_ConversationMetrics(t *testing.T) {
+	srv, storage, _ := newTestServerStorage(t)
+	for _, seed := range []struct {
+		conv, when, workspace string
+		tokens                int64
+	}{
+		{conv: "conv-repo", when: "2026-08-21T10:00:00Z", workspace: "/repo", tokens: 5},
+		{conv: "conv-repo", when: "2026-08-21T11:00:00Z", workspace: "/repo", tokens: 50},
+		{conv: "conv-unknown", when: "2026-08-21T10:30:00Z", tokens: 7},
+	} {
+		writeGen(t, storage, seed.conv, seed.when, agento11y.Generation{
+			StartedAt: mustParse(t, seed.when),
+			Usage:     agento11y.TokenUsage{InputTokens: seed.tokens},
+			Tags:      map[string]string{"cwd": seed.workspace},
+		}, seed.when)
+	}
+
+	t.Run("matched count precedes limit and before is exclusive", func(t *testing.T) {
+		req := newLocalRequest(http.MethodGet,
+			"/api/v1/metrics/conversations?limit=1&since=2026-08-21T10:00:00Z&before=2026-08-21T11:00:00Z", nil)
+		rr := httptest.NewRecorder()
+		srv.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code)
+		var got struct {
+			Aggregate            ConversationMetricsAggregate `json:"aggregate"`
+			Conversations        []ConversationSummary        `json:"conversations"`
+			MatchedConversations int                          `json:"matched_conversations"`
+		}
+		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &got))
+		assert.Equal(t, 2, got.MatchedConversations)
+		assert.Equal(t, 2, got.Aggregate.Calls)
+		assert.Equal(t, 0, got.Aggregate.Agents)
+		assert.Equal(t, 2, got.Aggregate.Workspaces)
+		assert.Equal(t, TokenBuckets{FreshInput: 12}, got.Aggregate.TokenBuckets)
+		require.Len(t, got.Conversations, 1)
+		assert.Equal(t, "conv-unknown", got.Conversations[0].ID)
+	})
+
+	t.Run("present blank workspace selects unknown", func(t *testing.T) {
+		req := newLocalRequest(http.MethodGet,
+			"/api/v1/metrics/conversations?workspace=&since=2026-08-21T10:00:00Z&before=2026-08-21T11:00:00Z", nil)
+		rr := httptest.NewRecorder()
+		srv.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code)
+		assert.Contains(t, rr.Body.String(), `"id":"conv-unknown"`)
+		assert.NotContains(t, rr.Body.String(), `"id":"conv-repo"`)
+	})
+
+	t.Run("invalid period and limit are rejected", func(t *testing.T) {
+		for _, path := range []string{
+			"/api/v1/metrics/conversations?limit=0",
+			"/api/v1/metrics/conversations?since=",
+			"/api/v1/metrics/conversations?before=tomorrow",
+		} {
+			rr := httptest.NewRecorder()
+			srv.ServeHTTP(rr, newLocalRequest(http.MethodGet, path, nil))
+			assert.Equal(t, http.StatusBadRequest, rr.Code, path)
+		}
+	})
+}
+
+func TestServer_ToolMetrics(t *testing.T) {
+	srv, storage, _ := newTestServerStorage(t)
+	writeGen(t, storage, "conv-tools", "g1", agento11y.Generation{
+		Tags: map[string]string{"cwd": "/repo"},
+		Output: []agento11y.Message{{
+			Role: agento11y.RoleAssistant,
+			Parts: []agento11y.Part{{
+				Kind:     agento11y.PartKindToolCall,
+				ToolCall: &agento11y.ToolCall{ID: "call-1", Name: "Bash"},
+			}},
+		}},
+	}, "2026-08-21T10:00:00Z")
+	failedResult := agento11y.Generation{Input: []agento11y.Message{{
+		Role: agento11y.RoleTool,
+		Parts: []agento11y.Part{{
+			Kind:       agento11y.PartKindToolResult,
+			ToolResult: &agento11y.ToolResult{ToolCallID: "call-1", Name: "Bash", IsError: true},
+		}},
+	}}}
+	writeGen(t, storage, "conv-tools", "g2", failedResult, "2026-08-21T10:01:00Z")
+	writeGen(t, storage, "conv-tools", "g3", failedResult, "2026-08-21T10:02:00Z")
+
+	req := newLocalRequest(http.MethodGet, "/api/v1/metrics/tools?limit=2000&since=2026-08-21T09:00:00Z&before=2026-08-21T10:02:00Z&workspace=%2Frepo", nil)
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	var got struct {
+		Conversations []ConversationToolUsage `json:"conversations"`
+	}
+	decodeJSON(t, io.NopCloser(rr.Body), &got)
+	require.Len(t, got.Conversations, 1)
+	assert.Equal(t, "conv-tools", got.Conversations[0].ID)
+	assert.Equal(t, []ToolUsage{{Name: "Bash", Calls: 1, Failures: 1}}, got.Conversations[0].Tools)
+}
+
 func assertFixedSecurityHeaders(t *testing.T, header http.Header) {
 	t.Helper()
 	assert.Equal(t, "nosniff", header.Get("X-Content-Type-Options"))
@@ -328,9 +424,13 @@ func TestServer_Routing(t *testing.T) {
 		{name: "conversation path serves viewer HTML", method: http.MethodGet, path: "/conversations/conv-123", want: http.StatusOK, wantContentType: "text/html", wantBodyHas: `src="/assets/app.js"`},
 		{name: "settings path serves viewer HTML", method: http.MethodGet, path: "/settings", want: http.StatusOK, wantContentType: "text/html", wantBodyHas: `src="/assets/app.js"`},
 		{name: "settings trailing slash serves viewer HTML", method: http.MethodGet, path: "/settings/", want: http.StatusOK, wantContentType: "text/html", wantBodyHas: `src="/assets/app.js"`},
+		{name: "analytics path serves viewer HTML", method: http.MethodGet, path: "/analytics", want: http.StatusOK, wantContentType: "text/html", wantBodyHas: `src="/assets/app.js"`},
+		{name: "analytics trailing slash serves viewer HTML", method: http.MethodGet, path: "/analytics/", want: http.StatusOK, wantContentType: "text/html", wantBodyHas: `src="/assets/app.js"`},
 		{name: "CSS asset", method: http.MethodGet, path: "/assets/app.css", want: http.StatusOK, wantContentType: "text/css", wantBodyHas: ":root"},
 		{name: "app bundle asset", method: http.MethodGet, path: "/assets/app.js", want: http.StatusOK, wantContentType: "application/javascript", wantBodyHas: "function App()"},
 		{name: "healthz serves JSON", method: http.MethodGet, path: "/healthz", want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"status":"ok"`},
+		{name: "empty conversation metrics serves an array", method: http.MethodGet, path: "/api/v1/metrics/conversations", want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"conversations":[]`},
+		{name: "empty tool metrics serves an array", method: http.MethodGet, path: "/api/v1/metrics/tools", want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"conversations":[]`},
 		{name: "unknown route", method: http.MethodPost, path: "/api/v1/unknown", contentType: wire.ContentTypeJSON, body: "{}", want: http.StatusNotFound},
 		{name: "wrong method on generations export", method: http.MethodPut, path: "/api/v1/generations:export", contentType: wire.ContentTypeJSON, body: "{}", want: http.StatusMethodNotAllowed},
 		{name: "hook evaluate serves JSON", method: http.MethodPost, path: "/api/v1/hooks:evaluate", contentType: wire.ContentTypeJSON, body: `{"phase":"postflight"}`, want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"action":"allow"`},
@@ -829,10 +929,12 @@ func TestServer_APITokenMetrics(t *testing.T) {
 		// the viewer reads these keys at the top level.
 		assert.Contains(t, rr.Body.String(), `"fresh_input":100`)
 		assert.Contains(t, rr.Body.String(), `"cache_read":30`)
+		assert.Contains(t, rr.Body.String(), `"calls":1`)
 		assert.Equal(t, TokenUsagePoint{
 			Timestamp:    mustParse(t, "2026-05-21T10:00:00Z"),
 			Model:        "claude-sonnet-4",
 			Provider:     "anthropic",
+			Calls:        1,
 			TokenBuckets: TokenBuckets{FreshInput: 100, CacheRead: 30, CacheWrite: 20, Output: 50},
 		}, body.Points[0])
 	})
@@ -868,6 +970,7 @@ func TestServer_APITokenMetrics(t *testing.T) {
 		require.Len(t, body.Points, 1)
 		assert.Equal(t, mustParse(t, "2026-05-21T10:00:00Z"), body.Points[0].Timestamp)
 		assert.Equal(t, int64(107), body.Points[0].FreshInput)
+		assert.Equal(t, 2, body.Points[0].Calls)
 	})
 
 	t.Run("since skips older files without decoding them", func(t *testing.T) {
@@ -907,6 +1010,46 @@ func TestServer_APITokenMetrics(t *testing.T) {
 			assert.Equal(t, http.StatusBadRequest, rr.Code, path)
 		}
 	})
+}
+
+func TestServer_APITokenMetricsPeriodFilters(t *testing.T) {
+	srv, storage, _ := newTestServerStorage(t)
+	for _, seed := range []struct {
+		conv, when, workspace string
+		tokens                int64
+	}{
+		{conv: "repo-inside", when: "2026-05-21T10:00:00Z", workspace: "/repo", tokens: 11},
+		{conv: "repo-upper", when: "2026-05-21T11:00:00Z", workspace: "/repo", tokens: 100},
+		{conv: "unknown", when: "2026-05-21T10:15:00Z", tokens: 7},
+	} {
+		writeGen(t, storage, seed.conv, "g", agento11y.Generation{
+			StartedAt: mustParse(t, seed.when),
+			Usage:     agento11y.TokenUsage{InputTokens: seed.tokens},
+			Tags:      map[string]string{"cwd": seed.workspace},
+		}, seed.when)
+	}
+
+	cases := []struct {
+		name, workspace string
+		want            int64
+	}{
+		{name: "named workspace", workspace: "%2Frepo", want: 11},
+		{name: "blank workspace means unknown", workspace: "", want: 7},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := "/api/v1/metrics/tokens?since=2026-05-21T10:00:00Z&before=2026-05-21T11:00:00Z&interval=3600&workspace=" + tc.workspace
+			rr := httptest.NewRecorder()
+			srv.ServeHTTP(rr, newLocalRequest(http.MethodGet, path, nil))
+			require.Equal(t, http.StatusOK, rr.Code)
+			var got struct {
+				Points []TokenUsagePoint `json:"points"`
+			}
+			require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &got))
+			require.Len(t, got.Points, 1)
+			assert.Equal(t, tc.want, got.Points[0].FreshInput)
+		})
+	}
 }
 
 func TestServer_APITokenMetrics_EmptyStorage(t *testing.T) {

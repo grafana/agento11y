@@ -1,18 +1,30 @@
 import type { MouseEvent as ReactMouseEvent } from 'react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type AnalyticsUnit, AnalyticsView } from './analytics';
 import { ConversationsView, GROUP_BY_OPTIONS } from './conversations';
 import { TraceDetailView } from './detail';
 import type { TimeSpan } from './formatters';
-import { DEFAULT_TIME_RANGE, LIST_PAGE_SIZE, requestWindow, TIME_RANGES } from './formatters';
 import {
+  chartBucketMs,
+  DEFAULT_TIME_RANGE,
+  LIST_PAGE_SIZE,
+  requestWindow,
+  TIME_RANGES,
+  TOKEN_SERIES,
+  timeRangeOption,
+} from './formatters';
+import {
+  analyticsRouteActive,
   conversationIDFromPath,
   conversationPath,
+  conversationsPath,
   IMPORT_ACTIVE_TTL_MS,
   IMPORT_REFRESH_DEBOUNCE_MS,
   REFRESH_DEBOUNCE_MS,
   settingsRouteActive,
   summaryFromDetail,
   usePersistedState,
+  workspaceFromLocation,
 } from './routing';
 import {
   importRunIsActive,
@@ -27,10 +39,15 @@ import type {
   ConfigResponse,
   ConversationDetail,
   ConversationListResponse,
+  ConversationMetricsAggregate,
+  ConversationMetricsResponse,
   ConversationSummary,
+  ConversationToolUsage,
   ImportRun,
+  TokenBucketKey,
   TokenUsagePoint,
   TokenUsageResponse,
+  ToolUsageResponse,
 } from './types';
 
 // ============================================================
@@ -40,6 +57,28 @@ import type {
 export interface ListSort {
   key: string;
   dir: 'asc' | 'desc';
+}
+
+interface DetailReturnState {
+  view?: 'analytics' | 'conversations';
+  workspace?: string | null;
+}
+
+const ANALYTICS_LIST_SIZE = 2000;
+const ALL_WORKSPACES = 'all';
+const WORKSPACE_PREFIX = 'workspace:';
+
+function decodeAnalyticsWorkspace(value: string): string | null {
+  if (value === '' || value === ALL_WORKSPACES) return null;
+  return value.startsWith(WORKSPACE_PREFIX) ? value.slice(WORKSPACE_PREFIX.length) : value;
+}
+
+function encodeAnalyticsWorkspace(value: string | null): string {
+  return value == null ? ALL_WORKSPACES : `${WORKSPACE_PREFIX}${value}`;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /** One frame of the /api/v1/events stream. */
@@ -52,6 +91,7 @@ interface StreamEvent {
 export function App() {
   const [selectedID, setSelectedID] = useState(conversationIDFromPath);
   const [showSettings, setShowSettings] = useState(settingsRouteActive);
+  const [showAnalytics, setShowAnalytics] = useState(analyticsRouteActive);
   // The settings tab is part of the route, so it is owned here with the rest
   // of it: the header chip opens the Cloud tab from any view, including from
   // Settings itself, where pushState alone leaves the panel where it was.
@@ -77,7 +117,7 @@ export function App() {
     (v) => v === 'tokens' || v === 'activity',
   );
   const [bucketSel, setBucketSel] = useState<TimeSpan | null>(null);
-  const [workspace, setWorkspace] = useState<string | null>(null);
+  const [workspace, setWorkspace] = useState<string | null>(workspaceFromLocation);
   const [groupBy, setGroupBy] = usePersistedState('sigil.local.groupBy', 'workspace', (value) =>
     GROUP_BY_OPTIONS.some((option) => option.value === value),
   );
@@ -85,6 +125,69 @@ export function App() {
     key: 'last_activity',
     dir: 'desc',
   });
+  const [analyticsUnitValue, setAnalyticsUnit] = usePersistedState(
+    'sigil.local.analyticsUnit',
+    'cost',
+    (value) => value === 'cost' || value === 'tokens',
+  );
+  const analyticsUnit = analyticsUnitValue as AnalyticsUnit;
+  const [analyticsRange, setAnalyticsRange] = usePersistedState('sigil.local.analyticsRange', '24h', (value) =>
+    TIME_RANGES.some((range) => range.value === value),
+  );
+  const [analyticsWorkspaceValue, setAnalyticsWorkspaceValue] = usePersistedState(
+    'sigil.local.analyticsWorkspace',
+    ALL_WORKSPACES,
+    () => true,
+  );
+  const analyticsWorkspace = decodeAnalyticsWorkspace(analyticsWorkspaceValue);
+  const [analyticsHiddenValue, setAnalyticsHiddenValue] = usePersistedState(
+    'sigil.local.analyticsHiddenSeries',
+    '',
+    (value) =>
+      value === '' ||
+      value.split(',').every((key) => TOKEN_SERIES.some((series) => series.key === (key as TokenBucketKey))),
+  );
+  const analyticsHiddenSeries = useMemo<ReadonlySet<TokenBucketKey>>(
+    () => new Set(analyticsHiddenValue.split(',').filter(Boolean) as TokenBucketKey[]),
+    [analyticsHiddenValue],
+  );
+  const toggleAnalyticsSeries = useCallback(
+    (key: TokenBucketKey) => {
+      const next = new Set(analyticsHiddenSeries);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      setAnalyticsHiddenValue(
+        TOKEN_SERIES.map((series) => series.key)
+          .filter((series) => next.has(series))
+          .join(','),
+      );
+    },
+    [analyticsHiddenSeries, setAnalyticsHiddenValue],
+  );
+  const [analyticsConversations, setAnalyticsConversations] = useState<ConversationSummary[]>([]);
+  const [analyticsPreviousConversations, setAnalyticsPreviousConversations] = useState<ConversationSummary[]>([]);
+  const [analyticsAggregate, setAnalyticsAggregate] = useState<ConversationMetricsAggregate | null>(null);
+  const [analyticsPreviousAggregate, setAnalyticsPreviousAggregate] = useState<ConversationMetricsAggregate | null>(
+    null,
+  );
+  const [analyticsFacetConversations, setAnalyticsFacetConversations] = useState<ConversationSummary[]>([]);
+  const [analyticsTotalConversations, setAnalyticsTotalConversations] = useState<number | null>(null);
+  const [analyticsPreviousTotalConversations, setAnalyticsPreviousTotalConversations] = useState<number | null>(null);
+  const [analyticsFacetTotalConversations, setAnalyticsFacetTotalConversations] = useState<number | null>(null);
+  const [analyticsTokenPoints, setAnalyticsTokenPoints] = useState<TokenUsagePoint[]>([]);
+  const [analyticsTokenIntervalMs, setAnalyticsTokenIntervalMs] = useState(0);
+  const [analyticsHeatmapPoints, setAnalyticsHeatmapPoints] = useState<TokenUsagePoint[]>([]);
+  const [analyticsToolUsage, setAnalyticsToolUsage] = useState<ConversationToolUsage[]>([]);
+  const [loadingAnalytics, setLoadingAnalytics] = useState(false);
+  const [loadingAnalyticsTokens, setLoadingAnalyticsTokens] = useState(false);
+  const [loadingAnalyticsTools, setLoadingAnalyticsTools] = useState(false);
+  const [loadingAnalyticsHeatmap, setLoadingAnalyticsHeatmap] = useState(false);
+  const [errAnalytics, setErrAnalytics] = useState<string | null>(null);
+  const [errAnalyticsPrevious, setErrAnalyticsPrevious] = useState<string | null>(null);
+  const [errAnalyticsFacets, setErrAnalyticsFacets] = useState<string | null>(null);
+  const [errAnalyticsTokens, setErrAnalyticsTokens] = useState<string | null>(null);
+  const [errAnalyticsTools, setErrAnalyticsTools] = useState<string | null>(null);
+  const [errAnalyticsHeatmap, setErrAnalyticsHeatmap] = useState<string | null>(null);
 
   const [detail, setDetail] = useState<ConversationDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
@@ -133,7 +236,13 @@ export function App() {
     return () => clearInterval(id);
   }, [loadConfig]);
 
-  const view = showSettings ? 'settings' : selectedID ? 'conversation' : 'conversations';
+  const view: 'settings' | 'analytics' | 'conversation' | 'conversations' = showSettings
+    ? 'settings'
+    : showAnalytics
+      ? 'analytics'
+      : selectedID
+        ? 'conversation'
+        : 'conversations';
   const selected = selectedID
     ? conversations.find((c) => c.id === selectedID) || summaryFromDetail(detail, selectedID)
     : null;
@@ -151,9 +260,11 @@ export function App() {
   const pageTitle =
     view === 'settings'
       ? 'Settings · agento11y local'
-      : view === 'conversation' && selected
-        ? `${selected.title || selected.id} · agento11y local`
-        : 'agento11y · local';
+      : view === 'analytics'
+        ? 'Analytics · agento11y local'
+        : view === 'conversation' && selected
+          ? `${selected.title || selected.id} · agento11y local`
+          : 'agento11y · local';
   useEffect(() => {
     document.title = pageTitle;
   }, [pageTitle]);
@@ -253,6 +364,217 @@ export function App() {
     [timeRange],
   );
 
+  const analyticsSeqRef = useRef(0);
+  const readJSON = useCallback(
+    <T,>(response: Response): Promise<T> =>
+      response.ok
+        ? response.json()
+        : response.text().then((text) => Promise.reject(new Error(text || `HTTP ${response.status}`))),
+    [],
+  );
+  const fetchAnalytics = useCallback(
+    (reset = false) => {
+      const seq = ++analyticsSeqRef.current;
+      setLoadingAnalytics(true);
+      setLoadingAnalyticsTokens(true);
+      setLoadingAnalyticsTools(true);
+      setErrAnalytics(null);
+      setErrAnalyticsPrevious(null);
+      setErrAnalyticsFacets(null);
+      setErrAnalyticsTokens(null);
+      setErrAnalyticsTools(null);
+      if (reset) {
+        setAnalyticsConversations([]);
+        setAnalyticsPreviousConversations([]);
+        setAnalyticsAggregate(null);
+        setAnalyticsPreviousAggregate(null);
+        setAnalyticsFacetConversations([]);
+        setAnalyticsTotalConversations(null);
+        setAnalyticsPreviousTotalConversations(null);
+        setAnalyticsFacetTotalConversations(null);
+        setAnalyticsTokenPoints([]);
+        setAnalyticsTokenIntervalMs(0);
+        setAnalyticsToolUsage([]);
+      }
+
+      const now = Date.now();
+      const range = timeRangeOption(analyticsRange);
+      const before = new Date(now).toISOString();
+      const currentParams = new URLSearchParams({ limit: String(ANALYTICS_LIST_SIZE), before });
+      const previousParams = new URLSearchParams({ limit: String(ANALYTICS_LIST_SIZE) });
+      const tokenParams = new URLSearchParams({ before });
+      const toolParams = new URLSearchParams({ limit: String(ANALYTICS_LIST_SIZE), before });
+      if (range.ms != null) {
+        const currentStart = now - range.ms;
+        currentParams.set('since', new Date(currentStart).toISOString());
+        previousParams.set('since', new Date(currentStart - range.ms).toISOString());
+        previousParams.set('before', new Date(currentStart).toISOString());
+        tokenParams.set('since', new Date(currentStart).toISOString());
+        tokenParams.set('interval', String(Math.round(chartBucketMs(range.ms) / 1000)));
+        toolParams.set('since', new Date(currentStart).toISOString());
+      }
+      const facetParams = new URLSearchParams(currentParams);
+      if (analyticsWorkspace != null) {
+        currentParams.set('workspace', analyticsWorkspace);
+        previousParams.set('workspace', analyticsWorkspace);
+        tokenParams.set('workspace', analyticsWorkspace);
+        toolParams.set('workspace', analyticsWorkspace);
+      }
+
+      const currentRequest = fetch(`/api/v1/metrics/conversations?${currentParams}`).then((response) =>
+        readJSON<ConversationMetricsResponse>(response),
+      );
+      const previousRequest =
+        range.ms == null
+          ? Promise.resolve<ConversationMetricsResponse | null>(null)
+          : fetch(`/api/v1/metrics/conversations?${previousParams}`).then((response) =>
+              readJSON<ConversationMetricsResponse>(response),
+            );
+      const facetRequest =
+        analyticsWorkspace == null
+          ? Promise.resolve<ConversationMetricsResponse | null>(null)
+          : fetch(`/api/v1/metrics/conversations?${facetParams}`).then((response) =>
+              readJSON<ConversationMetricsResponse>(response),
+            );
+      const tokenRequest = fetch(`/api/v1/metrics/tokens?${tokenParams}`).then((response) =>
+        readJSON<TokenUsageResponse>(response),
+      );
+      const toolRequest = fetch(`/api/v1/metrics/tools?${toolParams}`).then((response) =>
+        readJSON<ToolUsageResponse>(response),
+      );
+
+      const settle = <T,>(request: Promise<T>, apply: (value: T) => void, reject: (reason: unknown) => void) =>
+        request.then(
+          (value) => {
+            if (analyticsSeqRef.current === seq) apply(value);
+          },
+          (reason) => {
+            if (analyticsSeqRef.current === seq) reject(reason);
+          },
+        );
+      const requests = [
+        settle(
+          currentRequest,
+          (value) => {
+            setAnalyticsConversations(value.conversations || []);
+            setAnalyticsAggregate(value.aggregate || null);
+            setAnalyticsTotalConversations(
+              Number.isFinite(value.matched_conversations) ? value.matched_conversations : null,
+            );
+            if (analyticsWorkspace == null) {
+              setAnalyticsFacetConversations(value.conversations || []);
+              setAnalyticsFacetTotalConversations(
+                Number.isFinite(value.matched_conversations) ? value.matched_conversations : null,
+              );
+            }
+          },
+          (reason) => setErrAnalytics(errorMessage(reason)),
+        ),
+        settle(
+          previousRequest,
+          (value) => {
+            setAnalyticsPreviousConversations(value?.conversations || []);
+            setAnalyticsPreviousAggregate(value?.aggregate || null);
+            setAnalyticsPreviousTotalConversations(
+              value && Number.isFinite(value.matched_conversations) ? value.matched_conversations : null,
+            );
+          },
+          (reason) => setErrAnalyticsPrevious(errorMessage(reason)),
+        ),
+        settle(
+          facetRequest,
+          (value) => {
+            if (!value) return;
+            setAnalyticsFacetConversations(value.conversations || []);
+            setAnalyticsFacetTotalConversations(
+              Number.isFinite(value.matched_conversations) ? value.matched_conversations : null,
+            );
+          },
+          (reason) => setErrAnalyticsFacets(errorMessage(reason)),
+        ),
+        settle(
+          tokenRequest,
+          (value) => {
+            setAnalyticsTokenPoints(value.points || []);
+            const seconds = Number(value.interval_seconds);
+            setAnalyticsTokenIntervalMs(Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 0);
+            setLoadingAnalyticsTokens(false);
+          },
+          (reason) => {
+            setErrAnalyticsTokens(errorMessage(reason));
+            setLoadingAnalyticsTokens(false);
+          },
+        ),
+        settle(
+          toolRequest,
+          (value) => {
+            setAnalyticsToolUsage(value.conversations || []);
+            setLoadingAnalyticsTools(false);
+          },
+          (reason) => {
+            const status = errorMessage(reason);
+            setErrAnalyticsTools(status.includes('404') ? 'A newer daemon is required.' : status);
+            setLoadingAnalyticsTools(false);
+          },
+        ),
+      ];
+      return Promise.all(requests).finally(() => {
+        if (analyticsSeqRef.current !== seq) return;
+        setLoadingAnalytics(false);
+      });
+    },
+    [analyticsRange, analyticsWorkspace, readJSON],
+  );
+
+  const analyticsHeatmapSeqRef = useRef(0);
+  const fetchAnalyticsHeatmap = useCallback(
+    (reset = false) => {
+      const seq = ++analyticsHeatmapSeqRef.current;
+      setLoadingAnalyticsHeatmap(true);
+      setErrAnalyticsHeatmap(null);
+      if (reset) setAnalyticsHeatmapPoints([]);
+      const now = Date.now();
+      const params = new URLSearchParams({
+        since: new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString(),
+        before: new Date(now).toISOString(),
+        interval: '900',
+      });
+      if (analyticsWorkspace != null) params.set('workspace', analyticsWorkspace);
+      return fetch(`/api/v1/metrics/tokens?${params}`)
+        .then((response) => readJSON<TokenUsageResponse>(response))
+        .then((body) => {
+          if (analyticsHeatmapSeqRef.current !== seq) return;
+          setAnalyticsHeatmapPoints(body.points || []);
+        })
+        .catch((error) => {
+          if (analyticsHeatmapSeqRef.current !== seq) return;
+          setErrAnalyticsHeatmap(String(error.message || error));
+        })
+        .finally(() => {
+          if (analyticsHeatmapSeqRef.current !== seq) return;
+          setLoadingAnalyticsHeatmap(false);
+        });
+    },
+    [analyticsWorkspace, readJSON],
+  );
+
+  const analyticsRefreshInFlightRef = useRef(false);
+  const analyticsRefreshDirtyRef = useRef(false);
+  const refreshAnalyticsRef = useRef<() => void>(() => {});
+  const refreshAnalytics = useCallback(() => {
+    if (analyticsRefreshInFlightRef.current) {
+      analyticsRefreshDirtyRef.current = true;
+      return;
+    }
+    analyticsRefreshInFlightRef.current = true;
+    Promise.all([fetchAnalytics(), fetchAnalyticsHeatmap()]).finally(() => {
+      analyticsRefreshInFlightRef.current = false;
+      if (!analyticsRefreshDirtyRef.current) return;
+      analyticsRefreshDirtyRef.current = false;
+      refreshAnalyticsRef.current();
+    });
+  }, [fetchAnalytics, fetchAnalyticsHeatmap]);
+
   // refreshAll keeps one refresh cycle in flight. An event arriving while
   // a cycle runs marks at most one follow-up refresh as due instead of
   // starting a second cycle. Without that, a slow response lets one
@@ -336,10 +658,20 @@ export function App() {
   }, [reloadRange]);
 
   useEffect(() => {
+    if (view === 'analytics') fetchAnalytics(true);
+  }, [view, fetchAnalytics]);
+
+  useEffect(() => {
+    if (view === 'analytics') fetchAnalyticsHeatmap(true);
+  }, [view, fetchAnalyticsHeatmap]);
+
+  useEffect(() => {
     const onPopState = () => {
       setSelectedID(conversationIDFromPath());
       setShowSettings(settingsRouteActive());
+      setShowAnalytics(analyticsRouteActive());
       setSettingsTab(settingsTabFromLocation());
+      setWorkspace(workspaceFromLocation());
     };
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
@@ -376,6 +708,9 @@ export function App() {
     quietRefreshDetailRef.current = quietRefreshDetail;
   }, [quietRefreshDetail]);
   useEffect(() => {
+    refreshAnalyticsRef.current = refreshAnalytics;
+  }, [refreshAnalytics]);
+  useEffect(() => {
     selectedIDRef.current = selectedID;
   }, [selectedID]);
   useEffect(() => {
@@ -396,18 +731,18 @@ export function App() {
     // conversation keeps the normal cadence.
     let listTimer: ReturnType<typeof setTimeout> | null = null;
     let detailTimer: ReturnType<typeof setTimeout> | null = null;
-    // onConversations reports whether the list or a conversation is
-    // rendered. Elsewhere neither is, and the SSE connection itself is
-    // cheap to leave running.
+    // onConversations reports whether a data-backed screen is rendered.
+    // Elsewhere the SSE connection itself is cheap to leave running.
     const onConversations = () => {
       const v = viewRef.current;
-      return v === 'conversations' || v === 'conversation';
+      return v === 'conversations' || v === 'conversation' || v === 'analytics';
     };
     const importActive = () => importActiveUntilRef.current > Date.now();
     const flushList = () => {
       listTimer = null;
       if (!onConversations()) return;
-      refreshAllRef.current?.();
+      if (viewRef.current === 'analytics') refreshAnalyticsRef.current();
+      else refreshAllRef.current?.();
     };
     const flushDetail = () => {
       detailTimer = null;
@@ -465,20 +800,72 @@ export function App() {
   // event for the currently-open conversation only recovers when
   // another targeted event arrives or the user reopens it.
   useEffect(() => {
-    if (view !== 'conversations') return;
-    const id = setInterval(() => refreshAllRef.current?.(), 60_000);
+    if (view !== 'conversations' && view !== 'analytics') return;
+    const id = setInterval(() => {
+      if (view === 'analytics') refreshAnalyticsRef.current();
+      else refreshAllRef.current?.();
+    }, 60_000);
     return () => clearInterval(id);
   }, [view]);
 
   const openConv = (c: { id: string }) => {
-    window.history.pushState({}, '', conversationPath(c.id));
+    const returnState: DetailReturnState = {
+      view: view === 'analytics' ? 'analytics' : 'conversations',
+      workspace: view === 'conversations' ? workspace : null,
+    };
+    window.history.pushState(returnState, '', conversationPath(c.id));
     setShowSettings(false);
+    setShowAnalytics(false);
     setSelectedID(c.id);
   };
   const goConversations = () => {
-    window.history.pushState({}, '', '/');
+    window.history.pushState({}, '', conversationsPath());
+    setShowSettings(false);
+    setShowAnalytics(false);
+    setSelectedID(null);
+    setWorkspace(null);
+  };
+  const backFromDetail = () => {
+    const state = window.history.state as DetailReturnState | null;
     setShowSettings(false);
     setSelectedID(null);
+    if (state?.view === 'analytics') {
+      window.history.pushState({}, '', '/analytics');
+      setShowAnalytics(true);
+      return;
+    }
+    const returnWorkspace = state?.workspace ?? null;
+    window.history.pushState({}, '', conversationsPath(returnWorkspace));
+    setShowAnalytics(false);
+    setWorkspace(returnWorkspace);
+  };
+  const goAnalytics = () => {
+    window.history.pushState({}, '', '/analytics');
+    setShowSettings(false);
+    setShowAnalytics(true);
+    setSelectedID(null);
+  };
+  const openAnalyticsBucket = (span: TimeSpan) => {
+    window.history.pushState({}, '', conversationsPath(analyticsWorkspace));
+    setTimeRange(analyticsRange);
+    setWorkspace(analyticsWorkspace);
+    setBucketSel(span);
+    setShowSettings(false);
+    setShowAnalytics(false);
+    setSelectedID(null);
+  };
+  const openAnalyticsWorkspace = (path: string) => {
+    window.history.pushState({}, '', conversationsPath(path));
+    setTimeRange(analyticsRange);
+    setWorkspace(path);
+    setBucketSel(null);
+    setShowSettings(false);
+    setShowAnalytics(false);
+    setSelectedID(null);
+  };
+  const selectConversationWorkspace = (path: string | null) => {
+    window.history.pushState({}, '', conversationsPath(path));
+    setWorkspace(path);
   };
   // goSettings is also the nav tab's onClick, which passes an event, so
   // anything that is not a tab id opens the Cloud tab.
@@ -486,6 +873,7 @@ export function App() {
     const next = typeof tab === 'string' && SETTINGS_TAB_IDS.has(tab) ? tab : 'cloud';
     window.history.pushState({}, '', settingsPath(next));
     setSelectedID(null);
+    setShowAnalytics(false);
     setShowSettings(true);
     setSettingsTab(next);
   };
@@ -502,9 +890,11 @@ export function App() {
       if (typeof el.select === 'function') el.select();
     };
     if (viewRef.current !== 'conversations') {
-      window.history.pushState({}, '', '/');
+      window.history.pushState({}, '', conversationsPath());
       setSelectedID(null);
       setShowSettings(false);
+      setShowAnalytics(false);
+      setWorkspace(null);
       setTimeout(focus, 0);
       return;
     }
@@ -529,13 +919,21 @@ export function App() {
       onClick: goConversations,
     },
     {
+      key: 'analytics',
+      label: 'Analytics',
+      href: '/analytics',
+      onClick: goAnalytics,
+    },
+    {
       key: 'settings',
       label: 'Settings',
       href: '/settings',
       onClick: goSettings,
     },
   ];
-  const activeTab = view === 'settings' ? 'settings' : 'conversations';
+  const activeTab = view === 'settings' ? 'settings' : view === 'analytics' ? 'analytics' : 'conversations';
+  const detailReturnState = window.history.state as DetailReturnState | null;
+  const detailReturnsToAnalytics = detailReturnState?.view === 'analytics';
 
   return (
     <div
@@ -566,6 +964,45 @@ export function App() {
             onConfig={applyConfig}
           />
         )}
+        {view === 'analytics' && (
+          <AnalyticsView
+            conversations={analyticsConversations}
+            previousConversations={analyticsPreviousConversations}
+            aggregate={analyticsAggregate}
+            previousAggregate={analyticsPreviousAggregate}
+            facetConversations={analyticsFacetConversations}
+            totalConversations={analyticsTotalConversations}
+            previousTotalConversations={analyticsPreviousTotalConversations}
+            facetTotalConversations={analyticsFacetTotalConversations}
+            tokenPoints={analyticsTokenPoints}
+            tokenIntervalMs={analyticsTokenIntervalMs}
+            heatmapPoints={analyticsHeatmapPoints}
+            toolUsage={analyticsToolUsage}
+            loading={loadingAnalytics}
+            tokenLoading={loadingAnalyticsTokens}
+            toolLoading={loadingAnalyticsTools}
+            heatmapLoading={loadingAnalyticsHeatmap}
+            error={errAnalytics}
+            previousError={errAnalyticsPrevious}
+            facetError={errAnalyticsFacets}
+            tokenError={errAnalyticsTokens}
+            toolError={errAnalyticsTools}
+            heatmapError={errAnalyticsHeatmap}
+            unit={analyticsUnit}
+            onUnitChange={setAnalyticsUnit}
+            timeRange={analyticsRange}
+            onTimeRangeChange={setAnalyticsRange}
+            workspace={analyticsWorkspace}
+            onWorkspaceChange={(path) => setAnalyticsWorkspaceValue(encodeAnalyticsWorkspace(path))}
+            hiddenSeries={analyticsHiddenSeries}
+            onToggleSeries={toggleAnalyticsSeries}
+            onRefresh={refreshAnalytics}
+            refreshing={loadingAnalytics || loadingAnalyticsHeatmap}
+            onOpenConversation={openConv}
+            onOpenWorkspace={openAnalyticsWorkspace}
+            onOpenBucket={openAnalyticsBucket}
+          />
+        )}
         {view === 'conversations' && (
           <ConversationsView
             conversations={conversations}
@@ -586,7 +1023,7 @@ export function App() {
             bucketSel={bucketSel}
             setBucketSel={setBucketSel}
             workspace={workspace}
-            setWorkspace={setWorkspace}
+            setWorkspace={selectConversationWorkspace}
             groupBy={groupBy}
             setGroupBy={setGroupBy}
             listSort={listSort}
@@ -604,7 +1041,9 @@ export function App() {
             detail={detail}
             loading={loadingDetail}
             error={errDetail}
-            onBack={goConversations}
+            backHref={detailReturnsToAnalytics ? '/analytics' : conversationsPath(detailReturnState?.workspace ?? null)}
+            backLabel={detailReturnsToAnalytics ? 'Analytics' : 'Sessions'}
+            onBack={backFromDetail}
           />
         )}
       </div>

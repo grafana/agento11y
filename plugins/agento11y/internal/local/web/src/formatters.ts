@@ -383,6 +383,7 @@ export function useModelPrices(): ModelPrices | null {
 // What conversationCost needs off a conversation row.
 interface CostableConversation {
   token_buckets?: TokenBuckets | null;
+  token_buckets_by_model?: Record<string, TokenBuckets> | null;
   models?: string[] | null;
 }
 
@@ -394,8 +395,6 @@ interface CostableConversation {
 // orchestrator), a close approximation. Returns null when the model can't
 // be priced (unknown provider, or no model recorded) so callers show NO_VALUE
 // instead of a fabricated number.
-// ponytail: per-model attribution would need per-generation buckets — not
-// worth it until mixed-model conversations are common.
 export function conversationCost(
   c: CostableConversation | null | undefined,
   prices: ModelPrices | null,
@@ -426,6 +425,62 @@ export function conversationCost(
       ((b.output || 0) + (b.reasoning || 0)) * outRate) /
     1e6
   );
+}
+
+export interface CostEstimate {
+  value: number | null;
+  complete: boolean;
+}
+
+export function conversationCostEstimateByModel(
+  c: CostableConversation | null | undefined,
+  prices: ModelPrices | null,
+): CostEstimate {
+  const byModel = c?.token_buckets_by_model;
+  if (!byModel) {
+    const value = conversationCost(c, prices);
+    return { value, complete: value != null };
+  }
+  let sum = 0;
+  let priced = 0;
+  let considered = 0;
+  let complete = true;
+  for (const [model, token_buckets] of Object.entries(byModel)) {
+    if (!Object.values(token_buckets).some((value) => value > 0)) continue;
+    considered++;
+    const cost = conversationCost({ token_buckets, models: model ? [model] : [] }, prices);
+    if (cost == null) {
+      complete = false;
+      continue;
+    }
+    sum += cost;
+    priced++;
+  }
+  if (considered === 0) {
+    const aggregateHasUsage = c?.token_buckets && Object.values(c.token_buckets).some((value) => value > 0);
+    if (aggregateHasUsage) return { value: null, complete: false };
+    const fallback = conversationCost(c, prices);
+    if (fallback != null) return { value: fallback, complete: true };
+    for (const model of Object.keys(byModel)) {
+      if (!model) continue;
+      const zero = conversationCost({ token_buckets: byModel[model], models: [model] }, prices);
+      if (zero != null) return { value: 0, complete: true };
+    }
+    return { value: null, complete: false };
+  }
+  return { value: priced > 0 ? sum : null, complete: complete && priced === considered };
+}
+
+export function conversationCostByModel(
+  c: CostableConversation | null | undefined,
+  prices: ModelPrices | null,
+): number | null {
+  return conversationCostEstimateByModel(c, prices).value;
+}
+
+export function tokenPointCost(point: TokenUsagePoint, prices: ModelPrices | null): number | null {
+  if (!point.model) return null;
+  return conversationCost({ token_buckets: point, models: [point.model] }, prices);
 }
 
 export function formatCost(usd: number | null | undefined): string {
@@ -516,7 +571,7 @@ const CHART_BUCKET_MAX = 16;
 // ladder it widens the last step by a whole multiple, so a decade of
 // imported history draws CHART_BUCKET_MAX bars rather than one per week,
 // and a server bucket still divides a bar.
-function chartBucketMs(spanMs: number, minMs = 0): number {
+export function chartBucketMs(spanMs: number, minMs = 0): number {
   const span = Number.isFinite(spanMs) && spanMs > 0 ? spanMs : 60_000;
   const floor = Number.isFinite(minMs) && minMs > 0 ? minMs : 0;
   for (const step of BUCKET_INTERVALS_MS) {
