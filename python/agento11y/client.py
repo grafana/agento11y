@@ -112,6 +112,7 @@ _span_attr_cache_read_tokens = "gen_ai.usage.cache_read_input_tokens"
 _span_attr_cache_write_tokens = "gen_ai.usage.cache_write_input_tokens"
 _span_attr_reasoning_tokens = "gen_ai.usage.reasoning_tokens"
 _span_attr_tool_name = "gen_ai.tool.name"
+_span_attr_skill_name = "agento11y.skill.name"
 _span_attr_tool_call_id = "gen_ai.tool.call.id"
 _span_attr_tool_type = "gen_ai.tool.type"
 _span_attr_tool_description = "gen_ai.tool.description"
@@ -2069,10 +2070,17 @@ def _set_embedding_end_span_attributes(
             span.set_attribute(_span_attr_embedding_input_texts, texts)
 
 
+def _set_trimmed_skill_name_attribute(span: Span, skill_name: str) -> None:
+    normalized = skill_name.strip()
+    if normalized:
+        span.set_attribute(_span_attr_skill_name, normalized)
+
+
 def _set_tool_span_attributes(span: Span, start: ToolExecutionStart) -> None:
     span.set_attribute(_span_attr_operation_name, "execute_tool")
     span.set_attribute(_span_attr_tool_name, start.tool_name)
     span.set_attribute(_span_attr_sdk_name, _sdk_name)
+    _set_trimmed_skill_name_attribute(span, start.skill_name)
 
     if start.tool_call_id:
         span.set_attribute(_span_attr_tool_call_id, start.tool_call_id)

@@ -349,6 +349,7 @@ public sealed class ToolExecutionStart
     public string ToolCallId { get; set; } = string.Empty;
     public string ToolType { get; set; } = string.Empty;
     public string ToolDescription { get; set; } = string.Empty;
+    public string? SkillName { get; set; }
     public string ConversationId { get; set; } = string.Empty;
     public string ConversationTitle { get; set; } = string.Empty;
     public string AgentName { get; set; } = string.Empty;
