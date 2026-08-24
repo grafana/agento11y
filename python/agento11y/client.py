@@ -373,12 +373,14 @@ class Client:
 
         self._operation_duration_histogram: Histogram = self._meter.create_histogram(
             _metric_operation_duration,
+            description="GenAI operation duration.",
             unit="s",
             explicit_bucket_boundaries_advisory=_DURATION_BUCKETS_SECONDS,
         )
         self._token_usage_histogram: Histogram = self._meter.create_histogram(
             _metric_token_usage,
-            unit="token",
+            description="Number of input and output tokens used.",
+            unit="{token}",
             explicit_bucket_boundaries_advisory=_TOKEN_USAGE_BUCKETS,
         )
         self._ttft_histogram: Histogram = self._meter.create_histogram(

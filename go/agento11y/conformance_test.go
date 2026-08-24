@@ -970,6 +970,9 @@ func TestConformance_StreamingMode(t *testing.T) {
 		t.Fatalf("%s bucket boundaries mismatch:\nexpected %v\n     got %v", metricTokenUsage, expectedTokenUsageBuckets, got)
 	}
 
+	requireMetricMetadata(t, metrics, metricOperationDuration, "GenAI operation duration.", "s")
+	requireMetricMetadata(t, metrics, metricTokenUsage, "Number of input and output tokens used.", "{token}")
+
 	env.Shutdown(t)
 
 	streamGeneration := findGenerationByConversationID(t, env.Ingest.Requests(), "conv-stream")

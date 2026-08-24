@@ -241,6 +241,15 @@ class _ConformanceEnv:
                     metrics[metric.name] = metric.data
         return metrics
 
+    def metric_metadata(self) -> dict[str, tuple[str | None, str | None]]:
+        metadata = {}
+        data = self.metric_reader.get_metrics_data()
+        for resource_metric in data.resource_metrics:
+            for scope_metric in resource_metric.scope_metrics:
+                for metric in scope_metric.metrics:
+                    metadata[metric.name] = (metric.description, metric.unit)
+        return metadata
+
 
 def test_conformance_sync_roundtrip_semantics() -> None:
     env = _ConformanceEnv()
@@ -750,6 +759,13 @@ def test_conformance_streaming_telemetry_semantics() -> None:
         assert token_usage_points, "expected gen_ai.client.token.usage data points"
         assert tuple(token_usage_points[0].explicit_bounds) == expected_token_usage_buckets, (
             f"gen_ai.client.token.usage bucket boundaries mismatch: {tuple(token_usage_points[0].explicit_bounds)}"
+        )
+
+        metadata = env.metric_metadata()
+        assert metadata["gen_ai.client.operation.duration"] == ("GenAI operation duration.", "s")
+        assert metadata["gen_ai.client.token.usage"] == (
+            "Number of input and output tokens used.",
+            "{token}",
         )
     finally:
         env.shutdown()

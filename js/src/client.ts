@@ -267,11 +267,13 @@ export class Agento11yClient {
     this.tracer = this.config.tracer ?? trace.getTracer(instrumentationName);
     this.meter = this.config.meter ?? metrics.getMeter(instrumentationName);
     this.operationDurationHistogram = this.meter.createHistogram(metricOperationDuration, {
+      description: 'GenAI operation duration.',
       unit: 's',
       advice: { explicitBucketBoundaries: durationBucketsSeconds },
     });
     this.tokenUsageHistogram = this.meter.createHistogram(metricTokenUsage, {
-      unit: 'token',
+      description: 'Number of input and output tokens used.',
+      unit: '{token}',
       advice: { explicitBucketBoundaries: tokenUsageBuckets },
     });
     this.ttftHistogram = this.meter.createHistogram(metricTimeToFirstToken, {

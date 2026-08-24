@@ -195,11 +195,13 @@ public final class Agento11yClient implements AutoCloseable {
                 : GlobalOpenTelemetry.getMeter(INSTRUMENTATION_NAME);
 
         this.operationDurationHistogram = meter.histogramBuilder(METRIC_OPERATION_DURATION)
+                .setDescription("GenAI operation duration.")
                 .setUnit("s")
                 .setExplicitBucketBoundariesAdvice(DURATION_BUCKETS_SECONDS)
                 .build();
         this.tokenUsageHistogram = meter.histogramBuilder(METRIC_TOKEN_USAGE)
-                .setUnit("token")
+                .setDescription("Number of input and output tokens used.")
+                .setUnit("{token}")
                 .setExplicitBucketBoundariesAdvice(TOKEN_USAGE_BUCKETS)
                 .build();
         this.ttftHistogram = meter.histogramBuilder(METRIC_TTFT)

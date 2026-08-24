@@ -22,6 +22,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/semconv/v1.41.0/genaiconv"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -2180,22 +2181,22 @@ func reflectIntField(err error, field string) int {
 func newTelemetryInstruments(meter metric.Meter) (telemetryInstruments, error) {
 	out := telemetryInstruments{}
 	var err error
-	out.operationDuration, err = meter.Float64Histogram(
-		metricOperationDuration,
-		metric.WithUnit("s"),
+	duration, err := genaiconv.NewClientOperationDuration(
+		meter,
 		metric.WithExplicitBucketBoundaries(durationBucketsSeconds...),
 	)
 	if err != nil {
 		return telemetryInstruments{}, err
 	}
-	out.tokenUsage, err = meter.Int64Histogram(
-		metricTokenUsage,
-		metric.WithUnit("token"),
+	out.operationDuration = duration.Inst()
+	usage, err := genaiconv.NewClientTokenUsage(
+		meter,
 		metric.WithExplicitBucketBoundaries(tokenUsageBuckets...),
 	)
 	if err != nil {
 		return telemetryInstruments{}, err
 	}
+	out.tokenUsage = usage.Inst()
 	out.timeToFirstToken, err = meter.Float64Histogram(
 		metricTimeToFirstToken,
 		metric.WithUnit("s"),
