@@ -113,9 +113,9 @@ func TestServer_GenerationsExport_StampsLastActivity(t *testing.T) {
 	]}`, backfill.Add(-time.Minute).Format(time.RFC3339Nano), backfill.Format(time.RFC3339Nano)))
 	assert.WithinDuration(t, live, stamp(), time.Second, "a backfill must not sink a live conversation")
 
-	// The list bounds on that stamp, so the conversation stays in a range
-	// that covers its live turn.
-	since := live.Add(-time.Minute).Format(time.RFC3339Nano)
+	// The list bounds on that stamp, so a conversation that started before
+	// the range but finished inside it remains visible.
+	since := live.Add(-30 * time.Second).Format(time.RFC3339Nano)
 	req := newLocalRequest(http.MethodGet, "/api/v1/conversations?since="+url.QueryEscape(since), nil)
 	rr := httptest.NewRecorder()
 	s.ServeHTTP(rr, req)
@@ -395,6 +395,61 @@ func TestServer_ToolMetrics(t *testing.T) {
 	assert.Equal(t, []ToolUsage{{Name: "Bash", Calls: 1, Failures: 1}}, got.Conversations[0].Tools)
 }
 
+func TestServer_SkillsToolsMetricsAndSessionDrilldown(t *testing.T) {
+	srv, storage, _ := newTestServerStorage(t)
+	lower := mustParse(t, "2026-08-21T10:00:00Z")
+	upper := mustParse(t, "2026-08-21T11:00:00Z")
+	writeToolGeneration(t, storage, "conv-match", "g1", "/repo", lower, "call-1", "Bash", true)
+	writeToolGeneration(t, storage, "conv-new", "g1", "/repo", upper, "call-2", "Bash", false)
+	_, err := storage.appendToolSpans([]toolSpanRecord{
+		analyticsSpan("conv-match", "trace-1", "span-1", "call-1", "Bash", lower.Add(time.Second), 2*time.Second, false),
+	})
+	require.NoError(t, err)
+
+	t.Run("tools-only exact response", func(t *testing.T) {
+		req := newLocalRequest(http.MethodGet,
+			"/api/v1/metrics/skills-tools?since=2026-08-21T10:00:00Z&before=2026-08-21T11:00:00Z&workspace=%2Frepo&interval=300", nil)
+		rr := httptest.NewRecorder()
+		srv.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code)
+		assert.NotContains(t, rr.Body.String(), `"skills"`)
+		var got SkillsToolsMetricsResponse
+		decodeJSON(t, io.NopCloser(rr.Body), &got)
+		assert.Equal(t, ToolAnalyticsTotals{Calls: 1, Failures: 1, Tools: 1, Sessions: 1, DurationSamples: 1}, got.Tools.Totals)
+		assert.Equal(t, ToolAnalyticsCoverage{GenerationCalls: 1, ProjectedSpans: 1, MatchedCalls: 1}, got.Tools.Coverage)
+		assert.Equal(t, int64(300), got.Tools.IntervalSeconds)
+		require.Len(t, got.Tools.Rows, 1)
+		assert.Equal(t, "Bash", got.Tools.Rows[0].Name)
+	})
+
+	t.Run("sessions filters before limit", func(t *testing.T) {
+		req := newLocalRequest(http.MethodGet,
+			"/api/v1/conversations?limit=1&tool=Bash&workspace=%2Frepo&since=2026-08-21T10:00:00Z&before=2026-08-21T11:00:00Z", nil)
+		rr := httptest.NewRecorder()
+		srv.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code)
+		var got struct {
+			Conversations []ConversationSummary `json:"conversations"`
+		}
+		decodeJSON(t, io.NopCloser(rr.Body), &got)
+		require.Len(t, got.Conversations, 1)
+		assert.Equal(t, "conv-match", got.Conversations[0].ID)
+	})
+
+	t.Run("invalid exact parameters are rejected", func(t *testing.T) {
+		for _, path := range []string{
+			"/api/v1/metrics/skills-tools?interval=0",
+			"/api/v1/metrics/skills-tools?before=tomorrow",
+			"/api/v1/conversations?tool=Bash&since=",
+			"/api/v1/conversations?tool=Bash&before=tomorrow",
+		} {
+			rr := httptest.NewRecorder()
+			srv.ServeHTTP(rr, newLocalRequest(http.MethodGet, path, nil))
+			assert.Equal(t, http.StatusBadRequest, rr.Code, path)
+		}
+	})
+}
+
 func assertFixedSecurityHeaders(t *testing.T, header http.Header) {
 	t.Helper()
 	assert.Equal(t, "nosniff", header.Get("X-Content-Type-Options"))
@@ -431,6 +486,7 @@ func TestServer_Routing(t *testing.T) {
 		{name: "healthz serves JSON", method: http.MethodGet, path: "/healthz", want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"status":"ok"`},
 		{name: "empty conversation metrics serves an array", method: http.MethodGet, path: "/api/v1/metrics/conversations", want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"conversations":[]`},
 		{name: "empty tool metrics serves an array", method: http.MethodGet, path: "/api/v1/metrics/tools", want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"conversations":[]`},
+		{name: "empty skills-tools metrics serves tools only", method: http.MethodGet, path: "/api/v1/metrics/skills-tools", want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"tools":{"totals":{"calls":0`},
 		{name: "unknown route", method: http.MethodPost, path: "/api/v1/unknown", contentType: wire.ContentTypeJSON, body: "{}", want: http.StatusNotFound},
 		{name: "wrong method on generations export", method: http.MethodPut, path: "/api/v1/generations:export", contentType: wire.ContentTypeJSON, body: "{}", want: http.StatusMethodNotAllowed},
 		{name: "hook evaluate serves JSON", method: http.MethodPost, path: "/api/v1/hooks:evaluate", contentType: wire.ContentTypeJSON, body: `{"phase":"postflight"}`, want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"action":"allow"`},

@@ -90,19 +90,13 @@ function viewProps(overrides: Partial<AnalyticsViewProps> = {}): AnalyticsViewPr
     ],
     tokenIntervalMs: 3_600_000,
     heatmapPoints: [point()],
-    toolUsage: [
-      { id: 'session-costly', tools: [{ name: 'Bash', calls: 4, failures: 1 }] },
-      { id: 'session-efficient', tools: [{ name: 'Read', calls: 3, failures: 0 }] },
-    ],
     loading: false,
     tokenLoading: false,
-    toolLoading: false,
     heatmapLoading: false,
     error: null,
     previousError: null,
     facetError: null,
     tokenError: null,
-    toolError: null,
     heatmapError: null,
     unit: 'cost',
     onUnitChange: vi.fn(),
@@ -163,9 +157,8 @@ describe('analytics workspace routing', () => {
 });
 
 describe('App analytics loading', () => {
-  it('renders completed sources and returns to Analytics from a session', async () => {
+  it('renders analytics and returns from a session', async () => {
     window.history.replaceState({}, '', '/analytics');
-    const pendingTools = new Promise<Response>(() => {});
     const stored = new Map<string, string>();
     vi.stubGlobal('localStorage', {
       getItem: (key: string) => stored.get(key) ?? null,
@@ -181,7 +174,6 @@ describe('App analytics loading', () => {
       }) as Response;
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.startsWith('/api/v1/metrics/tools?')) return pendingTools;
       if (url.startsWith('/api/v1/metrics/conversations?')) {
         return Promise.resolve(response({ conversations: [conversation()], matched_conversations: 1 }));
       }
@@ -202,8 +194,8 @@ describe('App analytics loading', () => {
     render(<App />);
 
     await waitFor(() => expect(screen.getByText('Costly but compact')).toBeTruthy());
-    expect(screen.getByText('Loading tool calls…')).toBeTruthy();
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes('interval=900'))).toBe(true);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/v1/metrics/tools?'))).toBe(false);
 
     const session = document.querySelector<HTMLAnchorElement>('a[data-session-id="session-costly"]');
     if (!session) throw new Error('missing analytics session link');
@@ -245,7 +237,7 @@ describe('AnalyticsView', () => {
       />,
     );
 
-    for (const title of ['Cost over time', 'Workspaces', 'Models', 'Tool calls', 'Sessions', 'Heaviest sessions']) {
+    for (const title of ['Cost over time', 'Workspaces', 'Models', 'Sessions', 'Heaviest sessions']) {
       const panels = screen.getAllByText(title);
       expect(
         panels.some((heading) => heading.parentElement?.parentElement?.textContent?.includes('Last 24 hours')),
@@ -326,39 +318,6 @@ describe('AnalyticsView', () => {
     expect(screen.getAllByText(/vs previous period$/)).toHaveLength(3);
   });
 
-  it('aggregates tool calls for the selected workspace', () => {
-    const selected = conversation();
-    render(
-      <AnalyticsView
-        {...viewProps({ conversations: [selected], totalConversations: 1, workspace: '/worktrees/costly' })}
-      />,
-    );
-
-    expect(screen.getByText('1 of 4 failed')).toBeTruthy();
-    expect(screen.getByText('4 calls')).toBeTruthy();
-    expect(screen.getByText('25% failed')).toBeTruthy();
-    expect(document.querySelector('[data-tool-row="Bash"]')).toBeTruthy();
-    expect(document.querySelector('[data-tool-row="Read"]')).toBeNull();
-  });
-
-  it('distinguishes sessions without tool calls from an empty range', () => {
-    render(<AnalyticsView {...viewProps({ toolUsage: [] })} />);
-    expect(screen.getByText('No tool calls in this range.')).toBeTruthy();
-  });
-
-  it('caps tool rows and rolls the remainder into Other', () => {
-    const tools = Array.from({ length: 11 }, (_, position) => ({
-      name: `Tool ${position + 1}`,
-      calls: 11 - position,
-      failures: position === 0 ? 1 : 0,
-    }));
-    render(<AnalyticsView {...viewProps({ toolUsage: [{ id: 'session-costly', tools }] })} />);
-
-    const rows = document.querySelectorAll('[data-tool-row]');
-    expect(rows).toHaveLength(10);
-    expect(rows[9]?.getAttribute('data-tool-row')).toBe('Other');
-  });
-
   it('refreshes without passing the click event into the fetch callback', () => {
     const onRefresh = vi.fn();
     render(<AnalyticsView {...viewProps({ onRefresh })} />);
@@ -378,9 +337,9 @@ describe('AnalyticsView', () => {
     const refresh = screen.getByRole('button', { name: 'Refresh analytics' });
     const workspace = screen.getByTitle('Filter by workspace');
     const range = screen.getByTitle('Time range');
-    expect(measure.compareDocumentPosition(refresh) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(refresh.compareDocumentPosition(workspace) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(measure.compareDocumentPosition(workspace) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(workspace.compareDocumentPosition(range) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(range.compareDocumentPosition(refresh) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('keeps session rows as real anchors and intercepts only plain clicks', () => {
@@ -520,13 +479,10 @@ describe('AnalyticsView', () => {
         {...viewProps({
           heatmapPoints: [],
           heatmapLoading: true,
-          toolUsage: [],
-          toolError: 'A newer daemon is required.',
         })}
       />,
     );
     expect(screen.getByText('Loading agent usage…')).toBeTruthy();
-    expect(screen.getByText('Failed to load tool calls: A newer daemon is required.')).toBeTruthy();
 
     rerender(<AnalyticsView {...viewProps({ heatmapPoints: [], heatmapError: 'HTTP 500', tokenError: 'HTTP 503' })} />);
     expect(screen.getByText('Failed to load agent usage: HTTP 500')).toBeTruthy();

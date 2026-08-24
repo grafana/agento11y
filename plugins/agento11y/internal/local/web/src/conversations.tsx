@@ -5,6 +5,7 @@ import {
   bucketActivity,
   bucketTokenUsage,
   cacheInputHitPercent,
+  chartBucketMs,
   chartGrid,
   chartTooltipLeft,
   conversationCost,
@@ -28,6 +29,7 @@ import {
 } from './formatters';
 import type { SelectOption } from './notices';
 import { ACTIVE_PILL_BG, Notice, PageHero, PageShell, PillToggle, Select, Stack, SurfaceCard } from './notices';
+import type { ToolSessionFilters } from './routing';
 import { conversationPath, isPlainLeftClick } from './routing';
 import { ConversationSearchPanel, useSearchResults } from './search';
 import { HistoryImportBanner } from './settings-screen';
@@ -2262,7 +2264,7 @@ interface CollapsedGroups {
   sessions: number;
 }
 
-interface ConversationsViewProps {
+interface ConversationsViewBaseProps {
   conversations: ConversationSummary[];
   /** Conversations the daemon holds before the list's range bounds; null from an older daemon. */
   storeCount: number | null;
@@ -2295,6 +2297,19 @@ interface ConversationsViewProps {
   history?: React.ComponentProps<typeof HistoryImportBanner>['history'] | null;
 }
 
+export type ConversationsViewProps = ConversationsViewBaseProps &
+  (
+    | { toolFilter: ToolSessionFilters; onClearToolFilter: () => void }
+    | { toolFilter?: null; onClearToolFilter?: never }
+  );
+
+function toolRangeLabel(filter: ToolSessionFilters) {
+  if (filter.since && filter.before) return `${filter.since} to ${filter.before}`;
+  if (filter.since) return `From ${filter.since}`;
+  if (filter.before) return `Before ${filter.before}`;
+  return 'All time';
+}
+
 export function ConversationsView({
   conversations,
   storeCount,
@@ -2324,10 +2339,20 @@ export function ConversationsView({
   refreshing,
   onOpenSettings,
   history,
+  toolFilter,
+  onClearToolFilter,
 }: ConversationsViewProps) {
   const now = Date.now();
   const prices = useModelPrices();
   const range = timeRangeOption(timeRange);
+  const rangeLabel = toolFilter ? toolRangeLabel(toolFilter) : range.label;
+  const exactWindow = useMemo(() => {
+    if (!toolFilter?.before) return null;
+    const end = Date.parse(toolFilter.before);
+    const start = toolFilter.since ? Date.parse(toolFilter.since) : undefined;
+    if (!Number.isFinite(end) || (start != null && (!Number.isFinite(start) || start >= end))) return null;
+    return { start, end };
+  }, [toolFilter]);
   const trimmedQuery = query.trim();
   const searchActive = trimmedQuery.length > 0;
   const search = useSearchResults(query);
@@ -2344,13 +2369,13 @@ export function ConversationsView({
   const [modelFilter, setModelFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const rangeFiltered = useMemo(() => {
-    if (range.ms == null) return conversations;
+    if (toolFilter || range.ms == null) return conversations;
     const from = now - range.ms;
     return conversations.filter((c) => {
       const t = conversationTime(c);
       return t != null && t >= from && t <= now;
     });
-  }, [conversations, range.ms, now]);
+  }, [conversations, range.ms, now, toolFilter]);
 
   // Explicit group overrides survive filters because they are keyed by group.
   // A groupBy change resets them because the keys change meaning.
@@ -2602,28 +2627,44 @@ export function ConversationsView({
       }),
     [],
   );
-  // Both metrics share one window so switching the chart between
-  // them doesn't shift the time axis; with per-metric windows the
-  // "All" range drifts when the datasets' extents differ. The window
-  // is snapped to the bucket ladder the token endpoint aggregates on,
-  // so each server point falls inside exactly one bar.
+  // Outside an exact tool drilldown, both metrics share one window so
+  // switching metrics does not shift the time axis. The window is snapped to
+  // the token endpoint's bucket ladder, so each server point occupies one bar.
   //
   // A fixed range asks the server for the width it will draw on. Only
   // the "All" range needs the reported width as a floor: there the server
   // derives it from the whole store while the bars follow the visible
   // window, which a model facet can narrow.
-  const serverIntervalMs = range.ms == null ? tokenIntervalMs : 0;
+  const serverIntervalMs = toolFilter || range.ms == null ? tokenIntervalMs : 0;
   const chartWindow = useMemo(() => {
     const times = filtered.map(conversationTime).concat(tokenFiltered.map(tokenPointTime));
-    return chartGrid(times, timeRange, now, serverIntervalMs);
-  }, [filtered, tokenFiltered, timeRange, now, serverIntervalMs]);
+    if (!toolFilter || !exactWindow) return chartGrid(times, timeRange, now, serverIntervalMs);
+    let start = exactWindow.start;
+    if (start == null) {
+      for (const value of times) {
+        if (value != null && Number.isFinite(value) && (start == null || value < start)) start = value;
+      }
+    }
+    start ??= exactWindow.end - 60 * 60 * 1000;
+    const bucketMs = chartBucketMs(exactWindow.end - start, serverIntervalMs);
+    const gridStart = Math.floor(start / bucketMs) * bucketMs;
+    const gridEnd = Math.ceil(Math.max(exactWindow.end, gridStart + bucketMs) / bucketMs) * bucketMs;
+    return {
+      start: gridStart,
+      end: gridEnd,
+      bucketMs,
+      count: Math.round((gridEnd - gridStart) / bucketMs),
+    };
+  }, [filtered, tokenFiltered, timeRange, now, serverIntervalMs, toolFilter, exactWindow]);
   const activity = useMemo(
     () =>
-      bucketActivity(filtered, timeRange, now, {
-        window: chartWindow,
-        count: chartWindow.count,
-      }),
-    [filtered, timeRange, now, chartWindow],
+      toolFilter
+        ? { buckets: [], bucketLabel: '' }
+        : bucketActivity(filtered, timeRange, now, {
+            window: chartWindow,
+            count: chartWindow.count,
+          }),
+    [filtered, timeRange, now, chartWindow, toolFilter],
   );
   const tokenUsage = useMemo(
     () =>
@@ -2633,6 +2674,7 @@ export function ConversationsView({
       }),
     [tokenFiltered, timeRange, now, chartWindow],
   );
+  const effectiveChartMetric = toolFilter ? 'tokens' : chartMetric;
   // Bucket drill-down from a chart bar click: the list narrows to
   // conversations active inside the picked bucket, while the charts
   // keep the full window and just highlight the selection.
@@ -2829,7 +2871,7 @@ export function ConversationsView({
                 },
               ]
             : [
-                { label: 'Range', value: range.label },
+                { label: 'Range', value: rangeLabel },
                 {
                   label: 'Workspaces',
                   value: String(workspaces.length),
@@ -2846,15 +2888,15 @@ export function ConversationsView({
         query={query}
         onQueryChange={setQuery}
         inputRef={searchInputRef}
-        timeRange={searchActive ? null : timeRange}
-        onTimeRangeChange={searchActive ? null : setTimeRange}
+        timeRange={searchActive || toolFilter ? null : timeRange}
+        onTimeRangeChange={searchActive || toolFilter ? null : setTimeRange}
         workspaces={searchActive ? [] : workspaces}
         workspace={searchActive ? undefined : activeWorkspace}
         onWorkspaceChange={searchActive ? undefined : setWorkspace}
         workspaceSessionCount={rangeFiltered.length}
         workspaceTotalCost={totalCost}
         now={now}
-        rangeLabel={range.label}
+        rangeLabel={rangeLabel}
         groupBy={searchActive ? undefined : groupBy}
         onGroupByChange={searchActive ? undefined : setGroupBy}
         agentFilter={searchActive ? undefined : activeAgentFilter}
@@ -2873,6 +2915,35 @@ export function ConversationsView({
         onInputKeyDown={onSearchInputKey}
         rightAdornment={searchRightAdornment}
       />
+      {toolFilter && !searchActive && (
+        <div className="session-entity-filter" role="status">
+          <span>
+            Tool <code>{toolFilter.tool || '(blank)'}</code>
+            {toolFilter.workspace != null && (
+              <Fragment>
+                {' · '}workspace <code>{toolFilter.workspace || '(unknown)'}</code>
+              </Fragment>
+            )}
+            {toolFilter.since && (
+              <Fragment>
+                {' · '}from <code>{toolFilter.since}</code>
+              </Fragment>
+            )}
+            {toolFilter.before && (
+              <Fragment>
+                {' · '}before <code>{toolFilter.before}</code>
+              </Fragment>
+            )}
+          </span>
+          <span>
+            Token chart covers all generation usage in the exact time range, not only the selected tool. Session totals
+            cover each matched session's full lifetime.
+          </span>
+          <button type="button" onClick={onClearToolFilter}>
+            Clear tool filter
+          </button>
+        </div>
+      )}
       {searchActive ? (
         <ConversationSearchPanel
           query={trimmedQuery}
@@ -2889,7 +2960,7 @@ export function ConversationsView({
       ) : (
         <Fragment>
           <KpiStrip kpi={kpi} />
-          {chartMetric === 'activity' ? (
+          {effectiveChartMetric === 'activity' ? (
             <ActivityChart
               data={activity.buckets}
               bucketLabel={activity.bucketLabel}
@@ -2907,9 +2978,15 @@ export function ConversationsView({
               onModelChange={setTokenModel}
               hidden={hiddenSeries}
               onToggleSeries={toggleSeries}
-              selection={bucketSel}
-              onBucketClick={onBucketClick}
-              switcher={<ChartSwitch value={chartMetric} onChange={setChartMetric} />}
+              selection={toolFilter ? null : bucketSel}
+              onBucketClick={toolFilter ? undefined : onBucketClick}
+              switcher={
+                toolFilter ? (
+                  <span style={{ color: 'var(--fg2)', fontSize: 12 }}>Tokens in exact range</span>
+                ) : (
+                  <ChartSwitch value={chartMetric} onChange={setChartMetric} />
+                )
+              }
             />
           )}
 
@@ -3028,6 +3105,7 @@ export function ConversationsView({
                             older daemon) falls back to reading the page. */}
             {!error &&
               !loading &&
+              !toolFilter &&
               activeWorkspace == null &&
               rangeFiltered.length === 0 &&
               (storeCount === 0 || (storeCount == null && conversations.length === 0)) && (
@@ -3042,6 +3120,7 @@ export function ConversationsView({
               )}
             {!error &&
               !loading &&
+              !toolFilter &&
               activeWorkspace == null &&
               rangeFiltered.length === 0 &&
               ((storeCount ?? 0) > 0 || conversations.length > 0) && (
@@ -3055,7 +3134,7 @@ export function ConversationsView({
                   No sessions in <code style={{ color: 'var(--fg1)' }}>{range.label}</code>.
                 </div>
               )}
-            {!error && !loading && selectedWorkspaceRangeAggregate?.count === 0 && (
+            {!error && !loading && !toolFilter && selectedWorkspaceRangeAggregate?.count === 0 && (
               <div
                 style={{
                   padding: '16px 18px',
@@ -3064,6 +3143,17 @@ export function ConversationsView({
                 }}
               >
                 No sessions in this range.
+              </div>
+            )}
+            {!error && !loading && toolFilter && conversations.length === 0 && (
+              <div
+                style={{
+                  padding: '16px 18px',
+                  color: 'var(--fg2)',
+                  fontSize: 12,
+                }}
+              >
+                No sessions match this exact tool, workspace, and time range.
               </div>
             )}
             {!error &&

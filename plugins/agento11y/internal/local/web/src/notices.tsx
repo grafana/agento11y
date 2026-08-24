@@ -273,7 +273,10 @@ export function PageShell({ children, maxWidth = PAGE_MAX_WIDTH, style }: PageSh
         width: '100%',
         maxWidth,
         margin: '0 auto',
-        padding: '34px 24px 96px',
+        paddingTop: 34,
+        paddingRight: 24,
+        paddingBottom: 96,
+        paddingLeft: 24,
         ...(style || {}),
       }}
     >
@@ -282,7 +285,7 @@ export function PageShell({ children, maxWidth = PAGE_MAX_WIDTH, style }: PageSh
   );
 }
 
-interface PageHeroStat {
+export interface PageHeroStat {
   label: string;
   value: ReactNode;
   tone?: string;

@@ -120,29 +120,33 @@ type ConversationDetail struct {
 	Generations []GenerationView `json:"generations"`
 }
 
-// ConversationListOptions bounds one conversation-list request.
-//
-// The page is cut before any file is decoded: entries are ordered by file
-// modification time (newest first) and only the requested page is
-// summarised, so the cost of a request follows Limit rather than the size
-// of the store.
+// ConversationListOptions selects rows for list and metrics queries. Limit
+// caps returned rows; exact list filters and metrics aggregation can decode
+// the full candidate set before applying it.
 type ConversationListOptions struct {
-	// Limit caps how many conversations are summarised and returned.
-	// ≤ 0 means unbounded.
+	// Limit caps how many matching conversations are returned. Exact requests
+	// apply their filters before a candidate counts toward this cap. ≤ 0 means
+	// unbounded.
 	Limit int
-	// Since drops conversations whose last activity predates it. The bound
-	// is inclusive, so a conversation whose last activity is exactly Since
-	// is kept. It applies to the file modification time, which every append
-	// stamps with the newest activity the file holds. Zero means no lower
-	// bound.
+	// Since is inclusive. Plain list requests compare it with last activity;
+	// exact Sessions and analytics queries compare generation or reconciled
+	// tool-observation timestamps. Zero means no lower bound.
 	Since time.Time
-	// Before is an exclusive generation-time upper bound for analytics
-	// queries. ListConversations ignores it.
+	// Before is an exclusive generation-time upper bound for analytics and
+	// exact Sessions queries.
 	Before time.Time
-	// Workspace filters analytics queries when non-nil. A pointer to the
-	// empty string selects conversations whose lifetime cwd is unknown.
-	// ListConversations ignores it.
+	// Workspace filters analytics and exact Sessions queries when non-nil. A
+	// pointer to the empty string selects conversations whose lifetime cwd is
+	// unknown.
 	Workspace *string
+	// Tool filters exact Sessions queries to conversations with an observation
+	// whose name is exactly this value. A pointer to the empty string matches
+	// no valid tool.
+	Tool *string
+	// Exact applies the workspace, tool, and half-open generation-time filters
+	// before Limit. The plain list leaves this false to retain its bounded
+	// file-order fast path.
+	Exact bool
 }
 
 // ToolUsage is one tool's totals within a conversation.
@@ -160,17 +164,14 @@ type ConversationToolUsage struct {
 
 // ListConversations produces one ConversationSummary per conversation
 // file, newest-first by file modification time with ties broken by
-// conversation id, so paging is deterministic. total counts the
-// conversation files in the store before Limit and Since: a caller holding
-// one page still knows whether the store is empty. A missing directory
-// returns an empty slice and a zero total (first-launch case).
+// conversation id, so paging is deterministic. total counts conversation
+// files before filters and Limit, so a caller still knows whether the store
+// is empty. A missing directory returns an empty slice and a zero total.
 //
-// The limit can apply before the decode only because the order comes from
-// the file modification time rather than the decoded last_activity. The two
-// agree because an append stamps the file with the newest activity it holds
-// (recordActivity), and the modification-time pass at startup sets the same
-// stamp on every file whose records disagree with it. A copy or restore
-// that rewrites modification times reorders the list until the next append.
+// A plain list can stop decoding at Limit because file modification time and
+// last activity agree. An exact Sessions request instead filters generation
+// or reconciled tool observations before Limit; it still returns each
+// matching conversation's lifetime summary.
 func (s *Storage) ListConversations(opts ConversationListOptions) (page []ConversationSummary, total int, err error) {
 	files, err := s.conversationFiles()
 	if err != nil {
@@ -181,12 +182,20 @@ func (s *Storage) ListConversations(opts ConversationListOptions) (page []Conver
 		capacity = opts.Limit
 	}
 	out := make([]ConversationSummary, 0, capacity)
+	var toolMatches map[string]bool
+	if opts.Exact && opts.Tool != nil {
+		toolMatches, err = s.conversationToolMatches(*opts.Tool, opts.Since, opts.Before, opts.Workspace)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
 	var skipped int
 	defer func() { s.logSkipped("list conversations", skipped) }()
 	for _, f := range files {
-		// Files are newest-first, so the first one below the bound ends
-		// the walk without opening it.
-		if !opts.Since.IsZero() && f.modTime.Before(opts.Since) {
+		// A generation-side lower bound can stop on file activity. A tool
+		// sidecar can be newer than its conversation file, so a tool-filtered
+		// walk must inspect every conversation candidate before limiting.
+		if !opts.Since.IsZero() && opts.Tool == nil && f.modTime.Before(opts.Since) {
 			break
 		}
 		entry, err := s.summaries.get(f)
@@ -197,6 +206,18 @@ func (s *Storage) ListConversations(opts ConversationListOptions) (page []Conver
 		if !entry.ok {
 			continue // empty or all-invalid file
 		}
+		if opts.Exact {
+			if !workspaceMatches(entry.summary.Workspace, opts.Workspace) {
+				continue
+			}
+			if opts.Tool != nil {
+				if !toolMatches[f.id] {
+					continue
+				}
+			} else if (!opts.Since.IsZero() || !opts.Before.IsZero()) && !entryHasGenerationInPeriod(entry, opts.Since, opts.Before) {
+				continue
+			}
+		}
 		out = append(out, entry.summary)
 		if opts.Limit > 0 && len(out) == opts.Limit {
 			break
@@ -204,6 +225,30 @@ func (s *Storage) ListConversations(opts ConversationListOptions) (page []Conver
 	}
 	s.summaries.prune(files)
 	return out, len(files), nil
+}
+
+func entryHasGenerationInPeriod(entry *fileSummary, since, before time.Time) bool {
+	for _, generation := range entry.generations {
+		if inPeriod(generation.timestamp, since, before) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Storage) conversationToolMatches(tool string, since, before time.Time, workspace *string) (map[string]bool, error) {
+	observations, err := s.toolObservations()
+	if err != nil {
+		return nil, err
+	}
+	matches := map[string]bool{}
+	for _, observation := range observations {
+		if observation.HasSession && observation.Name == tool && inPeriod(observation.Timestamp, since, before) &&
+			workspaceMatches(observation.Workspace, workspace) {
+			matches[observation.ConversationID] = true
+		}
+	}
+	return matches, nil
 }
 
 // ConversationMetrics returns lifetime conversation metadata with every

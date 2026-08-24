@@ -63,7 +63,9 @@ type Storage struct {
 	// list and the token chart have read, so an unchanged file is not
 	// decoded again. It carries its own mutex; the read paths take no other
 	// lock.
-	summaries summaryCache
+	summaries         summaryCache
+	toolSpans         toolSpanCache
+	toolSpansAppendMu sync.Mutex
 
 	// chtimes stamps a file's modification time. Tests replace it to
 	// exercise the failure path; a nil value uses os.Chtimes.
@@ -77,7 +79,8 @@ type Storage struct {
 
 // NewStorage returns a Storage rooted at dir. The directory, the
 // conversations subdir, and their parents are created with 0o700
-// permissions on first use.
+// permissions on first use. Optional sidecar directories are created only
+// when their first record is appended.
 func NewStorage(dir string) (*Storage, error) {
 	if dir == "" {
 		return nil, fmt.Errorf("local storage: empty dir")
