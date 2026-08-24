@@ -36,6 +36,15 @@ func sessionIDs(sessions []SessionPreview) []string {
 	return out
 }
 
+type multiSessionStub struct {
+	*stubImporter
+	previews func(context.Context, string) ([]SessionPreview, error)
+}
+
+func (s *multiSessionStub) Previews(ctx context.Context, path string) ([]SessionPreview, error) {
+	return s.previews(ctx, path)
+}
+
 func TestDiscoverWalksRootsAndSortsByActivity(t *testing.T) {
 	root := t.TempDir()
 	base := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
@@ -73,6 +82,61 @@ func TestDiscoverWalksRootsAndSortsByActivity(t *testing.T) {
 		if s.LastActivityAt.IsZero() {
 			t.Fatalf("session %q has no last activity", s.SessionID)
 		}
+	}
+}
+
+func TestDiscoverExpandsMultiSessionSources(t *testing.T) {
+	root := t.TempDir()
+	now := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
+	path := writeFile(t, filepath.Join(root, "opencode.db"), strings.Repeat("x", 100))
+	setModTime(t, path, now.Add(-time.Minute))
+	old := now.Add(-time.Hour)
+
+	imp := &multiSessionStub{
+		stubImporter: &stubImporter{roots: []string{path}},
+		previews: func(context.Context, string) ([]SessionPreview, error) {
+			return []SessionPreview{
+				{SessionID: "session-b", LastActivityAt: old},
+				{SessionID: "session-a", LastActivityAt: old},
+				{SessionID: "session-active", LastActivityAt: now.Add(-time.Minute), SizeBytes: 7},
+			}, nil
+		},
+	}
+
+	got, err := Discover(context.Background(), AgentOpenCode, imp, DiscoverOptions{
+		Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if ids := sessionIDs(got.Sessions); !equalStrings(ids, []string{"session-active", "session-a", "session-b"}) {
+		t.Fatalf("session order = %v", ids)
+	}
+	for _, sess := range got.Sessions {
+		if sess.Agent != AgentOpenCode || sess.SourcePath != path {
+			t.Fatalf("session %q identity = (%q, %q)", sess.SessionID, sess.Agent, sess.SourcePath)
+		}
+	}
+	if got.Sessions[0].SizeBytes != 7 || !got.Sessions[0].Active {
+		t.Fatalf("active preview = %+v", got.Sessions[0])
+	}
+	for _, sess := range got.Sessions[1:] {
+		if sess.SizeBytes != 0 {
+			t.Fatalf("session %q inherited shared file size %d", sess.SessionID, sess.SizeBytes)
+		}
+		if sess.Active {
+			t.Fatalf("old session %q inherited the shared file activity", sess.SessionID)
+		}
+	}
+
+	again, err := Discover(context.Background(), AgentOpenCode, imp, DiscoverOptions{
+		Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("second Discover: %v", err)
+	}
+	if ids := sessionIDs(again.Sessions); !equalStrings(ids, sessionIDs(got.Sessions)) {
+		t.Fatalf("second session order = %v, first = %v", ids, sessionIDs(got.Sessions))
 	}
 }
 

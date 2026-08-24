@@ -55,6 +55,33 @@ func TestIdentityAndGenerationIDVaryWithEveryField(t *testing.T) {
 	}
 }
 
+func TestStableTurnIDIgnoresPositionChanges(t *testing.T) {
+	ref := baseRef()
+	ref.TurnIDStable = true
+	moved := ref
+	moved.TurnIndex++
+	if moved.GenerationID() != ref.GenerationID() {
+		t.Fatal("stable turn ID changed the generation ID after a position change")
+	}
+	if moved.Identity() != ref.Identity() {
+		t.Fatal("stable turn ID changed the ledger key after a position change")
+	}
+
+	changed := ref
+	changed.TurnID = "req_xyz"
+	if changed.GenerationID() == ref.GenerationID() || changed.Identity() == ref.Identity() {
+		t.Fatal("different stable turn IDs received the same identity")
+	}
+
+	withoutID := ref
+	withoutID.TurnID = ""
+	movedWithoutID := withoutID
+	movedWithoutID.TurnIndex++
+	if movedWithoutID.GenerationID() == withoutID.GenerationID() || movedWithoutID.Identity() == withoutID.Identity() {
+		t.Fatal("position did not distinguish turns without a stable turn ID")
+	}
+}
+
 func TestIdentityLeaksNoSourceText(t *testing.T) {
 	ref := baseRef()
 	key := string(ref.Identity())
@@ -105,6 +132,24 @@ func TestDetectCollisions(t *testing.T) {
 			previews: []SessionPreview{
 				{Agent: AgentCodex, SessionID: "s1", SourcePath: "/a.jsonl"},
 				{Agent: AgentClaudeCode, SessionID: "s1", SourcePath: "/b.jsonl"},
+			},
+		},
+		{
+			name: "mapped conversation in two files collides",
+			previews: []SessionPreview{
+				{Agent: AgentOpenCode, SessionID: "child-a", ConversationID: "root", SourcePath: "/a.db"},
+				{Agent: AgentOpenCode, SessionID: "child-b", ConversationID: "root", SourcePath: "/b.db"},
+			},
+			want: []Collision{{
+				Agent: AgentOpenCode, SessionID: "root",
+				Sources: []string{"/a.db", "/b.db"},
+			}},
+		},
+		{
+			name: "same session id in distinct conversations is not a collision",
+			previews: []SessionPreview{
+				{Agent: AgentOpenCode, SessionID: "child", ConversationID: "root-a", SourcePath: "/a.db"},
+				{Agent: AgentOpenCode, SessionID: "child", ConversationID: "root-b", SourcePath: "/b.db"},
 			},
 		},
 		{

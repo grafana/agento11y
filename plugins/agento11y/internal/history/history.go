@@ -3,15 +3,15 @@
 //
 // The package owns everything an importer does not: the agent registry,
 // filesystem discovery, selection filtering, redaction and truncation, the
-// idempotency ledger, and backdated export. A per-agent importer supplies only
-// four small methods (see [Importer]); everything else is shared.
+// idempotency ledger, and backdated export. A per-agent importer supplies the
+// source and turn readers (see [Importer]); everything else is shared.
 //
 // Nothing here decodes prompt, response, thinking, or tool text outside
-// [Importer.Turns]. Discovery reads a bounded window of each session file to
-// count turns and pick out metadata, but no part of those bytes is decoded into
-// content, returned, exported, or stored; the ledger is content-free by
-// construction. A user can therefore inspect what would be imported without any
-// of it being surfaced or kept.
+// [Importer.Turns]. Discovery reads bounded windows from single-session files
+// or content-free metadata from a multi-session source. It returns, exports,
+// and stores none of the source content; the ledger is content-free by
+// construction. A user can therefore inspect what would be imported without
+// any of it being surfaced or kept.
 package history
 
 import (
@@ -39,19 +39,21 @@ const (
 	AgentClaudeCode AgentID = "claude-code"
 	AgentCodex      AgentID = "codex"
 	AgentCursor     AgentID = "cursor"
+	AgentOpenCode   AgentID = "opencode"
 	AgentPi         AgentID = "pi"
 )
 
 // SourceRef locates a single historical turn on disk. It is content-free: it
 // carries identity (which session, file, and turn) but never prompt, response,
 // or tool payloads. It is the input to both the deterministic generation ID and
-// the hashed ledger key, so its fields must stay stable across releases.
+// the hashed ledger key, so its identity fields must stay stable across releases.
 type SourceRef struct {
-	Agent      AgentID
-	SessionID  string // native session or conversation ID
-	SourcePath string // file the session was read from
-	TurnIndex  int    // 0-based position within the session
-	TurnID     string // native turn or message ID when the agent provides one
+	Agent        AgentID
+	SessionID    string // native session or conversation ID
+	SourcePath   string // file the session was read from
+	TurnIndex    int    // 0-based position within the session
+	TurnID       string // native turn or message ID when the agent provides one
+	TurnIDStable bool   // TurnID stays stable when earlier turns change
 }
 
 // SessionPreview is the metadata-only view of a discovered session. It is what
@@ -60,6 +62,7 @@ type SourceRef struct {
 type SessionPreview struct {
 	Agent          AgentID
 	SessionID      string
+	ConversationID string // mapped root used for collision detection; empty means SessionID
 	Title          string
 	Workspace      string // workspace or repo path, when known
 	SourcePath     string // file the session lives in
@@ -120,8 +123,9 @@ type ImportResult struct {
 
 // Importer reads one agent's local history. The framework owns walking,
 // warning collection, active-session detection, sorting, filtering, redaction,
-// the ledger, and export, so an importer for an agent that already has a Go
-// live mapper is four small methods.
+// the ledger, and export. An importer implements Preview for a source that
+// holds one session. A source that holds several sessions also implements
+// [MultiSessionImporter].
 //
 // Register an implementation from its own file's init with [Register].
 type Importer interface {
@@ -150,6 +154,14 @@ type Importer interface {
 	// memory: rollouts of several hundred megabytes exist. Content is raw here;
 	// the framework runs [Sanitizer] once before export.
 	Turns(ctx context.Context, sess SessionPreview) iter.Seq2[HistoricalGeneration, error]
+}
+
+// MultiSessionImporter reads a source file that holds several sessions.
+// Discovery uses Previews instead of Preview and takes every returned preview
+// as complete, including its size and activity timestamps.
+type MultiSessionImporter interface {
+	Importer
+	Previews(ctx context.Context, path string) ([]SessionPreview, error)
 }
 
 // AgentSpec is the static, content-free description of a supported agent.

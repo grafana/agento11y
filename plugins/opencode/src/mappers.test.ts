@@ -17,7 +17,7 @@ import {
 const redactor = createRedactor();
 
 // A syntactically valid Grafana Cloud token that matches the tier-1 pattern.
-const GRAFANA_CLOUD_TOKEN = "glc_abcdefghijklmnopqrstuvwxyz0123456789";
+const GRAFANA_CLOUD_TOKEN = "glc_abcdefghijklmnopqrstuvwxyz0123456789"; // trufflehog:ignore
 
 function makeAssistantMsg(
   overrides?: Partial<AssistantMessage>,
@@ -132,7 +132,7 @@ describe("mapInputMessages", () => {
     expect(mapInputMessages(parts, redactor)).toHaveLength(0);
   });
 
-  it("skips text parts with empty or whitespace-only text", () => {
+  it("skips empty and ignored text parts", () => {
     const parts = [
       {
         id: "p1",
@@ -157,6 +157,14 @@ describe("mapInputMessages", () => {
       },
       {
         id: "p4",
+        sessionID: "s1",
+        messageID: "m1",
+        type: "text" as const,
+        text: "user only",
+        ignored: true,
+      },
+      {
+        id: "p5",
         sessionID: "s1",
         messageID: "m1",
         type: "text" as const,
@@ -251,6 +259,51 @@ describe("mapOutputMessages", () => {
     expect(result[1].parts?.[0].type).toBe("tool_result");
     const toolResult = (result[1].parts?.[0] as any).toolResult;
     expect(toolResult.content).toBe("test output");
+  });
+
+  it.each([
+    {
+      name: "invalid tool",
+      tool: "invalid",
+      metadata: {},
+      wantError: true,
+    },
+    {
+      name: "failed bash",
+      tool: "bash",
+      metadata: { exit: 1 },
+      wantError: true,
+    },
+    {
+      name: "successful bash",
+      tool: "bash",
+      metadata: { exit: 0 },
+      wantError: false,
+    },
+  ])("classifies $name results", ({ tool, metadata, wantError }) => {
+    const parts = [
+      {
+        id: "p1",
+        sessionID: "s1",
+        messageID: "m1",
+        type: "tool" as const,
+        callID: "call-1",
+        tool,
+        state: {
+          status: "completed" as const,
+          input: {},
+          output: "output",
+          title: "Tool",
+          metadata,
+          time: { start: 1000, end: 2000 },
+        },
+      },
+    ] as Part[];
+
+    const result = mapOutputMessages(parts, redactor);
+    const toolResult = (result[1].parts?.[0] as any).toolResult;
+    expect(Boolean(toolResult.isError)).toBe(wantError);
+    expect(toolResult.content).toBe("output");
   });
 
   it("keeps message text but omits tool bodies in no_tool_content mode", () => {

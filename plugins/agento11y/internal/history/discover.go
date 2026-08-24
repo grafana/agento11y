@@ -35,11 +35,9 @@ type DiscoverOptions struct {
 // Discover walks the importer's roots, previews every matching file, and
 // returns the sessions sorted most-recent-first.
 //
-// It is the only discovery implementation. Each importer contributes
-// [Importer.Roots], [Importer.Match], and [Importer.Preview]; walking,
-// cancellation, warning collection, active-session detection, and ordering are
-// shared, so a new importer for an agent with a Go live mapper adds no
-// scaffolding.
+// It is the only discovery implementation. Each importer contributes roots,
+// path matching, previewing, and turn decoding. Walking, cancellation, warning
+// collection, active-session detection, and ordering are shared.
 func Discover(ctx context.Context, agent AgentID, imp Importer, opts DiscoverOptions) (Discovery, error) {
 	if imp == nil {
 		return Discovery{}, fmt.Errorf("history: no importer for %q", agent)
@@ -88,14 +86,16 @@ func Discover(ctx context.Context, agent AgentID, imp Importer, opts DiscoverOpt
 	}
 	d.Sessions = sessions
 
-	// Most recent first, with the path as the tie-break so two sessions with
-	// the same timestamp keep a stable order across runs.
+	// Most recent first, with content-free identity fields as stable ties.
 	sort.SliceStable(d.Sessions, func(i, j int) bool {
 		a, b := d.Sessions[i], d.Sessions[j]
 		if !a.LastActivityAt.Equal(b.LastActivityAt) {
 			return a.LastActivityAt.After(b.LastActivityAt)
 		}
-		return a.SourcePath < b.SourcePath
+		if a.SourcePath != b.SourcePath {
+			return a.SourcePath < b.SourcePath
+		}
+		return a.SessionID < b.SessionID
 	})
 	return d, nil
 }
@@ -105,9 +105,8 @@ func Discover(ctx context.Context, agent AgentID, imp Importer, opts DiscoverOpt
 // does not depend on which worker finished first.
 func previewAll(ctx context.Context, agent AgentID, imp Importer, paths []string, at time.Time, window time.Duration) ([]SessionPreview, []string, error) {
 	type slot struct {
-		preview SessionPreview
-		ok      bool
-		warning string
+		previews []SessionPreview
+		warning  string
 	}
 	slots := make([]slot, len(paths))
 
@@ -131,6 +130,23 @@ func previewAll(ctx context.Context, agent AgentID, imp Importer, paths []string
 					return
 				}
 				path := paths[i]
+				if multi, ok := imp.(MultiSessionImporter); ok {
+					previews, err := multi.Previews(ctx, path)
+					if err != nil {
+						if ctx.Err() == nil {
+							slots[i] = slot{warning: fmt.Sprintf("read %s: %v", path, err)}
+						}
+						continue
+					}
+					for j := range previews {
+						previews[j].Agent = agent
+						previews[j].SourcePath = path
+						previews[j].Active = isActiveMod(previews[j].LastActivityAt, at, window)
+					}
+					slots[i] = slot{previews: previews}
+					continue
+				}
+
 				preview, ok, err := imp.Preview(ctx, path)
 				if err != nil {
 					if ctx.Err() == nil {
@@ -161,7 +177,7 @@ func previewAll(ctx context.Context, agent AgentID, imp Importer, paths []string
 					}
 					preview.Active = isActiveMod(written, at, window)
 				}
-				slots[i] = slot{preview: preview, ok: true}
+				slots[i] = slot{previews: []SessionPreview{preview}}
 			}
 		})
 	}
@@ -173,12 +189,11 @@ func previewAll(ctx context.Context, agent AgentID, imp Importer, paths []string
 	sessions := make([]SessionPreview, 0, len(slots))
 	var warnings []string
 	for _, s := range slots {
-		switch {
-		case s.warning != "":
+		if s.warning != "" {
 			warnings = append(warnings, s.warning)
-		case s.ok:
-			sessions = append(sessions, s.preview)
+			continue
 		}
+		sessions = append(sessions, s.previews...)
 	}
 	return sessions, warnings, nil
 }

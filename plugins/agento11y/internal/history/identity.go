@@ -21,12 +21,9 @@ func hashFields(parts ...string) string {
 
 // GenerationID derives the stable generation ID for a turn. Re-importing the
 // same source turn always yields the same ID, and that stability is what makes
-// export idempotent across runs. TurnIndex is included so two turns in one
-// session never collide even when the agent gives them no native turn ID.
+// export idempotent across runs.
 func (r SourceRef) GenerationID() string {
-	return genIDPrefix + "-" + hashFields(
-		string(r.Agent), r.SessionID, r.SourcePath, strconv.Itoa(r.TurnIndex), r.TurnID,
-	)[:24]
+	return genIDPrefix + "-" + r.identityHash()[:24]
 }
 
 // SourceIdentity is the opaque, hashed ledger key for a turn. It is a full
@@ -36,25 +33,29 @@ type SourceIdentity string
 
 // Identity returns the hashed ledger key for the turn.
 func (r SourceRef) Identity() SourceIdentity {
-	return SourceIdentity(hashFields(
-		string(r.Agent), r.SessionID, r.SourcePath, strconv.Itoa(r.TurnIndex), r.TurnID,
-	))
+	return SourceIdentity(r.identityHash())
 }
 
-// Collision reports a native session ID claimed by more than one source.
-// Imported generations keep the native session ID as the conversation ID, so
-// two different files reusing one ID would silently merge into one
-// conversation. Hash-derived generation IDs cannot collide by construction.
-// Detection therefore lives at the session-ID layer, where reuse is real.
+func (r SourceRef) identityHash() string {
+	turnIndex := strconv.Itoa(r.TurnIndex)
+	if r.TurnIDStable && r.TurnID != "" {
+		turnIndex = ""
+	}
+	return hashFields(string(r.Agent), r.SessionID, r.SourcePath, turnIndex, r.TurnID)
+}
+
+// Collision reports a mapped conversation ID claimed by more than one source.
+// Two different files reusing one conversation ID would otherwise merge in the
+// viewer. Hash-derived generation IDs cannot collide by construction.
 type Collision struct {
 	Agent     AgentID
-	SessionID string
+	SessionID string   // mapped conversation ID
 	Sources   []string // distinct source paths claiming the ID
 }
 
-// DetectCollisions returns the sessions whose native ID is claimed by more than
-// one source path within one agent. The same session discovered twice at the
-// same path is not a collision; only differing source paths are reported.
+// DetectCollisions returns the conversations claimed by more than one source
+// path within one agent. The same conversation discovered twice at one path is
+// not a collision; only differing source paths are reported.
 func DetectCollisions(previews []SessionPreview) []Collision {
 	type key struct {
 		agent     AgentID
@@ -62,10 +63,14 @@ func DetectCollisions(previews []SessionPreview) []Collision {
 	}
 	paths := map[key]map[string]bool{}
 	for _, p := range previews {
-		if p.SessionID == "" {
+		conversationID := p.ConversationID
+		if conversationID == "" {
+			conversationID = p.SessionID
+		}
+		if conversationID == "" {
 			continue // unidentified sessions get synthetic IDs; nothing to collide
 		}
-		k := key{p.Agent, p.SessionID}
+		k := key{p.Agent, conversationID}
 		if paths[k] == nil {
 			paths[k] = map[string]bool{}
 		}
