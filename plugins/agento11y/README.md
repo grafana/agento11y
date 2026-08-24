@@ -47,9 +47,11 @@ Verify with `agento11y --version`.
 
 ## Configure
 
-Run `agento11y login` to configure capture. On first run it asks where sessions go: **Local only**, or **Grafana Cloud**. That choice appears only on macOS and Linux when nothing is configured yet. Windows has no local receiver, so login goes straight to the Cloud credential questions. The Cloud path prints your stack's coding-agent setup page and asks you to paste the connection block from that page.
+Run `agento11y login` to configure capture. On first run it asks where sessions go: **Local only**, or **Grafana Cloud**. **Local only** needs no Cloud credentials and does not forward sessions. **Grafana Cloud** prints your stack's coding-agent setup page and asks you to paste the connection block from that page.
 
-Run `agento11y login` again to change the Cloud connection, content capture, tags, or guard settings. A rerun goes straight to the Cloud questions, and asks where sessions go only when neither that answer nor credentials are saved.
+Interactive Cloud setup on macOS and Linux also asks for **Local web UI** in the preferences. The question starts on **Yes** by default and remembers an earlier answer. **Yes** keeps a full local copy and forwards a copy to Grafana Cloud. **No** sends directly to Grafana Cloud without a local copy. Windows has no local receiver, so it does not show either local choice. Complete credential flags also skip the preferences and keep direct Cloud behavior.
+
+Run `agento11y login` again to change the Cloud connection, local web UI, content capture, tags, or guard settings. With a complete saved Cloud connection, a rerun shows its Grafana stack first. **Keep this connection** jumps to preferences without changing the connection. **Change connection** opens the stack and credential questions. A rerun asks where sessions go only when neither a destination nor credentials are saved.
 
 For scripts and unattended rollout (register an agent without prompts), see [Noninteractive agent setup](#noninteractive-agent-setup) and [Fleet reconciliation](#fleet-reconciliation).
 
@@ -98,9 +100,11 @@ The skills for instrumenting your own application code are separate and ship wit
 
 `agento11y <agent> --local` records the session to a JSONL store and starts the local Agent Observability app. The command prints the app URL (tries `http://127.0.0.1:8765`, then a higher port if needed).
 
-`AGENTO11Y_LOCAL=true` in the shell or `config.env` enables local mode for every launch and installed hook. Choosing **Local only** at first-run login writes that setting (and `SIGIL_LOCAL=true`) and later runs do not ask again. Local mode is available on macOS and Linux only; Windows has no local receiver. Use `--no-local` to override local mode for one launcher session.
+`AGENTO11Y_LOCAL=true` in the shell or `config.env` enables local mode for every launch and installed hook. **Local only** writes `AGENTO11Y_LOCAL` and `SIGIL_LOCAL` as true, and writes `AGENTO11Y_LOCAL_FORWARD` and `SIGIL_LOCAL_FORWARD` as false. Sessions then stay on the machine. **Local web UI = Yes** writes all four keys as true, so the daemon keeps a full local copy and also forwards to Grafana Cloud. **Local web UI = No** writes all four keys as false and sends directly to Cloud. Use `--no-local` to override a saved local destination for one launcher session without changing those keys.
 
-Local mode stores full session content. Manage the app with `agento11y local start|open|status|stop|restart`. `agento11y local open` starts the receiver if needed, prints its address, and tries to open the app.
+The daemon always stores full session content locally. It forwards full generation content only when `AGENTO11Y_CONTENT_CAPTURE_MODE=full`. Every other selected capture mode is reduced to `metadata_only` for the forwarded copy. Local mode is available on macOS and Linux only; Windows has no local receiver.
+
+Manage the app with `agento11y local start|open|status|stop|restart`. `agento11y local open` starts the receiver if needed, prints its address, and tries to open the app.
 
 ### History import
 

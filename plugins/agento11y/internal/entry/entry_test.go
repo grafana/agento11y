@@ -712,37 +712,49 @@ func TestRun_CursorInstallDispatch(t *testing.T) {
 // the launcher auto-prompt; when credentials are present it is skipped.
 func TestRun_CursorInstallLoginChain(t *testing.T) {
 	cases := []struct {
-		name           string
-		creds          bool
-		local          bool
-		invalidLocal   bool
-		result         login.Result
-		loginErr       error
-		wantLoginCalls int
-		wantOfferLocal bool
-		wantStderr     string
+		name                 string
+		creds                bool
+		local                bool
+		invalidLocal         bool
+		result               login.Result
+		loginErr             error
+		wantLoginCalls       int
+		wantOfferLocal       bool
+		wantOfferLocalDaemon bool
+		wantStderr           string
 	}{
 		{
-			name:           "chains login when credentials missing",
-			loginErr:       login.ErrNotInteractive,
-			wantLoginCalls: 1,
-			wantOfferLocal: true,
+			name:                 "chains login when credentials missing",
+			loginErr:             login.ErrNotInteractive,
+			wantLoginCalls:       1,
+			wantOfferLocal:       true,
+			wantOfferLocalDaemon: true,
 		},
 		{name: "skips login when credentials present", creds: true},
 		{name: "skips login when local mode is persisted", local: true},
 		{
-			name:           "invalid local value still offers destination",
-			invalidLocal:   true,
-			loginErr:       login.ErrNotInteractive,
-			wantLoginCalls: 1,
-			wantOfferLocal: true,
+			name:                 "invalid local value still offers destination",
+			invalidLocal:         true,
+			loginErr:             login.ErrNotInteractive,
+			wantLoginCalls:       1,
+			wantOfferLocal:       true,
+			wantOfferLocalDaemon: true,
 		},
 		{
-			name:           "local result enables local hook capture",
-			result:         login.Result{LocalMode: true},
-			wantLoginCalls: 1,
-			wantOfferLocal: true,
-			wantStderr:     "Cursor hook now captures sessions locally",
+			name:                 "local-only result enables local hook capture",
+			result:               login.Result{LocalMode: true, UsesLocalDaemon: true},
+			wantLoginCalls:       1,
+			wantOfferLocal:       true,
+			wantOfferLocalDaemon: true,
+			wantStderr:           "Cursor hook now captures sessions locally",
+		},
+		{
+			name:                 "local daemon result names Cloud forwarding",
+			result:               login.Result{UsesLocalDaemon: true},
+			wantLoginCalls:       1,
+			wantOfferLocal:       true,
+			wantOfferLocalDaemon: true,
+			wantStderr:           "captures sessions locally and forwards them to Grafana Cloud",
 		},
 	}
 
@@ -768,9 +780,11 @@ func TestRun_CursorInstallLoginChain(t *testing.T) {
 			withStubCursorInstall(t, func(io.Writer, io.Writer, *log.Logger) error { return nil })
 			loginCalls := 0
 			offerLocal := false
+			offerLocalDaemon := false
 			withStubLoginRun(t, func(_ context.Context, opts login.RunOpts) (login.Result, error) {
 				loginCalls++
 				offerLocal = opts.OfferLocal
+				offerLocalDaemon = opts.OfferLocalDaemon
 				return tc.result, tc.loginErr
 			})
 
@@ -781,6 +795,7 @@ func TestRun_CursorInstallLoginChain(t *testing.T) {
 			require.Nil(t, gotExit, "stderr=%q", stderr.String())
 			assert.Equal(t, tc.wantLoginCalls, loginCalls)
 			assert.Equal(t, tc.wantOfferLocal, offerLocal)
+			assert.Equal(t, tc.wantOfferLocalDaemon, offerLocalDaemon)
 			if tc.wantStderr != "" {
 				assert.Contains(t, stderr.String(), tc.wantStderr)
 			}
@@ -1166,6 +1181,9 @@ func TestRun_LauncherAutoPromptsWhenCredsMissing(t *testing.T) {
 		if !opts.OfferLocal {
 			t.Error("login did not offer the destination question")
 		}
+		if !opts.OfferLocalDaemon {
+			t.Error("login did not offer the local daemon Cloud preference")
+		}
 		// Simulate the prompt populating the credential env vars.
 		_ = os.Setenv("SIGIL_ENDPOINT", "https://sigil.example.com")
 		_ = os.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
@@ -1213,6 +1231,9 @@ func TestRun_LauncherNoLocalKeepsSavedLocalSettingDuringSetup(t *testing.T) {
 				if opts.OfferLocal {
 					t.Error("--no-local must skip the destination question")
 				}
+				if !opts.OfferLocalDaemon {
+					t.Error("launcher auto-login must enable the caller gate")
+				}
 				if !opts.KeepLocalSetting {
 					t.Error("--no-local setup must keep the saved local setting")
 				}
@@ -1236,7 +1257,7 @@ func TestRun_LauncherNoLocalKeepsSavedLocalSettingDuringSetup(t *testing.T) {
 	}
 }
 
-func TestRun_LauncherLocalAnswerStartsReceiver(t *testing.T) {
+func TestRun_LauncherLocalDaemonAnswerStartsReceiver(t *testing.T) {
 	isolateDotenvHome(t)
 	_, daemonURL := inProcessDaemon(t)
 
@@ -1244,7 +1265,10 @@ func TestRun_LauncherLocalAnswerStartsReceiver(t *testing.T) {
 		if !opts.OfferLocal {
 			t.Error("login did not offer the destination question")
 		}
-		return login.Result{LocalMode: true}, nil
+		if !opts.OfferLocalDaemon {
+			t.Error("login did not offer the local daemon Cloud preference")
+		}
+		return login.Result{UsesLocalDaemon: true}, nil
 	})
 
 	var gotEnv *local.LaunchEnv
@@ -1267,7 +1291,7 @@ func TestRun_LauncherLocalAnswerLogsReceiverFailure(t *testing.T) {
 	dir := isolateDotenvHome(t)
 	t.Setenv("AGENTO11Y_DEBUG", "true")
 	withStubLoginRun(t, func(context.Context, login.RunOpts) (login.Result, error) {
-		return login.Result{LocalMode: true}, nil
+		return login.Result{UsesLocalDaemon: true}, nil
 	})
 	restore := local.SetStartDaemonForTesting(func(context.Context, string, *log.Logger) (*local.Status, error) {
 		return nil, errors.New("port 8765 is taken")
@@ -1744,6 +1768,7 @@ func TestRun_LauncherLocalFromEnv(t *testing.T) {
 		argv           []string // launcher-side args, before any `--`
 		wantLocal      bool
 		wantOfferLocal bool
+		wantKeepLocal  bool
 		wantSource     string // variable the banner names, or "" for no source line
 	}{
 		{
@@ -1751,8 +1776,9 @@ func TestRun_LauncherLocalFromEnv(t *testing.T) {
 			wantOfferLocal: true,
 		},
 		{
-			name: "no-local names Cloud as the destination",
-			argv: []string{"--no-local"},
+			name:          "no-local names Cloud as the destination",
+			argv:          []string{"--no-local"},
+			wantKeepLocal: true,
 		},
 		{
 			name:       "shell preferred spelling",
@@ -1787,9 +1813,10 @@ func TestRun_LauncherLocalFromEnv(t *testing.T) {
 		{
 			// A shell value beats a config.env one, so this is the one-off
 			// Cloud session for a user who set the file value.
-			name:      "shell false beats config.env true",
-			shellEnv:  map[string]string{"AGENTO11Y_LOCAL": "false"},
-			configEnv: "AGENTO11Y_LOCAL=true\n",
+			name:          "shell false beats config.env true",
+			shellEnv:      map[string]string{"AGENTO11Y_LOCAL": "false"},
+			configEnv:     "AGENTO11Y_LOCAL=true\n",
+			wantKeepLocal: true,
 		},
 		{
 			name:           "unsupported boolean still offers destination",
@@ -1797,19 +1824,22 @@ func TestRun_LauncherLocalFromEnv(t *testing.T) {
 			wantOfferLocal: true,
 		},
 		{
-			name:     "no-local beats env",
-			shellEnv: map[string]string{"AGENTO11Y_LOCAL": "true"},
-			argv:     []string{"--no-local"},
+			name:          "no-local beats env",
+			shellEnv:      map[string]string{"AGENTO11Y_LOCAL": "true"},
+			argv:          []string{"--no-local"},
+			wantKeepLocal: true,
 		},
 		{
-			name:     "no-local after local",
-			shellEnv: map[string]string{"AGENTO11Y_LOCAL": "true"},
-			argv:     []string{"--local", "--no-local"},
+			name:          "no-local after local",
+			shellEnv:      map[string]string{"AGENTO11Y_LOCAL": "true"},
+			argv:          []string{"--local", "--no-local"},
+			wantKeepLocal: true,
 		},
 		{
-			name:     "local after no-local",
-			shellEnv: map[string]string{"AGENTO11Y_LOCAL": "true"},
-			argv:     []string{"--no-local", "--local"},
+			name:          "local after no-local",
+			shellEnv:      map[string]string{"AGENTO11Y_LOCAL": "true"},
+			argv:          []string{"--no-local", "--local"},
+			wantKeepLocal: true,
 		},
 		{
 			// Nothing in the environment asked for local mode, so the banner
@@ -1843,9 +1873,13 @@ func TestRun_LauncherLocalFromEnv(t *testing.T) {
 			// login and a local one does not.
 			loginCalls := 0
 			offerLocal := false
+			offerLocalDaemon := false
+			keepLocalSetting := false
 			withStubLoginRun(t, func(_ context.Context, opts login.RunOpts) (login.Result, error) {
 				loginCalls++
 				offerLocal = opts.OfferLocal
+				offerLocalDaemon = opts.OfferLocalDaemon
+				keepLocalSetting = opts.KeepLocalSetting
 				return login.Result{}, login.ErrNotInteractive
 			})
 
@@ -1870,6 +1904,8 @@ func TestRun_LauncherLocalFromEnv(t *testing.T) {
 				assert.NotContains(t, stderr.String(), "agento11y local mode")
 				assert.Equal(t, 1, loginCalls, "a Cloud session with no credentials prompts for login")
 				assert.Equal(t, tc.wantOfferLocal, offerLocal, "OfferLocal")
+				assert.True(t, offerLocalDaemon, "OfferLocalDaemon")
+				assert.Equal(t, tc.wantKeepLocal, keepLocalSetting, "KeepLocalSetting")
 				if slices.Contains(tc.argv, "--no-local") {
 					// The agent and anything it starts inherit this environment,
 					// where dotenv materialized the family under both spellings.
@@ -2181,6 +2217,7 @@ func TestRun_LoginSubcommandFlags(t *testing.T) {
 		wantExit   *int
 		wantOpts   *login.RunOpts
 		wantStderr []string
+		denyStderr []string
 	}{
 		{
 			name: "every value as a flag",
@@ -2194,14 +2231,15 @@ func TestRun_LoginSubcommandFlags(t *testing.T) {
 				"--yes",
 			},
 			wantOpts: &login.RunOpts{
-				Endpoint:     "https://example.invalid",
-				TenantID:     "123",
-				Token:        "secret-token",
-				OTLPEndpoint: "https://otlp.example",
-				SkipVerify:   true,
-				AssumeYes:    true,
-				ShowNextStep: true,
-				OfferLocal:   true,
+				Endpoint:         "https://example.invalid",
+				TenantID:         "123",
+				Token:            "secret-token",
+				OTLPEndpoint:     "https://otlp.example",
+				SkipVerify:       true,
+				AssumeYes:        true,
+				ShowNextStep:     true,
+				OfferLocal:       true,
+				OfferLocalDaemon: true,
 			},
 		},
 		{
@@ -2209,12 +2247,13 @@ func TestRun_LoginSubcommandFlags(t *testing.T) {
 			args:  []string{"login", "--endpoint", "https://example.invalid", "--tenant", "123", "--token-stdin", "--no-verify"},
 			stdin: "  secret-token  \n",
 			wantOpts: &login.RunOpts{
-				Endpoint:     "https://example.invalid",
-				TenantID:     "123",
-				Token:        "secret-token",
-				SkipVerify:   true,
-				ShowNextStep: true,
-				OfferLocal:   true,
+				Endpoint:         "https://example.invalid",
+				TenantID:         "123",
+				Token:            "secret-token",
+				SkipVerify:       true,
+				ShowNextStep:     true,
+				OfferLocal:       true,
+				OfferLocalDaemon: true,
 			},
 		},
 		{
@@ -2273,21 +2312,28 @@ func TestRun_LoginSubcommandFlags(t *testing.T) {
 			args:       []string{"login"},
 			stubErr:    login.ErrNotVerified,
 			wantExit:   intPtr(1),
-			wantOpts:   &login.RunOpts{ShowNextStep: true, OfferLocal: true},
+			wantOpts:   &login.RunOpts{ShowNextStep: true, OfferLocal: true, OfferLocalDaemon: true},
 			wantStderr: []string{"nothing was saved", "--yes"},
 		},
 		{
-			name:       "local result prints the next launcher step",
+			name:       "local-only result prints the next launcher step",
 			args:       []string{"login"},
-			stubResult: login.Result{LocalMode: true},
-			wantOpts:   &login.RunOpts{ShowNextStep: true, OfferLocal: true},
+			stubResult: login.Result{LocalMode: true, UsesLocalDaemon: true},
+			wantOpts:   &login.RunOpts{ShowNextStep: true, OfferLocal: true, OfferLocalDaemon: true},
 			wantStderr: []string{"agento11y claude", "capture sessions locally"},
+		},
+		{
+			name:       "local daemon with Cloud does not print the local-only step",
+			args:       []string{"login"},
+			stubResult: login.Result{UsesLocalDaemon: true},
+			wantOpts:   &login.RunOpts{ShowNextStep: true, OfferLocal: true, OfferLocalDaemon: true},
+			denyStderr: []string{"capture sessions locally"},
 		},
 		{
 			name:     "invalid local value still offers destination",
 			args:     []string{"login"},
 			env:      map[string]string{"AGENTO11Y_LOCAL": "maybe"},
-			wantOpts: &login.RunOpts{ShowNextStep: true, OfferLocal: true},
+			wantOpts: &login.RunOpts{ShowNextStep: true, OfferLocal: true, OfferLocalDaemon: true},
 		},
 	}
 	for _, c := range cases {
@@ -2317,6 +2363,11 @@ func TestRun_LoginSubcommandFlags(t *testing.T) {
 					t.Errorf("stderr missing %q:\n%s", want, stderr.String())
 				}
 			}
+			for _, deny := range c.denyStderr {
+				if strings.Contains(stderr.String(), deny) {
+					t.Errorf("stderr contains %q:\n%s", deny, stderr.String())
+				}
+			}
 			if c.wantOpts == nil {
 				if got != nil {
 					t.Errorf("login ran with %+v, want no run at all", *got)
@@ -2331,7 +2382,7 @@ func TestRun_LoginSubcommandFlags(t *testing.T) {
 			if got.Endpoint != want.Endpoint || got.TenantID != want.TenantID || got.Token != want.Token ||
 				got.OTLPEndpoint != want.OTLPEndpoint || got.SkipVerify != want.SkipVerify ||
 				got.AssumeYes != want.AssumeYes || got.ShowNextStep != want.ShowNextStep ||
-				got.OfferLocal != want.OfferLocal {
+				got.OfferLocal != want.OfferLocal || got.OfferLocalDaemon != want.OfferLocalDaemon {
 				t.Errorf("RunOpts =\n%+v\nwant\n%+v", *got, want)
 			}
 		})
@@ -2367,6 +2418,9 @@ func TestRun_LauncherAutoLoginKeepsNextStepQuiet(t *testing.T) {
 	}
 	if got.ShowNextStep {
 		t.Error("auto-login must leave ShowNextStep false")
+	}
+	if !got.OfferLocalDaemon {
+		t.Error("auto-login must offer the local daemon Cloud preference")
 	}
 	if got.SkipVerify || got.AssumeYes {
 		t.Errorf("auto-login must verify and must not assume yes: %+v", *got)

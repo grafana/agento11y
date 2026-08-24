@@ -439,6 +439,9 @@ func TestHistoryResolveDestination(t *testing.T) {
 				if opts.KeepLocalSetting != tt.wantKeepLocal {
 					t.Errorf("KeepLocalSetting = %v, want %v", opts.KeepLocalSetting, tt.wantKeepLocal)
 				}
+				if opts.OfferLocalDaemon {
+					t.Error("history import must not offer the local daemon Cloud preference")
+				}
 				return tt.loginResult, tt.loginErr
 			})
 

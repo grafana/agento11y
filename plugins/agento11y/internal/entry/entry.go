@@ -308,12 +308,15 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 			localValue, localKey, _ = envconfig.LookupMap(fileEnv, "LOCAL")
 		}
 		envLocal := localEnvRequest{on: envconfig.ParseBool(localValue), key: localKey}
+		shellLocal, shellLocalValid := envconfig.ParseBoolValue(localValue)
+		shellCloudOverride := inShell && shellLocalValid && !shellLocal
 
-		launcherArgs, localEnv, ok := parseLauncherArgs(args[0], args[1:], stderr, envLocal)
+		launcherArgs, localEnv, noLocalOverride, ok := parseLauncherArgs(args[0], args[1:], stderr, envLocal)
 		if !ok {
 			return
 		}
 		destinationSet := localDestinationSet()
+		keepLocalSetting := noLocalOverride || shellCloudOverride
 
 		logger := cli.InitLogger(args[0])
 
@@ -334,7 +337,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 				Stderr:           stderr,
 				Logger:           logger,
 				OfferLocal:       !destinationSet,
-				KeepLocalSetting: destinationSet,
+				OfferLocalDaemon: true,
+				KeepLocalSetting: keepLocalSetting,
 			})
 			switch {
 			case err == nil, errors.Is(err, login.ErrNotInteractive):
@@ -348,7 +352,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 				logger.Printf("auto-login: %v", err)
 				_, _ = fmt.Fprintf(stderr, "agento11y: setup failed (%v); continuing without capture\n", err)
 			}
-			if err == nil && result.LocalMode {
+			if err == nil && result.UsesLocalDaemon {
 				endpoint, otlp, localErr := setupLocalLaunch(stderr, "")
 				if localErr == nil {
 					localEnv = &local.LaunchEnv{Endpoint: endpoint, OTLPEndpoint: otlp}
@@ -610,16 +614,17 @@ func runLoginCommand(args []string, stdin io.Reader, stderr io.Writer) {
 		// Only the explicit `agento11y login` shows the “Try sigil claude/pi”
 		// hint. The launcher auto-prompt path leaves this false because the
 		// launcher is about to exec the agent anyway.
-		ShowNextStep: true,
-		OfferLocal:   !destinationSet && !dotenv.HasCredentials(),
-		Stderr:       stderr,
-		Logger:       logger,
-		Endpoint:     endpoint,
-		TenantID:     tenant,
-		Token:        token,
-		OTLPEndpoint: otlpEndpoint,
-		SkipVerify:   noVerify,
-		AssumeYes:    assumeYes,
+		ShowNextStep:     true,
+		OfferLocal:       !destinationSet && !dotenv.HasCredentials(),
+		OfferLocalDaemon: true,
+		Stderr:           stderr,
+		Logger:           logger,
+		Endpoint:         endpoint,
+		TenantID:         tenant,
+		Token:            token,
+		OTLPEndpoint:     otlpEndpoint,
+		SkipVerify:       noVerify,
+		AssumeYes:        assumeYes,
 	})
 	switch {
 	case err == nil && result.LocalMode:
@@ -729,13 +734,16 @@ func runCursorInstall(verb string, stdout, stderr io.Writer) {
 	localValue, _, _ := envconfig.LookupEnv("LOCAL")
 	if !dotenv.HasCredentials() && !envconfig.ParseBool(localValue) {
 		result, err := loginRun(context.Background(), login.RunOpts{
-			Stderr:     stderr,
-			Logger:     logger,
-			OfferLocal: !localDestinationSet(),
+			Stderr:           stderr,
+			Logger:           logger,
+			OfferLocal:       !localDestinationSet(),
+			OfferLocalDaemon: true,
 		})
 		switch {
 		case err == nil && result.LocalMode:
 			_, _ = fmt.Fprintln(stderr, "agento11y: Cursor hook now captures sessions locally")
+		case err == nil && result.UsesLocalDaemon:
+			_, _ = fmt.Fprintln(stderr, "agento11y: Cursor hook now captures sessions locally and forwards them to Grafana Cloud")
 		case err == nil, errors.Is(err, login.ErrNotInteractive):
 			// either succeeded or no TTY; nothing to report.
 		case errors.Is(err, login.ErrAborted):
@@ -1020,9 +1028,9 @@ type localEnvRequest struct {
 //
 // Any other token before `--` is an error.
 //
-// Returns the forwarded args plus a non-nil *local.LaunchEnv when the session
-// is local, that is when `--local` or the env family asked for it and
-// `--no-local` did not; the env values point at the local daemon. When --tag is used,
+// Returns the forwarded args, a non-nil *local.LaunchEnv when the session is
+// local, and whether --no-local forced Cloud for this run. The env values point
+// at the local daemon. When --tag is used,
 // SIGIL_TAGS is updated in the current process environment so the exec'd
 // child (which inherits os.Environ via local.Environ) sees it.
 //
@@ -1031,7 +1039,7 @@ type localEnvRequest struct {
 //     forgot the separator, so we point them at `agento11y <name> -- <args>`.
 //   - `--` is present but unrecognised tokens precede it: those are
 //     genuinely unknown sigil-side options, so we name them explicitly.
-func parseLauncherArgs(name string, rest []string, stderr io.Writer, envLocal localEnvRequest) ([]string, *local.LaunchEnv, bool) {
+func parseLauncherArgs(name string, rest []string, stderr io.Writer, envLocal localEnvRequest) ([]string, *local.LaunchEnv, bool, bool) {
 	sep := -1
 	for i, a := range rest {
 		if a == "--" {
@@ -1064,14 +1072,14 @@ func parseLauncherArgs(name string, rest []string, stderr io.Writer, envLocal lo
 			if i+1 >= len(launcherSide) {
 				_, _ = fmt.Fprintln(stderr, "agento11y: --tag requires a key=value argument")
 				exit(2)
-				return nil, nil, false
+				return nil, nil, false, false
 			}
 			i++
 			kv, ok := normalizeTag(launcherSide[i])
 			if !ok {
 				_, _ = fmt.Fprintf(stderr, "agento11y: invalid --tag %q (want key=value)\n", launcherSide[i])
 				exit(2)
-				return nil, nil, false
+				return nil, nil, false, false
 			}
 			flagTags = append(flagTags, kv)
 		case strings.HasPrefix(tok, "--tag="):
@@ -1080,7 +1088,7 @@ func parseLauncherArgs(name string, rest []string, stderr io.Writer, envLocal lo
 			if !ok {
 				_, _ = fmt.Fprintf(stderr, "agento11y: invalid --tag %q (want key=value)\n", raw)
 				exit(2)
-				return nil, nil, false
+				return nil, nil, false, false
 			}
 			flagTags = append(flagTags, kv)
 		default:
@@ -1095,7 +1103,7 @@ func parseLauncherArgs(name string, rest []string, stderr io.Writer, envLocal lo
 			_, _ = fmt.Fprintf(stderr, "agento11y: unknown options before `--`: %v\n", unknown)
 		}
 		exit(2)
-		return nil, nil, false
+		return nil, nil, false, false
 	}
 
 	if len(flagTags) > 0 {
@@ -1123,11 +1131,11 @@ func parseLauncherArgs(name string, rest []string, stderr io.Writer, envLocal lo
 		endpoint, otlp, err := setupLocalLaunch(stderr, sourceKey)
 		if err != nil {
 			exit(1)
-			return nil, nil, false
+			return nil, nil, false, false
 		}
 		localEnv = &local.LaunchEnv{Endpoint: endpoint, OTLPEndpoint: otlp}
 	}
-	return forwarded, localEnv, true
+	return forwarded, localEnv, noLocalFlag, true
 }
 
 // normalizeTag validates a `--tag` value and returns it as a trimmed

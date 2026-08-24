@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -88,6 +89,32 @@ func TestRun_NoTTYReturnsErrNotInteractive(t *testing.T) {
 	}
 }
 
+func TestRun_ConfigReadErrorDoesNotOverwrite(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.env")
+	original := []byte("AGENTO11Y_LOCAL=false\nAGENTO11Y_AUTH_TOKEN=" + strings.Repeat("x", 70*1024) + "\n")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Run(context.Background(), RunOpts{
+		ConfigPath: path,
+		Endpoint:   "https://sigil.example.com",
+		TenantID:   "123",
+		Token:      "glc_abc",
+		SkipVerify: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "login: read config") {
+		t.Fatalf("Run err = %v, want config read error", err)
+	}
+	got, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("read config after Run: %v", readErr)
+	}
+	if !bytes.Equal(got, original) {
+		t.Error("Run replaced config after a read error")
+	}
+}
+
 // TestLoadSeeds covers the precedence rules loadSeeds enforces:
 // process env wins over the dotenv file (the bug fix — launcher
 // auto-prompts must pre-fill from SIGIL_* vars already in the user's
@@ -140,6 +167,25 @@ func TestLoadSeeds(t *testing.T) {
 			},
 		},
 		{
+			name: "local preferences from shell",
+			env: map[string]string{
+				"AGENTO11Y_LOCAL":         "false",
+				"AGENTO11Y_LOCAL_FORWARD": "true",
+			},
+			want: map[string]string{
+				"SIGIL_LOCAL":         "false",
+				"SIGIL_LOCAL_FORWARD": "true",
+			},
+		},
+		{
+			name: "local preferences from dotenv",
+			file: "AGENTO11Y_LOCAL=false\nAGENTO11Y_LOCAL_FORWARD=true\n",
+			want: map[string]string{
+				"SIGIL_LOCAL":         "false",
+				"SIGIL_LOCAL_FORWARD": "true",
+			},
+		},
+		{
 			// Login writes back every value it seeds and no field can edit the
 			// OTLP headers, so a one-off shell export must not be saved.
 			name: "otlp headers are seeded from the file, not the shell",
@@ -161,7 +207,10 @@ func TestLoadSeeds(t *testing.T) {
 			for k, v := range c.env {
 				t.Setenv(k, v)
 			}
-			seeds := loadSeeds(writeDotenv(t, c.file), nil)
+			seeds, err := loadSeeds(writeDotenv(t, c.file), nil)
+			if err != nil {
+				t.Fatalf("loadSeeds() error = %v", err)
+			}
 			for k, want := range c.want {
 				if got := seeds[k]; got != want {
 					t.Errorf("seeds[%q] = %q, want %q", k, got, want)
@@ -290,6 +339,31 @@ func TestSeedGuards(t *testing.T) {
 	}
 }
 
+func TestSeedLocalDaemon(t *testing.T) {
+	cases := []struct {
+		name    string
+		local   string
+		forward string
+		want    bool
+	}{
+		{"unset starts on Yes", "", "", true},
+		{"blank starts on Yes", "   ", "false", true},
+		{"saved local mode stays on Yes", "true", "false", true},
+		{"legacy Cloud config without forwarding starts on Yes", "false", "", true},
+		{"legacy Cloud config with stale forwarding starts on Yes", "false", "true", true},
+		{"saved No stays on No", "false", "false", false},
+		{"invalid local value starts on No", "maybe", "true", false},
+		{"invalid forwarding value starts on No", "false", "maybe", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := seedLocalDaemon(c.local, c.forward); got != c.want {
+				t.Errorf("seedLocalDaemon(%q, %q) = %v, want %v", c.local, c.forward, got, c.want)
+			}
+		})
+	}
+}
+
 func TestSeedAutoTags(t *testing.T) {
 	cases := []struct {
 		name string
@@ -378,10 +452,12 @@ var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 // the field is blurred.
 func TestPreferenceGroupsMarkTheAnswer(t *testing.T) {
 	v := &formValues{
-		contentMode:  contentModeFull,
-		guards:       guardsClosed,
-		guardTimeout: "1500",
-		autoTags:     true,
+		offerLocalDaemon: true,
+		localDaemon:      seedLocalDaemon("false", "true"),
+		contentMode:      contentModeFull,
+		guards:           guardsClosed,
+		guardTimeout:     "1500",
+		autoTags:         true,
 	}
 	form := huh.NewForm(preferenceGroups(v)...).WithTheme(grafanaTheme()).WithWidth(100).WithHeight(40)
 	form.Init()
@@ -390,7 +466,10 @@ func TestPreferenceGroupsMarkTheAnswer(t *testing.T) {
 	// The first field holds the cursor, so it carries the focused marker; the
 	// rest are answered questions and carry the check.
 	for _, want := range []string{
-		"› Full — capture everything",
+		"Local web UI",
+		"› Yes: use the local web UI (default)",
+		"View coding agent sessions in your browser on this machine",
+		"✓ Full — capture everything",
 		"✓ Enabled, fail-closed",
 		"✓ On — choose which of the three to send next",
 	} {
@@ -401,6 +480,7 @@ func TestPreferenceGroupsMarkTheAnswer(t *testing.T) {
 	// The answers not taken are still listed, so a question can be answered
 	// again without walking into it first.
 	for _, want := range []string{
+		"No: do not use the local web UI",
 		"Metadata only",
 		"Disabled (default)",
 		"Off — no user, repository, or branch labels",
@@ -512,9 +592,10 @@ func TestValidateGuardTimeout(t *testing.T) {
 // enabled.
 func TestBuildUpdates(t *testing.T) {
 	cases := []struct {
-		name string
-		in   formValues
-		want map[string]string
+		name             string
+		in               formValues
+		keepLocalSetting bool
+		want             map[string]string
 	}{
 		{
 			// The form never ran, so the capture keys stay out of the update
@@ -530,6 +611,54 @@ func TestBuildUpdates(t *testing.T) {
 				tags:        "session=demo",
 				guards:      guardsOpen,
 			},
+			want: map[string]string{
+				"SIGIL_ENDPOINT":                    "https://sigil.example.com",
+				"SIGIL_AUTH_TENANT_ID":              "123",
+				"SIGIL_AUTH_TOKEN":                  "glc_abc",
+				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT": "",
+			},
+		},
+		{
+			name: "local daemon Yes writes local and forwarding together",
+			in: formValues{
+				endpoint:            "https://sigil.example.com",
+				tenantID:            "123",
+				token:               "glc_abc",
+				localDaemon:         true,
+				localDaemonPrompted: true,
+			},
+			want: map[string]string{
+				"SIGIL_ENDPOINT":                    "https://sigil.example.com",
+				"SIGIL_AUTH_TENANT_ID":              "123",
+				"SIGIL_AUTH_TOKEN":                  "glc_abc",
+				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT": "",
+			},
+		},
+		{
+			name: "local daemon No writes local and forwarding together",
+			in: formValues{
+				endpoint:            "https://sigil.example.com",
+				tenantID:            "123",
+				token:               "glc_abc",
+				localDaemonPrompted: true,
+			},
+			want: map[string]string{
+				"SIGIL_ENDPOINT":                    "https://sigil.example.com",
+				"SIGIL_AUTH_TENANT_ID":              "123",
+				"SIGIL_AUTH_TOKEN":                  "glc_abc",
+				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT": "",
+			},
+		},
+		{
+			name: "KeepLocalSetting leaves both local families alone",
+			in: formValues{
+				endpoint:            "https://sigil.example.com",
+				tenantID:            "123",
+				token:               "glc_abc",
+				localDaemon:         true,
+				localDaemonPrompted: true,
+			},
+			keepLocalSetting: true,
 			want: map[string]string{
 				"SIGIL_ENDPOINT":                    "https://sigil.example.com",
 				"SIGIL_AUTH_TENANT_ID":              "123",
@@ -742,9 +871,17 @@ func TestBuildUpdates(t *testing.T) {
 			if _, ok := want["OTEL_EXPORTER_OTLP_HEADERS"]; !ok {
 				want["OTEL_EXPORTER_OTLP_HEADERS"] = ""
 			}
+			if !c.keepLocalSetting {
+				localMode := false
+				if c.in.localDaemonPrompted {
+					localMode = c.in.localDaemon
+					want[envconfig.LegacyKey("LOCAL_FORWARD")] = strconv.FormatBool(localMode)
+				}
+				want[envconfig.LegacyKey("LOCAL")] = strconv.FormatBool(localMode)
+			}
 			// Managed values are written and deleted under both spellings.
 			want = envconfig.ExpandAliases(want)
-			if got := buildUpdates(c.in); !reflect.DeepEqual(got, want) {
+			if got := buildUpdates(c.in, c.keepLocalSetting); !reflect.DeepEqual(got, want) {
 				t.Errorf("buildUpdates() =\n%v\nwant\n%v", got, want)
 			}
 		})
@@ -927,7 +1064,7 @@ func TestStackURLIsSavedButIsNotTheEndpoint(t *testing.T) {
 	applyPaste(&v, fixedValues{}, "AGENTO11Y_ENDPOINT=https://agento11y-prod-eu-west-2.grafana.net\n"+
 		"AGENTO11Y_AUTH_TENANT_ID=123\nAGENTO11Y_AUTH_TOKEN=glc_test\n")
 
-	saved := buildUpdates(v)
+	saved := buildUpdates(v, false)
 	for _, key := range []string{"AGENTO11Y_ENDPOINT", "SIGIL_ENDPOINT"} {
 		if saved[key] != "https://agento11y-prod-eu-west-2.grafana.net" {
 			t.Errorf("saved[%q] = %q, want the pasted ingest endpoint", key, saved[key])
@@ -947,7 +1084,7 @@ func TestStackURLIsSavedButIsNotTheEndpoint(t *testing.T) {
 
 	// A promptless run seeds the stack from the file and must leave it alone,
 	// not delete a value it never asked about.
-	if _, ok := buildUpdates(formValues{})[stackURLKey]; ok {
+	if _, ok := buildUpdates(formValues{}, false)[stackURLKey]; ok {
 		t.Errorf("an empty stack should not be written at all")
 	}
 }
@@ -1213,6 +1350,82 @@ func TestShouldOfferLocal(t *testing.T) {
 				t.Errorf("shouldOfferLocal() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestShouldOfferLocalDaemon(t *testing.T) {
+	tests := []struct {
+		name             string
+		askUser          bool
+		requested        bool
+		supported        bool
+		keepLocalSetting bool
+		want             bool
+	}{
+		{name: "supported interactive caller", askUser: true, requested: true, supported: true, want: true},
+		{name: "promptless run", requested: true, supported: true},
+		{name: "caller did not offer", askUser: true, supported: true},
+		{name: "receiver unsupported", askUser: true, requested: true},
+		{name: "one-run Cloud override", askUser: true, requested: true, supported: true, keepLocalSetting: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shouldOfferLocalDaemon(tc.askUser, tc.requested, tc.supported, tc.keepLocalSetting); got != tc.want {
+				t.Errorf("shouldOfferLocalDaemon() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCanKeepCloudConnection(t *testing.T) {
+	complete := formValues{
+		stackURL: "https://alpha.grafana.net",
+		endpoint: "https://ingest.example.com",
+		tenantID: "123",
+	}
+	tests := []struct {
+		name          string
+		values        formValues
+		fixed         fixedValues
+		existingToken string
+		want          bool
+	}{
+		{name: "complete saved connection", values: complete, existingToken: "token", want: true},
+		{name: "OTLP flag does not change Cloud connection", values: complete, fixed: fixedValues{otelEndpoint: "https://otlp.example.com"}, existingToken: "token", want: true},
+		{name: "missing stack URL", values: formValues{endpoint: complete.endpoint, tenantID: complete.tenantID}, existingToken: "token"},
+		{name: "invalid stack URL", values: formValues{stackURL: "not a URL", endpoint: complete.endpoint, tenantID: complete.tenantID}, existingToken: "token"},
+		{name: "missing endpoint", values: formValues{stackURL: complete.stackURL, tenantID: complete.tenantID}, existingToken: "token"},
+		{name: "invalid endpoint", values: formValues{stackURL: complete.stackURL, endpoint: "not a URL", tenantID: complete.tenantID}, existingToken: "token"},
+		{name: "missing tenant ID", values: formValues{stackURL: complete.stackURL, endpoint: complete.endpoint}, existingToken: "token"},
+		{name: "missing token", values: complete},
+		{name: "endpoint flag changes connection", values: complete, fixed: fixedValues{endpoint: "https://new.example.com"}, existingToken: "token"},
+		{name: "tenant flag changes connection", values: complete, fixed: fixedValues{tenantID: "456"}, existingToken: "token"},
+		{name: "token flag changes connection", values: complete, fixed: fixedValues{token: "new-token"}, existingToken: "token"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := canKeepCloudConnection(tc.values, tc.fixed, tc.existingToken); got != tc.want {
+				t.Errorf("canKeepCloudConnection() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCloudConnectionFormFirstFrame(t *testing.T) {
+	change := false
+	form := cloudConnectionForm(&change, "https://alpha.grafana.net")
+	form.Init()
+	view := ansiEscape.ReplaceAllString(form.View(), "")
+
+	for _, want := range []string{
+		"Grafana Cloud connection",
+		"https://alpha.grafana.net",
+		"› Keep this connection (default)",
+		"Change connection",
+	} {
+		if !strings.Contains(view, want) {
+			t.Errorf("first frame does not show %q:\n%s", want, view)
+		}
 	}
 }
 
@@ -1613,11 +1826,14 @@ func TestSetupPageLinkWrapsOnANarrowTerminal(t *testing.T) {
 }
 
 func TestWelcomeBanner(t *testing.T) {
-	if banner := welcomeBanner(false); strings.Contains(banner, "<your-stack>") {
+	if banner := welcomeBanner(false, false); strings.Contains(banner, "<your-stack>") {
 		t.Error("the welcome banner should leave the setup link to setupPageLink")
 	}
-	if banner := welcomeBanner(true); !strings.Contains(banner, "Choose where to keep your sessions.") {
+	if banner := welcomeBanner(true, false); !strings.Contains(banner, "Choose where to keep your sessions.") {
 		t.Errorf("destination banner has the Cloud-only subtitle:\n%s", banner)
+	}
+	if banner := welcomeBanner(false, true); !strings.Contains(banner, "Update your Agent Observability settings.") {
+		t.Errorf("configured banner has the first-run subtitle:\n%s", banner)
 	}
 }
 
@@ -1906,6 +2122,9 @@ func TestEnableLocalMode(t *testing.T) {
 	if !result.LocalMode {
 		t.Error("LocalMode = false, want true")
 	}
+	if !result.UsesLocalDaemon {
+		t.Error("UsesLocalDaemon = false, want true")
+	}
 	want := map[string]string{
 		"AGENTO11Y_AUTO_CODING_AGENT_TAGS": "true",
 		"AGENTO11Y_LOCAL":                  "true",
@@ -1949,7 +2168,8 @@ func TestRun_ExplicitValues(t *testing.T) {
 	}{
 		{
 			name: "Cloud credentials disable saved local mode",
-			file: existing + "AGENTO11Y_LOCAL=true\nSIGIL_LOCAL=true\n",
+			file: existing + "AGENTO11Y_LOCAL=true\nSIGIL_LOCAL=true\n" +
+				"AGENTO11Y_LOCAL_FORWARD=true\nSIGIL_LOCAL_FORWARD=true\n",
 			opts: RunOpts{
 				Endpoint:   "https://new.example",
 				TenantID:   "222",
@@ -1963,11 +2183,14 @@ func TestRun_ExplicitValues(t *testing.T) {
 				"SIGIL_ENDPOINT":           "https://new.example",
 				"AGENTO11Y_LOCAL":          "false",
 				"SIGIL_LOCAL":              "false",
+				"AGENTO11Y_LOCAL_FORWARD":  "true",
+				"SIGIL_LOCAL_FORWARD":      "true",
 			},
 		},
 		{
 			name: "one-run Cloud override keeps saved local mode",
-			file: existing + "AGENTO11Y_LOCAL=true\nSIGIL_LOCAL=true\n",
+			file: existing + "AGENTO11Y_LOCAL=true\nSIGIL_LOCAL=true\n" +
+				"AGENTO11Y_LOCAL_FORWARD=true\nSIGIL_LOCAL_FORWARD=true\n",
 			env: map[string]string{
 				"AGENTO11Y_LOCAL": "true",
 				"SIGIL_LOCAL":     "true",
@@ -1979,9 +2202,11 @@ func TestRun_ExplicitValues(t *testing.T) {
 				KeepLocalSetting: true,
 			},
 			want: map[string]string{
-				"AGENTO11Y_AUTH_TOKEN": "new-token",
-				"AGENTO11Y_LOCAL":      "true",
-				"SIGIL_LOCAL":          "true",
+				"AGENTO11Y_AUTH_TOKEN":    "new-token",
+				"AGENTO11Y_LOCAL":         "true",
+				"SIGIL_LOCAL":             "true",
+				"AGENTO11Y_LOCAL_FORWARD": "true",
+				"SIGIL_LOCAL_FORWARD":     "true",
 			},
 		},
 		{
@@ -1993,8 +2218,10 @@ func TestRun_ExplicitValues(t *testing.T) {
 				KeepLocalSetting: true,
 			},
 			want: map[string]string{
-				"AGENTO11Y_LOCAL": "",
-				"SIGIL_LOCAL":     "",
+				"AGENTO11Y_LOCAL":         "",
+				"SIGIL_LOCAL":             "",
+				"AGENTO11Y_LOCAL_FORWARD": "",
+				"SIGIL_LOCAL_FORWARD":     "",
 			},
 		},
 		{

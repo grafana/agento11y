@@ -251,9 +251,10 @@ func grafanaTheme() *huh.Theme {
 // still handled, as a check that produced no verdict.
 type ProbeFunc func(ctx context.Context, endpoint, tenant, token string, insecure bool) *doctor.ProbeResult
 
-// Result reports whether the flow saved local mode instead of Cloud credentials.
+// Result distinguishes Local only from Cloud forwarding through the local daemon.
 type Result struct {
-	LocalMode bool
+	LocalMode       bool
+	UsesLocalDaemon bool
 }
 
 // RunOpts controls the login flow.
@@ -293,6 +294,10 @@ type RunOpts struct {
 	// OfferLocal asks where sessions should go before asking for Cloud
 	// credentials. The caller leaves it false when a destination is already set.
 	OfferLocal bool
+
+	// OfferLocalDaemon adds the local-daemon choice to Cloud setup paths that
+	// normally route live captures. KeepLocalSetting suppresses one-run overrides.
+	OfferLocalDaemon bool
 
 	// KeepLocalSetting leaves the saved LOCAL family unchanged after Cloud
 	// setup. One-run Cloud overrides set it so later runs still use local mode.
@@ -365,7 +370,9 @@ func Run(ctx context.Context, opts RunOpts) (Result, error) {
 	if askUser && !isTTY {
 		return Result{}, ErrNotInteractive
 	}
-	offerLocal := shouldOfferLocal(askUser, opts.OfferLocal, local.ReceiverSupported())
+	receiverSupported := local.ReceiverSupported()
+	offerLocal := shouldOfferLocal(askUser, opts.OfferLocal, receiverSupported)
+	offerLocalDaemon := shouldOfferLocalDaemon(askUser, opts.OfferLocalDaemon, receiverSupported, opts.KeepLocalSetting)
 
 	// Seed prompt fields from the existing dotenv (and any SIGIL_* vars
 	// already set in the process env) so re-running login — or the launcher
@@ -375,12 +382,20 @@ func Run(ctx context.Context, opts RunOpts) (Result, error) {
 	// show asterisks for a value the user didn't type; we offer "Press Enter
 	// to keep existing" semantics via the validator and a post-form restore
 	// instead.
-	existing := loadSeeds(configPath, opts.Logger)
+	existing, err := loadSeeds(configPath, opts.Logger)
+	if err != nil {
+		return Result{}, fmt.Errorf("login: read config %q: %w", configPath, err)
+	}
 
 	// existingToken is what a submitted-empty password field falls back to.
 	existingToken := existing["SIGIL_AUTH_TOKEN"]
 
 	v := formValues{
+		offerLocalDaemon: offerLocalDaemon,
+		localDaemon: seedLocalDaemon(
+			existing[envconfig.LegacyKey("LOCAL")],
+			existing[envconfig.LegacyKey("LOCAL_FORWARD")],
+		),
 		endpoint:     cmp.Or(fixed.endpoint, existing["SIGIL_ENDPOINT"]),
 		tenantID:     cmp.Or(fixed.tenantID, existing["SIGIL_AUTH_TENANT_ID"]),
 		token:        fixed.token,
@@ -437,11 +452,7 @@ func Run(ctx context.Context, opts RunOpts) (Result, error) {
 		return Result{}, err
 	}
 
-	updates := buildUpdates(v)
-	if !opts.KeepLocalSetting {
-		updates[envconfig.PreferredKey("LOCAL")] = "false"
-		updates[envconfig.LegacyKey("LOCAL")] = "false"
-	}
+	updates := buildUpdates(v, opts.KeepLocalSetting)
 	if err := dotenv.WriteDotenv(configPath, updates, opts.Logger); err != nil {
 		return Result{}, err
 	}
@@ -459,11 +470,15 @@ func Run(ctx context.Context, opts RunOpts) (Result, error) {
 	if opts.ShowNextStep {
 		printNextStep(opts.Stderr, verdict, v.stackURL)
 	}
-	return Result{}, nil
+	return Result{UsesLocalDaemon: v.localDaemonPrompted && v.localDaemon}, nil
 }
 
 func shouldOfferLocal(askUser, requested, supported bool) bool {
 	return askUser && requested && supported
+}
+
+func shouldOfferLocalDaemon(askUser, requested, supported, keepLocalSetting bool) bool {
+	return askUser && requested && supported && !keepLocalSetting
 }
 
 func enableLocalMode(configPath string, opts RunOpts) (Result, error) {
@@ -479,7 +494,7 @@ func enableLocalMode(configPath string, opts RunOpts) (Result, error) {
 	envconfig.SetBothEnv("LOCAL_FORWARD", "false")
 	envconfig.SetBothEnv(envconfig.AutoTagsSuffix, "true")
 	fmt.Fprintln(opts.Stderr, "Sessions will be captured on this machine.")
-	return Result{LocalMode: true}, nil
+	return Result{LocalMode: true, UsesLocalDaemon: true}, nil
 }
 
 // fixedValues are the values the command line supplied. An empty field means
@@ -511,15 +526,24 @@ func (f fixedValues) validate() error {
 	return nil
 }
 
+func canKeepCloudConnection(v formValues, fixed fixedValues, existingToken string) bool {
+	if fixed.endpoint != "" || fixed.tenantID != "" || fixed.token != "" {
+		return false
+	}
+	if _, err := stackOrigin(v.stackURL); err != nil {
+		return false
+	}
+	return requireURL(v.endpoint) == nil &&
+		strings.TrimSpace(v.tenantID) != "" &&
+		strings.TrimSpace(existingToken) != ""
+}
+
 // promptValues drives the interactive part of login, updating v in place.
 // Fields a flag fixed or the paste supplied are not asked again.
 //
-// Three forms run one after another, for two reasons. The stack question is
-// its own form because login prints the setup-page box and opens a browser
-// between it and the paste, which it cannot do while a form owns the terminal.
-// The paste is its own form because huh binds a field to its value when the
-// field is built, so a value pasted into one form cannot reach another field
-// of the same form.
+// Credential collection uses separate forms because login prints and opens the
+// setup page between the stack and paste questions. A paste must also finish
+// before huh binds the resulting values to the remaining fields.
 func promptValues(ctx context.Context, v *formValues, fixed fixedValues, existingToken string, stderr io.Writer, offerLocal bool) error {
 	// Guidance goes to stderr before huh takes over rendering. huh stays in
 	// inline mode, so this text remains static scrollback above the form and
@@ -535,7 +559,8 @@ func promptValues(ctx context.Context, v *formValues, fixed fixedValues, existin
 	}
 	defer func() { fmt.Fprintf(stderr, "\033[%dA\033[J", printed) }()
 
-	say(welcomeBanner(offerLocal))
+	keepCloudConnection := canKeepCloudConnection(*v, fixed, existingToken)
+	say(welcomeBanner(offerLocal, keepCloudConnection))
 
 	if offerLocal {
 		chooseLocal, err := promptDestination()
@@ -548,9 +573,22 @@ func promptValues(ctx context.Context, v *formValues, fixed fixedValues, existin
 		}
 	}
 
-	// The stack is what the setup-page link is built from, so it is asked for on
-	// every run. A saved answer is the answer already filled in, which makes a
-	// re-run one Enter.
+	// The guard timeout field shows the runtime default when no value is
+	// saved, so an empty seed becomes an explicit number the user can edit.
+	if strings.TrimSpace(v.guardTimeout) == "" {
+		v.guardTimeout = strconv.Itoa(envconfig.DefaultGuardsTimeoutMs)
+	}
+
+	if keepCloudConnection {
+		change, err := promptCloudConnection(v.stackURL)
+		if err != nil {
+			return err
+		}
+		if !change {
+			return runSettingsForm(v, nil)
+		}
+	}
+
 	stack, err := promptStack(ctx, v.stackURL)
 	if err != nil {
 		return err
@@ -580,12 +618,6 @@ func promptValues(ctx context.Context, v *formValues, fixed fixedValues, existin
 	if existingToken != "" {
 		tokenDesc = "Press Enter to keep the existing token"
 		tokenValidate = func(string) error { return nil }
-	}
-
-	// The guard timeout field shows the runtime default when no value is
-	// saved, so an empty seed becomes an explicit number the user can edit.
-	if strings.TrimSpace(v.guardTimeout) == "" {
-		v.guardTimeout = strconv.Itoa(envconfig.DefaultGuardsTimeoutMs)
 	}
 
 	var required []huh.Field
@@ -619,6 +651,10 @@ func promptValues(ctx context.Context, v *formValues, fixed fixedValues, existin
 			Value(&v.otelEndpoint))
 	}
 
+	return runSettingsForm(v, required)
+}
+
+func runSettingsForm(v *formValues, required []huh.Field) error {
 	var groups []*huh.Group
 	// A paste can fill every credential, and an empty group would render as a
 	// blank step.
@@ -631,6 +667,7 @@ func promptValues(ctx context.Context, v *formValues, fixed fixedValues, existin
 		return err
 	}
 	v.capturePrompted = true
+	v.localDaemonPrompted = v.offerLocalDaemon
 	return nil
 }
 
@@ -650,45 +687,54 @@ func promptValues(ctx context.Context, v *formValues, fixed fixedValues, existin
 // scrolls the options above it out of sight. destinationForm binds Value
 // first for the same reason: there the true option leads.
 func preferenceGroups(v *formValues) []*huh.Group {
+	fields := make([]huh.Field, 0, 6)
+	if v.offerLocalDaemon {
+		fields = append(fields, huh.NewSelect[bool]().
+			Title("Local web UI").
+			Description("View coding agent sessions in your browser on this machine").
+			Options(localDaemonOptions()...).
+			Value(&v.localDaemon))
+	}
+	fields = append(fields,
+		huh.NewSelect[string]().
+			Title("Content capture").
+			Description("What leaves this machine for each generation").
+			Options(contentCaptureOptions(v.contentMode)...).
+			Value(&v.contentMode),
+		huh.NewInput().
+			Title("Session tags").
+			Description("Applied to every generation, e.g. team=ai,project=demo. Press Enter to skip.").
+			Validate(validateTags).
+			Value(&v.tags),
+		huh.NewSelect[string]().
+			Title("Guards").
+			Description("Pre-tool-use safety checks").
+			Options(
+				huh.NewOption("Disabled (default)", guardsOff),
+				huh.NewOption("Enabled, fail-open — allow the action when a guard errors or times out", guardsOpen),
+				huh.NewOption("Enabled, fail-closed — block the action when a guard errors or times out", guardsClosed),
+			).
+			Value(&v.guards),
+		huh.NewInput().
+			Title("Guard timeout (ms)").
+			Description("How long to wait for guards before applying the fail mode. Only used when guards are enabled.").
+			Validate(func(s string) error {
+				// The timeout is ignored while guards are disabled, so don't
+				// let a stale or invalid value block submission then.
+				if v.guards == guardsOff {
+					return nil
+				}
+				return validateGuardTimeout(s)
+			}).
+			Value(&v.guardTimeout),
+		huh.NewSelect[bool]().
+			Title("Automatic tags").
+			Description("Tag every session with the user, the repository, and the branch, and turn those into metric labels so Usage and Cost can be split by person, repository, or branch.\nThe values are stored with the metrics and kept for the metric retention period; the user value is often an email address.").
+			Options(autoTagSwitchOptions()...).
+			Value(&v.autoTags),
+	)
 	return []*huh.Group{
-		huh.NewGroup(
-			huh.NewSelect[string]().
-				Title("Content capture").
-				Description("What leaves this machine for each generation").
-				Options(contentCaptureOptions(v.contentMode)...).
-				Value(&v.contentMode),
-			huh.NewInput().
-				Title("Session tags").
-				Description("Applied to every generation, e.g. team=ai,project=demo. Press Enter to skip.").
-				Validate(validateTags).
-				Value(&v.tags),
-			huh.NewSelect[string]().
-				Title("Guards").
-				Description("Pre-tool-use safety checks").
-				Options(
-					huh.NewOption("Disabled (default)", guardsOff),
-					huh.NewOption("Enabled, fail-open — allow the action when a guard errors or times out", guardsOpen),
-					huh.NewOption("Enabled, fail-closed — block the action when a guard errors or times out", guardsClosed),
-				).
-				Value(&v.guards),
-			huh.NewInput().
-				Title("Guard timeout (ms)").
-				Description("How long to wait for guards before applying the fail mode. Only used when guards are enabled.").
-				Validate(func(s string) error {
-					// The timeout is ignored while guards are disabled, so don't
-					// let a stale or invalid value block submission then.
-					if v.guards == guardsOff {
-						return nil
-					}
-					return validateGuardTimeout(s)
-				}).
-				Value(&v.guardTimeout),
-			huh.NewSelect[bool]().
-				Title("Automatic tags").
-				Description("Tag every session with the user, the repository, and the branch, and turn those into metric labels so Usage and Cost can be split by person, repository, or branch.\nThe values are stored with the metrics and kept for the metric retention period; the user value is often an email address.").
-				Options(autoTagSwitchOptions()...).
-				Value(&v.autoTags),
-		),
+		huh.NewGroup(fields...),
 		// The names only matter once the switch is on, so this group is skipped
 		// while the answer above is Off: the form asks whether to tag at all
 		// first and unfolds the list after it.
@@ -700,6 +746,15 @@ func preferenceGroups(v *formValues) []*huh.Group {
 				Validate(validateAutoTagNames).
 				Value(&v.autoTagNames),
 		).WithHideFunc(func() bool { return !v.autoTags }),
+	}
+}
+
+// Keep No first so Options lays out both rows before Value moves the cursor to
+// the default Yes answer.
+func localDaemonOptions() []huh.Option[bool] {
+	return []huh.Option[bool]{
+		huh.NewOption("No: do not use the local web UI", false),
+		huh.NewOption("Yes: use the local web UI (default)", true),
 	}
 }
 
@@ -749,6 +804,27 @@ func destinationOptions() []huh.Option[bool] {
 		huh.NewOption("Local only", true),
 		huh.NewOption("Grafana Cloud", false),
 	}
+}
+
+func promptCloudConnection(stackURL string) (bool, error) {
+	change := false
+	if err := formError(cloudConnectionForm(&change, stackURL).Run()); err != nil {
+		return false, err
+	}
+	return change, nil
+}
+
+func cloudConnectionForm(change *bool, stackURL string) *huh.Form {
+	return huh.NewForm(huh.NewGroup(
+		huh.NewSelect[bool]().
+			Title("Grafana Cloud connection").
+			Description(stackURL).
+			Value(change).
+			Options(
+				huh.NewOption("Keep this connection (default)", false),
+				huh.NewOption("Change connection", true),
+			),
+	)).WithTheme(grafanaTheme())
 }
 
 // manualStackChoice is the list value that opens the free-form field. Not the
@@ -1472,6 +1548,8 @@ var seededSuffixes = []string{
 	"INSECURE",
 	"CONTENT_CAPTURE_MODE",
 	"TAGS",
+	"LOCAL",
+	"LOCAL_FORWARD",
 	envconfig.AutoTagsSuffix,
 	envconfig.AutoTagNamesSuffix,
 	"GUARDS_ENABLED",
@@ -1501,11 +1579,14 @@ const (
 // formValues holds the resolved field values the form produced. It exists so
 // buildUpdates can be unit-tested without driving the huh TUI.
 type formValues struct {
-	localMode    bool
-	endpoint     string
-	tenantID     string
-	token        string
-	otelEndpoint string
+	localMode           bool
+	offerLocalDaemon    bool
+	localDaemon         bool
+	localDaemonPrompted bool
+	endpoint            string
+	tenantID            string
+	token               string
+	otelEndpoint        string
 	// otlpHeaders is the OTEL_EXPORTER_OTLP_HEADERS value to persist: the one on
 	// file, or the one a pasted block replaced it with. otlpHeadersPasted marks
 	// the second case, the only one where the header is known to carry the token
@@ -1538,11 +1619,14 @@ type formValues struct {
 // values delete both) so old binaries that only read SIGIL_* keep working.
 // Keys absent from the returned map keep whatever the file already holds.
 //
-// The preference settings are written only when capturePrompted says the form
+// The capture settings are written only when capturePrompted says the form
 // ran. A promptless run leaves them out: their values then come from seeds, and
 // a seed can be an AGENTO11Y_* variable exported in the current shell, so
 // writing them would turn a one-off `agento11y claude --tag session=demo` into
 // a permanent config entry the user never saw.
+//
+// Unless KeepLocalSetting is set, every Cloud setup writes LOCAL=false. A
+// submitted local-daemon answer writes LOCAL and LOCAL_FORWARD together.
 //
 // Content capture mode, the guard-enabled flag, and the automatic-tag switch
 // are always written explicitly so a downgrade (e.g. full back to
@@ -1568,13 +1652,21 @@ type formValues struct {
 // AGENTO11Y_STACK_URL is added after the aliases are expanded, so it gets one
 // spelling rather than two, and only when it holds something: a promptless run
 // seeds it from the file and must not delete a stack it never asked about.
-func buildUpdates(v formValues) map[string]string {
+func buildUpdates(v formValues, keepLocalSetting bool) map[string]string {
 	updates := map[string]string{
 		"SIGIL_ENDPOINT":                    v.endpoint,
 		"SIGIL_AUTH_TENANT_ID":              v.tenantID,
 		"SIGIL_AUTH_TOKEN":                  v.token,
 		"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT": v.otelEndpoint,                   // "" deletes
 		"OTEL_EXPORTER_OTLP_HEADERS":        strings.TrimSpace(v.otlpHeaders), // "" deletes
+	}
+	if !keepLocalSetting {
+		localMode := false
+		if v.localDaemonPrompted {
+			localMode = v.localDaemon
+			updates[envconfig.LegacyKey("LOCAL_FORWARD")] = strconv.FormatBool(localMode)
+		}
+		updates[envconfig.LegacyKey("LOCAL")] = strconv.FormatBool(localMode)
 	}
 	if v.capturePrompted {
 		updates["SIGIL_CONTENT_CAPTURE_MODE"] = normalizeContentMode(v.contentMode)
@@ -1645,6 +1737,26 @@ func normalizeContentMode(raw string) string {
 	}
 }
 
+func seedLocalDaemon(localRaw, forwardRaw string) bool {
+	localRaw = strings.TrimSpace(localRaw)
+	if localRaw == "" {
+		return true
+	}
+	localMode, ok := envconfig.ParseBoolValue(localRaw)
+	if !ok || localMode {
+		return localMode
+	}
+
+	// Cloud setup can write LOCAL=false without asking this question.
+	// LOCAL_FORWARD=false distinguishes a saved No answer.
+	forwardRaw = strings.TrimSpace(forwardRaw)
+	if forwardRaw == "" {
+		return true
+	}
+	forward, ok := envconfig.ParseBoolValue(forwardRaw)
+	return ok && forward
+}
+
 // seedGuards derives the guard select value from the persisted enabled and
 // fail-open keys. Fail-open defaults to true (matching the plugin), so an
 // enabled-but-unspecified config seeds the fail-open option.
@@ -1702,8 +1814,11 @@ func validateGuardTimeout(s string) error {
 // loadSeeds resolves each seeded family as shell over file, preferred
 // spelling first within each source, and keys the result by the legacy
 // SIGIL_* name — the form's internal key space.
-func loadSeeds(configPath string, logger *log.Logger) map[string]string {
-	fileEnv := dotenv.LoadDotenv(configPath, logger)
+func loadSeeds(configPath string, logger *log.Logger) (map[string]string, error) {
+	fileEnv, err := dotenv.ReadDotenv(configPath, logger)
+	if err != nil {
+		return nil, err
+	}
 	seeds := map[string]string{}
 	for _, suffix := range seededSuffixes {
 		preferred, legacy := envconfig.PreferredKey(suffix), envconfig.LegacyKey(suffix)
@@ -1724,7 +1839,7 @@ func loadSeeds(configPath string, logger *log.Logger) map[string]string {
 	// process env would turn a one-off shell export into a saved value.
 	seeds["OTEL_EXPORTER_OTLP_HEADERS"] = strings.TrimSpace(fileEnv["OTEL_EXPORTER_OTLP_HEADERS"])
 	seeds[stackURLKey] = strings.TrimSpace(fileEnv[stackURLKey])
-	return seeds
+	return seeds, nil
 }
 
 func requireURL(s string) error {
@@ -1762,8 +1877,11 @@ func requireNonEmpty(field string) func(string) error {
 }
 
 // welcomeBanner returns the rendered banner box promptValues prints first.
-func welcomeBanner(offerLocal bool) string {
+func welcomeBanner(offerLocal, configured bool) string {
 	subtitle := "Let's connect your Grafana stack."
+	if configured {
+		subtitle = "Update your Agent Observability settings."
+	}
 	if offerLocal {
 		subtitle = "Choose where to keep your sessions."
 	}
