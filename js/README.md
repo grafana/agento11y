@@ -521,6 +521,14 @@ auth: {
 
 `shutdown()` uses the same resolved timeout as the deadline for its final flush, so a request that is already in flight gets one complete attempt.
 
+## Export retry and queue tuning
+
+Generation and workflow-step exports retry five times by default, with exponential backoff capped at five seconds. Set `AGENTO11Y_MAX_RETRIES` and `AGENTO11Y_MAX_BACKOFF_MS` to base-10 integers from `1` through `2147483647` to override those defaults. Explicit `generationExport.maxRetries` and `generationExport.maxBackoffMs` values win over the environment variables.
+
+Each in-memory export queue holds 2,000 records by default. Set `AGENTO11Y_QUEUE_SIZE` to a base-10 integer from `1` through `2147483647` to override that capacity. Size it from the peak records per second multiplied by the expected outage in seconds, plus headroom. Generations and workflow steps have separate queues of this capacity. Larger queues consume application memory and do not survive a process restart. An explicit `generationExport.queueSize` value wins over the environment variable.
+
+Retries run in the background exporter. While an export is retrying, the in-memory queue can fill and newer generations can be dropped. Use a retry budget sized for a short, known interruption rather than a permanent multi-minute setting.
+
 ## Wiring custom env vars
 
 The SDK only auto-loads `AGENTO11Y_*` env vars (`AGENTO11Y_ENDPOINT`, `AGENTO11Y_PROTOCOL`, `AGENTO11Y_AUTH_MODE`, `AGENTO11Y_AUTH_TOKEN`, etc.) when you call `new Agento11yClient()`. For any other env var (for example one your secret manager exposes under a different name), read it in your app and pass the value into the config:
