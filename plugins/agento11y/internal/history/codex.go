@@ -634,7 +634,7 @@ func (r *codexReplay) finalizeAndEmit(emit bool) bool {
 	gen.ID = src.GenerationID()
 	gen.ConversationTitle = r.title
 	if turn.reasoning {
-		gen.ThinkingEnabled = codexBoolPtr(true)
+		gen.ThinkingEnabled = new(true)
 	}
 	if gen.ResponseID == "" {
 		gen.ResponseID = turn.frag.TurnID
@@ -1068,5 +1068,3 @@ func firstNonEmptyString(values ...string) string {
 	}
 	return ""
 }
-
-func codexBoolPtr(v bool) *bool { return &v }

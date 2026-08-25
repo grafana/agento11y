@@ -247,7 +247,7 @@ func TestOTelProtocolSpan(t *testing.T) {
 			name: "redaction runs before the span is encoded",
 			mutate: func(cfg *Config) {
 				cfg.GenerationSanitizer = NewSecretRedactionSanitizer(SecretRedactionOptions{
-					RedactInputMessages: BoolPtr(true),
+					RedactInputMessages: new(true),
 				})
 			},
 			content: Generation{
@@ -595,8 +595,8 @@ func TestOTelProtocolRequiresExperimentalGate(t *testing.T) {
 		experimental string
 		wantOTel     bool
 	}{
-		{name: "explicit true with gate unset", override: BoolPtr(true), wantOTel: true},
-		{name: "explicit false with gate open", override: BoolPtr(false), experimental: "true", wantOTel: false},
+		{name: "explicit true with gate unset", override: new(true), wantOTel: true},
+		{name: "explicit false with gate open", override: new(false), experimental: "true", wantOTel: false},
 		{name: "nil with gate open", experimental: "true", wantOTel: true},
 		{name: "nil with gate unset", wantOTel: false},
 		{name: "nil with gate off", experimental: "false", wantOTel: false},

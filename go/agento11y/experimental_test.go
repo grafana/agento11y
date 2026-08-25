@@ -79,8 +79,8 @@ func TestClientExperimentalFeaturePrecedence(t *testing.T) {
 		env      string
 		want     bool
 	}{
-		{name: "explicit true beats unset environment", override: BoolPtr(true), want: true},
-		{name: "explicit false beats truthy environment", override: BoolPtr(false), env: "true", want: false},
+		{name: "explicit true beats unset environment", override: new(true), want: true},
+		{name: "explicit false beats truthy environment", override: new(false), env: "true", want: false},
 		{name: "nil uses truthy environment", env: "true", want: true},
 		{name: "nil uses false environment", env: "false", want: false},
 	}
@@ -135,8 +135,8 @@ func TestClientExperimentalFeatureNilReadsCurrentEnvironment(t *testing.T) {
 
 func TestClientExperimentalFeatureSettingsAreIsolated(t *testing.T) {
 	clearExperimentalGate(t)
-	openClient := NewClient(Config{EnableExperimentalFeatures: BoolPtr(true), testDisableWorker: true})
-	closedClient := NewClient(Config{EnableExperimentalFeatures: BoolPtr(false), testDisableWorker: true})
+	openClient := NewClient(Config{EnableExperimentalFeatures: new(true), testDisableWorker: true})
+	closedClient := NewClient(Config{EnableExperimentalFeatures: new(false), testDisableWorker: true})
 	t.Cleanup(func() {
 		_ = openClient.Shutdown(context.Background())
 		_ = closedClient.Shutdown(context.Background())
@@ -170,7 +170,7 @@ func TestCloudTrialEvaluationBlockedWithoutTheGate(t *testing.T) {
 	t.Setenv(EnvEnableExperimentalFeatures, "true")
 	client := NewClient(Config{
 		API:                        APIConfig{Endpoint: server.URL},
-		EnableExperimentalFeatures: BoolPtr(false),
+		EnableExperimentalFeatures: new(false),
 		testGenerationExporter:     newNoopGenerationExporter(nil),
 		testDisableWorker:          true,
 	})

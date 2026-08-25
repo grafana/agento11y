@@ -680,7 +680,7 @@ func TestNewClient_EnvHandling(t *testing.T) {
 				"SIGIL_INSECURE": "true",
 				"SIGIL_PROTOCOL": "none",
 			},
-			cfg: Config{GenerationExport: GenerationExportConfig{Insecure: BoolPtr(false)}},
+			cfg: Config{GenerationExport: GenerationExportConfig{Insecure: new(false)}},
 			check: func(t *testing.T, c *Client) {
 				if c.config.GenerationExport.Insecure == nil || *c.config.GenerationExport.Insecure {
 					t.Fatalf("Insecure=%v, want explicit false", c.config.GenerationExport.Insecure)
@@ -705,7 +705,7 @@ func TestNewClient_EnvHandling(t *testing.T) {
 				"SIGIL_DEBUG":    "true",
 				"SIGIL_PROTOCOL": "none",
 			},
-			cfg: Config{Debug: BoolPtr(false)},
+			cfg: Config{Debug: new(false)},
 			check: func(t *testing.T, c *Client) {
 				if c.config.Debug == nil || *c.config.Debug {
 					t.Fatalf("Debug=%v, want explicit false", c.config.Debug)

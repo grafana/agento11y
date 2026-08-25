@@ -327,7 +327,7 @@ var (
 
 // BoolPtr returns a pointer to the supplied bool value. Used to distinguish
 // "explicitly set to false" from "not set" on GenerationExportConfig.Insecure.
-func BoolPtr(b bool) *bool { return &b }
+func BoolPtr(b bool) *bool { return new(b) }
 
 // DefaultConfig returns a production-ready baseline configuration.
 func DefaultConfig() Config {
@@ -336,7 +336,7 @@ func DefaultConfig() Config {
 			Protocol:                   GenerationExportProtocolGRPC,
 			Endpoint:                   "localhost:4317",
 			Auth:                       AuthConfig{Mode: ExportAuthModeNone},
-			Insecure:                   BoolPtr(false),
+			Insecure:                   new(false),
 			GRPCMaxSendMessageBytes:    defaultGRPCMaxSendMessageBytes,
 			GRPCMaxReceiveMessageBytes: defaultGRPCMaxReceiveMessageBytes,
 			BatchSize:                  100,
@@ -487,7 +487,7 @@ type telemetryInstruments struct {
 func NewClient(config Config) *Client {
 	cfg := config
 	if cfg.EnableExperimentalFeatures != nil {
-		cfg.EnableExperimentalFeatures = BoolPtr(*cfg.EnableExperimentalFeatures)
+		cfg.EnableExperimentalFeatures = new(*cfg.EnableExperimentalFeatures)
 	}
 	defaults, err := resolveFromEnv(defaultLookup, DefaultConfig())
 	if err != nil {

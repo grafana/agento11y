@@ -102,7 +102,7 @@ brew install grafana/grafana/agento11y
 
 Upgrade with `brew upgrade grafana/grafana/agento11y`.
 
-**Go install (any platform with Go 1.25.7+):**
+**Go install (any platform with Go 1.26+):**
 
 ```sh
 go install github.com/grafana/agento11y/plugins/agento11y/cmd/agento11y@latest

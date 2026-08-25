@@ -1,6 +1,6 @@
 module github.com/grafana/agento11y/go/otelgenai/conformance
 
-go 1.25.7
+go 1.26
 
 require (
 	github.com/grafana/agento11y/go v0.0.0-00010101000000-000000000000

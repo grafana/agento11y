@@ -105,7 +105,7 @@ func newExperimentTestClient(t *testing.T, serverURL string) *Client {
 			Protocol:        GenerationExportProtocolHTTP,
 			Endpoint:        serverURL + "/api/v1/generations:export",
 			Auth:            AuthConfig{Mode: ExportAuthModeTenant, TenantID: "tenant-a"},
-			Insecure:        BoolPtr(true),
+			Insecure:        new(true),
 			BatchSize:       10,
 			FlushInterval:   time.Hour,
 			QueueSize:       100,

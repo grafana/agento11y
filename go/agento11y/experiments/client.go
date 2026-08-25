@@ -96,7 +96,7 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	}
 	if redact {
 		cfg.GenerationSanitizer = agento11y.NewSecretRedactionSanitizer(agento11y.SecretRedactionOptions{
-			RedactInputMessages: agento11y.BoolPtr(true),
+			RedactInputMessages: new(true),
 		})
 	}
 	return &Client{

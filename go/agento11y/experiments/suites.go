@@ -53,8 +53,7 @@ func (e *ConflictError) Error() string { return e.Message }
 func (e *ConflictError) Unwrap() error { return ErrConflict }
 
 func ClassifyConflict(err error) ConflictKind {
-	var typed *ConflictError
-	if errors.As(err, &typed) {
+	if typed, ok := errors.AsType[*ConflictError](err); ok {
 		return typed.Kind
 	}
 	text := strings.ToLower(errString(err))
@@ -590,7 +589,7 @@ func remoteCaseToLocal(data map[string]any) TestCase {
 	}
 	var weight *float64
 	if value, ok := numberValue(portability["weight"]); ok {
-		weight = Weight(value)
+		weight = new(value)
 	}
 	wrapped := map[string]bool{}
 	for _, field := range stringSlice(portability["wrapped_fields"]) {

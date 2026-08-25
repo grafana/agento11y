@@ -1,6 +1,6 @@
 module github.com/grafana/agento11y/examples/experiments/go
 
-go 1.25.7
+go 1.26
 
 require github.com/grafana/agento11y/go v0.8.0
 

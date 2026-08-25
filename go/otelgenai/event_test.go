@@ -66,8 +66,8 @@ func TestOperationDetailsEventGating(t *testing.T) {
 		{name: "span and event defaults on", mode: otelgenai.CaptureSpanAndEvent, want: 1, wantContent: true},
 		{name: "false overrides event only", mode: otelgenai.CaptureEventOnly, emitEnv: "false"},
 		{name: "true overrides no content but not its content", mode: otelgenai.CaptureNoContent, emitEnv: "true", want: 1},
-		{name: "option false overrides env true", mode: otelgenai.CaptureEventOnly, emitEnv: "true", emitOption: testPtr(false)},
-		{name: "option true overrides env false", mode: otelgenai.CaptureNoContent, emitEnv: "false", emitOption: testPtr(true), want: 1},
+		{name: "option false overrides env true", mode: otelgenai.CaptureEventOnly, emitEnv: "true", emitOption: new(false)},
+		{name: "option true overrides env false", mode: otelgenai.CaptureNoContent, emitEnv: "false", emitOption: new(true), want: 1},
 		{name: "invalid value falls back to capture", mode: otelgenai.CaptureEventOnly, emitEnv: "invalid", want: 1, wantContent: true},
 		{name: "custom inference operations emit", mode: otelgenai.CaptureEventOnly, operation: "custom_inference", want: 1, wantContent: true},
 		{
@@ -151,7 +151,7 @@ func TestOperationDetailsEventStructuredContent(t *testing.T) {
 		otelgenai.WithCaptureMode(otelgenai.CaptureSpanAndEvent),
 	)
 	inv := chatInvocation()
-	inv.TopK = testPtr(int64(40))
+	inv.TopK = new(int64(40))
 	inv.ToolCallArguments = []byte(`{"city":"Paris"}`)
 	inv.RetrievalDocuments = []byte(`[{"id":"doc-1","score":0.9}]`)
 	inv.InputMessages = []otelgenai.Message{{
@@ -159,7 +159,7 @@ func TestOperationDetailsEventStructuredContent(t *testing.T) {
 		Parts: []otelgenai.Part{{
 			Type:       otelgenai.PartTypeCompaction,
 			ID:         "compaction-1",
-			Content:    testPtr("summary"),
+			Content:    new("summary"),
 			Extensions: map[string]any{"vendor.turns": 12},
 		}},
 	}}

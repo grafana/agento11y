@@ -20,7 +20,6 @@ import (
 
 	"github.com/grafana/agento11y/go/agento11y/model"
 	agento11yv1 "github.com/grafana/agento11y/go/proto/agento11y/v1"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -82,7 +81,7 @@ func ToProto(g model.Generation) (*agento11yv1.Generation, error) {
 	}
 
 	if digest := EffectiveVersionDigest(g.EffectiveVersion); digest != "" {
-		out.EffectiveVersion = proto.String(digest)
+		out.EffectiveVersion = new(digest)
 	}
 
 	if !g.StartedAt.IsZero() {

@@ -11,8 +11,6 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/fragment"
 )
 
-func ptrInt64(v int64) *int64 { return &v }
-
 // Assistant text is treated like UserPrompt: dropped from the on-disk
 // fragment in metadata_only / default, kept in full / no_tool_content.
 // Model, provider, and token counts are metadata and stay in every mode.
@@ -41,8 +39,8 @@ func TestAfterAgentResponse_GatesAssistantTextByMode(t *testing.T) {
 				Text:           "hello world",
 				Model:          "claude-opus-4-7",
 				Provider:       "anthropic",
-				InputTokens:    ptrInt64(10),
-				OutputTokens:   ptrInt64(20),
+				InputTokens:    new(int64(10)),
+				OutputTokens:   new(int64(20)),
 			}, cfg, logger)
 
 			got := fragment.LoadTolerant("conv", "gen", logger)
