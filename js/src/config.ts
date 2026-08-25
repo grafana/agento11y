@@ -12,7 +12,7 @@ import type {
 
 const tenantHeaderName = 'X-Scope-OrgID';
 const authorizationHeaderName = 'Authorization';
-const maxExportTimeoutMs = 2_147_483_647;
+const maxEnvInteger = 2_147_483_647;
 
 const validAuthModes: ExportAuthConfig['mode'][] = ['none', 'tenant', 'bearer', 'basic'];
 
@@ -35,6 +35,9 @@ const envProtocol = brandedPair('PROTOCOL');
 const envInsecure = brandedPair('INSECURE');
 const envHeaders = brandedPair('HEADERS');
 const envExportTimeoutMs = brandedPair('EXPORT_TIMEOUT_MS');
+const envMaxRetries = brandedPair('MAX_RETRIES');
+const envMaxBackoffMs = brandedPair('MAX_BACKOFF_MS');
+const envQueueSize = brandedPair('QUEUE_SIZE');
 const envAuthMode = brandedPair('AUTH_MODE');
 const envAuthTenantId = brandedPair('AUTH_TENANT_ID');
 const envAuthToken = brandedPair('AUTH_TOKEN');
@@ -183,10 +186,13 @@ function envOverrides(env: Record<string, string | undefined>, logger: Agento11y
       generationExport.timeoutMs = parsed;
     } else {
       logger.warn?.(
-        `agento11y: ignoring invalid ${exportTimeoutMs.key}: ${exportTimeoutMs.value}; expected a whole number from 1 through ${maxExportTimeoutMs}`,
+        `agento11y: ignoring invalid ${exportTimeoutMs.key}: ${exportTimeoutMs.value}; expected a whole number from 1 through ${maxEnvInteger}`,
       );
     }
   }
+  applyIntegerEnvOverride(env, envMaxRetries, 'maxRetries', 1, generationExport, logger);
+  applyIntegerEnvOverride(env, envMaxBackoffMs, 'maxBackoffMs', 1, generationExport, logger);
+  applyIntegerEnvOverride(env, envQueueSize, 'queueSize', 1, generationExport, logger);
 
   const authMode = envTrimmed(env, envAuthMode);
   if (authMode !== undefined) {
@@ -338,7 +344,7 @@ function mergeGenerationExportConfig(
     : defaultGenerationExportConfig.timeoutMs;
   if (config?.timeoutMs !== undefined && !isValidExportTimeoutMs(config.timeoutMs)) {
     logger.warn?.(
-      `agento11y: ignoring invalid generationExport.timeoutMs: ${String(config.timeoutMs)}; expected a whole number from 1 through ${maxExportTimeoutMs}`,
+      `agento11y: ignoring invalid generationExport.timeoutMs: ${String(config.timeoutMs)}; expected a whole number from 1 through ${maxEnvInteger}`,
     );
   }
   const merged: GenerationExportConfig = {
@@ -353,13 +359,38 @@ function mergeGenerationExportConfig(
 }
 
 function parseExportTimeoutMs(value: string): number | undefined {
-  if (!/^[0-9]+$/.test(value)) return undefined;
-  const parsed = Number(value);
-  return isValidExportTimeoutMs(parsed) ? parsed : undefined;
+  return parseWholeNumber(value, 1);
 }
 
 function isValidExportTimeoutMs(value: number | undefined): value is number {
-  return value !== undefined && Number.isSafeInteger(value) && value > 0 && value <= maxExportTimeoutMs;
+  return value !== undefined && Number.isSafeInteger(value) && value > 0 && value <= maxEnvInteger;
+}
+
+function applyIntegerEnvOverride(
+  env: Record<string, string | undefined>,
+  pair: EnvPair,
+  field: 'maxRetries' | 'maxBackoffMs' | 'queueSize',
+  minimum: number,
+  generationExport: Partial<GenerationExportConfig>,
+  logger: Agento11yLogger,
+): void {
+  const selected = envTrimmed(env, pair);
+  if (selected === undefined) return;
+
+  const parsed = parseWholeNumber(selected.value, minimum);
+  if (parsed !== undefined) {
+    generationExport[field] = parsed;
+    return;
+  }
+  logger.warn?.(
+    `agento11y: ignoring invalid ${selected.key}: ${selected.value}; expected a whole number from ${minimum} through ${maxEnvInteger}`,
+  );
+}
+
+function parseWholeNumber(value: string, minimum: number): number | undefined {
+  if (!/^[0-9]+$/.test(value)) return undefined;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= minimum && parsed <= maxEnvInteger ? parsed : undefined;
 }
 
 function mergeAPIConfig(config: Partial<ApiConfig> | undefined): ApiConfig {
