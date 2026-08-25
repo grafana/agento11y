@@ -855,21 +855,31 @@ func gunzip(body []byte) ([]byte, error) {
 // same format. The returned content type matches the encoding used.
 func stripTracePayload(body []byte, contentType string) ([]byte, string, error) {
 	isJSON := strings.Contains(strings.ToLower(contentType), "json")
-	var req coltracepb.ExportTraceServiceRequest
-	if isJSON {
-		if err := protojson.Unmarshal(body, &req); err != nil {
-			return nil, "", err
-		}
-	} else if err := proto.Unmarshal(body, &req); err != nil {
+	req, err := decodeTracePayload(body, contentType)
+	if err != nil {
 		return nil, "", err
 	}
-	stripTraceContent(&req)
+	stripTraceContent(req)
 	if isJSON {
-		out, err := protojson.Marshal(&req)
+		out, err := protojson.Marshal(req)
 		return out, wire.ContentTypeJSON, err
 	}
-	out, err := proto.Marshal(&req)
+	out, err := proto.Marshal(req)
 	return out, wire.ContentTypeProto, err
+}
+
+func decodeTracePayload(body []byte, contentType string) (*coltracepb.ExportTraceServiceRequest, error) {
+	req := new(coltracepb.ExportTraceServiceRequest)
+	if strings.Contains(strings.ToLower(contentType), "json") {
+		if err := protojson.Unmarshal(body, req); err != nil {
+			return nil, err
+		}
+		return req, nil
+	}
+	if err := proto.Unmarshal(body, req); err != nil {
+		return nil, err
+	}
+	return req, nil
 }
 
 func stripTraceContent(req *coltracepb.ExportTraceServiceRequest) {

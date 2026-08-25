@@ -157,7 +157,7 @@ func TestDecodeFileSummaryTokenBucketsByModel(t *testing.T) {
 	assert.Equal(t, mustParse(t, "2026-08-03T10:01:00Z"), entry.generations[1].timestamp)
 	require.Len(t, entry.toolOccurrences, 1, "the cache retains timestamped tool occurrences")
 	assert.Equal(t, toolOccurrence{
-		Timestamp: mustParse(t, "2026-08-03T10:01:00Z"), Name: "Read",
+		Timestamp: mustParse(t, "2026-08-03T10:01:00Z"), CallID: "call-1", Name: "Read",
 	}, entry.toolOccurrences[0])
 }
 

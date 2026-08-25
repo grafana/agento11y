@@ -70,6 +70,20 @@ func TestStorage_FilePermissions(t *testing.T) {
 	}
 }
 
+func TestNewStorageLeavesOptionalToolSpansDirectoryForFirstWrite(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "local")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	// A non-directory at the optional sidecar path must not prevent startup.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ToolSpansDir), []byte("reserved"), 0o600))
+
+	storage, err := NewStorage(dir)
+	require.NoError(t, err)
+	assert.Equal(t, dir, storage.Dir())
+	info, err := os.Stat(filepath.Join(dir, ConversationsDir))
+	require.NoError(t, err)
+	assert.True(t, info.IsDir())
+}
+
 // TestAppendGeneration covers generation storage: populated
 // conversation IDs go to conversations/<id>.jsonl, missing or path-shaped
 // IDs are rejected, and a conversations directory that disappeared under a

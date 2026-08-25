@@ -237,6 +237,7 @@ type periodGeneration struct {
 
 type toolOccurrence struct {
 	Timestamp time.Time
+	CallID    string
 	Name      string
 	Failed    bool
 }
@@ -309,7 +310,7 @@ func (c *toolUsageCounter) addCall(call toolProbeCall, timestamp time.Time) {
 	id := strings.TrimSpace(call.ID)
 	name := strings.TrimSpace(call.Name)
 	idx := len(c.occurrences)
-	c.occurrences = append(c.occurrences, toolOccurrence{Timestamp: timestamp, Name: name})
+	c.occurrences = append(c.occurrences, toolOccurrence{Timestamp: timestamp, CallID: id, Name: name})
 	if id != "" {
 		if c.pendingByID == nil {
 			c.pendingByID = map[string][]int{}
@@ -349,7 +350,7 @@ func (c *toolUsageCounter) addResult(result toolProbeResult, timestamp time.Time
 			c.seenResultID = map[string]bool{}
 		}
 		c.seenResultID[id] = true
-		c.occurrences = append(c.occurrences, toolOccurrence{Timestamp: timestamp, Name: name, Failed: result.IsError})
+		c.occurrences = append(c.occurrences, toolOccurrence{Timestamp: timestamp, CallID: id, Name: name, Failed: result.IsError})
 		return
 	}
 	if pending := c.pendingAnonymous[name]; name != "" && len(pending) > 0 {

@@ -144,6 +144,7 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/v1/metrics/conversations", s.handleConversationMetrics)
 	mux.HandleFunc("GET /api/v1/metrics/tokens", s.handleTokenMetrics)
 	mux.HandleFunc("GET /api/v1/metrics/tools", s.handleToolMetrics)
+	mux.HandleFunc("GET /api/v1/metrics/skills-tools", s.handleSkillsToolsMetrics)
 	mux.HandleFunc("GET /api/v1/config", s.handleGetConfig)
 	mux.HandleFunc("POST /api/v1/config:preview", s.handlePreviewConfig)
 	mux.HandleFunc("PUT /api/v1/config", s.handleSaveConfig)
@@ -481,9 +482,9 @@ func (s *Server) handleGenerations(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleOTLP accepts local OTLP exporter traffic so local mode does not
-// leak spans or metrics to a user-configured global collector. The viewer
-// does not read these signals yet, so the endpoint drains and acknowledges
-// them without persisting a second local data model.
+// leak spans or metrics to a user-configured global collector. It retains a
+// metadata-only projection of execute_tool spans for local analytics and
+// otherwise drains the signal.
 //
 // When Cloud forwarding is enabled the payload is also relayed to the
 // configured Cloud OTLP endpoint.
@@ -498,12 +499,27 @@ func (s *Server) handleOTLP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	contentType := r.Header.Get("Content-Type")
+	contentEncoding := r.Header.Get("Content-Encoding")
+	if r.URL.Path == otlpTracesPath {
+		if spans, projectErr := projectToolSpans(body, contentType, contentEncoding); projectErr != nil {
+			s.logger.Printf("local: project tool spans: %v", projectErr)
+		} else if changed, appendErr := s.storage.appendToolSpans(spans); appendErr != nil {
+			s.logger.Printf("local: append tool spans: %v", appendErr)
+			for _, conversationID := range changed {
+				s.hub.broadcast(changeEvent{ConversationID: conversationID})
+			}
+		} else {
+			for _, conversationID := range changed {
+				s.hub.broadcast(changeEvent{ConversationID: conversationID})
+			}
+		}
+	}
+
 	// Best-effort Cloud forwarding: metrics relay unchanged, trace content is
 	// stripped under a reduced content mode inside forwardOTLP.
 	if signal := otlpSignalFromPath(r.URL.Path); signal != "" && !isForwardedRequest(r) {
 		if cfg := s.forward.load(); cfg.enabled {
-			contentType := r.Header.Get("Content-Type")
-			contentEncoding := r.Header.Get("Content-Encoding")
 			s.forward.enqueue(otlpForwardLabel(signal), func() { s.forward.forwardOTLP(cfg, signal, contentType, contentEncoding, body) })
 		}
 	}
@@ -698,19 +714,19 @@ func (s *Server) decodeConfigRequest(w http.ResponseWriter, r *http.Request) (Se
 	return req.Settings, true
 }
 
-// conversationListLimit caps how many conversations the list endpoint
-// summarises when the client does not pass a limit. The cost of a request
-// follows this number, not the size of the store, and the viewer's list is
-// not virtualised, so an unbounded default would hurt both ends. Same
-// idiom as searchResultLimit: the default lives in the handler, and
-// Storage.ListConversations keeps ≤ 0 as unbounded for its own callers.
+// conversationListLimit caps how many matching conversations the list
+// endpoint returns when the client does not pass a limit. Exact filters are
+// checked before a candidate counts toward the cap, so those requests may
+// scan more files. The viewer's list is not virtualised, so an unbounded
+// response would hurt both ends. Same idiom as searchResultLimit: the default
+// lives in the handler, and Storage.ListConversations keeps ≤ 0 as unbounded
+// for its own callers.
 const conversationListLimit = 200
 
-// handleListConversations returns the aggregated conversation list as
-// JSON. The response is newest-first. ?limit= caps the page and ?since=
-// (RFC 3339) drops conversations whose file is older, both applied before
-// any conversation file is decoded. For an append-only file the
-// modification time is the last activity; see ConversationListOptions.
+// handleListConversations returns the aggregated conversation list as JSON.
+// The response is newest-first. ?limit= caps matching rows. Exact time,
+// workspace, and tool filters are applied to each decoded candidate before
+// it counts toward that cap; see ConversationListOptions.
 //
 // total_conversations counts the conversation files in the store, before
 // either bound. The viewer needs it to tell an empty store from an empty
@@ -721,11 +737,24 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	since, ok := sinceParam(w, r)
+	since, before, workspace, ok := metricsPeriodParams(w, r)
 	if !ok {
 		return
 	}
-	convs, total, err := s.storage.ListConversations(ConversationListOptions{Limit: limit, Since: since})
+	var tool *string
+	if values, present := r.URL.Query()["tool"]; present {
+		value := ""
+		if len(values) > 0 {
+			value = values[0]
+		}
+		tool = &value
+	}
+	_, hasBefore := r.URL.Query()["before"]
+	// A since-only request is the normal ranged list and uses last activity.
+	exact := hasBefore || workspace != nil || tool != nil
+	convs, total, err := s.storage.ListConversations(ConversationListOptions{
+		Limit: limit, Since: since, Before: before, Workspace: workspace, Tool: tool, Exact: exact,
+	})
 	if err != nil {
 		s.logger.Printf("local: list conversations: %v", err)
 		http.Error(w, "list conversations: "+err.Error(), http.StatusInternalServerError)
@@ -914,6 +943,32 @@ func (s *Server) handleToolMetrics(w http.ResponseWriter, r *http.Request) {
 	s.warmSummariesInBackground()
 }
 
+func (s *Server) handleSkillsToolsMetrics(w http.ResponseWriter, r *http.Request) {
+	since, before, workspace, ok := metricsPeriodParams(w, r)
+	if !ok {
+		return
+	}
+	var interval time.Duration
+	if raw := r.URL.Query().Get("interval"); raw != "" {
+		seconds, err := strconv.Atoi(raw)
+		if err != nil || seconds <= 0 {
+			http.Error(w, "invalid interval: want a positive number of seconds", http.StatusBadRequest)
+			return
+		}
+		interval = time.Duration(seconds) * time.Second
+	}
+	tools, err := s.storage.ToolAnalytics(ToolAnalyticsOptions{
+		Since: since, Before: before, Workspace: workspace, Interval: interval,
+	})
+	if err != nil {
+		s.logger.Printf("local: skills-tools metrics: %v", err)
+		http.Error(w, "skills-tools metrics: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, SkillsToolsMetricsResponse{Tools: tools})
+	s.warmSummariesInBackground()
+}
+
 // metricsPeriodParams reads the half-open generation-time bounds and the
 // presence-sensitive workspace filter shared by all metrics endpoints.
 func metricsPeriodParams(w http.ResponseWriter, r *http.Request) (time.Time, time.Time, *string, bool) {
@@ -950,23 +1005,6 @@ func metricsPeriodParams(w http.ResponseWriter, r *http.Request) (time.Time, tim
 		workspace = &value
 	}
 	return since, before, workspace, true
-}
-
-// sinceParam reads the shared ?since= lower bound. RFC 3339 is the only
-// accepted spelling, the one toISOString() produces, and an unparseable
-// value is a client error rather than a silently ignored filter. A missing
-// parameter returns the zero time (no bound).
-func sinceParam(w http.ResponseWriter, r *http.Request) (time.Time, bool) {
-	raw := r.URL.Query().Get("since")
-	if raw == "" {
-		return time.Time{}, true
-	}
-	since, err := time.Parse(time.RFC3339, raw)
-	if err != nil {
-		http.Error(w, "invalid since: want an RFC 3339 timestamp", http.StatusBadRequest)
-		return time.Time{}, false
-	}
-	return since, true
 }
 
 // handleConversationDetail returns the per-conversation generation

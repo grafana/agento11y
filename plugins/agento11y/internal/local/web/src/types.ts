@@ -159,19 +159,54 @@ export interface TokenUsageResponse {
   interval_seconds: number;
 }
 
-export interface ToolUsage {
+export interface ToolAnalyticsTotals {
+  calls: number;
+  failures: number;
+  tools: number;
+  sessions: number;
+  duration_samples: number;
+}
+
+export interface ToolAnalyticsCoverage {
+  generation_calls: number;
+  projected_spans: number;
+  matched_calls: number;
+}
+
+export interface ToolAnalyticsRow {
+  name: string;
+  calls: number;
+  failures: number;
+  sessions: number;
+  duration_samples: number;
+  p50_duration_seconds?: number;
+  p95_duration_seconds?: number;
+}
+
+export interface ToolAnalyticsBucket {
+  t: string;
   name: string;
   calls: number;
   failures: number;
 }
 
-export interface ConversationToolUsage {
-  id: string;
-  tools: ToolUsage[];
+export interface ToolWorkspaceFacet {
+  path: string;
+  calls: number;
+  sessions: number;
 }
 
-export interface ToolUsageResponse {
-  conversations: ConversationToolUsage[];
+export interface ToolAnalytics {
+  totals: ToolAnalyticsTotals;
+  rows: ToolAnalyticsRow[];
+  buckets: ToolAnalyticsBucket[];
+  workspaces: ToolWorkspaceFacet[];
+  interval_seconds: number;
+  coverage: ToolAnalyticsCoverage;
+}
+
+export interface SkillsToolsMetricsResponse {
+  tools: ToolAnalytics;
 }
 
 /** SearchHit in search.go: one row of GET /api/v1/search. */

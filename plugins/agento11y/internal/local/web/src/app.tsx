@@ -1,6 +1,7 @@
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { type AnalyticsUnit, AnalyticsView } from './analytics';
+import { AnalyticsOverviewContent, type AnalyticsUnit, analyticsOverviewHeroStats } from './analytics';
+import { AnalyticsPage } from './analytics-page';
 import { ConversationsView, GROUP_BY_OPTIONS } from './conversations';
 import { TraceDetailView } from './detail';
 import type { TimeSpan } from './formatters';
@@ -14,7 +15,10 @@ import {
   timeRangeOption,
 } from './formatters';
 import {
+  type AnalyticsTab,
+  analyticsPath,
   analyticsRouteActive,
+  analyticsTabFromLocation,
   conversationIDFromPath,
   conversationPath,
   conversationsPath,
@@ -23,6 +27,9 @@ import {
   REFRESH_DEBOUNCE_MS,
   settingsRouteActive,
   summaryFromDetail,
+  type ToolSessionFilters,
+  toolSessionFiltersFromLocation,
+  toolSessionsPath,
   usePersistedState,
   workspaceFromLocation,
 } from './routing';
@@ -35,6 +42,7 @@ import {
   useHistoryImport,
 } from './settings-screen';
 import { TopBar } from './shell';
+import { SkillsToolsContent, skillsToolsHeroStats } from './skills-tools';
 import type {
   ConfigResponse,
   ConversationDetail,
@@ -42,12 +50,12 @@ import type {
   ConversationMetricsAggregate,
   ConversationMetricsResponse,
   ConversationSummary,
-  ConversationToolUsage,
   ImportRun,
+  SkillsToolsMetricsResponse,
   TokenBucketKey,
   TokenUsagePoint,
   TokenUsageResponse,
-  ToolUsageResponse,
+  ToolAnalytics,
 } from './types';
 
 // ============================================================
@@ -62,6 +70,7 @@ export interface ListSort {
 interface DetailReturnState {
   view?: 'analytics' | 'conversations';
   workspace?: string | null;
+  returnPath?: string;
 }
 
 const ANALYTICS_LIST_SIZE = 2000;
@@ -92,6 +101,10 @@ export function App() {
   const [selectedID, setSelectedID] = useState(conversationIDFromPath);
   const [showSettings, setShowSettings] = useState(settingsRouteActive);
   const [showAnalytics, setShowAnalytics] = useState(analyticsRouteActive);
+  const [analyticsTab, setAnalyticsTab] = useState<AnalyticsTab>(analyticsTabFromLocation);
+  const [toolSessionFilters, setToolSessionFilters] = useState<ToolSessionFilters | null>(
+    toolSessionFiltersFromLocation,
+  );
   // The settings tab is part of the route, so it is owned here with the rest
   // of it: the header chip opens the Cloud tab from any view, including from
   // Settings itself, where pushState alone leaves the panel where it was.
@@ -177,16 +190,17 @@ export function App() {
   const [analyticsTokenPoints, setAnalyticsTokenPoints] = useState<TokenUsagePoint[]>([]);
   const [analyticsTokenIntervalMs, setAnalyticsTokenIntervalMs] = useState(0);
   const [analyticsHeatmapPoints, setAnalyticsHeatmapPoints] = useState<TokenUsagePoint[]>([]);
-  const [analyticsToolUsage, setAnalyticsToolUsage] = useState<ConversationToolUsage[]>([]);
+  const [skillsTools, setSkillsTools] = useState<ToolAnalytics | null>(null);
+  const [skillsToolsWindow, setSkillsToolsWindow] = useState<{ since?: string; before: string } | null>(null);
+  const [loadingSkillsTools, setLoadingSkillsTools] = useState(false);
+  const [errSkillsTools, setErrSkillsTools] = useState<string | null>(null);
   const [loadingAnalytics, setLoadingAnalytics] = useState(false);
   const [loadingAnalyticsTokens, setLoadingAnalyticsTokens] = useState(false);
-  const [loadingAnalyticsTools, setLoadingAnalyticsTools] = useState(false);
   const [loadingAnalyticsHeatmap, setLoadingAnalyticsHeatmap] = useState(false);
   const [errAnalytics, setErrAnalytics] = useState<string | null>(null);
   const [errAnalyticsPrevious, setErrAnalyticsPrevious] = useState<string | null>(null);
   const [errAnalyticsFacets, setErrAnalyticsFacets] = useState<string | null>(null);
   const [errAnalyticsTokens, setErrAnalyticsTokens] = useState<string | null>(null);
-  const [errAnalyticsTools, setErrAnalyticsTools] = useState<string | null>(null);
   const [errAnalyticsHeatmap, setErrAnalyticsHeatmap] = useState<string | null>(null);
 
   const [detail, setDetail] = useState<ConversationDetail | null>(null);
@@ -251,11 +265,19 @@ export function App() {
   // bucket boundaries belong to the old window.
   const changeTimeRange = useCallback(
     (v: string) => {
+      if (toolSessionFilters) {
+        window.history.pushState({}, '', conversationsPath(workspace));
+        setToolSessionFilters(null);
+      }
       setBucketSel(null);
       setTimeRange(v);
     },
-    [setTimeRange],
+    [setTimeRange, toolSessionFilters, workspace],
   );
+  const clearToolSessionFilter = useCallback(() => {
+    window.history.pushState({}, '', conversationsPath(workspace));
+    setToolSessionFilters(null);
+  }, [workspace]);
 
   const pageTitle =
     view === 'settings'
@@ -295,12 +317,16 @@ export function App() {
       setLoadingList(true);
       setErrList(null);
       if (reset) setConversations([]);
-      // Bound the request: the server pages the list by file modification
-      // time and never decodes past the page, so the cost follows the page
-      // size, not the store size.
       const w = requestWindow(timeRange, LIST_PAGE_SIZE);
       const params = new URLSearchParams({ limit: String(w.limit) });
-      if (w.since) params.set('since', w.since);
+      if (toolSessionFilters) {
+        params.set('tool', toolSessionFilters.tool);
+        if (toolSessionFilters.workspace != null) params.set('workspace', toolSessionFilters.workspace);
+        if (toolSessionFilters.since) params.set('since', toolSessionFilters.since);
+        if (toolSessionFilters.before) params.set('before', toolSessionFilters.before);
+      } else if (w.since) {
+        params.set('since', w.since);
+      }
       return fetch(`/api/v1/conversations?${params}`)
         .then((r) => (r.ok ? r.json() : r.text().then((t) => Promise.reject(new Error(t || `HTTP ${r.status}`)))))
         .then((body: ConversationListResponse) => {
@@ -317,7 +343,7 @@ export function App() {
           setLoadingList(false);
         });
     },
-    [timeRange],
+    [timeRange, toolSessionFilters],
   );
 
   // Token points back the usage chart. The server aggregates them per
@@ -345,8 +371,19 @@ export function App() {
       }
       const w = requestWindow(timeRange, LIST_PAGE_SIZE);
       const params = new URLSearchParams();
-      if (w.since) params.set('since', w.since);
-      if (w.intervalSec) params.set('interval', String(w.intervalSec));
+      if (toolSessionFilters) {
+        if (toolSessionFilters.since) params.set('since', toolSessionFilters.since);
+        if (toolSessionFilters.before) params.set('before', toolSessionFilters.before);
+        if (toolSessionFilters.workspace != null) params.set('workspace', toolSessionFilters.workspace);
+        const since = toolSessionFilters.since ? Date.parse(toolSessionFilters.since) : Number.NaN;
+        const before = toolSessionFilters.before ? Date.parse(toolSessionFilters.before) : Number.NaN;
+        if (Number.isFinite(since) && Number.isFinite(before) && since < before) {
+          params.set('interval', String(Math.round(chartBucketMs(before - since) / 1000)));
+        }
+      } else {
+        if (w.since) params.set('since', w.since);
+        if (w.intervalSec) params.set('interval', String(w.intervalSec));
+      }
       const query = params.toString();
       return fetch(`/api/v1/metrics/tokens${query ? `?${query}` : ''}`)
         .then((r) => (r.ok ? r.json() : null))
@@ -361,7 +398,7 @@ export function App() {
         })
         .catch(() => {});
     },
-    [timeRange],
+    [timeRange, toolSessionFilters],
   );
 
   const analyticsSeqRef = useRef(0);
@@ -377,12 +414,10 @@ export function App() {
       const seq = ++analyticsSeqRef.current;
       setLoadingAnalytics(true);
       setLoadingAnalyticsTokens(true);
-      setLoadingAnalyticsTools(true);
       setErrAnalytics(null);
       setErrAnalyticsPrevious(null);
       setErrAnalyticsFacets(null);
       setErrAnalyticsTokens(null);
-      setErrAnalyticsTools(null);
       if (reset) {
         setAnalyticsConversations([]);
         setAnalyticsPreviousConversations([]);
@@ -394,7 +429,6 @@ export function App() {
         setAnalyticsFacetTotalConversations(null);
         setAnalyticsTokenPoints([]);
         setAnalyticsTokenIntervalMs(0);
-        setAnalyticsToolUsage([]);
       }
 
       const now = Date.now();
@@ -403,7 +437,6 @@ export function App() {
       const currentParams = new URLSearchParams({ limit: String(ANALYTICS_LIST_SIZE), before });
       const previousParams = new URLSearchParams({ limit: String(ANALYTICS_LIST_SIZE) });
       const tokenParams = new URLSearchParams({ before });
-      const toolParams = new URLSearchParams({ limit: String(ANALYTICS_LIST_SIZE), before });
       if (range.ms != null) {
         const currentStart = now - range.ms;
         currentParams.set('since', new Date(currentStart).toISOString());
@@ -411,14 +444,12 @@ export function App() {
         previousParams.set('before', new Date(currentStart).toISOString());
         tokenParams.set('since', new Date(currentStart).toISOString());
         tokenParams.set('interval', String(Math.round(chartBucketMs(range.ms) / 1000)));
-        toolParams.set('since', new Date(currentStart).toISOString());
       }
       const facetParams = new URLSearchParams(currentParams);
       if (analyticsWorkspace != null) {
         currentParams.set('workspace', analyticsWorkspace);
         previousParams.set('workspace', analyticsWorkspace);
         tokenParams.set('workspace', analyticsWorkspace);
-        toolParams.set('workspace', analyticsWorkspace);
       }
 
       const currentRequest = fetch(`/api/v1/metrics/conversations?${currentParams}`).then((response) =>
@@ -438,9 +469,6 @@ export function App() {
             );
       const tokenRequest = fetch(`/api/v1/metrics/tokens?${tokenParams}`).then((response) =>
         readJSON<TokenUsageResponse>(response),
-      );
-      const toolRequest = fetch(`/api/v1/metrics/tools?${toolParams}`).then((response) =>
-        readJSON<ToolUsageResponse>(response),
       );
 
       const settle = <T,>(request: Promise<T>, apply: (value: T) => void, reject: (reason: unknown) => void) =>
@@ -505,23 +533,51 @@ export function App() {
             setLoadingAnalyticsTokens(false);
           },
         ),
-        settle(
-          toolRequest,
-          (value) => {
-            setAnalyticsToolUsage(value.conversations || []);
-            setLoadingAnalyticsTools(false);
-          },
-          (reason) => {
-            const status = errorMessage(reason);
-            setErrAnalyticsTools(status.includes('404') ? 'A newer daemon is required.' : status);
-            setLoadingAnalyticsTools(false);
-          },
-        ),
       ];
       return Promise.all(requests).finally(() => {
         if (analyticsSeqRef.current !== seq) return;
         setLoadingAnalytics(false);
       });
+    },
+    [analyticsRange, analyticsWorkspace, readJSON],
+  );
+
+  const skillsToolsSeqRef = useRef(0);
+  const fetchSkillsTools = useCallback(
+    (reset = false) => {
+      const seq = ++skillsToolsSeqRef.current;
+      setLoadingSkillsTools(true);
+      setErrSkillsTools(null);
+      if (reset) {
+        setSkillsTools(null);
+        setSkillsToolsWindow(null);
+      }
+      const now = Date.now();
+      const range = timeRangeOption(analyticsRange);
+      const before = new Date(now).toISOString();
+      const since = range.ms == null ? undefined : new Date(now - range.ms).toISOString();
+      const params = new URLSearchParams({ before });
+      if (since) {
+        params.set('since', since);
+        params.set('interval', String(Math.round(chartBucketMs(range.ms || 0) / 1000)));
+      }
+      if (analyticsWorkspace != null) params.set('workspace', analyticsWorkspace);
+      return fetch(`/api/v1/metrics/skills-tools?${params}`)
+        .then((response) => readJSON<SkillsToolsMetricsResponse>(response))
+        .then((body) => {
+          if (skillsToolsSeqRef.current !== seq) return;
+          setSkillsTools(body.tools);
+          setSkillsToolsWindow({ since, before });
+        })
+        .catch((error) => {
+          if (skillsToolsSeqRef.current !== seq) return;
+          const status = errorMessage(error);
+          setErrSkillsTools(status.includes('404') ? 'A newer daemon is required.' : status);
+        })
+        .finally(() => {
+          if (skillsToolsSeqRef.current !== seq) return;
+          setLoadingSkillsTools(false);
+        });
     },
     [analyticsRange, analyticsWorkspace, readJSON],
   );
@@ -567,13 +623,15 @@ export function App() {
       return;
     }
     analyticsRefreshInFlightRef.current = true;
-    Promise.all([fetchAnalytics(), fetchAnalyticsHeatmap()]).finally(() => {
+    const request =
+      analyticsTab === 'skills' ? fetchSkillsTools() : Promise.all([fetchAnalytics(), fetchAnalyticsHeatmap()]);
+    Promise.resolve(request).finally(() => {
       analyticsRefreshInFlightRef.current = false;
       if (!analyticsRefreshDirtyRef.current) return;
       analyticsRefreshDirtyRef.current = false;
       refreshAnalyticsRef.current();
     });
-  }, [fetchAnalytics, fetchAnalyticsHeatmap]);
+  }, [analyticsTab, fetchAnalytics, fetchAnalyticsHeatmap, fetchSkillsTools]);
 
   // refreshAll keeps one refresh cycle in flight. An event arriving while
   // a cycle runs marks at most one follow-up refresh as due instead of
@@ -658,12 +716,16 @@ export function App() {
   }, [reloadRange]);
 
   useEffect(() => {
-    if (view === 'analytics') fetchAnalytics(true);
-  }, [view, fetchAnalytics]);
+    if (view === 'analytics' && analyticsTab === 'overview') fetchAnalytics(true);
+  }, [view, analyticsTab, fetchAnalytics]);
 
   useEffect(() => {
-    if (view === 'analytics') fetchAnalyticsHeatmap(true);
-  }, [view, fetchAnalyticsHeatmap]);
+    if (view === 'analytics' && analyticsTab === 'overview') fetchAnalyticsHeatmap(true);
+  }, [view, analyticsTab, fetchAnalyticsHeatmap]);
+
+  useEffect(() => {
+    if (view === 'analytics' && analyticsTab === 'skills') fetchSkillsTools(true);
+  }, [view, analyticsTab, fetchSkillsTools]);
 
   useEffect(() => {
     const onPopState = () => {
@@ -671,6 +733,8 @@ export function App() {
       setShowSettings(settingsRouteActive());
       setShowAnalytics(analyticsRouteActive());
       setSettingsTab(settingsTabFromLocation());
+      setAnalyticsTab(analyticsTabFromLocation());
+      setToolSessionFilters(toolSessionFiltersFromLocation());
       setWorkspace(workspaceFromLocation());
     };
     window.addEventListener('popstate', onPopState);
@@ -812,6 +876,7 @@ export function App() {
     const returnState: DetailReturnState = {
       view: view === 'analytics' ? 'analytics' : 'conversations',
       workspace: view === 'conversations' ? workspace : null,
+      returnPath: `${window.location.pathname}${window.location.search}`,
     };
     window.history.pushState(returnState, '', conversationPath(c.id));
     setShowSettings(false);
@@ -824,26 +889,46 @@ export function App() {
     setShowAnalytics(false);
     setSelectedID(null);
     setWorkspace(null);
+    setToolSessionFilters(null);
   };
   const backFromDetail = () => {
     const state = window.history.state as DetailReturnState | null;
     setShowSettings(false);
     setSelectedID(null);
     if (state?.view === 'analytics') {
-      window.history.pushState({}, '', '/analytics');
+      const path = state.returnPath || analyticsPath('overview');
+      window.history.pushState({}, '', path);
+      setAnalyticsTab(path.includes('tab=skills') ? 'skills' : 'overview');
       setShowAnalytics(true);
       return;
     }
     const returnWorkspace = state?.workspace ?? null;
-    window.history.pushState({}, '', conversationsPath(returnWorkspace));
+    const path = state?.returnPath || conversationsPath(returnWorkspace);
+    window.history.pushState({}, '', path);
     setShowAnalytics(false);
     setWorkspace(returnWorkspace);
+    setToolSessionFilters(toolSessionFiltersFromLocation());
   };
   const goAnalytics = () => {
-    window.history.pushState({}, '', '/analytics');
+    window.history.pushState({}, '', analyticsPath('overview'));
     setShowSettings(false);
     setShowAnalytics(true);
+    setAnalyticsTab('overview');
     setSelectedID(null);
+  };
+  const selectAnalyticsTab = (tab: AnalyticsTab) => {
+    window.history.pushState({}, '', analyticsPath(tab));
+    setAnalyticsTab(tab);
+  };
+  const openToolSessions = (filters: ToolSessionFilters) => {
+    window.history.pushState({}, '', toolSessionsPath(filters));
+    setTimeRange(analyticsRange);
+    setShowSettings(false);
+    setShowAnalytics(false);
+    setSelectedID(null);
+    setWorkspace(filters.workspace);
+    setToolSessionFilters(filters);
+    setBucketSel(null);
   };
   const openAnalyticsBucket = (span: TimeSpan) => {
     window.history.pushState({}, '', conversationsPath(analyticsWorkspace));
@@ -853,6 +938,7 @@ export function App() {
     setShowSettings(false);
     setShowAnalytics(false);
     setSelectedID(null);
+    setToolSessionFilters(null);
   };
   const openAnalyticsWorkspace = (path: string) => {
     window.history.pushState({}, '', conversationsPath(path));
@@ -862,10 +948,13 @@ export function App() {
     setShowSettings(false);
     setShowAnalytics(false);
     setSelectedID(null);
+    setToolSessionFilters(null);
   };
   const selectConversationWorkspace = (path: string | null) => {
-    window.history.pushState({}, '', conversationsPath(path));
+    const filters = toolSessionFilters ? { ...toolSessionFilters, workspace: path } : null;
+    window.history.pushState({}, '', filters ? toolSessionsPath(filters) : conversationsPath(path));
     setWorkspace(path);
+    setToolSessionFilters(filters);
   };
   // goSettings is also the nav tab's onClick, which passes an event, so
   // anything that is not a tab id opens the Cloud tab.
@@ -895,6 +984,7 @@ export function App() {
       setShowSettings(false);
       setShowAnalytics(false);
       setWorkspace(null);
+      setToolSessionFilters(null);
       setTimeout(focus, 0);
       return;
     }
@@ -921,7 +1011,7 @@ export function App() {
     {
       key: 'analytics',
       label: 'Analytics',
-      href: '/analytics',
+      href: analyticsPath('overview'),
       onClick: goAnalytics,
     },
     {
@@ -934,6 +1024,9 @@ export function App() {
   const activeTab = view === 'settings' ? 'settings' : view === 'analytics' ? 'analytics' : 'conversations';
   const detailReturnState = window.history.state as DetailReturnState | null;
   const detailReturnsToAnalytics = detailReturnState?.view === 'analytics';
+  const detailBackHref =
+    detailReturnState?.returnPath ||
+    (detailReturnsToAnalytics ? analyticsPath('overview') : conversationsPath(detailReturnState?.workspace ?? null));
 
   return (
     <div
@@ -965,43 +1058,70 @@ export function App() {
           />
         )}
         {view === 'analytics' && (
-          <AnalyticsView
-            conversations={analyticsConversations}
-            previousConversations={analyticsPreviousConversations}
-            aggregate={analyticsAggregate}
-            previousAggregate={analyticsPreviousAggregate}
-            facetConversations={analyticsFacetConversations}
-            totalConversations={analyticsTotalConversations}
-            previousTotalConversations={analyticsPreviousTotalConversations}
-            facetTotalConversations={analyticsFacetTotalConversations}
-            tokenPoints={analyticsTokenPoints}
-            tokenIntervalMs={analyticsTokenIntervalMs}
-            heatmapPoints={analyticsHeatmapPoints}
-            toolUsage={analyticsToolUsage}
-            loading={loadingAnalytics}
-            tokenLoading={loadingAnalyticsTokens}
-            toolLoading={loadingAnalyticsTools}
-            heatmapLoading={loadingAnalyticsHeatmap}
-            error={errAnalytics}
-            previousError={errAnalyticsPrevious}
-            facetError={errAnalyticsFacets}
-            tokenError={errAnalyticsTokens}
-            toolError={errAnalyticsTools}
-            heatmapError={errAnalyticsHeatmap}
-            unit={analyticsUnit}
-            onUnitChange={setAnalyticsUnit}
-            timeRange={analyticsRange}
-            onTimeRangeChange={setAnalyticsRange}
-            workspace={analyticsWorkspace}
-            onWorkspaceChange={(path) => setAnalyticsWorkspaceValue(encodeAnalyticsWorkspace(path))}
-            hiddenSeries={analyticsHiddenSeries}
-            onToggleSeries={toggleAnalyticsSeries}
-            onRefresh={refreshAnalytics}
-            refreshing={loadingAnalytics || loadingAnalyticsHeatmap}
-            onOpenConversation={openConv}
-            onOpenWorkspace={openAnalyticsWorkspace}
-            onOpenBucket={openAnalyticsBucket}
-          />
+          <AnalyticsPage
+            stats={
+              analyticsTab === 'overview'
+                ? analyticsOverviewHeroStats({
+                    conversations: analyticsConversations,
+                    aggregate: analyticsAggregate,
+                    totalConversations: analyticsTotalConversations,
+                  })
+                : skillsToolsHeroStats(skillsTools)
+            }
+            tabs={{ active: analyticsTab, onSelect: selectAnalyticsTab }}
+            style={analyticsTab === 'skills' ? { paddingBottom: 40 } : undefined}
+          >
+            {analyticsTab === 'overview' ? (
+              <AnalyticsOverviewContent
+                conversations={analyticsConversations}
+                previousConversations={analyticsPreviousConversations}
+                aggregate={analyticsAggregate}
+                previousAggregate={analyticsPreviousAggregate}
+                facetConversations={analyticsFacetConversations}
+                totalConversations={analyticsTotalConversations}
+                previousTotalConversations={analyticsPreviousTotalConversations}
+                facetTotalConversations={analyticsFacetTotalConversations}
+                tokenPoints={analyticsTokenPoints}
+                tokenIntervalMs={analyticsTokenIntervalMs}
+                heatmapPoints={analyticsHeatmapPoints}
+                loading={loadingAnalytics}
+                tokenLoading={loadingAnalyticsTokens}
+                heatmapLoading={loadingAnalyticsHeatmap}
+                error={errAnalytics}
+                previousError={errAnalyticsPrevious}
+                facetError={errAnalyticsFacets}
+                tokenError={errAnalyticsTokens}
+                heatmapError={errAnalyticsHeatmap}
+                unit={analyticsUnit}
+                onUnitChange={setAnalyticsUnit}
+                timeRange={analyticsRange}
+                onTimeRangeChange={setAnalyticsRange}
+                workspace={analyticsWorkspace}
+                onWorkspaceChange={(path) => setAnalyticsWorkspaceValue(encodeAnalyticsWorkspace(path))}
+                hiddenSeries={analyticsHiddenSeries}
+                onToggleSeries={toggleAnalyticsSeries}
+                onRefresh={refreshAnalytics}
+                refreshing={loadingAnalytics || loadingAnalyticsHeatmap}
+                onOpenConversation={openConv}
+                onOpenWorkspace={openAnalyticsWorkspace}
+                onOpenBucket={openAnalyticsBucket}
+              />
+            ) : (
+              <SkillsToolsContent
+                data={skillsTools}
+                loading={loadingSkillsTools}
+                error={errSkillsTools}
+                timeRange={analyticsRange}
+                onTimeRangeChange={setAnalyticsRange}
+                workspace={analyticsWorkspace}
+                onWorkspaceChange={(path) => setAnalyticsWorkspaceValue(encodeAnalyticsWorkspace(path))}
+                window={skillsToolsWindow}
+                onRefresh={refreshAnalytics}
+                refreshing={loadingSkillsTools}
+                onOpenSessions={openToolSessions}
+              />
+            )}
+          </AnalyticsPage>
         )}
         {view === 'conversations' && (
           <ConversationsView
@@ -1033,6 +1153,9 @@ export function App() {
             refreshing={loadingList}
             onOpenSettings={goSettings}
             history={history}
+            {...(toolSessionFilters
+              ? { toolFilter: toolSessionFilters, onClearToolFilter: clearToolSessionFilter }
+              : { toolFilter: null })}
           />
         )}
         {view === 'conversation' && selected && (
@@ -1041,7 +1164,7 @@ export function App() {
             detail={detail}
             loading={loadingDetail}
             error={errDetail}
-            backHref={detailReturnsToAnalytics ? '/analytics' : conversationsPath(detailReturnState?.workspace ?? null)}
+            backHref={detailBackHref}
             backLabel={detailReturnsToAnalytics ? 'Analytics' : 'Sessions'}
             onBack={backFromDetail}
           />

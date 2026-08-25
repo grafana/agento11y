@@ -30,6 +30,33 @@ export function conversationsPath(workspace: string | null = null) {
   return `/?workspace=${encodeURIComponent(workspace)}`;
 }
 
+export interface ToolSessionFilters {
+  tool: string;
+  workspace: string | null;
+  since?: string;
+  before?: string;
+}
+
+export function toolSessionsPath(filters: ToolSessionFilters) {
+  const params = new URLSearchParams({ tool: filters.tool });
+  if (filters.workspace != null) params.set('workspace', filters.workspace);
+  if (filters.since) params.set('since', filters.since);
+  if (filters.before) params.set('before', filters.before);
+  return `/?${params}`;
+}
+
+export function toolSessionFiltersFromLocation(): ToolSessionFilters | null {
+  if (typeof window === 'undefined' || window.location.pathname.replace(/\/$/, '') !== '') return null;
+  const params = new URLSearchParams(window.location.search);
+  if (!params.has('tool')) return null;
+  return {
+    tool: params.get('tool') ?? '',
+    workspace: params.has('workspace') ? (params.get('workspace') ?? '') : null,
+    since: params.get('since') || undefined,
+    before: params.get('before') || undefined,
+  };
+}
+
 export function workspaceFromLocation() {
   if (typeof window === 'undefined') return null;
   const params = new URLSearchParams(window.location.search);
@@ -56,6 +83,17 @@ export function settingsRouteActive() {
 export function analyticsRouteActive() {
   if (typeof window === 'undefined') return false;
   return window.location.pathname.replace(/\/$/, '') === '/analytics';
+}
+
+export type AnalyticsTab = 'overview' | 'skills';
+
+export function analyticsTabFromLocation(): AnalyticsTab {
+  if (typeof window === 'undefined') return 'overview';
+  return new URLSearchParams(window.location.search).get('tab') === 'skills' ? 'skills' : 'overview';
+}
+
+export function analyticsPath(tab: AnalyticsTab = 'overview') {
+  return tab === 'skills' ? '/analytics?tab=skills&mode=tools' : '/analytics';
 }
 
 // The mouse-event fields the test reads. React's synthetic mouse events and

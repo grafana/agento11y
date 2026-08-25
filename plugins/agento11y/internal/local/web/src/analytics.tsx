@@ -1,5 +1,6 @@
 import type React from 'react';
 import { Fragment, useMemo, useState } from 'react';
+import { AnalyticsPage } from './analytics-page';
 import { ChartXLabels, ChartYAxis, TimeRangePicker, type WorkspaceAggregate, WorkspaceFacet } from './conversations';
 import {
   bucketTokenUsage,
@@ -26,18 +27,16 @@ import {
   tokenPointTime,
   useModelPrices,
 } from './formatters';
-import { ACTIVE_PILL_BG, Notice, PANEL_BG, PageHero, PageShell, SurfaceCard } from './notices';
+import { ACTIVE_PILL_BG, Notice, PANEL_BG, SurfaceCard } from './notices';
 import { conversationPath, conversationsPath, isPlainLeftClick } from './routing';
 import { agentHosts, Icon, iconBtn, ModelPill } from './shell';
 import type {
   ConversationMetricsAggregate,
   ConversationSummary,
-  ConversationToolUsage,
   ModelPrices,
   TokenBucketKey,
   TokenBuckets,
   TokenUsagePoint,
-  ToolUsage,
 } from './types';
 
 export type AnalyticsUnit = 'cost' | 'tokens';
@@ -54,16 +53,13 @@ export interface AnalyticsViewProps {
   tokenPoints: TokenUsagePoint[];
   tokenIntervalMs: number;
   heatmapPoints: TokenUsagePoint[];
-  toolUsage: ConversationToolUsage[];
   loading: boolean;
   tokenLoading: boolean;
-  toolLoading: boolean;
   heatmapLoading: boolean;
   error: string | null;
   previousError: string | null;
   facetError: string | null;
   tokenError: string | null;
-  toolError: string | null;
   heatmapError: string | null;
   unit: AnalyticsUnit;
   onUnitChange: (v: AnalyticsUnit) => void;
@@ -128,7 +124,6 @@ const EMPTY_BUCKETS: TokenBuckets = {
 };
 const WORKSPACE_GRID = 'minmax(96px, 1fr) minmax(56px, 110px) 52px 52px 56px';
 const MODEL_GRID = 'minmax(72px, 1fr) 70px 68px 56px';
-const CALL_GRID = '86px minmax(0, 1fr) 62px 76px';
 const SHAPE_GRID = '82px minmax(0, 1fr) 26px';
 const SESSION_GRID = '26px minmax(0, 1fr) 130px 84px 88px 128px 88px';
 const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
@@ -1138,98 +1133,6 @@ function ModelsPanel({ rows, unit, empty }: { rows: ModelAggregate[]; unit: Anal
   );
 }
 
-function ToolCallsPanel({
-  rows,
-  empty,
-  error,
-}: {
-  rows: ConversationToolUsage[];
-  empty: React.ReactNode;
-  error: string | null;
-}) {
-  const totals = new Map<string, ToolUsage>();
-  for (const conversation of rows) {
-    for (const tool of conversation.tools || []) {
-      const name = tool.name.trim();
-      if (!name) continue;
-      const total = totals.get(name) || { name, calls: 0, failures: 0 };
-      total.calls += tool.calls || 0;
-      total.failures += tool.failures || 0;
-      totals.set(name, total);
-    }
-  }
-  const sorted = [...totals.values()].filter((row) => row.calls > 0).sort((a, b) => b.calls - a.calls);
-  let shown = sorted;
-  if (sorted.length > 10) {
-    const other = sorted.slice(9).reduce(
-      (total, row) => ({
-        name: 'Other',
-        calls: total.calls + row.calls,
-        failures: total.failures + row.failures,
-      }),
-      { name: 'Other', calls: 0, failures: 0 },
-    );
-    shown = [...sorted.slice(0, 9), other];
-  }
-  const max = Math.max(1, ...shown.map((row) => row.calls));
-  const calls = sorted.reduce((sum, row) => sum + row.calls, 0);
-  const failures = sorted.reduce((sum, row) => sum + row.failures, 0);
-  return (
-    <SurfaceCard style={{ boxShadow: 'none', minWidth: 0 }}>
-      <PanelHeader title="Tool calls" meta={`${formatInteger(failures)} of ${formatInteger(calls)} failed`} />
-      {shown.length === 0 ? (
-        <EmptyPanel>{empty}</EmptyPanel>
-      ) : (
-        <div style={{ padding: '14px 18px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {error && (
-            <div style={{ color: 'var(--warning-text)', fontSize: 11 }}>Tool calls did not refresh: {error}</div>
-          )}
-          {shown.map((row) => {
-            const failureRate = row.calls > 0 ? (row.failures / row.calls) * 100 : 0;
-            return (
-              <div
-                key={row.name}
-                data-tool-row={row.name}
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: CALL_GRID,
-                  alignItems: 'center',
-                  gap: 10,
-                  fontFamily: 'var(--fontFamilyMonospace)',
-                  fontSize: 12,
-                }}
-              >
-                <span
-                  title={row.name}
-                  style={{ color: 'var(--fg1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                >
-                  {row.name}
-                </span>
-                <span style={{ height: 8, borderRadius: 2, overflow: 'hidden', background: 'rgba(204,204,220,0.05)' }}>
-                  <span
-                    style={{
-                      display: 'block',
-                      width: `${(row.calls / max) * 100}%`,
-                      height: '100%',
-                      background: 'rgba(204,204,220,0.26)',
-                    }}
-                  />
-                </span>
-                <span style={{ textAlign: 'right', color: 'var(--fg-max)' }}>
-                  {formatInteger(row.calls)} {row.calls === 1 ? 'call' : 'calls'}
-                </span>
-                <span style={{ textAlign: 'right', color: failureRate > 4 ? 'var(--error-text)' : 'var(--fg3)' }}>
-                  {failureRate === 0 ? '0%' : `${failureRate.toFixed(1).replace(/\.0$/, '')}%`} failed
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </SurfaceCard>
-  );
-}
-
 function SessionShapePanel({ conversations, empty }: { conversations: ConversationSummary[]; empty: React.ReactNode }) {
   const buckets = [
     { key: 'under-500k', label: '< 500k', min: 0, max: 500_000 },
@@ -1683,6 +1586,24 @@ function HeaviestSessionsPanel({
 
 type ResolvedAnalyticsViewProps = Omit<AnalyticsViewProps, 'prices'> & { prices: ModelPrices | null };
 
+type AnalyticsHeroSource = Pick<AnalyticsViewProps, 'conversations' | 'aggregate' | 'totalConversations'>;
+
+export function analyticsOverviewHeroStats(props: AnalyticsHeroSource) {
+  const agents = new Set<string>();
+  const workspaces = new Set<string>();
+  for (const conversation of props.conversations) {
+    workspaces.add(conversation.workspace || '');
+    for (const agent of agentHosts(conversation.agents)) agents.add(agent);
+  }
+  const sessions =
+    props.aggregate && props.totalConversations != null ? props.totalConversations : props.conversations.length;
+  return [
+    { label: 'Sessions', value: String(sessions) },
+    { label: 'Workspaces', value: String(props.aggregate?.workspaces ?? workspaces.size) },
+    { label: 'Agents', value: String(props.aggregate?.agents ?? agents.size) },
+  ];
+}
+
 function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
   const now = props.now ?? Date.now();
   const prices = props.prices;
@@ -1699,16 +1620,7 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
     () => aggregateModels(props.aggregate ? [props.aggregate] : selectedCurrent, prices),
     [props.aggregate, selectedCurrent, prices],
   );
-  const toolRows = useMemo(() => {
-    const selectedIDs = new Set(selectedCurrent.map((conversation) => conversation.id));
-    return props.toolUsage.filter((row) => selectedIDs.has(row.id));
-  }, [props.toolUsage, selectedCurrent]);
   const chartPoints = useMemo(() => props.tokenPoints.filter((point) => tokenTotal(point) > 0), [props.tokenPoints]);
-  const agents = useMemo(() => {
-    const names = new Set<string>();
-    for (const conversation of selectedCurrent) for (const agent of agentHosts(conversation.agents)) names.add(agent);
-    return names.size;
-  }, [selectedCurrent]);
   const currentCost = props.aggregate
     ? conversationCostEstimateByModel(props.aggregate, prices)
     : sumCosts(selectedCurrent, prices);
@@ -1791,26 +1703,10 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
       : selectedCurrent.length === 0
         ? empty
         : 'No token usage in this range.';
-  const toolsEmpty = props.toolError
-    ? `Failed to load tool calls: ${props.toolError}`
-    : props.toolLoading
-      ? 'Loading tool calls…'
-      : selectedCurrent.length === 0
-        ? empty
-        : 'No tool calls in this range.';
   const facetCost = sumCosts(props.facetConversations, prices);
 
   return (
-    <PageShell maxWidth={1400}>
-      <PageHero
-        title="Analytics"
-        desc="Cost, tokens, tools, and workspaces across captured local sessions."
-        stats={[
-          { label: 'Sessions', value: String(currentSessionCount) },
-          { label: 'Workspaces', value: String(props.aggregate?.workspaces ?? workspaceRows.length) },
-          { label: 'Agents', value: String(props.aggregate?.agents ?? agents) },
-        ]}
-      />
+    <>
       {props.error && (
         <div style={{ marginBottom: 14 }}>
           <Notice kind="error" title="Failed to load current-period sessions">
@@ -1852,6 +1748,17 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
           Measure in
         </span>
         <UnitToggle value={props.unit} onChange={props.onUnitChange} />
+        <div style={{ flex: 1, minWidth: 12 }} />
+        <WorkspaceFacet
+          workspaces={facetWorkspaces}
+          selected={props.workspace}
+          onSelect={props.onWorkspaceChange}
+          totalCount={props.facetConversations.length}
+          totalCost={facetCost.complete ? facetCost.value : null}
+          now={now}
+          rangeLabel={range.label}
+        />
+        <TimeRangePicker value={props.timeRange} onChange={props.onTimeRangeChange} />
         <button
           type="button"
           onClick={() => props.onRefresh()}
@@ -1881,17 +1788,6 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
         >
           <Icon name="refresh" size={14} />
         </button>
-        <div style={{ flex: 1, minWidth: 12 }} />
-        <WorkspaceFacet
-          workspaces={facetWorkspaces}
-          selected={props.workspace}
-          onSelect={props.onWorkspaceChange}
-          totalCount={props.facetConversations.length}
-          totalCost={facetCost.complete ? facetCost.value : null}
-          now={now}
-          rangeLabel={range.label}
-        />
-        <TimeRangePicker value={props.timeRange} onChange={props.onTimeRangeChange} />
       </div>
 
       <div
@@ -2018,12 +1914,11 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+          gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
           gap: 12,
           marginBottom: 12,
         }}
       >
-        <ToolCallsPanel rows={toolRows} empty={toolsEmpty} error={props.toolError} />
         <SessionShapePanel conversations={selectedCurrent} empty={empty} />
         <HeatmapPanel
           points={props.heatmapPoints}
@@ -2047,7 +1942,7 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
         onOpen={props.onOpenConversation}
         empty={empty}
       />
-    </PageShell>
+    </>
   );
 }
 
@@ -2056,9 +1951,17 @@ function AnalyticsWithModelPrices(props: AnalyticsViewProps) {
   return <AnalyticsContent {...props} prices={prices} />;
 }
 
-export function AnalyticsView(props: AnalyticsViewProps) {
+export function AnalyticsOverviewContent(props: AnalyticsViewProps) {
   if (props.prices === undefined) {
     return <AnalyticsWithModelPrices {...props} />;
   }
   return <AnalyticsContent {...props} prices={props.prices} />;
+}
+
+export function AnalyticsView(props: AnalyticsViewProps) {
+  return (
+    <AnalyticsPage stats={analyticsOverviewHeroStats(props)}>
+      <AnalyticsOverviewContent {...props} />
+    </AnalyticsPage>
+  );
 }
