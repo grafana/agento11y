@@ -236,19 +236,30 @@ func conformanceScenarios() []scenario {
 }
 
 func inferenceInvocation() *otelgenai.Invocation {
+	maxTokens, topK, seed := int64(256), int64(40), int64(7)
+	temperature, topP := 0.7, 0.9
+	frequencyPenalty, presencePenalty := 0.1, 0.2
 	return &otelgenai.Invocation{
-		Operation:       otelgenai.OperationChat,
-		Provider:        "openai",
-		RequestModel:    "gpt-4.1-mini",
-		ResponseModel:   "gpt-4.1-mini-2025-04-14",
-		ResponseID:      "resp-1",
-		ServerAddress:   "api.openai.com",
-		FinishReasons:   []string{"stop"},
-		Usage:           otelgenai.Usage{InputTokens: 12, OutputTokens: 7},
-		StartedAt:       time.Now().Add(-time.Second),
-		InputMessages:   nil,
-		OutputMessages:  nil,
-		ToolDefinitions: nil,
+		Operation:        otelgenai.OperationChat,
+		Provider:         "openai",
+		RequestModel:     "gpt-4.1-mini",
+		ResponseModel:    "gpt-4.1-mini-2025-04-14",
+		ResponseID:       "resp-1",
+		ServerAddress:    "api.openai.com",
+		FinishReasons:    []string{"stop"},
+		Usage:            otelgenai.Usage{InputTokens: 12, OutputTokens: 7},
+		MaxTokens:        &maxTokens,
+		Temperature:      &temperature,
+		TopP:             &topP,
+		TopK:             &topK,
+		FrequencyPenalty: &frequencyPenalty,
+		PresencePenalty:  &presencePenalty,
+		StopSequences:    []string{"stop", "done"},
+		Seed:             &seed,
+		StartedAt:        time.Now().Add(-time.Second),
+		InputMessages:    nil,
+		OutputMessages:   nil,
+		ToolDefinitions:  nil,
 	}
 }
 
