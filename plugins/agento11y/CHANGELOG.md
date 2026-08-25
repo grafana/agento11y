@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.38.0] - 2026-08-25
+
+### Features
+
+- **plugins/agento11y**: add tools analytics to local viewer (#663)
+
 ## [0.37.0] - 2026-08-24
 
 ### Features
