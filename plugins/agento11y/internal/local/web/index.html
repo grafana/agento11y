@@ -1,9 +1,19 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="{{AGENTO11Y_THEME}}">
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>agento11y local</title>
+  <script nonce="{{AGENTO11Y_CSP_NONCE}}">
+    (() => {
+      const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
+      const applySystemTheme = ({ matches }) => {
+        document.documentElement.dataset.systemTheme = matches ? "dark" : "light";
+      };
+      applySystemTheme(systemTheme);
+      systemTheme.addEventListener("change", applySystemTheme);
+    })();
+  </script>
   <link rel="stylesheet" href="/assets/app.css"/>
 
   <!-- React, ReactDOM, and markdown-to-jsx are served by this daemon, not by a
@@ -18,6 +28,6 @@
 </head>
 <body>
   <div id="root"></div>
-  <script src="/assets/app.js" nonce="{{AGENTO11Y_CSP_NONCE}}"></script>
+  <script src="/assets/app.js"></script>
 </body>
 </html>

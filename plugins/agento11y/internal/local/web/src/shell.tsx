@@ -213,7 +213,7 @@ export function ModelPill({ name, dot }: ModelPillProps) {
         padding: '2px 8px',
         border: '1px solid var(--border-medium)',
         borderRadius: 2,
-        background: 'rgba(204,204,220,0.02)',
+        background: 'var(--model-pill-bg)',
         color: 'var(--fg1)',
         fontSize: 12,
         fontFamily: 'var(--fontFamilyMonospace)',
@@ -261,7 +261,7 @@ export function AgentPill({ name, size }: AgentPillProps) {
         padding: sm ? '1px 6px' : '1px 7px',
         border: '1px solid var(--border-medium)',
         borderRadius: 2,
-        background: 'rgba(204,204,220,0.04)',
+        background: 'var(--agent-pill-bg)',
         color: 'var(--fg1)',
         fontSize: sm ? 10 : 11,
         fontFamily: 'var(--fontFamilyMonospace)',
@@ -324,7 +324,7 @@ export function AgentCell({ agents }: AgentCellProps) {
             padding: '1px 7px',
             border: '1px solid var(--border-medium)',
             borderRadius: 2,
-            background: 'rgba(204,204,220,0.04)',
+            background: 'var(--agent-pill-bg)',
             color: 'var(--fg1)',
             fontSize: 11,
             fontFamily: 'var(--fontFamilyMonospace)',
@@ -487,6 +487,7 @@ export function TopBar({ tabs = [], activeTab, config, onOpenSettings }: TopBarP
       style={{
         height: HEADER_H,
         background: 'var(--bg-primary)',
+        borderBottom: '1px solid var(--border-weak)',
         display: 'flex',
         alignItems: 'center',
         padding: '0 16px',
@@ -561,7 +562,7 @@ function ForwardModeChip({ config, onOpenSettings }: ForwardModeChipProps) {
         }}
         onMouseLeave={(e) => {
           setOpen(false);
-          e.currentTarget.style.background = 'rgba(24,27,31,0.78)';
+          e.currentTarget.style.background = 'var(--control-bg)';
         }}
         style={{
           display: 'inline-flex',
@@ -571,7 +572,7 @@ function ForwardModeChip({ config, onOpenSettings }: ForwardModeChipProps) {
           padding: '0 9px 0 10px',
           border: '1px solid var(--border-medium)',
           borderRadius: 2,
-          background: 'rgba(24,27,31,0.78)',
+          background: 'var(--control-bg)',
           fontFamily: 'var(--fontFamily)',
           cursor: 'pointer',
           whiteSpace: 'nowrap',

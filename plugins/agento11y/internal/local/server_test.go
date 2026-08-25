@@ -601,6 +601,39 @@ func TestServer_DocumentCSPNonce(t *testing.T) {
 		"form-action 'none'", settingsCSP)
 }
 
+func TestServer_DocumentThemeStamping(t *testing.T) {
+	tests := []struct {
+		name string
+		env  map[string]string
+		want Theme
+	}{
+		{name: "missing defaults dark", want: themeDark},
+		{name: "legacy light", env: map[string]string{"SIGIL_THEME": "light"}, want: themeLight},
+		{name: "system", env: map[string]string{"AGENTO11Y_THEME": "system"}, want: themeSystem},
+		{name: "invalid defaults dark", env: map[string]string{"AGENTO11Y_THEME": "sepia"}, want: themeDark},
+		{
+			name: "preferred wins",
+			env:  map[string]string{"AGENTO11Y_THEME": "light", "SIGIL_THEME": "system"},
+			want: themeLight,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, _ := newTestServer(t)
+			if tt.env != nil {
+				require.NoError(t, dotenv.WriteDotenv(srv.configPath, tt.env, nil))
+			}
+			for _, path := range []string{"/", "/conversations/conv-1", "/conversations/conv-1/", "/settings", "/settings/", "/analytics", "/analytics/"} {
+				rr := httptest.NewRecorder()
+				srv.ServeHTTP(rr, newLocalRequest(http.MethodGet, path, nil))
+				require.Equal(t, http.StatusOK, rr.Code, path)
+				assert.Contains(t, rr.Body.String(), `data-theme="`+string(tt.want)+`"`, path)
+				assert.NotContains(t, rr.Body.String(), themePlaceholder, path)
+			}
+		})
+	}
+}
+
 func TestServer_NonDocumentSecurityHeaders(t *testing.T) {
 	s, _ := newTestServer(t)
 	cases := []struct {
@@ -1145,6 +1178,7 @@ func TestServer_Config_RoundTrip(t *testing.T) {
 	require.Equal(t, http.StatusOK, rr.Code)
 	var got configResponse
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &got))
+	assert.Equal(t, themeDark, got.Settings.Theme)
 	assert.Empty(t, got.Settings.Capture) // unset until the user picks a mode
 	assert.True(t, got.Settings.AutoUpdate)
 	assert.Equal(t, guardsOff, got.Settings.Guards)
@@ -1154,6 +1188,7 @@ func TestServer_Config_RoundTrip(t *testing.T) {
 
 	// Save a non-default configuration.
 	resp := putConfig(t, srv, Settings{
+		Theme:        themeSystem,
 		Endpoint:     "https://cloud.example.test",
 		TenantID:     "12345",
 		Token:        "glc_token",
@@ -1170,6 +1205,7 @@ func TestServer_Config_RoundTrip(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	var saved configResponse
 	decodeJSON(t, resp.Body, &saved)
+	assert.Equal(t, themeSystem, saved.Settings.Theme)
 	assert.Equal(t, "metadata_only", saved.Settings.Capture)
 	assert.Equal(t, guardsFailClosed, saved.Settings.Guards)
 	assert.Equal(t, "2000", saved.Settings.GuardTimeout)
@@ -1192,6 +1228,8 @@ func TestServer_Config_RoundTrip(t *testing.T) {
 	// Preview and on-disk file agree, sorted with the managed header.
 	onDisk, err := os.ReadFile(configPathFor(dir))
 	require.NoError(t, err)
+	assert.Contains(t, string(onDisk), "AGENTO11Y_THEME=system")
+	assert.Contains(t, string(onDisk), "SIGIL_THEME=system")
 	assert.Contains(t, string(onDisk), "SIGIL_CONTENT_CAPTURE_MODE=metadata_only")
 	assert.Contains(t, string(onDisk), "SIGIL_GUARDS_TIMEOUT_MS=2000")
 	// Both spellings are written so an older binary still reads the toggle.
@@ -1285,7 +1323,7 @@ func TestServer_Config_OtlpHeaders(t *testing.T) {
 func TestServer_Config_Preview(t *testing.T) {
 	srv, dir := newTestServer(t)
 	body, err := json.Marshal(configRequest{Settings: Settings{
-		Capture: "full", Guards: guardsFailOpen, GuardTimeout: "2500", AutoUpdate: true,
+		Theme: themeLight, Capture: "full", Guards: guardsFailOpen, GuardTimeout: "2500", AutoUpdate: true,
 	}})
 	require.NoError(t, err)
 	resp := post(t, srv, "/api/v1/config:preview", "application/json", string(body))
@@ -1295,6 +1333,8 @@ func TestServer_Config_Preview(t *testing.T) {
 		Preview string `json:"preview"`
 	}
 	decodeJSON(t, resp.Body, &got)
+	assert.Contains(t, got.Preview, "AGENTO11Y_THEME=light")
+	assert.Contains(t, got.Preview, "SIGIL_THEME=light")
 	assert.Contains(t, got.Preview, "SIGIL_GUARDS_FAIL_OPEN=true")
 	assert.Contains(t, got.Preview, "SIGIL_GUARDS_TIMEOUT_MS=2500")
 	// Opt-out/opt-in keys at their defaults must not appear.

@@ -1,5 +1,5 @@
 import type { MouseEvent as ReactMouseEvent } from 'react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AnalyticsOverviewContent, type AnalyticsUnit, analyticsOverviewHeroStats } from './analytics';
 import { AnalyticsPage } from './analytics-page';
 import { ConversationsView, GROUP_BY_OPTIONS } from './conversations';
@@ -33,6 +33,7 @@ import {
   usePersistedState,
   workspaceFromLocation,
 } from './routing';
+import { applyDocumentTheme, documentThemePreference, resolveThemePreference } from './settings-model';
 import {
   importRunIsActive,
   SETTINGS_TAB_IDS,
@@ -52,6 +53,7 @@ import type {
   ConversationSummary,
   ImportRun,
   SkillsToolsMetricsResponse,
+  ThemePreference,
   TokenBucketKey,
   TokenUsagePoint,
   TokenUsageResponse,
@@ -98,6 +100,10 @@ interface StreamEvent {
 }
 
 export function App() {
+  // Capture the validated server stamp once. It owns the first paint and is
+  // the fallback until an accepted config response arrives.
+  const [initialTheme] = useState<ThemePreference>(() => documentThemePreference());
+  const [settingsThemePreview, setSettingsThemePreview] = useState<ThemePreference | null>(null);
   const [selectedID, setSelectedID] = useState(conversationIDFromPath);
   const [showSettings, setShowSettings] = useState(settingsRouteActive);
   const [showAnalytics, setShowAnalytics] = useState(analyticsRouteActive);
@@ -260,6 +266,14 @@ export function App() {
   const selected = selectedID
     ? conversations.find((c) => c.id === selectedID) || summaryFromDetail(detail, selectedID)
     : null;
+  const effectiveTheme = resolveThemePreference(
+    view === 'settings' ? settingsThemePreview : null,
+    config?.settings?.theme,
+    initialTheme,
+  );
+  useLayoutEffect(() => {
+    applyDocumentTheme(effectiveTheme);
+  }, [effectiveTheme]);
 
   // Changing the time range invalidates a bucket drill-down: the
   // bucket boundaries belong to the old window.
@@ -1055,6 +1069,7 @@ export function App() {
             activeSettingsTab={settingsTab}
             onSelectTab={selectSettingsTab}
             onConfig={applyConfig}
+            onThemePreview={setSettingsThemePreview}
           />
         )}
         {view === 'analytics' && (

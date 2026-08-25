@@ -17,11 +17,30 @@ func TestParseSettings(t *testing.T) {
 			name: "empty config leaves capture unset",
 			env:  map[string]string{},
 			want: Settings{
+				Theme:      themeDark,
 				Capture:    "", // unset: not written, so runtime defaults stand
 				Tags:       []Tag{},
 				Guards:     guardsOff,
 				AutoUpdate: true,
 			},
+		},
+		{
+			name: "valid theme",
+			env:  map[string]string{"SIGIL_THEME": "system"},
+			want: Settings{Theme: themeSystem, Capture: "", Tags: []Tag{}, Guards: guardsOff, AutoUpdate: true},
+		},
+		{
+			name: "invalid theme defaults dark",
+			env:  map[string]string{"AGENTO11Y_THEME": "sepia"},
+			want: Settings{Theme: themeDark, Capture: "", Tags: []Tag{}, Guards: guardsOff, AutoUpdate: true},
+		},
+		{
+			name: "preferred theme wins over legacy",
+			env: map[string]string{
+				"AGENTO11Y_THEME": "light",
+				"SIGIL_THEME":     "system",
+			},
+			want: Settings{Theme: themeLight, Capture: "", Tags: []Tag{}, Guards: guardsOff, AutoUpdate: true},
 		},
 		{
 			name: "full config round-trips every field",
@@ -37,6 +56,7 @@ func TestParseSettings(t *testing.T) {
 				"SIGIL_LOCAL_FORWARD":        "true",
 			},
 			want: Settings{
+				Theme:        themeDark,
 				Capture:      "metadata_only",
 				Tags:         []Tag{{Key: "team", Value: "ai"}, {Key: "project", Value: "demo"}},
 				Guards:       guardsFailClosed,
@@ -50,7 +70,7 @@ func TestParseSettings(t *testing.T) {
 		{
 			name: "local forward is opt-in and only truthy values enable it",
 			env:  map[string]string{"SIGIL_LOCAL_FORWARD": "nope"},
-			want: Settings{Capture: "", Tags: []Tag{}, Guards: guardsOff, AutoUpdate: true},
+			want: Settings{Theme: themeDark, Capture: "", Tags: []Tag{}, Guards: guardsOff, AutoUpdate: true},
 		},
 		{
 			name: "preferred local forward spelling wins over legacy",
@@ -58,37 +78,37 @@ func TestParseSettings(t *testing.T) {
 				"AGENTO11Y_LOCAL_FORWARD": "true",
 				"SIGIL_LOCAL_FORWARD":     "false",
 			},
-			want: Settings{Capture: "", Tags: []Tag{}, Guards: guardsOff, AutoUpdate: true, LocalForward: true},
+			want: Settings{Theme: themeDark, Capture: "", Tags: []Tag{}, Guards: guardsOff, AutoUpdate: true, LocalForward: true},
 		},
 		{
 			name: "advanced capture mode is preserved",
 			env:  map[string]string{"SIGIL_CONTENT_CAPTURE_MODE": "no_tool_content"},
-			want: Settings{Capture: "no_tool_content", Tags: []Tag{}, Guards: guardsOff, AutoUpdate: true},
+			want: Settings{Theme: themeDark, Capture: "no_tool_content", Tags: []Tag{}, Guards: guardsOff, AutoUpdate: true},
 		},
 		{
 			name: "unknown capture mode is treated as unset",
 			env:  map[string]string{"SIGIL_CONTENT_CAPTURE_MODE": "bogus"},
-			want: Settings{Capture: "", Tags: []Tag{}, Guards: guardsOff, AutoUpdate: true},
+			want: Settings{Theme: themeDark, Capture: "", Tags: []Tag{}, Guards: guardsOff, AutoUpdate: true},
 		},
 		{
 			name: "default alias is treated as unset",
 			env:  map[string]string{"SIGIL_CONTENT_CAPTURE_MODE": "default"},
-			want: Settings{Capture: "", Tags: []Tag{}, Guards: guardsOff, AutoUpdate: true},
+			want: Settings{Theme: themeDark, Capture: "", Tags: []Tag{}, Guards: guardsOff, AutoUpdate: true},
 		},
 		{
 			name: "guards enabled without fail-open seeds fail-open",
 			env:  map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
-			want: Settings{Capture: "", Tags: []Tag{}, Guards: guardsFailOpen, AutoUpdate: true},
+			want: Settings{Theme: themeDark, Capture: "", Tags: []Tag{}, Guards: guardsFailOpen, AutoUpdate: true},
 		},
 		{
 			name: "auto-update only disabled by explicit falsey value",
 			env:  map[string]string{"SIGIL_AUTO_UPDATE": "off"},
-			want: Settings{Capture: "", Tags: []Tag{}, Guards: guardsOff, AutoUpdate: false},
+			want: Settings{Theme: themeDark, Capture: "", Tags: []Tag{}, Guards: guardsOff, AutoUpdate: false},
 		},
 		{
 			name: "malformed tag pairs are dropped",
 			env:  map[string]string{"SIGIL_TAGS": "team=ai,,bad,empty="},
-			want: Settings{Capture: "", Tags: []Tag{{Key: "team", Value: "ai"}}, Guards: guardsOff, AutoUpdate: true},
+			want: Settings{Theme: themeDark, Capture: "", Tags: []Tag{{Key: "team", Value: "ai"}}, Guards: guardsOff, AutoUpdate: true},
 		},
 	}
 
@@ -218,6 +238,7 @@ func TestSettingsUpdates(t *testing.T) {
 			// empty (delete) markers for them and no token key. Every managed
 			// key is written and deleted under both spellings.
 			want := tc.want
+			want["SIGIL_THEME"] = string(normalizeTheme(tc.in.Theme))
 			want["SIGIL_ENDPOINT"] = ""
 			want["SIGIL_AUTH_TENANT_ID"] = ""
 			want["SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT"] = ""
@@ -228,6 +249,25 @@ func TestSettingsUpdates(t *testing.T) {
 				want["SIGIL_LOCAL_FORWARD"] = "false"
 			}
 			assert.Equal(t, envconfig.ExpandAliases(want), tc.in.Updates())
+		})
+	}
+
+	themeTests := []struct {
+		name  string
+		theme Theme
+		want  string
+	}{
+		{name: "missing theme normalizes dark", want: "dark"},
+		{name: "dark theme", theme: themeDark, want: "dark"},
+		{name: "light theme", theme: themeLight, want: "light"},
+		{name: "system theme", theme: themeSystem, want: "system"},
+		{name: "invalid theme normalizes dark", theme: "sepia", want: "dark"},
+	}
+	for _, tc := range themeTests {
+		t.Run(tc.name, func(t *testing.T) {
+			u := (Settings{Theme: tc.theme, Guards: guardsOff, AutoUpdate: true}).Updates()
+			assert.Equal(t, tc.want, u["AGENTO11Y_THEME"])
+			assert.Equal(t, tc.want, u["SIGIL_THEME"])
 		})
 	}
 }
@@ -363,6 +403,7 @@ func TestSettingsConnection(t *testing.T) {
 // snapshot the server returns is stable.
 func TestSettingsRoundTrip(t *testing.T) {
 	in := Settings{
+		Theme:        themeSystem,
 		Capture:      "no_tool_content",
 		Tags:         []Tag{{Key: "team", Value: "ai"}},
 		Guards:       guardsFailClosed,

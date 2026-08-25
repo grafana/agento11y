@@ -19,6 +19,30 @@ const (
 	guardsFailClosed = "failclosed"
 )
 
+type Theme string
+
+const (
+	themeDark   Theme = "dark"
+	themeLight  Theme = "light"
+	themeSystem Theme = "system"
+)
+
+func normalizeTheme(raw Theme) Theme {
+	switch Theme(strings.ToLower(strings.TrimSpace(string(raw)))) {
+	case themeLight:
+		return themeLight
+	case themeSystem:
+		return themeSystem
+	default:
+		return themeDark
+	}
+}
+
+func parseTheme(env map[string]string) Theme {
+	raw, _, _ := envconfig.LookupMap(env, "THEME")
+	return normalizeTheme(Theme(raw))
+}
+
 // tokenMask stands in for SIGIL_AUTH_TOKEN in the live preview. The stored
 // token is never sent to the browser, so the preview shows this marker to
 // signal a token is present without leaking the value.
@@ -41,6 +65,7 @@ type Tag struct {
 // replaces it, TokenCleared removes it, and otherwise the stored token is left
 // untouched.
 type Settings struct {
+	Theme        Theme  `json:"theme"`
 	Endpoint     string `json:"endpoint"`
 	TenantID     string `json:"tenantId"`
 	OtlpEndpoint string `json:"otlpEndpoint"`
@@ -90,6 +115,7 @@ func ParseSettings(env map[string]string) Settings {
 		return v
 	}
 	return Settings{
+		Theme:        parseTheme(env),
 		Endpoint:     fam("ENDPOINT"),
 		TenantID:     fam("AUTH_TENANT_ID"),
 		OtlpEndpoint: fam("OTEL_EXPORTER_OTLP_ENDPOINT"),
@@ -117,6 +143,7 @@ func ParseSettings(env map[string]string) Settings {
 // any key not listed here is left untouched on disk.
 func (s Settings) Updates() map[string]string {
 	u := map[string]string{
+		"SIGIL_THEME":                       string(normalizeTheme(s.Theme)),
 		"SIGIL_TAGS":                        renderTags(s.Tags),
 		"SIGIL_ENDPOINT":                    strings.TrimSpace(s.Endpoint),
 		"SIGIL_AUTH_TENANT_ID":              strings.TrimSpace(s.TenantID),

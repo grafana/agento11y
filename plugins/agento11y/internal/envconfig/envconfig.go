@@ -47,6 +47,7 @@ var AliasSuffixes = []string{
 	"GUARDS_FAIL_OPEN",
 	"GUARDS_TIMEOUT_MS",
 	"AUTO_UPDATE",
+	"THEME",
 	"USER_ID_SOURCE",
 	"BIN",
 	"COPILOT_HOOK_SURFACE",

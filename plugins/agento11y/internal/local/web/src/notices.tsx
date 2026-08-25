@@ -29,19 +29,19 @@ export function Notice({ kind = 'info', title, children }: NoticeProps) {
       {
         info: {
           color: 'var(--fg2)',
-          bg: 'rgba(204,204,220,0.03)',
+          bg: 'var(--notice-info-bg)',
           border: 'var(--border-weak)',
           icon: 'empty',
         },
         warning: {
           color: 'var(--warning-text)',
-          bg: 'var(--warning-transparent, rgba(247,148,30,0.06))',
-          border: 'var(--warning-border, var(--border-medium))',
+          bg: 'var(--warning-transparent)',
+          border: 'var(--warning-border)',
           icon: 'alert',
         },
         error: {
           color: 'var(--error-text)',
-          bg: 'rgba(209,14,92,0.06)',
+          bg: 'var(--notice-error-bg)',
           border: 'var(--error-border)',
           icon: 'alert',
         },
@@ -81,9 +81,9 @@ export function Notice({ kind = 'info', title, children }: NoticeProps) {
 }
 
 const PAGE_MAX_WIDTH = 1392;
-export const SURFACE_BG = 'rgba(24,27,31,0.88)';
-export const ACTIVE_PILL_BG = 'var(--action-selected, rgba(204,204,220,0.08))';
-export const PANEL_BG = 'rgba(17,18,23,0.42)';
+export const SURFACE_BG = 'var(--surface-bg)';
+export const ACTIVE_PILL_BG = 'var(--action-selected)';
+export const PANEL_BG = 'var(--panel-bg)';
 
 interface BoxProps extends HTMLAttributes<HTMLElement> {
   as?: ElementType;
@@ -151,7 +151,7 @@ export function SurfaceCard({ children, style, ...rest }: SurfaceCardProps) {
         background: SURFACE_BG,
         border: '1px solid var(--border-weak)',
         borderRadius: 8,
-        boxShadow: '0 10px 24px rgba(0,0,0,0.14)',
+        boxShadow: 'var(--surface-shadow)',
         ...(style || {}),
       }}
       {...rest}
@@ -184,7 +184,7 @@ export function ModalFrame({ title, desc, onClose, children, width = 'min(860px,
         position: 'fixed',
         inset: 0,
         zIndex: 70,
-        background: 'rgba(0,0,0,0.58)',
+        background: 'var(--modal-backdrop)',
         display: 'flex',
         alignItems: 'flex-start',
         justifyContent: 'center',
@@ -202,7 +202,7 @@ export function ModalFrame({ title, desc, onClose, children, width = 'min(860px,
           background: 'var(--bg-secondary)',
           border: '1px solid var(--border-strong)',
           borderRadius: 8,
-          boxShadow: '0 18px 54px rgba(0,0,0,0.58)',
+          boxShadow: 'var(--modal-shadow)',
           display: 'flex',
           flexDirection: 'column',
         }}
@@ -407,7 +407,7 @@ export function PillToggle({ options, value, onChange, size = 'sm', disabled = f
         borderRadius: 999,
         background: PANEL_BG,
         overflow: 'hidden',
-        boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.10)',
+        boxShadow: 'var(--control-inset-shadow)',
       }}
     >
       {options.map((o) => {
@@ -558,7 +558,7 @@ export function Select({ value, options, onChange, title, trigger, menu, id, dis
           padding: '0 10px',
           border: '1px solid var(--border-medium)',
           borderRadius: 2,
-          background: 'rgba(24,27,31,0.78)',
+          background: 'var(--control-bg)',
           color: disabled ? 'var(--fg3)' : 'var(--fg1)',
           fontSize: 13,
           fontFamily: 'var(--fontFamily)',
@@ -612,7 +612,7 @@ export function Select({ value, options, onChange, title, trigger, menu, id, dis
             border: '1px solid var(--border-strong)',
             borderRadius: 2,
             background: 'var(--bg-secondary)',
-            boxShadow: '0 12px 34px rgba(0,0,0,0.48)',
+            boxShadow: 'var(--menu-shadow)',
             ...menu,
           }}
         >
