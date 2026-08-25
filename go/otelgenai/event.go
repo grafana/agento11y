@@ -38,8 +38,8 @@ func (h *Handler) emitOperationDetails(
 	if !inv.CompletedAt.IsZero() {
 		record.SetTimestamp(inv.CompletedAt)
 	}
-	attrs := attributesToLog(h.requestAttributes(inv))
-	attrs = append(attrs, attributesToLog(h.responseAttributes(inv))...)
+	attrs := h.requestAttributes(inv)
+	attrs = append(attrs, h.responseAttributes(inv)...)
 	attrs = append(attrs, eventContentAttributes(inv, capture)...)
 	record.AddAttributes(attrs...)
 	h.logger.Emit(ctx, record)
@@ -68,20 +68,12 @@ func isInferenceOperation(operation Operation) bool {
 	}
 }
 
-func attributesToLog(attrs []attribute.KeyValue) []log.KeyValue {
-	out := make([]log.KeyValue, 0, len(attrs))
-	for _, attr := range attrs {
-		out = append(out, log.KeyValueFromAttribute(attr))
-	}
-	return out
-}
-
-func eventContentAttributes(inv *Invocation, capture CaptureMode) []log.KeyValue {
+func eventContentAttributes(inv *Invocation, capture CaptureMode) []attribute.KeyValue {
 	if !capture.EventContent() {
 		return nil
 	}
 
-	var attrs []log.KeyValue
+	var attrs []attribute.KeyValue
 	encode := func(key attribute.Key, encoder func() (string, error), populated bool) {
 		if !populated {
 			return
@@ -98,7 +90,7 @@ func eventContentAttributes(inv *Invocation, capture CaptureMode) []log.KeyValue
 			otel.Handle(fmt.Errorf("otelgenai: structuring %s for event: %w", key, err))
 			return
 		}
-		attrs = append(attrs, log.KeyValue{Key: string(key), Value: value})
+		attrs = append(attrs, attribute.KeyValue{Key: key, Value: value})
 	}
 
 	encode(semconv.GenAISystemInstructionsKey, func() (string, error) {
@@ -122,7 +114,7 @@ func eventContentAttributes(inv *Invocation, capture CaptureMode) []log.KeyValue
 		return string(payload), err
 	}, len(inv.ToolCallResult) > 0)
 	if inv.RetrievalQueryText != "" {
-		attrs = append(attrs, log.String(string(semconv.GenAIRetrievalQueryTextKey), inv.RetrievalQueryText))
+		attrs = append(attrs, attribute.String(string(semconv.GenAIRetrievalQueryTextKey), inv.RetrievalQueryText))
 	}
 	encode(semconv.GenAIRetrievalDocumentsKey, func() (string, error) {
 		payload, err := rawJSONField(inv.RetrievalDocuments, "retrieval documents")
@@ -131,60 +123,60 @@ func eventContentAttributes(inv *Invocation, capture CaptureMode) []log.KeyValue
 	return attrs
 }
 
-func structuredLogValue(payload string) (log.Value, error) {
+func structuredLogValue(payload string) (attribute.Value, error) {
 	decoder := json.NewDecoder(strings.NewReader(payload))
 	decoder.UseNumber()
 	var value any
 	if err := decoder.Decode(&value); err != nil {
-		return log.Value{}, err
+		return attribute.Value{}, err
 	}
 	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
 		if err == nil {
-			return log.Value{}, errors.New("multiple JSON values")
+			return attribute.Value{}, errors.New("multiple JSON values")
 		}
-		return log.Value{}, err
+		return attribute.Value{}, err
 	}
 	return logValue(value)
 }
 
-func logValue(value any) (log.Value, error) {
+func logValue(value any) (attribute.Value, error) {
 	switch value := value.(type) {
 	case nil:
-		return log.Value{}, nil
+		return attribute.Value{}, nil
 	case bool:
-		return log.BoolValue(value), nil
+		return attribute.BoolValue(value), nil
 	case string:
-		return log.StringValue(value), nil
+		return attribute.StringValue(value), nil
 	case json.Number:
 		if integer, err := value.Int64(); err == nil {
-			return log.Int64Value(integer), nil
+			return attribute.Int64Value(integer), nil
 		}
 		decimal, err := value.Float64()
 		if err != nil {
-			return log.Value{}, err
+			return attribute.Value{}, err
 		}
-		return log.Float64Value(decimal), nil
+		return attribute.Float64Value(decimal), nil
 	case []any:
-		items := make([]log.Value, 0, len(value))
+		items := make([]attribute.Value, 0, len(value))
 		for _, item := range value {
 			converted, err := logValue(item)
 			if err != nil {
-				return log.Value{}, err
+				return attribute.Value{}, err
 			}
 			items = append(items, converted)
 		}
-		return log.SliceValue(items...), nil
+		return attribute.SliceValue(items...), nil
 	case map[string]any:
-		items := make([]log.KeyValue, 0, len(value))
+		items := make([]attribute.KeyValue, 0, len(value))
 		for _, key := range slices.Sorted(maps.Keys(value)) {
 			converted, err := logValue(value[key])
 			if err != nil {
-				return log.Value{}, err
+				return attribute.Value{}, err
 			}
-			items = append(items, log.KeyValue{Key: key, Value: converted})
+			items = append(items, attribute.KeyValue{Key: attribute.Key(key), Value: converted})
 		}
-		return log.MapValue(items...), nil
+		return attribute.MapValue(items...), nil
 	default:
-		return log.Value{}, fmt.Errorf("unsupported JSON value %T", value)
+		return attribute.Value{}, fmt.Errorf("unsupported JSON value %T", value)
 	}
 }
