@@ -262,16 +262,8 @@ func TestResolveFromEnv(t *testing.T) {
 			},
 		},
 		{
-			name: "zero retries disables retries",
-			env:  map[string]string{"AGENTO11Y_MAX_RETRIES": "0"},
-			check: func(t *testing.T, cfg Config) {
-				defaults := DefaultConfig().GenerationExport
-				checkGenerationExportTuning(t, cfg, 0, defaults.MaxBackoff, defaults.QueueSize)
-			},
-		},
-		{
-			name:            "invalid max retries keeps default",
-			env:             map[string]string{"AGENTO11Y_MAX_RETRIES": "-1"},
+			name:            "zero max retries keeps default",
+			env:             map[string]string{"AGENTO11Y_MAX_RETRIES": "0"},
 			wantErr:         true,
 			wantErrContains: "AGENTO11Y_MAX_RETRIES",
 			check: func(t *testing.T, cfg Config) {

@@ -62,7 +62,7 @@ var (
 const (
 	minExportTimeoutMS int64 = 1
 	maxExportTimeoutMS int64 = 2147483647
-	minMaxRetries      int64 = 0
+	minMaxRetries      int64 = 1
 	maxMaxRetries      int64 = 2147483647
 	minQueueSize       int64 = 1
 	maxQueueSize       int64 = 2147483647

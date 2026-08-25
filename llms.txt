@@ -178,7 +178,7 @@ Construct the client with no config when the env vars are present; the SDK reads
 
 `AGENTO11Y_EXPORT_TIMEOUT_MS` defaults to `30000`. It accepts base-10 integers from `1` through `2147483647`. An explicit SDK config value wins over the environment variable.
 
-`AGENTO11Y_MAX_RETRIES` defaults to `5` and accepts base-10 integers from `0` through `2147483647`; `0` disables retries. `AGENTO11Y_MAX_BACKOFF_MS` defaults to `5000` and accepts base-10 integers from `1` through `2147483647`. Explicit positive SDK config values win over the environment variables.
+`AGENTO11Y_MAX_RETRIES` defaults to `5`. It and `AGENTO11Y_MAX_BACKOFF_MS` (default `5000`) accept base-10 integers from `1` through `2147483647`. Explicit positive SDK config values win over the environment variables.
 
 `AGENTO11Y_QUEUE_SIZE` defaults to `2000` and accepts base-10 integers from `1` through `2147483647`. Size it from the peak records per second multiplied by the expected outage in seconds, plus headroom. Generations and workflow steps have separate queues of this capacity. Larger queues consume application memory and do not survive a process restart.
 
