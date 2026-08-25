@@ -3,6 +3,7 @@ package agento11y
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"slices"
@@ -24,13 +25,14 @@ import (
 
 // newOTelTestClient builds a client in otel export mode with the experimental
 // gate open, recording spans into the returned recorder.
-func newOTelTestClient(t *testing.T, mutate func(*Config)) (*Client, *tracetest.SpanRecorder, *sdktrace.TracerProvider) {
+func newOTelTestClient(t *testing.T, mutate func(*Config), traceOptions ...sdktrace.TracerProviderOption) (*Client, *tracetest.SpanRecorder, *sdktrace.TracerProvider) {
 	t.Helper()
 
 	t.Setenv(EnvEnableExperimentalFeatures, "true")
 
 	recorder := tracetest.NewSpanRecorder()
-	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	options := append([]sdktrace.TracerProviderOption{sdktrace.WithSpanProcessor(recorder)}, traceOptions...)
+	provider := sdktrace.NewTracerProvider(options...)
 	t.Cleanup(func() {
 		_ = provider.Shutdown(context.Background())
 	})
@@ -122,11 +124,14 @@ func TestOTelProtocolSpan(t *testing.T) {
 		check   func(t *testing.T, span sdktrace.ReadOnlySpan)
 	}{
 		{
-			name: "semconv span replaces the metadata span",
+			name: "semconv span carries SDK attributes",
 			content: Generation{
 				Input:  []Message{UserTextMessage("Hello")},
 				Output: []Message{AssistantTextMessage("Hi!")},
 				Usage:  TokenUsage{InputTokens: 120, OutputTokens: 42, TotalTokens: 162},
+				Metadata: map[string]any{
+					spanAttrRequestThinkingBudget: int64(2048),
+				},
 			},
 			check: func(t *testing.T, span sdktrace.ReadOnlySpan) {
 				if got := span.Name(); got != "chat gpt-5" {
@@ -145,8 +150,21 @@ func TestOTelProtocolSpan(t *testing.T) {
 				if got := attrs["gen_ai.input.messages"].AsString(); !strings.Contains(got, "Hello") {
 					t.Errorf("gen_ai.input.messages = %q, want it to contain Hello", got)
 				}
-				if _, ok := attrs["agento11y.sdk.name"]; ok {
-					t.Error("otel-mode span carries the metadata-span attributes")
+				if got := attrs[sdkMetadataKeyName].AsString(); got != sdkName {
+					t.Errorf("%s = %q, want %q", sdkMetadataKeyName, got, sdkName)
+				}
+				if got := attrs[spanAttrRequestThinkingBudget].AsInt64(); got != 2048 {
+					t.Errorf("%s = %d, want 2048", spanAttrRequestThinkingBudget, got)
+				}
+				metadata := map[string]any{}
+				if err := json.Unmarshal([]byte(attrs["agento11y.generation.metadata"].AsString()), &metadata); err != nil {
+					t.Fatalf("unmarshal generation metadata: %v", err)
+				}
+				if got := metadata[sdkMetadataKeyName]; got != sdkName {
+					t.Errorf("metadata[%q] = %#v, want %q", sdkMetadataKeyName, got, sdkName)
+				}
+				if got := metadata[spanAttrRequestThinkingBudget]; got != float64(2048) {
+					t.Errorf("metadata[%q] = %#v, want 2048", spanAttrRequestThinkingBudget, got)
 				}
 				if attrs["agento11y.generation.id"].AsString() == "" {
 					t.Error("otel-mode span carries no agento11y.generation.id")
@@ -338,6 +356,169 @@ func TestOTelProtocolSpan(t *testing.T) {
 			recordOTelGeneration(t, client, tc.content)
 			tc.check(t, onlySpan(t, recorder))
 		})
+	}
+}
+
+func TestOTelProtocolTagDestinations(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	client, recorder, _ := newOTelTestClient(t, func(cfg *Config) {
+		meterProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+		t.Cleanup(func() { _ = meterProvider.Shutdown(context.Background()) })
+		cfg.MeterProvider = meterProvider
+		cfg.Tags = map[string]string{
+			"shared":      "client",
+			"client_only": "client",
+		}
+	})
+
+	ctx := WithTags(context.Background(), map[string]string{
+		"shared":       "context",
+		"context_only": "context",
+	})
+	_, rec := client.StartGeneration(ctx, GenerationStart{
+		Model: ModelRef{Provider: "openai", Name: "gpt-5"},
+		Tags: map[string]string{
+			"shared":     "start",
+			"start_only": "start",
+		},
+	})
+	rec.SetResult(Generation{
+		Tags: map[string]string{
+			"shared":      "result",
+			"result_only": "result",
+		},
+		Usage: TokenUsage{InputTokens: 10, OutputTokens: 2},
+	}, nil)
+	rec.End()
+
+	attrs := spanAttributeMapOf(onlySpan(t, recorder))
+	for key, want := range map[string]string{
+		"shared":       "context",
+		"client_only":  "client",
+		"context_only": "context",
+	} {
+		if got := attrs[spanAttrTagPrefix+key].AsString(); got != want {
+			t.Errorf("%s%s = %q, want %q", spanAttrTagPrefix, key, got, want)
+		}
+	}
+	for _, key := range []string{"start_only", "result_only"} {
+		if _, ok := attrs[spanAttrTagPrefix+key]; ok {
+			t.Errorf("span carries dimension %s%s for an export-only tag", spanAttrTagPrefix, key)
+		}
+	}
+
+	var tags map[string]string
+	if err := json.Unmarshal([]byte(attrs["agento11y.generation.tags"].AsString()), &tags); err != nil {
+		t.Fatalf("unmarshal generation tags: %v", err)
+	}
+	for key, want := range map[string]string{
+		"shared":       "result",
+		"client_only":  "client",
+		"context_only": "context",
+		"start_only":   "start",
+		"result_only":  "result",
+	} {
+		if got := tags[key]; got != want {
+			t.Errorf("generation tags[%q] = %q, want %q", key, got, want)
+		}
+	}
+
+	var collected metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &collected); err != nil {
+		t.Fatalf("collect metrics: %v", err)
+	}
+	metricCount := 0
+	for _, scope := range collected.ScopeMetrics {
+		if scope.Scope.Name != otelgenai.ScopeName {
+			continue
+		}
+		for _, metric := range scope.Metrics {
+			if metric.Name != "gen_ai.client.operation.duration" && metric.Name != "gen_ai.client.token.usage" {
+				continue
+			}
+			metricCount++
+			metricAttrs := histogramAttributes(t, metric)
+			for key, want := range map[string]string{
+				"shared":       "context",
+				"client_only":  "client",
+				"context_only": "context",
+			} {
+				if got := metricAttrs[spanAttrTagPrefix+key]; got != want {
+					t.Errorf("%s %s%s = %q, want %q", metric.Name, spanAttrTagPrefix, key, got, want)
+				}
+			}
+			for _, key := range []string{"start_only", "result_only"} {
+				if _, ok := metricAttrs[spanAttrTagPrefix+key]; ok {
+					t.Errorf("%s carries dimension %s%s for an export-only tag", metric.Name, spanAttrTagPrefix, key)
+				}
+			}
+		}
+	}
+	if metricCount != 2 {
+		t.Errorf("checked %d OTel generation metrics, want 2", metricCount)
+	}
+}
+
+func TestOTelProtocolPreservesExportContractAtSpanLimit(t *testing.T) {
+	limits := sdktrace.NewSpanLimits()
+	limits.AttributeCountLimit = 16
+	tags := map[string]string{
+		"tag_01": "value", "tag_02": "value", "tag_03": "value",
+		"tag_04": "value", "tag_05": "value", "tag_06": "value",
+		"tag_07": "value", "tag_08": "value", "tag_09": "value",
+		"tag_10": "value", "tag_11": "value", "tag_12": "value",
+	}
+	client, recorder, _ := newOTelTestClient(t, func(cfg *Config) {
+		cfg.Tags = tags
+	}, sdktrace.WithRawSpanLimits(limits))
+
+	_, rec := client.StartGeneration(context.Background(), GenerationStart{
+		ID:    "generation-at-span-limit",
+		Model: ModelRef{Provider: "openai", Name: "gpt-5"},
+	})
+	rec.SetResult(Generation{}, nil)
+	rec.End()
+	if err := rec.Err(); err != nil {
+		t.Fatalf("recorder: %v", err)
+	}
+
+	span := onlySpan(t, recorder)
+	attrs := spanAttributeMapOf(span)
+	for key, want := range map[string]string{
+		"agento11y.record":   "true",
+		spanAttrGenerationID: "generation-at-span-limit",
+		sdkMetadataKeyName:   sdkName,
+	} {
+		got, ok := attrs[key]
+		if !ok {
+			t.Errorf("%s is absent, want %q", key, want)
+			continue
+		}
+		if got.AsString() != want {
+			t.Errorf("%s = %q, want %q", key, got.AsString(), want)
+		}
+	}
+	var exportedTags map[string]string
+	if err := json.Unmarshal([]byte(attrs["agento11y.generation.tags"].AsString()), &exportedTags); err != nil {
+		t.Fatalf("unmarshal generation tags: %v", err)
+	}
+	for key, want := range tags {
+		if got := exportedTags[key]; got != want {
+			t.Errorf("generation tags[%q] = %q, want %q", key, got, want)
+		}
+	}
+	if got := span.DroppedAttributes(); got == 0 {
+		t.Fatal("span dropped no attributes; test did not reach the configured limit")
+	}
+	droppedDimension := false
+	for key := range tags {
+		if _, ok := attrs[spanAttrTagPrefix+key]; !ok {
+			droppedDimension = true
+			break
+		}
+	}
+	if !droppedDimension {
+		t.Error("all optional tag dimensions survived the span attribute limit")
 	}
 }
 
@@ -989,7 +1170,9 @@ func TestOTelProtocolDropsValidatorRejectedRecords(t *testing.T) {
 	// A record the SDK's validator refuses is never enqueued on the other
 	// protocols. In otel mode the span is the export, so it has to close
 	// without the id and the content that would make it a generation.
-	client, recorder, _ := newOTelTestClient(t, nil)
+	client, recorder, _ := newOTelTestClient(t, func(cfg *Config) {
+		cfg.Tags = map[string]string{"team": "sigil"}
+	})
 
 	_, rec := client.StartGeneration(context.Background(), GenerationStart{
 		Model: ModelRef{Provider: "openai", Name: "gpt-5"},
@@ -1011,6 +1194,12 @@ func TestOTelProtocolDropsValidatorRejectedRecords(t *testing.T) {
 
 	span := onlySpan(t, recorder)
 	attrs := spanAttributeMapOf(span)
+	if got := attrs[sdkMetadataKeyName].AsString(); got != sdkName {
+		t.Errorf("%s = %q, want %q", sdkMetadataKeyName, got, sdkName)
+	}
+	if got := attrs[spanAttrTagPrefix+"team"].AsString(); got != "sigil" {
+		t.Errorf("%steam = %q, want sigil", spanAttrTagPrefix, got)
+	}
 	if _, ok := attrs["agento11y.generation.id"]; ok {
 		t.Error("a rejected record carries agento11y.generation.id, so the backend would store it")
 	}

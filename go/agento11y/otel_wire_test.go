@@ -20,7 +20,7 @@ import (
 // mode emits the matching span.
 //
 // OTel mode maps the SDK's generateText and streamText defaults to "chat". It
-// also adds agento11y.record=true, which agento11y needs. OTLP attribute order
+// also adds agento11y.record=true and the Go SDK identity. OTLP attribute order
 // has no meaning, so this test compares attributes as a set.
 //
 // The test calls the OTel helpers directly because openai_sync contains a
@@ -49,6 +49,7 @@ func TestOTelModeMatchesGoldenWireFormat(t *testing.T) {
 			got := renderedAttributes(t, span)
 			wantAttributes := want.attributes(t)
 			wantAttributes["agento11y.record"] = "string:true"
+			wantAttributes[sdkMetadataKeyName] = "string:" + sdkName
 			for key, wantValue := range wantAttributes {
 				gotValue, ok := got[key]
 				if !ok {
