@@ -39,6 +39,9 @@ func TestExperimentalFeaturesDisabledByDefault(t *testing.T) {
 			t.Fatalf("error %q does not mention %q", err.Error(), want)
 		}
 	}
+	if strings.Contains(err.Error(), "EnableExperimentalFeatures") {
+		t.Fatalf("package-level error must not suggest a client option: %v", err)
+	}
 }
 
 func TestExperimentalGateReadsTruthyValues(t *testing.T) {
@@ -69,19 +72,112 @@ func TestExperimentalGateReadsTruthyValues(t *testing.T) {
 	}
 }
 
+func TestClientExperimentalFeaturePrecedence(t *testing.T) {
+	cases := []struct {
+		name     string
+		override *bool
+		env      string
+		want     bool
+	}{
+		{name: "explicit true beats unset environment", override: BoolPtr(true), want: true},
+		{name: "explicit false beats truthy environment", override: BoolPtr(false), env: "true", want: false},
+		{name: "nil uses truthy environment", env: "true", want: true},
+		{name: "nil uses false environment", env: "false", want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			clearExperimentalGate(t)
+			if tc.env != "" {
+				t.Setenv(EnvEnableExperimentalFeatures, tc.env)
+			}
+			client := NewClient(Config{
+				EnableExperimentalFeatures: tc.override,
+				testDisableWorker:          true,
+			})
+			t.Cleanup(func() { _ = client.Shutdown(context.Background()) })
+
+			err := client.RequireExperimental(FeatureCloudTrialEvaluation)
+			if got := err == nil; got != tc.want {
+				t.Fatalf("RequireExperimental() admitted = %v, want %v; err = %v", got, tc.want, err)
+			}
+			if !tc.want && !errors.Is(err, ErrExperimentalFeatureDisabled) {
+				t.Fatalf("expected ErrExperimentalFeatureDisabled, got %v", err)
+			}
+			if tc.override != nil && !*tc.override {
+				if strings.Contains(err.Error(), EnvEnableExperimentalFeatures) {
+					t.Fatalf("explicit false error must not suggest an environment override: %v", err)
+				}
+				if !strings.Contains(err.Error(), "BoolPtr(true)") {
+					t.Fatalf("explicit false error must name the programmatic opt-in: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestClientExperimentalFeatureNilReadsCurrentEnvironment(t *testing.T) {
+	clearExperimentalGate(t)
+	client := NewClient(Config{testDisableWorker: true})
+	t.Cleanup(func() { _ = client.Shutdown(context.Background()) })
+
+	if err := client.RequireExperimental(FeatureCloudTrialEvaluation); !errors.Is(err, ErrExperimentalFeatureDisabled) {
+		t.Fatalf("expected closed initial gate, got %v", err)
+	}
+	t.Setenv(EnvEnableExperimentalFeatures, "true")
+	if err := client.RequireExperimental(FeatureCloudTrialEvaluation); err != nil {
+		t.Fatalf("expected environment change to open nil client gate, got %v", err)
+	}
+	t.Setenv(EnvEnableExperimentalFeatures, "false")
+	if err := client.RequireExperimental(FeatureCloudTrialEvaluation); !errors.Is(err, ErrExperimentalFeatureDisabled) {
+		t.Fatalf("expected environment change to close nil client gate, got %v", err)
+	}
+}
+
+func TestClientExperimentalFeatureSettingsAreIsolated(t *testing.T) {
+	clearExperimentalGate(t)
+	openClient := NewClient(Config{EnableExperimentalFeatures: BoolPtr(true), testDisableWorker: true})
+	closedClient := NewClient(Config{EnableExperimentalFeatures: BoolPtr(false), testDisableWorker: true})
+	t.Cleanup(func() {
+		_ = openClient.Shutdown(context.Background())
+		_ = closedClient.Shutdown(context.Background())
+	})
+
+	if err := openClient.RequireExperimental(FeatureCloudTrialEvaluation); err != nil {
+		t.Fatalf("open client: %v", err)
+	}
+	if err := closedClient.RequireExperimental(FeatureCloudTrialEvaluation); !errors.Is(err, ErrExperimentalFeatureDisabled) {
+		t.Fatalf("closed client: expected ErrExperimentalFeatureDisabled, got %v", err)
+	}
+}
+
+func TestClientCopiesExperimentalFeatureSetting(t *testing.T) {
+	clearExperimentalGate(t)
+	enabled := true
+	client := NewClient(Config{EnableExperimentalFeatures: &enabled, testDisableWorker: true})
+	t.Cleanup(func() { _ = client.Shutdown(context.Background()) })
+
+	enabled = false
+	if err := client.RequireExperimental(FeatureCloudTrialEvaluation); err != nil {
+		t.Fatalf("caller mutation changed client gate: %v", err)
+	}
+}
+
 func TestCloudTrialEvaluationBlockedWithoutTheGate(t *testing.T) {
 	recorder := &experimentRecorder{}
 	recorder.push(http.StatusOK, map[string]any{"trial_id": "trial-cloud"})
 	server := httptest.NewServer(recorder.handler(t))
 	defer server.Close()
-	client := newExperimentTestClient(t, server.URL)
+	t.Setenv(EnvEnableExperimentalFeatures, "true")
+	client := NewClient(Config{
+		API:                        APIConfig{Endpoint: server.URL},
+		EnableExperimentalFeatures: BoolPtr(false),
+		testGenerationExporter:     newNoopGenerationExporter(nil),
+		testDisableWorker:          true,
+	})
+	t.Cleanup(func() { _ = client.Shutdown(context.Background()) })
 
-	// Built while the gate is still on, so the block below is the gate and not a
-	// setup failure.
 	trial := NewTrial(client, TrialRef{RunID: "run-cloud", TestCaseID: "case-cloud"})
 	trial.BindConversation("conv-1")
-
-	clearExperimentalGate(t)
 
 	cases := []struct {
 		name string

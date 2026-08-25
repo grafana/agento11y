@@ -509,12 +509,15 @@ a stored test suite.
 - `trial.evaluate(evaluator_id)` grades the trial's bound
   conversation with an evaluator that already exists in the tenant, instead of a
   locally computed score. Go spells it `trial.Evaluate(ctx, evaluatorID)` and
-  JavaScript `trial.evaluate(evaluatorId)`, and the rest of this bullet holds for
-  all three. Experimental: it requires
-  `AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true` and otherwise raises
-  `ExperimentalFeatureDisabledError` without sending a request. It blocks until the worker finishes, and the trial then
-  closes as `completed` with no local `final_score`. Requires
-  `trial.bind_conversation(...)` first.
+  JavaScript `trial.evaluate(evaluatorId)`. Python and JavaScript require
+  `AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true`; otherwise they raise
+  `ExperimentalFeatureDisabledError` without sending a request. Go can set
+  `experiments.ClientOptions.EnableExperimentalFeatures` to
+  `agento11y.BoolPtr(true)`, or
+  leave it nil and use the same environment variable. A closed Go gate returns
+  `ErrExperimentalFeatureDisabled` without sending a request. The call blocks
+  until the worker finishes, and the trial then closes as `completed` with no
+  local `final_score`. Call `trial.bind_conversation(...)` first.
   - The score is stored against the conversation and the trial, with no
     `generation_id`, so read it from the experiment's scores or the trial's
     `scores` in the report rather than from a per-generation lookup.
@@ -543,9 +546,12 @@ idempotent identities.
 
 The Go SDK can also grade a trial with an evaluator stored in the tenant instead
 of a locally computed score: `trial.Evaluate(ctx, evaluatorID, ...)`.
-Experimental: it requires `AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true` and
-otherwise returns `ErrExperimentalFeatureDisabled` without sending a request. Bind the
-agent's conversation first; the call persists that binding, exports the anchor
+Experimental: set `EnableExperimentalFeatures: agento11y.BoolPtr(true)` in
+`experiments.ClientOptions`. If the field is nil,
+`AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true` remains an alternative. Explicit
+false overrides the environment. A closed gate returns
+`ErrExperimentalFeatureDisabled` without sending a request. Bind the agent's
+conversation first; the call persists that binding, exports the anchor
 generation, queues the stored evaluator, and blocks until the worker reaches a
 terminal status. Such a trial closes as `completed` with no local final score,
 while an error returned from the trial callback after the call still closes it as

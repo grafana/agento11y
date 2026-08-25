@@ -84,9 +84,10 @@ func (c *Client) flushOTel(ctx context.Context) error {
 	return nil
 }
 
-// newOTelHandler builds the otelgenai handler for otel-mode export. When the
-// experimental gate is closed it returns a nil handler and an error, and the
-// caller then falls back to the noop exporter.
+// newOTelHandler builds the otelgenai handler for otel-mode export. It resolves
+// Config.EnableExperimentalFeatures before the environment fallback. When the
+// gate is closed it returns a nil handler and an error, and the caller uses the
+// noop exporter.
 //
 // The handler gets its tracer and spec meter from Config.TracerProvider and
 // Config.MeterProvider, or from the corresponding global providers.
@@ -96,7 +97,7 @@ func (c *Client) flushOTel(ctx context.Context) error {
 // otelHandlerOptions disables operation-details records. A process-wide OTel
 // environment variable must not add a signal the client did not configure.
 func newOTelHandler(cfg Config) (*otelgenai.Handler, error) {
-	if err := RequireExperimental(FeatureOTelGenerationExport); err != nil {
+	if err := requireExperimental(FeatureOTelGenerationExport, cfg.EnableExperimentalFeatures); err != nil {
 		return nil, err
 	}
 	return otelgenai.NewHandler(otelHandlerOptions(cfg)...), nil

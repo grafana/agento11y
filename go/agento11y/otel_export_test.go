@@ -410,17 +410,23 @@ func TestOTelProtocolDropsWorkflowSteps(t *testing.T) {
 func TestOTelProtocolRequiresExperimentalGate(t *testing.T) {
 	cases := []struct {
 		name         string
+		override     *bool
 		experimental string
 		wantOTel     bool
 	}{
-		{name: "gate open", experimental: "true", wantOTel: true},
-		{name: "gate unset", experimental: "", wantOTel: false},
-		{name: "gate off", experimental: "false", wantOTel: false},
+		{name: "explicit true with gate unset", override: BoolPtr(true), wantOTel: true},
+		{name: "explicit false with gate open", override: BoolPtr(false), experimental: "true", wantOTel: false},
+		{name: "nil with gate open", experimental: "true", wantOTel: true},
+		{name: "nil with gate unset", wantOTel: false},
+		{name: "nil with gate off", experimental: "false", wantOTel: false},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv(EnvEnableExperimentalFeatures, tc.experimental)
+			clearExperimentalGate(t)
+			if tc.experimental != "" {
+				t.Setenv(EnvEnableExperimentalFeatures, tc.experimental)
+			}
 
 			recorder := tracetest.NewSpanRecorder()
 			provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
@@ -429,6 +435,7 @@ func TestOTelProtocolRequiresExperimentalGate(t *testing.T) {
 			})
 
 			cfg := DefaultConfig()
+			cfg.EnableExperimentalFeatures = tc.override
 			cfg.GenerationExport.Protocol = GenerationExportProtocolOTel
 			cfg.ContentCapture = ContentCaptureModeFullWithMetadataSpans
 			cfg.TracerProvider = provider
@@ -465,6 +472,32 @@ func TestOTelProtocolRequiresExperimentalGate(t *testing.T) {
 			_, hasTitle := spanAttributeMapOf(span)["agento11y.conversation.title"]
 			if hasTitle != tc.wantOTel {
 				t.Errorf("conversation title present = %v, want %v", hasTitle, tc.wantOTel)
+			}
+		})
+	}
+}
+
+func TestOTelProtocolAdmissionIsFixedAfterNewClient(t *testing.T) {
+	cases := []struct {
+		name       string
+		initialEnv string
+		changedEnv string
+		wantOTel   bool
+	}{
+		{name: "open stays open", initialEnv: "true", changedEnv: "false", wantOTel: true},
+		{name: "closed stays closed", initialEnv: "false", changedEnv: "true", wantOTel: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(EnvEnableExperimentalFeatures, tc.initialEnv)
+			cfg := DefaultConfig()
+			cfg.GenerationExport.Protocol = GenerationExportProtocolOTel
+			client := NewClient(cfg)
+			t.Cleanup(func() { _ = client.Shutdown(context.Background()) })
+
+			t.Setenv(EnvEnableExperimentalFeatures, tc.changedEnv)
+			if got := client.otelExportEnabled(); got != tc.wantOTel {
+				t.Fatalf("otelExportEnabled() after environment change = %v, want %v", got, tc.wantOTel)
 			}
 		})
 	}

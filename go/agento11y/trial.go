@@ -298,16 +298,17 @@ func (o EvaluateOptions) resolve() (timeout, pollInterval time.Duration, err err
 // built this trial with NewTrial or NewTrialFromRef must leave
 // CompleteExperimentOptions.ScoreCount unset when finalizing the run itself.
 //
-// Experimental: requires AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true, otherwise
-// it returns ErrExperimentalFeatureDisabled without sending a request. This call
-// can change or be removed in any release.
+// Experimental: Config.EnableExperimentalFeatures takes precedence over
+// AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES. A closed gate returns
+// ErrExperimentalFeatureDisabled before any trial state or generation is sent.
+// This call can change or be removed in any release.
 func (t *Trial) Evaluate(ctx context.Context, evaluatorID string, options ...EvaluateOptions) (*TrialEvaluation, error) {
 	if t == nil || t.client == nil {
 		return nil, ErrNilClient
 	}
 	// Checked before the trial is created and the generation is flushed, so a
 	// blocked call leaves nothing behind.
-	if err := RequireExperimental(FeatureCloudTrialEvaluation); err != nil {
+	if err := t.client.RequireExperimental(FeatureCloudTrialEvaluation); err != nil {
 		return nil, err
 	}
 	if ctx == nil {

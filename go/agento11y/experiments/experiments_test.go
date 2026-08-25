@@ -477,7 +477,7 @@ func TestTrialFlushCreatesTrialBeforePublishingScores(t *testing.T) {
 }
 
 func TestClientRedactsScoresAndTextArtifactsByDefault(t *testing.T) {
-	const secret = "glc_abcdefghijklmnopqrstuvwxyz123456"
+	const secret = "glc_abcdefghijklmnopqrstuvwxyz123456" // trufflehog:ignore
 	var bodies []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
@@ -723,11 +723,16 @@ func (s *trialEvaluationServer) statusRequestCount() int {
 	return count
 }
 
-func (s *trialEvaluationServer) newClient(t *testing.T) *Client {
+func (s *trialEvaluationServer) newClient(t *testing.T, enableExperimentalFeatures ...*bool) *Client {
 	t.Helper()
+	var experimentalOverride *bool
+	if len(enableExperimentalFeatures) > 0 {
+		experimentalOverride = enableExperimentalFeatures[0]
+	}
 	client, err := NewClient(ClientOptions{
 		Endpoint: s.server.URL, TenantID: "123", IngestToken: "token",
-		UseExperimentalOTel: boolPointer(false),
+		UseExperimentalOTel:        boolPointer(false),
+		EnableExperimentalFeatures: experimentalOverride,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -737,8 +742,9 @@ func (s *trialEvaluationServer) newClient(t *testing.T) *Client {
 }
 
 func TestClientForwardsTrialEvaluationCalls(t *testing.T) {
+	clearExperimentalGate(t)
 	server := newTrialEvaluationServer(t, "queued")
-	client := server.newClient(t)
+	client := server.newClient(t, boolPointer(true))
 
 	evaluation, err := client.TriggerTrialEvaluation(context.Background(), "exp-1", "trial-1", TriggerTrialEvaluationRequest{
 		EvaluatorID: "helpfulness", EvaluatorVersion: "v3",
@@ -786,9 +792,9 @@ func TestNilClientTrialEvaluationCallsDoNotRequest(t *testing.T) {
 	}
 }
 
-func newCloudEvaluatedTrial(t *testing.T, server *trialEvaluationServer) (*Experiment, *Trial) {
+func newCloudEvaluatedTrial(t *testing.T, server *trialEvaluationServer, enableExperimentalFeatures ...*bool) (*Experiment, *Trial) {
 	t.Helper()
-	client := server.newClient(t)
+	client := server.newClient(t, enableExperimentalFeatures...)
 	experiment, err := NewExperiment(client, ExperimentOptions{
 		ExperimentID: "run-1", Name: "run",
 		Suite: &TestSuite{SuiteID: "suite", TestCases: []TestCase{{TestCaseID: "case", Input: "2+2"}}},
@@ -819,8 +825,9 @@ func indexOfRequest(requests []capturedRequest, match func(capturedRequest) bool
 }
 
 func TestTrialEvaluatePersistsConversationAndClosesCompleted(t *testing.T) {
+	clearExperimentalGate(t)
 	server := newTrialEvaluationServer(t, "queued", "claimed", "success")
-	_, trial := newCloudEvaluatedTrial(t, server)
+	_, trial := newCloudEvaluatedTrial(t, server, boolPointer(true))
 	trial.BindConversation("conv-1").RecordIO(RecordIOOptions{Input: "2+2", Output: "4"})
 
 	evaluation, err := trial.Evaluate(context.Background(), "helpfulness", EvaluateOptions{
@@ -1118,15 +1125,12 @@ func clearExperimentalGate(t *testing.T) {
 }
 
 func TestCloudTrialEvaluationBlockedWithoutTheGate(t *testing.T) {
+	t.Setenv(agento11y.EnvEnableExperimentalFeatures, "true")
 	server := newTrialEvaluationServer(t, "success")
-	// Built while the gate is still on, so the block below is the gate and not a
-	// setup failure.
-	_, trial := newCloudEvaluatedTrial(t, server)
+	_, trial := newCloudEvaluatedTrial(t, server, boolPointer(false))
 	trial.BindConversation("conv-1")
-	client := server.newClient(t)
+	client := server.newClient(t, boolPointer(false))
 	before := len(server.captured())
-
-	clearExperimentalGate(t)
 
 	if _, err := trial.Evaluate(context.Background(), "helpfulness"); !errors.Is(err, agento11y.ErrExperimentalFeatureDisabled) {
 		t.Fatalf("expected ErrExperimentalFeatureDisabled from Trial.Evaluate, got %v", err)
