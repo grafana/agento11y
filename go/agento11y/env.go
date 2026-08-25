@@ -40,6 +40,14 @@ var (
 	envTags               = brandedPair("TAGS")
 	envContentCaptureMode = brandedPair("CONTENT_CAPTURE_MODE")
 	envDebug              = brandedPair("DEBUG")
+	// envMaxRetries: base-10 integer count of retries after the initial
+	// generation / workflow-step export attempt. Zero disables retries.
+	envMaxRetries = brandedPair("MAX_RETRIES")
+	// envMaxBackoffMS: base-10 integer milliseconds capping the exponential
+	// delay between generation / workflow-step export attempts.
+	envMaxBackoffMS = brandedPair("MAX_BACKOFF_MS")
+	// envQueueSize: base-10 integer capacity of each in-memory export queue.
+	envQueueSize = brandedPair("QUEUE_SIZE")
 	// envExportTimeoutMS: base-10 integer milliseconds bounding one generation /
 	// workflow-step export attempt on both HTTP and gRPC.
 	envExportTimeoutMS     = brandedPair("EXPORT_TIMEOUT_MS")
@@ -54,6 +62,10 @@ var (
 const (
 	minExportTimeoutMS int64 = 1
 	maxExportTimeoutMS int64 = 2147483647
+	minMaxRetries      int64 = 0
+	maxMaxRetries      int64 = 2147483647
+	minQueueSize       int64 = 1
+	maxQueueSize       int64 = 2147483647
 )
 
 // envLookup resolves canonical env vars from os.Environ unless a
@@ -150,6 +162,33 @@ func resolveFromEnv(lookup envLookup, base Config) (Config, error) {
 		cfg.Debug = &b
 	}
 
+	if v, key, ok := envTrimmed(lookup, envMaxRetries); ok {
+		maxRetries, err := parseMaxRetries(key, v)
+		if err != nil {
+			errs = append(errs, err)
+		} else {
+			cfg.GenerationExport.MaxRetries = maxRetries
+		}
+	}
+
+	if v, key, ok := envTrimmed(lookup, envMaxBackoffMS); ok {
+		maxBackoff, err := parseExportTimeoutMS(key, v)
+		if err != nil {
+			errs = append(errs, err)
+		} else {
+			cfg.GenerationExport.MaxBackoff = maxBackoff
+		}
+	}
+
+	if v, key, ok := envTrimmed(lookup, envQueueSize); ok {
+		queueSize, err := parseQueueSize(key, v)
+		if err != nil {
+			errs = append(errs, err)
+		} else {
+			cfg.GenerationExport.QueueSize = queueSize
+		}
+	}
+
 	if v, key, ok := envTrimmed(lookup, envExportTimeoutMS); ok {
 		timeout, err := parseExportTimeoutMS(key, v)
 		if err != nil {
@@ -239,6 +278,30 @@ func parseExportTimeoutMS(key, v string) (time.Duration, error) {
 		return 0, invalid
 	}
 	return time.Duration(ms) * time.Millisecond, nil
+}
+
+func parseMaxRetries(key, v string) (int, error) {
+	invalid := fmt.Errorf(
+		"agento11y: invalid %s %q (want integer from %d through %d)",
+		key, v, minMaxRetries, maxMaxRetries,
+	)
+	value, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+	if err != nil || value < minMaxRetries || value > maxMaxRetries {
+		return 0, invalid
+	}
+	return int(value), nil
+}
+
+func parseQueueSize(key, v string) (int, error) {
+	invalid := fmt.Errorf(
+		"agento11y: invalid %s %q (want integer from %d through %d)",
+		key, v, minQueueSize, maxQueueSize,
+	)
+	value, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+	if err != nil || value < minQueueSize || value > maxQueueSize {
+		return 0, invalid
+	}
+	return int(value), nil
 }
 
 func parseContentCaptureMode(key, v string) (ContentCaptureMode, error) {

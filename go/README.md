@@ -142,6 +142,12 @@ defer func() {
 
 `GenerationExport.ExportTimeout` bounds each HTTP or gRPC generation and workflow-step request. It defaults to 30 seconds. Set `AGENTO11Y_EXPORT_TIMEOUT_MS` to a base-10 integer from `1` through `2147483647` to override the default. A positive caller value wins over the environment variable.
 
+Generation and workflow-step exports retry five times by default, with exponential backoff capped at five seconds. Set `AGENTO11Y_MAX_RETRIES` to a base-10 integer from `0` through `2147483647` and `AGENTO11Y_MAX_BACKOFF_MS` to a base-10 integer from `1` through `2147483647` to override those defaults. `0` retries disables retrying. Positive caller values win over the environment variables.
+
+Each in-memory export queue holds 2,000 records by default. Set `AGENTO11Y_QUEUE_SIZE` to a base-10 integer from `1` through `2147483647` to override that capacity. Size it from the peak records per second multiplied by the expected outage in seconds, plus headroom. Generations and workflow steps have separate queues of this capacity. Larger queues consume application memory and do not survive a process restart. A positive caller value wins over the environment variable.
+
+Retries run in the background exporter. While an export is retrying, the in-memory queue can fill and newer generations can be dropped. Use a retry budget sized for a short, known interruption rather than a permanent multi-minute setting.
+
 `GenerationExport.HTTPTimeout` remains an HTTP-only override. A positive value wins over `ExportTimeout` on HTTP requests. The experiments client uses this field for `ClientOptions.RetryTimeout`.
 
 Configure OTEL exporters (traces/metrics) in your application OTEL SDK setup.
