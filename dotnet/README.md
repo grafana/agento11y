@@ -153,6 +153,9 @@ var agento11y = new Agento11yClient(new Agento11yClientConfig
 
 ```bash
 AGENTO11Y_EXPORT_TIMEOUT_MS=5000
+AGENTO11Y_MAX_RETRIES=5
+AGENTO11Y_MAX_BACKOFF_MS=5000
+AGENTO11Y_QUEUE_SIZE=2000
 ```
 
 An explicit `ExportTimeout` assignment always wins over the environment variable,
@@ -403,6 +406,9 @@ SDK schema defaults fill the rest.
 | `AGENTO11Y_INSECURE` | `GenerationExportConfig.Insecure` (tri-state `bool?`) |
 | `AGENTO11Y_HEADERS` | `GenerationExportConfig.Headers` (CSV: `K=V,...`) |
 | `AGENTO11Y_EXPORT_TIMEOUT_MS` | `GenerationExportConfig.ExportTimeout` (base-10 integer milliseconds, inclusive `1`..`2147483647`; default `30000`) |
+| `AGENTO11Y_MAX_RETRIES` | `GenerationExportConfig.MaxRetries` (inclusive `1`..`2147483647`; default `5`) |
+| `AGENTO11Y_MAX_BACKOFF_MS` | `GenerationExportConfig.MaxBackoff` (milliseconds, inclusive `1`..`2147483647`; default `5000`) |
+| `AGENTO11Y_QUEUE_SIZE` | `GenerationExportConfig.QueueSize` (inclusive `1`..`2147483647`; default `2000`) |
 | `AGENTO11Y_AUTH_MODE` | `AuthConfig.Mode` (`none`/`tenant`/`bearer`/`basic`) |
 | `AGENTO11Y_AUTH_TENANT_ID` | `AuthConfig.TenantId` |
 | `AGENTO11Y_AUTH_TOKEN` | `AuthConfig.BearerToken` and/or `BasicPassword` (filled when empty) |
@@ -421,7 +427,7 @@ reported and ignored rather than silently falling back to a stale `SIGIL_*` one.
 
 Use `EnvConfig.FromEnv()` to inspect the resolved config without constructing a
 client. Invalid values (bad auth mode, out-of-range
-`AGENTO11Y_EXPORT_TIMEOUT_MS`, etc.) are skipped with a warning and the field
+`AGENTO11Y_EXPORT_TIMEOUT_MS`, `AGENTO11Y_MAX_RETRIES`, etc.) are skipped with a warning and the field
 keeps its default, so a single typo does not discard the rest of the env layer.
 
 ## Breaking changes (unreleased)

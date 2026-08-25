@@ -32,6 +32,7 @@ subprojects {
             // should pass an explicit lookup to Agento11yEnvConfig.resolveFromEnv.
             listOf(
                 "ENDPOINT", "PROTOCOL", "INSECURE", "HEADERS", "EXPORT_TIMEOUT_MS",
+                "MAX_RETRIES", "MAX_BACKOFF_MS", "QUEUE_SIZE",
                 "AUTH_MODE", "AUTH_TENANT_ID", "AUTH_TOKEN",
                 "AGENT_NAME", "AGENT_VERSION", "USER_ID", "TAGS",
                 "CONTENT_CAPTURE_MODE", "DEBUG",

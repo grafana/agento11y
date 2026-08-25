@@ -198,6 +198,60 @@ public sealed class EnvConfigTests
         Assert.Equal(TimeSpan.FromSeconds(30), cfg.GenerationExport.ExportTimeout);
     }
 
+    [Fact]
+    public void InvalidExportRetryAndQueueSettingsWarnAndKeepDefaults()
+    {
+        var env = new Dictionary<string, string?>
+        {
+            ["AGENTO11Y_MAX_RETRIES"] = "0",
+            ["AGENTO11Y_MAX_BACKOFF_MS"] = "1.5",
+            ["AGENTO11Y_QUEUE_SIZE"] = "2147483648",
+        };
+        var (cfg, warnings) = EnvConfig.ResolveFromEnv(MapLookup(env), new Agento11yClientConfig());
+
+        Assert.Equal(GenerationExportConfig.DefaultMaxRetries, cfg.GenerationExport.MaxRetries);
+        Assert.Equal(GenerationExportConfig.DefaultMaxBackoff, cfg.GenerationExport.MaxBackoff);
+        Assert.Equal(GenerationExportConfig.DefaultQueueSize, cfg.GenerationExport.QueueSize);
+        Assert.Contains(warnings, w => w.Contains("AGENTO11Y_MAX_RETRIES"));
+        Assert.Contains(warnings, w => w.Contains("AGENTO11Y_MAX_BACKOFF_MS"));
+        Assert.Contains(warnings, w => w.Contains("AGENTO11Y_QUEUE_SIZE"));
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidExportTimeoutValues))]
+    public void ParsePositiveIntRejectsInvalidValues(string raw)
+    {
+        Assert.Null(EnvConfig.ParsePositiveInt(raw));
+    }
+
+    [Theory]
+    [MemberData(nameof(ValidExportTimeoutValues))]
+    public void ParsePositiveIntAcceptsValidValues(string raw, int expected)
+    {
+        Assert.Equal(expected, EnvConfig.ParsePositiveInt(raw));
+    }
+
+    [Fact]
+    public void CallerExportRetryAndQueueDefaultsStillWinOverEnv()
+    {
+        var baseConfig = new Agento11yClientConfig();
+        baseConfig.GenerationExport.MaxRetries = GenerationExportConfig.DefaultMaxRetries;
+        baseConfig.GenerationExport.MaxBackoff = GenerationExportConfig.DefaultMaxBackoff;
+        baseConfig.GenerationExport.QueueSize = GenerationExportConfig.DefaultQueueSize;
+        var env = new Dictionary<string, string?>
+        {
+            ["AGENTO11Y_MAX_RETRIES"] = "12",
+            ["AGENTO11Y_MAX_BACKOFF_MS"] = "45000",
+            ["AGENTO11Y_QUEUE_SIZE"] = "5000",
+        };
+
+        var (cfg, _) = EnvConfig.ResolveFromEnv(MapLookup(env), baseConfig);
+
+        Assert.Equal(GenerationExportConfig.DefaultMaxRetries, cfg.GenerationExport.MaxRetries);
+        Assert.Equal(GenerationExportConfig.DefaultMaxBackoff, cfg.GenerationExport.MaxBackoff);
+        Assert.Equal(GenerationExportConfig.DefaultQueueSize, cfg.GenerationExport.QueueSize);
+    }
+
     [Theory]
     [MemberData(nameof(InvalidExportTimeoutValues))]
     public void ParseExportTimeoutMsRejectsInvalidValues(string raw)
@@ -519,6 +573,9 @@ public sealed class EnvConfigTests
             ["INSECURE"] = "true",
             ["HEADERS"] = "X-A=1,X-B=two",
             ["EXPORT_TIMEOUT_MS"] = "1500",
+            ["MAX_RETRIES"] = "12",
+            ["MAX_BACKOFF_MS"] = "45000",
+            ["QUEUE_SIZE"] = "5000",
             ["AUTH_MODE"] = "basic",
             ["AUTH_TENANT_ID"] = "42",
             ["AUTH_TOKEN"] = "glc_xxx",
@@ -544,6 +601,12 @@ public sealed class EnvConfigTests
         Assert.Equal(legacy.GenerationExport.Headers, preferred.GenerationExport.Headers);
         Assert.Equal(TimeSpan.FromMilliseconds(1500), preferred.GenerationExport.ExportTimeout);
         Assert.Equal(legacy.GenerationExport.ExportTimeout, preferred.GenerationExport.ExportTimeout);
+        Assert.Equal(12, preferred.GenerationExport.MaxRetries);
+        Assert.Equal(legacy.GenerationExport.MaxRetries, preferred.GenerationExport.MaxRetries);
+        Assert.Equal(TimeSpan.FromSeconds(45), preferred.GenerationExport.MaxBackoff);
+        Assert.Equal(legacy.GenerationExport.MaxBackoff, preferred.GenerationExport.MaxBackoff);
+        Assert.Equal(5000, preferred.GenerationExport.QueueSize);
+        Assert.Equal(legacy.GenerationExport.QueueSize, preferred.GenerationExport.QueueSize);
         Assert.Equal(legacy.GenerationExport.Auth.Mode, preferred.GenerationExport.Auth.Mode);
         Assert.Equal(legacy.GenerationExport.Auth.TenantId, preferred.GenerationExport.Auth.TenantId);
         Assert.Equal(legacy.GenerationExport.Auth.BasicUser, preferred.GenerationExport.Auth.BasicUser);
@@ -674,6 +737,9 @@ public sealed class EnvConfigTests
         Assert.Equal("SIGIL_INSECURE", EnvConfig.EnvInsecure);
         Assert.Equal("SIGIL_HEADERS", EnvConfig.EnvHeaders);
         Assert.Equal("SIGIL_EXPORT_TIMEOUT_MS", EnvConfig.EnvExportTimeoutMs);
+        Assert.Equal("SIGIL_MAX_RETRIES", EnvConfig.EnvMaxRetries);
+        Assert.Equal("SIGIL_MAX_BACKOFF_MS", EnvConfig.EnvMaxBackoffMs);
+        Assert.Equal("SIGIL_QUEUE_SIZE", EnvConfig.EnvQueueSize);
         Assert.Equal("SIGIL_AUTH_MODE", EnvConfig.EnvAuthMode);
         Assert.Equal("SIGIL_AUTH_TENANT_ID", EnvConfig.EnvAuthTenantId);
         Assert.Equal("SIGIL_AUTH_TOKEN", EnvConfig.EnvAuthToken);
@@ -693,6 +759,9 @@ public sealed class EnvConfigTests
         Assert.Equal("AGENTO11Y_INSECURE", EnvConfig.PreferredEnvInsecure);
         Assert.Equal("AGENTO11Y_HEADERS", EnvConfig.PreferredEnvHeaders);
         Assert.Equal("AGENTO11Y_EXPORT_TIMEOUT_MS", EnvConfig.PreferredEnvExportTimeoutMs);
+        Assert.Equal("AGENTO11Y_MAX_RETRIES", EnvConfig.PreferredEnvMaxRetries);
+        Assert.Equal("AGENTO11Y_MAX_BACKOFF_MS", EnvConfig.PreferredEnvMaxBackoffMs);
+        Assert.Equal("AGENTO11Y_QUEUE_SIZE", EnvConfig.PreferredEnvQueueSize);
         Assert.Equal("AGENTO11Y_AUTH_MODE", EnvConfig.PreferredEnvAuthMode);
         Assert.Equal("AGENTO11Y_AUTH_TENANT_ID", EnvConfig.PreferredEnvAuthTenantId);
         Assert.Equal("AGENTO11Y_AUTH_TOKEN", EnvConfig.PreferredEnvAuthToken);

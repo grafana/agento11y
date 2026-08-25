@@ -83,7 +83,7 @@ try {
 }
 ```
 
-`GenerationExportConfig.exportTimeout` bounds each HTTP or gRPC generation export request. It defaults to 30 seconds. Set `AGENTO11Y_EXPORT_TIMEOUT_MS` to a base-10 integer from `1` through `2147483647` to override the default. An explicit caller value wins over the environment variable. The HTTP request uses this timeout, while HTTP connection setup keeps its separate 10-second timeout.
+`GenerationExportConfig.exportTimeout` bounds each HTTP or gRPC generation export request. It defaults to 30 seconds. Set `AGENTO11Y_EXPORT_TIMEOUT_MS` to a base-10 integer from `1` through `2147483647` to override the default. Retry and buffering can likewise be configured with `AGENTO11Y_MAX_RETRIES`, `AGENTO11Y_MAX_BACKOFF_MS`, and `AGENTO11Y_QUEUE_SIZE`. Explicit caller values win over environment variables. The HTTP request uses the export timeout, while HTTP connection setup keeps its separate 10-second timeout.
 
 Configure OTEL exporters (traces/metrics) in your application OTEL SDK setup. You can optionally inject `Tracer` and `Meter` via `Agento11yClientConfig`.
 
@@ -368,6 +368,9 @@ SDK schema defaults fill the rest.
 | `AGENTO11Y_INSECURE` | `GenerationExportConfig.insecure` (tri-state) |
 | `AGENTO11Y_HEADERS` | `GenerationExportConfig.headers` (CSV: `K=V,...`) |
 | `AGENTO11Y_EXPORT_TIMEOUT_MS` | `GenerationExportConfig.exportTimeout` (base-10 integer milliseconds, inclusive `1` through `2147483647`; default `30000`) |
+| `AGENTO11Y_MAX_RETRIES` | `GenerationExportConfig.maxRetries` (inclusive `1` through `2147483647`; default `5`) |
+| `AGENTO11Y_MAX_BACKOFF_MS` | `GenerationExportConfig.maxBackoff` (milliseconds, inclusive `1` through `2147483647`; default `5000`) |
+| `AGENTO11Y_QUEUE_SIZE` | `GenerationExportConfig.queueSize` (inclusive `1` through `2147483647`; default `2000`) |
 | `AGENTO11Y_AUTH_MODE` | `AuthConfig.mode` (`none`/`tenant`/`bearer`/`basic`) |
 | `AGENTO11Y_AUTH_TENANT_ID` | `AuthConfig.tenantId` |
 | `AGENTO11Y_AUTH_TOKEN` | `AuthConfig.bearerToken` and/or `basicPassword` (filled when empty) |

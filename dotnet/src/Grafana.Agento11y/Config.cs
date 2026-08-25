@@ -63,10 +63,34 @@ public sealed class GenerationExportConfig
     public bool? Insecure { get; set; }
     public int BatchSize { get; set; } = 100;
     public TimeSpan FlushInterval { get; set; } = TimeSpan.FromSeconds(1);
-    public int QueueSize { get; set; } = 2000;
-    public int MaxRetries { get; set; } = 5;
+    internal const int DefaultQueueSize = 2000;
+    internal const int DefaultMaxRetries = 5;
+    internal static readonly TimeSpan DefaultMaxBackoff = TimeSpan.FromSeconds(5);
+
+    private int? _queueSize;
+    private int? _maxRetries;
+    private TimeSpan? _maxBackoff;
+
+    public int QueueSize
+    {
+        get => _queueSize ?? DefaultQueueSize;
+        set => _queueSize = value;
+    }
+    internal bool HasExplicitQueueSize => _queueSize.HasValue;
+
+    public int MaxRetries
+    {
+        get => _maxRetries ?? DefaultMaxRetries;
+        set => _maxRetries = value;
+    }
+    internal bool HasExplicitMaxRetries => _maxRetries.HasValue;
     public TimeSpan InitialBackoff { get; set; } = TimeSpan.FromMilliseconds(100);
-    public TimeSpan MaxBackoff { get; set; } = TimeSpan.FromSeconds(5);
+    public TimeSpan MaxBackoff
+    {
+        get => _maxBackoff ?? DefaultMaxBackoff;
+        set => _maxBackoff = value;
+    }
+    internal bool HasExplicitMaxBackoff => _maxBackoff.HasValue;
     public int PayloadMaxBytes { get; set; } = 4 << 20;
 
     /// <summary>
