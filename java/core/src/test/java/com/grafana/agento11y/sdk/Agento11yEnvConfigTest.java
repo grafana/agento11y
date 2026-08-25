@@ -188,6 +188,53 @@ class Agento11yEnvConfigTest {
     }
 
     @Test
+    void invalidExportRetryAndQueueSettingsWarnAndKeepDefaults() {
+        EnvResolveResult result = resolve(Map.of(
+                "AGENTO11Y_MAX_RETRIES", "0",
+                "AGENTO11Y_MAX_BACKOFF_MS", "1.5",
+                "AGENTO11Y_QUEUE_SIZE", "2147483648"));
+        GenerationExportConfig export = result.config().getGenerationExport();
+        assertThat(export.getMaxRetries()).isEqualTo(GenerationExportConfig.DEFAULT_MAX_RETRIES);
+        assertThat(export.getMaxBackoff()).isEqualTo(GenerationExportConfig.DEFAULT_MAX_BACKOFF);
+        assertThat(export.getQueueSize()).isEqualTo(GenerationExportConfig.DEFAULT_QUEUE_SIZE);
+        assertThat(result.warnings())
+                .anySatisfy(w -> assertThat(w).contains("AGENTO11Y_MAX_RETRIES"))
+                .anySatisfy(w -> assertThat(w).contains("AGENTO11Y_MAX_BACKOFF_MS"))
+                .anySatisfy(w -> assertThat(w).contains("AGENTO11Y_QUEUE_SIZE"));
+    }
+
+    @Test
+    void parsePositiveIntAcceptsOnlyBaseTenIntegerRange() {
+        assertThat(Agento11yEnvConfig.parsePositiveInt("1")).isEqualTo(1);
+        assertThat(Agento11yEnvConfig.parsePositiveInt(" 250 ")).isEqualTo(250);
+        assertThat(Agento11yEnvConfig.parsePositiveInt("2147483647")).isEqualTo(Integer.MAX_VALUE);
+        for (String raw : new String[] {"0", "-1", "1.5", "abc", "2147483648", "+5", "0x10", ""}) {
+            assertThat(Agento11yEnvConfig.parsePositiveInt(raw)).isNull();
+        }
+        assertThat(Agento11yEnvConfig.parsePositiveInt(null)).isNull();
+    }
+
+    @Test
+    void callerExportRetryAndQueueDefaultsStillWinOverEnv() {
+        Agento11yClientConfig base = new Agento11yClientConfig();
+        base.getGenerationExport()
+                .setMaxRetries(GenerationExportConfig.DEFAULT_MAX_RETRIES)
+                .setMaxBackoff(GenerationExportConfig.DEFAULT_MAX_BACKOFF)
+                .setQueueSize(GenerationExportConfig.DEFAULT_QUEUE_SIZE);
+        Agento11yClientConfig cfg = Agento11yEnvConfig.resolveFromEnv(
+                Map.of(
+                                "AGENTO11Y_MAX_RETRIES", "12",
+                                "AGENTO11Y_MAX_BACKOFF_MS", "45000",
+                                "AGENTO11Y_QUEUE_SIZE", "5000")
+                        ::get,
+                base)
+                .config();
+        assertThat(cfg.getGenerationExport().getMaxRetries()).isEqualTo(GenerationExportConfig.DEFAULT_MAX_RETRIES);
+        assertThat(cfg.getGenerationExport().getMaxBackoff()).isEqualTo(GenerationExportConfig.DEFAULT_MAX_BACKOFF);
+        assertThat(cfg.getGenerationExport().getQueueSize()).isEqualTo(GenerationExportConfig.DEFAULT_QUEUE_SIZE);
+    }
+
+    @Test
     void nullExportTimeoutResetsToDefaultAndReopensEnvLayering() {
         GenerationExportConfig export = new GenerationExportConfig().setExportTimeout(Duration.ofSeconds(3));
         export.setExportTimeout(null);
@@ -449,6 +496,9 @@ class Agento11yEnvConfigTest {
         env.put(prefix + "INSECURE", "true");
         env.put(prefix + "HEADERS", "X-A=1,X-B=two");
         env.put(prefix + "EXPORT_TIMEOUT_MS", "7500");
+        env.put(prefix + "MAX_RETRIES", "12");
+        env.put(prefix + "MAX_BACKOFF_MS", "45000");
+        env.put(prefix + "QUEUE_SIZE", "5000");
         env.put(prefix + "AUTH_MODE", "basic");
         env.put(prefix + "AUTH_TENANT_ID", "42");
         env.put(prefix + "AUTH_TOKEN", "glc_xxx");
@@ -473,6 +523,9 @@ class Agento11yEnvConfigTest {
         assertThat(pe.getInsecure()).isEqualTo(le.getInsecure()).isTrue();
         assertThat(pe.getHeaders()).isEqualTo(le.getHeaders()).containsEntry("X-A", "1");
         assertThat(pe.getExportTimeout()).isEqualTo(le.getExportTimeout()).isEqualTo(Duration.ofMillis(7500));
+        assertThat(pe.getMaxRetries()).isEqualTo(le.getMaxRetries()).isEqualTo(12);
+        assertThat(pe.getMaxBackoff()).isEqualTo(le.getMaxBackoff()).isEqualTo(Duration.ofSeconds(45));
+        assertThat(pe.getQueueSize()).isEqualTo(le.getQueueSize()).isEqualTo(5000);
 
         AuthConfig pa = pe.getAuth();
         AuthConfig la = le.getAuth();
@@ -568,6 +621,9 @@ class Agento11yEnvConfigTest {
         assertThat(Agento11yEnvConfig.ENV_INSECURE).isEqualTo("SIGIL_INSECURE");
         assertThat(Agento11yEnvConfig.ENV_HEADERS).isEqualTo("SIGIL_HEADERS");
         assertThat(Agento11yEnvConfig.ENV_EXPORT_TIMEOUT_MS).isEqualTo("SIGIL_EXPORT_TIMEOUT_MS");
+        assertThat(Agento11yEnvConfig.ENV_MAX_RETRIES).isEqualTo("SIGIL_MAX_RETRIES");
+        assertThat(Agento11yEnvConfig.ENV_MAX_BACKOFF_MS).isEqualTo("SIGIL_MAX_BACKOFF_MS");
+        assertThat(Agento11yEnvConfig.ENV_QUEUE_SIZE).isEqualTo("SIGIL_QUEUE_SIZE");
         assertThat(Agento11yEnvConfig.ENV_AUTH_MODE).isEqualTo("SIGIL_AUTH_MODE");
         assertThat(Agento11yEnvConfig.ENV_AUTH_TENANT_ID).isEqualTo("SIGIL_AUTH_TENANT_ID");
         assertThat(Agento11yEnvConfig.ENV_AUTH_TOKEN).isEqualTo("SIGIL_AUTH_TOKEN");
@@ -586,6 +642,9 @@ class Agento11yEnvConfigTest {
         assertThat(Agento11yEnvConfig.ENV_INSECURE_PREFERRED).isEqualTo("AGENTO11Y_INSECURE");
         assertThat(Agento11yEnvConfig.ENV_HEADERS_PREFERRED).isEqualTo("AGENTO11Y_HEADERS");
         assertThat(Agento11yEnvConfig.ENV_EXPORT_TIMEOUT_MS_PREFERRED).isEqualTo("AGENTO11Y_EXPORT_TIMEOUT_MS");
+        assertThat(Agento11yEnvConfig.ENV_MAX_RETRIES_PREFERRED).isEqualTo("AGENTO11Y_MAX_RETRIES");
+        assertThat(Agento11yEnvConfig.ENV_MAX_BACKOFF_MS_PREFERRED).isEqualTo("AGENTO11Y_MAX_BACKOFF_MS");
+        assertThat(Agento11yEnvConfig.ENV_QUEUE_SIZE_PREFERRED).isEqualTo("AGENTO11Y_QUEUE_SIZE");
         assertThat(Agento11yEnvConfig.ENV_AUTH_MODE_PREFERRED).isEqualTo("AGENTO11Y_AUTH_MODE");
         assertThat(Agento11yEnvConfig.ENV_AUTH_TENANT_ID_PREFERRED).isEqualTo("AGENTO11Y_AUTH_TENANT_ID");
         assertThat(Agento11yEnvConfig.ENV_AUTH_TOKEN_PREFERRED).isEqualTo("AGENTO11Y_AUTH_TOKEN");
