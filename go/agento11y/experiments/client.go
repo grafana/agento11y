@@ -32,7 +32,11 @@ type ClientOptions struct {
 	GenerationEndpoint  string
 	Insecure            *bool
 	UseExperimentalOTel *bool
-	RedactSecrets       *bool
+	// EnableExperimentalFeatures controls experimental features for this client.
+	// A non-nil value overrides AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES. When nil,
+	// each feature check reads the current environment value.
+	EnableExperimentalFeatures *bool
+	RedactSecrets              *bool
 }
 
 // Client owns the shared core transport used for experiment, generation,
@@ -86,8 +90,9 @@ func NewClient(opts ClientOptions) (*Client, error) {
 			Insecure:    insecure,
 			HTTPTimeout: opts.RetryTimeout,
 		},
-		ExperimentRetryTimeout:  opts.RetryTimeout,
-		RedactExperimentSecrets: redact,
+		ExperimentRetryTimeout:     opts.RetryTimeout,
+		RedactExperimentSecrets:    redact,
+		EnableExperimentalFeatures: opts.EnableExperimentalFeatures,
 	}
 	if redact {
 		cfg.GenerationSanitizer = agento11y.NewSecretRedactionSanitizer(agento11y.SecretRedactionOptions{
@@ -154,8 +159,9 @@ func (c *Client) UpdateTrial(ctx context.Context, experimentID, trialID string, 
 // wait. The evaluator ID and version are sent as given, like every other
 // resource identifier in this package.
 //
-// Experimental: requires AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true, otherwise
-// it returns agento11y.ErrExperimentalFeatureDisabled.
+// Experimental: ClientOptions.EnableExperimentalFeatures takes precedence over
+// AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES. When disabled, returns
+// agento11y.ErrExperimentalFeatureDisabled.
 func (c *Client) TriggerTrialEvaluation(ctx context.Context, experimentID, trialID string, req TriggerTrialEvaluationRequest) (*TrialEvaluation, error) {
 	if c == nil || c.core == nil {
 		return nil, agento11y.ErrNilClient
@@ -165,8 +171,9 @@ func (c *Client) TriggerTrialEvaluation(ctx context.Context, experimentID, trial
 
 // GetTrialEvaluation reads durable status for a triggered trial evaluation.
 //
-// Experimental: requires AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true, otherwise
-// it returns agento11y.ErrExperimentalFeatureDisabled.
+// Experimental: ClientOptions.EnableExperimentalFeatures takes precedence over
+// AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES. When disabled, returns
+// agento11y.ErrExperimentalFeatureDisabled.
 func (c *Client) GetTrialEvaluation(ctx context.Context, experimentID, trialID, evaluationID string) (*TrialEvaluation, error) {
 	if c == nil || c.core == nil {
 		return nil, agento11y.ErrNilClient

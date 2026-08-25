@@ -49,7 +49,9 @@ var answers = map[string]string{
 
 func main() {
 	ctx := context.Background()
-	client, err := experiments.NewClientFromEnv()
+	client, err := experiments.NewClient(experiments.ClientOptions{
+		EnableExperimentalFeatures: agento11y.BoolPtr(true),
+	})
 	if err != nil {
 		log.Fatal(err)
 	}

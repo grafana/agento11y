@@ -31,19 +31,57 @@ func ExperimentalFeaturesEnabled() bool {
 	}
 }
 
+func experimentalFeaturesEnabled(override *bool) bool {
+	if override != nil {
+		return *override
+	}
+	return ExperimentalFeaturesEnabled()
+}
+
+func experimentalFeatureName(feature string) string {
+	name := strings.TrimSpace(feature)
+	if name == "" {
+		return "this feature"
+	}
+	return name
+}
+
+func requireExperimental(feature string, override *bool) error {
+	if experimentalFeaturesEnabled(override) {
+		return nil
+	}
+	name := experimentalFeatureName(feature)
+	if override != nil {
+		return fmt.Errorf(
+			"%w: %s is experimental; EnableExperimentalFeatures is false; set it to BoolPtr(true) when constructing the client to use this feature",
+			ErrExperimentalFeatureDisabled, name,
+		)
+	}
+	return fmt.Errorf(
+		"%w: %s is experimental; set EnableExperimentalFeatures to BoolPtr(true) when constructing the client, or set %s=true",
+		ErrExperimentalFeatureDisabled, name, EnvEnableExperimentalFeatures,
+	)
+}
+
 // RequireExperimental returns ErrExperimentalFeatureDisabled unless the
-// experimental gate is set. Callers name the feature so the error says which one
-// was blocked.
+// environment enables experimental features. Client code should use
+// Client.RequireExperimental so a client-scoped override takes precedence.
 func RequireExperimental(feature string) error {
 	if ExperimentalFeaturesEnabled() {
 		return nil
 	}
-	name := strings.TrimSpace(feature)
-	if name == "" {
-		name = "this feature"
-	}
 	return fmt.Errorf(
 		"%w: %s is experimental; set %s=true to use it",
-		ErrExperimentalFeatureDisabled, name, EnvEnableExperimentalFeatures,
+		ErrExperimentalFeatureDisabled, experimentalFeatureName(feature), EnvEnableExperimentalFeatures,
 	)
+}
+
+// RequireExperimental returns ErrExperimentalFeatureDisabled unless this
+// client enables experimental features. Config.EnableExperimentalFeatures takes
+// precedence over the current EnvEnableExperimentalFeatures value.
+func (c *Client) RequireExperimental(feature string) error {
+	if c == nil {
+		return ErrNilClient
+	}
+	return requireExperimental(feature, c.config.EnableExperimentalFeatures)
 }
