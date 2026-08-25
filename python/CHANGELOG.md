@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.17.0] - 2026-08-25
+
+### Features
+
+- **retries**: add configurations for js and python retires & queuing (#670)
+
+### Bug Fixes
+
+- **sdk**: change operation.duration  and client.token.usage description to match semconv (#648)
+- **python**: update experiment runner attributes (#626)
+
 ## [0.16.0] - 2026-08-18
 
 ### Bug Fixes
