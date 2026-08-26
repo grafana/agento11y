@@ -679,3 +679,29 @@ func TestExpandAliases(t *testing.T) {
 		t.Errorf("ExpandAliases() = %v, want %v", got, want)
 	}
 }
+
+func TestUpdateExistingLegacyAliases(t *testing.T) {
+	current := map[string]string{
+		"SIGIL_ENDPOINT":   "https://old",
+		"SIGIL_AUTH_TOKEN": "old-token",
+		"SIGIL_THEME":      "dark",
+	}
+	got := UpdateExistingLegacyAliases(current, map[string]string{
+		"AGENTO11Y_ENDPOINT":   "https://new",
+		"AGENTO11Y_AUTH_TOKEN": "new-token",
+		"SIGIL_AUTH_TOKEN":     "keep explicit value",
+		"AGENTO11Y_TAGS":       "team=ai",
+		"OTEL_SERVICE_NAME":    "svc",
+	})
+	want := map[string]string{
+		"AGENTO11Y_ENDPOINT":   "https://new",
+		"SIGIL_ENDPOINT":       "https://new",
+		"AGENTO11Y_AUTH_TOKEN": "new-token",
+		"SIGIL_AUTH_TOKEN":     "keep explicit value",
+		"AGENTO11Y_TAGS":       "team=ai",
+		"OTEL_SERVICE_NAME":    "svc",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("UpdateExistingLegacyAliases() = %v, want %v", got, want)
+	}
+}

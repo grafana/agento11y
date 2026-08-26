@@ -1802,7 +1802,8 @@ function AgentBlock({ turn, openGroups, toggleGroup, openReasoning, toggleReason
           }}
         >
           No message content captured. Re-run with{' '}
-          <code style={{ color: 'var(--fg1)' }}>SIGIL_CONTENT_CAPTURE_MODE=full</code> to record prompts and responses.
+          <code style={{ color: 'var(--fg1)' }}>AGENTO11Y_CONTENT_CAPTURE_MODE=full</code> to record prompts and
+          responses.
         </div>
       )}
       {turn.blocks.map((block, index) => {

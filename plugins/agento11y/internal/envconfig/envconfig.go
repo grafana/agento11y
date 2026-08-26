@@ -142,6 +142,27 @@ func ExpandAliases(updates map[string]string) map[string]string {
 	return out
 }
 
+// UpdateExistingLegacyAliases mirrors preferred updates only when the legacy
+// key already exists in the stored config. Explicit legacy updates win.
+func UpdateExistingLegacyAliases(current, updates map[string]string) map[string]string {
+	out := make(map[string]string, len(updates)*2)
+	maps.Copy(out, updates)
+	for k, v := range updates {
+		suffix, ok := strings.CutPrefix(k, "AGENTO11Y_")
+		if !ok {
+			continue
+		}
+		legacy := LegacyKey(suffix)
+		if _, exists := current[legacy]; !exists {
+			continue
+		}
+		if _, exists := out[legacy]; !exists {
+			out[legacy] = v
+		}
+	}
+	return out
+}
+
 // ParseBoolValue parses a boolean config value against the 1/true/yes/on and
 // 0/false/no/off whitelist. ok is false for anything else, so a caller can tell
 // an unrecognised value from a false one and report it.

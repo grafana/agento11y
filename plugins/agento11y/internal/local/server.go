@@ -679,7 +679,9 @@ func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	s.configMu.Lock()
 	defer s.configMu.Unlock()
-	if err := dotenv.WriteDotenv(s.configPath, settings.Updates(), s.logger); err != nil {
+	if err := dotenv.UpdateDotenv(s.configPath, func(stored map[string]string) map[string]string {
+		return envconfig.UpdateExistingLegacyAliases(stored, settings.Updates())
+	}, s.logger); err != nil {
 		s.logger.Printf("local: write config: %v", err)
 		http.Error(w, "write config: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -714,8 +716,10 @@ func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	s.configMu.Lock()
 	defer s.configMu.Unlock()
-	updates := envconfig.ExpandAliases(map[string]string{"SIGIL_THEME": string(*req.Theme)})
-	if err := dotenv.WriteDotenv(s.configPath, updates, s.logger); err != nil {
+	if err := dotenv.UpdateDotenv(s.configPath, func(stored map[string]string) map[string]string {
+		updates := map[string]string{"AGENTO11Y_THEME": string(*req.Theme)}
+		return envconfig.UpdateExistingLegacyAliases(stored, updates)
+	}, s.logger); err != nil {
 		s.logger.Printf("local: patch config: %v", err)
 		http.Error(w, "patch config: "+err.Error(), http.StatusInternalServerError)
 		return

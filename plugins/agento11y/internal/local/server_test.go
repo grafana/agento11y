@@ -1241,13 +1241,12 @@ func TestServer_Config_RoundTrip(t *testing.T) {
 	onDisk, err := os.ReadFile(configPathFor(dir))
 	require.NoError(t, err)
 	assert.Contains(t, string(onDisk), "AGENTO11Y_THEME=system")
-	assert.Contains(t, string(onDisk), "SIGIL_THEME=system")
-	assert.Contains(t, string(onDisk), "SIGIL_CONTENT_CAPTURE_MODE=metadata_only")
-	assert.Contains(t, string(onDisk), "SIGIL_GUARDS_TIMEOUT_MS=2000")
-	// Both spellings are written so an older binary still reads the toggle.
+	assert.NotContains(t, string(onDisk), "SIGIL_THEME")
+	assert.Contains(t, string(onDisk), "AGENTO11Y_CONTENT_CAPTURE_MODE=metadata_only")
+	assert.Contains(t, string(onDisk), "AGENTO11Y_GUARDS_TIMEOUT_MS=2000")
 	assert.Contains(t, string(onDisk), "AGENTO11Y_LOCAL_FORWARD=true")
-	assert.Contains(t, string(onDisk), "SIGIL_LOCAL_FORWARD=true")
-	assert.Contains(t, saved.Preview, "SIGIL_USER_ID=alice")
+	assert.NotContains(t, string(onDisk), "SIGIL_LOCAL_FORWARD")
+	assert.Contains(t, saved.Preview, "AGENTO11Y_USER_ID=alice")
 	assert.True(t, strings.HasPrefix(saved.Preview, "# Managed by `agento11y login`."))
 
 	// A fresh GET returns the same saved snapshot.
@@ -1394,20 +1393,121 @@ func TestServer_Config_Preview(t *testing.T) {
 	}
 	decodeJSON(t, resp.Body, &got)
 	assert.Contains(t, got.Preview, "AGENTO11Y_THEME=light")
-	assert.Contains(t, got.Preview, "SIGIL_THEME=light")
-	assert.Contains(t, got.Preview, "SIGIL_GUARDS_FAIL_OPEN=true")
-	assert.Contains(t, got.Preview, "SIGIL_GUARDS_TIMEOUT_MS=2500")
+	assert.Contains(t, got.Preview, "AGENTO11Y_GUARDS_FAIL_OPEN=true")
+	assert.Contains(t, got.Preview, "AGENTO11Y_GUARDS_TIMEOUT_MS=2500")
 	// Opt-out/opt-in keys at their defaults must not appear.
-	assert.NotContains(t, got.Preview, "SIGIL_AUTO_UPDATE")
-	assert.NotContains(t, got.Preview, "SIGIL_DEBUG")
+	assert.NotContains(t, got.Preview, "AGENTO11Y_AUTO_UPDATE")
+	assert.NotContains(t, got.Preview, "AGENTO11Y_DEBUG")
 	// LOCAL_FORWARD is the exception: off is written as an explicit false,
 	// because the daemon prefers config.env and a missing key cannot override
 	// the value it inherited into its own environment at boot.
 	assert.Contains(t, got.Preview, "AGENTO11Y_LOCAL_FORWARD=false")
-	assert.Contains(t, got.Preview, "SIGIL_LOCAL_FORWARD=false")
+	assert.NotContains(t, got.Preview, "\nSIGIL_")
 	// Preview is read-only: no file should have been created.
 	_, statErr := os.Stat(configPathFor(dir))
 	assert.True(t, os.IsNotExist(statErr))
+}
+
+func TestServer_Config_AuthTokenWrites(t *testing.T) {
+	files := []struct {
+		name         string
+		tokens       map[string]string
+		preserveWant map[string]string
+		replaceWant  map[string]string
+	}{
+		{
+			name:         "legacy only",
+			tokens:       map[string]string{"SIGIL_AUTH_TOKEN": "glc_legacy"},
+			preserveWant: map[string]string{"SIGIL_AUTH_TOKEN": "glc_legacy"},
+			replaceWant: map[string]string{
+				"AGENTO11Y_AUTH_TOKEN": "glc_new",
+				"SIGIL_AUTH_TOKEN":     "glc_new",
+			},
+		},
+		{
+			name:         "preferred only",
+			tokens:       map[string]string{"AGENTO11Y_AUTH_TOKEN": "glc_preferred"},
+			preserveWant: map[string]string{"AGENTO11Y_AUTH_TOKEN": "glc_preferred"},
+			replaceWant:  map[string]string{"AGENTO11Y_AUTH_TOKEN": "glc_new"},
+		},
+		{
+			name: "both spellings",
+			tokens: map[string]string{
+				"AGENTO11Y_AUTH_TOKEN": "glc_preferred",
+				"SIGIL_AUTH_TOKEN":     "glc_legacy",
+			},
+			preserveWant: map[string]string{
+				"AGENTO11Y_AUTH_TOKEN": "glc_preferred",
+				"SIGIL_AUTH_TOKEN":     "glc_legacy",
+			},
+			replaceWant: map[string]string{
+				"AGENTO11Y_AUTH_TOKEN": "glc_new",
+				"SIGIL_AUTH_TOKEN":     "glc_new",
+			},
+		},
+	}
+	for _, file := range files {
+		t.Run(file.name, func(t *testing.T) {
+			actions := []struct {
+				name         string
+				settings     Settings
+				want         map[string]string
+				wantTokenSet bool
+			}{
+				{
+					name:         "preserve",
+					settings:     Settings{TokenSet: true},
+					want:         file.preserveWant,
+					wantTokenSet: true,
+				},
+				{
+					name:         "replace",
+					settings:     Settings{TokenSet: true, Token: "glc_new"},
+					want:         file.replaceWant,
+					wantTokenSet: true,
+				},
+				{
+					name:     "reset",
+					settings: Settings{TokenSet: true, TokenCleared: true},
+					want:     map[string]string{},
+				},
+			}
+			for _, action := range actions {
+				t.Run(action.name, func(t *testing.T) {
+					srv, dir := newTestServer(t)
+					path := configPathFor(dir)
+					seed := maps.Clone(file.tokens)
+					seed["SIGIL_USER_ID_SOURCE"] = "accountUuid"
+					seed["SIGIL_GUARDS_ENABLED"] = "true"
+					seed["AGENTO11Y_LOCAL"] = "true"
+					seed["SIGIL_LOCAL"] = "true"
+					require.NoError(t, dotenv.WriteDotenv(path, seed, nil))
+
+					settings := action.settings
+					settings.Guards = guardsOff
+					settings.AutoUpdate = true
+					resp := putConfig(t, srv, settings)
+					defer resp.Body.Close()
+					require.Equal(t, http.StatusOK, resp.StatusCode)
+
+					env := dotenv.LoadDotenv(path, nil)
+					gotTokens := map[string]string{}
+					for _, key := range []string{"AGENTO11Y_AUTH_TOKEN", "SIGIL_AUTH_TOKEN"} {
+						if value, ok := env[key]; ok {
+							gotTokens[key] = value
+						}
+					}
+					assert.Equal(t, action.want, gotTokens)
+					assert.Equal(t, action.wantTokenSet, ParseSettings(env).TokenSet)
+					assert.Equal(t, "accountUuid", env["SIGIL_USER_ID_SOURCE"])
+					assert.Equal(t, "false", env["AGENTO11Y_GUARDS_ENABLED"])
+					assert.Equal(t, "false", env["SIGIL_GUARDS_ENABLED"])
+					assert.Equal(t, "true", env["AGENTO11Y_LOCAL"])
+					assert.Equal(t, "true", env["SIGIL_LOCAL"])
+				})
+			}
+		})
+	}
 }
 
 // TestServer_Config_DoesNotLeakSecrets confirms the auth token never crosses
@@ -1436,7 +1536,8 @@ func TestServer_Config_DoesNotLeakSecrets(t *testing.T) {
 	assert.Equal(t, "12345", got.Settings.TenantID)
 	assert.True(t, got.Settings.TokenSet)
 	assert.Empty(t, got.Settings.Token)
-	assert.Contains(t, got.Preview, "SIGIL_AUTH_TOKEN=<set>")
+	assert.Contains(t, got.Preview, "AGENTO11Y_AUTH_TOKEN=<set>")
+	assert.NotContains(t, got.Preview, "\nSIGIL_")
 
 	// Saving with a blank token keeps it; endpoint/tenant round-trip; unmanaged
 	// keys survive the merge.
@@ -1452,9 +1553,10 @@ func TestServer_Config_DoesNotLeakSecrets(t *testing.T) {
 
 	onDisk, err := os.ReadFile(path)
 	require.NoError(t, err)
+	assert.NotContains(t, string(onDisk), "AGENTO11Y_AUTH_TOKEN")
 	assert.Contains(t, string(onDisk), "SIGIL_AUTH_TOKEN=glc_supersecret")
 	assert.Contains(t, string(onDisk), "SIGIL_USER_ID_SOURCE=accountUuid")
-	assert.Contains(t, string(onDisk), "SIGIL_USER_ID=alice")
+	assert.Contains(t, string(onDisk), "AGENTO11Y_USER_ID=alice")
 
 	// Resetting the token removes it from disk.
 	resp2 := putConfig(t, srv, Settings{
@@ -1466,7 +1568,9 @@ func TestServer_Config_DoesNotLeakSecrets(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp2.StatusCode)
 	onDisk2, err := os.ReadFile(path)
 	require.NoError(t, err)
+	assert.NotContains(t, string(onDisk2), "AGENTO11Y_AUTH_TOKEN")
 	assert.NotContains(t, string(onDisk2), "SIGIL_AUTH_TOKEN")
+	assert.False(t, ParseSettings(dotenv.LoadDotenv(path, nil)).TokenSet)
 }
 
 // TestServer_Config_RejectsBadBody covers malformed input handling.
