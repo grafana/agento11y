@@ -448,6 +448,67 @@ func TestPluginInstalled_JsonTakesPrecedenceOverJsonc(t *testing.T) {
 	assert.False(t, got, "opencode.json should take precedence")
 }
 
+func TestDefaultRunUpdateRefreshesCachedPlugin(t *testing.T) {
+	tests := []struct {
+		name        string
+		cached      bool
+		commandErr  error
+		wantVersion string
+	}{
+		{name: "replaces stale cache", cached: true, wantVersion: "0.22.0"},
+		{name: "installs with an empty cache", wantVersion: "0.22.0"},
+		{name: "restores stale cache when install fails", cached: true, commandErr: errors.New("network down"), wantVersion: "0.21.0"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			withConfig(t, `{"plugin":["@grafana/agento11y-opencode"]}`)
+			cacheFiles := map[string]string{}
+			if tt.cached {
+				cacheFiles = map[string]string{
+					"packages/@grafana/agento11y-opencode@latest/node_modules/@grafana/agento11y-opencode/package.json": `{"name":"@grafana/agento11y-opencode","version":"0.21.0"}`,
+					"packages/@grafana/agento11y-opencode@latest/stale.txt":                                             "old cache",
+				}
+			}
+			cache := withCache(t, cacheFiles)
+			packageCache := filepath.Join(cache, "packages", filepath.FromSlash(cachedPackageSpec(PluginSource)))
+
+			previous := runUpdateStep
+			t.Cleanup(func() { runUpdateStep = previous })
+			runUpdateStep = func(_ context.Context, _ string, _ io.Writer, argv []string) error {
+				assert.Equal(t, []string{"plugin", PluginSource, "--global", "--force", "--pure"}, argv)
+				_, err := os.Stat(packageCache)
+				assert.ErrorIs(t, err, os.ErrNotExist, "stale package must be absent before opencode resolves it")
+
+				if tt.commandErr != nil {
+					require.NoError(t, os.MkdirAll(packageCache, 0o755))
+					require.NoError(t, os.WriteFile(filepath.Join(packageCache, "partial"), []byte("partial install"), 0o600))
+					return tt.commandErr
+				}
+
+				pkg := filepath.Join(packageCache, "node_modules", filepath.FromSlash(PluginName))
+				require.NoError(t, os.MkdirAll(pkg, 0o755))
+				require.NoError(t, os.WriteFile(filepath.Join(pkg, "package.json"), []byte(`{"name":"@grafana/agento11y-opencode","version":"0.22.0"}`), 0o600))
+				return nil
+			}
+
+			err := defaultRunUpdate(context.Background(), "/usr/local/bin/opencode", io.Discard)
+			if tt.commandErr != nil {
+				require.ErrorIs(t, err, tt.commandErr)
+				assert.FileExists(t, filepath.Join(packageCache, "stale.txt"))
+				assert.NoFileExists(t, filepath.Join(packageCache, "partial"))
+			} else {
+				require.NoError(t, err)
+				assert.NoFileExists(t, filepath.Join(packageCache, "stale.txt"))
+			}
+			assert.Equal(t, tt.wantVersion, cachedVersion(PluginSource))
+			backups, globErr := filepath.Glob(filepath.Join(filepath.Dir(packageCache), ".agento11y-opencode-backup-*"))
+			require.NoError(t, globErr)
+			assert.Empty(t, backups)
+		})
+	}
+}
+
 func TestLaunch_RefreshesInstalledPluginWhenUpdateDue(t *testing.T) {
 	const binPath = "/usr/local/bin/opencode"
 	state := t.TempDir()
