@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.39.0] - 2026-08-26
+
+### Features
+
+- **plugins/agento11y**: add local viewer light theme (#671)
+
 ## [0.38.0] - 2026-08-25
 
 ### Features
