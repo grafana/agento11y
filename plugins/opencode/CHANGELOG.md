@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.22.0] - 2026-08-26
+
+### Features
+
+- **plugins/agento11y**: add opencode history import (#657)
+- **plugins/agento11y**: block denied prompts (#647)
+
+### Bug Fixes
+
+- **plugins/opencode**: stop opencode hanging at startup in local mode (#688)
+
 ## [0.21.0] - 2026-08-20
 
 ### Features
