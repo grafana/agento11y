@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.40.0] - 2026-08-26
+
+### Features
+
+- **plugins/agento11y**: support changing theme with c-t (#682)
+
 ## [0.39.0] - 2026-08-26
 
 ### Features
