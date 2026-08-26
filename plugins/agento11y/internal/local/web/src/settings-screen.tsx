@@ -2383,7 +2383,7 @@ export function SettingsAppearanceCard({ theme, onChange }: SettingsAppearanceCa
         help={
           <>
             Applies to this viewer only. <Mono>Match system</Mono> follows your OS setting and switches without a
-            reload.
+            reload. Press <Mono>c</Mono>, then <Mono>t</Mono> to switch between dark and light.
           </>
         }
       >
