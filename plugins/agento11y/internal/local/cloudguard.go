@@ -110,7 +110,7 @@ func (l *forwardLoader) evaluateCloudHook(ctx context.Context, cfg forwardConfig
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return out, l.recordHookFailure("POST %s status %d: %s", cfg.hookURL, resp.StatusCode, hookFailureDetail(respBody, http.StatusText(resp.StatusCode)))
 	}
-	if err := json.Unmarshal(respBody, &out); err != nil {
+	if out, err = decodeHookEvaluateResponse(respBody); err != nil {
 		return out, l.recordHookFailure("decode response from %s: %v", cfg.hookURL, err)
 	}
 	// Mirrors the SDK's own decode: an omitted action is an allow.
