@@ -6,7 +6,7 @@ require (
 	github.com/charmbracelet/huh v1.0.0
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/google/uuid v1.6.0
-	github.com/grafana/agento11y/go v0.17.0
+	github.com/grafana/agento11y/go v0.18.0
 	github.com/pelletier/go-toml/v2 v2.4.0
 	github.com/stretchr/testify v1.11.1
 	github.com/tailscale/hujson v0.0.0-20260302212456-ecc657c15afd
@@ -62,6 +62,7 @@ require (
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.45.0 // indirect
+	go.opentelemetry.io/otel/log v0.21.0 // indirect
 	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
