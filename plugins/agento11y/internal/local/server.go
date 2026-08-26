@@ -43,6 +43,7 @@ type Server struct {
 	logger       *log.Logger
 	now          func() time.Time
 	configPath   string
+	configMu     sync.Mutex
 	allowedHosts []string
 	mux          *http.ServeMux
 	forward      *forwardLoader
@@ -149,6 +150,7 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/v1/config", s.handleGetConfig)
 	mux.HandleFunc("POST /api/v1/config:preview", s.handlePreviewConfig)
 	mux.HandleFunc("PUT /api/v1/config", s.handleSaveConfig)
+	mux.HandleFunc("PATCH /api/v1/config", s.handlePatchConfig)
 	mux.HandleFunc("GET /api/v1/conversations/{id}", func(w http.ResponseWriter, r *http.Request) {
 		s.handleConversationDetail(w, r, r.PathValue("id"))
 	})
@@ -200,7 +202,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if postOrPutWithUnsupportedMediaType(r) {
+	if writeWithUnsupportedMediaType(r) {
 		s.logger.Printf("local: refused %s %q: Content-Type %q", r.Method, r.URL.Path, r.Header.Get("Content-Type"))
 		http.Error(w, "unsupported media type", http.StatusUnsupportedMediaType)
 		return
@@ -209,8 +211,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
 }
 
-func postOrPutWithUnsupportedMediaType(r *http.Request) bool {
-	return (r.Method == http.MethodPost || r.Method == http.MethodPut) &&
+func writeWithUnsupportedMediaType(r *http.Request) bool {
+	return (r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch) &&
 		!mediaTypeAccepted(r.URL.Path, r.Header.Get("Content-Type"))
 }
 
@@ -605,7 +607,7 @@ func (s *Server) chainHookEvaluate(r *http.Request, cfg forwardConfig, body []by
 	}
 }
 
-// configResponse is the GET /api/v1/config and PUT /api/v1/config payload:
+// configResponse is the GET, PUT, and PATCH /api/v1/config payload:
 // the page-managed settings, the rendered config.env preview, and a display
 // path for the file. It never includes the endpoint, tenant id, or auth
 // token — those keys are not part of Settings and are never read back into
@@ -629,6 +631,10 @@ type configResponse struct {
 // edits.
 type configRequest struct {
 	Settings Settings `json:"settings"`
+}
+
+type configPatchRequest struct {
+	Theme *Theme `json:"theme"`
 }
 
 // handleGetConfig hydrates Settings from the current config.env and returns
@@ -671,6 +677,8 @@ func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
 	if err := dotenv.WriteDotenv(s.configPath, settings.Updates(), s.logger); err != nil {
 		s.logger.Printf("local: write config: %v", err)
 		http.Error(w, "write config: "+err.Error(), http.StatusInternalServerError)
@@ -678,6 +686,40 @@ func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	// Re-read so the response reflects the normalised on-disk state (dropped
 	// defaults, deleted keys), which the client adopts as its saved snapshot.
+	s.writeConfigResponse(w, dotenv.LoadDotenv(s.configPath, s.logger))
+}
+
+func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
+	if s.configPath == "" {
+		http.Error(w, "config persistence disabled", http.StatusServiceUnavailable)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxHookBodyBytes+1))
+	if err != nil {
+		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if len(body) > maxHookBodyBytes {
+		http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	var req configPatchRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Theme == nil || (*req.Theme != themeDark && *req.Theme != themeLight && *req.Theme != themeSystem) {
+		http.Error(w, "invalid theme: want dark, light, or system", http.StatusBadRequest)
+		return
+	}
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+	updates := envconfig.ExpandAliases(map[string]string{"SIGIL_THEME": string(*req.Theme)})
+	if err := dotenv.WriteDotenv(s.configPath, updates, s.logger); err != nil {
+		s.logger.Printf("local: patch config: %v", err)
+		http.Error(w, "patch config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	s.writeConfigResponse(w, dotenv.LoadDotenv(s.configPath, s.logger))
 }
 

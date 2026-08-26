@@ -494,6 +494,8 @@ func TestServer_Routing(t *testing.T) {
 		{name: "form type refused", method: http.MethodPost, path: "/api/v1/generations:export", contentType: "application/x-www-form-urlencoded", body: "generations=[]", want: http.StatusUnsupportedMediaType, wantNoConversations: true},
 		{name: "text type refused", method: http.MethodPost, path: "/api/v1/hooks:evaluate", contentType: "text/plain", body: `{"phase":"postflight"}`, want: http.StatusUnsupportedMediaType, wantBodyNotHas: `"action"`},
 		{name: "absent type refused", method: http.MethodPost, path: "/api/v1/history/runs/r1:cancel", want: http.StatusUnsupportedMediaType},
+		{name: "PATCH text type refused", method: http.MethodPatch, path: "/api/v1/config", contentType: "text/plain", body: `{"theme":"light"}`, want: http.StatusUnsupportedMediaType},
+		{name: "PATCH absent type refused", method: http.MethodPatch, path: "/api/v1/config", body: `{"theme":"light"}`, want: http.StatusUnsupportedMediaType},
 		{name: "charset parameter accepted", method: http.MethodPost, path: "/api/v1/hooks:evaluate", contentType: "application/json; charset=utf-8", body: `{"phase":"postflight"}`, want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"action":"allow"`},
 		{name: "protobuf accepted on OTLP", method: http.MethodPost, path: otlpTracesPath, contentType: wire.ContentTypeProto, body: "protobuf", want: http.StatusOK},
 		{name: "protobuf refused outside OTLP", method: http.MethodPost, path: "/api/v1/generations:export", contentType: wire.ContentTypeProto, body: "protobuf", want: http.StatusUnsupportedMediaType},
@@ -1166,6 +1168,16 @@ func putConfig(t *testing.T, s *Server, settings Settings) *http.Response {
 	return rr.Result()
 }
 
+func patchTheme(t *testing.T, s *Server, body string) *http.Response {
+	t.Helper()
+	req := newLocalRequest(http.MethodPatch, "/api/v1/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", "http://127.0.0.1:8765")
+	rr := httptest.NewRecorder()
+	s.ServeHTTP(rr, req)
+	return rr.Result()
+}
+
 // TestServer_Config_RoundTrip saves settings and reads them back, asserting
 // the GET reflects the normalised on-disk state and the file is written.
 func TestServer_Config_RoundTrip(t *testing.T) {
@@ -1246,6 +1258,54 @@ func TestServer_Config_RoundTrip(t *testing.T) {
 	var reread configResponse
 	require.NoError(t, json.Unmarshal(rr2.Body.Bytes(), &reread))
 	assert.Equal(t, saved.Settings, reread.Settings)
+}
+
+func TestServer_Config_PatchTheme(t *testing.T) {
+	srv, dir := newTestServer(t)
+	path := configPathFor(dir)
+	require.NoError(t, dotenv.WriteDotenv(path, envconfig.ExpandAliases(map[string]string{
+		"SIGIL_THEME": "system",
+		"SIGIL_DEBUG": "true",
+		"SIGIL_TAGS":  "team=ai",
+	}), nil))
+
+	resp := patchTheme(t, srv, `{"theme":"light"}`)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var saved configResponse
+	decodeJSON(t, resp.Body, &saved)
+	assert.Equal(t, themeLight, saved.Settings.Theme)
+	assert.True(t, saved.Settings.Debug)
+	assert.Equal(t, []Tag{{Key: "team", Value: "ai"}}, saved.Settings.Tags)
+
+	env := dotenv.LoadDotenv(path, nil)
+	assert.Equal(t, "light", env["AGENTO11Y_THEME"])
+	assert.Equal(t, "light", env["SIGIL_THEME"])
+	assert.Equal(t, "true", env["AGENTO11Y_DEBUG"])
+	assert.Equal(t, "true", env["SIGIL_DEBUG"])
+	assert.Equal(t, "team=ai", env["AGENTO11Y_TAGS"])
+	assert.Equal(t, "team=ai", env["SIGIL_TAGS"])
+}
+
+func TestServer_Config_PatchThemeRejectsInvalidBody(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "missing theme", body: `{}`},
+		{name: "unknown theme", body: `{"theme":"sepia"}`},
+		{name: "malformed JSON", body: `{`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, dir := newTestServer(t)
+			resp := patchTheme(t, srv, tc.body)
+			defer resp.Body.Close()
+			assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+			_, err := os.Stat(configPathFor(dir))
+			assert.ErrorIs(t, err, os.ErrNotExist)
+		})
+	}
 }
 
 // TestServer_Config_StackURL covers the read-only stack URL the connect flow

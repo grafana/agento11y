@@ -33,7 +33,15 @@ import {
   usePersistedState,
   workspaceFromLocation,
 } from './routing';
-import { applyDocumentTheme, documentThemePreference, resolveThemePreference } from './settings-model';
+import {
+  applyDocumentTheme,
+  documentThemePreference,
+  patchThemePreference,
+  resolveThemePreference,
+  type ThemeShortcutState,
+  themeShortcutToggles,
+  toggledThemePreference,
+} from './settings-model';
 import {
   importRunIsActive,
   SETTINGS_TAB_IDS,
@@ -104,6 +112,7 @@ export function App() {
   // the fallback until an accepted config response arrives.
   const [initialTheme] = useState<ThemePreference>(() => documentThemePreference());
   const [settingsThemePreview, setSettingsThemePreview] = useState<ThemePreference | null>(null);
+  const [shortcutTheme, setShortcutTheme] = useState<ThemePreference | null>(null);
   const [selectedID, setSelectedID] = useState(conversationIDFromPath);
   const [showSettings, setShowSettings] = useState(settingsRouteActive);
   const [showAnalytics, setShowAnalytics] = useState(analyticsRouteActive);
@@ -231,6 +240,8 @@ export function App() {
   const [config, setConfig] = useState<ConfigResponse | null>(null);
   const [configErr, setConfigErr] = useState<string | null>(null);
   const configSeqRef = useRef(0);
+  const themeSaveQueueRef = useRef<Promise<ConfigResponse | null>>(Promise.resolve(null));
+  const themeSaveSeqRef = useRef(0);
   const applyConfig = useCallback((body: ConfigResponse) => {
     configSeqRef.current++;
     setConfig(body);
@@ -266,14 +277,35 @@ export function App() {
   const selected = selectedID
     ? conversations.find((c) => c.id === selectedID) || summaryFromDetail(detail, selectedID)
     : null;
+  const selectedTheme = resolveThemePreference(shortcutTheme, config?.settings?.theme, initialTheme);
   const effectiveTheme = resolveThemePreference(
     view === 'settings' ? settingsThemePreview : null,
-    config?.settings?.theme,
+    selectedTheme,
     initialTheme,
   );
   useLayoutEffect(() => {
     applyDocumentTheme(effectiveTheme);
   }, [effectiveTheme]);
+  const toggleTheme = useCallback(() => {
+    const next = toggledThemePreference(
+      documentThemePreference(),
+      document.documentElement.getAttribute('data-system-theme'),
+    );
+    setShortcutTheme(next);
+    const seq = ++themeSaveSeqRef.current;
+    themeSaveQueueRef.current = themeSaveQueueRef.current
+      .catch(() => null)
+      .then(() => patchThemePreference(next))
+      .then((body) => {
+        applyConfig(body);
+        if (themeSaveSeqRef.current === seq) setShortcutTheme(null);
+        return body;
+      })
+      .catch(() => {
+        if (themeSaveSeqRef.current === seq) setShortcutTheme(null);
+        return null;
+      });
+  }, [applyConfig]);
 
   // Changing the time range invalidates a bucket drill-down: the
   // bucket boundaries belong to the old window.
@@ -1004,8 +1036,15 @@ export function App() {
     }
     focus();
   }, []);
+  const themeShortcutRef = useRef<ThemeShortcutState>({ prefix: '', at: 0 });
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      if (themeShortcutToggles(e, themeShortcutRef.current)) {
+        if (view === 'settings' && settingsThemePreview !== null) return;
+        e.preventDefault();
+        toggleTheme();
+        return;
+      }
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && String(e.key).toLowerCase() === 'k') {
         e.preventDefault();
         focusConversationSearch();
@@ -1013,7 +1052,7 @@ export function App() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [focusConversationSearch]);
+  }, [focusConversationSearch, settingsThemePreview, toggleTheme, view]);
 
   const tabs = [
     {

@@ -8,7 +8,11 @@ import searchSource from '../internal/local/web/src/search.tsx?raw';
 import {
   applyDocumentTheme,
   documentThemePreference,
+  patchThemePreference,
   resolveThemePreference,
+  type ThemeShortcutState,
+  themeShortcutToggles,
+  toggledThemePreference,
 } from '../internal/local/web/src/settings-model';
 import { type HistoryImport, SettingsAppearanceCard, SettingsView } from '../internal/local/web/src/settings-screen';
 import settingsSource from '../internal/local/web/src/settings-screen.tsx?raw';
@@ -364,6 +368,72 @@ describe('document theme resolution', () => {
     expect(applyDocumentTheme('sepia', root)).toBe('dark');
     expect(root.getAttribute('data-theme')).toBe('dark');
   });
+
+  it('toggles fixed themes and the active system palette', () => {
+    expect(toggledThemePreference('dark', 'light')).toBe('light');
+    expect(toggledThemePreference('light', 'dark')).toBe('dark');
+    expect(toggledThemePreference('system', 'dark')).toBe('light');
+    expect(toggledThemePreference('system', 'light')).toBe('dark');
+  });
+});
+
+function shortcutEvent(
+  key: string,
+  target: EventTarget | null = null,
+  modifiers: Partial<Pick<KeyboardEvent, 'altKey' | 'ctrlKey' | 'metaKey'>> = {},
+): Pick<KeyboardEvent, 'altKey' | 'ctrlKey' | 'key' | 'metaKey' | 'target'> {
+  return { key, target, altKey: false, ctrlKey: false, metaKey: false, ...modifiers };
+}
+
+describe('theme shortcut', () => {
+  it('patches only the selected theme', async () => {
+    const saved = config('light');
+    const fetchMock = vi.fn(() => Promise.resolve(new Response(JSON.stringify(saved), { status: 200 })));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(patchThemePreference('light')).resolves.toEqual(saved);
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/config', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ theme: 'light' }),
+    });
+  });
+
+  it('toggles on c then t within 800 ms', () => {
+    const state: ThemeShortcutState = { prefix: '', at: 0 };
+
+    expect(themeShortcutToggles(shortcutEvent('c'), state, 100)).toBe(false);
+    expect(themeShortcutToggles(shortcutEvent('T'), state, 900)).toBe(true);
+    expect(state.prefix).toBe('');
+  });
+
+  it('resets after the timeout or another key', () => {
+    const state: ThemeShortcutState = { prefix: '', at: 0 };
+
+    themeShortcutToggles(shortcutEvent('c'), state, 100);
+    expect(themeShortcutToggles(shortcutEvent('t'), state, 901)).toBe(false);
+    themeShortcutToggles(shortcutEvent('c'), state, 1_000);
+    themeShortcutToggles(shortcutEvent('x'), state, 1_100);
+    expect(themeShortcutToggles(shortcutEvent('t'), state, 1_200)).toBe(false);
+  });
+
+  it('ignores modified keys and text-entry controls', () => {
+    const targets = ['input', 'textarea', 'select'].map((tag) => document.createElement(tag));
+    const editable = document.createElement('div');
+    editable.contentEditable = 'true';
+    targets.push(editable);
+
+    for (const target of targets) {
+      const state: ThemeShortcutState = { prefix: '', at: 0 };
+      themeShortcutToggles(shortcutEvent('c', target), state, 100);
+      expect(themeShortcutToggles(shortcutEvent('t', target), state, 200)).toBe(false);
+    }
+
+    const state: ThemeShortcutState = { prefix: '', at: 0 };
+    themeShortcutToggles(shortcutEvent('c'), state, 100);
+    expect(themeShortcutToggles(shortcutEvent('t', null, { ctrlKey: true }), state, 200)).toBe(false);
+    expect(state.prefix).toBe('');
+  });
 });
 
 describe('SettingsAppearanceCard', () => {
@@ -374,7 +444,7 @@ describe('SettingsAppearanceCard', () => {
     expect(screen.getByText('Appearance')).toBeTruthy();
     expect(screen.getByText('Theme')).toBeTruthy();
     expect(container.textContent).toContain(
-      'Applies to this viewer only. Match system follows your OS setting and switches without a reload.',
+      'Applies to this viewer only. Match system follows your OS setting and switches without a reload. Press c, then t to switch between dark and light.',
     );
     for (const name of ['Dark', 'Light', 'Match system']) expect(screen.getByRole('button', { name })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Dark' }).getAttribute('aria-pressed')).toBe('true');
