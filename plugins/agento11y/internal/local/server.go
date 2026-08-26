@@ -888,9 +888,9 @@ func limitParam(w http.ResponseWriter, r *http.Request, def int) (int, bool) {
 // renders the full list it receives.
 const searchResultLimit = 100
 
-// handleSearch runs a full-text search across every recorded conversation
-// and returns the hits as JSON. Empty/whitespace queries are not an
-// error; they yield {"hits":[],"mode":"fts"} so the client can treat "no
+// handleSearch runs a full-text search across every readable recorded
+// conversation and returns the hits as JSON. Empty/whitespace queries are not
+// an error; they yield {"hits":[],"mode":"fts"} so the client can treat "no
 // query" the same as "no results" without a special case.
 //
 // The response carries mode ("fts") so the viewer can show a faint
@@ -904,7 +904,10 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	hits, err := s.storage.SearchConversations(q, limit)
+	hits, err := s.storage.SearchConversations(r.Context(), q, limit)
+	if isCallerAbort(err) {
+		return
+	}
 	if err != nil {
 		s.logger.Printf("local: search: %v", err)
 		http.Error(w, "search: "+err.Error(), http.StatusInternalServerError)
