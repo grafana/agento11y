@@ -198,7 +198,7 @@ func TestOperationDetailsEventStructuredContent(t *testing.T) {
 		t.Error("event context has no valid span context")
 	}
 	attrs := logAttributes(record)
-	if got := attrs["gen_ai.request.top_k"].AsFloat64(); got != 40 {
+	if got := attrs["gen_ai.request.top_k"].AsInt64(); got != 40 {
 		t.Errorf("gen_ai.request.top_k = %v, want 40", got)
 	}
 

@@ -563,7 +563,7 @@ func TestSpanLifecycle(t *testing.T) {
 			},
 			check: func(t *testing.T, span sdktrace.ReadOnlySpan) {
 				attrs := spanAttrs(span)
-				if got := attrs["gen_ai.request.top_k"].AsFloat64(); got != 40 {
+				if got := attrs["gen_ai.request.top_k"].AsInt64(); got != 40 {
 					t.Errorf("gen_ai.request.top_k = %v, want 40", got)
 				}
 				if got := attrs["gen_ai.request.frequency_penalty"].AsFloat64(); got != 0.1 {
