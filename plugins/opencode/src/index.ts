@@ -16,6 +16,11 @@ type HooksWithDispose = Hooks & { dispose: () => Promise<void> };
 
 // Best effort: opencode's TUI may not be attached yet while plugins load, and
 // a failed toast must not take the plugin down with it.
+//
+// Never await this from plugin initialization. opencode serves the call
+// in-process, and the handler needs the instance whose bootstrap is waiting on
+// this plugin's own init, so an awaited toast deadlocks the host at startup
+// (opencode 1.18.20). Left floating, it settles as soon as bootstrap finishes.
 async function toast(
   client: PluginInput["client"],
   message: string,
@@ -41,7 +46,7 @@ export const Agento11yPlugin: Plugin = async ({ client, directory }) => {
     // must not be sent to Cloud because the receiver is down. opencode keeps
     // running with no hooks registered.
     console.warn(`[sigil-opencode] local capture is off: ${err.message}`);
-    await toast(client, `Local capture is off: ${err.message}`, "error");
+    void toast(client, `Local capture is off: ${err.message}`, "error");
     return {};
   }
   if (!config) return {};
@@ -54,7 +59,7 @@ export const Agento11yPlugin: Plugin = async ({ client, directory }) => {
   if (config.local) {
     // Where the session went is not obvious once the endpoint stops being the
     // configured one, so name the receiver the transcript lands in.
-    await toast(
+    void toast(
       client,
       `Recording to the local receiver at ${config.endpoint}`,
       "info",

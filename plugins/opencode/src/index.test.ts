@@ -160,6 +160,43 @@ describe("Agento11yPlugin", () => {
     warn.mockRestore();
   });
 
+  // opencode answers `client.tui.showToast` from the same process, and its
+  // handler needs the instance whose bootstrap is waiting on this plugin's
+  // init, so a toast awaited here never settles and hangs opencode at startup.
+  // Each case below fails by timeout if its toast is awaited again.
+  it.each([
+    {
+      name: "local receiver notice",
+      arrange: () => {
+        const { sigil } = makeAgento11yMock();
+        createAgento11yClientMock.mockReturnValue(sigil);
+        loadConfigMock.mockResolvedValue(
+          baseConfig({ endpoint: "http://127.0.0.1:8768", local: true }),
+        );
+      },
+    },
+    {
+      name: "capture-off warning",
+      arrange: () => {
+        loadConfigMock.mockRejectedValue(
+          new LocalReceiverError("no local receiver is running"),
+        );
+      },
+    },
+  ])("returns without waiting for the $name toast", async ({ arrange }) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    arrange();
+
+    const input = pluginInput();
+    input.client.tui.showToast = vi.fn(() => new Promise(() => {}));
+
+    const hooks = (await Agento11yPlugin(input)) as PluginHooks;
+
+    expect(input.client.tui.showToast).toHaveBeenCalledTimes(1);
+    await hooks.dispose?.();
+    warn.mockRestore();
+  });
+
   it("loads even when the failure toast cannot be shown", async () => {
     // opencode loads plugins before the TUI is necessarily attached, and a
     // rejected toast must not turn a disabled capture into a broken host.
