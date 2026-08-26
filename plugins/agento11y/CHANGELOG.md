@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.41.0] - 2026-08-26
+
+### Bug Fixes
+
+- **plugins/agento11y**: fix local viewer session stats row (#685)
+- **plugins/agento11y**: write only agento11y config keys from local UI (#684)
+
 ## [0.40.0] - 2026-08-26
 
 ### Features
