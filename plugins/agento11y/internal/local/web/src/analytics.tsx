@@ -1750,6 +1750,7 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
           totalCost={facetCost.complete ? facetCost.value : null}
           now={now}
           rangeLabel={range.label}
+          fromRows
         />
         <TimeRangePicker value={props.timeRange} onChange={props.onTimeRangeChange} />
         <button

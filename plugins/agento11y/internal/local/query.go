@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -52,6 +53,7 @@ type ConversationMetricsAggregate struct {
 	Calls               int                     `json:"calls"`
 	Errored             int                     `json:"errored"`
 	Agents              int                     `json:"agents"`
+	AgentHosts          []string                `json:"agent_hosts"`
 	Workspaces          int                     `json:"workspaces"`
 	TokenBuckets        TokenBuckets            `json:"token_buckets"`
 	TokenBucketsByModel map[string]TokenBuckets `json:"token_buckets_by_model"`
@@ -128,9 +130,10 @@ type ConversationListOptions struct {
 	// apply their filters before a candidate counts toward this cap. ≤ 0 means
 	// unbounded.
 	Limit int
-	// Since is inclusive. Plain list requests compare it with last activity;
-	// exact Sessions and analytics queries compare generation or reconciled
-	// tool-observation timestamps. Zero means no lower bound.
+	// Since is inclusive. Plain list requests without facets compare it with
+	// last activity. Exact Sessions, analytics, and faceted list queries compare
+	// generation or reconciled tool-observation timestamps. Zero means no lower
+	// bound.
 	Since time.Time
 	// Before is an exclusive generation-time upper bound for analytics and
 	// exact Sessions queries.
@@ -139,14 +142,80 @@ type ConversationListOptions struct {
 	// pointer to the empty string selects conversations whose lifetime cwd is
 	// unknown.
 	Workspace *string
-	// Tool filters exact Sessions queries to conversations with an observation
-	// whose name is exactly this value. A pointer to the empty string matches
-	// no valid tool.
+	// Tool keeps conversations with an observation whose name equals this value.
+	// ConversationMetrics always applies it; ListConversations applies it only
+	// when Exact is true. A non-nil pointer to an empty string matches no valid
+	// tool.
 	Tool *string
 	// Exact applies the workspace, tool, and half-open generation-time filters
 	// before Limit. The plain list leaves this false to retain its bounded
 	// file-order fast path.
 	Exact bool
+	// Agent keeps conversations containing an agent whose name before the first
+	// "/" equals this value. For example, "pi" matches "pi/explore". Empty means
+	// no filter.
+	Agent string
+	// Model keeps conversations that recorded this exact model name. Empty
+	// means no filter.
+	Model string
+	// Status keeps conversations whose derived status equals this value, "ok"
+	// or "err". Empty means no filter.
+	Status string
+	// MinSubagents keeps conversations with at least this many subagent steps.
+	// Zero means no filter.
+	MinSubagents int
+}
+
+func (opts ConversationListOptions) matchesFacets(sum ConversationSummary) bool {
+	if opts.Agent != "" && !agentHostListed(sum.Agents, opts.Agent) {
+		return false
+	}
+	if opts.Model != "" && !slices.Contains(sum.Models, opts.Model) {
+		return false
+	}
+	if opts.Status != "" && sum.Status != opts.Status {
+		return false
+	}
+	return sum.Subagents >= opts.MinSubagents
+}
+
+func (opts ConversationListOptions) hasFacets() bool {
+	return opts.Agent != "" || opts.Model != "" || opts.Status != "" || opts.MinSubagents > 0
+}
+
+// facetsMatch tests the facets against the period-clipped summary whenever the
+// request names a period, and against the lifetime summary otherwise. A tool
+// observation without an in-period generation uses the same zero-usage summary
+// as ConversationMetrics. Both conversation endpoints answer one Sessions
+// screen, so a facet selecting a different set on each would leave a row in the
+// table that the totals above it do not count: a conversation whose only
+// errored or subagent generation falls outside the window fails the facet on
+// both.
+func (opts ConversationListOptions) facetsMatch(entry *fileSummary, match *toolMatch) bool {
+	if !opts.hasFacets() {
+		return true
+	}
+	if opts.Since.IsZero() && opts.Before.IsZero() {
+		return opts.matchesFacets(entry.summary)
+	}
+	clipped, ok := clippedConversationSummary(entry, opts.Since, opts.Before)
+	if !ok && match != nil {
+		clipped = toolCallOnlySummary(entry, *match)
+		ok = true
+	}
+	return ok && opts.matchesFacets(clipped)
+}
+
+// Keep the split at the first "/" aligned with aggregateConversationMetrics
+// and web/src/shell.tsx's agentHosts so the UI and aggregate group agents by
+// the same host name.
+func agentHostListed(agents []string, host string) bool {
+	for _, agent := range agents {
+		if name, _, _ := strings.Cut(agent, "/"); name == host {
+			return true
+		}
+	}
+	return false
 }
 
 // ToolUsage is one tool's totals within a conversation.
@@ -168,10 +237,10 @@ type ConversationToolUsage struct {
 // files before filters and Limit, so a caller still knows whether the store
 // is empty. A missing directory returns an empty slice and a zero total.
 //
-// A plain list can stop decoding at Limit because file modification time and
-// last activity agree. An exact Sessions request instead filters generation
-// or reconciled tool observations before Limit; it still returns each
-// matching conversation's lifetime summary.
+// A plain list without facets can stop decoding at Limit because file
+// modification time and last activity agree. An exact or faceted Sessions
+// request instead filters generation or reconciled tool observations before
+// Limit; it still returns each matching conversation's lifetime summary.
 func (s *Storage) ListConversations(opts ConversationListOptions) (page []ConversationSummary, total int, err error) {
 	files, err := s.conversationFiles()
 	if err != nil {
@@ -182,7 +251,7 @@ func (s *Storage) ListConversations(opts ConversationListOptions) (page []Conver
 		capacity = opts.Limit
 	}
 	out := make([]ConversationSummary, 0, capacity)
-	var toolMatches map[string]bool
+	var toolMatches map[string]toolMatch
 	if opts.Exact && opts.Tool != nil {
 		toolMatches, err = s.conversationToolMatches(*opts.Tool, opts.Since, opts.Before, opts.Workspace)
 		if err != nil {
@@ -206,17 +275,23 @@ func (s *Storage) ListConversations(opts ConversationListOptions) (page []Conver
 		if !entry.ok {
 			continue // empty or all-invalid file
 		}
+		var matchedTool *toolMatch
 		if opts.Exact {
 			if !workspaceMatches(entry.summary.Workspace, opts.Workspace) {
 				continue
 			}
 			if opts.Tool != nil {
-				if !toolMatches[f.id] {
+				match, matched := toolMatches[f.id]
+				if !matched {
 					continue
 				}
+				matchedTool = &match
 			} else if (!opts.Since.IsZero() || !opts.Before.IsZero()) && !entryHasGenerationInPeriod(entry, opts.Since, opts.Before) {
 				continue
 			}
+		}
+		if !opts.facetsMatch(entry, matchedTool) {
+			continue
 		}
 		out = append(out, entry.summary)
 		if opts.Limit > 0 && len(out) == opts.Limit {
@@ -236,35 +311,89 @@ func entryHasGenerationInPeriod(entry *fileSummary, since, before time.Time) boo
 	return false
 }
 
-func (s *Storage) conversationToolMatches(tool string, since, before time.Time, workspace *string) (map[string]bool, error) {
+// toolMatch records the first and last matching observation timestamps.
+// Reconciliation can put an observation inside the requested period while all
+// generation timestamps are outside it, so metrics use these bounds for the
+// resulting zero-usage row.
+type toolMatch struct {
+	first, last time.Time
+}
+
+func (s *Storage) conversationToolMatches(tool string, since, before time.Time, workspace *string) (map[string]toolMatch, error) {
 	observations, err := s.toolObservations()
 	if err != nil {
 		return nil, err
 	}
-	matches := map[string]bool{}
+	matches := map[string]toolMatch{}
 	for _, observation := range observations {
 		if observation.HasSession && observation.Name == tool && inPeriod(observation.Timestamp, since, before) &&
 			workspaceMatches(observation.Workspace, workspace) {
-			matches[observation.ConversationID] = true
+			match, seen := matches[observation.ConversationID]
+			if !seen || observation.Timestamp.Before(match.first) {
+				match.first = observation.Timestamp
+			}
+			if observation.Timestamp.After(match.last) {
+				match.last = observation.Timestamp
+			}
+			matches[observation.ConversationID] = match
 		}
 	}
 	return matches, nil
 }
 
-// ConversationMetrics returns lifetime conversation metadata with every
-// analytic field clipped to generations in [Since, Before). matched counts
+// toolCallOnlySummary represents a conversation whose matching tool observation
+// is inside the period while all generations are outside it. Observation times
+// bound the row. Calls, token usage, agents, models, errors, and subagent counts
+// stay empty or zero. The aggregate counts the session but attributes no
+// out-of-period usage.
+func toolCallOnlySummary(entry *fileSummary, match toolMatch) ConversationSummary {
+	return ConversationSummary{
+		ID:                  entry.summary.ID,
+		Title:               entry.summary.Title,
+		Workspace:           entry.summary.Workspace,
+		Branch:              entry.summary.Branch,
+		Status:              "ok",
+		StartedAt:           match.first,
+		LastActivity:        match.last,
+		Agents:              []string{},
+		Models:              []string{},
+		TokenBucketsByModel: map[string]TokenBuckets{},
+	}
+}
+
+// ConversationMetrics returns lifetime conversation metadata. Fields derived
+// from generations are clipped to [Since, Before). matched counts
 // matching conversations before Limit. Rows are ordered by clipped newest
 // activity, then id.
+//
+// The agent, model, status and subagent facets are tested against the clipped
+// summary, so a conversation whose only error or subagent step falls outside
+// the period does not match one. ListConversations tests a period request the
+// same way, so both endpoints select one set.
+//
+// A tool filter selects on the observation's own timestamp, which a reconciled
+// span can place outside its generation's period. Such a conversation is kept
+// with zero usage and the call times as its bounds, so the list and these
+// totals still count one set.
 func (s *Storage) ConversationMetrics(opts ConversationListOptions) ([]ConversationSummary, int, ConversationMetricsAggregate, error) {
 	files, err := s.conversationFiles()
 	if err != nil {
 		return nil, 0, ConversationMetricsAggregate{}, err
 	}
 	out := make([]ConversationSummary, 0, len(files))
+	var toolMatches map[string]toolMatch
+	if opts.Tool != nil {
+		toolMatches, err = s.conversationToolMatches(*opts.Tool, opts.Since, opts.Before, opts.Workspace)
+		if err != nil {
+			return nil, 0, ConversationMetricsAggregate{}, err
+		}
+	}
 	var skipped int
 	defer func() { s.logSkipped("conversation metrics", skipped) }()
 	for _, f := range files {
-		if !opts.Since.IsZero() && f.modTime.Before(opts.Since) {
+		// A tool sidecar can be newer than its conversation file, so a
+		// tool-filtered walk has to inspect every candidate, as the list does.
+		if !opts.Since.IsZero() && opts.Tool == nil && f.modTime.Before(opts.Since) {
 			break
 		}
 		entry, err := s.summaries.get(f)
@@ -275,7 +404,18 @@ func (s *Storage) ConversationMetrics(opts ConversationListOptions) ([]Conversat
 		if !entry.ok || !workspaceMatches(entry.summary.Workspace, opts.Workspace) {
 			continue
 		}
-		if summary, ok := clippedConversationSummary(entry, opts.Since, opts.Before); ok {
+		match, matchedTool := toolMatches[f.id]
+		if opts.Tool != nil && !matchedTool {
+			continue
+		}
+		summary, ok := clippedConversationSummary(entry, opts.Since, opts.Before)
+		if !ok {
+			if opts.Tool == nil {
+				continue
+			}
+			summary = toolCallOnlySummary(entry, match)
+		}
+		if opts.matchesFacets(summary) {
 			out = append(out, summary)
 		}
 	}
@@ -296,6 +436,7 @@ func (s *Storage) ConversationMetrics(opts ConversationListOptions) ([]Conversat
 
 func aggregateConversationMetrics(rows []ConversationSummary) ConversationMetricsAggregate {
 	aggregate := ConversationMetricsAggregate{
+		AgentHosts:          []string{},
 		TokenBucketsByModel: map[string]TokenBuckets{},
 		Models:              []string{},
 	}
@@ -322,16 +463,17 @@ func aggregateConversationMetrics(rows []ConversationSummary) ConversationMetric
 		}
 		workspaces[row.Workspace] = struct{}{}
 	}
-	aggregate.Agents = len(agents)
+	aggregate.AgentHosts = sortedKeys(agents)
+	aggregate.Agents = len(aggregate.AgentHosts)
 	aggregate.Models = sortedKeys(models)
 	aggregate.Workspaces = len(workspaces)
 	return aggregate
 }
 
-// ToolUsage returns period-clipped per-conversation tool totals. Conversation
-// membership and ordering use the same clipped summaries as
-// ConversationMetrics; result failures remain attributed to their call's
-// generation timestamp.
+// ToolUsage returns period-clipped per-conversation tool totals. When Tool and
+// conversation facets are unset, membership and ordering use the same clipped
+// summaries as ConversationMetrics. Result failures remain attributed to their
+// call's generation timestamp.
 func (s *Storage) ToolUsage(opts ConversationListOptions) ([]ConversationToolUsage, error) {
 	files, err := s.conversationFiles()
 	if err != nil {

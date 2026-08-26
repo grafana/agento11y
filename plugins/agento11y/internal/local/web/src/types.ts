@@ -51,6 +51,7 @@ export interface ConversationMetricsAggregate {
   calls: number;
   errored: number;
   agents: number;
+  agent_hosts: string[];
   workspaces: number;
   token_buckets: TokenBuckets;
   token_buckets_by_model: Record<string, TokenBuckets>;

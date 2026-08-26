@@ -267,6 +267,7 @@ describe('AnalyticsView', () => {
       calls: 12,
       errored: 1,
       agents: 2,
+      agent_hosts: ['claude-code', 'pi'],
       workspaces: 3,
       token_buckets: { ...EMPTY, fresh_input: 200_000, cache_read: 100_000 },
       token_buckets_by_model: {
@@ -279,6 +280,7 @@ describe('AnalyticsView', () => {
       calls: 6,
       errored: 0,
       agents: 1,
+      agent_hosts: ['pi'],
       workspaces: 1,
       token_buckets: { ...EMPTY, fresh_input: 50_000, cache_read: 50_000 },
       token_buckets_by_model: { 'costly-model': { ...EMPTY, fresh_input: 50_000, cache_read: 50_000 } },

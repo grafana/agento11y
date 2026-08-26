@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../internal/local/web/src/app';
 import type { ConfigResponse, Settings, ThemePreference } from '../internal/local/web/src/types';
+import { metricsResponse } from './fixtures';
 
 function settings(theme: ThemePreference): Settings {
   return {
@@ -65,6 +66,9 @@ function installFetch(patches: Promise<Response>[] = []) {
     if (url === '/api/v1/config') return Promise.resolve(jsonResponse(config('dark')));
     if (url.startsWith('/api/v1/conversations?')) {
       return Promise.resolve(jsonResponse({ conversations: [], total_conversations: 0 }));
+    }
+    if (url.startsWith('/api/v1/metrics/conversations?')) {
+      return Promise.resolve(jsonResponse(metricsResponse()));
     }
     if (url.startsWith('/api/v1/metrics/tokens')) {
       return Promise.resolve(jsonResponse({ interval_seconds: 10, points: [] }));
