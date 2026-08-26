@@ -404,7 +404,7 @@ def test_strands_model_call_without_message_metadata_records_no_usage() -> None:
         client.shutdown()
 
 
-def test_strands_cache_token_usage_preserved() -> None:
+def test_strands_cache_token_usage_is_preserved() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
 
