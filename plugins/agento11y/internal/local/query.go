@@ -58,6 +58,16 @@ type ConversationMetricsAggregate struct {
 	TokenBuckets        TokenBuckets            `json:"token_buckets"`
 	TokenBucketsByModel map[string]TokenBuckets `json:"token_buckets_by_model"`
 	Models              []string                `json:"models"`
+	WorkspaceRows       []WorkspaceAggregate    `json:"workspace_rows"`
+}
+
+type WorkspaceAggregate struct {
+	Path                string                  `json:"path"`
+	Sessions            int                     `json:"sessions"`
+	TokenBuckets        TokenBuckets            `json:"token_buckets"`
+	TokenBucketsByModel map[string]TokenBuckets `json:"token_buckets_by_model"`
+	DurationSeconds     float64                 `json:"duration_seconds"`
+	LastActivity        time.Time               `json:"last_activity"`
 }
 
 // GenerationView is one step in the conversation thread.
@@ -142,11 +152,14 @@ type ConversationListOptions struct {
 	// pointer to the empty string selects conversations whose lifetime cwd is
 	// unknown.
 	Workspace *string
-	// Tool keeps conversations with an observation whose name equals this value.
+	// Tool keeps conversations with a matching observation, ignoring capitalization.
 	// ConversationMetrics always applies it; ListConversations applies it only
 	// when Exact is true. A non-nil pointer to an empty string matches no valid
 	// tool.
 	Tool *string
+	// Order selects the metrics row order. "tokens" uses tokens in the
+	// requested time range, counted once. Empty keeps newest activity first.
+	Order string
 	// Exact applies the workspace, tool, and half-open generation-time filters
 	// before Limit. The plain list leaves this false to retain its bounded
 	// file-order fast path.
@@ -325,8 +338,9 @@ func (s *Storage) conversationToolMatches(tool string, since, before time.Time, 
 		return nil, err
 	}
 	matches := map[string]toolMatch{}
+	toolKey := toolNameKey(tool)
 	for _, observation := range observations {
-		if observation.HasSession && observation.Name == tool && inPeriod(observation.Timestamp, since, before) &&
+		if observation.HasSession && toolNameKey(observation.Name) == toolKey && toolKey != "" && inPeriod(observation.Timestamp, since, before) &&
 			workspaceMatches(observation.Workspace, workspace) {
 			match, seen := matches[observation.ConversationID]
 			if !seen || observation.Timestamp.Before(match.first) {
@@ -363,8 +377,9 @@ func toolCallOnlySummary(entry *fileSummary, match toolMatch) ConversationSummar
 
 // ConversationMetrics returns lifetime conversation metadata. Fields derived
 // from generations are clipped to [Since, Before). matched counts
-// matching conversations before Limit. Rows are ordered by clipped newest
-// activity, then id.
+// matching conversations before Limit. Rows use newest activity by default.
+// Order "tokens" uses tokens in the requested time range, counted once. IDs
+// break ties.
 //
 // The agent, model, status and subagent facets are tested against the clipped
 // summary, so a conversation whose only error or subagent step falls outside
@@ -421,7 +436,13 @@ func (s *Storage) ConversationMetrics(opts ConversationListOptions) ([]Conversat
 	}
 	s.summaries.prune(files)
 	sort.Slice(out, func(i, j int) bool {
-		if !out[i].LastActivity.Equal(out[j].LastActivity) {
+		if opts.Order == "tokens" {
+			iTokens := out[i].TokenBuckets.total()
+			jTokens := out[j].TokenBuckets.total()
+			if iTokens != jTokens {
+				return iTokens > jTokens
+			}
+		} else if !out[i].LastActivity.Equal(out[j].LastActivity) {
 			return out[i].LastActivity.After(out[j].LastActivity)
 		}
 		return out[i].ID < out[j].ID
@@ -439,10 +460,11 @@ func aggregateConversationMetrics(rows []ConversationSummary) ConversationMetric
 		AgentHosts:          []string{},
 		TokenBucketsByModel: map[string]TokenBuckets{},
 		Models:              []string{},
+		WorkspaceRows:       []WorkspaceAggregate{},
 	}
 	agents := map[string]struct{}{}
 	models := map[string]struct{}{}
-	workspaces := map[string]struct{}{}
+	workspaces := map[string]*WorkspaceAggregate{}
 	for _, row := range rows {
 		aggregate.Calls += row.Calls
 		if row.Status == "err" {
@@ -461,12 +483,39 @@ func aggregateConversationMetrics(rows []ConversationSummary) ConversationMetric
 		for _, model := range row.Models {
 			models[model] = struct{}{}
 		}
-		workspaces[row.Workspace] = struct{}{}
+		workspace := workspaces[row.Workspace]
+		if workspace == nil {
+			workspace = &WorkspaceAggregate{
+				Path:                row.Workspace,
+				TokenBucketsByModel: map[string]TokenBuckets{},
+			}
+			workspaces[row.Workspace] = workspace
+		}
+		workspace.Sessions++
+		workspace.TokenBuckets = workspace.TokenBuckets.plus(row.TokenBuckets)
+		for model, buckets := range row.TokenBucketsByModel {
+			workspace.TokenBucketsByModel[model] = workspace.TokenBucketsByModel[model].plus(buckets)
+		}
+		if !row.StartedAt.IsZero() && !row.LastActivity.IsZero() && !row.LastActivity.Before(row.StartedAt) {
+			workspace.DurationSeconds += row.LastActivity.Sub(row.StartedAt).Seconds()
+		}
+		if row.LastActivity.After(workspace.LastActivity) {
+			workspace.LastActivity = row.LastActivity
+		}
 	}
 	aggregate.AgentHosts = sortedKeys(agents)
 	aggregate.Agents = len(aggregate.AgentHosts)
 	aggregate.Models = sortedKeys(models)
 	aggregate.Workspaces = len(workspaces)
+	for _, workspace := range workspaces {
+		aggregate.WorkspaceRows = append(aggregate.WorkspaceRows, *workspace)
+	}
+	sort.Slice(aggregate.WorkspaceRows, func(i, j int) bool {
+		if !aggregate.WorkspaceRows[i].LastActivity.Equal(aggregate.WorkspaceRows[j].LastActivity) {
+			return aggregate.WorkspaceRows[i].LastActivity.After(aggregate.WorkspaceRows[j].LastActivity)
+		}
+		return aggregate.WorkspaceRows[i].Path < aggregate.WorkspaceRows[j].Path
+	})
 	return aggregate
 }
 
@@ -731,6 +780,10 @@ type TokenBuckets struct {
 	CacheWrite int64 `json:"cache_write"`
 	Output     int64 `json:"output"`
 	Reasoning  int64 `json:"reasoning"`
+}
+
+func (b TokenBuckets) total() int64 {
+	return b.FreshInput + b.CacheRead + b.CacheWrite + b.Output + b.Reasoning
 }
 
 func (b TokenBuckets) plus(o TokenBuckets) TokenBuckets {
@@ -1311,9 +1364,11 @@ func extractTools(msgs []agento11y.Message) (names []string, preview string) {
 			if p.Kind != agento11y.PartKindToolCall || p.ToolCall == nil {
 				continue
 			}
-			if _, ok := seen[p.ToolCall.Name]; !ok {
-				seen[p.ToolCall.Name] = struct{}{}
-				names = append(names, p.ToolCall.Name)
+			name := strings.TrimSpace(p.ToolCall.Name)
+			key := toolNameKey(name)
+			if _, ok := seen[key]; key != "" && !ok {
+				seen[key] = struct{}{}
+				names = append(names, name)
 			}
 			if preview == "" {
 				preview = renderToolPreview(p.ToolCall.InputJSON)

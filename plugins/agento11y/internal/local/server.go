@@ -833,7 +833,7 @@ func toolParam(r *http.Request) *string {
 	}
 	value := ""
 	if len(values) > 0 {
-		value = values[0]
+		value = toolNameKey(values[0])
 	}
 	return &value
 }
@@ -996,8 +996,13 @@ func (s *Server) handleConversationMetrics(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
+	order := r.URL.Query().Get("order")
+	if order != "" && order != "tokens" {
+		http.Error(w, `order must be "tokens"`, http.StatusBadRequest)
+		return
+	}
 	facets.Limit, facets.Since, facets.Before = limit, since, before
-	facets.Workspace, facets.Tool = workspace, toolParam(r)
+	facets.Workspace, facets.Tool, facets.Order = workspace, toolParam(r), order
 	rows, matched, aggregate, err := s.storage.ConversationMetrics(facets)
 	if err != nil {
 		s.logger.Printf("local: conversation metrics: %v", err)

@@ -1,6 +1,12 @@
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { AnalyticsOverviewContent, type AnalyticsUnit, analyticsOverviewHeroStats } from './analytics';
+import {
+  AnalyticsOverviewContent,
+  type AnalyticsUnit,
+  analyticsOverviewHeroStats,
+  heaviestCostPageNeedsMore,
+  heaviestCostRankingIsExact,
+} from './analytics';
 import { AnalyticsPage } from './analytics-page';
 import { ConversationsView, GROUP_BY_OPTIONS } from './conversations';
 import { TraceDetailView } from './detail';
@@ -13,6 +19,7 @@ import {
   TIME_RANGES,
   TOKEN_SERIES,
   timeRangeOption,
+  useModelPrices,
 } from './formatters';
 import {
   type AnalyticsTab,
@@ -84,6 +91,8 @@ interface DetailReturnState {
 }
 
 const ANALYTICS_LIST_SIZE = 2000;
+const HEAVIEST_INITIAL_LIMIT = 64;
+const HEAVIEST_MAX_RETRIES = 3;
 const ALL_WORKSPACES = 'all';
 const WORKSPACE_PREFIX = 'workspace:';
 
@@ -266,9 +275,15 @@ export function App() {
     null,
   );
   const [analyticsFacetConversations, setAnalyticsFacetConversations] = useState<ConversationSummary[]>([]);
+  const [analyticsFacetAggregate, setAnalyticsFacetAggregate] = useState<ConversationMetricsAggregate | null>(null);
   const [analyticsTotalConversations, setAnalyticsTotalConversations] = useState<number | null>(null);
   const [analyticsPreviousTotalConversations, setAnalyticsPreviousTotalConversations] = useState<number | null>(null);
   const [analyticsFacetTotalConversations, setAnalyticsFacetTotalConversations] = useState<number | null>(null);
+  const [analyticsHeaviestConversations, setAnalyticsHeaviestConversations] = useState<ConversationSummary[]>([]);
+  const [analyticsHeaviestTotalConversations, setAnalyticsHeaviestTotalConversations] = useState<number | null>(null);
+  const [analyticsHeaviestRankingExact, setAnalyticsHeaviestRankingExact] = useState(false);
+  const [loadingAnalyticsHeaviest, setLoadingAnalyticsHeaviest] = useState(false);
+  const [errAnalyticsHeaviest, setErrAnalyticsHeaviest] = useState<string | null>(null);
   const [analyticsTokenPoints, setAnalyticsTokenPoints] = useState<TokenUsagePoint[]>([]);
   const [analyticsTokenIntervalMs, setAnalyticsTokenIntervalMs] = useState(0);
   const [analyticsHeatmapPoints, setAnalyticsHeatmapPoints] = useState<TokenUsagePoint[]>([]);
@@ -284,6 +299,7 @@ export function App() {
   const [errAnalyticsFacets, setErrAnalyticsFacets] = useState<string | null>(null);
   const [errAnalyticsTokens, setErrAnalyticsTokens] = useState<string | null>(null);
   const [errAnalyticsHeatmap, setErrAnalyticsHeatmap] = useState<string | null>(null);
+  const analyticsModelPrices = useModelPrices(showAnalytics && analyticsTab === 'overview');
 
   const [detail, setDetail] = useState<ConversationDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
@@ -582,8 +598,69 @@ export function App() {
         : response.text().then((text) => Promise.reject(new Error(text || `HTTP ${response.status}`))),
     [],
   );
+  const analyticsHeaviestSeqRef = useRef(0);
+  const analyticsHeaviestScopeRef = useRef('');
+  const fetchAnalyticsHeaviest = useCallback(
+    async (reset = false, now = Date.now()) => {
+      const seq = ++analyticsHeaviestSeqRef.current;
+      setLoadingAnalyticsHeaviest(true);
+      setErrAnalyticsHeaviest(null);
+      setAnalyticsHeaviestTotalConversations(null);
+      setAnalyticsHeaviestRankingExact(false);
+      const scope = JSON.stringify([analyticsRange, analyticsWorkspace]);
+      if (reset && analyticsHeaviestScopeRef.current !== scope) {
+        setAnalyticsHeaviestConversations([]);
+      }
+      analyticsHeaviestScopeRef.current = scope;
+
+      const range = timeRangeOption(analyticsRange);
+      const params = new URLSearchParams({
+        before: new Date(now).toISOString(),
+        order: 'tokens',
+      });
+      if (range.ms != null) params.set('since', new Date(now - range.ms).toISOString());
+      if (analyticsWorkspace != null) params.set('workspace', analyticsWorkspace);
+
+      let limit = HEAVIEST_INITIAL_LIMIT;
+      try {
+        for (let attempt = 0; attempt <= HEAVIEST_MAX_RETRIES; attempt++) {
+          params.set('limit', String(limit));
+          const body = await fetch(`/api/v1/metrics/conversations?${params}`).then((response) =>
+            readJSON<ConversationMetricsResponse>(response),
+          );
+          if (analyticsHeaviestSeqRef.current !== seq) return;
+          const rows = body.conversations || [];
+          const reported = Number(body.matched_conversations);
+          const matched = Number.isFinite(reported) ? Math.max(rows.length, Math.trunc(reported)) : rows.length;
+          const needsMore = heaviestCostPageNeedsMore(rows, matched, analyticsModelPrices);
+          if (!needsMore || attempt === HEAVIEST_MAX_RETRIES) {
+            setAnalyticsHeaviestConversations(rows);
+            setAnalyticsHeaviestTotalConversations(matched);
+            setAnalyticsHeaviestRankingExact(heaviestCostRankingIsExact(rows, matched, analyticsModelPrices));
+            return;
+          }
+          const nextLimit =
+            attempt + 1 === HEAVIEST_MAX_RETRIES ? matched : Math.min(matched, Math.max(limit + 1, limit * 8));
+          if (nextLimit <= limit) {
+            setAnalyticsHeaviestConversations(rows);
+            setAnalyticsHeaviestTotalConversations(matched);
+            setAnalyticsHeaviestRankingExact(false);
+            return;
+          }
+          limit = nextLimit;
+        }
+      } catch (error) {
+        if (analyticsHeaviestSeqRef.current !== seq) return;
+        setErrAnalyticsHeaviest(errorMessage(error));
+      } finally {
+        if (analyticsHeaviestSeqRef.current === seq) setLoadingAnalyticsHeaviest(false);
+      }
+    },
+    [analyticsModelPrices, analyticsRange, analyticsWorkspace, readJSON],
+  );
+
   const fetchAnalytics = useCallback(
-    (reset = false) => {
+    (reset = false, now = Date.now()) => {
       const seq = ++analyticsSeqRef.current;
       setLoadingAnalytics(true);
       setLoadingAnalyticsTokens(true);
@@ -597,6 +674,7 @@ export function App() {
         setAnalyticsAggregate(null);
         setAnalyticsPreviousAggregate(null);
         setAnalyticsFacetConversations([]);
+        setAnalyticsFacetAggregate(null);
         setAnalyticsTotalConversations(null);
         setAnalyticsPreviousTotalConversations(null);
         setAnalyticsFacetTotalConversations(null);
@@ -604,7 +682,6 @@ export function App() {
         setAnalyticsTokenIntervalMs(0);
       }
 
-      const now = Date.now();
       const range = timeRangeOption(analyticsRange);
       const before = new Date(now).toISOString();
       const currentParams = new URLSearchParams({ limit: String(ANALYTICS_LIST_SIZE), before });
@@ -664,6 +741,7 @@ export function App() {
             );
             if (analyticsWorkspace == null) {
               setAnalyticsFacetConversations(value.conversations || []);
+              setAnalyticsFacetAggregate(value.aggregate || null);
               setAnalyticsFacetTotalConversations(
                 Number.isFinite(value.matched_conversations) ? value.matched_conversations : null,
               );
@@ -687,6 +765,7 @@ export function App() {
           (value) => {
             if (!value) return;
             setAnalyticsFacetConversations(value.conversations || []);
+            setAnalyticsFacetAggregate(value.aggregate || null);
             setAnalyticsFacetTotalConversations(
               Number.isFinite(value.matched_conversations) ? value.matched_conversations : null,
             );
@@ -796,15 +875,18 @@ export function App() {
       return;
     }
     analyticsRefreshInFlightRef.current = true;
+    const now = Date.now();
     const request =
-      analyticsTab === 'skills' ? fetchSkillsTools() : Promise.all([fetchAnalytics(), fetchAnalyticsHeatmap()]);
+      analyticsTab === 'skills'
+        ? fetchSkillsTools()
+        : Promise.all([fetchAnalytics(false, now), fetchAnalyticsHeaviest(false, now), fetchAnalyticsHeatmap()]);
     Promise.resolve(request).finally(() => {
       analyticsRefreshInFlightRef.current = false;
       if (!analyticsRefreshDirtyRef.current) return;
       analyticsRefreshDirtyRef.current = false;
       refreshAnalyticsRef.current();
     });
-  }, [analyticsTab, fetchAnalytics, fetchAnalyticsHeatmap, fetchSkillsTools]);
+  }, [analyticsTab, fetchAnalytics, fetchAnalyticsHeaviest, fetchAnalyticsHeatmap, fetchSkillsTools]);
 
   // refreshAll keeps one refresh cycle in flight. An event arriving while
   // a cycle runs marks at most one follow-up refresh as due instead of
@@ -895,8 +977,11 @@ export function App() {
   }, [fetchTokens]);
 
   useEffect(() => {
-    if (view === 'analytics' && analyticsTab === 'overview') fetchAnalytics(true);
-  }, [view, analyticsTab, fetchAnalytics]);
+    if (view !== 'analytics' || analyticsTab !== 'overview') return;
+    const now = Date.now();
+    fetchAnalytics(true, now);
+    fetchAnalyticsHeaviest(true, now);
+  }, [view, analyticsTab, fetchAnalytics, fetchAnalyticsHeaviest]);
 
   useEffect(() => {
     if (view === 'analytics' && analyticsTab === 'overview') fetchAnalyticsHeatmap(true);
@@ -1274,9 +1359,15 @@ export function App() {
               <AnalyticsOverviewContent
                 conversations={analyticsConversations}
                 previousConversations={analyticsPreviousConversations}
+                heaviestConversations={analyticsHeaviestConversations}
+                heaviestTotalConversations={analyticsHeaviestTotalConversations}
+                heaviestRankingExact={analyticsHeaviestRankingExact}
+                heaviestLoading={loadingAnalyticsHeaviest}
+                heaviestError={errAnalyticsHeaviest}
                 aggregate={analyticsAggregate}
                 previousAggregate={analyticsPreviousAggregate}
                 facetConversations={analyticsFacetConversations}
+                facetAggregate={analyticsFacetAggregate}
                 totalConversations={analyticsTotalConversations}
                 previousTotalConversations={analyticsPreviousTotalConversations}
                 facetTotalConversations={analyticsFacetTotalConversations}
@@ -1292,6 +1383,7 @@ export function App() {
                 tokenError={errAnalyticsTokens}
                 heatmapError={errAnalyticsHeatmap}
                 unit={analyticsUnit}
+                prices={analyticsModelPrices}
                 onUnitChange={setAnalyticsUnit}
                 timeRange={analyticsRange}
                 onTimeRangeChange={setAnalyticsRange}
@@ -1300,7 +1392,7 @@ export function App() {
                 hiddenSeries={analyticsHiddenSeries}
                 onToggleSeries={toggleAnalyticsSeries}
                 onRefresh={refreshAnalytics}
-                refreshing={loadingAnalytics || loadingAnalyticsHeatmap}
+                refreshing={loadingAnalytics || loadingAnalyticsHeaviest || loadingAnalyticsHeatmap}
                 onOpenConversation={openConv}
                 onOpenWorkspace={openAnalyticsWorkspace}
                 onOpenBucket={openAnalyticsBucket}

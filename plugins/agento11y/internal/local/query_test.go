@@ -239,13 +239,13 @@ func TestToolUsagePairsCallsAndResults(t *testing.T) {
 			want: []ToolUsage{{Name: "Bash", Calls: 2, Failures: 1}},
 		},
 		{
-			name: "reused Cursor id pairs only the new cumulative result",
+			name: "reused Cursor id ignores a mixed-case old cumulative result",
 			generations: []agento11y.Generation{
 				call("call-1", "Bash"),
 				result("call-1", "Bash", false),
 				call("call-1", "Bash"),
 				{Input: []agento11y.Message{{Parts: []agento11y.Part{
-					{ToolResult: &agento11y.ToolResult{ToolCallID: "call-1", Name: "Bash"}},
+					{ToolResult: &agento11y.ToolResult{ToolCallID: "call-1", Name: "bash"}},
 					{ToolResult: &agento11y.ToolResult{ToolCallID: "call-1", Name: "Bash", IsError: true}},
 				}}}},
 			},
@@ -261,6 +261,22 @@ func TestToolUsagePairsCallsAndResults(t *testing.T) {
 				},
 			}}}},
 			want: []ToolUsage{{Name: "Read", Calls: 1, Failures: 1}},
+		},
+		{
+			name: "anonymous mixed-case result pairs with its call",
+			generations: []agento11y.Generation{
+				call("", "Bash"),
+				result("", "bash", true),
+			},
+			want: []ToolUsage{{Name: "Bash", Calls: 1, Failures: 1}},
+		},
+		{
+			name: "case-folded usage uses the lexical spelling on a tie",
+			generations: []agento11y.Generation{
+				call("upper", "Bash"),
+				call("lower", "bash"),
+			},
+			want: []ToolUsage{{Name: "Bash", Calls: 2}},
 		},
 		{
 			name: "anonymous same-name failures all count",
@@ -347,6 +363,30 @@ func TestConversationMetricsPeriodClipping(t *testing.T) {
 	assert.Equal(t, 3, aggregate.Workspaces, "unknown workspace has its own group")
 	assert.Equal(t, TokenBuckets{FreshInput: 20, Output: 3}, aggregate.TokenBuckets)
 	assert.Equal(t, []string{"current-model", "zero-model"}, aggregate.Models)
+	assert.Equal(t, []WorkspaceAggregate{
+		{
+			Path:                "/other",
+			Sessions:            1,
+			TokenBucketsByModel: map[string]TokenBuckets{"": {}},
+			LastActivity:        mustParse(t, "2026-05-21T10:45:00Z"),
+		},
+		{
+			Sessions:            1,
+			TokenBucketsByModel: map[string]TokenBuckets{"": {}},
+			LastActivity:        mustParse(t, "2026-05-21T10:40:00Z"),
+		},
+		{
+			Path:         "/repo",
+			Sessions:     1,
+			TokenBuckets: TokenBuckets{FreshInput: 20, Output: 3},
+			TokenBucketsByModel: map[string]TokenBuckets{
+				"current-model": {FreshInput: 20, Output: 3},
+				"zero-model":    {},
+			},
+			DurationSeconds: 30 * 60,
+			LastActivity:    mustParse(t, "2026-05-21T10:30:00Z"),
+		},
+	}, aggregate.WorkspaceRows, "workspace rows cover matches outside the returned page in stable order")
 	require.Len(t, rows, 1)
 	assert.Equal(t, "conv-other", rows[0].ID, "clipped newest activity controls order")
 	assert.Equal(t, mustParse(t, "2026-05-21T10:45:00Z"), rows[0].StartedAt, "missing start uses generation time")
@@ -382,6 +422,17 @@ func TestConversationMetricsPeriodClipping(t *testing.T) {
 		"current-model": {FreshInput: 20, Output: 3},
 		"zero-model":    {},
 	}, aggregate.TokenBucketsByModel)
+	assert.Equal(t, []WorkspaceAggregate{{
+		Path:         "/repo",
+		Sessions:     1,
+		TokenBuckets: TokenBuckets{FreshInput: 20, Output: 3},
+		TokenBucketsByModel: map[string]TokenBuckets{
+			"current-model": {FreshInput: 20, Output: 3},
+			"zero-model":    {},
+		},
+		DurationSeconds: 30 * 60,
+		LastActivity:    mustParse(t, "2026-05-21T10:30:00Z"),
+	}}, aggregate.WorkspaceRows)
 
 	blank := ""
 	rows, matched, _, err = s.ConversationMetrics(ConversationListOptions{Since: since, Before: before, Workspace: &blank})
@@ -402,6 +453,14 @@ func TestConversationMetricsPeriodClipping(t *testing.T) {
 	assert.Equal(t, int64(9), previous[0].InputTokens)
 	assert.Equal(t, []string{"old-agent"}, previous[0].Agents)
 	assert.Equal(t, "err", previous[0].Status)
+
+	tied := aggregateConversationMetrics([]ConversationSummary{
+		{Workspace: "/zeta", LastActivity: before},
+		{Workspace: "/alpha", LastActivity: before},
+	})
+	require.Len(t, tied.WorkspaceRows, 2)
+	assert.Equal(t, "/alpha", tied.WorkspaceRows[0].Path)
+	assert.Equal(t, "/zeta", tied.WorkspaceRows[1].Path)
 }
 
 func TestConversationFacetFilters(t *testing.T) {
@@ -976,8 +1035,8 @@ func TestConversationDetail(t *testing.T) {
 		Output: []agento11y.Message{{Role: agento11y.RoleAssistant, Parts: []agento11y.Part{
 			{Kind: agento11y.PartKindText, Text: "thinking..."},
 			{Kind: agento11y.PartKindToolCall, ToolCall: &agento11y.ToolCall{Name: "bash", InputJSON: bashInput}},
-			// Duplicate name to confirm dedup.
-			{Kind: agento11y.PartKindToolCall, ToolCall: &agento11y.ToolCall{Name: "bash", InputJSON: bashInput}},
+			// Case-only spelling differences are one tool.
+			{Kind: agento11y.PartKindToolCall, ToolCall: &agento11y.ToolCall{Name: "Bash", InputJSON: bashInput}},
 		}}},
 	}, "2026-05-21T10:00:03.19Z")
 
@@ -1008,7 +1067,7 @@ func TestConversationDetail(t *testing.T) {
 	if first.TokenBuckets != (TokenBuckets{FreshInput: 10, Output: 5}) {
 		t.Errorf("first.token_buckets = %+v, want fresh=10 output=5", first.TokenBuckets)
 	}
-	// Dedup keeps a single "bash" tool; preview unwraps `command`.
+	// Dedup keeps the first spelling; preview unwraps `command`.
 	if len(first.Tools) != 1 || first.Tools[0] != "bash" {
 		t.Errorf("first.tools = %v, want [bash]", first.Tools)
 	}

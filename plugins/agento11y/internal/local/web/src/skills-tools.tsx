@@ -2,7 +2,7 @@ import type { MouseEvent as ReactMouseEvent } from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { AnalyticsPage } from './analytics-page';
 import { ChartXLabels, ChartYAxis, TimeRangePicker, type WorkspaceAggregate, WorkspaceFacet } from './conversations';
-import { formatBucketLabel, timeRangeOption } from './formatters';
+import { formatBucketLabel, formatInteger, timeRangeOption } from './formatters';
 import { Notice, SurfaceCard } from './notices';
 import { type AnalyticsTab, isPlainLeftClick, type ToolSessionFilters, toolSessionsPath } from './routing';
 import { Icon, iconBtn } from './shell';
@@ -32,10 +32,6 @@ export interface SkillsToolsViewProps {
   refreshing: boolean;
   onSelectTab: (tab: AnalyticsTab) => void;
   onOpenSessions: (filters: ToolSessionFilters) => void;
-}
-
-function integer(value: number) {
-  return Math.max(0, value || 0).toLocaleString();
 }
 
 function duration(value: number | undefined) {
@@ -179,11 +175,12 @@ function ToolTable({
     <SurfaceCard className="tools-table-panel" style={{ marginBottom: 12 }}>
       <div className="tools-panel-header">
         <div className="tools-mode-label">
-          Tools <span>{data?.totals.tools || 0}</span>
+          Tools <span>{formatInteger(Math.max(0, data?.totals.tools || 0))}</span>
         </div>
         <div className="tools-panel-caption">
-          {integer(data?.totals.failures || 0)} of {integer(data?.totals.calls || 0)} failed · duration from{' '}
-          {integer(data?.totals.duration_samples || 0)} tool-execution spans
+          {formatInteger(Math.max(0, data?.totals.failures || 0))} of{' '}
+          {formatInteger(Math.max(0, data?.totals.calls || 0))} failed · duration from{' '}
+          {formatInteger(Math.max(0, data?.totals.duration_samples || 0))} tool-execution spans
         </div>
       </div>
       <div className="tools-table-scroll">
@@ -255,9 +252,9 @@ function ToolTable({
                       <span className="tools-share-fill" style={{ width: `${(row.calls / maxCalls) * 100}%` }} />
                     </span>
                   </td>
-                  <td>{integer(row.calls)}</td>
+                  <td>{formatInteger(Math.max(0, row.calls || 0))}</td>
                   <td style={{ color: failureRate > 0.05 ? 'var(--error-text)' : 'var(--fg3)' }}>
-                    {integer(row.failures)}
+                    {formatInteger(Math.max(0, row.failures || 0))}
                   </td>
                   <td style={{ color: (row.p50_duration_seconds || 0) > 10 ? 'var(--warning-text)' : 'var(--fg2)' }}>
                     {duration(row.p50_duration_seconds)}
@@ -265,7 +262,7 @@ function ToolTable({
                   <td style={{ color: (row.p95_duration_seconds || 0) > 10 ? 'var(--warning-text)' : 'var(--fg2)' }}>
                     {duration(row.p95_duration_seconds)}
                   </td>
-                  <td>{integer(row.sessions)}</td>
+                  <td>{formatInteger(Math.max(0, row.sessions || 0))}</td>
                 </tr>
               );
             })}
@@ -354,7 +351,7 @@ function ToolChart({ buckets, intervalSeconds, workspace, window, loading, error
           <div className="tools-chart-state">No tool calls to chart in this range.</div>
         ) : (
           <div style={{ position: 'relative' }}>
-            <ChartYAxis top={integer(chart.max)} mid={integer(Math.ceil(chart.max / 2))} />
+            <ChartYAxis top={formatInteger(chart.max)} mid={formatInteger(Math.ceil(chart.max / 2))} />
             <div className="tools-chart-plot">
               {chart.columns.map((column) => (
                 <div className="tools-chart-column" key={column.start}>
@@ -373,7 +370,7 @@ function ToolChart({ buckets, intervalSeconds, workspace, window, loading, error
                           key={series.name}
                           href={toolSessionsPath(filters)}
                           aria-label={`${series.name}, ${calls} ${calls === 1 ? 'call' : 'calls'}, ${formatBucketLabel(column.start, intervalMs)}`}
-                          title={`${series.name}: ${integer(calls)} ${calls === 1 ? 'call' : 'calls'}`}
+                          title={`${series.name}: ${formatInteger(calls)} ${calls === 1 ? 'call' : 'calls'}`}
                           style={{ flex: calls, background: series.color }}
                           onClick={(event: ReactMouseEvent<HTMLAnchorElement>) => {
                             if (!isPlainLeftClick(event)) return;
@@ -404,9 +401,9 @@ export type SkillsToolsContentProps = Omit<SkillsToolsViewProps, 'onSelectTab'>;
 
 export function skillsToolsHeroStats(data: ToolAnalytics | null) {
   return [
-    { label: 'Sessions', value: integer(data?.totals.sessions || 0) },
-    { label: 'Tools', value: integer(data?.totals.tools || 0) },
-    { label: 'Calls', value: integer(data?.totals.calls || 0) },
+    { label: 'Sessions with tool calls', value: formatInteger(Math.max(0, data?.totals.sessions || 0)) },
+    { label: 'Tools', value: formatInteger(Math.max(0, data?.totals.tools || 0)) },
+    { label: 'Calls', value: formatInteger(Math.max(0, data?.totals.calls || 0)) },
   ];
 }
 
@@ -462,20 +459,25 @@ export function SkillsToolsContent(props: SkillsToolsContentProps) {
   return (
     <>
       <div className="tools-stat-strip">
-        {stat('tool calls', integer(data?.totals.calls || 0))}
+        {stat('tool calls', formatInteger(Math.max(0, data?.totals.calls || 0)))}
         {stat(
           'failed',
-          `${integer(data?.totals.failures || 0)} · ${failureRate.toFixed(1)}%`,
+          `${formatInteger(Math.max(0, data?.totals.failures || 0))} · ${failureRate.toFixed(1)}%`,
           (data?.totals.failures || 0) > 0 ? 'var(--error-text)' : undefined,
         )}
-        {stat('tools used', integer(data?.totals.tools || 0))}
+        {stat('tools used', formatInteger(Math.max(0, data?.totals.tools || 0)))}
         {stat(
           'slowest p95',
           slowest ? duration(slowest.p95_duration_seconds) : '-',
           (slowest?.p95_duration_seconds || 0) > 10 ? 'var(--warning-text)' : undefined,
           slowest?.name,
         )}
-        {stat('timed calls', `${integer(data?.totals.duration_samples || 0)}/${integer(data?.totals.calls || 0)}`)}
+        {stat(
+          'timed calls',
+          `${formatInteger(Math.max(0, data?.totals.duration_samples || 0))}/${formatInteger(
+            Math.max(0, data?.totals.calls || 0),
+          )}`,
+        )}
       </div>
       <div className="tools-filter-bar">
         <label className="tools-search">
@@ -492,6 +494,7 @@ export function SkillsToolsContent(props: SkillsToolsContentProps) {
           totalCost={null}
           now={Date.now()}
           rangeLabel={range.label}
+          countLabel="workspaces with tool calls"
         />
         <TimeRangePicker value={props.timeRange} onChange={props.onTimeRangeChange} />
         <button

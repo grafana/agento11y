@@ -17,6 +17,7 @@ import {
   formatBucketLabel,
   formatCost,
   formatDuration,
+  formatInteger,
   formatTokens,
   NO_VALUE,
   splitWorkspacePath,
@@ -789,6 +790,7 @@ interface WorkspaceFacetProps {
   totalCost: number | null;
   now: number;
   rangeLabel: string;
+  countLabel?: string;
   fromRows?: boolean;
 }
 
@@ -800,6 +802,7 @@ export function WorkspaceFacet({
   totalCost,
   now,
   rangeLabel,
+  countLabel = 'workspaces',
   fromRows = false,
 }: WorkspaceFacetProps) {
   const [open, setOpen] = useState(false);
@@ -904,7 +907,9 @@ export function WorkspaceFacet({
     }
   };
 
-  const triggerCount = selectedPath ? `${selectedInRange ? 1 : 0}/${workspaces.length}` : String(workspaces.length);
+  const triggerCount = selectedPath
+    ? `${formatInteger(selectedInRange ? 1 : 0)}/${formatInteger(workspaces.length)}`
+    : formatInteger(workspaces.length);
 
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: Child controls own focus; the wrapper handles their keyboard events.
@@ -978,7 +983,7 @@ export function WorkspaceFacet({
               )}
             </Fragment>
           ) : (
-            <span style={{ whiteSpace: 'nowrap' }}>All workspaces</span>
+            <span style={{ whiteSpace: 'nowrap' }}>All {countLabel}</span>
           )}
         </span>
         <span
@@ -1081,7 +1086,7 @@ export function WorkspaceFacet({
                 textAlign: 'left',
               }}
             >
-              <span>All workspaces</span>
+              <span>All {countLabel}</span>
               <span
                 style={{
                   color: 'var(--fg3)',
@@ -1089,7 +1094,7 @@ export function WorkspaceFacet({
                   fontSize: 11,
                 }}
               >
-                {totalCount} · {formatCost(totalCost)}
+                {formatInteger(totalCount)} · {formatCost(totalCost)}
               </span>
             </button>
             <div
@@ -1179,7 +1184,7 @@ export function WorkspaceFacet({
                         textAlign: 'right',
                       }}
                     >
-                      {w.count}
+                      {formatInteger(w.count)}
                     </span>
                     <span
                       style={{
@@ -1255,8 +1260,8 @@ export function WorkspaceFacet({
             }}
           >
             <span>
-              {workspaces.length} workspaces · {rangeLabel}
-              {fromRows ? ` · from the ${totalCount} listed sessions` : ''}
+              {formatInteger(workspaces.length)} {countLabel} · {rangeLabel}
+              {fromRows ? ` · from the ${formatInteger(totalCount)} listed sessions` : ''}
             </span>
             <span>sessions · cost · share</span>
           </div>
