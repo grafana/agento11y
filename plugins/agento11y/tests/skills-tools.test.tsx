@@ -9,6 +9,7 @@ import {
 } from '../internal/local/web/src/routing';
 import { SkillsToolsView, type SkillsToolsViewProps } from '../internal/local/web/src/skills-tools';
 import type { ToolAnalytics } from '../internal/local/web/src/types';
+import { metricsResponse, response } from './fixtures';
 
 const DATA: ToolAnalytics = {
   totals: { calls: 31, failures: 2, tools: 3, sessions: 4, duration_samples: 21 },
@@ -62,15 +63,6 @@ function props(overrides: Partial<SkillsToolsViewProps> = {}): SkillsToolsViewPr
     onOpenSessions: vi.fn(),
     ...overrides,
   };
-}
-
-function response(body: unknown): Response {
-  return {
-    ok: true,
-    status: 200,
-    json: () => Promise.resolve(body),
-    text: () => Promise.resolve(''),
-  } as Response;
 }
 
 function stubLocalStorage(entries: [string, string][] = []) {
@@ -288,6 +280,9 @@ describe('Tools analytics routing and App fetching', () => {
       if (url.startsWith('/api/v1/conversations?')) {
         return Promise.resolve(response({ conversations: [], total_conversations: 0 }));
       }
+      if (url.startsWith('/api/v1/metrics/conversations?')) {
+        return Promise.resolve(response(metricsResponse()));
+      }
       if (url.startsWith('/api/v1/metrics/tokens')) {
         return Promise.resolve(response({ points: [], interval_seconds: 60 }));
       }
@@ -373,6 +368,9 @@ describe('Tools analytics routing and App fetching', () => {
       if (url.startsWith('/api/v1/conversations?')) {
         return Promise.resolve(response({ conversations: [], total_conversations: 0 }));
       }
+      if (url.startsWith('/api/v1/metrics/conversations?')) {
+        return Promise.resolve(response(metricsResponse()));
+      }
       if (url.startsWith('/api/v1/metrics/tokens')) {
         return Promise.resolve(response({ points: [], interval_seconds: 60 }));
       }
@@ -432,14 +430,16 @@ describe('Tools analytics routing and App fetching', () => {
     expect(tokenRequest?.searchParams.has('workspace')).toBe(false);
   });
 
-  it('navigates a plain row click to exact Sessions and preserves modified clicks', async () => {
-    window.history.replaceState({}, '', analyticsPath('skills'));
+  it('navigates a plain row click to exact Sessions without old facets and preserves modified clicks', async () => {
     const stored = stubLocalStorage();
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.startsWith('/api/v1/metrics/skills-tools?')) return Promise.resolve(response({ tools: DATA }));
       if (url.startsWith('/api/v1/conversations?')) {
         return Promise.resolve(response({ conversations: [], total_conversations: 1 }));
+      }
+      if (url.startsWith('/api/v1/metrics/conversations?')) {
+        return Promise.resolve(response(metricsResponse()));
       }
       if (url.startsWith('/api/v1/metrics/tokens')) {
         return Promise.resolve(response({ points: [], interval_seconds: 60 }));
@@ -449,6 +449,20 @@ describe('Tools analytics routing and App fetching', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     render(<App />);
+    await screen.findByRole('heading', { name: 'Sessions' });
+    fireEvent.click(screen.getByTitle('Filter by status'));
+    fireEvent.click(screen.getByRole('option', { name: 'Has subagents' }));
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([url]) => {
+          const parsed = new URL(String(url), 'http://localhost');
+          return parsed.pathname === '/api/v1/conversations' && parsed.searchParams.get('subagents') === '1';
+        }),
+      ).toBe(true),
+    );
+    fireEvent.click(screen.getByRole('link', { name: 'Analytics' }));
+    fireEvent.click(await screen.findByRole('link', { name: 'Tools' }));
+
     const link = await screen.findByRole('link', { name: 'Bash' });
     const drilldown = new URL(link.getAttribute('href') || '', 'http://localhost');
     const expectedSince = drilldown.searchParams.get('since');
@@ -463,14 +477,23 @@ describe('Tools analytics routing and App fetching', () => {
     expect(window.location.pathname).toBe('/');
     expect(new URLSearchParams(window.location.search).get('tool')).toBe('Bash');
     expect(stored.get('sigil.local.timeRange')).toBe('24h');
-    await waitFor(() =>
-      expect(
-        fetchMock.mock.calls.some(([url]) => {
-          const parsed = new URL(String(url), 'http://localhost');
-          return parsed.pathname === '/api/v1/conversations' && parsed.searchParams.get('tool') === 'Bash';
-        }),
-      ).toBe(true),
-    );
+    await waitFor(() => {
+      const exactPaths = fetchMock.mock.calls
+        .map(([url]) => new URL(String(url), 'http://localhost'))
+        .filter((url) => url.searchParams.get('tool') === 'Bash')
+        .map((url) => url.pathname);
+      expect(exactPaths).toContain('/api/v1/conversations');
+      expect(exactPaths).toContain('/api/v1/metrics/conversations');
+    });
+    const exactRequests = fetchMock.mock.calls
+      .map(([url]) => new URL(String(url), 'http://localhost'))
+      .filter((url) => url.searchParams.get('tool') === 'Bash');
+    for (const request of exactRequests) {
+      expect(request.searchParams.has('agent')).toBe(false);
+      expect(request.searchParams.has('model')).toBe(false);
+      expect(request.searchParams.has('status')).toBe(false);
+      expect(request.searchParams.has('subagents')).toBe(false);
+    }
     expect(screen.getByText(/Tool/).parentElement?.textContent).toContain('Bash');
     expect(document.body.textContent).toContain(`${expectedSince} to ${expectedBefore}`);
     expect(screen.getByText('Tokens in exact range')).toBeTruthy();

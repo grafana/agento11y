@@ -100,6 +100,55 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+interface SessionFacets {
+  agent: string;
+  model: string;
+  status: string;
+}
+
+function applySessionFacets(params: URLSearchParams, facets: SessionFacets) {
+  if (facets.agent !== 'all') params.set('agent', facets.agent);
+  if (facets.model !== 'all') params.set('model', facets.model);
+  if (facets.status === 'errors') params.set('status', 'err');
+  else if (facets.status === 'subagents') params.set('subagents', '1');
+}
+
+interface SessionScope {
+  timeRange: string;
+  toolFilter: ToolSessionFilters | null;
+  workspace: string | null;
+  facets: SessionFacets;
+}
+
+// sessionRequestParams builds the query the Sessions list and the Sessions
+// totals both carry, so the tiles count the set the rows come from. One
+// builder rather than two copies: a parameter added to one of them only is how
+// the workspace came to reach neither.
+//
+// The window is the range the header names, not the chart's bucket-floored
+// one, because a tile labelled 24h must not count a generation from 25 hours
+// ago. Sending `before` also makes the list request exact, so a row is one
+// with a generation inside the window rather than one whose last activity
+// happens to be recent, which is the rule the totals already use.
+function sessionRequestParams(scope: SessionScope, now: number): URLSearchParams {
+  const params = new URLSearchParams({ limit: String(LIST_PAGE_SIZE) });
+  if (scope.toolFilter) {
+    params.set('tool', scope.toolFilter.tool);
+    if (scope.toolFilter.workspace != null) params.set('workspace', scope.toolFilter.workspace);
+    if (scope.toolFilter.since) params.set('since', scope.toolFilter.since);
+    if (scope.toolFilter.before) params.set('before', scope.toolFilter.before);
+  } else {
+    const range = timeRangeOption(scope.timeRange);
+    if (range.ms != null) {
+      params.set('since', new Date(now - range.ms).toISOString());
+      params.set('before', new Date(now).toISOString());
+    }
+    if (scope.workspace != null) params.set('workspace', scope.workspace);
+  }
+  applySessionFacets(params, scope.facets);
+  return params;
+}
+
 /** One frame of the /api/v1/events stream. */
 interface StreamEvent {
   conversation_id?: string;
@@ -125,6 +174,7 @@ export function App() {
   // Settings itself, where pushState alone leaves the panel where it was.
   const [settingsTab, setSettingsTab] = useState(settingsTabFromLocation);
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [workspaceFacetConversations, setWorkspaceFacetConversations] = useState<ConversationSummary[]>([]);
   // storeCount is the number of conversations the daemon holds, before
   // the list's page and range bounds. The list itself is range-scoped,
   // so only this count distinguishes an empty store from a quiet range.
@@ -133,6 +183,23 @@ export function App() {
   const [tokenIntervalMs, setTokenIntervalMs] = useState(0);
   const [loadingList, setLoadingList] = useState(true);
   const [errList, setErrList] = useState<string | null>(null);
+  // Session headline numbers come from the conversation-metrics aggregate for
+  // the full range, workspace, tool filter, and facets, not the list page.
+  const [sessionAggregate, setSessionAggregate] = useState<ConversationMetricsAggregate | null>(null);
+  const [sessionMatched, setSessionMatched] = useState<number | null>(null);
+  const [loadingSessionMetrics, setLoadingSessionMetrics] = useState(true);
+  const [errSessionMetrics, setErrSessionMetrics] = useState<string | null>(null);
+  // The agent, model and status facets live here because both the list and
+  // the metrics request carry them; a page-local predicate could only ever
+  // narrow the rows the server already returned.
+  const [agentFilter, setAgentFilter] = useState('all');
+  const [modelFilter, setModelFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const resetSessionFacets = useCallback(() => {
+    setAgentFilter('all');
+    setModelFilter('all');
+    setStatusFilter('all');
+  }, []);
   const [query, setQuery] = useState('');
   const conversationSearchRef = useRef<HTMLInputElement | null>(null);
   const [timeRange, setTimeRange] = usePersistedState('sigil.local.timeRange', DEFAULT_TIME_RANGE, (v) =>
@@ -362,22 +429,36 @@ export function App() {
       const seq = ++listSeqRef.current;
       setLoadingList(true);
       setErrList(null);
-      if (reset) setConversations([]);
-      const w = requestWindow(timeRange, LIST_PAGE_SIZE);
-      const params = new URLSearchParams({ limit: String(w.limit) });
-      if (toolSessionFilters) {
-        params.set('tool', toolSessionFilters.tool);
-        if (toolSessionFilters.workspace != null) params.set('workspace', toolSessionFilters.workspace);
-        if (toolSessionFilters.since) params.set('since', toolSessionFilters.since);
-        if (toolSessionFilters.before) params.set('before', toolSessionFilters.before);
-      } else if (w.since) {
-        params.set('since', w.since);
+      if (reset) {
+        setConversations([]);
+        setWorkspaceFacetConversations([]);
+      }
+      const params = sessionRequestParams(
+        {
+          timeRange,
+          toolFilter: toolSessionFilters,
+          workspace,
+          facets: { agent: agentFilter, model: modelFilter, status: statusFilter },
+        },
+        Date.now(),
+      );
+      if (params.has('workspace')) {
+        const facetParams = new URLSearchParams(params);
+        facetParams.delete('workspace');
+        void fetch(`/api/v1/conversations?${facetParams}`)
+          .then((r) => (r.ok ? r.json() : r.text().then((t) => Promise.reject(new Error(t || `HTTP ${r.status}`)))))
+          .then((body: ConversationListResponse) => {
+            if (listSeqRef.current === seq) setWorkspaceFacetConversations(body.conversations || []);
+          })
+          .catch(() => undefined);
       }
       return fetch(`/api/v1/conversations?${params}`)
         .then((r) => (r.ok ? r.json() : r.text().then((t) => Promise.reject(new Error(t || `HTTP ${r.status}`)))))
         .then((body: ConversationListResponse) => {
           if (listSeqRef.current !== seq) return;
-          setConversations(body.conversations || []);
+          const rows = body.conversations || [];
+          setConversations(rows);
+          if (!params.has('workspace')) setWorkspaceFacetConversations(rows);
           setStoreCount(Number.isFinite(body.total_conversations) ? body.total_conversations : null);
         })
         .catch((e) => {
@@ -389,7 +470,52 @@ export function App() {
           setLoadingList(false);
         });
     },
-    [timeRange, toolSessionFilters],
+    [timeRange, toolSessionFilters, workspace, agentFilter, modelFilter, statusFilter],
+  );
+
+  // fetchSessionMetrics is what makes the Sessions headline numbers exact:
+  // the response's aggregate and matched_conversations are computed over
+  // every conversation matching the request, before its row limit. It carries
+  // the same scope as fetchList, so the tiles count every conversation the
+  // list request selected, including the ones its page could not hold.
+  const sessionMetricsSeqRef = useRef(0);
+  const fetchSessionMetrics = useCallback(
+    (reset = false) => {
+      const seq = ++sessionMetricsSeqRef.current;
+      setLoadingSessionMetrics(true);
+      setErrSessionMetrics(null);
+      if (reset) {
+        setSessionAggregate(null);
+        setSessionMatched(null);
+      }
+      const params = sessionRequestParams(
+        {
+          timeRange,
+          toolFilter: toolSessionFilters,
+          workspace,
+          facets: { agent: agentFilter, model: modelFilter, status: statusFilter },
+        },
+        Date.now(),
+      );
+      return fetch(`/api/v1/metrics/conversations?${params}`)
+        .then((r) => (r.ok ? r.json() : r.text().then((t) => Promise.reject(new Error(t || `HTTP ${r.status}`)))))
+        .then((body: ConversationMetricsResponse) => {
+          if (sessionMetricsSeqRef.current !== seq) return;
+          setSessionAggregate(body.aggregate || null);
+          setSessionMatched(Number.isFinite(body.matched_conversations) ? body.matched_conversations : null);
+        })
+        .catch((e) => {
+          if (sessionMetricsSeqRef.current !== seq) return;
+          setSessionAggregate(null);
+          setSessionMatched(null);
+          setErrSessionMetrics(String(e.message || e));
+        })
+        .finally(() => {
+          if (sessionMetricsSeqRef.current !== seq) return;
+          setLoadingSessionMetrics(false);
+        });
+    },
+    [timeRange, toolSessionFilters, workspace, agentFilter, modelFilter, statusFilter],
   );
 
   // Token points back the usage chart. The server aggregates them per
@@ -429,6 +555,7 @@ export function App() {
       } else {
         if (w.since) params.set('since', w.since);
         if (w.intervalSec) params.set('interval', String(w.intervalSec));
+        if (workspace != null) params.set('workspace', workspace);
       }
       const query = params.toString();
       return fetch(`/api/v1/metrics/tokens${query ? `?${query}` : ''}`)
@@ -444,7 +571,7 @@ export function App() {
         })
         .catch(() => {});
     },
-    [timeRange, toolSessionFilters],
+    [timeRange, toolSessionFilters, workspace],
   );
 
   const analyticsSeqRef = useRef(0);
@@ -698,22 +825,21 @@ export function App() {
       return;
     }
     refreshInFlightRef.current = true;
-    Promise.all([fetchList(), fetchTokens()]).finally(() => {
+    Promise.all([fetchList(), fetchTokens(), fetchSessionMetrics()]).finally(() => {
       refreshInFlightRef.current = false;
       if (!refreshDirtyRef.current) return;
       refreshDirtyRef.current = false;
       refreshAllRef.current?.();
     });
-  }, [fetchList, fetchTokens]);
+  }, [fetchList, fetchTokens, fetchSessionMetrics]);
 
-  // reloadRange refetches when the request window itself changed: mount,
-  // or a range change. Both callbacks close over timeRange, so this
-  // identity moves exactly then, and the effect below is the only caller
-  // that discards what the previous window returned.
-  const reloadRange = useCallback(() => {
-    fetchList(true);
-    fetchTokens(true);
-  }, [fetchList, fetchTokens]);
+  // Arm Sessions metrics only while the Sessions view is active. Analytics
+  // uses separate totals. An SSE flush can still update Sessions metrics while
+  // a conversation is open; the 60-second list backstop cannot.
+  const conversationsActive = view === 'conversations';
+  useEffect(() => {
+    if (conversationsActive) fetchSessionMetrics(true);
+  }, [conversationsActive, fetchSessionMetrics]);
 
   // fetchDetailCore is the shared fetch body for both an explicit
   // open (quiet=false: shows a spinner and clears stale content) and
@@ -757,9 +883,16 @@ export function App() {
   const fetchDetail = useCallback((id: string) => fetchDetailCore(id, false), [fetchDetailCore]);
   const quietRefreshDetail = useCallback((id: string) => fetchDetailCore(id, true), [fetchDetailCore]);
 
+  // Reset list rows and token points only when each request's scope changes.
+  // Token metrics do not use the agent, model, or status facets, so facet
+  // changes must not clear or refetch the chart.
   useEffect(() => {
-    reloadRange();
-  }, [reloadRange]);
+    fetchList(true);
+  }, [fetchList]);
+
+  useEffect(() => {
+    fetchTokens(true);
+  }, [fetchTokens]);
 
   useEffect(() => {
     if (view === 'analytics' && analyticsTab === 'overview') fetchAnalytics(true);
@@ -775,9 +908,15 @@ export function App() {
 
   useEffect(() => {
     const onPopState = () => {
-      setSelectedID(conversationIDFromPath());
-      setShowSettings(settingsRouteActive());
-      setShowAnalytics(analyticsRouteActive());
+      const nextSelectedID = conversationIDFromPath();
+      const nextSettings = settingsRouteActive();
+      const nextAnalytics = analyticsRouteActive();
+      if (!nextSelectedID && !nextSettings && !nextAnalytics && view !== 'conversations') {
+        resetSessionFacets();
+      }
+      setSelectedID(nextSelectedID);
+      setShowSettings(nextSettings);
+      setShowAnalytics(nextAnalytics);
       setSettingsTab(settingsTabFromLocation());
       setAnalyticsTab(analyticsTabFromLocation());
       setToolSessionFilters(toolSessionFiltersFromLocation());
@@ -785,7 +924,7 @@ export function App() {
     };
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
-  }, []);
+  }, [resetSessionFacets, view]);
 
   useEffect(() => {
     if (!selectedID) {
@@ -931,6 +1070,7 @@ export function App() {
   };
   const goConversations = () => {
     window.history.pushState({}, '', conversationsPath());
+    resetSessionFacets();
     setShowSettings(false);
     setShowAnalytics(false);
     setSelectedID(null);
@@ -951,6 +1091,7 @@ export function App() {
     const returnWorkspace = state?.workspace ?? null;
     const path = state?.returnPath || conversationsPath(returnWorkspace);
     window.history.pushState({}, '', path);
+    resetSessionFacets();
     setShowAnalytics(false);
     setWorkspace(returnWorkspace);
     setToolSessionFilters(toolSessionFiltersFromLocation());
@@ -968,6 +1109,7 @@ export function App() {
   };
   const openToolSessions = (filters: ToolSessionFilters) => {
     window.history.pushState({}, '', toolSessionsPath(filters));
+    resetSessionFacets();
     setTimeRange(analyticsRange);
     setShowSettings(false);
     setShowAnalytics(false);
@@ -978,6 +1120,7 @@ export function App() {
   };
   const openAnalyticsBucket = (span: TimeSpan) => {
     window.history.pushState({}, '', conversationsPath(analyticsWorkspace));
+    resetSessionFacets();
     setTimeRange(analyticsRange);
     setWorkspace(analyticsWorkspace);
     setBucketSel(span);
@@ -988,6 +1131,7 @@ export function App() {
   };
   const openAnalyticsWorkspace = (path: string) => {
     window.history.pushState({}, '', conversationsPath(path));
+    resetSessionFacets();
     setTimeRange(analyticsRange);
     setWorkspace(path);
     setBucketSel(null);
@@ -1026,6 +1170,7 @@ export function App() {
     };
     if (viewRef.current !== 'conversations') {
       window.history.pushState({}, '', conversationsPath());
+      resetSessionFacets();
       setSelectedID(null);
       setShowSettings(false);
       setShowAnalytics(false);
@@ -1035,7 +1180,7 @@ export function App() {
       return;
     }
     focus();
-  }, []);
+  }, [resetSessionFacets]);
   const themeShortcutRef = useRef<ThemeShortcutState>({ prefix: '', at: 0 });
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -1180,7 +1325,12 @@ export function App() {
         {view === 'conversations' && (
           <ConversationsView
             conversations={conversations}
+            workspaceFacetConversations={workspaceFacetConversations}
             storeCount={storeCount}
+            aggregate={sessionAggregate}
+            matchedConversations={sessionMatched}
+            metricsLoading={loadingSessionMetrics}
+            metricsError={errSessionMetrics}
             tokenPoints={tokenPoints}
             tokenIntervalMs={tokenIntervalMs}
             loading={loadingList}
@@ -1200,6 +1350,12 @@ export function App() {
             setWorkspace={selectConversationWorkspace}
             groupBy={groupBy}
             setGroupBy={setGroupBy}
+            agentFilter={agentFilter}
+            setAgentFilter={setAgentFilter}
+            modelFilter={modelFilter}
+            setModelFilter={setModelFilter}
+            statusFilter={statusFilter}
+            setStatusFilter={setStatusFilter}
             listSort={listSort}
             setListSort={setListSort}
             onOpen={openConv}

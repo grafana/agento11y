@@ -77,6 +77,24 @@ describe('per-model conversation cost', () => {
     ).toBe(8);
   });
 
+  it('differs from whole-conversation pricing when the cheaper model sorts first', () => {
+    const mixedPrices: ModelPrices = {
+      'a-cheap': { input: 1, output: 1 },
+      'z-pricey': { input: 100, output: 100 },
+    };
+    const empty: TokenBuckets = { fresh_input: 0, cache_read: 0, cache_write: 0, output: 0, reasoning: 0 };
+    const conversation = {
+      models: ['a-cheap', 'z-pricey'],
+      token_buckets: { ...empty, fresh_input: 2e6 },
+      token_buckets_by_model: {
+        'a-cheap': { ...empty, fresh_input: 1e6 },
+        'z-pricey': { ...empty, fresh_input: 1e6 },
+      },
+    };
+    expect(conversationCost(conversation, mixedPrices)).toBe(2);
+    expect(conversationCostByModel(conversation, mixedPrices)).toBe(101);
+  });
+
   it('falls back to the conversation model for an older daemon', () => {
     const conversation = { models: ['grok-4.6'], token_buckets: buckets };
     expect(conversationCostByModel(conversation, prices)).toBe(conversationCost(conversation, prices));

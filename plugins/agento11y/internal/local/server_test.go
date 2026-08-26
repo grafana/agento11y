@@ -360,6 +360,92 @@ func TestServer_ConversationMetrics(t *testing.T) {
 	})
 }
 
+func TestServer_ConversationFacetParams(t *testing.T) {
+	srv, storage, _ := newTestServerStorage(t)
+	writeGen(t, storage, "conv-pi", "g1", agento11y.Generation{
+		AgentName: "pi",
+		Model:     agento11y.ModelRef{Name: "claude-opus-5"},
+		StartedAt: mustParse(t, "2026-08-21T10:00:00Z"),
+		Usage:     agento11y.TokenUsage{InputTokens: 10},
+		Tags:      map[string]string{"cwd": "/repo"},
+	}, "2026-08-21T10:00:00Z")
+	writeGen(t, storage, "conv-sub", "g2", agento11y.Generation{
+		AgentName: "pi/explore",
+		Model:     agento11y.ModelRef{Name: "claude-haiku-4-5"},
+		StartedAt: mustParse(t, "2026-08-21T10:10:00Z"),
+		Usage:     agento11y.TokenUsage{InputTokens: 20},
+		CallError: "boom",
+		Tags:      map[string]string{"cwd": "/repo"},
+	}, "2026-08-21T10:10:00Z")
+
+	for _, tc := range []struct {
+		name  string
+		query string
+		want  []string
+	}{
+		{name: "agent host part", query: "agent=pi", want: []string{"conv-sub", "conv-pi"}},
+		{name: "model", query: "model=claude-opus-5", want: []string{"conv-pi"}},
+		{name: "status err", query: "status=err", want: []string{"conv-sub"}},
+		{name: "subagents", query: "subagents=1", want: []string{"conv-sub"}},
+		{name: "facets compose to nothing", query: "agent=pi&model=claude-opus-5&status=err", want: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, path := range []string{"/api/v1/conversations", "/api/v1/metrics/conversations"} {
+				rr := httptest.NewRecorder()
+				srv.ServeHTTP(rr, newLocalRequest(http.MethodGet,
+					path+"?since=2026-08-21T09:00:00Z&before=2026-08-21T11:00:00Z&"+tc.query, nil))
+				require.Equal(t, http.StatusOK, rr.Code, path)
+				var got struct {
+					Conversations        []ConversationSummary `json:"conversations"`
+					MatchedConversations int                   `json:"matched_conversations"`
+				}
+				decodeJSON(t, io.NopCloser(rr.Body), &got)
+				var ids []string
+				for _, conv := range got.Conversations {
+					ids = append(ids, conv.ID)
+				}
+				assert.Equal(t, tc.want, ids, path)
+				if path == "/api/v1/metrics/conversations" {
+					assert.Equal(t, len(tc.want), got.MatchedConversations, path)
+				}
+			}
+		})
+	}
+
+	t.Run("metrics reads the tool filter", func(t *testing.T) {
+		srv, storage, _ := newTestServerStorage(t)
+		lower := mustParse(t, "2026-08-21T10:00:00Z")
+		writeToolGeneration(t, storage, "conv-bash", "g1", "/repo", lower, "call-1", "Bash", false)
+		writeToolGeneration(t, storage, "conv-read", "g1", "/repo", lower, "call-2", "Read", false)
+		rr := httptest.NewRecorder()
+		srv.ServeHTTP(rr, newLocalRequest(http.MethodGet,
+			"/api/v1/metrics/conversations?tool=Bash&since=2026-08-21T09:00:00Z&before=2026-08-21T11:00:00Z", nil))
+		require.Equal(t, http.StatusOK, rr.Code)
+		var got struct {
+			Conversations        []ConversationSummary `json:"conversations"`
+			MatchedConversations int                   `json:"matched_conversations"`
+		}
+		decodeJSON(t, io.NopCloser(rr.Body), &got)
+		require.Len(t, got.Conversations, 1)
+		assert.Equal(t, "conv-bash", got.Conversations[0].ID)
+		assert.Equal(t, 1, got.MatchedConversations)
+	})
+
+	t.Run("invalid facet values are rejected", func(t *testing.T) {
+		for _, path := range []string{
+			"/api/v1/conversations?status=maybe",
+			"/api/v1/conversations?subagents=many",
+			"/api/v1/conversations?subagents=-1",
+			"/api/v1/metrics/conversations?status=maybe",
+			"/api/v1/metrics/conversations?subagents=many",
+		} {
+			rr := httptest.NewRecorder()
+			srv.ServeHTTP(rr, newLocalRequest(http.MethodGet, path, nil))
+			assert.Equal(t, http.StatusBadRequest, rr.Code, path)
+		}
+	})
+}
+
 func TestServer_ToolMetrics(t *testing.T) {
 	srv, storage, _ := newTestServerStorage(t)
 	writeGen(t, storage, "conv-tools", "g1", agento11y.Generation{

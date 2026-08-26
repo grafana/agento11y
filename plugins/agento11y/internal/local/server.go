@@ -777,8 +777,9 @@ const conversationListLimit = 200
 
 // handleListConversations returns the aggregated conversation list as JSON.
 // The response is newest-first. ?limit= caps matching rows. Exact time,
-// workspace, and tool filters are applied to each decoded candidate before
-// it counts toward that cap; see ConversationListOptions.
+// workspace, and tool filters, plus the ?agent=, ?model=, ?status= and
+// ?subagents= facets, are applied to each decoded candidate before it counts
+// toward that cap; see ConversationListOptions.
 //
 // total_conversations counts the conversation files in the store, before
 // either bound. The viewer needs it to tell an empty store from an empty
@@ -793,20 +794,18 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	var tool *string
-	if values, present := r.URL.Query()["tool"]; present {
-		value := ""
-		if len(values) > 0 {
-			value = values[0]
-		}
-		tool = &value
+	tool := toolParam(r)
+	facets, ok := conversationFacetParams(w, r)
+	if !ok {
+		return
 	}
 	_, hasBefore := r.URL.Query()["before"]
-	// A since-only request is the normal ranged list and uses last activity.
+	// A since-only request without facets is the normal ranged list and uses last
+	// activity. Facets still use period-clipped summaries.
 	exact := hasBefore || workspace != nil || tool != nil
-	convs, total, err := s.storage.ListConversations(ConversationListOptions{
-		Limit: limit, Since: since, Before: before, Workspace: workspace, Tool: tool, Exact: exact,
-	})
+	facets.Limit, facets.Since, facets.Before = limit, since, before
+	facets.Workspace, facets.Tool, facets.Exact = workspace, tool, exact
+	convs, total, err := s.storage.ListConversations(facets)
 	if err != nil {
 		s.logger.Printf("local: list conversations: %v", err)
 		http.Error(w, "list conversations: "+err.Error(), http.StatusInternalServerError)
@@ -823,6 +822,46 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request)
 		"total_conversations": total,
 	})
 	s.warmSummariesInBackground()
+}
+
+// toolParam reads the presence-sensitive ?tool= filter. A present but empty
+// value matches no tool, which is not the same as no filter at all.
+func toolParam(r *http.Request) *string {
+	values, present := r.URL.Query()["tool"]
+	if !present {
+		return nil
+	}
+	value := ""
+	if len(values) > 0 {
+		value = values[0]
+	}
+	return &value
+}
+
+// conversationFacetParams reads ?agent=, ?model=, ?status= and ?subagents=
+// into the option fields both conversation endpoints share. status and
+// subagents are two independent predicates rather than one enum, because a
+// caller can want errored subagent sessions.
+func conversationFacetParams(w http.ResponseWriter, r *http.Request) (ConversationListOptions, bool) {
+	query := r.URL.Query()
+	opts := ConversationListOptions{
+		Agent:  query.Get("agent"),
+		Model:  query.Get("model"),
+		Status: query.Get("status"),
+	}
+	if opts.Status != "" && opts.Status != "ok" && opts.Status != "err" {
+		http.Error(w, `invalid status: want "ok" or "err"`, http.StatusBadRequest)
+		return ConversationListOptions{}, false
+	}
+	if raw := query.Get("subagents"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			http.Error(w, "invalid subagents: want a non-negative integer", http.StatusBadRequest)
+			return ConversationListOptions{}, false
+		}
+		opts.MinSubagents = n
+	}
+	return opts, true
 }
 
 // limitParam reads a ?limit= page size, falling back to def when the
@@ -940,7 +979,10 @@ func (s *Server) handleTokenMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleConversationMetrics returns lifetime conversation identity metadata
-// with all analytic fields clipped to the requested generation-time period.
+// with generation-derived analytics clipped to the requested period.
+// It reads the same filters as the list endpoint, so a drill-down can show
+// exact totals over the set the list is showing. The two differ where a row
+// needs a generation inside the period; see ConversationMetrics.
 func (s *Server) handleConversationMetrics(w http.ResponseWriter, r *http.Request) {
 	limit, ok := limitParam(w, r, conversationListLimit)
 	if !ok {
@@ -950,9 +992,13 @@ func (s *Server) handleConversationMetrics(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	rows, matched, aggregate, err := s.storage.ConversationMetrics(ConversationListOptions{
-		Limit: limit, Since: since, Before: before, Workspace: workspace,
-	})
+	facets, ok := conversationFacetParams(w, r)
+	if !ok {
+		return
+	}
+	facets.Limit, facets.Since, facets.Before = limit, since, before
+	facets.Workspace, facets.Tool = workspace, toolParam(r)
+	rows, matched, aggregate, err := s.storage.ConversationMetrics(facets)
 	if err != nil {
 		s.logger.Printf("local: conversation metrics: %v", err)
 		http.Error(w, "conversation metrics: "+err.Error(), http.StatusInternalServerError)

@@ -387,14 +387,17 @@ interface CostableConversation {
   models?: string[] | null;
 }
 
-// conversationCost prices a conversation's disjoint token buckets at its
-// primary model's rates. Prefers the live models.dev catalog (exact model
-// id, all providers); falls back to the bundled Anthropic table for
-// brand-new Claude ids or when offline. Exact for the single-model common
-// case; a mixed-model conversation is priced at models[0] (the
-// orchestrator), a close approximation. Returns null when the model can't
-// be priced (unknown provider, or no model recorded) so callers show NO_VALUE
-// instead of a fabricated number.
+// conversationCost prices all token buckets at models[0]'s rate. The server
+// sorts model IDs alphabetically, so mixed-model rows select by ID rather than
+// orchestration role or usage. It checks the multi-provider models.dev map by
+// exact or supported canonicalized ID, then the bundled Anthropic-family
+// substring table when the catalog is unavailable or has no match. It returns
+// null when no model is recorded or neither source has a rate. Callers show
+// NO_VALUE instead of guessing.
+//
+// Use conversationCostByModel for token_buckets_by_model. It prices each
+// nonzero model bucket separately and falls back to conversationCost when the
+// per-model map is absent.
 export function conversationCost(
   c: CostableConversation | null | undefined,
   prices: ModelPrices | null,
