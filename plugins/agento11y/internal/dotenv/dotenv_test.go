@@ -293,6 +293,11 @@ func TestApplyEnvAliasFamilies(t *testing.T) {
 			want: "os-legacy",
 		},
 		{
+			name: "file preferred applies under both spellings",
+			file: "AGENTO11Y_ENDPOINT=file-preferred\n",
+			want: "file-preferred",
+		},
+		{
 			name: "file preferred beats file legacy",
 			file: "AGENTO11Y_ENDPOINT=file-preferred\nSIGIL_ENDPOINT=file-legacy\n",
 			want: "file-preferred",

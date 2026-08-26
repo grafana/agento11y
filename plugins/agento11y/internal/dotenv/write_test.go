@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
 
 func TestWriteDotenv_CreatesFileAndDirectory(t *testing.T) {
@@ -67,6 +69,36 @@ OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.example.com
 	for k, v := range want {
 		if got[k] != v {
 			t.Errorf("merged[%q] = %q, want %q", k, got[k], v)
+		}
+	}
+}
+
+func TestUpdateDotenv_DerivesUpdatesFromCurrentFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.env")
+	if err := WriteDotenv(path, map[string]string{"AGENTO11Y_THEME": "dark"}, nil); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	stale := LoadDotenv(path, nil)
+
+	if err := WriteDotenv(path, map[string]string{"SIGIL_THEME": "system"}, nil); err != nil {
+		t.Fatalf("concurrent write: %v", err)
+	}
+
+	if err := UpdateDotenv(path, func(current map[string]string) map[string]string {
+		updates := map[string]string{"AGENTO11Y_THEME": "light"}
+		return envconfig.UpdateExistingLegacyAliases(current, updates)
+	}, nil); err != nil {
+		t.Fatalf("UpdateDotenv: %v", err)
+	}
+
+	if _, ok := stale["SIGIL_THEME"]; ok {
+		t.Fatalf("stale snapshot unexpectedly contains SIGIL_THEME")
+	}
+	got := LoadDotenv(path, nil)
+	for _, key := range []string{"AGENTO11Y_THEME", "SIGIL_THEME"} {
+		if got[key] != "light" {
+			t.Errorf("%s = %q, want light", key, got[key])
 		}
 	}
 }
