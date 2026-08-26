@@ -1,6 +1,7 @@
 package local
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"os"
@@ -1230,8 +1231,8 @@ func TestConversationDetail_ThreadMessages(t *testing.T) {
 					assert.Equal(t, want.toolCallID, part.ToolResult.ToolCallID, "message %d tool result id", i)
 				case agento11y.PartKindText:
 					assert.Equal(t, want.text, part.Text, "message %d text", i)
-				case agento11y.PartKindThinking:
-					// No thinking parts are used in this table; case included for exhaustiveness.
+				case agento11y.PartKindThinking, agento11y.PartKindMedia:
+					// No thinking or media parts are used in this table.
 				}
 			}
 		})
@@ -1639,7 +1640,7 @@ func TestInputSemanticsMarkerSurvivesTheStore(t *testing.T) {
 			require.Len(t, points, 1)
 			assert.Equal(t, tc.wantBuckets, points[0].TokenBuckets, "chart buckets")
 
-			hits, err := s.SearchConversations("semantics", 10)
+			hits, err := s.SearchConversations(context.Background(), "semantics", 10)
 			require.NoError(t, err)
 			require.Len(t, hits, 1)
 			assert.Equal(t, tc.wantBuckets, hits[0].TokenBuckets, "search buckets")

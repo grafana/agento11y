@@ -33,7 +33,7 @@ import type { SelectOption } from './notices';
 import { ACTIVE_PILL_BG, Notice, PageHero, PageShell, PillToggle, Select, Stack, SurfaceCard } from './notices';
 import type { ToolSessionFilters } from './routing';
 import { conversationPath, isPlainLeftClick } from './routing';
-import { ConversationSearchPanel, useSearchResults } from './search';
+import { ConversationSearchPanel, searchHeroStats, useSearchResults } from './search';
 import { HistoryImportBanner } from './settings-screen';
 import { AgentCell, agentHosts, Icon, iconBtn, ModelCell } from './shell';
 import type {
@@ -2891,23 +2891,7 @@ export function ConversationsView({
         }
         stats={
           searchActive
-            ? [
-                {
-                  label: 'Index',
-                  value: searchMode === 'semantic' ? 'QMD' : 'FTS',
-                  tone: 'var(--primary-text)',
-                },
-                {
-                  label: 'Results',
-                  value: String(searchHits.length),
-                  tone: searchHits.length ? 'var(--success-text)' : 'var(--fg3)',
-                },
-                {
-                  label: 'Status',
-                  value: searchPhase === 'loading' ? 'Searching' : 'Ready',
-                  tone: searchPhase === 'loading' ? 'var(--warning-text)' : undefined,
-                },
-              ]
+            ? searchHeroStats(searchPhase, searchHits, searchMode)
             : [
                 { label: 'Range', value: rangeLabel },
                 {
