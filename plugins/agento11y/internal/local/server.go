@@ -33,6 +33,7 @@ const (
 	otlpTracesPath   = "/otlp/v1/traces"
 	otlpMetricsPath  = "/otlp/v1/metrics"
 	noncePlaceholder = "{{AGENTO11Y_CSP_NONCE}}"
+	themePlaceholder = "{{AGENTO11Y_THEME}}"
 )
 
 // Server is the in-process HTTP handler that records generations from
@@ -256,7 +257,12 @@ func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
 	if !bytes.Contains(body, []byte(noncePlaceholder)) {
 		s.logger.Printf("local: index.html missing CSP nonce placeholder %q", noncePlaceholder)
 	}
+	if !bytes.Contains(body, []byte(themePlaceholder)) {
+		s.logger.Printf("local: index.html missing theme placeholder %q", themePlaceholder)
+	}
+	theme := parseTheme(dotenv.LoadDotenv(s.configPath, s.logger))
 	body = bytes.ReplaceAll(body, []byte(noncePlaceholder), []byte(nonce))
+	body = bytes.ReplaceAll(body, []byte(themePlaceholder), []byte(theme))
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")

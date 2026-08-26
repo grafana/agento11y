@@ -163,15 +163,15 @@ export function chartTooltipLeft(i: number, n: number): string {
 // Per-model dot colour. New models fall back to a neutral grey
 // pulled from the Saga viz palette.
 const MODEL_COLORS: Record<string, string> = {
-  'claude-opus-4-7': '#FF8833',
-  'claude-opus-4-1': '#FF8833',
-  'claude-sonnet-4': '#FF9830',
-  'deepseek-v4-pro': '#5794F2',
-  'gpt-5-omni': '#73BF69',
+  'claude-opus-4-7': 'var(--model-opus)',
+  'claude-opus-4-1': 'var(--model-opus)',
+  'claude-sonnet-4': 'var(--model-sonnet)',
+  'deepseek-v4-pro': 'var(--model-deepseek)',
+  'gpt-5-omni': 'var(--model-gpt)',
 };
 export function modelDot(name: string | null | undefined): string {
-  if (!name) return '#808080';
-  return MODEL_COLORS[name] || '#808080';
+  if (!name) return 'var(--model-fallback)';
+  return MODEL_COLORS[name] || 'var(--model-fallback)';
 }
 
 // shortModel trims the vendor prefix and dated snapshot suffix so a list

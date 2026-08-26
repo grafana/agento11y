@@ -48,7 +48,7 @@ function SearchResultRow({ hit, now, query, selected, onSelect, onOpen }: Search
         display: 'block',
         padding: '11px 16px 12px',
         borderBottom: '1px solid var(--border-weak)',
-        background: selected ? 'rgba(204,204,220,0.06)' : 'transparent',
+        background: selected ? 'var(--row-selected)' : 'transparent',
         cursor: 'pointer',
         textDecoration: 'none',
         color: 'inherit',
@@ -174,9 +174,9 @@ function SearchResultRow({ hit, now, query, selected, onSelect, onOpen }: Search
             style={{
               fontFamily: 'var(--fontFamilyMonospace)',
               fontSize: 11,
-              color: 'var(--warning-main)',
-              background: 'rgba(245,183,61,0.10)',
-              border: '1px solid rgba(245,183,61,0.30)',
+              color: 'var(--search-match-text)',
+              background: 'var(--search-match-bg)',
+              border: '1px solid var(--search-match-border)',
               borderRadius: 2,
               padding: '0 5px',
               marginRight: 8,
@@ -300,13 +300,7 @@ export function ConversationSearchPanel({
   const showLoadingSkeleton = showResults && phase === 'loading' && hits.length === 0;
 
   return (
-    <SurfaceCard
-      style={{
-        overflow: 'hidden',
-        opacity: phase === 'loading' && hits.length > 0 ? 0.55 : 1,
-        transition: 'opacity 120ms ease',
-      }}
-    >
+    <SurfaceCard style={{ overflow: 'hidden' }}>
       {error && (
         <div
           style={{
@@ -379,9 +373,7 @@ export function ConversationSearchPanel({
               {hits.length} {hits.length === 1 ? 'result' : 'results'}
             </span>
             <span style={{ flex: 1 }} />
-            <span style={{ fontSize: 11, opacity: 0.7 }}>
-              ranked by {mode === 'semantic' ? 'relevance (qmd)' : 'matches'}
-            </span>
+            <span style={{ fontSize: 11 }}>ranked by {mode === 'semantic' ? 'relevance (qmd)' : 'matches'}</span>
           </div>
           {hits.map((hit, i) => (
             <SearchResultRow

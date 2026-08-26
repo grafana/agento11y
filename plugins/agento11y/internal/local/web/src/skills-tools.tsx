@@ -16,7 +16,7 @@ const TOOL_COLORS = [
   'var(--viz-purple)',
   'var(--viz-green)',
   'var(--viz-yellow)',
-  'rgba(204,204,220,0.35)',
+  'var(--tool-neutral)',
 ] as const;
 
 export interface SkillsToolsViewProps {

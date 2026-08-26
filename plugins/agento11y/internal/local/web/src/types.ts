@@ -230,6 +230,9 @@ export interface SearchResponse {
   mode: string;
 }
 
+/** The local viewer colour scheme persisted in config.env. */
+export type ThemePreference = 'dark' | 'light' | 'system';
+
 /** Tag in settings.go: one key/value pair written to config.env. */
 export interface Tag {
   key: string;
@@ -246,6 +249,7 @@ export interface Tag {
  * alone.
  */
 export interface Settings {
+  theme: ThemePreference;
   endpoint: string;
   tenantId: string;
   otlpEndpoint: string;

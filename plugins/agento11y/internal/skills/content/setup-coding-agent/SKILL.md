@@ -369,8 +369,7 @@ using it, with the new `agento11y.log` file name.
 
 ### Config keys
 
-All hosts read the resolved config path. The default is
-`~/.config/agento11y/config.env`; `$XDG_CONFIG_HOME` changes the config root.
+All hosts read the resolved config path. The default is `~/.config/agento11y/config.env`; `$XDG_CONFIG_HOME` changes the config root.
 
 | Key | Meaning |
 | --- | --- |
@@ -387,6 +386,7 @@ All hosts read the resolved config path. The default is
 | `AGENTO11Y_GUARDS_FAIL_OPEN` | Allow the operation when guard evaluation fails |
 | `AGENTO11Y_LOCAL` | A true value routes `agento11y <agent>` launches, agento11y hooks, and history imports to the local daemon |
 | `AGENTO11Y_LOCAL_FORWARD` | Forward local-mode captures to Grafana Cloud |
+| `AGENTO11Y_THEME` | Local viewer theme: `dark`, `light`, or `system`; defaults to `dark` |
 | `AGENTO11Y_AUTO_UPDATE` | A false value opts out of host-plugin refresh |
 | `AGENTO11Y_DEBUG` | A true value writes the debug log |
 

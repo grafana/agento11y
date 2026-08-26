@@ -127,13 +127,7 @@ const MODEL_GRID = 'minmax(72px, 1fr) 70px 68px 56px';
 const SHAPE_GRID = '82px minmax(0, 1fr) 26px';
 const SESSION_GRID = '26px minmax(0, 1fr) 130px 84px 88px 128px 88px';
 const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
-const HEAT_COLORS = [
-  'rgba(204,204,220,0.05)',
-  'rgba(255,103,29,0.22)',
-  'rgba(255,103,29,0.45)',
-  'rgba(255,103,29,0.7)',
-  'rgba(255,103,29,0.95)',
-] as const;
+const HEAT_COLORS = ['var(--heat-0)', 'var(--heat-1)', 'var(--heat-2)', 'var(--heat-3)', 'var(--heat-4)'] as const;
 
 function tokenTotal(buckets: TokenBuckets | null | undefined): number {
   if (!buckets) return 0;
@@ -344,7 +338,7 @@ function UnitToggle({ value, onChange }: { value: AnalyticsUnit; onChange: (valu
         border: '1px solid var(--border-medium)',
         borderRadius: 999,
         background: PANEL_BG,
-        boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.10)',
+        boxShadow: 'var(--control-inset-shadow)',
       }}
     >
       {options.map((option) => {
@@ -447,7 +441,7 @@ function cacheSparkline(
     return {
       key: bucket.key,
       value: pct,
-      tone: overall != null && pct > 0 && pct + 8 < overall ? 'rgba(245,183,61,0.55)' : undefined,
+      tone: overall != null && pct > 0 && pct + 8 < overall ? 'var(--warning-spark)' : undefined,
     };
   });
 }
@@ -662,7 +656,6 @@ export function AnalyticsChart({
                       color: 'inherit',
                       font: 'inherit',
                       cursor: 'pointer',
-                      opacity: hidden ? 0.6 : 1,
                       textDecoration: hidden ? 'line-through' : 'none',
                     }}
                   >
@@ -734,7 +727,7 @@ export function AnalyticsChart({
                     x2={100}
                     y1={32 * line}
                     y2={32 * line}
-                    stroke="rgba(204,204,220,0.06)"
+                    stroke="var(--chart-grid)"
                     strokeWidth="0.2"
                   />
                 ))}
@@ -970,7 +963,7 @@ function WorkspacesPanel({
                   fontSize: 12,
                   textDecoration: 'none',
                 }}
-                onMouseEnter={(event) => (event.currentTarget.style.background = 'rgba(204,204,220,0.03)')}
+                onMouseEnter={(event) => (event.currentTarget.style.background = 'var(--row-hover)')}
                 onMouseLeave={(event) => (event.currentTarget.style.background = 'transparent')}
               >
                 <span
@@ -1017,7 +1010,7 @@ function WorkspacesPanel({
                       height: 6,
                       borderRadius: 2,
                       overflow: 'hidden',
-                      background: 'rgba(204,204,220,0.07)',
+                      background: 'var(--bar-track)',
                     }}
                   >
                     <span
@@ -1177,13 +1170,13 @@ function SessionShapePanel({ conversations, empty }: { conversations: Conversati
               }}
             >
               <span style={{ color: 'var(--fg2)' }}>{bucket.label}</span>
-              <span style={{ height: 14, overflow: 'hidden', background: 'rgba(204,204,220,0.05)' }}>
+              <span style={{ height: 14, overflow: 'hidden', background: 'var(--shape-track)' }}>
                 <span
                   style={{
                     display: 'block',
                     width: `${(bucket.count / max) * 100}%`,
                     height: '100%',
-                    background: bucket.key === 'over-10m' ? 'rgba(255,103,29,0.7)' : 'rgba(87,148,242,0.55)',
+                    background: bucket.key === 'over-10m' ? 'var(--shape-hot-fill)' : 'var(--shape-fill)',
                   }}
                 />
               </span>
@@ -1331,7 +1324,7 @@ function HeatmapPanel({
                           padding: 0,
                           border: costStatus === 'unknown' ? '1px dotted var(--warning-text)' : 'none',
                           borderRadius: 1,
-                          background: costStatus === 'unknown' ? 'rgba(245,183,61,0.12)' : HEAT_COLORS[level],
+                          background: costStatus === 'unknown' ? 'var(--warning-soft-bg)' : HEAT_COLORS[level],
                           opacity: costStatus === 'partial' ? 0.7 : 1,
                           cursor: 'pointer',
                         }}
@@ -1504,7 +1497,7 @@ function HeaviestSessionsPanel({
                 fontSize: 12,
                 textDecoration: 'none',
               }}
-              onMouseEnter={(event) => (event.currentTarget.style.background = 'rgba(204,204,220,0.03)')}
+              onMouseEnter={(event) => (event.currentTarget.style.background = 'var(--row-hover)')}
               onMouseLeave={(event) => (event.currentTarget.style.background = 'transparent')}
             >
               <span style={{ color: 'var(--fg3)' }}>{position + 1}</span>
@@ -1812,7 +1805,7 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
               : 'var(--fg2)'
           }
           bars={costSpark}
-          color="rgba(255,103,29,0.4)"
+          color="var(--spark-orange)"
           peakColor="var(--brand-orange)"
           sub={
             selectedCurrent.length === 0
@@ -1829,7 +1822,7 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
           value={formatTokens(currentTokens)}
           delta={hidePeriodDeltas ? null : percentageDelta(currentTokens, previousTokens)}
           bars={tokenSpark}
-          color="rgba(115,191,105,0.4)"
+          color="var(--spark-green)"
           peakColor="var(--viz-green)"
           sub={
             selectedCurrent.length === 0
@@ -1847,7 +1840,7 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
               : 'var(--fg2)'
           }
           bars={cacheSpark}
-          color="rgba(115,191,105,0.4)"
+          color="var(--spark-green)"
           peakColor="var(--viz-green)"
           sub={
             selectedCurrent.length === 0
@@ -1860,8 +1853,8 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
           value={formatInteger(currentCalls)}
           delta={hidePeriodDeltas ? null : percentageDelta(currentCalls, previousCalls)}
           bars={callSpark}
-          color="rgba(204,204,220,0.2)"
-          peakColor="rgba(204,204,220,0.38)"
+          color="var(--spark-neutral)"
+          peakColor="var(--spark-neutral-peak)"
           sub={
             selectedCurrent.length === 0 ? (
               empty

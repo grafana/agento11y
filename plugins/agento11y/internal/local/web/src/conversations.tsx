@@ -236,7 +236,7 @@ function ActivityChart({
           >
             <title>Session activity over time</title>
             {[0, 0.5].map((g) => (
-              <line key={g} x1={0} x2={W} y1={H * g} y2={H * g} stroke="rgba(204,204,220,0.06)" strokeWidth="0.2" />
+              <line key={g} x1={0} x2={W} y1={H * g} y2={H * g} stroke="var(--chart-grid)" strokeWidth="0.2" />
             ))}
             {data.map((d, i) => {
               const h = (d.c / max) * H;
@@ -412,7 +412,6 @@ export function TokenChart({
                   cursor: 'pointer',
                   font: 'inherit',
                   color: off ? 'var(--fg3)' : 'inherit',
-                  opacity: off ? 0.6 : 1,
                   textDecoration: off ? 'line-through' : 'none',
                 }}
               >
@@ -467,7 +466,7 @@ export function TokenChart({
           >
             <title>Token usage over time</title>
             {[0, 0.5].map((g) => (
-              <line key={g} x1={0} x2={W} y1={H * g} y2={H * g} stroke="rgba(204,204,220,0.06)" strokeWidth="0.2" />
+              <line key={g} x1={0} x2={W} y1={H * g} y2={H * g} stroke="var(--chart-grid)" strokeWidth="0.2" />
             ))}
             {data.map((d, i) => {
               const x = i * (W / data.length) + gap / 2;
@@ -633,7 +632,7 @@ export function TimeRangePicker({ value, onChange, ranges = TIME_RANGES }: TimeR
           padding: '0 10px',
           border: '1px solid var(--border-medium)',
           borderRadius: 2,
-          background: 'rgba(24,27,31,0.78)',
+          background: 'var(--control-bg)',
           color: 'var(--fg1)',
           fontSize: 13,
           fontFamily: 'var(--fontFamily)',
@@ -668,7 +667,7 @@ export function TimeRangePicker({ value, onChange, ranges = TIME_RANGES }: TimeR
             border: '1px solid var(--border-strong)',
             borderRadius: 2,
             background: 'var(--bg-secondary)',
-            boxShadow: '0 12px 34px rgba(0,0,0,0.48)',
+            boxShadow: 'var(--menu-shadow)',
           }}
         >
           {ranges.map((r) => {
@@ -885,7 +884,7 @@ export function WorkspaceFacet({
           padding: '0 10px',
           border: `1px solid ${selectedPath ? 'var(--primary-border)' : 'var(--border-medium)'}`,
           borderRadius: 2,
-          background: 'rgba(24,27,31,0.78)',
+          background: 'var(--control-bg)',
           color: 'var(--fg1)',
           fontSize: 13,
           fontFamily: 'var(--fontFamily)',
@@ -962,7 +961,7 @@ export function WorkspaceFacet({
             border: '1px solid var(--border-strong)',
             borderRadius: 2,
             background: 'var(--bg-secondary)',
-            boxShadow: '0 12px 34px rgba(0,0,0,0.48)',
+            boxShadow: 'var(--menu-shadow)',
           }}
         >
           <div
@@ -972,7 +971,7 @@ export function WorkspaceFacet({
               alignItems: 'center',
               gap: 7,
               padding: '0 9px',
-              background: 'rgba(17,18,23,0.42)',
+              background: 'var(--panel-bg)',
               borderRadius: 2,
               color: 'var(--fg3)',
             }}
@@ -1166,7 +1165,7 @@ export function WorkspaceFacet({
                           display: 'block',
                           height: 2,
                           borderRadius: 2,
-                          background: 'rgba(204,204,220,0.08)',
+                          background: 'var(--share-track)',
                           overflow: 'hidden',
                         }}
                       >
@@ -1295,7 +1294,7 @@ function FilterBar({
     padding: '0 30px 0 11px',
     border: '1px solid var(--border-medium)',
     borderRadius: 2,
-    background: 'rgba(24,27,31,0.78)',
+    background: 'var(--control-bg)',
     color: 'var(--fg1)',
     fontSize: 13,
     fontFamily: 'var(--fontFamily)',
@@ -1312,9 +1311,9 @@ function FilterBar({
           height: 34,
           border: '1px solid var(--border-medium)',
           borderRadius: 2,
-          background: 'rgba(24,27,31,0.78)',
+          background: 'var(--control-bg)',
           color: 'var(--fg3)',
-          boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.12)',
+          boxShadow: 'var(--search-inset-shadow)',
         }}
       >
         <Icon name="search" size={14} />
@@ -1502,7 +1501,7 @@ export function ConvRow({ c, now, onOpen, prices, grouped = false, hideWorkspace
         textDecoration: 'none',
         color: 'inherit',
       }}
-      onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(204,204,220,0.03)')}
+      onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--row-hover)')}
       onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
     >
       <span style={{ color: 'var(--fg2)' }}>{formatAgo(c.last_activity, now)}</span>
@@ -1544,7 +1543,7 @@ export function ConvRow({ c, now, onOpen, prices, grouped = false, hideWorkspace
                 padding: '0 6px',
                 height: 16,
                 borderRadius: 2,
-                background: 'rgba(204,204,220,0.06)',
+                background: 'var(--subagent-chip-bg)',
                 color: 'var(--fg2)',
                 fontSize: 10,
                 fontFamily: 'var(--fontFamilyMonospace)',
@@ -1670,17 +1669,17 @@ function SessionGroupHeader({
         padding: '10px 16px',
         border: 'none',
         borderBottom: '1px solid var(--border-weak)',
-        background: 'rgba(34,37,43,0.55)',
+        background: 'var(--group-bg)',
         color: 'inherit',
         cursor: 'pointer',
         textAlign: 'left',
         font: 'inherit',
       }}
       onMouseEnter={(e) => {
-        e.currentTarget.style.background = 'rgba(34,37,43,0.8)';
+        e.currentTarget.style.background = 'var(--group-hover)';
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.background = 'rgba(34,37,43,0.55)';
+        e.currentTarget.style.background = 'var(--group-bg)';
       }}
     >
       <span
@@ -1755,7 +1754,7 @@ function SessionGroupHeader({
             height: 3,
             flex: '0 0 auto',
             borderRadius: 2,
-            background: 'rgba(204,204,220,0.08)',
+            background: 'var(--share-track)',
             overflow: 'hidden',
           }}
         >
@@ -1823,7 +1822,7 @@ function WorkspaceContextStrip({ path, count, cost, tokens, last, share, now, on
         gap: 14,
         padding: '10px 16px',
         borderBottom: '1px solid var(--border-weak)',
-        background: 'rgba(34,37,43,0.55)',
+        background: 'var(--group-bg)',
         color: 'var(--fg2)',
         fontFamily: 'var(--fontFamilyMonospace)',
         fontSize: 11.5,
@@ -1871,7 +1870,7 @@ function WorkspaceContextStrip({ path, count, cost, tokens, last, share, now, on
           height: 3,
           flex: '0 0 auto',
           borderRadius: 2,
-          background: 'rgba(204,204,220,0.08)',
+          background: 'var(--share-track)',
           overflow: 'hidden',
         }}
       >
@@ -2160,7 +2159,7 @@ function KpiTile({ label, value, valueColor, sub, dot, bar, tooltip }: KpiTilePr
             display: 'block',
             height: 4,
             borderRadius: 2,
-            background: 'rgba(204,204,220,0.1)',
+            background: 'var(--progress-track)',
             overflow: 'hidden',
             marginTop: 1,
           }}

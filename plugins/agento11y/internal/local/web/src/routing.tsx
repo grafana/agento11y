@@ -256,8 +256,8 @@ export function highlightTerms(text: string | null | undefined, query: string): 
   const wash: CSSProperties = {
     color: 'var(--fg-max)',
     fontWeight: 500,
-    background: 'rgba(245,183,61,0.18)',
-    boxShadow: 'inset 0 -1px 0 rgba(245,183,61,0.45)',
+    background: 'var(--search-highlight-bg)',
+    boxShadow: 'inset 0 -1px 0 var(--search-highlight-edge)',
     borderRadius: 2,
     padding: '0 2px',
   };
