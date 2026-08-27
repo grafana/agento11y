@@ -301,9 +301,25 @@ func (c *toolUsageCounter) addGeneration(gen summaryGeneration, timestamp time.T
 	}
 }
 
+func toolNameKey(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
+func preferredToolSpelling(counts map[string]int) string {
+	preferred := ""
+	preferredCalls := -1
+	for spelling, calls := range counts {
+		if calls > preferredCalls || calls == preferredCalls && spelling < preferred {
+			preferred = spelling
+			preferredCalls = calls
+		}
+	}
+	return preferred
+}
+
 func sameToolResult(a, b toolProbeResult) bool {
 	return strings.TrimSpace(a.ToolCallID) == strings.TrimSpace(b.ToolCallID) &&
-		strings.TrimSpace(a.Name) == strings.TrimSpace(b.Name) && a.IsError == b.IsError
+		toolNameKey(a.Name) == toolNameKey(b.Name) && a.IsError == b.IsError
 }
 
 func (c *toolUsageCounter) addCall(call toolProbeCall, timestamp time.Time) {
@@ -318,11 +334,11 @@ func (c *toolUsageCounter) addCall(call toolProbeCall, timestamp time.Time) {
 		c.pendingByID[id] = append(c.pendingByID[id], idx)
 		return
 	}
-	if name != "" {
+	if key := toolNameKey(name); key != "" {
 		if c.pendingAnonymous == nil {
 			c.pendingAnonymous = map[string][]int{}
 		}
-		c.pendingAnonymous[name] = append(c.pendingAnonymous[name], idx)
+		c.pendingAnonymous[key] = append(c.pendingAnonymous[key], idx)
 	}
 }
 
@@ -353,9 +369,10 @@ func (c *toolUsageCounter) addResult(result toolProbeResult, timestamp time.Time
 		c.occurrences = append(c.occurrences, toolOccurrence{Timestamp: timestamp, CallID: id, Name: name, Failed: result.IsError})
 		return
 	}
-	if pending := c.pendingAnonymous[name]; name != "" && len(pending) > 0 {
+	key := toolNameKey(name)
+	if pending := c.pendingAnonymous[key]; key != "" && len(pending) > 0 {
 		idx := pending[0]
-		c.pendingAnonymous[name] = pending[1:]
+		c.pendingAnonymous[key] = pending[1:]
 		c.occurrences[idx].Failed = c.occurrences[idx].Failed || result.IsError
 		return
 	}
@@ -363,22 +380,32 @@ func (c *toolUsageCounter) addResult(result toolProbeResult, timestamp time.Time
 }
 
 func toolUsage(occurrences []toolOccurrence, since, before time.Time) []ToolUsage {
-	counts := map[string]ToolUsage{}
+	type accumulator struct {
+		usage     ToolUsage
+		spellings map[string]int
+	}
+	counts := map[string]*accumulator{}
 	for _, occurrence := range occurrences {
-		if !inPeriod(occurrence.Timestamp, since, before) || occurrence.Name == "" {
+		name := strings.TrimSpace(occurrence.Name)
+		key := toolNameKey(name)
+		if !inPeriod(occurrence.Timestamp, since, before) || key == "" {
 			continue
 		}
-		usage := counts[occurrence.Name]
-		usage.Name = occurrence.Name
-		usage.Calls++
-		if occurrence.Failed {
-			usage.Failures++
+		entry := counts[key]
+		if entry == nil {
+			entry = &accumulator{spellings: map[string]int{}}
+			counts[key] = entry
 		}
-		counts[occurrence.Name] = usage
+		entry.usage.Calls++
+		entry.spellings[name]++
+		if occurrence.Failed {
+			entry.usage.Failures++
+		}
 	}
 	out := make([]ToolUsage, 0, len(counts))
-	for _, usage := range counts {
-		out = append(out, usage)
+	for _, entry := range counts {
+		entry.usage.Name = preferredToolSpelling(entry.spellings)
+		out = append(out, entry.usage)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out

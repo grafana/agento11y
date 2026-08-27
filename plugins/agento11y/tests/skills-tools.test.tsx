@@ -92,6 +92,10 @@ describe('Tools analytics component', () => {
     render(<SkillsToolsView {...props()} />);
 
     expect(screen.getByRole('link', { name: 'Tools' })).toBeTruthy();
+    expect(screen.getByText('Sessions with tool calls')).toBeTruthy();
+    fireEvent.click(screen.getByTitle('Filter by workspace'));
+    expect(screen.getByRole('option', { name: /All workspaces with tool calls/ })).toBeTruthy();
+    expect(screen.getByText(/2 workspaces with tool calls/)).toBeTruthy();
     expect(screen.getByText('2 · 6.5%')).toBeTruthy();
     expect(screen.getByText('21/31')).toBeTruthy();
     expect(screen.queryByText(/Source coverage:/)).toBeNull();
@@ -116,6 +120,46 @@ describe('Tools analytics component', () => {
     expect(segment.getAttribute('href')).toBe(
       '/?tool=Bash&workspace=%2Frepo&since=2026-08-21T10%3A00%3A00.000Z&before=2026-08-21T10%3A05%3A00.000Z',
     );
+  });
+
+  it('renders one deep-link row for a case-folded tool aggregate', () => {
+    render(
+      <SkillsToolsView
+        {...props({
+          data: {
+            ...DATA,
+            totals: { ...DATA.totals, calls: 130066, tools: 1 },
+            rows: DATA.rows.slice(0, 1).map((row) => ({ ...row, calls: 130066 })),
+          },
+        })}
+      />,
+    );
+
+    expect(document.querySelectorAll('[data-tool-row]')).toHaveLength(1);
+    expect(screen.getByRole('link', { name: 'Bash' }).getAttribute('href')).toContain('tool=Bash');
+    const bash = document.querySelector<HTMLTableRowElement>('tr[data-tool-row="Bash"]');
+    expect(bash?.cells[3]?.textContent).toBe('130,066');
+  });
+
+  it('pins grouped counts when the browser locale is Dutch', () => {
+    vi.spyOn(Number.prototype, 'toLocaleString').mockImplementation(function (this: number, locales, options) {
+      return new Intl.NumberFormat(locales || 'nl-NL', options).format(Number(this));
+    });
+    render(
+      <SkillsToolsView
+        {...props({
+          data: {
+            ...DATA,
+            totals: { ...DATA.totals, calls: 200102 },
+            rows: DATA.rows.slice(0, 1).map((row) => ({ ...row, calls: 200102 })),
+          },
+        })}
+      />,
+    );
+
+    const bash = document.querySelector<HTMLTableRowElement>('tr[data-tool-row="Bash"]');
+    if (!bash) throw new Error('missing Bash row');
+    expect(bash.cells[3]?.textContent).toBe('200,102');
   });
 
   it('sorts by every data column and keeps missing durations last', () => {

@@ -1,6 +1,7 @@
 import type { CSSProperties, ReactNode } from 'react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { markdownURL } from './detail';
+import { formatInteger } from './formatters';
 import { HistoryDatePicker, localDateStartISO } from './history-date-picker';
 import type { NoticeKind } from './notices';
 import {
@@ -206,7 +207,7 @@ export function useHistoryImport(liveRun: ImportRunView | null | undefined): His
 
 function formatImportTurns(offer: Pick<HistoryOffer, 'turns' | 'approx_turns'>): string {
   const turns = offer.turns || 0;
-  const count = `${turns.toLocaleString()} turn${turns === 1 ? '' : 's'}`;
+  const count = `${formatInteger(turns)} turn${turns === 1 ? '' : 's'}`;
   return offer.approx_turns ? `about ${count}` : count;
 }
 
@@ -2579,7 +2580,7 @@ export function SettingsHistoryTab({ history }: SettingsHistoryTabProps) {
           ) : planError ? (
             <span style={{ color: 'var(--error-text)' }}>{planError}</span>
           ) : (
-            `${sessions.length} sessions · ${approx ? 'about ' : ''}${turns.toLocaleString()} turns`
+            `${formatInteger(sessions.length)} sessions · ${approx ? 'about ' : ''}${formatInteger(turns)} turns`
           )}
         </div>
       </SettingRow>
@@ -2659,9 +2660,9 @@ function HistoryImportStatus({ run }: HistoryImportStatusProps) {
                 gap: '2px 12px',
               }}
             >
-              <span>{(run.imported || 0).toLocaleString()} turns imported</span>
-              <span>{(run.skipped || 0).toLocaleString()} already imported</span>
-              <span>{(run.failed || 0).toLocaleString()} failed</span>
+              <span>{formatInteger(run.imported || 0)} turns imported</span>
+              <span>{formatInteger(run.skipped || 0)} already imported</span>
+              <span>{formatInteger(run.failed || 0)} failed</span>
             </span>
           </div>
         )}

@@ -12,6 +12,10 @@ import type { ModelCost, ModelPrices, TokenBucketKey, TokenBuckets, TokenUsagePo
 // all read the same in a table.
 export const NO_VALUE = '-';
 
+export function formatInteger(value: number): string {
+  return Math.round(value).toLocaleString('en-US');
+}
+
 export function formatTokens(n: number | null | undefined): string {
   if (n == null || Number.isNaN(Number(n))) return NO_VALUE;
   if (n < 1000) return String(n);
@@ -258,6 +262,23 @@ function modelPrice(model: string | null | undefined): BundledModelPrice | null 
   return MODEL_PRICES.find((p) => m.includes(p.match)) || null;
 }
 
+export function maximumEstimatedTokenRate(prices: ModelPrices | null | undefined): number {
+  let maximum = Math.max(...MODEL_PRICES.flatMap((price) => [price.in, price.out, price.in * 1.25]));
+  for (const price of Object.values(prices || {})) {
+    const input = price.input;
+    if (input == null || !Number.isFinite(input)) continue;
+    for (const rate of [
+      input,
+      price.output ?? input,
+      price.cache_read ?? input * 0.1,
+      price.cache_write ?? input * 1.25,
+    ]) {
+      if (Number.isFinite(rate)) maximum = Math.max(maximum, rate);
+    }
+  }
+  return maximum;
+}
+
 // Cursor hosted Grok SKUs are `cursor-grok-4.6-high-fast`. models.dev (and
 // the Cloud catalog) key the same model as `grok-4.6`. Keep this suffix
 // list in sync with canonicalizeCursorModel in the cursor mapper.
@@ -361,12 +382,12 @@ function loadModelPrices(): Promise<ModelPrices> {
   return modelPricesPromise;
 }
 
-// useModelPrices resolves to the flattened models.dev map, or null while
-// loading / when the fetch fails (the daemon may be offline). Callers must
-// tolerate null and fall back to the bundled table.
-export function useModelPrices(): ModelPrices | null {
+// Returns null until prices load. Disabling the hook stops loading but keeps
+// prices already loaded. Callers must use the bundled table while null.
+export function useModelPrices(enabled = true): ModelPrices | null {
   const [prices, setPrices] = useState<ModelPrices | null>(null);
   useEffect(() => {
+    if (!enabled) return;
     let alive = true;
     loadModelPrices()
       .then((m) => {
@@ -376,7 +397,7 @@ export function useModelPrices(): ModelPrices | null {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [enabled]);
   return prices;
 }
 

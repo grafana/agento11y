@@ -268,6 +268,7 @@ func aggregateToolAnalytics(observations []toolObservation, interval time.Durati
 		row       ToolAnalyticsRow
 		durations []time.Duration
 		sessions  map[string]struct{}
+		spellings map[string]int
 	}
 	type bucketKey struct {
 		start int64
@@ -292,12 +293,15 @@ func aggregateToolAnalytics(observations []toolObservation, interval time.Durati
 		if observation.HasGeneration && observation.HasSpan {
 			coverage.MatchedCalls++
 		}
-		row := rows[observation.Name]
+		name := strings.TrimSpace(observation.Name)
+		nameKey := toolNameKey(name)
+		row := rows[nameKey]
 		if row == nil {
-			row = &rowAccumulator{row: ToolAnalyticsRow{Name: observation.Name}, sessions: map[string]struct{}{}}
-			rows[observation.Name] = row
+			row = &rowAccumulator{sessions: map[string]struct{}{}, spellings: map[string]int{}}
+			rows[nameKey] = row
 		}
 		row.row.Calls++
+		row.spellings[name]++
 		if observation.Failed {
 			row.row.Failures++
 		}
@@ -310,10 +314,10 @@ func aggregateToolAnalytics(observations []toolObservation, interval time.Durati
 		}
 
 		start := intervalStart(observation.Timestamp, interval)
-		key := bucketKey{start: start.UnixNano(), name: observation.Name}
+		key := bucketKey{start: start.UnixNano(), name: nameKey}
 		bucket := buckets[key]
 		if bucket == nil {
-			bucket = &ToolAnalyticsBucket{Timestamp: start, Name: observation.Name}
+			bucket = &ToolAnalyticsBucket{Timestamp: start}
 			buckets[key] = bucket
 		}
 		bucket.Calls++
@@ -331,7 +335,10 @@ func aggregateToolAnalytics(observations []toolObservation, interval time.Durati
 	analytics.Totals.Calls = totalCalls
 	analytics.Totals.Tools = len(rows)
 	analytics.Totals.Sessions = len(sessions)
-	for _, accumulator := range rows {
+	displayNames := make(map[string]string, len(rows))
+	for key, accumulator := range rows {
+		accumulator.row.Name = preferredToolSpelling(accumulator.spellings)
+		displayNames[key] = accumulator.row.Name
 		accumulator.row.Sessions = len(accumulator.sessions)
 		accumulator.row.DurationSamples = len(accumulator.durations)
 		analytics.Totals.Failures += accumulator.row.Failures
@@ -351,7 +358,8 @@ func aggregateToolAnalytics(observations []toolObservation, interval time.Durati
 		}
 		return analytics.Rows[i].Name < analytics.Rows[j].Name
 	})
-	for _, bucket := range buckets {
+	for key, bucket := range buckets {
+		bucket.Name = displayNames[key.name]
 		analytics.Buckets = append(analytics.Buckets, *bucket)
 	}
 	sort.Slice(analytics.Buckets, func(i, j int) bool {

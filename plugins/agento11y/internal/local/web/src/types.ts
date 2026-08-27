@@ -5,9 +5,8 @@
 // the SDK shares. Nothing checks the two against each other, so a renamed
 // `json:` tag shows up here as a field the viewer reads and never finds.
 //
-// Optional fields are the ones whose Go tag carries `omitempty`: the daemon
-// leaves them out of the object rather than sending a zero. Timestamps are
-// RFC 3339 strings.
+// Optional fields either carry `omitempty` in Go or were added after the first
+// response version. Timestamps are RFC 3339 strings.
 
 /** TokenBuckets in query.go: one generation's usage, split into disjoint parts. */
 export interface TokenBuckets {
@@ -47,6 +46,15 @@ export interface ConversationListResponse {
   total_conversations: number;
 }
 
+export interface WorkspaceMetricsAggregate {
+  path: string;
+  sessions: number;
+  token_buckets: TokenBuckets;
+  token_buckets_by_model: Record<string, TokenBuckets>;
+  duration_seconds: number;
+  last_activity: string;
+}
+
 export interface ConversationMetricsAggregate {
   calls: number;
   errored: number;
@@ -56,6 +64,7 @@ export interface ConversationMetricsAggregate {
   token_buckets: TokenBuckets;
   token_buckets_by_model: Record<string, TokenBuckets>;
   models: string[];
+  workspace_rows?: WorkspaceMetricsAggregate[];
 }
 
 export interface ConversationMetricsResponse {

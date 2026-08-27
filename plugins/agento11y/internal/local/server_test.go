@@ -306,7 +306,7 @@ func TestServer_ConversationMetrics(t *testing.T) {
 		tokens                int64
 	}{
 		{conv: "conv-repo", when: "2026-08-21T10:00:00Z", workspace: "/repo", tokens: 5},
-		{conv: "conv-repo", when: "2026-08-21T11:00:00Z", workspace: "/repo", tokens: 50},
+		{conv: "conv-repo", when: "2026-08-21T11:00:00Z", workspace: "/repo", tokens: 500},
 		{conv: "conv-unknown", when: "2026-08-21T10:30:00Z", tokens: 7},
 	} {
 		writeGen(t, storage, seed.conv, seed.when, agento11y.Generation{
@@ -333,8 +333,43 @@ func TestServer_ConversationMetrics(t *testing.T) {
 		assert.Equal(t, 0, got.Aggregate.Agents)
 		assert.Equal(t, 2, got.Aggregate.Workspaces)
 		assert.Equal(t, TokenBuckets{FreshInput: 12}, got.Aggregate.TokenBuckets)
+		assert.Equal(t, []WorkspaceAggregate{
+			{
+				Sessions:            1,
+				TokenBuckets:        TokenBuckets{FreshInput: 7},
+				TokenBucketsByModel: map[string]TokenBuckets{"": {FreshInput: 7}},
+				LastActivity:        mustParse(t, "2026-08-21T10:30:00Z"),
+			},
+			{
+				Path:                "/repo",
+				Sessions:            1,
+				TokenBuckets:        TokenBuckets{FreshInput: 5},
+				TokenBucketsByModel: map[string]TokenBuckets{"": {FreshInput: 5}},
+				LastActivity:        mustParse(t, "2026-08-21T10:00:00Z"),
+			},
+		}, got.Aggregate.WorkspaceRows)
 		require.Len(t, got.Conversations, 1)
 		assert.Equal(t, "conv-unknown", got.Conversations[0].ID)
+	})
+
+	t.Run("token ordering precedes the limit", func(t *testing.T) {
+		writeGen(t, storage, "conv-heavy", "g1", agento11y.Generation{
+			StartedAt: mustParse(t, "2026-08-21T09:00:00Z"),
+			Usage:     agento11y.TokenUsage{InputTokens: 100},
+		}, "2026-08-21T09:00:00Z")
+		req := newLocalRequest(http.MethodGet,
+			"/api/v1/metrics/conversations?limit=1&order=tokens&since=2026-08-21T08:00:00Z&before=2026-08-21T11:00:00Z", nil)
+		rr := httptest.NewRecorder()
+		srv.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code)
+		var got struct {
+			Conversations        []ConversationSummary `json:"conversations"`
+			MatchedConversations int                   `json:"matched_conversations"`
+		}
+		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &got))
+		assert.Equal(t, 3, got.MatchedConversations)
+		require.Len(t, got.Conversations, 1)
+		assert.Equal(t, "conv-heavy", got.Conversations[0].ID, "the oldest but largest row is returned")
 	})
 
 	t.Run("present blank workspace selects unknown", func(t *testing.T) {
@@ -352,6 +387,7 @@ func TestServer_ConversationMetrics(t *testing.T) {
 			"/api/v1/metrics/conversations?limit=0",
 			"/api/v1/metrics/conversations?since=",
 			"/api/v1/metrics/conversations?before=tomorrow",
+			"/api/v1/metrics/conversations?order=cost",
 		} {
 			rr := httptest.NewRecorder()
 			srv.ServeHTTP(rr, newLocalRequest(http.MethodGet, path, nil))
@@ -486,6 +522,7 @@ func TestServer_SkillsToolsMetricsAndSessionDrilldown(t *testing.T) {
 	lower := mustParse(t, "2026-08-21T10:00:00Z")
 	upper := mustParse(t, "2026-08-21T11:00:00Z")
 	writeToolGeneration(t, storage, "conv-match", "g1", "/repo", lower, "call-1", "Bash", true)
+	writeToolGeneration(t, storage, "conv-lower", "g1", "/repo", lower.Add(10*time.Minute), "call-lower", "bash", false)
 	writeToolGeneration(t, storage, "conv-new", "g1", "/repo", upper, "call-2", "Bash", false)
 	_, err := storage.appendToolSpans([]toolSpanRecord{
 		analyticsSpan("conv-match", "trace-1", "span-1", "call-1", "Bash", lower.Add(time.Second), 2*time.Second, false),
@@ -501,16 +538,17 @@ func TestServer_SkillsToolsMetricsAndSessionDrilldown(t *testing.T) {
 		assert.NotContains(t, rr.Body.String(), `"skills"`)
 		var got SkillsToolsMetricsResponse
 		decodeJSON(t, io.NopCloser(rr.Body), &got)
-		assert.Equal(t, ToolAnalyticsTotals{Calls: 1, Failures: 1, Tools: 1, Sessions: 1, DurationSamples: 1}, got.Tools.Totals)
-		assert.Equal(t, ToolAnalyticsCoverage{GenerationCalls: 1, ProjectedSpans: 1, MatchedCalls: 1}, got.Tools.Coverage)
+		assert.Equal(t, ToolAnalyticsTotals{Calls: 2, Failures: 1, Tools: 1, Sessions: 2, DurationSamples: 1}, got.Tools.Totals)
+		assert.Equal(t, ToolAnalyticsCoverage{GenerationCalls: 2, ProjectedSpans: 1, MatchedCalls: 1}, got.Tools.Coverage)
 		assert.Equal(t, int64(300), got.Tools.IntervalSeconds)
 		require.Len(t, got.Tools.Rows, 1)
 		assert.Equal(t, "Bash", got.Tools.Rows[0].Name)
+		assert.Equal(t, 2, got.Tools.Rows[0].Calls)
 	})
 
-	t.Run("sessions filters before limit", func(t *testing.T) {
+	t.Run("folded row deep link reaches both spellings", func(t *testing.T) {
 		req := newLocalRequest(http.MethodGet,
-			"/api/v1/conversations?limit=1&tool=Bash&workspace=%2Frepo&since=2026-08-21T10:00:00Z&before=2026-08-21T11:00:00Z", nil)
+			"/api/v1/conversations?limit=2&tool=Bash&workspace=%2Frepo&since=2026-08-21T10:00:00Z&before=2026-08-21T11:00:00Z", nil)
 		rr := httptest.NewRecorder()
 		srv.ServeHTTP(rr, req)
 		require.Equal(t, http.StatusOK, rr.Code)
@@ -518,8 +556,20 @@ func TestServer_SkillsToolsMetricsAndSessionDrilldown(t *testing.T) {
 			Conversations []ConversationSummary `json:"conversations"`
 		}
 		decodeJSON(t, io.NopCloser(rr.Body), &got)
-		require.Len(t, got.Conversations, 1)
-		assert.Equal(t, "conv-match", got.Conversations[0].ID)
+		assert.Equal(t, []string{"conv-lower", "conv-match"}, summaryIDs(got.Conversations))
+	})
+
+	t.Run("present blank tool matches no sessions", func(t *testing.T) {
+		req := newLocalRequest(http.MethodGet,
+			"/api/v1/conversations?tool=&since=2026-08-21T10:00:00Z&before=2026-08-21T11:00:00Z", nil)
+		rr := httptest.NewRecorder()
+		srv.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code)
+		var got struct {
+			Conversations []ConversationSummary `json:"conversations"`
+		}
+		decodeJSON(t, io.NopCloser(rr.Body), &got)
+		assert.Empty(t, got.Conversations)
 	})
 
 	t.Run("invalid exact parameters are rejected", func(t *testing.T) {

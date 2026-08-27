@@ -77,6 +77,35 @@ func TestToolAnalyticsReconcilesCallsSpansAndCoverage(t *testing.T) {
 	assert.Equal(t, got.Workspaces, filtered.Workspaces, "facets retain all period workspaces for a one-request picker")
 }
 
+func TestToolAnalyticsFoldsToolNamesByCase(t *testing.T) {
+	storage := newStorage(t)
+	started := mustParse(t, "2026-08-21T10:00:00Z")
+	writeToolGeneration(t, storage, "conv-lower", "g1", "/repo", started, "lower-1", "bash", false)
+	writeToolGeneration(t, storage, "conv-lower", "g2", "/repo", started.Add(time.Minute), "lower-2", "bash", false)
+	writeToolGeneration(t, storage, "conv-lower", "g3", "/repo", started.Add(2*time.Minute), "lower-3", "bash", false)
+	writeToolGeneration(t, storage, "conv-upper", "g1", "/repo", started.Add(3*time.Minute), "upper", "Bash", false)
+	_, err := storage.appendToolSpans([]toolSpanRecord{
+		analyticsSpan("conv-upper", "trace", "span", "upper", "Bash", started.Add(3*time.Minute), 2*time.Second, false),
+	})
+	require.NoError(t, err)
+
+	got, err := storage.ToolAnalytics(ToolAnalyticsOptions{Interval: 5 * time.Minute})
+	require.NoError(t, err)
+	assert.Equal(t, ToolAnalyticsTotals{Calls: 4, Tools: 1, Sessions: 2, DurationSamples: 1}, got.Totals)
+	require.Len(t, got.Rows, 1)
+	assert.Equal(t, "bash", got.Rows[0].Name, "the spelling with the most calls is displayed")
+	assert.Equal(t, 4, got.Rows[0].Calls)
+	assert.Equal(t, 1, got.Rows[0].DurationSamples)
+	require.NotNil(t, got.Rows[0].P50DurationSeconds)
+	require.NotNil(t, got.Rows[0].P95DurationSeconds)
+	assert.Equal(t, 2.0, *got.Rows[0].P50DurationSeconds)
+	assert.Equal(t, 2.0, *got.Rows[0].P95DurationSeconds)
+	require.Len(t, got.Buckets, 1)
+	assert.Equal(t, "bash", got.Buckets[0].Name)
+	assert.Equal(t, 4, got.Buckets[0].Calls)
+	assert.Equal(t, "Bash", preferredToolSpelling(map[string]int{"bash": 1, "Bash": 1}), "ties are lexical")
+}
+
 func TestToolAnalyticsDropsUnixNanoUnrepresentableTimestampsEverywhere(t *testing.T) {
 	storage := newStorage(t)
 	valid := mustParse(t, "2026-08-21T10:00:00Z")
@@ -162,8 +191,8 @@ func TestListConversationsAppliesExactFiltersBeforeLimit(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, 5, total, "the existing store total contract is unchanged")
-	assert.Equal(t, []string{"conv-match", "conv-span"}, conversationIDs(rows),
-		"tool, workspace, and half-open bounds apply before the limit")
+	assert.Equal(t, []string{"conv-case", "conv-match"}, conversationIDs(rows),
+		"case-folded tool, workspace, and half-open bounds apply before the limit")
 
 	rows, _, err = storage.ListConversations(ConversationListOptions{
 		Limit: 1, Since: lower, Before: upper, Workspace: &workspace, Exact: true,

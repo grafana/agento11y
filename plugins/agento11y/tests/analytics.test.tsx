@@ -6,10 +6,18 @@ import {
   type AnalyticsUnit,
   AnalyticsView,
   type AnalyticsViewProps,
+  heaviestCostPageNeedsMore,
+  heaviestCostRankingIsExact,
 } from '../internal/local/web/src/analytics';
 import { App } from '../internal/local/web/src/app';
 import { conversationsPath, workspaceFromLocation } from '../internal/local/web/src/routing';
-import type { ConversationSummary, ModelPrices, TokenBuckets, TokenUsagePoint } from '../internal/local/web/src/types';
+import type {
+  ConversationMetricsAggregate,
+  ConversationSummary,
+  ModelPrices,
+  TokenBuckets,
+  TokenUsagePoint,
+} from '../internal/local/web/src/types';
 
 afterEach(() => {
   cleanup();
@@ -44,20 +52,35 @@ function conversation(overrides: Partial<ConversationSummary> = {}): Conversatio
   };
 }
 
-function efficientConversation(): ConversationSummary {
-  const buckets = { ...EMPTY, fresh_input: 200_000 };
+function efficientConversation(overrides: Partial<ConversationSummary> = {}): ConversationSummary {
+  const buckets = overrides.token_buckets || { ...EMPTY, fresh_input: 200_000 };
   return conversation({
     id: 'session-efficient',
     title: 'Large but efficient',
     started_at: '2026-04-12T09:00:00Z',
     last_activity: '2026-04-12T10:30:00Z',
     calls: 3,
-    input_tokens: 200_000,
-    total_tokens: 200_000,
-    token_buckets: buckets,
+    input_tokens: buckets.fresh_input + buckets.cache_read + buckets.cache_write,
+    output_tokens: buckets.output,
+    total_tokens: Object.values(buckets).reduce((sum, value) => sum + value, 0),
     token_buckets_by_model: { 'efficient-model': buckets },
     models: ['efficient-model'],
     workspace: '/worktrees/efficient',
+    ...overrides,
+    token_buckets: buckets,
+  });
+}
+
+function bundledConversation(id: string, tokens: number, model: string): ConversationSummary {
+  const buckets = { ...EMPTY, fresh_input: tokens };
+  return conversation({
+    id,
+    title: id,
+    input_tokens: tokens,
+    total_tokens: tokens,
+    token_buckets: buckets,
+    token_buckets_by_model: { [model]: buckets },
+    models: [model],
   });
 }
 
@@ -193,8 +216,14 @@ describe('App analytics loading', () => {
 
     render(<App />);
 
-    await waitFor(() => expect(screen.getByText('Costly but compact')).toBeTruthy());
+    await waitFor(() => expect(document.querySelector('a[data-session-id="session-costly"]')).toBeTruthy());
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes('interval=900'))).toBe(true);
+    expect(
+      fetchMock.mock.calls.some(([url]) => {
+        const parsed = new URL(String(url), 'http://local');
+        return parsed.pathname === '/api/v1/metrics/conversations' && parsed.searchParams.get('order') === 'tokens';
+      }),
+    ).toBe(true);
     expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/v1/metrics/tools?'))).toBe(false);
 
     const session = document.querySelector<HTMLAnchorElement>('a[data-session-id="session-costly"]');
@@ -206,6 +235,184 @@ describe('App analytics loading', () => {
     fireEvent.click(back);
     expect(window.location.pathname).toBe('/analytics');
     expect(screen.getByRole('heading', { name: 'Analytics' })).toBeTruthy();
+  });
+  it('grows the token-ordered page until the cost ranking is proven', async () => {
+    window.history.replaceState({}, '', '/analytics');
+    const stored = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => stored.get(key) ?? null,
+      setItem: (key: string, value: string) => stored.set(key, value),
+      removeItem: (key: string) => stored.delete(key),
+    });
+    const cheap = Array.from({ length: 64 }, (_, index) =>
+      bundledConversation(`cheap-${index}`, 100_000, 'claude-haiku-4-5'),
+    );
+    const costliest = bundledConversation('costliest-outside-newest-page', 90_000, 'claude-opus-4-8');
+    const ordered = [
+      ...cheap,
+      costliest,
+      ...Array.from({ length: 35 }, (_, index) => bundledConversation(`tail-${index}`, 1_000, 'claude-haiku-4-5')),
+    ];
+    const response = (body: unknown): Response =>
+      ({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(body),
+        text: () => Promise.resolve(''),
+      }) as Response;
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://local');
+      if (url.pathname === '/api/v1/metrics/conversations') {
+        if (url.searchParams.get('order') === 'tokens') {
+          const limit = Number(url.searchParams.get('limit'));
+          return Promise.resolve(
+            response({ conversations: ordered.slice(0, limit), matched_conversations: ordered.length }),
+          );
+        }
+        return Promise.resolve(response({ conversations: cheap.slice(0, 1), matched_conversations: ordered.length }));
+      }
+      if (url.pathname === '/api/v1/metrics/tokens') {
+        return Promise.resolve(response({ points: [], interval_seconds: 3600 }));
+      }
+      if (url.pathname === '/api/v1/conversations') {
+        return Promise.resolve(response({ conversations: [], total_conversations: 0 }));
+      }
+      if (url.pathname === '/api.json') return Promise.resolve(response({}));
+      if (url.pathname === '/api/v1/config') return Promise.resolve(response({}));
+      return Promise.resolve(response({}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    await waitFor(() =>
+      expect(firstAttribute('[data-session-id]', 'data-session-id')).toBe('costliest-outside-newest-page'),
+    );
+    const metricRequests = fetchMock.mock.calls
+      .map(([input]) => new URL(String(input), 'http://local'))
+      .filter((url) => url.pathname === '/api/v1/metrics/conversations');
+    const firstCurrentRequest = metricRequests.find((url) => url.searchParams.get('order') == null);
+    const firstRankedRequest = metricRequests.find((url) => url.searchParams.get('order') === 'tokens');
+    expect(firstRankedRequest?.searchParams.get('before')).toBe(firstCurrentRequest?.searchParams.get('before'));
+    const rankedLimits = metricRequests
+      .filter((url) => url.searchParams.get('order') === 'tokens')
+      .map((url) => url.searchParams.get('limit'));
+    expect(rankedLimits).toContain('64');
+    expect(rankedLimits).toContain('100');
+    await waitFor(() => expect(screen.getByText('top 6 of 100 by cost')).toBeTruthy());
+  });
+
+  it('does not claim an exact full-range ranking when a session has unpriced usage', async () => {
+    window.history.replaceState({}, '', '/analytics');
+    vi.stubGlobal('localStorage', {
+      getItem: () => null,
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    });
+    const priced = { ...EMPTY, fresh_input: 100_000 };
+    const unpriced = { ...EMPTY, output: 100_000 };
+    const partial = conversation({
+      id: 'partially-priced',
+      title: 'Partially priced',
+      token_buckets: { ...EMPTY, fresh_input: 100_000, output: 100_000 },
+      token_buckets_by_model: {
+        'claude-haiku-4-5': priced,
+        'unlisted-model': unpriced,
+      },
+      models: ['claude-haiku-4-5', 'unlisted-model'],
+    });
+    const complete = bundledConversation('fully-priced', 100_000, 'claude-opus-4-8');
+    const response = (body: unknown): Response =>
+      ({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(body),
+        text: () => Promise.resolve(''),
+      }) as Response;
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://local');
+      if (url.pathname === '/api/v1/metrics/conversations') {
+        return Promise.resolve(response({ conversations: [partial, complete], matched_conversations: 2 }));
+      }
+      if (url.pathname === '/api/v1/metrics/tokens') {
+        return Promise.resolve(response({ points: [], interval_seconds: 3600 }));
+      }
+      if (url.pathname === '/api/v1/conversations') {
+        return Promise.resolve(response({ conversations: [], total_conversations: 0 }));
+      }
+      if (url.pathname === '/api.json') return new Promise<Response>(() => {});
+      return Promise.resolve(response({}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('2 shown of 2 by cost')).toBeTruthy());
+    expect(screen.queryByText('top 2 of 2 by cost')).toBeNull();
+    expect(
+      screen.getByText(
+        /Every session in range is included, but incomplete cost estimates prevent an exact cost ranking/,
+      ),
+    ).toBeTruthy();
+    const rankedLimits = fetchMock.mock.calls
+      .map(([input]) => new URL(String(input), 'http://local'))
+      .filter((url) => url.pathname === '/api/v1/metrics/conversations' && url.searchParams.get('order') === 'tokens')
+      .map((url) => url.searchParams.get('limit'));
+    expect(rankedLimits.length).toBeGreaterThan(0);
+    expect(new Set(rankedLimits)).toEqual(new Set(['64']));
+  });
+
+  it('stops after three retries when the cost bound stays inconclusive', async () => {
+    window.history.replaceState({}, '', '/analytics');
+    vi.stubGlobal('localStorage', {
+      getItem: () => null,
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    });
+    const response = (body: unknown): Response =>
+      ({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(body),
+        text: () => Promise.resolve(''),
+      }) as Response;
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://local');
+      if (url.pathname === '/api/v1/metrics/conversations') {
+        if (url.searchParams.get('order') === 'tokens') {
+          const limit = Number(url.searchParams.get('limit'));
+          return Promise.resolve(
+            response({
+              conversations: Array.from({ length: Math.min(limit, 10_000) }, (_, index) =>
+                bundledConversation(`same-rate-${index}`, 100_000, 'claude-haiku-4-5'),
+              ),
+              matched_conversations: 100_000,
+            }),
+          );
+        }
+        return Promise.resolve(response({ conversations: [], matched_conversations: 100_000 }));
+      }
+      if (url.pathname === '/api/v1/metrics/tokens') {
+        return Promise.resolve(response({ points: [], interval_seconds: 3600 }));
+      }
+      if (url.pathname === '/api/v1/conversations') {
+        return Promise.resolve(response({ conversations: [], total_conversations: 0 }));
+      }
+      if (url.pathname === '/api.json') return new Promise<Response>(() => {});
+      return Promise.resolve(response({}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText(/sessions outside this set may rank higher/)).toBeTruthy());
+    const rankedLimits = fetchMock.mock.calls
+      .map(([input]) => new URL(String(input), 'http://local'))
+      .filter((url) => url.pathname === '/api/v1/metrics/conversations' && url.searchParams.get('order') === 'tokens')
+      .map((url) => url.searchParams.get('limit'));
+    const retryLimits = ['64', '512', '4096', '100000'];
+    expect(rankedLimits.length).toBeGreaterThanOrEqual(retryLimits.length);
+    expect(rankedLimits.every((limit, index) => limit === retryLimits[index % retryLimits.length])).toBe(true);
   });
 });
 
@@ -223,6 +430,89 @@ describe('AnalyticsView', () => {
     expect(firstAttribute('[data-model-row]', 'data-model-row')).toBe('efficient-model');
     expect(firstAttribute('a[href^="/?workspace="]', 'href')).toContain('efficient');
     expect(firstAttribute('[data-session-id]', 'data-session-id')).toBe('session-efficient');
+  });
+
+  it('ranks Heaviest sessions from its whole-range candidate page', () => {
+    const costlyOutsidePage = conversation({
+      id: 'outside-newest-page',
+      title: 'Costliest outside newest page',
+      token_buckets: { ...EMPTY, fresh_input: 90_000 },
+      token_buckets_by_model: { 'costly-model': { ...EMPTY, fresh_input: 90_000 } },
+      total_tokens: 90_000,
+    });
+    const ranked = [
+      costlyOutsidePage,
+      ...Array.from({ length: 5 }, (_, index) =>
+        efficientConversation({ id: `ranked-${index}`, title: `Ranked ${index}` }),
+      ),
+    ];
+
+    render(
+      <AnalyticsView
+        {...viewProps({
+          conversations: [efficientConversation()],
+          totalConversations: 3443,
+          heaviestConversations: ranked,
+          heaviestTotalConversations: 3443,
+          heaviestRankingExact: true,
+        })}
+      />,
+    );
+
+    expect(firstAttribute('[data-session-id]', 'data-session-id')).toBe('outside-newest-page');
+    expect(screen.getByText('top 6 of 3,443 by cost')).toBeTruthy();
+    expect(screen.getByText('tokens / session · based on 1 session')).toBeTruthy();
+  });
+
+  it('refetches a token-ordered page when unseen cost can exceed sixth place', () => {
+    const returned = Array.from({ length: 64 }, (_, index) =>
+      efficientConversation({ id: `returned-${index}`, token_buckets: { ...EMPTY, fresh_input: 100_000 } }),
+    );
+    expect(heaviestCostPageNeedsMore(returned, 100, PRICES)).toBe(true);
+
+    const proven = returned.map((row, index) =>
+      index < 6
+        ? conversation({ id: `high-cost-${index}`, token_buckets: { ...EMPTY, fresh_input: 1_000_000 } })
+        : efficientConversation({ id: row.id, token_buckets: { ...EMPTY, fresh_input: 1 } }),
+    );
+    expect(heaviestCostPageNeedsMore(proven, 100, PRICES)).toBe(false);
+    expect(heaviestCostRankingIsExact(proven, 100, PRICES)).toBe(true);
+  });
+
+  it('does not prove a full candidate page whose costs are incomplete', () => {
+    const priced = { ...EMPTY, fresh_input: 100_000 };
+    const unpriced = { ...EMPTY, output: 100_000 };
+    const partial = conversation({
+      token_buckets: { ...EMPTY, fresh_input: 100_000, output: 100_000 },
+      token_buckets_by_model: {
+        'costly-model': priced,
+        'unlisted-model': unpriced,
+      },
+      models: ['costly-model', 'unlisted-model'],
+    });
+
+    const complete = conversation({ id: 'fully-priced' });
+
+    expect(heaviestCostPageNeedsMore([partial, complete], 2, PRICES)).toBe(false);
+    expect(heaviestCostRankingIsExact([partial, complete], 2, PRICES)).toBe(false);
+  });
+
+  it('uses the whole-range denominator when the ranked request fails', () => {
+    render(
+      <AnalyticsView
+        {...viewProps({
+          conversations: [],
+          totalConversations: 3443,
+          heaviestConversations: [],
+          heaviestTotalConversations: null,
+          heaviestRankingExact: false,
+          heaviestError: 'HTTP 500',
+        })}
+      />,
+    );
+
+    expect(screen.getByText('0 shown of 3,443 by cost')).toBeTruthy();
+    expect(screen.getByText('Failed to load ranked sessions: HTTP 500')).toBeTruthy();
   });
 
   it('shows a range-specific message in every data panel when the range is empty', () => {
@@ -256,14 +546,15 @@ describe('AnalyticsView', () => {
         })}
       />,
     );
-    expect(screen.getByText(/Coverage: session panels use 2 returned sessions from 19 in range/)).toBeTruthy();
+    expect(screen.getByText('tokens / session · based on 2 sessions')).toBeTruthy();
+    expect(screen.getByText(/Session distribution is based on 2 of 19 sessions in range/)).toBeTruthy();
     expect(screen.getByText(/Token charts and trends cover all generations in range/)).toBeTruthy();
     expect(screen.getByText(/Previous-period comparisons are unavailable: 1 of 7 sessions returned/)).toBeTruthy();
     expect(screen.queryByText(/vs previous period$/)).toBeNull();
   });
 
   it('uses uncapped aggregates for KPI totals and comparisons', () => {
-    const aggregate = {
+    const aggregate: ConversationMetricsAggregate = {
       calls: 12,
       errored: 1,
       agents: 2,
@@ -275,8 +566,34 @@ describe('AnalyticsView', () => {
         unknown: { ...EMPTY, fresh_input: 100_000, cache_read: 100_000 },
       },
       models: ['costly-model', 'unknown'],
+      workspace_rows: [
+        {
+          path: '/aggregate-only',
+          sessions: 1,
+          token_buckets: { ...EMPTY, fresh_input: 300_000 },
+          token_buckets_by_model: { 'costly-model': { ...EMPTY, fresh_input: 300_000 } },
+          duration_seconds: 600,
+          last_activity: '2026-04-12T11:30:00Z',
+        },
+        {
+          path: '/worktrees/costly',
+          sessions: 1,
+          token_buckets: { ...EMPTY, fresh_input: 100_000 },
+          token_buckets_by_model: { 'costly-model': { ...EMPTY, fresh_input: 100_000 } },
+          duration_seconds: 3_600,
+          last_activity: '2026-04-12T11:00:00Z',
+        },
+        {
+          path: '',
+          sessions: 1,
+          token_buckets: { ...EMPTY },
+          token_buckets_by_model: {},
+          duration_seconds: 0,
+          last_activity: '2026-04-12T10:00:00Z',
+        },
+      ],
     };
-    const previousAggregate = {
+    const previousAggregate: ConversationMetricsAggregate = {
       calls: 6,
       errored: 0,
       agents: 1,
@@ -293,8 +610,10 @@ describe('AnalyticsView', () => {
           previousConversations: [conversation({ id: 'previous' })],
           aggregate,
           previousAggregate,
+          facetAggregate: aggregate,
           totalConversations: 3,
           previousTotalConversations: 2,
+          facetTotalConversations: 3,
         })}
       />,
     );
@@ -314,6 +633,10 @@ describe('AnalyticsView', () => {
     expect(kpiCard('Model calls').textContent).toContain('4 avg / session');
     expect(kpiCard('Model calls').textContent).toContain('1 errored session');
     expect(document.querySelector('[data-model-row="unknown"]')).toBeTruthy();
+    const aggregateOnly = document.querySelector<HTMLAnchorElement>('a[href="/?workspace=%2Faggregate-only"]');
+    expect(aggregateOnly?.textContent).toContain('aggregate-only');
+    expect(screen.getByTitle('Filter by workspace').textContent).toContain('3');
+    expect(screen.queryByText(/Workspace options are incomplete/)).toBeNull();
     expect(
       screen.getByText(/KPI totals, model totals, token charts, and trends cover all generations in range/),
     ).toBeTruthy();
@@ -344,6 +667,14 @@ describe('AnalyticsView', () => {
     expect(range.compareDocumentPosition(refresh) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it('keeps the Overview workspace copy unchanged', () => {
+    render(<AnalyticsView {...viewProps()} />);
+
+    fireEvent.click(screen.getByTitle('Filter by workspace'));
+    expect(screen.getByRole('option', { name: /^All workspaces \d/ })).toBeTruthy();
+    expect(screen.queryByText(/workspaces with tool calls/)).toBeNull();
+  });
+
   it('keeps session rows as real anchors and intercepts only plain clicks', () => {
     const onOpenConversation = vi.fn();
     render(<AnalyticsView {...viewProps({ onOpenConversation })} />);
@@ -355,6 +686,7 @@ describe('AnalyticsView', () => {
     expect(onOpenConversation).toHaveBeenCalledWith({ id: 'session-costly' });
 
     onOpenConversation.mockClear();
+    document.addEventListener('click', (event) => event.preventDefault(), { once: true });
     fireEvent.click(link, { button: 0, metaKey: true });
     expect(onOpenConversation).not.toHaveBeenCalled();
   });
@@ -364,20 +696,77 @@ describe('AnalyticsView', () => {
     expect(document.querySelector('a[href="/?workspace="]')).toBeTruthy();
   });
 
-  it('keeps a selected workspace visible when facet coverage is incomplete', () => {
+  it('reads every workspace facet option from the uncapped aggregate', () => {
     const selected = conversation({ workspace: '/outside/page' });
     render(
       <AnalyticsView
         {...viewProps({
           conversations: [selected],
+          aggregate: {
+            calls: 1,
+            errored: 0,
+            agents: 1,
+            agent_hosts: selected.agents,
+            workspaces: 1,
+            token_buckets: selected.token_buckets,
+            token_buckets_by_model: selected.token_buckets_by_model || {},
+            models: selected.models,
+            workspace_rows: [
+              {
+                path: '/outside/page',
+                sessions: 1,
+                token_buckets: selected.token_buckets,
+                token_buckets_by_model: selected.token_buckets_by_model || {},
+                duration_seconds: 3_600,
+                last_activity: selected.last_activity,
+              },
+            ],
+          },
+          facetAggregate: {
+            calls: 19,
+            errored: 0,
+            agents: 1,
+            agent_hosts: selected.agents,
+            workspaces: 3,
+            token_buckets: selected.token_buckets,
+            token_buckets_by_model: selected.token_buckets_by_model || {},
+            models: selected.models,
+            workspace_rows: ['/worktrees/costly', '/worktrees/efficient', '/outside/page'].map((path) => ({
+              path,
+              sessions: path === '/outside/page' ? 1 : 9,
+              token_buckets: { ...EMPTY },
+              token_buckets_by_model: {},
+              duration_seconds: 0,
+              last_activity: selected.last_activity,
+            })),
+          },
           totalConversations: 1,
           workspace: '/outside/page',
           facetTotalConversations: 19,
         })}
       />,
     );
-    expect(screen.getByText('Options cover 2 of 19 sessions in range.')).toBeTruthy();
-    expect(screen.getByText('1/3')).toBeTruthy();
+    expect(screen.queryByText(/Workspace options are incomplete/)).toBeNull();
+    const workspaceFilter = screen.getByTitle('Filter by workspace');
+    expect(workspaceFilter.textContent).toContain('1/3');
+    fireEvent.click(workspaceFilter);
+    expect(screen.queryByText(/listed sessions/)).toBeNull();
+  });
+
+  it('labels capped workspace fallback options as incomplete', () => {
+    render(
+      <AnalyticsView
+        {...viewProps({
+          facetConversations: [conversation(), efficientConversation()],
+          facetAggregate: null,
+          facetTotalConversations: 3443,
+        })}
+      />,
+    );
+
+    expect(screen.getByText('Options cover 2 of 3,443 sessions in range.')).toBeTruthy();
+    fireEvent.click(screen.getByTitle('Filter by workspace'));
+    expect(screen.getByRole('option', { name: /All workspaces 3,443/ })).toBeTruthy();
   });
 
   it('draws the model-call trend from generation points, including calls without tokens', () => {
