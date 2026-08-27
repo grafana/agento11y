@@ -80,6 +80,7 @@ export function postflightGuardRequest() {
     context: {
       agentName: 'conformance-guard',
       agentVersion: '1.2.3',
+      conversationId: 'conv-hooks-conformance',
       model: { provider: 'anthropic', name: 'claude-sonnet-4' },
     },
     input: {

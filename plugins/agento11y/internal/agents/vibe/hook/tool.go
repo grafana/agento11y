@@ -39,7 +39,8 @@ func PreTool(ctx context.Context, stdout io.Writer, p Payload, logger *log.Logge
 	}
 
 	envconfig.ApplyLocalAuthPlaceholders()
-	provider, modelName := guardModel(p)
+	m, metaOK := loadGuardMeta(p)
+	provider, modelName := guardModel(m, metaOK)
 
 	evalCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.TimeoutMs)*time.Millisecond+guardEvalBuffer)
 	defer cancel()
@@ -48,12 +49,13 @@ func PreTool(ctx context.Context, stdout io.Writer, p Payload, logger *log.Logge
 		// Same resolution the export path uses, so a rule scoped to a per-run
 		// name matches the generations that run produces. vibe has no config
 		// package, so each handler resolves it for its own invocation.
-		AgentName:     envconfig.ResolveAgentName(mapper.AgentName),
-		ToolName:      toolName,
-		ToolCallID:    p.ToolCallID(),
-		ToolInputJSON: p.ToolInput(),
-		ModelProvider: provider,
-		ModelName:     modelName,
+		AgentName:      envconfig.ResolveAgentName(mapper.AgentName),
+		ConversationID: guardConversationID(p, m),
+		ToolName:       toolName,
+		ToolCallID:     p.ToolCallID(),
+		ToolInputJSON:  p.ToolInput(),
+		ModelProvider:  provider,
+		ModelName:      modelName,
 	}, logger)
 	if res.Blocked() {
 		writePreToolDeny(stdout, res.Reason)
@@ -89,15 +91,17 @@ func PostTool(p Payload, logger *log.Logger) {
 	}
 }
 
-// guardModel returns the model provider/name for the guard request,
-// best-effort from the session meta.json. Guards work without it (the helper
-// falls back to "unknown"), so any read error is ignored.
-func guardModel(p Payload) (provider, modelName string) {
+// Guards run without metadata, so read failures do not block tool calls.
+func loadGuardMeta(p Payload) (meta.Meta, bool) {
 	if p.TranscriptPath == "" {
-		return "", ""
+		return meta.Meta{}, false
 	}
 	m, err := meta.Load(p.TranscriptPath)
-	if err != nil {
+	return m, err == nil
+}
+
+func guardModel(m meta.Meta, ok bool) (provider, modelName string) {
+	if !ok {
 		return "", ""
 	}
 	provider, apiName := m.ActiveModelRef()
@@ -106,6 +110,14 @@ func guardModel(p Payload) (provider, modelName string) {
 		modelName = apiName
 	}
 	return provider, modelName
+}
+
+func guardConversationID(p Payload, m meta.Meta) string {
+	parentSessionID, parentGenerationID := resolveParentLineage(p, m)
+	if parentSessionID != "" && parentGenerationID != "" {
+		return parentSessionID
+	}
+	return p.SessionID
 }
 
 // preToolDeny is vibe's structured deny response: a non-empty stdout

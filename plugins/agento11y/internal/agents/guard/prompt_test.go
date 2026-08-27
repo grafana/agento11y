@@ -213,8 +213,9 @@ func TestEvaluatePrompt_SendsOneUserMessage(t *testing.T) {
 	t.Setenv("SIGIL_AUTH_TOKEN", "token")
 
 	EvaluatePrompt(context.Background(), envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true}, PromptInput{
-		AgentName: "cursor",
-		Prompt:    "my token is glc_secret",
+		AgentName:      "cursor",
+		ConversationID: " session-1 ",
+		Prompt:         "my token is glc_secret",
 	}, log.New(bytes.NewBuffer(nil), "", 0))
 
 	if path, _ := capturedPath.Load().(string); path != "/api/v1/hooks:evaluate" {
@@ -227,8 +228,9 @@ func TestEvaluatePrompt_SendsOneUserMessage(t *testing.T) {
 	var req struct {
 		Phase   string `json:"phase"`
 		Context struct {
-			AgentName string `json:"agent_name"`
-			Model     *struct {
+			AgentName      string `json:"agent_name"`
+			ConversationID string `json:"conversation_id"`
+			Model          *struct {
 				Provider string `json:"provider"`
 				Name     string `json:"name"`
 			} `json:"model"`
@@ -253,6 +255,9 @@ func TestEvaluatePrompt_SendsOneUserMessage(t *testing.T) {
 	if req.Context.AgentName != "cursor" {
 		t.Errorf("agent_name = %q, want cursor", req.Context.AgentName)
 	}
+	if req.Context.ConversationID != "session-1" {
+		t.Errorf("conversation_id = %q, want session-1", req.Context.ConversationID)
+	}
 	if req.Context.Model == nil || req.Context.Model.Provider != "unknown" || req.Context.Model.Name != "unknown" {
 		t.Errorf("model = %+v, want unknown/unknown", req.Context.Model)
 	}
@@ -271,6 +276,22 @@ func TestEvaluatePrompt_SendsOneUserMessage(t *testing.T) {
 	}
 	if msg.Parts[0].Kind != "text" || msg.Parts[0].Text != "my token is glc_secret" {
 		t.Errorf("part = %+v, want the submitted prompt as one text part", msg.Parts[0])
+	}
+
+	EvaluatePrompt(context.Background(), envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true}, PromptInput{
+		AgentName:      "cursor",
+		ConversationID: "   ",
+		Prompt:         "another prompt",
+	}, log.New(bytes.NewBuffer(nil), "", 0))
+	raw, _ = capturedBody.Load().([]byte)
+	var blankIDReq struct {
+		Context map[string]json.RawMessage `json:"context"`
+	}
+	if err := json.Unmarshal(raw, &blankIDReq); err != nil {
+		t.Fatalf("unmarshal blank-id body: %v\n%s", err, raw)
+	}
+	if _, ok := blankIDReq.Context["conversation_id"]; ok {
+		t.Errorf("blank conversation ID serialized in context: %s", raw)
 	}
 }
 

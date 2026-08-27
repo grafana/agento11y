@@ -100,6 +100,7 @@ def postflight_guard_request() -> HookEvaluateRequest:
         context=HookContext(
             agent_name="conformance-guard",
             agent_version="1.2.3",
+            conversation_id="conv-hooks-conformance",
             model=HookModel(provider="anthropic", name="claude-sonnet-4"),
         ),
         input=HookInput(

@@ -116,22 +116,37 @@ func TestPostAgent_UsesMetaParentSessionID(t *testing.T) {
 	// A subagent session carries its parent only in meta.json, not on the
 	// thin hook payload. The handler must still resolve the parent edge.
 	var (
-		mu   sync.Mutex
-		body []byte
+		mu                  sync.Mutex
+		body                []byte
+		guardConversationID string
 	)
 	srv := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		mu.Lock()
+		defer mu.Unlock()
+		if strings.Contains(r.URL.Path, "hooks:evaluate") {
+			var req struct {
+				Context struct {
+					ConversationID string `json:"conversation_id"`
+				} `json:"context"`
+			}
+			_ = json.Unmarshal(b, &req)
+			guardConversationID = req.Context.ConversationID
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"action":"allow"}`))
+			return
+		}
 		body = b
-		mu.Unlock()
 		writeAcceptedGenerationResponse(t, w, b)
 	}))
 	t.Cleanup(srv.Close)
 
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	envconfig.PinAliasEnvBlank(t)
 	t.Setenv("SIGIL_ENDPOINT", srv.URL)
 	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
 	t.Setenv("SIGIL_AUTH_TOKEN", "token")
+	t.Setenv("SIGIL_GUARDS_ENABLED", "true")
 	must(t, state.Save("parent-session", state.Session{LastGenerationID: "parent-generation"}))
 
 	dir := t.TempDir()
@@ -142,11 +157,24 @@ func TestPostAgent_UsesMetaParentSessionID(t *testing.T) {
 	tp := filepath.Join(dir, "messages.jsonl")
 
 	logger := log.New(io.Discard, "", 0)
+	var stdout bytes.Buffer
+	PreTool(context.Background(), &stdout, Payload{
+		HookEventName:   "pre_tool",
+		SessionID:       "child-session",
+		TranscriptPath:  tp,
+		ToolNameValue:   "shell",
+		ToolCallIDValue: "call-1",
+		ToolInputValue:  json.RawMessage(`{"command":"echo hi"}`),
+	}, logger)
 	PostAgent(context.Background(), Payload{HookEventName: "post_agent", SessionID: "child-session", TranscriptPath: tp}, logger)
 
 	mu.Lock()
 	got := body
+	gotGuardConversationID := guardConversationID
 	mu.Unlock()
+	if gotGuardConversationID != "parent-session" {
+		t.Errorf("guard conversation ID = %q, want parent-session", gotGuardConversationID)
+	}
 	if len(got) == 0 {
 		t.Fatalf("expected export request")
 	}
@@ -494,9 +522,11 @@ func TestAgentNameOverrideGuardAndExport(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var (
-				mu           sync.Mutex
-				guardAgents  []string
-				exportAgents []string
+				mu                    sync.Mutex
+				guardAgents           []string
+				guardConversationIDs  []string
+				exportAgents          []string
+				exportConversationIDs []string
 			)
 			srv := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				body, _ := io.ReadAll(r.Body)
@@ -505,23 +535,27 @@ func TestAgentNameOverrideGuardAndExport(t *testing.T) {
 				if strings.Contains(r.URL.Path, "hooks:evaluate") {
 					var req struct {
 						Context struct {
-							AgentName string `json:"agent_name"`
+							AgentName      string `json:"agent_name"`
+							ConversationID string `json:"conversation_id"`
 						} `json:"context"`
 					}
 					_ = json.Unmarshal(body, &req)
 					guardAgents = append(guardAgents, req.Context.AgentName)
+					guardConversationIDs = append(guardConversationIDs, req.Context.ConversationID)
 					w.Header().Set("Content-Type", "application/json")
 					_, _ = w.Write([]byte(`{"action":"allow"}`))
 					return
 				}
 				var req struct {
 					Generations []struct {
-						AgentName string `json:"agent_name"`
+						AgentName      string `json:"agent_name"`
+						ConversationID string `json:"conversation_id"`
 					} `json:"generations"`
 				}
 				_ = json.Unmarshal(body, &req)
 				for _, g := range req.Generations {
 					exportAgents = append(exportAgents, g.AgentName)
+					exportConversationIDs = append(exportConversationIDs, g.ConversationID)
 				}
 				writeAcceptedGenerationResponse(t, w, body)
 			}))
@@ -564,8 +598,14 @@ func TestAgentNameOverrideGuardAndExport(t *testing.T) {
 			if len(guardAgents) != 1 || guardAgents[0] != tt.want {
 				t.Fatalf("guard agent names = %v, want [%q]", guardAgents, tt.want)
 			}
+			if len(guardConversationIDs) != 1 || guardConversationIDs[0] != "sess-agent-name" {
+				t.Fatalf("guard conversation IDs = %v, want [sess-agent-name]", guardConversationIDs)
+			}
 			if len(exportAgents) != 1 || exportAgents[0] != tt.want {
 				t.Fatalf("exported agent names = %v, want [%q]", exportAgents, tt.want)
+			}
+			if len(exportConversationIDs) != 1 || exportConversationIDs[0] != "sess-agent-name" {
+				t.Fatalf("exported conversation IDs = %v, want [sess-agent-name]", exportConversationIDs)
 			}
 		})
 	}

@@ -203,6 +203,7 @@ describe("pi guards: real-SDK over HTTP", () => {
           expect(server.hookCalls).toHaveLength(1);
           const call = server.hookCalls[0]!;
           expect(call.phase).toBe("preflight");
+          expect(call.body.context?.conversation_id).toBe("guards-conv-1");
           // The forwarded body carried the unredacted original. The server
           // dispatches on the snake_case `kind`, so the part carries it and
           // nothing else. conformance/hooks/README.md.
@@ -425,6 +426,9 @@ describe("pi guards: real-SDK over HTTP", () => {
           expect(result).toBeUndefined();
           expect(event.input).toEqual({ command: "echo [REDACTED]" });
           expect(server.hookCalls[0]!.phase).toBe("postflight");
+          expect(server.hookCalls[0]!.body.context?.conversation_id).toBe(
+            "guards-conv-1",
+          );
         },
       },
       {
