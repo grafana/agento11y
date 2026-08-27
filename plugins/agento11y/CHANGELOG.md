@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.42.0] - 2026-08-27
+
+### Bug Fixes
+
+- **plugins/agento11y**: fix local viewer analytics tab numbers calculation (#689)
+
 ## [0.41.0] - 2026-08-26
 
 ### Bug Fixes
