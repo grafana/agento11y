@@ -12,6 +12,8 @@ import type { ModelCost, ModelPrices, TokenBucketKey, TokenBuckets, TokenUsagePo
 // all read the same in a table.
 export const NO_VALUE = '-';
 
+const COMPACT_TOKENS = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 });
+
 export function formatInteger(value: number): string {
   return Math.round(value).toLocaleString('en-US');
 }
@@ -19,8 +21,7 @@ export function formatInteger(value: number): string {
 export function formatTokens(n: number | null | undefined): string {
   if (n == null || Number.isNaN(Number(n))) return NO_VALUE;
   if (n < 1000) return String(n);
-  if (n < 1_000_000) return `${(n / 1_000).toFixed(n < 10_000 ? 1 : 1).replace(/\.0$/, '')}k`;
-  return `${(n / 1_000_000).toFixed(n < 10_000_000 ? 1 : 1).replace(/\.0$/, '')}M`;
+  return COMPACT_TOKENS.format(n).replace('K', 'k');
 }
 
 export function formatDuration(seconds: number | null | undefined): string {
