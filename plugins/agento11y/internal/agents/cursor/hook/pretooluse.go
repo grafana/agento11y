@@ -39,13 +39,14 @@ func PreToolUse(ctx context.Context, p Payload, cfg config.Config, stdout io.Wri
 
 	modelName := resolvedModel(p)
 	res := guard.EvaluateToolCall(ctx, envconfig.ResolveGuards(logger), guard.ToolCallInput{
-		AgentName:     cfg.Agent(),
-		AgentVersion:  strings.TrimSpace(p.CursorVersion),
-		ModelProvider: strings.TrimSpace(p.Provider),
-		ModelName:     modelName,
-		ToolName:      strings.TrimSpace(p.ToolName),
-		ToolCallID:    strings.TrimSpace(p.ToolUseID),
-		ToolInputJSON: p.ToolInput,
+		AgentName:      cfg.Agent(),
+		AgentVersion:   strings.TrimSpace(p.CursorVersion),
+		ConversationID: p.ConversationID,
+		ModelProvider:  strings.TrimSpace(p.Provider),
+		ModelName:      modelName,
+		ToolName:       strings.TrimSpace(p.ToolName),
+		ToolCallID:     strings.TrimSpace(p.ToolUseID),
+		ToolInputJSON:  p.ToolInput,
 	}, logger)
 
 	resp := preToolUseResponse{Permission: "allow"}

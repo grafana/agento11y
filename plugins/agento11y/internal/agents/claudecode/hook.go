@@ -260,13 +260,14 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 // and copilot agents.
 func handlePreToolUse(ctx context.Context, stdout io.Writer, input *hookInput, st state.Session, agentName string, logger *log.Logger) {
 	res := guard.EvaluateToolCall(ctx, envconfig.ResolveGuards(logger), guard.ToolCallInput{
-		AgentName:     agentName,
-		AgentVersion:  Version,
-		ModelProvider: "anthropic",
-		ModelName:     strings.TrimSpace(st.Model),
-		ToolName:      strings.TrimSpace(input.ToolName),
-		ToolCallID:    strings.TrimSpace(input.ToolUseID),
-		ToolInputJSON: input.ToolInput,
+		AgentName:      agentName,
+		AgentVersion:   Version,
+		ConversationID: input.SessionID,
+		ModelProvider:  "anthropic",
+		ModelName:      strings.TrimSpace(st.Model),
+		ToolName:       strings.TrimSpace(input.ToolName),
+		ToolCallID:     strings.TrimSpace(input.ToolUseID),
+		ToolInputJSON:  input.ToolInput,
 	}, logger)
 	if res.Blocked() {
 		guard.WriteHookSpecificOutputDeny(stdout, res.Reason)
@@ -283,11 +284,12 @@ func handlePreToolUse(ctx context.Context, stdout io.Writer, input *hookInput, s
 // Prompt capture still happens from the transcript at Stop.
 func handleUserPromptSubmit(ctx context.Context, stdout io.Writer, input *hookInput, st state.Session, agentName string, logger *log.Logger) {
 	res := guard.EvaluatePrompt(ctx, envconfig.ResolveGuards(logger), guard.PromptInput{
-		AgentName:     agentName,
-		AgentVersion:  Version,
-		ModelProvider: "anthropic",
-		ModelName:     strings.TrimSpace(st.Model),
-		Prompt:        input.Prompt,
+		AgentName:      agentName,
+		AgentVersion:   Version,
+		ConversationID: input.SessionID,
+		ModelProvider:  "anthropic",
+		ModelName:      strings.TrimSpace(st.Model),
+		Prompt:         input.Prompt,
 	}, logger)
 	if res.Blocked() {
 		guard.WritePromptBlock(stdout, res.Reason)

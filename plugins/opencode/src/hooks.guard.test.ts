@@ -7,12 +7,16 @@ import {
   _peekPendingGenerations,
   _peekToolExecutionState,
   _resetHookState,
-  _resetToolExecutionState,
   _setGuardToastDelayMs,
   type Agento11yHooks,
   createAgento11yHooks,
 } from "./hooks.js";
-import { emitServerInstanceDisposed } from "./hooks.testutil.js";
+import {
+  emitMessageUpdated,
+  emitServerInstanceDisposed,
+  emitSessionCreated,
+  inFlightAssistantMessage,
+} from "./hooks.testutil.js";
 
 type HookServer = {
   server: Server;
@@ -82,6 +86,18 @@ async function runToolLikeOpencode(
   );
 }
 
+async function seedLinkedSession(
+  hooks: Agento11yHooks,
+  parentSessionID: string,
+  childSessionID: string,
+): Promise<void> {
+  await emitMessageUpdated(
+    hooks,
+    inFlightAssistantMessage(parentSessionID, `msg-${parentSessionID}`),
+  );
+  await emitSessionCreated(hooks, childSessionID, parentSessionID);
+}
+
 function config(endpoint: string): Agento11yOpencodeConfig {
   return {
     endpoint,
@@ -98,7 +114,7 @@ function config(endpoint: string): Agento11yOpencodeConfig {
 describe("opencode guards", () => {
   const servers: Server[] = [];
 
-  beforeEach(() => _resetToolExecutionState());
+  beforeEach(() => _resetHookState());
 
   afterEach(async () => {
     // A scheduled toast outlives the case that caused it, and would otherwise
@@ -155,6 +171,7 @@ describe("opencode guards", () => {
       context: {
         agent_name: "opencode:build",
         agent_version: "test-version",
+        conversation_id: "sess-1",
         model: { provider: "anthropic", name: "claude-sonnet-4" },
       },
       input: {
@@ -450,6 +467,7 @@ describe("opencode guards", () => {
     );
 
     expect(output.status).toBe("deny");
+    expect(hookServer.captures[0]?.context?.conversation_id).toBe("sess-1");
     expect(
       hookServer.captures[0]?.input?.output?.[0]?.parts?.[0],
     ).toMatchObject({
@@ -467,6 +485,114 @@ describe("opencode guards", () => {
       },
     });
 
+    await emitServerInstanceDisposed(hooks);
+  });
+
+  it.each([
+    {
+      name: "linked child",
+      physicalSessionID: "sess-child",
+      wantConversationID: "sess-root",
+      setup: async (hooks: Agento11yHooks) => {
+        await seedLinkedSession(hooks, "sess-root", "sess-child");
+      },
+    },
+    {
+      name: "nested child",
+      physicalSessionID: "sess-grandchild",
+      wantConversationID: "sess-root",
+      setup: async (hooks: Agento11yHooks) => {
+        await seedLinkedSession(hooks, "sess-root", "sess-child");
+        await seedLinkedSession(hooks, "sess-child", "sess-grandchild");
+      },
+    },
+    {
+      name: "unresolved child",
+      physicalSessionID: "sess-unresolved",
+      wantConversationID: "sess-unresolved",
+      setup: async (hooks: Agento11yHooks) => {
+        await emitSessionCreated(hooks, "sess-unresolved", "sess-unseen");
+      },
+    },
+  ])("uses exported conversation identity for a $name tool guard", async ({
+    physicalSessionID,
+    wantConversationID,
+    setup,
+  }) => {
+    const hookServer = await startHookServer({
+      action: "allow",
+      evaluations: [],
+    });
+    servers.push(hookServer.server);
+
+    const hooks = await createAgento11yHooks(config(hookServer.baseUrl), {
+      session: { message: async () => ({ data: { parts: [] } }) },
+    } as any);
+    if (!hooks) throw new Error("expected hooks");
+    await setup(hooks);
+
+    const args = { command: "ls" };
+    await hooks.toolExecuteBefore(
+      {
+        sessionID: physicalSessionID,
+        callID: "lineage-call",
+        tool: "bash",
+      },
+      { args },
+    );
+
+    expect(hookServer.captures[0]?.context?.conversation_id).toBe(
+      wantConversationID,
+    );
+    expect(hookServer.captures[0]?.context).not.toHaveProperty("session_id");
+    expect(_peekToolExecutionState().active).toEqual([
+      expect.objectContaining({ sessionID: physicalSessionID }),
+    ]);
+
+    hooks.toolExecuteAfter(
+      {
+        sessionID: physicalSessionID,
+        callID: "lineage-call",
+        tool: "bash",
+        args,
+      },
+      { title: "bash", output: "ok", metadata: {} },
+    );
+    await emitServerInstanceDisposed(hooks);
+  });
+
+  it("uses the root conversation for a nested child's permission guard", async () => {
+    const hookServer = await startHookServer({
+      action: "allow",
+      evaluations: [],
+    });
+    servers.push(hookServer.server);
+
+    const hooks = await createAgento11yHooks(config(hookServer.baseUrl), {
+      session: { message: async () => ({ data: { parts: [] } }) },
+    } as any);
+    if (!hooks) throw new Error("expected hooks");
+    await seedLinkedSession(hooks, "sess-root", "sess-child");
+    await seedLinkedSession(hooks, "sess-child", "sess-grandchild");
+
+    const output: { status: "ask" | "deny" | "allow" } = { status: "ask" };
+    await hooks.permissionAsk(
+      {
+        id: "perm-nested",
+        sessionID: "sess-grandchild",
+        messageID: "msg-nested",
+        callID: "call-nested",
+        type: "bash",
+        pattern: "*",
+        title: "Run shell command",
+        metadata: {},
+        time: { created: Date.now() },
+      },
+      output,
+    );
+
+    expect(hookServer.captures[0]?.context?.conversation_id).toBe("sess-root");
+    expect(output.status).toBe("ask");
     await emitServerInstanceDisposed(hooks);
   });
 });
@@ -520,20 +646,25 @@ function startPreflightServer(
   });
 }
 
-function textPart(id: string, messageID: string, text: string): Part {
+function textPart(
+  id: string,
+  messageID: string,
+  text: string,
+  sessionID = "sess-1",
+): Part {
   return {
     id,
-    sessionID: "sess-1",
+    sessionID,
     messageID,
     type: "text",
     text,
   } as Part;
 }
 
-function userEntry(id: string, text: string) {
+function userEntry(id: string, text: string, sessionID = "sess-1") {
   return {
-    info: { id, role: "user", sessionID: "sess-1" } as any,
-    parts: [textPart(`${id}-p1`, id, text)],
+    info: { id, role: "user", sessionID } as any,
+    parts: [textPart(`${id}-p1`, id, text, sessionID)],
   };
 }
 
@@ -745,6 +876,7 @@ describe("opencode preflight guard", () => {
           context: {
             agent_name: "opencode:build",
             agent_version: "test-version",
+            conversation_id: "sess-1",
             model: { provider: "anthropic", name: "claude-sonnet-4" },
           },
         });
@@ -771,6 +903,20 @@ describe("opencode preflight guard", () => {
         expect((messages[1].parts[0] as any).state.output).toBe(
           "secret output",
         );
+      },
+    },
+    {
+      name: "omits conversation identity when outgoing messages have none",
+      build: () => {
+        const message = userEntry("m1", "hello");
+        delete message.info.sessionID;
+        return { messages: [message] };
+      },
+      wantCalls: 1,
+      wantTexts: [["hello"]],
+      assert: ({ captures }) => {
+        expect(captures[0]?.context).not.toHaveProperty("conversation_id");
+        expect(captures[0]?.context).not.toHaveProperty("session_id");
       },
     },
     {
@@ -987,22 +1133,22 @@ describe("opencode preflight guard", () => {
 });
 
 /** A `chat.message` payload carrying one text part, or none when text is null. */
-function chatMessagePayload(text: string | null) {
+function chatMessagePayload(text: string | null, sessionID = "sess-1") {
   return {
     input: {
-      sessionID: "sess-1",
+      sessionID,
       agent: "build",
       model: { providerID: "anthropic", modelID: "claude-sonnet-4" },
     },
     output: {
       message: {
         id: "m1",
-        sessionID: "sess-1",
+        sessionID,
         role: "user",
         system: "",
         tools: {},
       } as any,
-      parts: text === null ? [] : [textPart("m1-p1", "m1", text)],
+      parts: text === null ? [] : [textPart("m1-p1", "m1", text, sessionID)],
     },
   };
 }
@@ -1060,6 +1206,7 @@ describe("opencode prompt guard", () => {
           context: {
             agent_name: "opencode:build",
             agent_version: "test-version",
+            conversation_id: "sess-1",
             model: { provider: "anthropic", name: "claude-sonnet-4" },
           },
           input: {
@@ -1165,6 +1312,23 @@ describe("opencode prompt guard", () => {
     await emitServerInstanceDisposed(hooks);
   });
 
+  it("uses the root conversation for a linked child's submitted prompt", async () => {
+    const hookServer = await startPreflightServer(() => ({
+      action: "allow",
+      evaluations: [],
+    }));
+    servers.push(hookServer.server);
+
+    const hooks = await hooksFor(hookServer.baseUrl);
+    await seedLinkedSession(hooks, "sess-root", "sess-child");
+    const { input, output } = chatMessagePayload("key=abc", "sess-child");
+
+    await hooks.chatMessage(input, output);
+
+    expect(hookServer.captures[0]?.context?.conversation_id).toBe("sess-root");
+    await emitServerInstanceDisposed(hooks);
+  });
+
   it("drops the refused turn's user-side data", async () => {
     // opencode creates some assistant messages without a `chat.message` of
     // their own, so a leftover pending entry would be exported against one of
@@ -1203,7 +1367,8 @@ describe("opencode prompt guard", () => {
     servers.push(hookServer.server);
 
     const hooks = await hooksFor(hookServer.baseUrl);
-    const messages = [userEntry("m1", "one")];
+    await seedLinkedSession(hooks, "sess-root", "sess-child");
+    const messages = [userEntry("m1", "one", "sess-child")];
 
     await expect(hooks.messagesTransform({ messages })).rejects.toThrow(
       "secrets are not allowed in prompts",
@@ -1213,9 +1378,10 @@ describe("opencode prompt guard", () => {
     expect(logs).toHaveLength(1);
     expect(logs[0]?.message).toContain("the turn was stopped");
     expect(toasts).toHaveLength(1);
-    // Cleanup for the assistant message row opencode has already written,
-    // which its interrupt finalizer owns.
-    expect(aborts).toEqual(["sess-1"]);
+    expect(hookServer.captures[0]?.context?.conversation_id).toBe("sess-root");
+    // Guard context follows export lineage, but cleanup still targets the
+    // physical child session whose assistant row opencode already wrote.
+    expect(aborts).toEqual(["sess-child"]);
     // A refused turn never reaches the provider, so nothing is rewritten.
     expect(partTexts(messages)).toEqual([["one"]]);
 

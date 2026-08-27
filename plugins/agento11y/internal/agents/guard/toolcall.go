@@ -113,6 +113,8 @@ type ToolCallInput struct {
 	// ModelProvider and ModelName describe the upstream model, when known.
 	ModelProvider string
 	ModelName     string
+	// ConversationID identifies the host conversation, when known.
+	ConversationID string
 	// ToolName is required.
 	ToolName string
 	// ToolCallID correlates the tool call with downstream telemetry, when known.
@@ -194,8 +196,9 @@ func EvaluateToolCall(ctx context.Context, cfg envconfig.GuardsConfig, in ToolCa
 		modelName = "unknown"
 	}
 	hookCtx := agento11y.HookContext{
-		AgentName:    in.AgentName,
-		AgentVersion: in.AgentVersion,
+		AgentName:      in.AgentName,
+		AgentVersion:   in.AgentVersion,
+		ConversationID: strings.TrimSpace(in.ConversationID),
 		Model: &agento11y.HookModel{
 			Provider: provider,
 			Name:     modelName,

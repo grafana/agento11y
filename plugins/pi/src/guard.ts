@@ -9,6 +9,7 @@ export interface GuardArgs {
   agentName: string;
   agentVersion?: string;
   model: { provider: string; name: string };
+  conversationId?: string;
   toolCallId: string;
   toolName: string;
   input: Record<string, unknown>;
@@ -88,6 +89,7 @@ export interface PreflightTransformArgs {
   agentName: string;
   agentVersion?: string;
   model: { provider: string; name: string };
+  conversationId?: string;
   messages: Message[];
   logger?: { warn: (msg: string) => void };
 }
@@ -108,11 +110,13 @@ export async function runPreflightTransform(
   args: PreflightTransformArgs,
 ): Promise<PreflightTransformResult> {
   try {
+    const conversationId = args.conversationId?.trim();
     const req: HookEvaluateRequest = {
       phase: "preflight",
       context: {
         agentName: args.agentName,
         agentVersion: args.agentVersion,
+        ...(conversationId ? { conversationId } : {}),
         model: args.model,
       },
       input: {
@@ -148,11 +152,13 @@ export async function runPreflightTransform(
  */
 export async function runToolCallGuard(args: GuardArgs): Promise<GuardResult> {
   try {
+    const conversationId = args.conversationId?.trim();
     const req: HookEvaluateRequest = {
       phase: "postflight",
       context: {
         agentName: args.agentName,
         agentVersion: args.agentVersion,
+        ...(conversationId ? { conversationId } : {}),
         model: args.model,
       },
       input: {

@@ -137,8 +137,9 @@ func PreToolUse(ctx context.Context, stdout io.Writer, p Payload, cfg config.Con
 			}
 		}
 		res := guard.EvaluateToolCall(ctx, cfg.Guards, guard.ToolCallInput{
-			AgentName: cfg.Agent(),
-			ToolName:  p.ToolName(),
+			AgentName:      cfg.Agent(),
+			ConversationID: sessionID,
+			ToolName:       p.ToolName(),
 			// Copilot delivers tool args as a JSON-encoded string; the agento11y
 			// server only transforms tool-call input that is a JSON object, so
 			// decode the wrapper before evaluating or redaction never happens.

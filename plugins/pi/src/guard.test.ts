@@ -59,6 +59,7 @@ function makeArgs(overrides?: Partial<GuardArgs>): GuardArgs {
     agentName: "pi",
     agentVersion: "1.0.0",
     model: { provider: "anthropic", name: "claude-sonnet-4" },
+    conversationId: "pi-session-1",
     toolCallId: "c1",
     toolName: "bash",
     input: { command: "ls" },
@@ -204,6 +205,7 @@ describe("runToolCallGuard", () => {
     expect(req.phase).toBe("postflight");
     expect(req.context.agentName).toBe("pi");
     expect(req.context.agentVersion).toBe("1.0.0");
+    expect(req.context.conversationId).toBe("pi-session-1");
     expect(req.context.model).toEqual({
       provider: "anthropic",
       name: "claude-sonnet-4",
@@ -220,6 +222,9 @@ describe("runToolCallGuard", () => {
       inputJSON: '{"command":"ls"}',
     });
     expect(override).toEqual({ enabled: true });
+
+    await runToolCallGuard(makeArgs({ client, conversationId: undefined }));
+    expect(calls[1]!.req.context).not.toHaveProperty("conversationId");
   });
 
   it("returns a transform result when the server emits redacted tool_call args", async () => {
@@ -382,6 +387,7 @@ function makePreflightArgs(
     agentName: "pi",
     agentVersion: "1.0.0",
     model: { provider: "anthropic", name: "claude-sonnet-4" },
+    conversationId: "pi-session-1",
     messages: [{ role: "user", parts: [{ type: "text", text: "hi" }] }],
     ...overrides,
   };
@@ -402,12 +408,18 @@ describe("runPreflightTransform", () => {
     expect(req.context).toEqual({
       agentName: "pi",
       agentVersion: "1.0.0",
+      conversationId: "pi-session-1",
       model: { provider: "anthropic", name: "claude-sonnet-4" },
     });
     expect((req.input as HookInput).messages).toEqual([
       { role: "user", parts: [{ type: "text", text: "hi" }] },
     ]);
     expect(override).toEqual({ enabled: true, phases: ["preflight"] });
+
+    await runPreflightTransform(
+      makePreflightArgs({ client, conversationId: undefined }),
+    );
+    expect(calls[1]!.req.context).not.toHaveProperty("conversationId");
   });
 
   it("returns the redacted messages from transformedInput", async () => {

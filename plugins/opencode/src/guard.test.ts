@@ -37,6 +37,7 @@ describe("runToolCallGuard", () => {
       client: client as any,
       agentName: "opencode",
       model: { provider: "anthropic", name: "claude" },
+      conversationId: "opencode-session-1",
       toolCallId: "c1",
       toolName: "bash",
       input: { command: "ls" },
@@ -46,9 +47,21 @@ describe("runToolCallGuard", () => {
     expect(res).toBeUndefined();
     expect(calls).toHaveLength(1);
     expect((calls[0] as any).phase).toBe("postflight");
+    expect((calls[0] as any).context.conversationId).toBe("opencode-session-1");
     expect((calls[0] as any).input.output[0].parts[0].toolCall.inputJSON).toBe(
       JSON.stringify({ command: "ls" }),
     );
+
+    await runToolCallGuard({
+      client: client as any,
+      agentName: "opencode",
+      model: { provider: "anthropic", name: "claude" },
+      conversationId: "   ",
+      toolName: "bash",
+      input: {},
+      failOpen: true,
+    });
+    expect((calls[1] as any).context).not.toHaveProperty("conversationId");
   });
 
   it("returns a wrapped policy-deny result when Agent Observability denies the tool call", async () => {
@@ -388,6 +401,7 @@ function makePreflightArgs(
     agentName: "opencode:build",
     agentVersion: "1.2.3",
     model: { provider: "anthropic", name: "claude-sonnet-4" },
+    conversationId: "opencode-session-1",
     messages: [{ role: "user", parts: [{ type: "text", text: "hi" }] }],
     failOpen: true,
     ...overrides,
@@ -423,6 +437,7 @@ describe("runPreflightTransform", () => {
         expect(req.context).toEqual({
           agentName: "opencode:build",
           agentVersion: "1.2.3",
+          conversationId: "opencode-session-1",
           model: { provider: "anthropic", name: "claude-sonnet-4" },
         });
         expect(req.input.messages).toEqual([
@@ -437,6 +452,13 @@ describe("runPreflightTransform", () => {
           phases: ["preflight"],
           failOpen: false,
         });
+      },
+    },
+    {
+      name: "omits a blank conversation ID",
+      args: { conversationId: "   " },
+      assert: (calls) => {
+        expect(calls[0]!.req.context).not.toHaveProperty("conversationId");
       },
     },
     {

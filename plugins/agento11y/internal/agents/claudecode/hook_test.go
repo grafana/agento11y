@@ -1493,25 +1493,28 @@ func TestHook_AgentNameOverride(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var guardAgents, exportAgents, exportUserAgents []string
+			var guardAgents, guardConversationIDs, exportAgents, exportConversationIDs, exportUserAgents []string
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				body, _ := io.ReadAll(r.Body)
 				switch {
 				case strings.Contains(r.URL.Path, "hooks:evaluate"):
 					var req struct {
 						Context struct {
-							AgentName string `json:"agent_name"`
+							AgentName      string `json:"agent_name"`
+							ConversationID string `json:"conversation_id"`
 						} `json:"context"`
 					}
 					_ = json.Unmarshal(body, &req)
 					guardAgents = append(guardAgents, req.Context.AgentName)
+					guardConversationIDs = append(guardConversationIDs, req.Context.ConversationID)
 					w.Header().Set("Content-Type", "application/json")
 					_, _ = w.Write([]byte(`{"action":"allow"}`))
 				default:
 					var req struct {
 						Generations []struct {
-							ID        string `json:"id"`
-							AgentName string `json:"agent_name"`
+							ID             string `json:"id"`
+							AgentName      string `json:"agent_name"`
+							ConversationID string `json:"conversation_id"`
 						} `json:"generations"`
 					}
 					_ = json.Unmarshal(body, &req)
@@ -1521,6 +1524,7 @@ func TestHook_AgentNameOverride(t *testing.T) {
 					}{Results: make([]map[string]any, 0, len(req.Generations))}
 					for _, g := range req.Generations {
 						exportAgents = append(exportAgents, g.AgentName)
+						exportConversationIDs = append(exportConversationIDs, g.ConversationID)
 						resp.Results = append(resp.Results, map[string]any{"generation_id": g.ID, "accepted": true})
 					}
 					w.Header().Set("Content-Type", "application/json")
@@ -1591,6 +1595,9 @@ func TestHook_AgentNameOverride(t *testing.T) {
 			if len(guardAgents) != 1 || guardAgents[0] != wantGuard {
 				t.Fatalf("guard agent names = %v, want [%q]", guardAgents, wantGuard)
 			}
+			if len(guardConversationIDs) != 1 || guardConversationIDs[0] != sessionID {
+				t.Fatalf("guard conversation IDs = %v, want [%q]", guardConversationIDs, sessionID)
+			}
 			wantExport := []string{tt.wantAgent, tt.wantSubagent, tt.wantAgent}
 			if len(exportAgents) != len(wantExport) {
 				t.Fatalf("exported agent names = %v, want %v (logs:\n%s)", exportAgents, wantExport, logs)
@@ -1598,6 +1605,11 @@ func TestHook_AgentNameOverride(t *testing.T) {
 			for i, want := range wantExport {
 				if exportAgents[i] != want {
 					t.Fatalf("exported agent name[%d] = %q, want %q (all: %v)", i, exportAgents[i], want, exportAgents)
+				}
+			}
+			for i, got := range exportConversationIDs {
+				if got != sessionID {
+					t.Fatalf("exported conversation ID[%d] = %q, want %q", i, got, sessionID)
 				}
 			}
 			if len(exportUserAgents) == 0 {

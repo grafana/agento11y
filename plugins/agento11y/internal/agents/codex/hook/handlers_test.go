@@ -1007,9 +1007,19 @@ func TestPreToolUseGuard(t *testing.T) {
 func TestUserPromptSubmitGuard(t *testing.T) {
 	var responseBody atomic.Value
 	responseBody.Store("")
+	var conversationID atomic.Value
+	conversationID.Store("")
 	var calls atomic.Int32
-	server := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
+		requestBody, _ := io.ReadAll(r.Body)
+		var req struct {
+			Context struct {
+				ConversationID string `json:"conversation_id"`
+			} `json:"context"`
+		}
+		_ = json.Unmarshal(requestBody, &req)
+		conversationID.Store(req.Context.ConversationID)
 		body, _ := responseBody.Load().(string)
 		if body == "" {
 			body = `{"action":"allow"}`
@@ -1027,6 +1037,8 @@ func TestUserPromptSubmitGuard(t *testing.T) {
 		wantStdoutEmpty    bool
 		wantStdoutContains []string
 		wantCaptured       bool
+		link               *fragment.SubagentLink
+		wantConversationID string
 	}{
 		{
 			name:            "disabled_by_default_no_env",
@@ -1034,12 +1046,13 @@ func TestUserPromptSubmitGuard(t *testing.T) {
 			wantCaptured:    true,
 		},
 		{
-			name:             "enabled_allow_response",
-			env:              map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
-			serverResponds:   `{"action":"allow"}`,
-			expectServerCall: true,
-			wantStdoutEmpty:  true,
-			wantCaptured:     true,
+			name:               "enabled_allow_response",
+			env:                map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
+			serverResponds:     `{"action":"allow"}`,
+			expectServerCall:   true,
+			wantStdoutEmpty:    true,
+			wantCaptured:       true,
+			wantConversationID: "sess",
 		},
 		{
 			name:               "enabled_deny_response",
@@ -1047,15 +1060,40 @@ func TestUserPromptSubmitGuard(t *testing.T) {
 			serverResponds:     `{"action":"deny","reason":"secret in prompt"}`,
 			expectServerCall:   true,
 			wantStdoutContains: []string{`"decision":"block"`, "secret in prompt", "blocked this message"},
+			wantConversationID: "sess",
 		},
 		{
 			// Shared-binary hosts ignore prompt transforms.
-			name:             "enabled_allow_with_transform_is_ignored",
+			name:               "enabled_allow_with_transform_is_ignored",
+			env:                map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
+			serverResponds:     `{"action":"allow","transformed_input":{"messages":[{"role":"user","parts":[{"kind":"text","text":"[REDACTED]"}]}]}}`,
+			expectServerCall:   true,
+			wantStdoutEmpty:    true,
+			wantCaptured:       true,
+			wantConversationID: "sess",
+		},
+		{
+			name:             "resolved subagent uses parent session",
 			env:              map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
-			serverResponds:   `{"action":"allow","transformed_input":{"messages":[{"role":"user","parts":[{"kind":"text","text":"[REDACTED]"}]}]}}`,
 			expectServerCall: true,
 			wantStdoutEmpty:  true,
 			wantCaptured:     true,
+			link: &fragment.SubagentLink{
+				ParentSessionID:    "parent-session",
+				ParentGenerationID: "parent-generation",
+			},
+			wantConversationID: "parent-session",
+		},
+		{
+			name:             "partial subagent link keeps child session",
+			env:              map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
+			expectServerCall: true,
+			wantStdoutEmpty:  true,
+			wantCaptured:     true,
+			link: &fragment.SubagentLink{
+				ParentSessionID: "parent-session",
+			},
+			wantConversationID: "sess",
 		},
 	}
 
@@ -1073,8 +1111,16 @@ func TestUserPromptSubmitGuard(t *testing.T) {
 
 			calls.Store(0)
 			responseBody.Store(tt.serverResponds)
+			conversationID.Store("")
 
 			logger := log.New(io.Discard, "", 0)
+			if tt.link != nil {
+				link := *tt.link
+				link.ChildSessionID = "sess"
+				if err := fragment.SaveSubagentLink(&link); err != nil {
+					t.Fatalf("save subagent link: %v", err)
+				}
+			}
 			cfg := config.Load(logger)
 			var stdout bytes.Buffer
 			UserPromptSubmit(context.Background(), &stdout, Payload{
@@ -1090,6 +1136,9 @@ func TestUserPromptSubmitGuard(t *testing.T) {
 			}
 			if !tt.expectServerCall && calls.Load() != 0 {
 				t.Errorf("expected no server call, got %d", calls.Load())
+			}
+			if got, _ := conversationID.Load().(string); got != tt.wantConversationID {
+				t.Errorf("guard conversation ID = %q, want %q", got, tt.wantConversationID)
 			}
 			if tt.wantStdoutEmpty && stdout.Len() != 0 {
 				t.Errorf("stdout not empty: %q", stdout.String())
@@ -1157,8 +1206,9 @@ func TestPreToolUseGuardSendsExpectedRequest(t *testing.T) {
 	var req struct {
 		Phase   string `json:"phase"`
 		Context struct {
-			AgentName string `json:"agent_name"`
-			Model     *struct {
+			AgentName      string `json:"agent_name"`
+			ConversationID string `json:"conversation_id"`
+			Model          *struct {
 				Provider string `json:"provider"`
 				Name     string `json:"name"`
 			} `json:"model"`
@@ -1185,6 +1235,9 @@ func TestPreToolUseGuardSendsExpectedRequest(t *testing.T) {
 	}
 	if req.Context.AgentName != mapper.AgentName {
 		t.Errorf("agent_name = %q, want %q", req.Context.AgentName, mapper.AgentName)
+	}
+	if req.Context.ConversationID != "sess" {
+		t.Errorf("conversation_id = %q, want sess", req.Context.ConversationID)
 	}
 	if req.Context.Model == nil {
 		t.Fatal("missing context model")
@@ -1315,17 +1368,19 @@ func TestAgentNameOverrideGuardAndExport(t *testing.T) {
 			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 			logger := log.New(io.Discard, "", 0)
 
-			var guardAgents, exportAgents []string
+			var guardAgents, guardConversationIDs, exportAgents, exportConversationIDs []string
 			server := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if strings.Contains(r.URL.Path, "hooks:evaluate") {
 					body, _ := io.ReadAll(r.Body)
 					var req struct {
 						Context struct {
-							AgentName string `json:"agent_name"`
+							AgentName      string `json:"agent_name"`
+							ConversationID string `json:"conversation_id"`
 						} `json:"context"`
 					}
 					_ = json.Unmarshal(body, &req)
 					guardAgents = append(guardAgents, req.Context.AgentName)
+					guardConversationIDs = append(guardConversationIDs, req.Context.ConversationID)
 					w.Header().Set("Content-Type", "application/json")
 					_, _ = w.Write([]byte(`{"action":"allow"}`))
 					return
@@ -1333,12 +1388,14 @@ func TestAgentNameOverrideGuardAndExport(t *testing.T) {
 				body, _ := io.ReadAll(r.Body)
 				var req struct {
 					Generations []struct {
-						AgentName string `json:"agent_name"`
+						AgentName      string `json:"agent_name"`
+						ConversationID string `json:"conversation_id"`
 					} `json:"generations"`
 				}
 				_ = json.Unmarshal(body, &req)
 				for _, g := range req.Generations {
 					exportAgents = append(exportAgents, g.AgentName)
+					exportConversationIDs = append(exportConversationIDs, g.ConversationID)
 				}
 				writeAcceptedGenerationResponse(t, w, body)
 			}))
@@ -1380,9 +1437,11 @@ func TestAgentNameOverrideGuardAndExport(t *testing.T) {
 			Stop(Payload{HookEventName: "Stop", SessionID: "sess", TurnID: "turn"}, cfg, logger)
 
 			assert.Equal(t, []string{tt.want}, guardAgents, "guard agent names")
+			assert.Equal(t, []string{"sess"}, guardConversationIDs, "guard conversation IDs")
 			assert.Len(t, exportAgents, 2, "one current turn plus one retried turn")
 			for i, got := range exportAgents {
 				assert.Equal(t, tt.want, got, "exported agent name[%d]", i)
+				assert.Equal(t, "sess", exportConversationIDs[i], "exported conversation ID[%d]", i)
 			}
 		})
 	}
