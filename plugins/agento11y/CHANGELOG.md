@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.43.0] - 2026-08-27
+
+### Features
+
+- **plugins**: send conversation IDs in guard requests (#694)
+
+### Bug Fixes
+
+- **plugins/agento11y**: show token counts above 1B in the local viewer (#686)
+
 ## [0.42.0] - 2026-08-27
 
 ### Bug Fixes
