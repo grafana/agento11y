@@ -9,8 +9,8 @@ import (
 	"iter"
 	"time"
 
+	_ "github.com/glebarez/go-sqlite"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/chatstore"
-	_ "modernc.org/sqlite"
 )
 
 // MaxPayloadBytes is the largest message.data or part.data value decoded.

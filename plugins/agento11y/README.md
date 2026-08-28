@@ -98,11 +98,11 @@ The skills for instrumenting your own application code are separate and ship wit
 
 ## Local mode
 
-`agento11y <agent> --local` records the session to a JSONL store and starts the local Agent Observability app. The command prints the app URL (tries `http://127.0.0.1:8765`, then a higher port if needed).
+`agento11y <agent> --local` records the session to a SQLite database and starts the local Agent Observability app. The command prints the app URL (tries `http://127.0.0.1:8765`, then a higher port if needed).
 
 `AGENTO11Y_LOCAL=true` in the shell or `config.env` enables local mode for every launch and installed hook. **Local only** writes `AGENTO11Y_LOCAL` and `SIGIL_LOCAL` as true, and writes `AGENTO11Y_LOCAL_FORWARD` and `SIGIL_LOCAL_FORWARD` as false. Sessions then stay on the machine. **Local web UI = Yes** writes all four keys as true, so the daemon keeps a full local copy and also forwards to Grafana Cloud. **Local web UI = No** writes all four keys as false and sends directly to Cloud. Use `--no-local` to override a saved local destination for one launcher session without changing those keys.
 
-The daemon always stores full session content locally. It forwards full generation content only when `AGENTO11Y_CONTENT_CAPTURE_MODE=full`. Every other selected capture mode is reduced to `metadata_only` for the forwarded copy. Local mode is available on macOS and Linux only; Windows has no local receiver.
+The daemon always stores full session content locally. It forwards full generation content only when `AGENTO11Y_CONTENT_CAPTURE_MODE=full`. Every other selected capture mode is reduced to `metadata_only` for the forwarded copy. Existing JSONL stores migrate in the background and later remove their JSONL files after SQLite becomes the source of truth. Local mode is available on macOS and Linux only; Windows has no local receiver.
 
 Manage the app with `agento11y local start|open|status|stop|restart`. `agento11y local open` starts the receiver if needed, prints its address, and tries to open the app.
 

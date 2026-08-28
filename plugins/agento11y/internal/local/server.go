@@ -434,7 +434,7 @@ func (s *Server) handleGenerations(w http.ResponseWriter, r *http.Request) {
 			recs[i] = p.record
 			activities[i] = p.activity
 		}
-		written, err := s.storage.AppendGenerations(convID, recs, activities)
+		written, err := s.storage.AppendGenerations(convID, recs)
 		if err != nil {
 			s.logger.Printf("local: append generations: %v", err)
 		}
