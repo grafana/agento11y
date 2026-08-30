@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe/meta"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe/state"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe/toolevents"
 )
 
@@ -72,6 +74,60 @@ func TestPreTool_FailOpenAllowsOnMissingCreds(t *testing.T) {
 	}, discardLogger())
 	if out.Len() != 0 {
 		t.Errorf("stdout = %q, want empty (allow) when failing open", out.String())
+	}
+}
+
+func TestGuardConversationID(t *testing.T) {
+	tests := []struct {
+		name               string
+		payloadParentID    string
+		metaParentID       string
+		stateParentID      string
+		parentGenerationID string
+		want               string
+	}{
+		{name: "root session", want: "child"},
+		{
+			name:               "resolved payload parent",
+			payloadParentID:    "payload-parent",
+			metaParentID:       "meta-parent",
+			stateParentID:      "payload-parent",
+			parentGenerationID: "parent-generation",
+			want:               "payload-parent",
+		},
+		{
+			name:               "resolved meta parent",
+			metaParentID:       "meta-parent",
+			stateParentID:      "meta-parent",
+			parentGenerationID: "parent-generation",
+			want:               "meta-parent",
+		},
+		{name: "missing parent state", metaParentID: "meta-parent", want: "child"},
+		{
+			name:          "parent state without generation",
+			metaParentID:  "meta-parent",
+			stateParentID: "meta-parent",
+			want:          "child",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			if tt.stateParentID != "" {
+				if err := state.Save(tt.stateParentID, state.Session{LastGenerationID: tt.parentGenerationID}); err != nil {
+					t.Fatalf("save parent state: %v", err)
+				}
+			}
+
+			got := guardConversationID(Payload{
+				SessionID:       "child",
+				ParentSessionID: tt.payloadParentID,
+			}, meta.Meta{ParentSessionID: tt.metaParentID})
+			if got != tt.want {
+				t.Errorf("guard conversation ID = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

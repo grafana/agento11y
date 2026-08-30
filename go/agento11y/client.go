@@ -44,6 +44,10 @@ type Config struct {
 	// (preflight/postflight guardrails). Disabled by default; callers must
 	// explicitly opt in by setting Hooks.Enabled = true.
 	Hooks HooksConfig
+	// EnableExperimentalFeatures controls experimental features for this client.
+	// A non-nil value overrides EnvEnableExperimentalFeatures. When nil, each
+	// feature check reads the current environment value.
+	EnableExperimentalFeatures *bool
 	// ContentCapture controls the default content capture mode for all
 	// generations and tool executions. Per-recording overrides take precedence.
 	ContentCapture ContentCaptureMode
@@ -177,8 +181,8 @@ const (
 	// GenerationExportProtocolOTel exports each generation as one
 	// GenAI-semconv span on the application's OTel pipeline instead of calling
 	// the generation-export endpoint. This protocol is experimental: NewClient
-	// also requires EnvEnableExperimentalFeatures, and falls back to the noop
-	// exporter when that variable is not set.
+	// checks Config.EnableExperimentalFeatures first, then
+	// EnvEnableExperimentalFeatures when the config field is nil.
 	GenerationExportProtocolOTel GenerationExportProtocol = "otel"
 )
 
@@ -482,6 +486,9 @@ type telemetryInstruments struct {
 // apply. Use ConfigFromEnv() if strict validation is required.
 func NewClient(config Config) *Client {
 	cfg := config
+	if cfg.EnableExperimentalFeatures != nil {
+		cfg.EnableExperimentalFeatures = BoolPtr(*cfg.EnableExperimentalFeatures)
+	}
 	defaults, err := resolveFromEnv(defaultLookup, DefaultConfig())
 	if err != nil {
 		log.Default().Printf("agento11y: skipping invalid env values: %v", err)
@@ -565,7 +572,7 @@ func NewClient(config Config) *Client {
 	}
 
 	// Build the otel handler before the exporter. Without
-	// EnvEnableExperimentalFeatures the handler fails, and the client then uses
+	// experimental features enabled, the handler fails, and the client then uses
 	// the noop exporter, which exports nothing.
 	var otelErr error
 	if cfg.GenerationExport.Protocol == GenerationExportProtocolOTel {

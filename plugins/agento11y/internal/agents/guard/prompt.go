@@ -45,6 +45,8 @@ type PromptInput struct {
 	// ModelProvider and ModelName describe the upstream model, when known.
 	ModelProvider string
 	ModelName     string
+	// ConversationID identifies the host conversation, when known.
+	ConversationID string
 	// Prompt is the message the user just submitted.
 	Prompt string
 }
@@ -112,8 +114,9 @@ func EvaluatePrompt(ctx context.Context, cfg envconfig.GuardsConfig, in PromptIn
 	req := agento11y.HookEvaluateRequest{
 		Phase: agento11y.HookPhasePreflight,
 		Context: agento11y.HookContext{
-			AgentName:    in.AgentName,
-			AgentVersion: in.AgentVersion,
+			AgentName:      in.AgentName,
+			AgentVersion:   in.AgentVersion,
+			ConversationID: strings.TrimSpace(in.ConversationID),
 			Model: &agento11y.HookModel{
 				Provider: provider,
 				Name:     modelName,

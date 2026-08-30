@@ -42,6 +42,9 @@ public final class Agento11yEnvConfig {
     public static final String ENV_INSECURE_PREFERRED = "AGENTO11Y_INSECURE";
     public static final String ENV_HEADERS_PREFERRED = "AGENTO11Y_HEADERS";
     public static final String ENV_EXPORT_TIMEOUT_MS_PREFERRED = "AGENTO11Y_EXPORT_TIMEOUT_MS";
+    public static final String ENV_MAX_RETRIES_PREFERRED = "AGENTO11Y_MAX_RETRIES";
+    public static final String ENV_MAX_BACKOFF_MS_PREFERRED = "AGENTO11Y_MAX_BACKOFF_MS";
+    public static final String ENV_QUEUE_SIZE_PREFERRED = "AGENTO11Y_QUEUE_SIZE";
     public static final String ENV_AUTH_MODE_PREFERRED = "AGENTO11Y_AUTH_MODE";
     public static final String ENV_AUTH_TENANT_ID_PREFERRED = "AGENTO11Y_AUTH_TENANT_ID";
     public static final String ENV_AUTH_TOKEN_PREFERRED = "AGENTO11Y_AUTH_TOKEN";
@@ -58,6 +61,9 @@ public final class Agento11yEnvConfig {
     public static final String ENV_INSECURE = "SIGIL_INSECURE";
     public static final String ENV_HEADERS = "SIGIL_HEADERS";
     public static final String ENV_EXPORT_TIMEOUT_MS = "SIGIL_EXPORT_TIMEOUT_MS";
+    public static final String ENV_MAX_RETRIES = "SIGIL_MAX_RETRIES";
+    public static final String ENV_MAX_BACKOFF_MS = "SIGIL_MAX_BACKOFF_MS";
+    public static final String ENV_QUEUE_SIZE = "SIGIL_QUEUE_SIZE";
     public static final String ENV_AUTH_MODE = "SIGIL_AUTH_MODE";
     public static final String ENV_AUTH_TENANT_ID = "SIGIL_AUTH_TENANT_ID";
     public static final String ENV_AUTH_TOKEN = "SIGIL_AUTH_TOKEN";
@@ -140,6 +146,36 @@ public final class Agento11yEnvConfig {
             } else {
                 warnings.add("agento11y: ignoring invalid " + exportTimeoutRaw.key() + " " + exportTimeoutRaw.value()
                         + "; expected an integer from 1 through " + Integer.MAX_VALUE);
+            }
+        }
+
+        EnvValue maxRetriesRaw = envTrimmed(source, ENV_MAX_RETRIES_PREFERRED, ENV_MAX_RETRIES);
+        if (maxRetriesRaw != null && !export.isMaxRetriesExplicit()) {
+            Integer parsed = parsePositiveInt(maxRetriesRaw.value());
+            if (parsed != null) {
+                export.setMaxRetries(parsed);
+            } else {
+                warnings.add(invalidPositiveIntWarning(maxRetriesRaw));
+            }
+        }
+
+        EnvValue maxBackoffRaw = envTrimmed(source, ENV_MAX_BACKOFF_MS_PREFERRED, ENV_MAX_BACKOFF_MS);
+        if (maxBackoffRaw != null && !export.isMaxBackoffExplicit()) {
+            Integer parsed = parsePositiveInt(maxBackoffRaw.value());
+            if (parsed != null) {
+                export.setMaxBackoff(Duration.ofMillis(parsed));
+            } else {
+                warnings.add(invalidPositiveIntWarning(maxBackoffRaw));
+            }
+        }
+
+        EnvValue queueSizeRaw = envTrimmed(source, ENV_QUEUE_SIZE_PREFERRED, ENV_QUEUE_SIZE);
+        if (queueSizeRaw != null && !export.isQueueSizeExplicit()) {
+            Integer parsed = parsePositiveInt(queueSizeRaw.value());
+            if (parsed != null) {
+                export.setQueueSize(parsed);
+            } else {
+                warnings.add(invalidPositiveIntWarning(queueSizeRaw));
             }
         }
 
@@ -241,6 +277,11 @@ public final class Agento11yEnvConfig {
     private record EnvValue(String value, String key) {
     }
 
+    private static String invalidPositiveIntWarning(EnvValue value) {
+        return "agento11y: ignoring invalid " + value.key() + " " + value.value()
+                + "; expected an integer from 1 through " + Integer.MAX_VALUE;
+    }
+
     /**
      * Selects the first nonblank value of {@code preferred} then {@code legacy}
      * and returns it with the env-var name it came from, so validation warnings
@@ -278,6 +319,18 @@ public final class Agento11yEnvConfig {
                 return true;
             default:
                 return false;
+        }
+    }
+
+    static Integer parsePositiveInt(String raw) {
+        if (raw == null || !raw.trim().matches("[0-9]+")) {
+            return null;
+        }
+        try {
+            int value = Integer.parseInt(raw.trim());
+            return value >= 1 ? value : null;
+        } catch (NumberFormatException ex) {
+            return null;
         }
     }
 

@@ -1,5 +1,6 @@
 import type React from 'react';
 import { Fragment, useMemo, useState } from 'react';
+import { AnalyticsPage } from './analytics-page';
 import { ChartXLabels, ChartYAxis, TimeRangePicker, type WorkspaceAggregate, WorkspaceFacet } from './conversations';
 import {
   bucketTokenUsage,
@@ -15,7 +16,9 @@ import {
   formatBucketLabel,
   formatCost,
   formatDuration,
+  formatInteger,
   formatTokens,
+  maximumEstimatedTokenRate,
   modelDot,
   shortModel,
   splitWorkspacePath,
@@ -26,18 +29,17 @@ import {
   tokenPointTime,
   useModelPrices,
 } from './formatters';
-import { ACTIVE_PILL_BG, Notice, PANEL_BG, PageHero, PageShell, SurfaceCard } from './notices';
+import { ACTIVE_PILL_BG, Notice, PANEL_BG, SurfaceCard } from './notices';
 import { conversationPath, conversationsPath, isPlainLeftClick } from './routing';
 import { agentHosts, Icon, iconBtn, ModelPill } from './shell';
 import type {
   ConversationMetricsAggregate,
   ConversationSummary,
-  ConversationToolUsage,
   ModelPrices,
   TokenBucketKey,
   TokenBuckets,
   TokenUsagePoint,
-  ToolUsage,
+  WorkspaceMetricsAggregate,
 } from './types';
 
 export type AnalyticsUnit = 'cost' | 'tokens';
@@ -45,8 +47,14 @@ export type AnalyticsUnit = 'cost' | 'tokens';
 export interface AnalyticsViewProps {
   conversations: ConversationSummary[];
   previousConversations: ConversationSummary[];
+  heaviestConversations?: ConversationSummary[];
+  heaviestTotalConversations?: number | null;
+  heaviestRankingExact?: boolean;
+  heaviestLoading?: boolean;
+  heaviestError?: string | null;
   aggregate?: ConversationMetricsAggregate | null;
   previousAggregate?: ConversationMetricsAggregate | null;
+  facetAggregate?: ConversationMetricsAggregate | null;
   facetConversations: ConversationSummary[];
   totalConversations: number | null;
   previousTotalConversations: number | null;
@@ -54,16 +62,13 @@ export interface AnalyticsViewProps {
   tokenPoints: TokenUsagePoint[];
   tokenIntervalMs: number;
   heatmapPoints: TokenUsagePoint[];
-  toolUsage: ConversationToolUsage[];
   loading: boolean;
   tokenLoading: boolean;
-  toolLoading: boolean;
   heatmapLoading: boolean;
   error: string | null;
   previousError: string | null;
   facetError: string | null;
   tokenError: string | null;
-  toolError: string | null;
   heatmapError: string | null;
   unit: AnalyticsUnit;
   onUnitChange: (v: AnalyticsUnit) => void;
@@ -128,28 +133,52 @@ const EMPTY_BUCKETS: TokenBuckets = {
 };
 const WORKSPACE_GRID = 'minmax(96px, 1fr) minmax(56px, 110px) 52px 52px 56px';
 const MODEL_GRID = 'minmax(72px, 1fr) 70px 68px 56px';
-const CALL_GRID = '86px minmax(0, 1fr) 62px 76px';
 const SHAPE_GRID = '82px minmax(0, 1fr) 26px';
 const SESSION_GRID = '26px minmax(0, 1fr) 130px 84px 88px 128px 88px';
 const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
-const HEAT_COLORS = [
-  'rgba(204,204,220,0.05)',
-  'rgba(255,103,29,0.22)',
-  'rgba(255,103,29,0.45)',
-  'rgba(255,103,29,0.7)',
-  'rgba(255,103,29,0.95)',
-] as const;
+const HEAT_COLORS = ['var(--heat-0)', 'var(--heat-1)', 'var(--heat-2)', 'var(--heat-3)', 'var(--heat-4)'] as const;
 
 function tokenTotal(buckets: TokenBuckets | null | undefined): number {
   if (!buckets) return 0;
   return TOKEN_SERIES.reduce((sum, series) => sum + (buckets[series.key] || 0), 0);
 }
 
+// Token ordering makes the final row's token count an upper bound for every
+// unseen row; the highest rate the estimator can apply turns it into a cost bound.
+export function heaviestCostPageNeedsMore(
+  conversations: readonly ConversationSummary[],
+  matchedConversations: number,
+  prices: ModelPrices | null,
+): boolean {
+  if (conversations.length >= matchedConversations) return false;
+  const pricedCosts = conversations
+    .map((conversation) => conversationCostEstimateByModel(conversation, prices).value)
+    .filter((cost): cost is number => cost != null)
+    .sort((a, b) => b - a);
+  const sixthCost = pricedCosts[5];
+  if (sixthCost == null) return true;
+  const lastReturned = conversations.at(-1);
+  if (!lastReturned) return true;
+  const unseenCostUpperBound = (tokenTotal(lastReturned.token_buckets) * maximumEstimatedTokenRate(prices)) / 1e6;
+  return sixthCost <= unseenCostUpperBound;
+}
+
+export function heaviestCostRankingIsExact(
+  conversations: readonly ConversationSummary[],
+  matchedConversations: number,
+  prices: ModelPrices | null,
+): boolean {
+  return (
+    conversations.every((conversation) => conversationCostEstimateByModel(conversation, prices).complete) &&
+    !heaviestCostPageNeedsMore(conversations, matchedConversations, prices)
+  );
+}
+
 function sumTokens(conversations: readonly ConversationSummary[]): number {
   return conversations.reduce((sum, conversation) => sum + tokenTotal(conversation.token_buckets), 0);
 }
 
-function sumCosts(conversations: readonly ConversationSummary[], prices: ModelPrices | null): CostEstimate {
+function sumCosts(conversations: readonly ModelUsageSource[], prices: ModelPrices | null): CostEstimate {
   let total = 0;
   let priced = 0;
   let complete = true;
@@ -183,6 +212,25 @@ function chartCostDescription(estimate: CostEstimate & { hasUsage: boolean }): s
   if (estimate.value == null) return 'estimated cost unavailable';
   if (estimate.complete) return `estimated cost ${formatCost(estimate.value)}`;
   return `estimated cost ${formatCostEstimate(estimate)}; unpriced usage excluded`;
+}
+
+function workspaceAggregateRows(
+  workspaces: readonly WorkspaceMetricsAggregate[],
+  prices: ModelPrices | null,
+): WorkspaceRow[] {
+  return workspaces.map((workspace) => {
+    const estimate = conversationCostEstimateByModel(workspace, prices);
+    const last = Date.parse(workspace.last_activity);
+    return {
+      path: workspace.path,
+      count: workspace.sessions,
+      cost: estimate.value,
+      costComplete: estimate.complete,
+      tokens: tokenTotal(workspace.token_buckets),
+      dur: workspace.duration_seconds,
+      last: Number.isFinite(last) ? last : 0,
+    };
+  });
 }
 
 function aggregateWorkspaces(
@@ -272,10 +320,6 @@ function pointDelta(current: number | null, previous: number | null): string | n
   return `0 pt ${DELTA_BASELINE}`;
 }
 
-function formatInteger(value: number): string {
-  return Math.round(value).toLocaleString('en-US');
-}
-
 function emptyRangeMessage(rangeLabel: string): React.ReactNode {
   return (
     <Fragment>
@@ -349,7 +393,7 @@ function UnitToggle({ value, onChange }: { value: AnalyticsUnit; onChange: (valu
         border: '1px solid var(--border-medium)',
         borderRadius: 999,
         background: PANEL_BG,
-        boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.10)',
+        boxShadow: 'var(--control-inset-shadow)',
       }}
     >
       {options.map((option) => {
@@ -452,7 +496,7 @@ function cacheSparkline(
     return {
       key: bucket.key,
       value: pct,
-      tone: overall != null && pct > 0 && pct + 8 < overall ? 'rgba(245,183,61,0.55)' : undefined,
+      tone: overall != null && pct > 0 && pct + 8 < overall ? 'var(--warning-spark)' : undefined,
     };
   });
 }
@@ -667,7 +711,6 @@ export function AnalyticsChart({
                       color: 'inherit',
                       font: 'inherit',
                       cursor: 'pointer',
-                      opacity: hidden ? 0.6 : 1,
                       textDecoration: hidden ? 'line-through' : 'none',
                     }}
                   >
@@ -739,7 +782,7 @@ export function AnalyticsChart({
                     x2={100}
                     y1={32 * line}
                     y2={32 * line}
-                    stroke="rgba(204,204,220,0.06)"
+                    stroke="var(--chart-grid)"
                     strokeWidth="0.2"
                   />
                 ))}
@@ -975,7 +1018,7 @@ function WorkspacesPanel({
                   fontSize: 12,
                   textDecoration: 'none',
                 }}
-                onMouseEnter={(event) => (event.currentTarget.style.background = 'rgba(204,204,220,0.03)')}
+                onMouseEnter={(event) => (event.currentTarget.style.background = 'var(--row-hover)')}
                 onMouseLeave={(event) => (event.currentTarget.style.background = 'transparent')}
               >
                 <span
@@ -1022,7 +1065,7 @@ function WorkspacesPanel({
                       height: 6,
                       borderRadius: 2,
                       overflow: 'hidden',
-                      background: 'rgba(204,204,220,0.07)',
+                      background: 'var(--bar-track)',
                     }}
                   >
                     <span
@@ -1038,7 +1081,7 @@ function WorkspacesPanel({
                     {unit === 'cost' && !costComplete ? '—' : `${share}%`}
                   </span>
                 </span>
-                <span style={{ textAlign: 'right', color: 'var(--fg2)' }}>{row.count}</span>
+                <span style={{ textAlign: 'right', color: 'var(--fg2)' }}>{formatInteger(row.count)}</span>
                 <span style={{ textAlign: 'right', color: unit === 'tokens' ? 'var(--fg-max)' : 'var(--fg1)' }}>
                   {formatTokens(row.tokens)}
                 </span>
@@ -1138,98 +1181,6 @@ function ModelsPanel({ rows, unit, empty }: { rows: ModelAggregate[]; unit: Anal
   );
 }
 
-function ToolCallsPanel({
-  rows,
-  empty,
-  error,
-}: {
-  rows: ConversationToolUsage[];
-  empty: React.ReactNode;
-  error: string | null;
-}) {
-  const totals = new Map<string, ToolUsage>();
-  for (const conversation of rows) {
-    for (const tool of conversation.tools || []) {
-      const name = tool.name.trim();
-      if (!name) continue;
-      const total = totals.get(name) || { name, calls: 0, failures: 0 };
-      total.calls += tool.calls || 0;
-      total.failures += tool.failures || 0;
-      totals.set(name, total);
-    }
-  }
-  const sorted = [...totals.values()].filter((row) => row.calls > 0).sort((a, b) => b.calls - a.calls);
-  let shown = sorted;
-  if (sorted.length > 10) {
-    const other = sorted.slice(9).reduce(
-      (total, row) => ({
-        name: 'Other',
-        calls: total.calls + row.calls,
-        failures: total.failures + row.failures,
-      }),
-      { name: 'Other', calls: 0, failures: 0 },
-    );
-    shown = [...sorted.slice(0, 9), other];
-  }
-  const max = Math.max(1, ...shown.map((row) => row.calls));
-  const calls = sorted.reduce((sum, row) => sum + row.calls, 0);
-  const failures = sorted.reduce((sum, row) => sum + row.failures, 0);
-  return (
-    <SurfaceCard style={{ boxShadow: 'none', minWidth: 0 }}>
-      <PanelHeader title="Tool calls" meta={`${formatInteger(failures)} of ${formatInteger(calls)} failed`} />
-      {shown.length === 0 ? (
-        <EmptyPanel>{empty}</EmptyPanel>
-      ) : (
-        <div style={{ padding: '14px 18px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {error && (
-            <div style={{ color: 'var(--warning-text)', fontSize: 11 }}>Tool calls did not refresh: {error}</div>
-          )}
-          {shown.map((row) => {
-            const failureRate = row.calls > 0 ? (row.failures / row.calls) * 100 : 0;
-            return (
-              <div
-                key={row.name}
-                data-tool-row={row.name}
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: CALL_GRID,
-                  alignItems: 'center',
-                  gap: 10,
-                  fontFamily: 'var(--fontFamilyMonospace)',
-                  fontSize: 12,
-                }}
-              >
-                <span
-                  title={row.name}
-                  style={{ color: 'var(--fg1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                >
-                  {row.name}
-                </span>
-                <span style={{ height: 8, borderRadius: 2, overflow: 'hidden', background: 'rgba(204,204,220,0.05)' }}>
-                  <span
-                    style={{
-                      display: 'block',
-                      width: `${(row.calls / max) * 100}%`,
-                      height: '100%',
-                      background: 'rgba(204,204,220,0.26)',
-                    }}
-                  />
-                </span>
-                <span style={{ textAlign: 'right', color: 'var(--fg-max)' }}>
-                  {formatInteger(row.calls)} {row.calls === 1 ? 'call' : 'calls'}
-                </span>
-                <span style={{ textAlign: 'right', color: failureRate > 4 ? 'var(--error-text)' : 'var(--fg3)' }}>
-                  {failureRate === 0 ? '0%' : `${failureRate.toFixed(1).replace(/\.0$/, '')}%`} failed
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </SurfaceCard>
-  );
-}
-
 function SessionShapePanel({ conversations, empty }: { conversations: ConversationSummary[]; empty: React.ReactNode }) {
   const buckets = [
     { key: 'under-500k', label: '< 500k', min: 0, max: 500_000 },
@@ -1254,7 +1205,10 @@ function SessionShapePanel({ conversations, empty }: { conversations: Conversati
     durations[Math.min(durations.length - 1, Math.max(0, Math.ceil(durations.length * p) - 1))];
   return (
     <SurfaceCard style={{ boxShadow: 'none', minWidth: 0 }}>
-      <PanelHeader title="Sessions" meta="tokens / session" />
+      <PanelHeader
+        title="Sessions"
+        meta={`tokens / session · based on ${formatInteger(conversations.length)} ${conversations.length === 1 ? 'session' : 'sessions'}`}
+      />
       {conversations.length === 0 ? (
         <EmptyPanel>{empty}</EmptyPanel>
       ) : (
@@ -1274,17 +1228,17 @@ function SessionShapePanel({ conversations, empty }: { conversations: Conversati
               }}
             >
               <span style={{ color: 'var(--fg2)' }}>{bucket.label}</span>
-              <span style={{ height: 14, overflow: 'hidden', background: 'rgba(204,204,220,0.05)' }}>
+              <span style={{ height: 14, overflow: 'hidden', background: 'var(--shape-track)' }}>
                 <span
                   style={{
                     display: 'block',
                     width: `${(bucket.count / max) * 100}%`,
                     height: '100%',
-                    background: bucket.key === 'over-10m' ? 'rgba(255,103,29,0.7)' : 'rgba(87,148,242,0.55)',
+                    background: bucket.key === 'over-10m' ? 'var(--shape-hot-fill)' : 'var(--shape-fill)',
                   }}
                 />
               </span>
-              <span style={{ textAlign: 'right', color: 'var(--fg1)' }}>{bucket.count}</span>
+              <span style={{ textAlign: 'right', color: 'var(--fg1)' }}>{formatInteger(bucket.count)}</span>
             </div>
           ))}
           <div
@@ -1428,7 +1382,7 @@ function HeatmapPanel({
                           padding: 0,
                           border: costStatus === 'unknown' ? '1px dotted var(--warning-text)' : 'none',
                           borderRadius: 1,
-                          background: costStatus === 'unknown' ? 'rgba(245,183,61,0.12)' : HEAT_COLORS[level],
+                          background: costStatus === 'unknown' ? 'var(--warning-soft-bg)' : HEAT_COLORS[level],
                           opacity: costStatus === 'partial' ? 0.7 : 1,
                           cursor: 'pointer',
                         }}
@@ -1516,6 +1470,9 @@ function HeaviestSessionsPanel({
   unit,
   prices,
   totalConversations,
+  rankingExact,
+  loading,
+  error,
   returnedCurrentRange,
   previousTotalConversations,
   returnedPreviousRange,
@@ -1528,6 +1485,9 @@ function HeaviestSessionsPanel({
   unit: AnalyticsUnit;
   prices: ModelPrices | null;
   totalConversations: number | null;
+  rankingExact: boolean;
+  loading: boolean;
+  error: string | null;
   returnedCurrentRange: number;
   previousTotalConversations: number | null;
   returnedPreviousRange: number;
@@ -1546,13 +1506,24 @@ function HeaviestSessionsPanel({
       return bv - av;
     })
     .slice(0, 6);
-  const totalTokens = sumTokens(conversations);
-  const totalCost = sumCosts(conversations, prices);
+  const rangeSessions = totalConversations ?? conversations.length;
+  const unitRankingExact =
+    rankingExact || (unit === 'tokens' && !loading && error == null && totalConversations != null);
+  const hasUnpricedUsage = [...costs.values()].some((estimate) => !estimate.complete);
   const coverage = totalConversations != null && totalConversations > returnedCurrentRange;
   const previousCoverage = previousTotalConversations != null && previousTotalConversations > returnedPreviousRange;
+  const panelEmpty = error ? `Failed to load ranked sessions: ${error}` : loading ? 'Loading ranked sessions…' : empty;
+  const panelMeta =
+    totalConversations == null
+      ? loading
+        ? `loading ${unit} ranking`
+        : `${unit} ranking unavailable`
+      : unitRankingExact
+        ? `top ${formatInteger(sorted.length)} of ${formatInteger(rangeSessions)} by ${unit}`
+        : `${formatInteger(sorted.length)} shown of ${formatInteger(rangeSessions)} by ${unit}`;
   return (
     <SurfaceCard style={{ boxShadow: 'none', minWidth: 0 }}>
-      <PanelHeader title="Heaviest sessions" meta={`top ${sorted.length} of ${conversations.length} by ${unit}`} />
+      <PanelHeader title="Heaviest sessions" meta={panelMeta} />
       <div
         style={{
           display: 'grid',
@@ -1575,7 +1546,7 @@ function HeaviestSessionsPanel({
         <span style={{ textAlign: 'right' }}>Cost</span>
       </div>
       {sorted.length === 0 ? (
-        <EmptyPanel>{empty}</EmptyPanel>
+        <EmptyPanel>{panelEmpty}</EmptyPanel>
       ) : (
         sorted.map((conversation, position) => {
           const workspace = splitWorkspacePath(conversation.workspace);
@@ -1601,7 +1572,7 @@ function HeaviestSessionsPanel({
                 fontSize: 12,
                 textDecoration: 'none',
               }}
-              onMouseEnter={(event) => (event.currentTarget.style.background = 'rgba(204,204,220,0.03)')}
+              onMouseEnter={(event) => (event.currentTarget.style.background = 'var(--row-hover)')}
               onMouseLeave={(event) => (event.currentTarget.style.background = 'transparent')}
             >
               <span style={{ color: 'var(--fg3)' }}>{position + 1}</span>
@@ -1659,21 +1630,28 @@ function HeaviestSessionsPanel({
           fontSize: 11,
         }}
       >
-        {conversations.length} {conversations.length === 1 ? 'session' : 'sessions'} in range ·{' '}
-        {unit === 'cost' ? `${formatCostEstimate(totalCost)} total` : `${formatTokens(totalTokens)} tokens total`}
-        {!totalCost.complete && totalCost.value != null && ' · Unpriced usage is excluded.'}
+        {unitRankingExact
+          ? `Ranked across ${formatInteger(rangeSessions)} ${rangeSessions === 1 ? 'session' : 'sessions'} in range.`
+          : conversations.length >= rangeSessions
+            ? unit === 'cost' && hasUnpricedUsage
+              ? 'Every session in range is included, but incomplete cost estimates prevent an exact cost ranking.'
+              : `Ranking could not be verified across ${formatInteger(rangeSessions)} ${rangeSessions === 1 ? 'session' : 'sessions'} in range.`
+            : `Ranking is based on ${formatInteger(conversations.length)} of ${formatInteger(rangeSessions)} sessions; sessions outside this set may rank higher.`}
+        {unit === 'cost' && hasUnpricedUsage && ' Unpriced usage is excluded from estimated cost.'}
+        {error && conversations.length > 0 && ` Ranked sessions did not refresh: ${error}`}
         {coverage && (
           <Fragment>
-            {' · '}Coverage: session panels use {returnedCurrentRange} returned{' '}
-            {returnedCurrentRange === 1 ? 'session' : 'sessions'} from {totalConversations} in range.{' '}
+            {' '}
+            Session distribution is based on {formatInteger(returnedCurrentRange)} of{' '}
+            {formatInteger(totalConversations ?? rangeSessions)} sessions in range.{' '}
             {kpisCoverAll ? 'KPI totals, model totals, token charts, and trends' : 'Token charts and trends'} cover all
             generations in range.
           </Fragment>
         )}
         {previousCoverage && !previousKpisCoverAll && (
           <Fragment>
-            {' · '}Previous-period comparisons are unavailable: {returnedPreviousRange} of {previousTotalConversations}{' '}
-            sessions returned.
+            {' · '}Previous-period comparisons are unavailable: {formatInteger(returnedPreviousRange)} of{' '}
+            {formatInteger(previousTotalConversations ?? 0)} sessions returned.
           </Fragment>
         )}
       </div>
@@ -1683,6 +1661,24 @@ function HeaviestSessionsPanel({
 
 type ResolvedAnalyticsViewProps = Omit<AnalyticsViewProps, 'prices'> & { prices: ModelPrices | null };
 
+type AnalyticsHeroSource = Pick<AnalyticsViewProps, 'conversations' | 'aggregate' | 'totalConversations'>;
+
+export function analyticsOverviewHeroStats(props: AnalyticsHeroSource) {
+  const agents = new Set<string>();
+  const workspaces = new Set<string>();
+  for (const conversation of props.conversations) {
+    workspaces.add(conversation.workspace || '');
+    for (const agent of agentHosts(conversation.agents)) agents.add(agent);
+  }
+  const sessions =
+    props.aggregate && props.totalConversations != null ? props.totalConversations : props.conversations.length;
+  return [
+    { label: 'Sessions', value: formatInteger(sessions) },
+    { label: 'Workspaces', value: formatInteger(props.aggregate?.workspaces ?? workspaces.size) },
+    { label: 'Agents', value: formatInteger(props.aggregate?.agents ?? agents.size) },
+  ];
+}
+
 function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
   const now = props.now ?? Date.now();
   const prices = props.prices;
@@ -1690,25 +1686,27 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
   const selectedCurrent = props.conversations;
   const selectedPrevious = props.previousConversations;
   const facetWorkspaces = useMemo(() => {
-    const rows = aggregateWorkspaces(props.facetConversations, prices);
+    const rows = props.facetAggregate?.workspace_rows
+      ? workspaceAggregateRows(props.facetAggregate.workspace_rows, prices)
+      : aggregateWorkspaces(props.facetConversations, prices);
     if (props.workspace == null || rows.some((row) => row.path === props.workspace)) return rows;
-    return [...rows, ...aggregateWorkspaces(selectedCurrent, prices)];
-  }, [props.facetConversations, props.workspace, selectedCurrent, prices]);
-  const workspaceRows = useMemo(() => aggregateWorkspaces(selectedCurrent, prices), [selectedCurrent, prices]);
+    const selectedRows = props.aggregate?.workspace_rows
+      ? workspaceAggregateRows(props.aggregate.workspace_rows, prices)
+      : aggregateWorkspaces(selectedCurrent, prices);
+    return [...rows, ...selectedRows];
+  }, [props.facetAggregate, props.facetConversations, props.workspace, props.aggregate, selectedCurrent, prices]);
+  const workspaceRows = useMemo(
+    () =>
+      props.aggregate?.workspace_rows
+        ? workspaceAggregateRows(props.aggregate.workspace_rows, prices)
+        : aggregateWorkspaces(selectedCurrent, prices),
+    [props.aggregate, selectedCurrent, prices],
+  );
   const modelRows = useMemo(
     () => aggregateModels(props.aggregate ? [props.aggregate] : selectedCurrent, prices),
     [props.aggregate, selectedCurrent, prices],
   );
-  const toolRows = useMemo(() => {
-    const selectedIDs = new Set(selectedCurrent.map((conversation) => conversation.id));
-    return props.toolUsage.filter((row) => selectedIDs.has(row.id));
-  }, [props.toolUsage, selectedCurrent]);
   const chartPoints = useMemo(() => props.tokenPoints.filter((point) => tokenTotal(point) > 0), [props.tokenPoints]);
-  const agents = useMemo(() => {
-    const names = new Set<string>();
-    for (const conversation of selectedCurrent) for (const agent of agentHosts(conversation.agents)) names.add(agent);
-    return names.size;
-  }, [selectedCurrent]);
   const currentCost = props.aggregate
     ? conversationCostEstimateByModel(props.aggregate, prices)
     : sumCosts(selectedCurrent, prices);
@@ -1791,26 +1789,19 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
       : selectedCurrent.length === 0
         ? empty
         : 'No token usage in this range.';
-  const toolsEmpty = props.toolError
-    ? `Failed to load tool calls: ${props.toolError}`
-    : props.toolLoading
-      ? 'Loading tool calls…'
-      : selectedCurrent.length === 0
-        ? empty
-        : 'No tool calls in this range.';
-  const facetCost = sumCosts(props.facetConversations, prices);
+  const facetCost = sumCosts(props.facetAggregate?.workspace_rows || props.facetConversations, prices);
+  const facetSessionCount =
+    props.facetTotalConversations ?? facetWorkspaces.reduce((sum, workspace) => sum + workspace.count, 0);
+  const heaviestConversations = props.heaviestConversations ?? selectedCurrent;
+  const heaviestTotalConversations = props.heaviestTotalConversations ?? props.totalConversations;
+  const heaviestRankingExact =
+    props.heaviestRankingExact ??
+    (heaviestTotalConversations == null
+      ? heaviestCostRankingIsExact(heaviestConversations, heaviestConversations.length, prices)
+      : heaviestCostRankingIsExact(heaviestConversations, heaviestTotalConversations, prices));
 
   return (
-    <PageShell maxWidth={1400}>
-      <PageHero
-        title="Analytics"
-        desc="Cost, tokens, tools, and workspaces across captured local sessions."
-        stats={[
-          { label: 'Sessions', value: String(currentSessionCount) },
-          { label: 'Workspaces', value: String(props.aggregate?.workspaces ?? workspaceRows.length) },
-          { label: 'Agents', value: String(props.aggregate?.agents ?? agents) },
-        ]}
-      />
+    <>
       {props.error && (
         <div style={{ marginBottom: 14 }}>
           <Notice kind="error" title="Failed to load current-period sessions">
@@ -1832,13 +1823,16 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
           </Notice>
         </div>
       )}
-      {props.facetTotalConversations != null && props.facetTotalConversations > props.facetConversations.length && (
-        <div style={{ marginBottom: 14 }}>
-          <Notice kind="warning" title="Workspace options are incomplete">
-            Options cover {props.facetConversations.length} of {props.facetTotalConversations} sessions in range.
-          </Notice>
-        </div>
-      )}
+      {props.facetAggregate?.workspace_rows == null &&
+        props.facetTotalConversations != null &&
+        props.facetTotalConversations > props.facetConversations.length && (
+          <div style={{ marginBottom: 14 }}>
+            <Notice kind="warning" title="Workspace options are incomplete">
+              Options cover {formatInteger(props.facetConversations.length)} of{' '}
+              {formatInteger(props.facetTotalConversations)} sessions in range.
+            </Notice>
+          </div>
+        )}
       <div
         style={{
           display: 'flex',
@@ -1852,6 +1846,17 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
           Measure in
         </span>
         <UnitToggle value={props.unit} onChange={props.onUnitChange} />
+        <div style={{ flex: 1, minWidth: 12 }} />
+        <WorkspaceFacet
+          workspaces={facetWorkspaces}
+          selected={props.workspace}
+          onSelect={props.onWorkspaceChange}
+          totalCount={facetSessionCount}
+          totalCost={facetCost.complete ? facetCost.value : null}
+          now={now}
+          rangeLabel={range.label}
+        />
+        <TimeRangePicker value={props.timeRange} onChange={props.onTimeRangeChange} />
         <button
           type="button"
           onClick={() => props.onRefresh()}
@@ -1881,17 +1886,6 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
         >
           <Icon name="refresh" size={14} />
         </button>
-        <div style={{ flex: 1, minWidth: 12 }} />
-        <WorkspaceFacet
-          workspaces={facetWorkspaces}
-          selected={props.workspace}
-          onSelect={props.onWorkspaceChange}
-          totalCount={props.facetConversations.length}
-          totalCost={facetCost.complete ? facetCost.value : null}
-          now={now}
-          rangeLabel={range.label}
-        />
-        <TimeRangePicker value={props.timeRange} onChange={props.onTimeRangeChange} />
       </div>
 
       <div
@@ -1916,7 +1910,7 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
               : 'var(--fg2)'
           }
           bars={costSpark}
-          color="rgba(255,103,29,0.4)"
+          color="var(--spark-orange)"
           peakColor="var(--brand-orange)"
           sub={
             selectedCurrent.length === 0
@@ -1933,7 +1927,7 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
           value={formatTokens(currentTokens)}
           delta={hidePeriodDeltas ? null : percentageDelta(currentTokens, previousTokens)}
           bars={tokenSpark}
-          color="rgba(115,191,105,0.4)"
+          color="var(--spark-green)"
           peakColor="var(--viz-green)"
           sub={
             selectedCurrent.length === 0
@@ -1951,7 +1945,7 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
               : 'var(--fg2)'
           }
           bars={cacheSpark}
-          color="rgba(115,191,105,0.4)"
+          color="var(--spark-green)"
           peakColor="var(--viz-green)"
           sub={
             selectedCurrent.length === 0
@@ -1964,8 +1958,8 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
           value={formatInteger(currentCalls)}
           delta={hidePeriodDeltas ? null : percentageDelta(currentCalls, previousCalls)}
           bars={callSpark}
-          color="rgba(204,204,220,0.2)"
-          peakColor="rgba(204,204,220,0.38)"
+          color="var(--spark-neutral)"
+          peakColor="var(--spark-neutral-peak)"
           sub={
             selectedCurrent.length === 0 ? (
               empty
@@ -2018,12 +2012,11 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+          gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
           gap: 12,
           marginBottom: 12,
         }}
       >
-        <ToolCallsPanel rows={toolRows} empty={toolsEmpty} error={props.toolError} />
         <SessionShapePanel conversations={selectedCurrent} empty={empty} />
         <HeatmapPanel
           points={props.heatmapPoints}
@@ -2035,10 +2028,13 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
       </div>
 
       <HeaviestSessionsPanel
-        conversations={selectedCurrent}
+        conversations={heaviestConversations}
         unit={props.unit}
         prices={prices}
-        totalConversations={props.totalConversations}
+        totalConversations={heaviestTotalConversations}
+        rankingExact={heaviestRankingExact}
+        loading={props.heaviestLoading ?? props.loading}
+        error={props.heaviestError ?? null}
         returnedCurrentRange={props.conversations.length}
         previousTotalConversations={props.previousTotalConversations}
         returnedPreviousRange={props.previousConversations.length}
@@ -2047,7 +2043,7 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
         onOpen={props.onOpenConversation}
         empty={empty}
       />
-    </PageShell>
+    </>
   );
 }
 
@@ -2056,9 +2052,17 @@ function AnalyticsWithModelPrices(props: AnalyticsViewProps) {
   return <AnalyticsContent {...props} prices={prices} />;
 }
 
-export function AnalyticsView(props: AnalyticsViewProps) {
+export function AnalyticsOverviewContent(props: AnalyticsViewProps) {
   if (props.prices === undefined) {
     return <AnalyticsWithModelPrices {...props} />;
   }
   return <AnalyticsContent {...props} prices={props.prices} />;
+}
+
+export function AnalyticsView(props: AnalyticsViewProps) {
+  return (
+    <AnalyticsPage stats={analyticsOverviewHeroStats(props)}>
+      <AnalyticsOverviewContent {...props} />
+    </AnalyticsPage>
+  );
 }

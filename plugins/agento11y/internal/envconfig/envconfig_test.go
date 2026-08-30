@@ -649,7 +649,7 @@ func TestResolveContentModeValue(t *testing.T) {
 // Local settings use alias-family dotenv precedence across the AGENTO11Y_ and
 // SIGIL_ spellings.
 func TestAliasSuffixesCoversLocalFamilies(t *testing.T) {
-	for _, suffix := range []string{"LOCAL", "LOCAL_FORWARD", "LOCAL_ALLOWED_HOSTS"} {
+	for _, suffix := range []string{"LOCAL", "LOCAL_FORWARD", "LOCAL_ALLOWED_HOSTS", "THEME"} {
 		if !slices.Contains(AliasSuffixes, suffix) {
 			t.Fatalf("AliasSuffixes must contain %s", suffix)
 		}
@@ -661,6 +661,7 @@ func TestExpandAliases(t *testing.T) {
 		"SIGIL_ENDPOINT":       "https://x",
 		"AGENTO11Y_AUTH_TOKEN": "tok",
 		"SIGIL_TAGS":           "",
+		"SIGIL_THEME":          "light",
 		"OTEL_SERVICE_NAME":    "svc",
 	})
 	want := map[string]string{
@@ -670,9 +671,37 @@ func TestExpandAliases(t *testing.T) {
 		"SIGIL_AUTH_TOKEN":     "tok",
 		"SIGIL_TAGS":           "",
 		"AGENTO11Y_TAGS":       "",
+		"SIGIL_THEME":          "light",
+		"AGENTO11Y_THEME":      "light",
 		"OTEL_SERVICE_NAME":    "svc",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("ExpandAliases() = %v, want %v", got, want)
+	}
+}
+
+func TestUpdateExistingLegacyAliases(t *testing.T) {
+	current := map[string]string{
+		"SIGIL_ENDPOINT":   "https://old",
+		"SIGIL_AUTH_TOKEN": "old-token",
+		"SIGIL_THEME":      "dark",
+	}
+	got := UpdateExistingLegacyAliases(current, map[string]string{
+		"AGENTO11Y_ENDPOINT":   "https://new",
+		"AGENTO11Y_AUTH_TOKEN": "new-token",
+		"SIGIL_AUTH_TOKEN":     "keep explicit value",
+		"AGENTO11Y_TAGS":       "team=ai",
+		"OTEL_SERVICE_NAME":    "svc",
+	})
+	want := map[string]string{
+		"AGENTO11Y_ENDPOINT":   "https://new",
+		"SIGIL_ENDPOINT":       "https://new",
+		"AGENTO11Y_AUTH_TOKEN": "new-token",
+		"SIGIL_AUTH_TOKEN":     "keep explicit value",
+		"AGENTO11Y_TAGS":       "team=ai",
+		"OTEL_SERVICE_NAME":    "svc",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("UpdateExistingLegacyAliases() = %v, want %v", got, want)
 	}
 }

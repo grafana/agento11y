@@ -6,6 +6,9 @@ import java.util.Map;
 
 /** Generation ingest export settings. */
 public final class GenerationExportConfig {
+    public static final int DEFAULT_QUEUE_SIZE = 2000;
+    public static final int DEFAULT_MAX_RETRIES = 5;
+    public static final Duration DEFAULT_MAX_BACKOFF = Duration.ofSeconds(5);
     /**
      * Default per-attempt export timeout applied when neither the caller nor
      * {@code AGENTO11Y_EXPORT_TIMEOUT_MS} (legacy {@code SIGIL_EXPORT_TIMEOUT_MS})
@@ -36,10 +39,13 @@ public final class GenerationExportConfig {
 
     private int batchSize = 100;
     private Duration flushInterval = Duration.ofSeconds(1);
-    private int queueSize = 2000;
-    private int maxRetries = 5;
+    private int queueSize = DEFAULT_QUEUE_SIZE;
+    private boolean queueSizeExplicit;
+    private int maxRetries = DEFAULT_MAX_RETRIES;
+    private boolean maxRetriesExplicit;
     private Duration initialBackoff = Duration.ofMillis(100);
-    private Duration maxBackoff = Duration.ofSeconds(5);
+    private Duration maxBackoff = DEFAULT_MAX_BACKOFF;
+    private boolean maxBackoffExplicit;
     private int payloadMaxBytes = 4 << 20;
     private Duration exportTimeout = DEFAULT_EXPORT_TIMEOUT;
     /**
@@ -141,7 +147,12 @@ public final class GenerationExportConfig {
 
     public GenerationExportConfig setQueueSize(int queueSize) {
         this.queueSize = queueSize;
+        this.queueSizeExplicit = true;
         return this;
+    }
+
+    boolean isQueueSizeExplicit() {
+        return queueSizeExplicit;
     }
 
     public int getMaxRetries() {
@@ -150,7 +161,12 @@ public final class GenerationExportConfig {
 
     public GenerationExportConfig setMaxRetries(int maxRetries) {
         this.maxRetries = maxRetries;
+        this.maxRetriesExplicit = true;
         return this;
+    }
+
+    boolean isMaxRetriesExplicit() {
+        return maxRetriesExplicit;
     }
 
     public Duration getInitialBackoff() {
@@ -168,7 +184,12 @@ public final class GenerationExportConfig {
 
     public GenerationExportConfig setMaxBackoff(Duration maxBackoff) {
         this.maxBackoff = maxBackoff == null ? Duration.ZERO : maxBackoff;
+        this.maxBackoffExplicit = true;
         return this;
+    }
+
+    boolean isMaxBackoffExplicit() {
+        return maxBackoffExplicit;
     }
 
     public int getPayloadMaxBytes() {
@@ -230,6 +251,9 @@ public final class GenerationExportConfig {
         // copy that env resolution takes of the caller config.
         copy.exportTimeout = exportTimeout;
         copy.exportTimeoutExplicit = exportTimeoutExplicit;
+        copy.queueSizeExplicit = queueSizeExplicit;
+        copy.maxRetriesExplicit = maxRetriesExplicit;
+        copy.maxBackoffExplicit = maxBackoffExplicit;
         return copy;
     }
 }

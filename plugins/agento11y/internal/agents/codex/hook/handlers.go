@@ -70,10 +70,11 @@ func SessionStart(p Payload, _ config.Config, logger *log.Logger) {
 // On denial it writes a block response, and Codex stops the turn.
 func UserPromptSubmit(ctx context.Context, stdout io.Writer, p Payload, cfg config.Config, logger *log.Logger) {
 	res := guard.EvaluatePrompt(ctx, cfg.Guards, guard.PromptInput{
-		AgentName:     cfg.Agent(),
-		ModelProvider: mapperutil.InferProvider(p.Model),
-		ModelName:     p.Model,
-		Prompt:        p.Prompt,
+		AgentName:      cfg.Agent(),
+		ConversationID: guardConversationID(p.SessionID, logger),
+		ModelProvider:  mapperutil.InferProvider(p.Model),
+		ModelName:      p.Model,
+		Prompt:         p.Prompt,
 	}, logger)
 	if res.Blocked() {
 		guard.WritePromptBlock(stdout, res.Reason)
@@ -81,6 +82,18 @@ func UserPromptSubmit(ctx context.Context, stdout io.Writer, p Payload, cfg conf
 	}
 
 	capturePrompt(p, cfg, logger)
+}
+
+func guardConversationID(sessionID string, logger *log.Logger) string {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return ""
+	}
+	link := fragment.LoadSubagentLinkTolerant(sessionID, logger)
+	if link != nil && strings.TrimSpace(link.ParentSessionID) != "" && strings.TrimSpace(link.ParentGenerationID) != "" {
+		return strings.TrimSpace(link.ParentSessionID)
+	}
+	return sessionID
 }
 
 func capturePrompt(p Payload, cfg config.Config, logger *log.Logger) {
@@ -105,12 +118,13 @@ func capturePrompt(p Payload, cfg config.Config, logger *log.Logger) {
 // Claude Code and Codex also share both PreToolUse envelope writers.
 func PreToolUse(ctx context.Context, stdout io.Writer, p Payload, cfg config.Config, logger *log.Logger) {
 	res := guard.EvaluateToolCall(ctx, cfg.Guards, guard.ToolCallInput{
-		AgentName:     cfg.Agent(),
-		ToolName:      p.ToolName,
-		ToolCallID:    p.ToolUseID,
-		ToolInputJSON: p.ToolInput,
-		ModelProvider: mapperutil.InferProvider(p.Model),
-		ModelName:     p.Model,
+		AgentName:      cfg.Agent(),
+		ConversationID: guardConversationID(p.SessionID, logger),
+		ToolName:       p.ToolName,
+		ToolCallID:     p.ToolUseID,
+		ToolInputJSON:  p.ToolInput,
+		ModelProvider:  mapperutil.InferProvider(p.Model),
+		ModelName:      p.Model,
 	}, logger)
 	if res.Blocked() {
 		guard.WriteHookSpecificOutputDeny(stdout, res.Reason)

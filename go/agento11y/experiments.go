@@ -218,13 +218,14 @@ func (c *Client) UpdateTrial(ctx context.Context, experimentID, trialID string, 
 // the same combination returns the existing evaluation instead of running it
 // twice, and requeues it once it has failed.
 //
-// Experimental: requires AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true, otherwise
-// it returns ErrExperimentalFeatureDisabled.
+// Experimental: Config.EnableExperimentalFeatures takes precedence over
+// AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES. A closed gate returns
+// ErrExperimentalFeatureDisabled.
 func (c *Client) TriggerTrialEvaluation(ctx context.Context, experimentID, trialID string, req TriggerTrialEvaluationRequest) (*TrialEvaluation, error) {
 	if c == nil {
 		return nil, ErrNilClient
 	}
-	if err := RequireExperimental(FeatureCloudTrialEvaluation); err != nil {
+	if err := c.RequireExperimental(FeatureCloudTrialEvaluation); err != nil {
 		return nil, err
 	}
 	normalizedRunID := strings.TrimSpace(experimentID)
@@ -259,13 +260,14 @@ func (c *Client) TriggerTrialEvaluation(ctx context.Context, experimentID, trial
 
 // GetTrialEvaluation reads durable status for a triggered trial evaluation.
 //
-// Experimental: requires AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true, otherwise
-// it returns ErrExperimentalFeatureDisabled.
+// Experimental: Config.EnableExperimentalFeatures takes precedence over
+// AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES. A closed gate returns
+// ErrExperimentalFeatureDisabled.
 func (c *Client) GetTrialEvaluation(ctx context.Context, experimentID, trialID, evaluationID string) (*TrialEvaluation, error) {
 	if c == nil {
 		return nil, ErrNilClient
 	}
-	if err := RequireExperimental(FeatureCloudTrialEvaluation); err != nil {
+	if err := c.RequireExperimental(FeatureCloudTrialEvaluation); err != nil {
 		return nil, err
 	}
 	normalizedRunID := strings.TrimSpace(experimentID)

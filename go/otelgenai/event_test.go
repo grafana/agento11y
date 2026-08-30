@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/log"
 	"go.opentelemetry.io/otel/log/logtest"
 	"go.opentelemetry.io/otel/trace"
 
@@ -23,18 +22,18 @@ func recordedEvents(t *testing.T, recorder *logtest.Recorder) ([]logtest.Record,
 	return nil, logtest.Scope{}
 }
 
-func logAttributes(record logtest.Record) map[string]log.Value {
-	out := make(map[string]log.Value, len(record.Attributes))
+func logAttributes(record logtest.Record) map[string]attribute.Value {
+	out := make(map[string]attribute.Value, len(record.Attributes))
 	for _, attr := range record.Attributes {
-		out[attr.Key] = attr.Value
+		out[string(attr.Key)] = attr.Value
 	}
 	return out
 }
 
-func logMap(value log.Value) map[string]log.Value {
-	out := make(map[string]log.Value, len(value.AsMap()))
+func logMap(value attribute.Value) map[string]attribute.Value {
+	out := make(map[string]attribute.Value, len(value.AsMap()))
 	for _, item := range value.AsMap() {
-		out[item.Key] = item.Value
+		out[string(item.Key)] = item.Value
 	}
 	return out
 }
@@ -199,7 +198,7 @@ func TestOperationDetailsEventStructuredContent(t *testing.T) {
 		t.Error("event context has no valid span context")
 	}
 	attrs := logAttributes(record)
-	if got := attrs["gen_ai.request.top_k"].AsFloat64(); got != 40 {
+	if got := attrs["gen_ai.request.top_k"].AsInt64(); got != 40 {
 		t.Errorf("gen_ai.request.top_k = %v, want 40", got)
 	}
 

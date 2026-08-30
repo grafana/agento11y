@@ -306,7 +306,10 @@ def _serialized_agent(agent: Any, *, model_name: str) -> dict[str, Any]:
 
 
 def _model_invocation_params(agent: Any, *, model_name: str) -> dict[str, Any]:
-    params: dict[str, Any] = {"stream": True}
+    config = _model_config(agent)
+    model_params = _model_params(config)
+
+    params: dict[str, Any] = {"stream": _model_streaming(config, model_params)}
     if model_name != "":
         params["model"] = model_name
     provider = _model_provider(agent)
@@ -317,9 +320,10 @@ def _model_invocation_params(agent: Any, *, model_name: str) -> dict[str, Any]:
     if system_prompt != "":
         params["system_prompt"] = system_prompt
 
-    config = _model_config(agent)
     for key in ("temperature", "max_tokens", "top_p", "tool_choice"):
-        value = _read(config, key)
+        value = _read(model_params, key)
+        if value is None:
+            value = _read(config, key)
         if value is not None:
             params[key] = value
 
@@ -419,6 +423,19 @@ def _model_config(agent: Any) -> Any:
         except Exception:
             return {}
     return _read(model, "config") or {}
+
+
+def _model_params(config: Any) -> dict[str, Any]:
+    params = _read(config, "params")
+    return params if isinstance(params, dict) else {}
+
+
+def _model_streaming(config: Any, model_params: dict[str, Any]) -> bool:
+    for source, key in ((model_params, "stream"), (config, "stream"), (config, "streaming")):
+        enabled = _bool_or_none(_read(source, key))
+        if enabled is not None:
+            return enabled
+    return True
 
 
 def _tool_definitions(agent: Any) -> list[ToolDefinition]:
@@ -557,6 +574,23 @@ def _int_or_none(value: Any) -> int | None:
         return None
     if isinstance(value, int):
         return value
+    return None
+
+
+def _bool_or_none(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+        return None
+    if isinstance(value, int):
+        return value != 0
     return None
 
 

@@ -443,6 +443,7 @@ async function handleChatMessage(
       agentName: agentNameForSession(config, input.sessionID),
       agentVersion: config.agentVersion || hostVersion,
       model: modelForSession(input.sessionID),
+      conversationId: resolveExportedConversationId(input.sessionID),
       messages: forward,
       failOpen: guards.failOpen,
       logger: { warn: (msg: string) => debugLog(msg) },
@@ -580,12 +581,13 @@ async function evaluateOutgoingMessages(
     }
 
     // The hook input carries no session id, so it comes from the messages.
-    const sessionID = sessionIdFromOutgoing(messages) ?? "";
+    const physicalSessionID = sessionIdFromOutgoing(messages) ?? "";
     const result = await runPreflightTransform({
       client: sigil,
-      agentName: agentNameForSession(config, sessionID),
+      agentName: agentNameForSession(config, physicalSessionID),
       agentVersion: config.agentVersion || hostVersion,
-      model: modelForSession(sessionID),
+      model: modelForSession(physicalSessionID),
+      conversationId: resolveExportedConversationId(physicalSessionID),
       messages: forward,
       failOpen: guards.failOpen,
       logger: { warn: (msg: string) => debugLog(msg) },
@@ -1332,6 +1334,7 @@ async function handleToolExecuteBefore(
     agentName: agentNameForSession(config, input.sessionID),
     agentVersion: config.agentVersion || hostVersion,
     model: modelForSession(input.sessionID),
+    conversationId: resolveExportedConversationId(input.sessionID),
     toolCallId: input.callID,
     toolName: input.tool,
     input: output.args ?? {},
@@ -1452,6 +1455,7 @@ async function handlePermissionAsk(
     agentName: agentNameForSession(config, input.sessionID),
     agentVersion: config.agentVersion || hostVersion,
     model: modelForSession(input.sessionID),
+    conversationId: resolveExportedConversationId(input.sessionID),
     toolCallId: input.callID,
     toolName: input.type,
     input: {

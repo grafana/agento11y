@@ -1,6 +1,9 @@
 # Tags and Metadata
 
-The SDK lets you attach custom key/value data (team, project, environment, request ID, end-user id) to what you record. Where each piece of data shows up depends on how you attach it. There are three independent mechanisms, and only one of them reaches OTel metrics.
+The SDK lets you attach custom key/value data (team, project, environment, request ID, end-user ID) to what you record.
+Where each piece of data appears depends on how you attach it.
+There are three cross-SDK mechanisms.
+Go also supports per-request context tags, which reach OTel metrics.
 
 Each SDK README links here for the language-specific config fields.
 
@@ -9,10 +12,16 @@ Each SDK README links here for the language-specific config fields.
 | Mechanism | Set where | Cardinality | Generation export (Agent Observability UI) | OTel spans (traces) | OTel metrics |
 | --- | --- | --- | --- | --- | --- |
 | **Client tags** (`AGENTO11Y_TAGS` / config `tags`) | Once, on the client | Keep low | Yes, merged into every generation | Yes, as `agento11y.tag.<key>` | Yes, as `agento11y.tag.<key>` |
-| **Per-generation `tags`** | Per `startGeneration` call | Any | Yes | No | No |
-| **`metadata`** (struct/dict) | Per `startGeneration` call | Any | Yes | No | No |
+| **Go context tags** (`WithTag` / `WithTags`) | Per request, on the context | Keep low | Yes, merged into the generation | Yes, as `agento11y.tag.<key>` | Yes, as `agento11y.tag.<key>` |
+| **Per-generation `tags`** | Per `startGeneration` call | Any | Yes | Only as the `agento11y.generation.tags` JSON document in Go OTel generation-export mode | No |
+| **`metadata`** (struct/dict) | Per `startGeneration` call | Any | Yes | Only as the `agento11y.generation.metadata` JSON document in Go OTel generation-export mode | No |
 
-There is also a dedicated **`user_id`** field (`AGENTO11Y_USER_ID` / config / per-call / context). It is recorded on the generation export and on the generation span as the `user.id` attribute (all SDKs), but it is **not** a metric label.
+In Go OTel generation-export mode, the generation span is also the transport.
+The JSON document attributes preserve export-only tags and metadata without creating `agento11y.tag.<key>` dimensions or metric labels.
+
+There is also a dedicated **`user_id`** field (`AGENTO11Y_USER_ID` / config / per-call / context).
+All SDKs record it on the generation export and on the generation span as the `user.id` attribute.
+It is **not** a metric label.
 
 ## Cross-SDK parity
 
@@ -57,9 +66,28 @@ const agento11y = createAgento11yClient({
 });
 ```
 
-### Per-generation tags, metadata, and user id
+### Go context tags for one request
 
-Per-call values win over client-level values on key conflict. Per-call `tags` and `metadata` are export-only; they do not appear on spans or metrics.
+Use `WithTag` or `WithTags` to add low-cardinality dimensions to one request and its generation export:
+
+```go
+ctx = agento11y.WithTags(ctx, map[string]string{
+    "route":  "checkout",
+    "region": "us-east-1",
+})
+ctx, rec := client.StartGeneration(ctx, agento11y.GenerationStart{
+    Model: agento11y.ModelRef{Provider: "openai", Name: "gpt-4.1-mini"},
+})
+```
+
+Context tags override client tags on span and metric conflicts.
+Generation-start tags override client and context tags only in the generation export.
+Generation-result tags override every earlier source there, including generation-start tags.
+
+### Per-generation tags, metadata, and user ID
+
+In the generation export, generation-result values win over generation-start values, which win over client and Go context tags.
+Per-generation `tags` and `metadata` remain export-only and don't become span or metric dimensions.
 
 **Go**
 

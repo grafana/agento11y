@@ -554,7 +554,7 @@ export default function (pi: ExtensionAPI) {
     firstTokenTime = Date.now();
   });
 
-  pi.on("context", async (event, _ctx) => {
+  pi.on("context", async (event, ctx) => {
     if (!sigil || !config?.guards.enabled) return;
     try {
       const piMessages = event.messages;
@@ -568,6 +568,7 @@ export default function (pi: ExtensionAPI) {
         agentName: config.agentName,
         agentVersion: config.agentVersion,
         model: lastSeenModel ?? { provider: "unknown", name: "unknown" },
+        conversationId: readSessionId(ctx.sessionManager),
         messages: forward,
         logger: { warn: (msg: string) => logger.warn(msg) },
       });
@@ -603,13 +604,14 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  pi.on("tool_call", async (event, _ctx) => {
+  pi.on("tool_call", async (event, ctx) => {
     if (!sigil || !config?.guards.enabled) return;
     const res = await runToolCallGuard({
       client: sigil,
       agentName: config.agentName,
       agentVersion: config.agentVersion,
       model: lastSeenModel ?? { provider: "unknown", name: "unknown" },
+      conversationId: readSessionId(ctx.sessionManager),
       toolCallId: event.toolCallId,
       toolName: event.toolName,
       input: event.input as Record<string, unknown>,

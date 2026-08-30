@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"strings"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -29,7 +30,8 @@ import (
 )
 
 const (
-	attrRecord              = "agento11y.record"
+	// AttrRecord marks a span as an agento11y generation transport record.
+	AttrRecord              = "agento11y.record"
 	AttrGenerationID        = "agento11y.generation.id"
 	AttrParentGenerationIDs = "agento11y.generation.parent_generation_ids"
 	AttrTags                = "agento11y.generation.tags"
@@ -44,9 +46,8 @@ const (
 	AttrUsageTotalTokens  = "agento11y.gen_ai.usage.total_tokens"
 	AttrTokenSemantics    = "gen_ai.token.semantics"
 	AttrUserID            = "user.id"
-	// AttrTagPrefix is the per-tag dimension prefix the SDK already emits on
-	// spans and metrics. The hook emits these dimensions next to the tags JSON
-	// document, so existing trace filters keep working in otel mode.
+	// AttrTagPrefix is the prefix for client and per-request context tag
+	// dimensions. The hook keeps Generation.Tags only in the AttrTags document.
 	AttrTagPrefix = "agento11y.tag."
 
 	// TokenSemanticsInclusive marks usage whose input_tokens already includes
@@ -86,8 +87,10 @@ type Generation struct {
 	UserID string
 	// ConversationTitle carries user text, so it goes under
 	// AttrConversationTitle and only under content capture.
-	ConversationTitle   string
-	Tags                map[string]string
+	ConversationTitle string
+	Tags              map[string]string
+	// DimensionalTags are emitted after the generation transport attributes.
+	DimensionalTags     map[string]string
 	Metadata            map[string]any
 	Artifacts           []Artifact
 	ParentGenerationIDs []string
@@ -97,6 +100,8 @@ type Generation struct {
 	ToolChoice       *string
 	ThinkingEnabled  *bool
 	TotalTokens      int64
+	// Rejected suppresses the missing-ID error for validator-rejected spans.
+	Rejected bool
 	// InclusiveTokenSemantics marks that Usage.InputTokens on the invocation
 	// already includes both cache buckets.
 	InclusiveTokenSemantics bool
@@ -134,7 +139,7 @@ func (h *Hook) OnEnd(_ context.Context, inv *otelgenai.Invocation, capture otelg
 		}
 		return nil
 	}
-	if generation.ID == "" {
+	if generation.ID == "" && !generation.Rejected {
 		otel.Handle(errors.New("agento11y otelhook: generation has no id, so the span carries no " + AttrGenerationID))
 	}
 	withContent := capture.SpanContent()
@@ -142,7 +147,7 @@ func (h *Hook) OnEnd(_ context.Context, inv *otelgenai.Invocation, capture otelg
 	var attrs []attribute.KeyValue
 	if generation.ID != "" {
 		attrs = append(attrs,
-			attribute.String(attrRecord, "true"),
+			attribute.String(AttrRecord, "true"),
 			attribute.String(AttrGenerationID, generation.ID),
 		)
 	}
@@ -156,7 +161,9 @@ func (h *Hook) OnEnd(_ context.Context, inv *otelgenai.Invocation, capture otelg
 		attrs = append(attrs, attribute.String(AttrTokenSemantics, TokenSemanticsInclusive))
 	}
 	if generation.ToolChoice != nil {
-		attrs = append(attrs, attribute.String(AttrToolChoice, *generation.ToolChoice))
+		if toolChoice := strings.TrimSpace(*generation.ToolChoice); toolChoice != "" {
+			attrs = append(attrs, attribute.String(AttrToolChoice, toolChoice))
+		}
 	}
 	if generation.ThinkingEnabled != nil {
 		attrs = append(attrs, attribute.Bool(AttrThinkingEnabled, *generation.ThinkingEnabled))
@@ -168,12 +175,9 @@ func (h *Hook) OnEnd(_ context.Context, inv *otelgenai.Invocation, capture otelg
 		attrs = append(attrs, attribute.String(AttrEffectiveVersion, digest))
 	}
 	if len(generation.Tags) > 0 {
-		// The document keeps the map as given, matching the proto tags field.
-		// The dimensions trim it.
 		if payload, err := json.Marshal(generation.Tags); err == nil {
 			attrs = append(attrs, attribute.String(AttrTags, string(payload)))
 		}
-		attrs = append(attrs, tagAttributes(generation.Tags)...)
 	}
 	if withContent {
 		if title := conversationTitle(generation); title != "" {
@@ -194,6 +198,7 @@ func (h *Hook) OnEnd(_ context.Context, inv *otelgenai.Invocation, capture otelg
 			attrs = append(attrs, attribute.String(AttrRawArtifacts, string(payload)))
 		}
 	}
+	attrs = append(attrs, tagattr.Attributes(AttrTagPrefix, generation.DimensionalTags)...)
 	return attrs
 }
 
@@ -260,8 +265,4 @@ func vendorGeneration(vendor any) (Generation, bool) {
 	default:
 		return Generation{}, false
 	}
-}
-
-func tagAttributes(tags map[string]string) []attribute.KeyValue {
-	return tagattr.Attributes(AttrTagPrefix, tags)
 }

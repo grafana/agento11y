@@ -27,6 +27,9 @@ func TestOnEnd(t *testing.T) {
 	t.Parallel()
 
 	toolChoice := "auto"
+	toolChoiceWithWhitespace := "  required \t"
+	emptyToolChoice := ""
+	whitespaceToolChoice := " \t\n"
 	thinking := true
 
 	cases := []struct {
@@ -35,6 +38,7 @@ func TestOnEnd(t *testing.T) {
 		capture otelgenai.CaptureMode
 		want    map[string]string
 		absent  []string
+		check   func(t *testing.T)
 	}{
 		{
 			name: "full generation",
@@ -42,6 +46,7 @@ func TestOnEnd(t *testing.T) {
 				ID:                      "gen-1",
 				UserID:                  "user-1",
 				Tags:                    map[string]string{"team": "sigil", " env ": " dev "},
+				DimensionalTags:         map[string]string{"client": "sdk", "request": "context"},
 				Metadata:                map[string]any{"model_version": "2026-06"},
 				ParentGenerationIDs:     []string{"gen-0"},
 				EffectiveVersion:        "v3",
@@ -55,8 +60,8 @@ func TestOnEnd(t *testing.T) {
 				"agento11y.generation.id":                    "gen-1",
 				"user.id":                                    "user-1",
 				"agento11y.generation.tags":                  `{" env ":" dev ","team":"sigil"}`,
-				"agento11y.tag.team":                         "sigil",
-				"agento11y.tag.env":                          "dev",
+				"agento11y.tag.client":                       "sdk",
+				"agento11y.tag.request":                      "context",
 				"agento11y.generation.metadata":              `{"model_version":"2026-06"}`,
 				"agento11y.generation.parent_generation_ids": `["gen-0"]`,
 				// The digest of "v3", the rule the proto path applies too.
@@ -65,6 +70,10 @@ func TestOnEnd(t *testing.T) {
 				"agento11y.gen_ai.request.thinking.enabled": "true",
 				"agento11y.gen_ai.usage.total_tokens":       "162",
 				"gen_ai.token.semantics":                    "inclusive",
+			},
+			absent: []string{
+				otelhook.AttrTagPrefix + "team",
+				otelhook.AttrTagPrefix + "env",
 			},
 		},
 		{
@@ -80,6 +89,56 @@ func TestOnEnd(t *testing.T) {
 				"agento11y.generation.metadata",
 				"gen_ai.token.semantics",
 			},
+		},
+		{
+			name: "tool choice is trimmed without changing the generation",
+			vendor: otelhook.Generation{
+				ID:         "gen-tool-choice-trimmed",
+				ToolChoice: &toolChoiceWithWhitespace,
+			},
+			want: map[string]string{
+				"agento11y.gen_ai.request.tool_choice": "required",
+			},
+			check: func(t *testing.T) {
+				if toolChoiceWithWhitespace != "  required \t" {
+					t.Errorf("generation tool choice = %q, want the original value", toolChoiceWithWhitespace)
+				}
+			},
+		},
+		{
+			name: "empty tool choice is omitted",
+			vendor: otelhook.Generation{
+				ID:         "gen-tool-choice-empty",
+				ToolChoice: &emptyToolChoice,
+			},
+			absent: []string{"agento11y.gen_ai.request.tool_choice"},
+		},
+		{
+			name: "whitespace tool choice is omitted",
+			vendor: otelhook.Generation{
+				ID:         "gen-tool-choice-whitespace",
+				ToolChoice: &whitespaceToolChoice,
+			},
+			absent: []string{"agento11y.gen_ai.request.tool_choice"},
+		},
+		{
+			name: "nil tool choice is omitted",
+			vendor: otelhook.Generation{
+				ID:         "gen-tool-choice-nil",
+				ToolChoice: nil,
+			},
+			absent: []string{"agento11y.gen_ai.request.tool_choice"},
+		},
+		{
+			name: "rejected generation keeps dimensions",
+			vendor: otelhook.Generation{
+				DimensionalTags: map[string]string{"team": "sigil"},
+				Rejected:        true,
+			},
+			want: map[string]string{
+				"agento11y.tag.team": "sigil",
+			},
+			absent: []string{"agento11y.record", "agento11y.generation.id"},
 		},
 		{
 			name:   "no vendor payload",
@@ -158,6 +217,9 @@ func TestOnEnd(t *testing.T) {
 				if _, ok := got[key]; ok {
 					t.Errorf("%s is present, want it absent", key)
 				}
+			}
+			if tc.check != nil {
+				tc.check(t)
 			}
 		})
 	}

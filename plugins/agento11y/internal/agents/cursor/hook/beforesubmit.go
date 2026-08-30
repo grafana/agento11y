@@ -31,11 +31,12 @@ type beforeSubmitDeny struct {
 // Denied messages never reach the session file or conversation title.
 func BeforeSubmit(ctx context.Context, stdout io.Writer, p Payload, cfg config.Config, logger *log.Logger) {
 	res := guard.EvaluatePrompt(ctx, envconfig.ResolveGuards(logger), guard.PromptInput{
-		AgentName:     cfg.Agent(),
-		AgentVersion:  strings.TrimSpace(p.CursorVersion),
-		ModelProvider: strings.TrimSpace(p.Provider),
-		ModelName:     resolvedModel(p),
-		Prompt:        p.Prompt,
+		AgentName:      cfg.Agent(),
+		AgentVersion:   strings.TrimSpace(p.CursorVersion),
+		ConversationID: p.ConversationID,
+		ModelProvider:  strings.TrimSpace(p.Provider),
+		ModelName:      resolvedModel(p),
+		Prompt:         p.Prompt,
 	}, logger)
 	if res.Blocked() {
 		_ = json.NewEncoder(stdout).Encode(beforeSubmitDeny{

@@ -12,11 +12,16 @@ import type { ModelCost, ModelPrices, TokenBucketKey, TokenBuckets, TokenUsagePo
 // all read the same in a table.
 export const NO_VALUE = '-';
 
+const COMPACT_TOKENS = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 });
+
+export function formatInteger(value: number): string {
+  return Math.round(value).toLocaleString('en-US');
+}
+
 export function formatTokens(n: number | null | undefined): string {
   if (n == null || Number.isNaN(Number(n))) return NO_VALUE;
   if (n < 1000) return String(n);
-  if (n < 1_000_000) return `${(n / 1_000).toFixed(n < 10_000 ? 1 : 1).replace(/\.0$/, '')}k`;
-  return `${(n / 1_000_000).toFixed(n < 10_000_000 ? 1 : 1).replace(/\.0$/, '')}M`;
+  return COMPACT_TOKENS.format(n).replace('K', 'k');
 }
 
 export function formatDuration(seconds: number | null | undefined): string {
@@ -163,15 +168,15 @@ export function chartTooltipLeft(i: number, n: number): string {
 // Per-model dot colour. New models fall back to a neutral grey
 // pulled from the Saga viz palette.
 const MODEL_COLORS: Record<string, string> = {
-  'claude-opus-4-7': '#FF8833',
-  'claude-opus-4-1': '#FF8833',
-  'claude-sonnet-4': '#FF9830',
-  'deepseek-v4-pro': '#5794F2',
-  'gpt-5-omni': '#73BF69',
+  'claude-opus-4-7': 'var(--model-opus)',
+  'claude-opus-4-1': 'var(--model-opus)',
+  'claude-sonnet-4': 'var(--model-sonnet)',
+  'deepseek-v4-pro': 'var(--model-deepseek)',
+  'gpt-5-omni': 'var(--model-gpt)',
 };
 export function modelDot(name: string | null | undefined): string {
-  if (!name) return '#808080';
-  return MODEL_COLORS[name] || '#808080';
+  if (!name) return 'var(--model-fallback)';
+  return MODEL_COLORS[name] || 'var(--model-fallback)';
 }
 
 // shortModel trims the vendor prefix and dated snapshot suffix so a list
@@ -256,6 +261,23 @@ const MODEL_PRICES: BundledModelPrice[] = [
 function modelPrice(model: string | null | undefined): BundledModelPrice | null {
   const m = (model || '').toLowerCase();
   return MODEL_PRICES.find((p) => m.includes(p.match)) || null;
+}
+
+export function maximumEstimatedTokenRate(prices: ModelPrices | null | undefined): number {
+  let maximum = Math.max(...MODEL_PRICES.flatMap((price) => [price.in, price.out, price.in * 1.25]));
+  for (const price of Object.values(prices || {})) {
+    const input = price.input;
+    if (input == null || !Number.isFinite(input)) continue;
+    for (const rate of [
+      input,
+      price.output ?? input,
+      price.cache_read ?? input * 0.1,
+      price.cache_write ?? input * 1.25,
+    ]) {
+      if (Number.isFinite(rate)) maximum = Math.max(maximum, rate);
+    }
+  }
+  return maximum;
 }
 
 // Cursor hosted Grok SKUs are `cursor-grok-4.6-high-fast`. models.dev (and
@@ -361,12 +383,12 @@ function loadModelPrices(): Promise<ModelPrices> {
   return modelPricesPromise;
 }
 
-// useModelPrices resolves to the flattened models.dev map, or null while
-// loading / when the fetch fails (the daemon may be offline). Callers must
-// tolerate null and fall back to the bundled table.
-export function useModelPrices(): ModelPrices | null {
+// Returns null until prices load. Disabling the hook stops loading but keeps
+// prices already loaded. Callers must use the bundled table while null.
+export function useModelPrices(enabled = true): ModelPrices | null {
   const [prices, setPrices] = useState<ModelPrices | null>(null);
   useEffect(() => {
+    if (!enabled) return;
     let alive = true;
     loadModelPrices()
       .then((m) => {
@@ -376,7 +398,7 @@ export function useModelPrices(): ModelPrices | null {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [enabled]);
   return prices;
 }
 
@@ -387,14 +409,17 @@ interface CostableConversation {
   models?: string[] | null;
 }
 
-// conversationCost prices a conversation's disjoint token buckets at its
-// primary model's rates. Prefers the live models.dev catalog (exact model
-// id, all providers); falls back to the bundled Anthropic table for
-// brand-new Claude ids or when offline. Exact for the single-model common
-// case; a mixed-model conversation is priced at models[0] (the
-// orchestrator), a close approximation. Returns null when the model can't
-// be priced (unknown provider, or no model recorded) so callers show NO_VALUE
-// instead of a fabricated number.
+// conversationCost prices all token buckets at models[0]'s rate. The server
+// sorts model IDs alphabetically, so mixed-model rows select by ID rather than
+// orchestration role or usage. It checks the multi-provider models.dev map by
+// exact or supported canonicalized ID, then the bundled Anthropic-family
+// substring table when the catalog is unavailable or has no match. It returns
+// null when no model is recorded or neither source has a rate. Callers show
+// NO_VALUE instead of guessing.
+//
+// Use conversationCostByModel for token_buckets_by_model. It prices each
+// nonzero model bucket separately and falls back to conversationCost when the
+// per-model map is absent.
 export function conversationCost(
   c: CostableConversation | null | undefined,
   prices: ModelPrices | null,

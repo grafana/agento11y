@@ -161,6 +161,9 @@ AGENTO11Y_AUTH_MODE=basic
 AGENTO11Y_AUTH_TENANT_ID=<your-instance-id>
 AGENTO11Y_AUTH_TOKEN=<glc_... token>
 AGENTO11Y_EXPORT_TIMEOUT_MS=30000       # optional per-request generation export timeout, in milliseconds
+AGENTO11Y_MAX_RETRIES=5                 # optional retries after the initial generation export attempt
+AGENTO11Y_MAX_BACKOFF_MS=5000           # optional maximum delay between retries, in milliseconds
+AGENTO11Y_QUEUE_SIZE=5000               # optional capacity of each in-memory export queue
 AGENTO11Y_TAGS=team=checkout,env=prod   # optional client tags; also emitted as agento11y.tag.<key> on OTel spans/metrics
 AGENTO11Y_USER_ID=<end-user id>          # optional; sets the user.id span attribute (all SDKs)
 
@@ -174,6 +177,12 @@ OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64 of "<otlp-instance-id>:<g
 Construct the client with no config when the env vars are present; the SDK reads them. Only use explicit `ClientConfig(...)` when the app needs values that aren't in env (e.g. test endpoints).
 
 `AGENTO11Y_EXPORT_TIMEOUT_MS` defaults to `30000`. It accepts base-10 integers from `1` through `2147483647`. An explicit SDK config value wins over the environment variable.
+
+`AGENTO11Y_MAX_RETRIES` defaults to `5`. It and `AGENTO11Y_MAX_BACKOFF_MS` (default `5000`) accept base-10 integers from `1` through `2147483647`. Explicit positive SDK config values win over the environment variables.
+
+`AGENTO11Y_QUEUE_SIZE` defaults to `2000` and accepts base-10 integers from `1` through `2147483647`. Size it from the peak records per second multiplied by the expected outage in seconds, plus headroom. Generations and workflow steps have separate queues of this capacity. Larger queues consume application memory and do not survive a process restart.
+
+Retries run in the background exporter. While an export is retrying, the in-memory queue can fill and newer generations can be dropped. Size the retry budget for a short, known interruption rather than leaving a multi-minute budget enabled permanently.
 
 ### Content capture
 
@@ -509,12 +518,15 @@ a stored test suite.
 - `trial.evaluate(evaluator_id)` grades the trial's bound
   conversation with an evaluator that already exists in the tenant, instead of a
   locally computed score. Go spells it `trial.Evaluate(ctx, evaluatorID)` and
-  JavaScript `trial.evaluate(evaluatorId)`, and the rest of this bullet holds for
-  all three. Experimental: it requires
-  `AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true` and otherwise raises
-  `ExperimentalFeatureDisabledError` without sending a request. It blocks until the worker finishes, and the trial then
-  closes as `completed` with no local `final_score`. Requires
-  `trial.bind_conversation(...)` first.
+  JavaScript `trial.evaluate(evaluatorId)`. Python and JavaScript require
+  `AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true`; otherwise they raise
+  `ExperimentalFeatureDisabledError` without sending a request. Go can set
+  `experiments.ClientOptions.EnableExperimentalFeatures` to
+  `agento11y.BoolPtr(true)`, or
+  leave it nil and use the same environment variable. A closed Go gate returns
+  `ErrExperimentalFeatureDisabled` without sending a request. The call blocks
+  until the worker finishes, and the trial then closes as `completed` with no
+  local `final_score`. Call `trial.bind_conversation(...)` first.
   - The score is stored against the conversation and the trial, with no
     `generation_id`, so read it from the experiment's scores or the trial's
     `scores` in the report rather than from a per-generation lookup.
@@ -543,9 +555,12 @@ idempotent identities.
 
 The Go SDK can also grade a trial with an evaluator stored in the tenant instead
 of a locally computed score: `trial.Evaluate(ctx, evaluatorID, ...)`.
-Experimental: it requires `AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true` and
-otherwise returns `ErrExperimentalFeatureDisabled` without sending a request. Bind the
-agent's conversation first; the call persists that binding, exports the anchor
+Experimental: set `EnableExperimentalFeatures: agento11y.BoolPtr(true)` in
+`experiments.ClientOptions`. If the field is nil,
+`AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true` remains an alternative. Explicit
+false overrides the environment. A closed gate returns
+`ErrExperimentalFeatureDisabled` without sending a request. Bind the agent's
+conversation first; the call persists that binding, exports the anchor
 generation, queues the stored evaluator, and blocks until the worker reaches a
 terminal status. Such a trial closes as `completed` with no local final score,
 while an error returned from the trial callback after the call still closes it as

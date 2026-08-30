@@ -36,6 +36,9 @@ def _check_no_env(cfg: ClientConfig) -> None:
     assert cfg.generation_export.insecure is False
     assert cfg.generation_export.auth.mode == "none"
     assert cfg.generation_export.export_timeout == _DEFAULT_EXPORT_TIMEOUT
+    assert cfg.generation_export.max_retries == 5
+    assert cfg.generation_export.max_backoff == timedelta(seconds=5)
+    assert cfg.generation_export.queue_size == 2000
     assert cfg.agent_name == ""
     assert cfg.debug is False
     assert cfg.use_experimental_otel is False
@@ -98,6 +101,12 @@ def _check_export_timeout_min(cfg: ClientConfig) -> None:
 
 def _check_export_timeout_max(cfg: ClientConfig) -> None:
     assert cfg.generation_export.export_timeout == timedelta(milliseconds=2147483647)
+
+
+def _check_generation_export_tuning(cfg: ClientConfig) -> None:
+    assert cfg.generation_export.max_retries == 12
+    assert cfg.generation_export.max_backoff == timedelta(milliseconds=45000)
+    assert cfg.generation_export.queue_size == 5000
 
 
 def _check_invalid_export_timeout_preserves_valid(cfg: ClientConfig) -> None:
@@ -227,6 +236,15 @@ def _check_invalid_canonical_blocks_valid_legacy(cfg: ClientConfig) -> None:
         ),
         pytest.param(
             {
+                "AGENTO11Y_MAX_RETRIES": "12",
+                "AGENTO11Y_MAX_BACKOFF_MS": "45000",
+                "AGENTO11Y_QUEUE_SIZE": "5000",
+            },
+            _check_generation_export_tuning,
+            id="generation export tuning from env",
+        ),
+        pytest.param(
+            {
                 "AGENTO11Y_EXPORT_TIMEOUT_MS": "abc",
                 "AGENTO11Y_ENDPOINT": "valid.example:4318",
             },
@@ -343,6 +361,72 @@ def test_explicit_export_timeout_beats_env() -> None:
     explicit = ClientConfig(generation_export=GenerationExportConfig(export_timeout=timedelta(seconds=5)))
     cfg = resolve_config(explicit, env={"AGENTO11Y_EXPORT_TIMEOUT_MS": "1500"})
     assert cfg.generation_export.export_timeout == timedelta(seconds=5)
+
+
+def test_explicit_generation_export_tuning_beats_env() -> None:
+    explicit = ClientConfig(
+        generation_export=GenerationExportConfig(
+            max_retries=5,
+            max_backoff=timedelta(seconds=5),
+            queue_size=2000,
+        )
+    )
+    cfg = resolve_config(
+        explicit,
+        env={
+            "AGENTO11Y_MAX_RETRIES": "12",
+            "AGENTO11Y_MAX_BACKOFF_MS": "45000",
+            "AGENTO11Y_QUEUE_SIZE": "5000",
+        },
+    )
+    assert cfg.generation_export.max_retries == 5
+    assert cfg.generation_export.max_backoff == timedelta(seconds=5)
+    assert cfg.generation_export.queue_size == 2000
+
+
+@pytest.mark.parametrize(
+    "key,raw,field,default,minimum",
+    [
+        pytest.param("AGENTO11Y_MAX_RETRIES", "0", "max_retries", 5, 1, id="zero retries"),
+        pytest.param("AGENTO11Y_MAX_RETRIES", "-1", "max_retries", 5, 1, id="negative retries"),
+        pytest.param("AGENTO11Y_MAX_RETRIES", "1.5", "max_retries", 5, 1, id="fractional retries"),
+        pytest.param("AGENTO11Y_MAX_RETRIES", "abc", "max_retries", 5, 1, id="non-numeric retries"),
+        pytest.param("AGENTO11Y_MAX_RETRIES", "2147483648", "max_retries", 5, 1, id="retries above max"),
+        pytest.param("AGENTO11Y_MAX_BACKOFF_MS", "0", "max_backoff", timedelta(seconds=5), 1, id="zero backoff"),
+        pytest.param("AGENTO11Y_MAX_BACKOFF_MS", "-1", "max_backoff", timedelta(seconds=5), 1, id="negative backoff"),
+        pytest.param(
+            "AGENTO11Y_MAX_BACKOFF_MS", "1.5", "max_backoff", timedelta(seconds=5), 1, id="fractional backoff"
+        ),
+        pytest.param(
+            "AGENTO11Y_MAX_BACKOFF_MS", "abc", "max_backoff", timedelta(seconds=5), 1, id="non-numeric backoff"
+        ),
+        pytest.param(
+            "AGENTO11Y_MAX_BACKOFF_MS", "2147483648", "max_backoff", timedelta(seconds=5), 1, id="backoff above max"
+        ),
+        pytest.param("AGENTO11Y_QUEUE_SIZE", "0", "queue_size", 2000, 1, id="zero queue size"),
+        pytest.param("AGENTO11Y_QUEUE_SIZE", "-1", "queue_size", 2000, 1, id="negative queue size"),
+        pytest.param("AGENTO11Y_QUEUE_SIZE", "1.5", "queue_size", 2000, 1, id="fractional queue size"),
+        pytest.param("AGENTO11Y_QUEUE_SIZE", "abc", "queue_size", 2000, 1, id="non-numeric queue size"),
+        pytest.param("AGENTO11Y_QUEUE_SIZE", "2147483648", "queue_size", 2000, 1, id="queue size above max"),
+    ],
+)
+def test_invalid_generation_export_tuning_warns_and_keeps_default(
+    key: str,
+    raw: str,
+    field: str,
+    default: int | timedelta,
+    minimum: int,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="agento11y"):
+        cfg = resolve_config(None, env={key: raw, "AGENTO11Y_AGENT_NAME": "planner"})
+
+    assert getattr(cfg.generation_export, field) == default
+    assert cfg.agent_name == "planner"
+    assert any(
+        key in record.getMessage() and f"from {minimum} through 2147483647" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 @pytest.mark.parametrize(

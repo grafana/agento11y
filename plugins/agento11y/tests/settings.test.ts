@@ -22,6 +22,7 @@ import type { ConfigResponse, ForwardStatus, Settings } from '../internal/local/
 
 function settings(overrides: Partial<Settings> = {}): Settings {
   return {
+    theme: 'dark',
     endpoint: '',
     tenantId: '',
     otlpEndpoint: '',
@@ -352,6 +353,10 @@ describe('pendingEdits', () => {
     });
   });
 
+  it('keeps an unowned theme edit pending', () => {
+    expect(pendingEdits(settings({ theme: 'light' }), settings(), { debug: true })).toEqual({ theme: 'light' });
+  });
+
   it('returns null when the form matches what is saved', () => {
     expect(pendingEdits(saved, saved, null)).toBeNull();
   });
@@ -363,5 +368,10 @@ describe('sameSettings', () => {
   it('treats tokenSet as a difference', () => {
     const base: FormSettings = settings();
     expect(sameSettings(base, settings({ tokenSet: true }))).toBe(false);
+  });
+
+  it('tracks the theme preference', () => {
+    expect(sameSettings(settings(), settings({ theme: 'light' }))).toBe(false);
+    expect(sameSettings(settings({ theme: 'system' }), settings({ theme: 'system' }))).toBe(true);
   });
 });

@@ -426,6 +426,22 @@ func TestViewerIndexHasCSPNoncePlaceholder(t *testing.T) {
 	assert.Equal(t, 1, strings.Count(string(indexHTML), noncePlaceholder))
 }
 
+func TestViewerIndexThemeBootstrap(t *testing.T) {
+	index := string(indexHTML)
+	assert.Equal(t, 1, strings.Count(index, themePlaceholder))
+	assert.Contains(t, index, `data-theme="`+themePlaceholder+`"`)
+	assert.Contains(t, index, `window.matchMedia("(prefers-color-scheme: dark)")`)
+	assert.Contains(t, index, `dataset.systemTheme = matches ? "dark" : "light"`)
+	assert.Contains(t, index, `addEventListener("change", applySystemTheme)`)
+	assert.NotContains(t, index, "dataset.theme")
+
+	bootstrap := strings.Index(index, `nonce="`+noncePlaceholder+`"`)
+	stylesheet := strings.Index(index, `href="/assets/app.css"`)
+	require.GreaterOrEqual(t, bootstrap, 0)
+	require.Greater(t, stylesheet, bootstrap, "the system theme must be stamped before CSS loads")
+	assert.Contains(t, index, `<script src="/assets/app.js"></script>`)
+}
+
 // TestViewerServesItsOwnAssets pins the offline and privacy contract: the
 // viewer renders private session data, so opening it must not reach a CDN, and
 // it must work with no network. Every third-party asset ships in the binary.

@@ -33,6 +33,7 @@ const (
 	otlpTracesPath   = "/otlp/v1/traces"
 	otlpMetricsPath  = "/otlp/v1/metrics"
 	noncePlaceholder = "{{AGENTO11Y_CSP_NONCE}}"
+	themePlaceholder = "{{AGENTO11Y_THEME}}"
 )
 
 // Server is the in-process HTTP handler that records generations from
@@ -42,6 +43,7 @@ type Server struct {
 	logger       *log.Logger
 	now          func() time.Time
 	configPath   string
+	configMu     sync.Mutex
 	allowedHosts []string
 	mux          *http.ServeMux
 	forward      *forwardLoader
@@ -144,9 +146,11 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/v1/metrics/conversations", s.handleConversationMetrics)
 	mux.HandleFunc("GET /api/v1/metrics/tokens", s.handleTokenMetrics)
 	mux.HandleFunc("GET /api/v1/metrics/tools", s.handleToolMetrics)
+	mux.HandleFunc("GET /api/v1/metrics/skills-tools", s.handleSkillsToolsMetrics)
 	mux.HandleFunc("GET /api/v1/config", s.handleGetConfig)
 	mux.HandleFunc("POST /api/v1/config:preview", s.handlePreviewConfig)
 	mux.HandleFunc("PUT /api/v1/config", s.handleSaveConfig)
+	mux.HandleFunc("PATCH /api/v1/config", s.handlePatchConfig)
 	mux.HandleFunc("GET /api/v1/conversations/{id}", func(w http.ResponseWriter, r *http.Request) {
 		s.handleConversationDetail(w, r, r.PathValue("id"))
 	})
@@ -198,7 +202,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if postOrPutWithUnsupportedMediaType(r) {
+	if writeWithUnsupportedMediaType(r) {
 		s.logger.Printf("local: refused %s %q: Content-Type %q", r.Method, r.URL.Path, r.Header.Get("Content-Type"))
 		http.Error(w, "unsupported media type", http.StatusUnsupportedMediaType)
 		return
@@ -207,8 +211,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
 }
 
-func postOrPutWithUnsupportedMediaType(r *http.Request) bool {
-	return (r.Method == http.MethodPost || r.Method == http.MethodPut) &&
+func writeWithUnsupportedMediaType(r *http.Request) bool {
+	return (r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch) &&
 		!mediaTypeAccepted(r.URL.Path, r.Header.Get("Content-Type"))
 }
 
@@ -255,7 +259,12 @@ func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
 	if !bytes.Contains(body, []byte(noncePlaceholder)) {
 		s.logger.Printf("local: index.html missing CSP nonce placeholder %q", noncePlaceholder)
 	}
+	if !bytes.Contains(body, []byte(themePlaceholder)) {
+		s.logger.Printf("local: index.html missing theme placeholder %q", themePlaceholder)
+	}
+	theme := parseTheme(dotenv.LoadDotenv(s.configPath, s.logger))
 	body = bytes.ReplaceAll(body, []byte(noncePlaceholder), []byte(nonce))
+	body = bytes.ReplaceAll(body, []byte(themePlaceholder), []byte(theme))
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -481,9 +490,9 @@ func (s *Server) handleGenerations(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleOTLP accepts local OTLP exporter traffic so local mode does not
-// leak spans or metrics to a user-configured global collector. The viewer
-// does not read these signals yet, so the endpoint drains and acknowledges
-// them without persisting a second local data model.
+// leak spans or metrics to a user-configured global collector. It retains a
+// metadata-only projection of execute_tool spans for local analytics and
+// otherwise drains the signal.
 //
 // When Cloud forwarding is enabled the payload is also relayed to the
 // configured Cloud OTLP endpoint.
@@ -498,12 +507,27 @@ func (s *Server) handleOTLP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	contentType := r.Header.Get("Content-Type")
+	contentEncoding := r.Header.Get("Content-Encoding")
+	if r.URL.Path == otlpTracesPath {
+		if spans, projectErr := projectToolSpans(body, contentType, contentEncoding); projectErr != nil {
+			s.logger.Printf("local: project tool spans: %v", projectErr)
+		} else if changed, appendErr := s.storage.appendToolSpans(spans); appendErr != nil {
+			s.logger.Printf("local: append tool spans: %v", appendErr)
+			for _, conversationID := range changed {
+				s.hub.broadcast(changeEvent{ConversationID: conversationID})
+			}
+		} else {
+			for _, conversationID := range changed {
+				s.hub.broadcast(changeEvent{ConversationID: conversationID})
+			}
+		}
+	}
+
 	// Best-effort Cloud forwarding: metrics relay unchanged, trace content is
 	// stripped under a reduced content mode inside forwardOTLP.
 	if signal := otlpSignalFromPath(r.URL.Path); signal != "" && !isForwardedRequest(r) {
 		if cfg := s.forward.load(); cfg.enabled {
-			contentType := r.Header.Get("Content-Type")
-			contentEncoding := r.Header.Get("Content-Encoding")
 			s.forward.enqueue(otlpForwardLabel(signal), func() { s.forward.forwardOTLP(cfg, signal, contentType, contentEncoding, body) })
 		}
 	}
@@ -583,7 +607,7 @@ func (s *Server) chainHookEvaluate(r *http.Request, cfg forwardConfig, body []by
 	}
 }
 
-// configResponse is the GET /api/v1/config and PUT /api/v1/config payload:
+// configResponse is the GET, PUT, and PATCH /api/v1/config payload:
 // the page-managed settings, the rendered config.env preview, and a display
 // path for the file. It never includes the endpoint, tenant id, or auth
 // token — those keys are not part of Settings and are never read back into
@@ -607,6 +631,10 @@ type configResponse struct {
 // edits.
 type configRequest struct {
 	Settings Settings `json:"settings"`
+}
+
+type configPatchRequest struct {
+	Theme *Theme `json:"theme"`
 }
 
 // handleGetConfig hydrates Settings from the current config.env and returns
@@ -649,13 +677,53 @@ func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := dotenv.WriteDotenv(s.configPath, settings.Updates(), s.logger); err != nil {
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+	if err := dotenv.UpdateDotenv(s.configPath, func(stored map[string]string) map[string]string {
+		return envconfig.UpdateExistingLegacyAliases(stored, settings.Updates())
+	}, s.logger); err != nil {
 		s.logger.Printf("local: write config: %v", err)
 		http.Error(w, "write config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	// Re-read so the response reflects the normalised on-disk state (dropped
 	// defaults, deleted keys), which the client adopts as its saved snapshot.
+	s.writeConfigResponse(w, dotenv.LoadDotenv(s.configPath, s.logger))
+}
+
+func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
+	if s.configPath == "" {
+		http.Error(w, "config persistence disabled", http.StatusServiceUnavailable)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxHookBodyBytes+1))
+	if err != nil {
+		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if len(body) > maxHookBodyBytes {
+		http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	var req configPatchRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Theme == nil || (*req.Theme != themeDark && *req.Theme != themeLight && *req.Theme != themeSystem) {
+		http.Error(w, "invalid theme: want dark, light, or system", http.StatusBadRequest)
+		return
+	}
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+	if err := dotenv.UpdateDotenv(s.configPath, func(stored map[string]string) map[string]string {
+		updates := map[string]string{"AGENTO11Y_THEME": string(*req.Theme)}
+		return envconfig.UpdateExistingLegacyAliases(stored, updates)
+	}, s.logger); err != nil {
+		s.logger.Printf("local: patch config: %v", err)
+		http.Error(w, "patch config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	s.writeConfigResponse(w, dotenv.LoadDotenv(s.configPath, s.logger))
 }
 
@@ -698,19 +766,20 @@ func (s *Server) decodeConfigRequest(w http.ResponseWriter, r *http.Request) (Se
 	return req.Settings, true
 }
 
-// conversationListLimit caps how many conversations the list endpoint
-// summarises when the client does not pass a limit. The cost of a request
-// follows this number, not the size of the store, and the viewer's list is
-// not virtualised, so an unbounded default would hurt both ends. Same
-// idiom as searchResultLimit: the default lives in the handler, and
-// Storage.ListConversations keeps ≤ 0 as unbounded for its own callers.
+// conversationListLimit caps how many matching conversations the list
+// endpoint returns when the client does not pass a limit. Exact filters are
+// checked before a candidate counts toward the cap, so those requests may
+// scan more files. The viewer's list is not virtualised, so an unbounded
+// response would hurt both ends. Same idiom as searchResultLimit: the default
+// lives in the handler, and Storage.ListConversations keeps ≤ 0 as unbounded
+// for its own callers.
 const conversationListLimit = 200
 
-// handleListConversations returns the aggregated conversation list as
-// JSON. The response is newest-first. ?limit= caps the page and ?since=
-// (RFC 3339) drops conversations whose file is older, both applied before
-// any conversation file is decoded. For an append-only file the
-// modification time is the last activity; see ConversationListOptions.
+// handleListConversations returns the aggregated conversation list as JSON.
+// The response is newest-first. ?limit= caps matching rows. Exact time,
+// workspace, and tool filters, plus the ?agent=, ?model=, ?status= and
+// ?subagents= facets, are applied to each decoded candidate before it counts
+// toward that cap; see ConversationListOptions.
 //
 // total_conversations counts the conversation files in the store, before
 // either bound. The viewer needs it to tell an empty store from an empty
@@ -721,11 +790,22 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	since, ok := sinceParam(w, r)
+	since, before, workspace, ok := metricsPeriodParams(w, r)
 	if !ok {
 		return
 	}
-	convs, total, err := s.storage.ListConversations(ConversationListOptions{Limit: limit, Since: since})
+	tool := toolParam(r)
+	facets, ok := conversationFacetParams(w, r)
+	if !ok {
+		return
+	}
+	_, hasBefore := r.URL.Query()["before"]
+	// A since-only request without facets is the normal ranged list and uses last
+	// activity. Facets still use period-clipped summaries.
+	exact := hasBefore || workspace != nil || tool != nil
+	facets.Limit, facets.Since, facets.Before = limit, since, before
+	facets.Workspace, facets.Tool, facets.Exact = workspace, tool, exact
+	convs, total, err := s.storage.ListConversations(facets)
 	if err != nil {
 		s.logger.Printf("local: list conversations: %v", err)
 		http.Error(w, "list conversations: "+err.Error(), http.StatusInternalServerError)
@@ -742,6 +822,46 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request)
 		"total_conversations": total,
 	})
 	s.warmSummariesInBackground()
+}
+
+// toolParam reads the presence-sensitive ?tool= filter. A present but empty
+// value matches no tool, which is not the same as no filter at all.
+func toolParam(r *http.Request) *string {
+	values, present := r.URL.Query()["tool"]
+	if !present {
+		return nil
+	}
+	value := ""
+	if len(values) > 0 {
+		value = toolNameKey(values[0])
+	}
+	return &value
+}
+
+// conversationFacetParams reads ?agent=, ?model=, ?status= and ?subagents=
+// into the option fields both conversation endpoints share. status and
+// subagents are two independent predicates rather than one enum, because a
+// caller can want errored subagent sessions.
+func conversationFacetParams(w http.ResponseWriter, r *http.Request) (ConversationListOptions, bool) {
+	query := r.URL.Query()
+	opts := ConversationListOptions{
+		Agent:  query.Get("agent"),
+		Model:  query.Get("model"),
+		Status: query.Get("status"),
+	}
+	if opts.Status != "" && opts.Status != "ok" && opts.Status != "err" {
+		http.Error(w, `invalid status: want "ok" or "err"`, http.StatusBadRequest)
+		return ConversationListOptions{}, false
+	}
+	if raw := query.Get("subagents"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			http.Error(w, "invalid subagents: want a non-negative integer", http.StatusBadRequest)
+			return ConversationListOptions{}, false
+		}
+		opts.MinSubagents = n
+	}
+	return opts, true
 }
 
 // limitParam reads a ?limit= page size, falling back to def when the
@@ -859,7 +979,10 @@ func (s *Server) handleTokenMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleConversationMetrics returns lifetime conversation identity metadata
-// with all analytic fields clipped to the requested generation-time period.
+// with generation-derived analytics clipped to the requested period.
+// It reads the same filters as the list endpoint, so a drill-down can show
+// exact totals over the set the list is showing. The two differ where a row
+// needs a generation inside the period; see ConversationMetrics.
 func (s *Server) handleConversationMetrics(w http.ResponseWriter, r *http.Request) {
 	limit, ok := limitParam(w, r, conversationListLimit)
 	if !ok {
@@ -869,9 +992,18 @@ func (s *Server) handleConversationMetrics(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	rows, matched, aggregate, err := s.storage.ConversationMetrics(ConversationListOptions{
-		Limit: limit, Since: since, Before: before, Workspace: workspace,
-	})
+	facets, ok := conversationFacetParams(w, r)
+	if !ok {
+		return
+	}
+	order := r.URL.Query().Get("order")
+	if order != "" && order != "tokens" {
+		http.Error(w, `order must be "tokens"`, http.StatusBadRequest)
+		return
+	}
+	facets.Limit, facets.Since, facets.Before = limit, since, before
+	facets.Workspace, facets.Tool, facets.Order = workspace, toolParam(r), order
+	rows, matched, aggregate, err := s.storage.ConversationMetrics(facets)
 	if err != nil {
 		s.logger.Printf("local: conversation metrics: %v", err)
 		http.Error(w, "conversation metrics: "+err.Error(), http.StatusInternalServerError)
@@ -914,6 +1046,32 @@ func (s *Server) handleToolMetrics(w http.ResponseWriter, r *http.Request) {
 	s.warmSummariesInBackground()
 }
 
+func (s *Server) handleSkillsToolsMetrics(w http.ResponseWriter, r *http.Request) {
+	since, before, workspace, ok := metricsPeriodParams(w, r)
+	if !ok {
+		return
+	}
+	var interval time.Duration
+	if raw := r.URL.Query().Get("interval"); raw != "" {
+		seconds, err := strconv.Atoi(raw)
+		if err != nil || seconds <= 0 {
+			http.Error(w, "invalid interval: want a positive number of seconds", http.StatusBadRequest)
+			return
+		}
+		interval = time.Duration(seconds) * time.Second
+	}
+	tools, err := s.storage.ToolAnalytics(ToolAnalyticsOptions{
+		Since: since, Before: before, Workspace: workspace, Interval: interval,
+	})
+	if err != nil {
+		s.logger.Printf("local: skills-tools metrics: %v", err)
+		http.Error(w, "skills-tools metrics: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, SkillsToolsMetricsResponse{Tools: tools})
+	s.warmSummariesInBackground()
+}
+
 // metricsPeriodParams reads the half-open generation-time bounds and the
 // presence-sensitive workspace filter shared by all metrics endpoints.
 func metricsPeriodParams(w http.ResponseWriter, r *http.Request) (time.Time, time.Time, *string, bool) {
@@ -950,23 +1108,6 @@ func metricsPeriodParams(w http.ResponseWriter, r *http.Request) (time.Time, tim
 		workspace = &value
 	}
 	return since, before, workspace, true
-}
-
-// sinceParam reads the shared ?since= lower bound. RFC 3339 is the only
-// accepted spelling, the one toISOString() produces, and an unparseable
-// value is a client error rather than a silently ignored filter. A missing
-// parameter returns the zero time (no bound).
-func sinceParam(w http.ResponseWriter, r *http.Request) (time.Time, bool) {
-	raw := r.URL.Query().Get("since")
-	if raw == "" {
-		return time.Time{}, true
-	}
-	since, err := time.Parse(time.RFC3339, raw)
-	if err != nil {
-		http.Error(w, "invalid since: want an RFC 3339 timestamp", http.StatusBadRequest)
-		return time.Time{}, false
-	}
-	return since, true
 }
 
 // handleConversationDetail returns the per-conversation generation

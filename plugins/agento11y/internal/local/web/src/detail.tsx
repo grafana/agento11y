@@ -1031,12 +1031,12 @@ const SPEAKERS = {
   you: {
     label: 'YOU',
     colour: 'var(--brand-orange-text)',
-    rule: 'rgba(255,138,77,',
+    rule: 'var(--speaker-you-rule)',
   },
   agent: {
     label: 'AGENT',
-    colour: 'var(--viz-blue)',
-    rule: 'rgba(87,148,242,',
+    colour: 'var(--agent-accent-text)',
+    rule: 'var(--speaker-agent-rule)',
   },
 };
 
@@ -1089,7 +1089,7 @@ function SpeakerLabel({ speaker, suffix }: SpeakerLabelProps) {
         style={{
           flex: 1,
           height: 1,
-          background: `linear-gradient(to right, ${rule}0.45), ${rule}0.06) 55%, transparent)`,
+          background: rule,
         }}
       />
     </div>
@@ -1116,7 +1116,7 @@ function PreambleChip({ text }: PreambleChipProps) {
           alignItems: 'center',
           gap: 6,
           padding: '3px 9px',
-          background: 'rgba(204,204,220,0.04)',
+          background: 'var(--preamble-chip-bg)',
           border: '1px solid var(--border-weak)',
           borderRadius: 2,
           color: 'var(--fg3)',
@@ -1299,7 +1299,7 @@ function ReasoningBlock({ block, open, onToggle }: ReasoningBlockProps) {
           padding: '0 0 10px',
           background: 'transparent',
           border: 'none',
-          color: 'var(--viz-blue)',
+          color: 'var(--agent-accent-text)',
           cursor: 'pointer',
           fontFamily: 'var(--fontFamilyMonospace)',
           fontSize: 11,
@@ -1343,7 +1343,7 @@ function CallErrorBlock({ block, compact = false }: CallErrorBlockProps) {
         padding: compact ? '9px 10px' : '10px 12px',
         border: '1px solid var(--error-border)',
         borderRadius: 2,
-        background: 'rgba(209,14,92,0.05)',
+        background: 'var(--tool-failed-bg)',
         color: 'var(--error-text)',
       }}
     >
@@ -1446,15 +1446,15 @@ function ToolRow({ call, compact = false }: ToolRowProps) {
           border: 'none',
           borderBottom: '1px solid var(--border-weak)',
           borderLeft: call.failed ? '2px solid var(--error-main)' : '2px solid transparent',
-          background: call.failed ? 'rgba(209,14,92,0.05)' : 'transparent',
+          background: call.failed ? 'var(--tool-failed-bg)' : 'transparent',
           textAlign: 'left',
           fontFamily: 'var(--fontFamilyMonospace)',
         }}
         onMouseEnter={(event) =>
-          (event.currentTarget.style.background = call.failed ? 'rgba(209,14,92,0.09)' : 'rgba(204,204,220,0.03)')
+          (event.currentTarget.style.background = call.failed ? 'var(--tool-failed-hover)' : 'var(--row-hover)')
         }
         onMouseLeave={(event) =>
-          (event.currentTarget.style.background = call.failed ? 'rgba(209,14,92,0.05)' : 'transparent')
+          (event.currentTarget.style.background = call.failed ? 'var(--tool-failed-bg)' : 'transparent')
         }
       >
         <span
@@ -1568,7 +1568,7 @@ function SubagentRun({ run }: SubagentRunProps) {
           gap: 8,
           border: 'none',
           borderLeft: `2px solid ${color}`,
-          background: 'rgba(87,148,242,0.04)',
+          background: 'var(--subagent-row-bg)',
           cursor: 'pointer',
           textAlign: 'left',
         }}
@@ -1802,7 +1802,8 @@ function AgentBlock({ turn, openGroups, toggleGroup, openReasoning, toggleReason
           }}
         >
           No message content captured. Re-run with{' '}
-          <code style={{ color: 'var(--fg1)' }}>SIGIL_CONTENT_CAPTURE_MODE=full</code> to record prompts and responses.
+          <code style={{ color: 'var(--fg1)' }}>AGENTO11Y_CONTENT_CAPTURE_MODE=full</code> to record prompts and
+          responses.
         </div>
       )}
       {turn.blocks.map((block, index) => {
@@ -2237,7 +2238,7 @@ function TimelinePanel({ turns, metrics, onJump }: TimelinePanelProps) {
                 style={{
                   position: 'relative',
                   height: 8,
-                  background: 'rgba(204,204,220,0.05)',
+                  background: 'var(--timeline-track)',
                   overflow: 'hidden',
                 }}
               >
@@ -2450,9 +2451,9 @@ function WorthALook({ steps, turns, metrics, onJump }: WorthALookProps) {
                 : 'var(--fg3)';
           const hover =
             entry.tone === 'error'
-              ? 'rgba(209,14,92,0.08)'
+              ? 'var(--error-hover)'
               : entry.tone === 'warning'
-                ? 'rgba(245,183,61,0.08)'
+                ? 'var(--warning-hover)'
                 : 'var(--action-hover)';
           return (
             <button
@@ -2615,7 +2616,7 @@ function MetricsPanel({ conv, steps, turns, metrics, onJump }: MetricsPanelProps
             padding: '10px 12px',
             border: '1px solid var(--border-weak)',
             borderRadius: 8,
-            background: 'rgba(204,204,220,0.03)',
+            background: 'var(--notice-info-bg)',
             color: 'var(--fg2)',
             fontSize: 12,
             lineHeight: 1.5,
@@ -2666,7 +2667,7 @@ function MetricsPanel({ conv, steps, turns, metrics, onJump }: MetricsPanelProps
                     position: 'relative',
                     flex: 1,
                     height: 6,
-                    background: 'rgba(204,204,220,0.06)',
+                    background: 'var(--histogram-track)',
                   }}
                 >
                   <span
@@ -2675,7 +2676,7 @@ function MetricsPanel({ conv, steps, turns, metrics, onJump }: MetricsPanelProps
                       inset: 0,
                       right: 'auto',
                       width: `${(tool.count / maxToolCount) * 100}%`,
-                      background: 'rgba(204,204,220,0.30)',
+                      background: 'var(--histogram-fill)',
                     }}
                   />
                 </span>

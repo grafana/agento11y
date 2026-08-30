@@ -5,9 +5,11 @@ import {
   bucketActivity,
   bucketTokenUsage,
   cacheInputHitPercent,
+  chartBucketMs,
   chartGrid,
   chartTooltipLeft,
-  conversationCost,
+  conversationCostByModel,
+  conversationCostEstimateByModel,
   conversationTime,
   durationBetweenSeconds,
   ESTIMATED_COST_TOOLTIP,
@@ -15,6 +17,7 @@ import {
   formatBucketLabel,
   formatCost,
   formatDuration,
+  formatInteger,
   formatTokens,
   NO_VALUE,
   splitWorkspacePath,
@@ -28,11 +31,18 @@ import {
 } from './formatters';
 import type { SelectOption } from './notices';
 import { ACTIVE_PILL_BG, Notice, PageHero, PageShell, PillToggle, Select, Stack, SurfaceCard } from './notices';
+import type { ToolSessionFilters } from './routing';
 import { conversationPath, isPlainLeftClick } from './routing';
 import { ConversationSearchPanel, useSearchResults } from './search';
 import { HistoryImportBanner } from './settings-screen';
 import { AgentCell, agentHosts, Icon, iconBtn, ModelCell } from './shell';
-import type { ConversationSummary, ModelPrices, TokenBucketKey, TokenBuckets, TokenUsagePoint } from './types';
+import type {
+  ConversationMetricsAggregate,
+  ConversationSummary,
+  ModelPrices,
+  TokenBucketKey,
+  TokenUsagePoint,
+} from './types';
 
 /** One bar of the activity chart: the bucket bounds plus its session count. */
 interface ActivityChartBucket extends TimeBucket, ActivityBucket {}
@@ -234,7 +244,7 @@ function ActivityChart({
           >
             <title>Session activity over time</title>
             {[0, 0.5].map((g) => (
-              <line key={g} x1={0} x2={W} y1={H * g} y2={H * g} stroke="rgba(204,204,220,0.06)" strokeWidth="0.2" />
+              <line key={g} x1={0} x2={W} y1={H * g} y2={H * g} stroke="var(--chart-grid)" strokeWidth="0.2" />
             ))}
             {data.map((d, i) => {
               const h = (d.c / max) * H;
@@ -410,7 +420,6 @@ export function TokenChart({
                   cursor: 'pointer',
                   font: 'inherit',
                   color: off ? 'var(--fg3)' : 'inherit',
-                  opacity: off ? 0.6 : 1,
                   textDecoration: off ? 'line-through' : 'none',
                 }}
               >
@@ -465,7 +474,7 @@ export function TokenChart({
           >
             <title>Token usage over time</title>
             {[0, 0.5].map((g) => (
-              <line key={g} x1={0} x2={W} y1={H * g} y2={H * g} stroke="rgba(204,204,220,0.06)" strokeWidth="0.2" />
+              <line key={g} x1={0} x2={W} y1={H * g} y2={H * g} stroke="var(--chart-grid)" strokeWidth="0.2" />
             ))}
             {data.map((d, i) => {
               const x = i * (W / data.length) + gap / 2;
@@ -631,7 +640,7 @@ export function TimeRangePicker({ value, onChange, ranges = TIME_RANGES }: TimeR
           padding: '0 10px',
           border: '1px solid var(--border-medium)',
           borderRadius: 2,
-          background: 'rgba(24,27,31,0.78)',
+          background: 'var(--control-bg)',
           color: 'var(--fg1)',
           fontSize: 13,
           fontFamily: 'var(--fontFamily)',
@@ -666,7 +675,7 @@ export function TimeRangePicker({ value, onChange, ranges = TIME_RANGES }: TimeR
             border: '1px solid var(--border-strong)',
             borderRadius: 2,
             background: 'var(--bg-secondary)',
-            boxShadow: '0 12px 34px rgba(0,0,0,0.48)',
+            boxShadow: 'var(--menu-shadow)',
           }}
         >
           {ranges.map((r) => {
@@ -735,6 +744,44 @@ export interface WorkspaceAggregate extends Omit<WorkspaceTotals, 'cost'> {
   cost: number | null;
 }
 
+function workspaceAggregates(conversations: ConversationSummary[], prices: ModelPrices | null): WorkspaceAggregate[] {
+  const map = new Map<string, WorkspaceTotals>();
+  for (const conversation of conversations) {
+    const path = conversation.workspace || '';
+    let aggregate = map.get(path);
+    if (!aggregate) {
+      aggregate = {
+        path,
+        count: 0,
+        cost: 0,
+        costComplete: true,
+        tokens: 0,
+        dur: 0,
+        last: 0,
+      };
+      map.set(path, aggregate);
+    }
+    aggregate.count++;
+    const estimate = conversationCostEstimateByModel(conversation, prices);
+    if (!estimate.complete) aggregate.costComplete = false;
+    if (estimate.value != null) aggregate.cost += estimate.value;
+    aggregate.tokens += conversation.total_tokens || 0;
+    const duration = durationBetweenSeconds(conversation.started_at, conversation.last_activity);
+    if (duration != null) aggregate.dur += duration;
+    const activity = conversationTime(conversation);
+    if (activity != null && activity > aggregate.last) aggregate.last = activity;
+  }
+  return [...map.values()]
+    .map((aggregate) => ({
+      ...aggregate,
+      // Keep the priced sum when a workspace mixes priced and
+      // unpriced sessions. Null only when nothing in it can be
+      // priced, so share bars match the total cost.
+      cost: aggregate.costComplete || aggregate.cost > 0 ? aggregate.cost : null,
+    }))
+    .sort((a, b) => b.last - a.last);
+}
+
 interface WorkspaceFacetProps {
   workspaces: WorkspaceAggregate[];
   selected?: string | null;
@@ -743,6 +790,8 @@ interface WorkspaceFacetProps {
   totalCost: number | null;
   now: number;
   rangeLabel: string;
+  countLabel?: string;
+  fromRows?: boolean;
 }
 
 export function WorkspaceFacet({
@@ -753,6 +802,8 @@ export function WorkspaceFacet({
   totalCost,
   now,
   rangeLabel,
+  countLabel = 'workspaces',
+  fromRows = false,
 }: WorkspaceFacetProps) {
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState('');
@@ -856,7 +907,9 @@ export function WorkspaceFacet({
     }
   };
 
-  const triggerCount = selectedPath ? `${selectedInRange ? 1 : 0}/${workspaces.length}` : String(workspaces.length);
+  const triggerCount = selectedPath
+    ? `${formatInteger(selectedInRange ? 1 : 0)}/${formatInteger(workspaces.length)}`
+    : formatInteger(workspaces.length);
 
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: Child controls own focus; the wrapper handles their keyboard events.
@@ -883,7 +936,7 @@ export function WorkspaceFacet({
           padding: '0 10px',
           border: `1px solid ${selectedPath ? 'var(--primary-border)' : 'var(--border-medium)'}`,
           borderRadius: 2,
-          background: 'rgba(24,27,31,0.78)',
+          background: 'var(--control-bg)',
           color: 'var(--fg1)',
           fontSize: 13,
           fontFamily: 'var(--fontFamily)',
@@ -930,7 +983,7 @@ export function WorkspaceFacet({
               )}
             </Fragment>
           ) : (
-            <span style={{ whiteSpace: 'nowrap' }}>All workspaces</span>
+            <span style={{ whiteSpace: 'nowrap' }}>All {countLabel}</span>
           )}
         </span>
         <span
@@ -960,7 +1013,7 @@ export function WorkspaceFacet({
             border: '1px solid var(--border-strong)',
             borderRadius: 2,
             background: 'var(--bg-secondary)',
-            boxShadow: '0 12px 34px rgba(0,0,0,0.48)',
+            boxShadow: 'var(--menu-shadow)',
           }}
         >
           <div
@@ -970,7 +1023,7 @@ export function WorkspaceFacet({
               alignItems: 'center',
               gap: 7,
               padding: '0 9px',
-              background: 'rgba(17,18,23,0.42)',
+              background: 'var(--panel-bg)',
               borderRadius: 2,
               color: 'var(--fg3)',
             }}
@@ -1033,7 +1086,7 @@ export function WorkspaceFacet({
                 textAlign: 'left',
               }}
             >
-              <span>All workspaces</span>
+              <span>All {countLabel}</span>
               <span
                 style={{
                   color: 'var(--fg3)',
@@ -1041,7 +1094,7 @@ export function WorkspaceFacet({
                   fontSize: 11,
                 }}
               >
-                {totalCount} · {formatCost(totalCost)}
+                {formatInteger(totalCount)} · {formatCost(totalCost)}
               </span>
             </button>
             <div
@@ -1131,7 +1184,7 @@ export function WorkspaceFacet({
                         textAlign: 'right',
                       }}
                     >
-                      {w.count}
+                      {formatInteger(w.count)}
                     </span>
                     <span
                       style={{
@@ -1164,7 +1217,7 @@ export function WorkspaceFacet({
                           display: 'block',
                           height: 2,
                           borderRadius: 2,
-                          background: 'rgba(204,204,220,0.08)',
+                          background: 'var(--share-track)',
                           overflow: 'hidden',
                         }}
                       >
@@ -1207,7 +1260,8 @@ export function WorkspaceFacet({
             }}
           >
             <span>
-              {workspaces.length} workspaces · {rangeLabel}
+              {formatInteger(workspaces.length)} {countLabel} · {rangeLabel}
+              {fromRows ? ` · from the ${formatInteger(totalCount)} listed sessions` : ''}
             </span>
             <span>sessions · cost · share</span>
           </div>
@@ -1293,7 +1347,7 @@ function FilterBar({
     padding: '0 30px 0 11px',
     border: '1px solid var(--border-medium)',
     borderRadius: 2,
-    background: 'rgba(24,27,31,0.78)',
+    background: 'var(--control-bg)',
     color: 'var(--fg1)',
     fontSize: 13,
     fontFamily: 'var(--fontFamily)',
@@ -1310,9 +1364,9 @@ function FilterBar({
           height: 34,
           border: '1px solid var(--border-medium)',
           borderRadius: 2,
-          background: 'rgba(24,27,31,0.78)',
+          background: 'var(--control-bg)',
           color: 'var(--fg3)',
-          boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.12)',
+          boxShadow: 'var(--search-inset-shadow)',
         }}
       >
         <Icon name="search" size={14} />
@@ -1359,6 +1413,7 @@ function FilterBar({
           totalCost={workspaceTotalCost}
           now={now}
           rangeLabel={rangeLabel}
+          fromRows
         />
       )}
       {showTimeRange && <TimeRangePicker value={timeRange} onChange={onTimeRangeChange} />}
@@ -1500,7 +1555,7 @@ export function ConvRow({ c, now, onOpen, prices, grouped = false, hideWorkspace
         textDecoration: 'none',
         color: 'inherit',
       }}
-      onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(204,204,220,0.03)')}
+      onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--row-hover)')}
       onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
     >
       <span style={{ color: 'var(--fg2)' }}>{formatAgo(c.last_activity, now)}</span>
@@ -1542,7 +1597,7 @@ export function ConvRow({ c, now, onOpen, prices, grouped = false, hideWorkspace
                 padding: '0 6px',
                 height: 16,
                 borderRadius: 2,
-                background: 'rgba(204,204,220,0.06)',
+                background: 'var(--subagent-chip-bg)',
                 color: 'var(--fg2)',
                 fontSize: 10,
                 fontFamily: 'var(--fontFamilyMonospace)',
@@ -1568,7 +1623,7 @@ export function ConvRow({ c, now, onOpen, prices, grouped = false, hideWorkspace
       </div>
       <AgentCell agents={c.agents} />
       <span style={{ color: 'var(--fg1)' }} title={ESTIMATED_COST_TOOLTIP}>
-        {formatCost(conversationCost(c, prices))}
+        {formatCost(conversationCostByModel(c, prices))}
       </span>
       <span
         style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}
@@ -1668,17 +1723,17 @@ function SessionGroupHeader({
         padding: '10px 16px',
         border: 'none',
         borderBottom: '1px solid var(--border-weak)',
-        background: 'rgba(34,37,43,0.55)',
+        background: 'var(--group-bg)',
         color: 'inherit',
         cursor: 'pointer',
         textAlign: 'left',
         font: 'inherit',
       }}
       onMouseEnter={(e) => {
-        e.currentTarget.style.background = 'rgba(34,37,43,0.8)';
+        e.currentTarget.style.background = 'var(--group-hover)';
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.background = 'rgba(34,37,43,0.55)';
+        e.currentTarget.style.background = 'var(--group-bg)';
       }}
     >
       <span
@@ -1753,7 +1808,7 @@ function SessionGroupHeader({
             height: 3,
             flex: '0 0 auto',
             borderRadius: 2,
-            background: 'rgba(204,204,220,0.08)',
+            background: 'var(--share-track)',
             overflow: 'hidden',
           }}
         >
@@ -1821,7 +1876,7 @@ function WorkspaceContextStrip({ path, count, cost, tokens, last, share, now, on
         gap: 14,
         padding: '10px 16px',
         borderBottom: '1px solid var(--border-weak)',
-        background: 'rgba(34,37,43,0.55)',
+        background: 'var(--group-bg)',
         color: 'var(--fg2)',
         fontFamily: 'var(--fontFamilyMonospace)',
         fontSize: 11.5,
@@ -1869,7 +1924,7 @@ function WorkspaceContextStrip({ path, count, cost, tokens, last, share, now, on
           height: 3,
           flex: '0 0 auto',
           borderRadius: 2,
-          background: 'rgba(204,204,220,0.08)',
+          background: 'var(--share-track)',
           overflow: 'hidden',
         }}
       >
@@ -2158,7 +2213,7 @@ function KpiTile({ label, value, valueColor, sub, dot, bar, tooltip }: KpiTilePr
             display: 'block',
             height: 4,
             borderRadius: 2,
-            background: 'rgba(204,204,220,0.1)',
+            background: 'var(--progress-track)',
             overflow: 'hidden',
             marginTop: 1,
           }}
@@ -2178,12 +2233,15 @@ function KpiTile({ label, value, valueColor, sub, dot, bar, tooltip }: KpiTilePr
   );
 }
 
-// KpiStrip surfaces the headline numbers for the in-view set: counts
-// from the range + search conversations, token and cache rate from the
-// chart's series (so they honour the model dropdown and legend
-// toggles). "Model calls" is the per-generation call count. "Errored
-// conversations" counts conversations with a call error.
-/** The headline numbers the KPI strip renders, derived from the in-view set. */
+const KPI_STRIP_STYLE: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(6, 1fr)',
+  gap: 12,
+  marginBottom: 16,
+};
+
+const KPI_LABELS = ['Sessions', 'Cost', 'Total tokens', 'Input cache hit', 'Model calls', 'Errored sessions'];
+
 interface KpiSummary {
   conversations: number;
   conversationsSub: string;
@@ -2199,20 +2257,22 @@ interface KpiSummary {
 }
 
 interface KpiStripProps {
-  kpi: KpiSummary;
+  kpi: KpiSummary | null;
 }
 
 function KpiStrip({ kpi }: KpiStripProps) {
+  if (!kpi) {
+    return (
+      <div style={KPI_STRIP_STYLE}>
+        {KPI_LABELS.map((label) => (
+          <KpiTile key={label} label={label} value={NO_VALUE} />
+        ))}
+      </div>
+    );
+  }
   const avg = kpi.avgCalls.toFixed(1).replace(/\.0$/, '');
   return (
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(6, 1fr)',
-        gap: 12,
-        marginBottom: 16,
-      }}
-    >
+    <div style={KPI_STRIP_STYLE}>
       <KpiTile label="Sessions" value={kpi.conversations} sub={kpi.conversationsSub} />
       <KpiTile label="Cost" value={formatCost(kpi.cost)} sub={kpi.costSub} tooltip={ESTIMATED_COST_TOOLTIP} />
       <KpiTile
@@ -2262,10 +2322,20 @@ interface CollapsedGroups {
   sessions: number;
 }
 
-interface ConversationsViewProps {
+interface ConversationsViewBaseProps {
   conversations: ConversationSummary[];
+  workspaceFacetConversations: ConversationSummary[];
   /** Conversations the daemon holds before the list's range bounds; null from an older daemon. */
   storeCount: number | null;
+  /**
+   * Totals before the row limit for conversations matching the range,
+   * workspace, tool filter, and facets. Null before a response for the current
+   * scope or after that request fails; never derived from the returned page.
+   */
+  aggregate: ConversationMetricsAggregate | null;
+  matchedConversations: number | null;
+  metricsLoading: boolean;
+  metricsError: string | null;
   tokenPoints: TokenUsagePoint[] | null;
   tokenIntervalMs: number;
   loading: boolean;
@@ -2285,6 +2355,13 @@ interface ConversationsViewProps {
   setWorkspace: (path: string | null) => void;
   groupBy: string;
   setGroupBy: (value: string) => void;
+  /** Facet state lives in App because the list and metrics requests include it. */
+  agentFilter: string;
+  setAgentFilter: (value: string) => void;
+  modelFilter: string;
+  setModelFilter: (value: string) => void;
+  statusFilter: string;
+  setStatusFilter: (value: string) => void;
   listSort: ListSort;
   setListSort: React.Dispatch<React.SetStateAction<ListSort>>;
   onOpen: (c: OpenTarget) => void;
@@ -2295,9 +2372,27 @@ interface ConversationsViewProps {
   history?: React.ComponentProps<typeof HistoryImportBanner>['history'] | null;
 }
 
+export type ConversationsViewProps = ConversationsViewBaseProps &
+  (
+    | { toolFilter: ToolSessionFilters; onClearToolFilter: () => void }
+    | { toolFilter?: null; onClearToolFilter?: never }
+  );
+
+function toolRangeLabel(filter: ToolSessionFilters) {
+  if (filter.since && filter.before) return `${filter.since} to ${filter.before}`;
+  if (filter.since) return `From ${filter.since}`;
+  if (filter.before) return `Before ${filter.before}`;
+  return 'All time';
+}
+
 export function ConversationsView({
   conversations,
+  workspaceFacetConversations,
   storeCount,
+  aggregate,
+  matchedConversations,
+  metricsLoading,
+  metricsError,
   tokenPoints,
   tokenIntervalMs,
   loading,
@@ -2317,6 +2412,12 @@ export function ConversationsView({
   setWorkspace,
   groupBy,
   setGroupBy,
+  agentFilter,
+  setAgentFilter,
+  modelFilter,
+  setModelFilter,
+  statusFilter,
+  setStatusFilter,
   listSort,
   setListSort,
   onOpen,
@@ -2324,10 +2425,20 @@ export function ConversationsView({
   refreshing,
   onOpenSettings,
   history,
+  toolFilter,
+  onClearToolFilter,
 }: ConversationsViewProps) {
   const now = Date.now();
   const prices = useModelPrices();
   const range = timeRangeOption(timeRange);
+  const rangeLabel = toolFilter ? toolRangeLabel(toolFilter) : range.label;
+  const exactWindow = useMemo(() => {
+    if (!toolFilter?.before) return null;
+    const end = Date.parse(toolFilter.before);
+    const start = toolFilter.since ? Date.parse(toolFilter.since) : undefined;
+    if (!Number.isFinite(end) || (start != null && (!Number.isFinite(start) || start >= end))) return null;
+    return { start, end };
+  }, [toolFilter]);
   const trimmedQuery = query.trim();
   const searchActive = trimmedQuery.length > 0;
   const search = useSearchResults(query);
@@ -2340,17 +2451,9 @@ export function ConversationsView({
     setSelectedIndex: setSearchSelectedIndex,
     retry: retrySearch,
   } = search;
-  const [agentFilter, setAgentFilter] = useState('all');
-  const [modelFilter, setModelFilter] = useState('all');
-  const [statusFilter, setStatusFilter] = useState('all');
-  const rangeFiltered = useMemo(() => {
-    if (range.ms == null) return conversations;
-    const from = now - range.ms;
-    return conversations.filter((c) => {
-      const t = conversationTime(c);
-      return t != null && t >= from && t <= now;
-    });
-  }, [conversations, range.ms, now]);
+  // The server filters exact list requests by generation time. Row timestamps
+  // cover the full session, so applying the range again would select another set.
+  const rangeFiltered = conversations;
 
   // Explicit group overrides survive filters because they are keyed by group.
   // A groupBy change resets them because the keys change meaning.
@@ -2364,119 +2467,101 @@ export function ConversationsView({
       return next;
     });
   }, []);
-  const workspaces = useMemo<WorkspaceAggregate[]>(() => {
-    const map = new Map<string, WorkspaceTotals>();
-    for (const c of rangeFiltered) {
-      const w = c.workspace || '';
-      let e = map.get(w);
-      if (!e) {
-        e = {
-          path: w,
-          count: 0,
-          cost: 0,
-          costComplete: true,
-          tokens: 0,
-          dur: 0,
-          last: 0,
-        };
-        map.set(w, e);
-      }
-      e.count++;
-      const cost = conversationCost(c, prices);
-      if (cost == null) e.costComplete = false;
-      else e.cost += cost;
-      e.tokens += c.total_tokens || 0;
-      const d = durationBetweenSeconds(c.started_at, c.last_activity);
-      if (d != null) e.dur += d;
-      const t = conversationTime(c);
-      if (t != null && t > e.last) e.last = t;
-    }
-    return [...map.values()]
-      .map((entry) => ({
-        ...entry,
-        // Keep the priced sum when a workspace mixes priced and
-        // unpriced sessions. Null only when nothing in it can be
-        // priced, so share bars match totalCost.
-        cost: entry.costComplete || entry.cost > 0 ? entry.cost : null,
-      }))
-      .sort((a, b) => b.last - a.last);
-  }, [rangeFiltered, prices]);
+  const facetWorkspaces = useMemo(
+    () => workspaceAggregates(workspaceFacetConversations, prices),
+    [workspaceFacetConversations, prices],
+  );
   const totalCost = useMemo(() => {
-    // Sum priced sessions only. One unpriced model used to zero the
+    // Sum priced model usage only. One unpriced model used to zero the
     // whole header to NO_VALUE even when other sessions had a real
     // dollar figure — the KPI tile already skips those.
     let cost = 0;
     let priced = 0;
-    for (const conversation of rangeFiltered) {
-      const value = conversationCost(conversation, prices);
+    for (const conversation of workspaceFacetConversations) {
+      const value = conversationCostByModel(conversation, prices);
       if (value == null) continue;
       cost += value;
       priced++;
     }
     return priced ? cost : null;
-  }, [rangeFiltered, prices]);
-  const agentCount = useMemo(() => {
-    const set = new Set<string>();
-    for (const c of rangeFiltered) for (const a of agentHosts(c.agents)) set.add(a);
-    return set.size;
-  }, [rangeFiltered]);
+  }, [workspaceFacetConversations, prices]);
   // Keep an out-of-range workspace selected so the page can show its empty
   // context instead of silently returning to all workspaces.
   const activeWorkspace = workspace;
-  const selectedWorkspaceRangeAggregate =
-    activeWorkspace == null
-      ? null
-      : workspaces.find((w) => w.path === activeWorkspace) || {
-          path: activeWorkspace,
-          count: 0,
-          cost: 0,
-          costComplete: true,
-          tokens: 0,
-          dur: 0,
-          last: 0,
-        };
-  const wsFiltered = useMemo(
+  const selectedWorkspaceRangeAggregate = useMemo(
+    () =>
+      activeWorkspace == null
+        ? null
+        : workspaceAggregates(rangeFiltered, prices).find((entry) => entry.path === activeWorkspace) || {
+            path: activeWorkspace,
+            count: 0,
+            cost: 0,
+            costComplete: true,
+            tokens: 0,
+            dur: 0,
+            last: 0,
+          },
+    [activeWorkspace, rangeFiltered, prices],
+  );
+  const workspaces = useMemo(() => {
+    if (
+      activeWorkspace == null ||
+      selectedWorkspaceRangeAggregate == null ||
+      facetWorkspaces.some((entry) => entry.path === activeWorkspace)
+    ) {
+      return facetWorkspaces;
+    }
+    return [...facetWorkspaces, selectedWorkspaceRangeAggregate].sort((a, b) => b.last - a.last);
+  }, [activeWorkspace, facetWorkspaces, selectedWorkspaceRangeAggregate]);
+  // The returned page, narrowed to the range and the selected workspace. The
+  // agent, model and status facets are applied by the server, so the rows
+  // arrive already narrowed by those.
+  const workspaceRows = useMemo(
     () =>
       activeWorkspace == null ? rangeFiltered : rangeFiltered.filter((c) => (c.workspace || '') === activeWorkspace),
     [rangeFiltered, activeWorkspace],
   );
 
+  // Keep the selected value when no match contains it so the control shows the
+  // requested filter.
   const agentOptions = useMemo(() => {
     const set = new Set<string>();
-    for (const c of wsFiltered) for (const a of agentHosts(c.agents)) set.add(a);
+    if (aggregate?.agent_hosts) {
+      for (const agent of aggregate.agent_hosts) set.add(agent);
+    } else {
+      for (const conversation of workspaceRows) for (const agent of agentHosts(conversation.agents)) set.add(agent);
+    }
+    if (agentFilter !== 'all') set.add(agentFilter);
     return [...set].sort();
-  }, [wsFiltered]);
-  const activeAgentFilter = agentOptions.includes(agentFilter) ? agentFilter : 'all';
+  }, [aggregate, workspaceRows, agentFilter]);
 
   const modelFacetOptions = useMemo(() => {
     const set = new Set<string>();
-    for (const c of wsFiltered) for (const m of c.models || []) if (m) set.add(m);
+    if (aggregate?.models) {
+      for (const model of aggregate.models) set.add(model);
+    } else {
+      for (const conversation of workspaceRows)
+        for (const model of conversation.models || []) if (model) set.add(model);
+    }
+    if (modelFilter !== 'all') set.add(modelFilter);
     return [...set].sort();
-  }, [wsFiltered]);
-  const activeModelFilter = modelFacetOptions.includes(modelFilter) ? modelFilter : 'all';
+  }, [aggregate, workspaceRows, modelFilter]);
   const activeStatusFilter = statusFilter === 'errors' || statusFilter === 'subagents' ? statusFilter : 'all';
-
-  const filtered = useMemo(() => {
-    return wsFiltered.filter((c) => {
-      if (activeAgentFilter !== 'all' && !agentHosts(c.agents).includes(activeAgentFilter)) return false;
-      if (activeModelFilter !== 'all' && !(c.models || []).includes(activeModelFilter)) return false;
-      if (activeStatusFilter === 'errors' && c.status !== 'err') return false;
-      if (activeStatusFilter === 'subagents' && !((c.subagents ?? 0) > 0)) return false;
-      return true;
-    });
-  }, [wsFiltered, activeAgentFilter, activeModelFilter, activeStatusFilter]);
+  // A facet that matches nothing returns an empty page, so the range looks
+  // empty too. The empty state has to name the facet rather than the range.
+  const facetActive = agentFilter !== 'all' || modelFilter !== 'all' || activeStatusFilter !== 'all';
 
   const activeFilterCount =
     (activeWorkspace != null ? 1 : 0) +
-    (activeAgentFilter !== 'all' ? 1 : 0) +
-    (activeModelFilter !== 'all' ? 1 : 0) +
+    (agentFilter !== 'all' ? 1 : 0) +
+    (modelFilter !== 'all' ? 1 : 0) +
     (activeStatusFilter !== 'all' ? 1 : 0);
   const clearFilters = useCallback(() => {
     setWorkspace(null);
     setAgentFilter('all');
     setModelFilter('all');
     setStatusFilter('all');
-  }, [setWorkspace]);
+  }, [setWorkspace, setAgentFilter, setModelFilter, setStatusFilter]);
   const clearSearch = useCallback(() => {
     setQuery('');
     setTimeout(() => {
@@ -2589,9 +2674,6 @@ export function ConversationsView({
       effectiveModel === 'all' ? tokenUsagePoints : tokenUsagePoints.filter((point) => point.model === effectiveModel),
     [tokenUsagePoints, effectiveModel],
   );
-  // Legend visibility is shared with the KPI strip so hiding a series
-  // rescales the chart and drops it from the headline tokens in step.
-  // Lives here, not in TokenChart, so both read the one set.
   const [hiddenSeries, setHiddenSeries] = useState<Set<TokenBucketKey>>(() => new Set());
   const toggleSeries = useCallback(
     (key: TokenBucketKey) =>
@@ -2602,28 +2684,44 @@ export function ConversationsView({
       }),
     [],
   );
-  // Both metrics share one window so switching the chart between
-  // them doesn't shift the time axis; with per-metric windows the
-  // "All" range drifts when the datasets' extents differ. The window
-  // is snapped to the bucket ladder the token endpoint aggregates on,
-  // so each server point falls inside exactly one bar.
+  // Outside an exact tool drilldown, both metrics share one window so
+  // switching metrics does not shift the time axis. The window is snapped to
+  // the token endpoint's bucket ladder, so each server point occupies one bar.
   //
   // A fixed range asks the server for the width it will draw on. Only
   // the "All" range needs the reported width as a floor: there the server
   // derives it from the whole store while the bars follow the visible
   // window, which a model facet can narrow.
-  const serverIntervalMs = range.ms == null ? tokenIntervalMs : 0;
+  const serverIntervalMs = toolFilter || range.ms == null ? tokenIntervalMs : 0;
   const chartWindow = useMemo(() => {
-    const times = filtered.map(conversationTime).concat(tokenFiltered.map(tokenPointTime));
-    return chartGrid(times, timeRange, now, serverIntervalMs);
-  }, [filtered, tokenFiltered, timeRange, now, serverIntervalMs]);
+    const times = workspaceRows.map(conversationTime).concat(tokenFiltered.map(tokenPointTime));
+    if (!toolFilter || !exactWindow) return chartGrid(times, timeRange, now, serverIntervalMs);
+    let start = exactWindow.start;
+    if (start == null) {
+      for (const value of times) {
+        if (value != null && Number.isFinite(value) && (start == null || value < start)) start = value;
+      }
+    }
+    start ??= exactWindow.end - 60 * 60 * 1000;
+    const bucketMs = chartBucketMs(exactWindow.end - start, serverIntervalMs);
+    const gridStart = Math.floor(start / bucketMs) * bucketMs;
+    const gridEnd = Math.ceil(Math.max(exactWindow.end, gridStart + bucketMs) / bucketMs) * bucketMs;
+    return {
+      start: gridStart,
+      end: gridEnd,
+      bucketMs,
+      count: Math.round((gridEnd - gridStart) / bucketMs),
+    };
+  }, [workspaceRows, tokenFiltered, timeRange, now, serverIntervalMs, toolFilter, exactWindow]);
   const activity = useMemo(
     () =>
-      bucketActivity(filtered, timeRange, now, {
-        window: chartWindow,
-        count: chartWindow.count,
-      }),
-    [filtered, timeRange, now, chartWindow],
+      toolFilter
+        ? { buckets: [], bucketLabel: '' }
+        : bucketActivity(workspaceRows, timeRange, now, {
+            window: chartWindow,
+            count: chartWindow.count,
+          }),
+    [workspaceRows, timeRange, now, chartWindow, toolFilter],
   );
   const tokenUsage = useMemo(
     () =>
@@ -2633,6 +2731,7 @@ export function ConversationsView({
       }),
     [tokenFiltered, timeRange, now, chartWindow],
   );
+  const effectiveChartMetric = toolFilter ? 'tokens' : chartMetric;
   // Bucket drill-down from a chart bar click: the list narrows to
   // conversations active inside the picked bucket, while the charts
   // keep the full window and just highlight the selection.
@@ -2645,15 +2744,15 @@ export function ConversationsView({
     [setBucketSel],
   );
   const listFiltered = useMemo(() => {
-    if (!bucketSel) return filtered;
-    return filtered.filter((c) => {
+    if (!bucketSel) return workspaceRows;
+    return workspaceRows.filter((c) => {
       const endT = conversationTime(c);
       if (endT == null) return false;
       const startT = new Date(c.started_at).getTime();
       const s = Number.isFinite(startT) ? startT : endT;
       return s < bucketSel.end && endT >= bucketSel.start;
     });
-  }, [filtered, bucketSel]);
+  }, [workspaceRows, bucketSel]);
 
   const handleSort = useCallback(
     (key: string) => {
@@ -2669,7 +2768,7 @@ export function ConversationsView({
         return d == null ? -1 : d;
       }
       if (listSort.key === 'tokens') return c.total_tokens || 0;
-      if (listSort.key === 'cost') return conversationCost(c, prices) || 0;
+      if (listSort.key === 'cost') return conversationCostByModel(c, prices) || 0;
       const t = conversationTime(c);
       return t == null ? 0 : t;
     };
@@ -2697,9 +2796,9 @@ export function ConversationsView({
       }
       group.rows.push(c);
       group.count++;
-      const cost = conversationCost(c, prices);
-      if (cost == null) group.costComplete = false;
-      else group.cost += cost;
+      const estimate = conversationCostEstimateByModel(c, prices);
+      if (!estimate.complete) group.costComplete = false;
+      if (estimate.value != null) group.cost += estimate.value;
       group.tokens += c.total_tokens || 0;
       const duration = durationBetweenSeconds(c.started_at, c.last_activity);
       if (duration != null) group.dur += duration;
@@ -2744,61 +2843,42 @@ export function ConversationsView({
     return { groups, sessions };
   }, [grouped, groupOpen, groupBy, activeWorkspace]);
 
-  // KPI tiles read the range + workspace + search set (not the bucket
-  // drill-down), computed straight off each conversation's token buckets.
-  // This keeps headline tokens, cost, and cache rate conversation-based rather
-  // than tied to the token-series chart, which has its own model filter.
-  const kpi = useMemo(() => {
-    let calls = 0,
-      errConvs = 0,
-      cost = 0,
-      priced = 0,
-      unpriced = 0;
-    const tot: TokenBuckets = {
-      fresh_input: 0,
-      cache_read: 0,
-      cache_write: 0,
-      output: 0,
-      reasoning: 0,
-    };
-    const models = new Set<string>();
-    for (const c of filtered) {
-      calls += c.calls || 0;
-      if (c.status === 'err') errConvs++;
-      const cc = conversationCost(c, prices);
-      if (cc == null) unpriced++;
-      else {
-        cost += cc;
-        priced++;
-      }
-      const b = c.token_buckets;
-      if (b) for (const k in tot) tot[k as TokenBucketKey] += b[k as TokenBucketKey] || 0;
-      for (const m of c.models || []) models.add(m);
-    }
+  // KPI tiles use the conversation-metrics aggregate, not the returned page.
+  // Tile usage is clipped to the range; list rows show each session's lifetime
+  // totals. If no aggregate is available for the current scope, do not derive
+  // totals from a page that may omit matching sessions.
+  const kpi = useMemo<KpiSummary | null>(() => {
+    if (!aggregate || matchedConversations == null) return null;
+    const tot = aggregate.token_buckets;
     const tokens = tot.fresh_input + tot.cache_read + tot.cache_write + tot.output + tot.reasoning;
-    // Cost sub is honest about coverage: if some conversations ran on an
-    // unpriced (non-Anthropic) model, say so rather than implying the
-    // total covers everything.
-    const costSub =
-      unpriced > 0
-        ? `${unpriced} unpriced · ${formatCost(priced ? cost / priced : 0)} avg`
-        : cost
-          ? `${formatCost(cost / Math.max(1, priced))} avg / session`
-          : 'estimated';
+    const estimate = conversationCostEstimateByModel(aggregate, prices);
+    const cost = estimate.value;
+    const average = estimate.complete && cost != null && matchedConversations > 0 ? cost / matchedConversations : null;
+    // Exclude unpriced model usage instead of counting it as free. An empty
+    // range has no usage to exclude.
+    const averageSub = average != null ? `${formatCost(average)} avg / session` : null;
+    let costSub = averageSub ?? 'estimated';
+    if (tokens > 0 && !estimate.complete) {
+      costSub = averageSub ? `unpriced usage excluded · ${averageSub}` : 'unpriced usage excluded';
+    }
     return {
-      conversations: filtered.length,
+      conversations: matchedConversations,
       conversationsSub: activeWorkspace != null ? 'in workspace' : 'active in range',
       tokens,
-      cost: priced ? cost : null, // nothing priced, so NO_VALUE rather than a misleading $0
+      cost,
       costSub,
-      models: models.size,
+      models: aggregate.models.length,
       cachePct: cacheInputHitPercent(tot.fresh_input, tot.cache_read, tot.cache_write),
-      calls,
-      avgCalls: filtered.length ? calls / filtered.length : 0,
-      errConvs,
-      errPct: filtered.length ? Math.round((errConvs / filtered.length) * 100) : 0,
+      calls: aggregate.calls,
+      avgCalls: matchedConversations ? aggregate.calls / matchedConversations : 0,
+      errConvs: aggregate.errored,
+      errPct: matchedConversations ? Math.round((aggregate.errored / matchedConversations) * 100) : 0,
     };
-  }, [filtered, activeWorkspace, prices]);
+  }, [aggregate, matchedConversations, activeWorkspace, prices]);
+  // The list request returns at most one page of rows, newest first, while the
+  // totals cover every match. More matches than rows means the table below is
+  // a sample of what the tiles count.
+  const sampledRows = !error && matchedConversations != null && matchedConversations > conversations.length;
 
   return (
     <PageShell maxWidth={1400}>
@@ -2829,14 +2909,14 @@ export function ConversationsView({
                 },
               ]
             : [
-                { label: 'Range', value: range.label },
+                { label: 'Range', value: rangeLabel },
                 {
                   label: 'Workspaces',
-                  value: String(workspaces.length),
+                  value: aggregate ? String(aggregate.workspaces) : NO_VALUE,
                 },
                 {
                   label: 'Agents',
-                  value: String(agentCount),
+                  value: aggregate ? String(aggregate.agents) : NO_VALUE,
                 },
               ]
         }
@@ -2846,21 +2926,21 @@ export function ConversationsView({
         query={query}
         onQueryChange={setQuery}
         inputRef={searchInputRef}
-        timeRange={searchActive ? null : timeRange}
-        onTimeRangeChange={searchActive ? null : setTimeRange}
+        timeRange={searchActive || toolFilter ? null : timeRange}
+        onTimeRangeChange={searchActive || toolFilter ? null : setTimeRange}
         workspaces={searchActive ? [] : workspaces}
         workspace={searchActive ? undefined : activeWorkspace}
         onWorkspaceChange={searchActive ? undefined : setWorkspace}
-        workspaceSessionCount={rangeFiltered.length}
+        workspaceSessionCount={workspaceFacetConversations.length}
         workspaceTotalCost={totalCost}
         now={now}
-        rangeLabel={range.label}
+        rangeLabel={rangeLabel}
         groupBy={searchActive ? undefined : groupBy}
         onGroupByChange={searchActive ? undefined : setGroupBy}
-        agentFilter={searchActive ? undefined : activeAgentFilter}
+        agentFilter={searchActive ? undefined : agentFilter}
         onAgentFilterChange={searchActive ? undefined : setAgentFilter}
         agentOptions={searchActive ? [] : agentOptions}
-        modelFilter={searchActive ? undefined : activeModelFilter}
+        modelFilter={searchActive ? undefined : modelFilter}
         onModelFilterChange={searchActive ? undefined : setModelFilter}
         modelOptions={searchActive ? [] : modelFacetOptions}
         statusFilter={searchActive ? undefined : activeStatusFilter}
@@ -2873,6 +2953,35 @@ export function ConversationsView({
         onInputKeyDown={onSearchInputKey}
         rightAdornment={searchRightAdornment}
       />
+      {toolFilter && !searchActive && (
+        <div className="session-entity-filter" role="status">
+          <span>
+            Tool <code>{toolFilter.tool || '(blank)'}</code>
+            {toolFilter.workspace != null && (
+              <Fragment>
+                {' · '}workspace <code>{toolFilter.workspace || '(unknown)'}</code>
+              </Fragment>
+            )}
+            {toolFilter.since && (
+              <Fragment>
+                {' · '}from <code>{toolFilter.since}</code>
+              </Fragment>
+            )}
+            {toolFilter.before && (
+              <Fragment>
+                {' · '}before <code>{toolFilter.before}</code>
+              </Fragment>
+            )}
+          </span>
+          <span>
+            Token chart covers all generation usage in the exact time range, not only the selected tool. Session totals
+            cover each matched session's full lifetime.
+          </span>
+          <button type="button" onClick={onClearToolFilter}>
+            Clear tool filter
+          </button>
+        </div>
+      )}
       {searchActive ? (
         <ConversationSearchPanel
           query={trimmedQuery}
@@ -2888,8 +2997,24 @@ export function ConversationsView({
         />
       ) : (
         <Fragment>
-          <KpiStrip kpi={kpi} />
-          {chartMetric === 'activity' ? (
+          {metricsError ? (
+            <div style={{ marginBottom: 16 }}>
+              <Notice kind="error" title="Failed to load session totals">
+                {metricsError}
+              </Notice>
+            </div>
+          ) : (
+            (kpi || metricsLoading) && <KpiStrip kpi={kpi} />
+          )}
+          {sampledRows && (
+            <div style={{ marginBottom: 16 }}>
+              <Notice kind="info" title="Session row and total counts differ">
+                Rows returned: {workspaceRows.length}. Sessions covered by totals: {matchedConversations}. Totals
+                include usage only from the selected range. Each row shows lifetime cost, tokens, and duration.
+              </Notice>
+            </div>
+          )}
+          {effectiveChartMetric === 'activity' ? (
             <ActivityChart
               data={activity.buckets}
               bucketLabel={activity.bucketLabel}
@@ -2907,9 +3032,15 @@ export function ConversationsView({
               onModelChange={setTokenModel}
               hidden={hiddenSeries}
               onToggleSeries={toggleSeries}
-              selection={bucketSel}
-              onBucketClick={onBucketClick}
-              switcher={<ChartSwitch value={chartMetric} onChange={setChartMetric} />}
+              selection={toolFilter ? null : bucketSel}
+              onBucketClick={toolFilter ? undefined : onBucketClick}
+              switcher={
+                toolFilter ? (
+                  <span style={{ color: 'var(--fg2)', fontSize: 12 }}>Tokens in exact range</span>
+                ) : (
+                  <ChartSwitch value={chartMetric} onChange={setChartMetric} />
+                )
+              }
             />
           )}
 
@@ -3028,6 +3159,7 @@ export function ConversationsView({
                             older daemon) falls back to reading the page. */}
             {!error &&
               !loading &&
+              !toolFilter &&
               activeWorkspace == null &&
               rangeFiltered.length === 0 &&
               (storeCount === 0 || (storeCount == null && conversations.length === 0)) && (
@@ -3042,7 +3174,9 @@ export function ConversationsView({
               )}
             {!error &&
               !loading &&
+              !toolFilter &&
               activeWorkspace == null &&
+              !facetActive &&
               rangeFiltered.length === 0 &&
               ((storeCount ?? 0) > 0 || conversations.length > 0) && (
                 <div
@@ -3055,7 +3189,7 @@ export function ConversationsView({
                   No sessions in <code style={{ color: 'var(--fg1)' }}>{range.label}</code>.
                 </div>
               )}
-            {!error && !loading && selectedWorkspaceRangeAggregate?.count === 0 && (
+            {!error && !loading && !toolFilter && !facetActive && selectedWorkspaceRangeAggregate?.count === 0 && (
               <div
                 style={{
                   padding: '16px 18px',
@@ -3066,10 +3200,22 @@ export function ConversationsView({
                 No sessions in this range.
               </div>
             )}
+            {!error && !loading && toolFilter && conversations.length === 0 && (
+              <div
+                style={{
+                  padding: '16px 18px',
+                  color: 'var(--fg2)',
+                  fontSize: 12,
+                }}
+              >
+                No sessions match this exact tool, workspace, and time range.
+              </div>
+            )}
             {!error &&
-              filtered.length === 0 &&
-              rangeFiltered.length > 0 &&
-              (activeWorkspace == null || (selectedWorkspaceRangeAggregate?.count ?? 0) > 0) && (
+              !toolFilter &&
+              workspaceRows.length === 0 &&
+              (rangeFiltered.length > 0 || facetActive) &&
+              (activeWorkspace == null || facetActive || (selectedWorkspaceRangeAggregate?.count ?? 0) > 0) && (
                 <div
                   style={{
                     padding: '16px 18px',
@@ -3080,7 +3226,7 @@ export function ConversationsView({
                   No sessions match the current filters.
                 </div>
               )}
-            {!error && bucketSel && listFiltered.length === 0 && filtered.length > 0 && (
+            {!error && bucketSel && listFiltered.length === 0 && workspaceRows.length > 0 && (
               <div
                 style={{
                   padding: '16px 18px',
@@ -3140,7 +3286,7 @@ export function ConversationsView({
                 fontFamily: 'var(--fontFamilyMonospace)',
               }}
             >
-              {sorted.length} of {filtered.length} {filtered.length === 1 ? 'session' : 'sessions'}
+              {sorted.length} of {workspaceRows.length} {workspaceRows.length === 1 ? 'session' : 'sessions'}
               {collapsed.groups > 0 && (
                 <Fragment>
                   {' · '}

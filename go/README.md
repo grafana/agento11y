@@ -142,6 +142,12 @@ defer func() {
 
 `GenerationExport.ExportTimeout` bounds each HTTP or gRPC generation and workflow-step request. It defaults to 30 seconds. Set `AGENTO11Y_EXPORT_TIMEOUT_MS` to a base-10 integer from `1` through `2147483647` to override the default. A positive caller value wins over the environment variable.
 
+Generation and workflow-step exports retry five times by default, with exponential backoff capped at five seconds. Set `AGENTO11Y_MAX_RETRIES` and `AGENTO11Y_MAX_BACKOFF_MS` to base-10 integers from `1` through `2147483647` to override those defaults. Positive caller values win over the environment variables.
+
+Each in-memory export queue holds 2,000 records by default. Set `AGENTO11Y_QUEUE_SIZE` to a base-10 integer from `1` through `2147483647` to override that capacity. Size it from the peak records per second multiplied by the expected outage in seconds, plus headroom. Generations and workflow steps have separate queues of this capacity. Larger queues consume application memory and do not survive a process restart. A positive caller value wins over the environment variable.
+
+Retries run in the background exporter. While an export is retrying, the in-memory queue can fill and newer generations can be dropped. Use a retry budget sized for a short, known interruption rather than a permanent multi-minute setting.
+
 `GenerationExport.HTTPTimeout` remains an HTTP-only override. A positive value wins over `ExportTimeout` on HTTP requests. The experiments client uses this field for `ClientOptions.RetryTimeout`.
 
 Configure OTEL exporters (traces/metrics) in your application OTEL SDK setup.
@@ -359,11 +365,21 @@ continues to use the ingest credential. `NewExperimentFromSuite` and
 
 ### Grading with an evaluator stored in your tenant
 
-> **Experimental.** Set `AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true` to use
-> this. Without it, `Trial.Evaluate`, `Client.TriggerTrialEvaluation`, and
+> **Experimental.** Set `Config.EnableExperimentalFeatures` or
+> `experiments.ClientOptions.EnableExperimentalFeatures` to
+> `agento11y.BoolPtr(true)`. If the field is nil,
+> `AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true` remains a supported alternative.
+> Explicit false overrides the environment.
+> Without it, `Trial.Evaluate`, `Client.TriggerTrialEvaluation`, and
 > `Client.GetTrialEvaluation` return `agento11y.ErrExperimentalFeatureDisabled`
 > without sending a request. Experimental features can change or be removed in
 > any release.
+
+```go
+client, err := experiments.NewClient(experiments.ClientOptions{
+	EnableExperimentalFeatures: agento11y.BoolPtr(true),
+})
+```
 
 `Trial.Evaluate` grades the conversation Agent Observability already stored,
 using an evaluator defined in your tenant, instead of a score the runner

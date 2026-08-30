@@ -7,6 +7,7 @@ afterEach(cleanup);
 
 function settings(overrides: Partial<Settings> = {}): Settings {
   return {
+    theme: 'dark',
     endpoint: '',
     tenantId: '',
     otlpEndpoint: '',

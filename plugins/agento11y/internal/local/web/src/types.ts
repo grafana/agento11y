@@ -5,9 +5,8 @@
 // the SDK shares. Nothing checks the two against each other, so a renamed
 // `json:` tag shows up here as a field the viewer reads and never finds.
 //
-// Optional fields are the ones whose Go tag carries `omitempty`: the daemon
-// leaves them out of the object rather than sending a zero. Timestamps are
-// RFC 3339 strings.
+// Optional fields either carry `omitempty` in Go or were added after the first
+// response version. Timestamps are RFC 3339 strings.
 
 /** TokenBuckets in query.go: one generation's usage, split into disjoint parts. */
 export interface TokenBuckets {
@@ -47,14 +46,25 @@ export interface ConversationListResponse {
   total_conversations: number;
 }
 
+export interface WorkspaceMetricsAggregate {
+  path: string;
+  sessions: number;
+  token_buckets: TokenBuckets;
+  token_buckets_by_model: Record<string, TokenBuckets>;
+  duration_seconds: number;
+  last_activity: string;
+}
+
 export interface ConversationMetricsAggregate {
   calls: number;
   errored: number;
   agents: number;
+  agent_hosts: string[];
   workspaces: number;
   token_buckets: TokenBuckets;
   token_buckets_by_model: Record<string, TokenBuckets>;
   models: string[];
+  workspace_rows?: WorkspaceMetricsAggregate[];
 }
 
 export interface ConversationMetricsResponse {
@@ -159,19 +169,54 @@ export interface TokenUsageResponse {
   interval_seconds: number;
 }
 
-export interface ToolUsage {
+export interface ToolAnalyticsTotals {
+  calls: number;
+  failures: number;
+  tools: number;
+  sessions: number;
+  duration_samples: number;
+}
+
+export interface ToolAnalyticsCoverage {
+  generation_calls: number;
+  projected_spans: number;
+  matched_calls: number;
+}
+
+export interface ToolAnalyticsRow {
+  name: string;
+  calls: number;
+  failures: number;
+  sessions: number;
+  duration_samples: number;
+  p50_duration_seconds?: number;
+  p95_duration_seconds?: number;
+}
+
+export interface ToolAnalyticsBucket {
+  t: string;
   name: string;
   calls: number;
   failures: number;
 }
 
-export interface ConversationToolUsage {
-  id: string;
-  tools: ToolUsage[];
+export interface ToolWorkspaceFacet {
+  path: string;
+  calls: number;
+  sessions: number;
 }
 
-export interface ToolUsageResponse {
-  conversations: ConversationToolUsage[];
+export interface ToolAnalytics {
+  totals: ToolAnalyticsTotals;
+  rows: ToolAnalyticsRow[];
+  buckets: ToolAnalyticsBucket[];
+  workspaces: ToolWorkspaceFacet[];
+  interval_seconds: number;
+  coverage: ToolAnalyticsCoverage;
+}
+
+export interface SkillsToolsMetricsResponse {
+  tools: ToolAnalytics;
 }
 
 /** SearchHit in search.go: one row of GET /api/v1/search. */
@@ -195,6 +240,9 @@ export interface SearchResponse {
   mode: string;
 }
 
+/** The local viewer colour scheme persisted in config.env. */
+export type ThemePreference = 'dark' | 'light' | 'system';
+
 /** Tag in settings.go: one key/value pair written to config.env. */
 export interface Tag {
   key: string;
@@ -211,6 +259,7 @@ export interface Tag {
  * alone.
  */
 export interface Settings {
+  theme: ThemePreference;
   endpoint: string;
   tenantId: string;
   otlpEndpoint: string;

@@ -9,6 +9,8 @@ pip install agento11y agento11y-strands
 pip install strands-agents
 ```
 
+Requires `strands-agents>=1.36.0`. That is the first release to attach token usage to the assistant message, which is the only place `AfterModelCallEvent` exposes it. On older versions generations are still recorded, but always without token counts or cost.
+
 ## Quickstart
 
 ```python
@@ -114,6 +116,16 @@ Metadata includes:
 - required: `agento11y.framework.run_type`
 - optional: `agento11y.framework.run_id`, `agento11y.framework.thread_id`, `agento11y.framework.parent_run_id`, `agento11y.framework.component_name`, `agento11y.framework.event_id`
 
+## Streaming Mode
+
+Generations are recorded as `STREAM` or `SYNC` from the model's own configuration. Strands spells the flag three ways, and all of them are read:
+
+- `params={"stream": False}` for OpenAI, LiteLLM, Anthropic and Writer models
+- `stream=False` for Mistral and SageMaker models
+- `streaming=False` for Bedrock models
+
+Strands defaults every provider to streaming, so a model that sets none of these is recorded as `STREAM`.
+
 ## Provider Resolver
 
 Resolver order: explicit provider option -> Strands model config metadata -> model prefix inference -> `custom`.
@@ -146,6 +158,7 @@ invoked as ordinary application code or tools need to be instrumented separately
 ## Troubleshooting
 
 - If conversations are fragmented, pass stable `conversation_id` or `session_id` in `invocation_state`.
+- If generations carry no token usage or cost, check the installed `strands-agents` version. Usage is only reachable from the model hook on 1.36.0 and later.
 - If provider is inferred as `custom`, set `provider="openai"` / `provider="anthropic"` / `provider="gemini"` on hook creation.
 - If cost is zero, verify the exact model ID, underlying vendor provider, and input/output token usage in the generation.
 - Always call `client.shutdown()` during teardown.

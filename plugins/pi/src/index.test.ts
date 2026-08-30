@@ -1272,6 +1272,55 @@ describe("extension lifecycle", () => {
       expect(result).toBeUndefined();
     });
 
+    it("reads the current session ID for every tool guard", async () => {
+      const evaluateHook = vi
+        .fn()
+        .mockResolvedValue({ action: "allow", evaluations: [] });
+      const sigil = makeAgento11yLike(evaluateHook);
+
+      loadConfigMock.mockResolvedValue({
+        endpoint: "http://localhost:8080/api/v1/generations:export",
+        auth: { mode: "none" },
+        agentName: "pi",
+        contentCapture: "metadata_only",
+        guards: { enabled: true, timeoutMs: 1500, failOpen: true },
+      });
+      createAgento11yClientMock.mockReturnValue(sigil);
+
+      const fakePi = new FakePi();
+      registerExtension(fakePi as any);
+      let currentId = "guard-before-fork";
+      let unavailable = false;
+      const ctx = makeCtx({
+        sessionId: () => {
+          if (unavailable) throw new Error("session ID unavailable");
+          return currentId;
+        },
+      });
+
+      await fakePi.emit("session_start", {}, ctx);
+      const handler = fakePi.handlers.get("tool_call")!;
+      const event = {
+        toolCallId: "c1",
+        toolName: "bash",
+        input: { command: "ls" },
+      };
+      await handler(event, ctx);
+      currentId = "guard-after-fork";
+      await handler(event, ctx);
+      unavailable = true;
+      await handler(event, ctx);
+
+      expect(evaluateHook).toHaveBeenCalledTimes(3);
+      expect(
+        evaluateHook.mock.calls.map(
+          ([req]) =>
+            (req as { context: { conversationId?: string } }).context
+              .conversationId,
+        ),
+      ).toEqual(["guard-before-fork", "guard-after-fork", undefined]);
+    });
+
     it("returns { block, reason } when guards deny the tool call", async () => {
       const evaluateHook = vi.fn().mockResolvedValue({
         action: "deny",
@@ -1579,6 +1628,46 @@ describe("extension lifecycle", () => {
       });
       expect(result).toEqual({ messages: piMessages });
       expect(piMessages[0]!.content).toBe("my email is [REDACTED_EMAIL]");
+    });
+
+    it("reads the current session ID for every context guard", async () => {
+      const evaluateHook = vi
+        .fn()
+        .mockResolvedValue({ action: "allow", evaluations: [] });
+      const sigil = makeAgento11yLike(evaluateHook);
+      loadConfigMock.mockResolvedValue(preflightConfig());
+      createAgento11yClientMock.mockReturnValue(sigil);
+
+      const fakePi = new FakePi();
+      registerExtension(fakePi as any);
+      let currentId = "guard-before-fork";
+      let unavailable = false;
+      const ctx = makeCtx({
+        sessionId: () => {
+          if (unavailable) throw new Error("session ID unavailable");
+          return currentId;
+        },
+      });
+
+      await fakePi.emit("session_start", {}, ctx);
+      const handler = fakePi.handlers.get("context")!;
+      const event = {
+        messages: [{ role: "user", content: "hello", timestamp: 1 }],
+      };
+      await handler(event, ctx);
+      currentId = "guard-after-fork";
+      await handler(event, ctx);
+      unavailable = true;
+      await handler(event, ctx);
+
+      expect(evaluateHook).toHaveBeenCalledTimes(3);
+      expect(
+        evaluateHook.mock.calls.map(
+          ([req]) =>
+            (req as { context: { conversationId?: string } }).context
+              .conversationId,
+        ),
+      ).toEqual(["guard-before-fork", "guard-after-fork", undefined]);
     });
 
     it("returns undefined when the server emits no transformedInput", async () => {

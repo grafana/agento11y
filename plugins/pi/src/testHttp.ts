@@ -56,6 +56,7 @@ export interface HookRequestBody {
     model?: { provider?: string; name?: string };
     agent_name?: string;
     agent_version?: string;
+    conversation_id?: string;
   };
   input?: {
     messages?: WireMessage[];

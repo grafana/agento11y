@@ -35,6 +35,9 @@ public static class EnvConfig
     public const string EnvInsecure = "SIGIL_INSECURE";
     public const string EnvHeaders = "SIGIL_HEADERS";
     public const string EnvExportTimeoutMs = "SIGIL_EXPORT_TIMEOUT_MS";
+    public const string EnvMaxRetries = "SIGIL_MAX_RETRIES";
+    public const string EnvMaxBackoffMs = "SIGIL_MAX_BACKOFF_MS";
+    public const string EnvQueueSize = "SIGIL_QUEUE_SIZE";
     public const string EnvAuthMode = "SIGIL_AUTH_MODE";
     public const string EnvAuthTenantId = "SIGIL_AUTH_TENANT_ID";
     public const string EnvAuthToken = "SIGIL_AUTH_TOKEN";
@@ -51,6 +54,9 @@ public static class EnvConfig
     public const string PreferredEnvInsecure = "AGENTO11Y_INSECURE";
     public const string PreferredEnvHeaders = "AGENTO11Y_HEADERS";
     public const string PreferredEnvExportTimeoutMs = "AGENTO11Y_EXPORT_TIMEOUT_MS";
+    public const string PreferredEnvMaxRetries = "AGENTO11Y_MAX_RETRIES";
+    public const string PreferredEnvMaxBackoffMs = "AGENTO11Y_MAX_BACKOFF_MS";
+    public const string PreferredEnvQueueSize = "AGENTO11Y_QUEUE_SIZE";
     public const string PreferredEnvAuthMode = "AGENTO11Y_AUTH_MODE";
     public const string PreferredEnvAuthTenantId = "AGENTO11Y_AUTH_TENANT_ID";
     public const string PreferredEnvAuthToken = "AGENTO11Y_AUTH_TOKEN";
@@ -66,6 +72,9 @@ public static class EnvConfig
     private static readonly EnvPair InsecurePair = new(PreferredEnvInsecure, EnvInsecure);
     private static readonly EnvPair HeadersPair = new(PreferredEnvHeaders, EnvHeaders);
     private static readonly EnvPair ExportTimeoutMsPair = new(PreferredEnvExportTimeoutMs, EnvExportTimeoutMs);
+    private static readonly EnvPair MaxRetriesPair = new(PreferredEnvMaxRetries, EnvMaxRetries);
+    private static readonly EnvPair MaxBackoffMsPair = new(PreferredEnvMaxBackoffMs, EnvMaxBackoffMs);
+    private static readonly EnvPair QueueSizePair = new(PreferredEnvQueueSize, EnvQueueSize);
     private static readonly EnvPair AuthModePair = new(PreferredEnvAuthMode, EnvAuthMode);
     private static readonly EnvPair AuthTenantIdPair = new(PreferredEnvAuthTenantId, EnvAuthTenantId);
     private static readonly EnvPair AuthTokenPair = new(PreferredEnvAuthToken, EnvAuthToken);
@@ -167,6 +176,28 @@ public static class EnvConfig
                 );
             }
         }
+
+        ApplyPositiveIntEnv(
+            src,
+            MaxRetriesPair,
+            export.HasExplicitMaxRetries,
+            value => export.MaxRetries = value,
+            warnings
+        );
+        ApplyPositiveIntEnv(
+            src,
+            MaxBackoffMsPair,
+            export.HasExplicitMaxBackoff,
+            value => export.MaxBackoff = TimeSpan.FromMilliseconds(value),
+            warnings
+        );
+        ApplyPositiveIntEnv(
+            src,
+            QueueSizePair,
+            export.HasExplicitQueueSize,
+            value => export.QueueSize = value,
+            warnings
+        );
 
         var headersRaw = EnvTrimmed(src, HeadersPair);
         if (headersRaw != null && (export.Headers == null || export.Headers.Count == 0))
@@ -303,6 +334,28 @@ public static class EnvConfig
         return EnvTrimmed(lookup, pair, out _);
     }
 
+    private static void ApplyPositiveIntEnv(
+        Func<string, string?> lookup,
+        EnvPair pair,
+        bool callerSet,
+        Action<int> apply,
+        List<string> warnings
+    )
+    {
+        var raw = EnvTrimmed(lookup, pair, out var key);
+        if (raw == null || callerSet)
+        {
+            return;
+        }
+        var parsed = ParsePositiveInt(raw);
+        if (parsed.HasValue)
+        {
+            apply(parsed.Value);
+            return;
+        }
+        warnings.Add($"agento11y: ignoring invalid {key} {raw}; expected an integer from 1 through {int.MaxValue}");
+    }
+
     /// <summary>
     /// Selects the pair's first nonblank value (preferred, then legacy) and
     /// reports the env-var name it came from via <paramref name="key"/>, so
@@ -392,6 +445,22 @@ public static class EnvConfig
         }
 
         return milliseconds;
+    }
+
+    internal static int? ParsePositiveInt(string? raw)
+    {
+        if (raw == null)
+        {
+            return null;
+        }
+        return int.TryParse(
+            raw.Trim(),
+            System.Globalization.NumberStyles.None,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out var value
+        ) && value >= 1
+            ? value
+            : null;
     }
 
     internal static Dictionary<string, string> ParseCsvKv(string? raw)

@@ -3,6 +3,7 @@ package dotenv
 import (
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -23,13 +24,34 @@ import (
 // key returns an error so a typo or unexpected caller cannot inject unrelated
 // process state on next load.
 func WriteDotenv(path string, updates map[string]string, logger *log.Logger) error {
+	if err := validateUpdates(updates); err != nil {
+		return err
+	}
+	return writeDotenv(path, LoadDotenv(path, logger), updates)
+}
+
+// UpdateDotenv derives updates from the same file snapshot they are merged
+// into. The callback receives a copy so it cannot bypass update validation or
+// empty-value deletion semantics by modifying the stored map directly.
+func UpdateDotenv(path string, derive func(current map[string]string) map[string]string, logger *log.Logger) error {
+	merged := LoadDotenv(path, logger)
+	updates := derive(maps.Clone(merged))
+	if err := validateUpdates(updates); err != nil {
+		return err
+	}
+	return writeDotenv(path, merged, updates)
+}
+
+func validateUpdates(updates map[string]string) error {
 	for k := range updates {
 		if !AllowedDotenvKey(k) {
 			return fmt.Errorf("dotenv: refusing to write disallowed key %q", k)
 		}
 	}
+	return nil
+}
 
-	merged := LoadDotenv(path, logger)
+func writeDotenv(path string, merged, updates map[string]string) error {
 	for k, v := range updates {
 		if strings.TrimSpace(v) == "" {
 			delete(merged, k)

@@ -307,9 +307,9 @@ export function HistoryDatePicker({ value, effectiveSince, onChange, disabled }:
                             height: 30,
                             border: selected ? '1px solid var(--primary-border)' : '1px solid transparent',
                             borderRadius: 2,
-                            background: selected ? 'rgba(110,159,255,0.16)' : 'transparent',
+                            background: selected ? 'var(--date-selected-bg)' : 'transparent',
                             color: future
-                              ? 'rgba(204,204,220,0.22)'
+                              ? 'var(--date-disabled-fg)'
                               : outside
                                 ? 'var(--fg3)'
                                 : selected

@@ -228,31 +228,35 @@ func TestAgentNameOverrideGuardAndExport(t *testing.T) {
 			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 			logger := log.New(&bytes.Buffer{}, "", 0)
 
-			var guardAgents, exportAgents []string
+			var guardAgents, guardConversationIDs, exportAgents, exportConversationIDs []string
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				body, _ := io.ReadAll(r.Body)
 				if strings.Contains(r.URL.Path, "hooks:evaluate") {
 					var req struct {
 						Context struct {
-							AgentName string `json:"agent_name"`
+							AgentName      string `json:"agent_name"`
+							ConversationID string `json:"conversation_id"`
 						} `json:"context"`
 					}
 					_ = json.Unmarshal(body, &req)
 					guardAgents = append(guardAgents, req.Context.AgentName)
+					guardConversationIDs = append(guardConversationIDs, req.Context.ConversationID)
 					w.Header().Set("Content-Type", "application/json")
 					_, _ = w.Write([]byte(`{"action":"allow"}`))
 					return
 				}
 				var req struct {
 					Generations []struct {
-						ID        string `json:"id"`
-						AgentName string `json:"agent_name"`
+						ID             string `json:"id"`
+						AgentName      string `json:"agent_name"`
+						ConversationID string `json:"conversation_id"`
 					} `json:"generations"`
 				}
 				_ = json.Unmarshal(body, &req)
 				results := make([]map[string]any, 0, len(req.Generations))
 				for _, g := range req.Generations {
 					exportAgents = append(exportAgents, g.AgentName)
+					exportConversationIDs = append(exportConversationIDs, g.ConversationID)
 					results = append(results, map[string]any{"generation_id": g.ID, "accepted": true})
 				}
 				w.Header().Set("Content-Type", "application/json")
@@ -297,13 +301,19 @@ func TestAgentNameOverrideGuardAndExport(t *testing.T) {
 			if len(guardAgents) != 2 {
 				t.Fatalf("guard agent names = %v, want two entries", guardAgents)
 			}
-			for _, got := range guardAgents {
+			for i, got := range guardAgents {
 				if got != tt.want {
 					t.Fatalf("guard agent names = %v, want every entry %q", guardAgents, tt.want)
+				}
+				if guardConversationIDs[i] != "conv" {
+					t.Fatalf("guard conversation IDs = %v, want every entry conv", guardConversationIDs)
 				}
 			}
 			if len(exportAgents) != 1 || exportAgents[0] != tt.want {
 				t.Fatalf("exported agent names = %v, want [%q]", exportAgents, tt.want)
+			}
+			if len(exportConversationIDs) != 1 || exportConversationIDs[0] != "conv" {
+				t.Fatalf("exported conversation IDs = %v, want [conv]", exportConversationIDs)
 			}
 		})
 	}

@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -28,16 +30,19 @@ func TestEvaluateToolCall(t *testing.T) {
 		clearCreds bool
 		// clearCredsKeepEndpoint clears tenant/token but keeps the (local)
 		// endpoint set, to exercise the LocalAuthPlaceholders path.
-		clearCredsKeepEndpoint bool
-		toolName               string
-		wantAction             agento11y.HookAction
-		wantReasonSub          string
-		wantNoReasonSub        string
-		wantRuleID             string
-		wantUpdatedInput       string
-		wantLogSub             string
-		wantNoLogSub           string
-		wantServerCalled       bool
+		clearCredsKeepEndpoint    bool
+		toolName                  string
+		conversationID            string
+		wantConversationID        string
+		wantConversationIDOmitted bool
+		wantAction                agento11y.HookAction
+		wantReasonSub             string
+		wantNoReasonSub           string
+		wantRuleID                string
+		wantUpdatedInput          string
+		wantLogSub                string
+		wantNoLogSub              string
+		wantServerCalled          bool
 	}{
 		{
 			name:       "disabled returns allow without contacting sigil",
@@ -52,24 +57,28 @@ func TestEvaluateToolCall(t *testing.T) {
 			wantAction: agento11y.HookActionAllow,
 		},
 		{
-			name:             "allow response from sigil",
-			cfg:              envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true},
-			serverResponds:   `{"action":"allow"}`,
-			toolName:         "bash",
-			wantAction:       agento11y.HookActionAllow,
-			wantLogSub:       "transform_applied=false",
-			wantServerCalled: true,
+			name:               "allow response from sigil",
+			cfg:                envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true},
+			serverResponds:     `{"action":"allow"}`,
+			toolName:           "bash",
+			conversationID:     " session-1 ",
+			wantConversationID: "session-1",
+			wantAction:         agento11y.HookActionAllow,
+			wantLogSub:         "transform_applied=false",
+			wantServerCalled:   true,
 		},
 		{
 			// An empty output is treated the same as no transform at all, so it
 			// must stay silent rather than emit the no-match line. Mirrors pi.
-			name:             "empty transform output is ignored",
-			cfg:              envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true},
-			serverResponds:   `{"action":"allow","transformed_input":{"output":[]}}`,
-			toolName:         "bash",
-			wantAction:       agento11y.HookActionAllow,
-			wantNoLogSub:     "tool-call transform present but no part matched",
-			wantServerCalled: true,
+			name:                      "empty transform output is ignored",
+			cfg:                       envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true},
+			serverResponds:            `{"action":"allow","transformed_input":{"output":[]}}`,
+			toolName:                  "bash",
+			conversationID:            "   ",
+			wantConversationIDOmitted: true,
+			wantAction:                agento11y.HookActionAllow,
+			wantNoLogSub:              "tool-call transform present but no part matched",
+			wantServerCalled:          true,
 		},
 		{
 			name:             "deny response from sigil",
@@ -210,14 +219,17 @@ func TestEvaluateToolCall(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var calls atomic.Int32
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			var capturedBody atomic.Value
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls.Add(1)
-				body := tt.serverResponds
-				if body == "" {
-					body = `{"action":"allow"}`
+				requestBody, _ := io.ReadAll(r.Body)
+				capturedBody.Store(requestBody)
+				responseBody := tt.serverResponds
+				if responseBody == "" {
+					responseBody = `{"action":"allow"}`
 				}
 				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write([]byte(body))
+				_, _ = w.Write([]byte(responseBody))
 			}))
 			defer server.Close()
 
@@ -245,13 +257,14 @@ func TestEvaluateToolCall(t *testing.T) {
 
 			var logBuf bytes.Buffer
 			res := EvaluateToolCall(context.Background(), tt.cfg, ToolCallInput{
-				AgentName:     "copilot",
-				AgentVersion:  "dev",
-				ModelProvider: "openai",
-				ModelName:     "gpt-4",
-				ToolName:      tt.toolName,
-				ToolCallID:    "tu_1",
-				ToolInputJSON: json.RawMessage(`{"cmd":"echo hi"}`),
+				AgentName:      "copilot",
+				AgentVersion:   "dev",
+				ModelProvider:  "openai",
+				ModelName:      "gpt-4",
+				ConversationID: tt.conversationID,
+				ToolName:       tt.toolName,
+				ToolCallID:     "tu_1",
+				ToolInputJSON:  json.RawMessage(`{"cmd":"echo hi"}`),
 			}, log.New(&logBuf, "", 0))
 
 			if res.Action != tt.wantAction {
@@ -280,6 +293,23 @@ func TestEvaluateToolCall(t *testing.T) {
 			}
 			if !tt.wantServerCalled && !tt.useClosedServer && calls.Load() != 0 {
 				t.Errorf("did not expect sigil hook server call, got %d", calls.Load())
+			}
+			if tt.wantConversationID != "" || tt.wantConversationIDOmitted {
+				raw, _ := capturedBody.Load().([]byte)
+				var req struct {
+					Context map[string]json.RawMessage `json:"context"`
+				}
+				if err := json.Unmarshal(raw, &req); err != nil {
+					t.Fatalf("decode request body: %v\n%s", err, raw)
+				}
+				conversationID, ok := req.Context["conversation_id"]
+				if tt.wantConversationIDOmitted {
+					if ok {
+						t.Errorf("blank conversation ID serialized as %s", conversationID)
+					}
+				} else if !ok || string(conversationID) != strconv.Quote(tt.wantConversationID) {
+					t.Errorf("conversation_id = %s, want %q", conversationID, tt.wantConversationID)
+				}
 			}
 		})
 	}

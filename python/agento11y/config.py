@@ -40,6 +40,15 @@ _DEFAULT_EXPORT_TIMEOUT = timedelta(seconds=DEFAULT_EXPORT_TIMEOUT_SECONDS)
 _MIN_EXPORT_TIMEOUT_MS = 1
 _MAX_EXPORT_TIMEOUT_MS = 2147483647
 _INT_PATTERN = re.compile(r"[+-]?[0-9]+")
+
+
+class _DefaultInt(int):
+    """An int-valued sentinel that distinguishes untouched SDK defaults."""
+
+
+_DEFAULT_MAX_RETRIES = _DefaultInt(5)
+_DEFAULT_MAX_BACKOFF = timedelta(seconds=5)
+_DEFAULT_QUEUE_SIZE = _DefaultInt(2000)
 # Legacy SIGIL_* spellings still honoured for each AGENTO11Y_<suffix> name, in
 # fallback order. Only names that shipped before the rename are listed; a suffix
 # absent from this table is canonical-only, because no release ever read a
@@ -116,10 +125,10 @@ class GenerationExportConfig:
     # any caller-set value wins over env. Non-positive values are clamped back
     # to the 30s default by ``resolve_config``.
     export_timeout: timedelta = _DEFAULT_EXPORT_TIMEOUT
-    queue_size: int = 2000
-    max_retries: int = 5
+    queue_size: int = _DEFAULT_QUEUE_SIZE
+    max_retries: int = _DEFAULT_MAX_RETRIES
     initial_backoff: timedelta = timedelta(milliseconds=100)
-    max_backoff: timedelta = timedelta(seconds=5)
+    max_backoff: timedelta = _DEFAULT_MAX_BACKOFF
     payload_max_bytes: int = 4 << 20
 
 
@@ -269,8 +278,8 @@ def _parse_bool(raw: str) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
-def _parse_int_ms(raw: str, *, minimum: int, maximum: int) -> int | None:
-    """Parses base-10 integer milliseconds inside ``[minimum, maximum]``.
+def _parse_bounded_int(raw: str, *, minimum: int, maximum: int) -> int | None:
+    """Parses a base-10 integer inside ``[minimum, maximum]``.
 
     Floats, other bases, digit separators, non-numeric text, and out-of-range
     values return ``None``, so the caller can warn and keep its current value
@@ -283,6 +292,28 @@ def _parse_int_ms(raw: str, *, minimum: int, maximum: int) -> int | None:
     value = int(text, 10)
     if value < minimum or value > maximum:
         return None
+    return value
+
+
+def _resolve_integer_env(
+    env: dict[str, str] | None,
+    suffix: str,
+    *,
+    minimum: int,
+    maximum: int,
+) -> int | None:
+    raw, key = _env(env, suffix)
+    if raw is None:
+        return None
+    value = _parse_bounded_int(raw, minimum=minimum, maximum=maximum)
+    if value is None:
+        logging.getLogger("agento11y").warning(
+            "agento11y: ignoring invalid %s %r; expected an integer from %d through %d",
+            key,
+            raw,
+            minimum,
+            maximum,
+        )
     return value
 
 
@@ -340,7 +371,7 @@ def resolve_config(
     if out.generation_export.export_timeout is _DEFAULT_EXPORT_TIMEOUT:
         ev, timeout_key = _env(env, "EXPORT_TIMEOUT_MS")
         if ev is not None:
-            timeout_ms = _parse_int_ms(ev, minimum=_MIN_EXPORT_TIMEOUT_MS, maximum=_MAX_EXPORT_TIMEOUT_MS)
+            timeout_ms = _parse_bounded_int(ev, minimum=_MIN_EXPORT_TIMEOUT_MS, maximum=_MAX_EXPORT_TIMEOUT_MS)
             if timeout_ms is None:
                 log.warning(
                     "agento11y: ignoring invalid %s %r; expected an integer from %d through %d",
@@ -351,6 +382,33 @@ def resolve_config(
                 )
             else:
                 out.generation_export.export_timeout = timedelta(milliseconds=timeout_ms)
+    if out.generation_export.max_retries is _DEFAULT_MAX_RETRIES:
+        max_retries = _resolve_integer_env(
+            env,
+            "MAX_RETRIES",
+            minimum=1,
+            maximum=_MAX_EXPORT_TIMEOUT_MS,
+        )
+        if max_retries is not None:
+            out.generation_export.max_retries = max_retries
+    if out.generation_export.max_backoff is _DEFAULT_MAX_BACKOFF:
+        max_backoff_ms = _resolve_integer_env(
+            env,
+            "MAX_BACKOFF_MS",
+            minimum=1,
+            maximum=_MAX_EXPORT_TIMEOUT_MS,
+        )
+        if max_backoff_ms is not None:
+            out.generation_export.max_backoff = timedelta(milliseconds=max_backoff_ms)
+    if out.generation_export.queue_size is _DEFAULT_QUEUE_SIZE:
+        queue_size = _resolve_integer_env(
+            env,
+            "QUEUE_SIZE",
+            minimum=1,
+            maximum=_MAX_EXPORT_TIMEOUT_MS,
+        )
+        if queue_size is not None:
+            out.generation_export.queue_size = queue_size
 
     # Auth. Invalid mode strings are warned and skipped so other valid env
     # vars still apply.

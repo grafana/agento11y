@@ -113,9 +113,9 @@ func TestServer_GenerationsExport_StampsLastActivity(t *testing.T) {
 	]}`, backfill.Add(-time.Minute).Format(time.RFC3339Nano), backfill.Format(time.RFC3339Nano)))
 	assert.WithinDuration(t, live, stamp(), time.Second, "a backfill must not sink a live conversation")
 
-	// The list bounds on that stamp, so the conversation stays in a range
-	// that covers its live turn.
-	since := live.Add(-time.Minute).Format(time.RFC3339Nano)
+	// The list bounds on that stamp, so a conversation that started before
+	// the range but finished inside it remains visible.
+	since := live.Add(-30 * time.Second).Format(time.RFC3339Nano)
 	req := newLocalRequest(http.MethodGet, "/api/v1/conversations?since="+url.QueryEscape(since), nil)
 	rr := httptest.NewRecorder()
 	s.ServeHTTP(rr, req)
@@ -306,7 +306,7 @@ func TestServer_ConversationMetrics(t *testing.T) {
 		tokens                int64
 	}{
 		{conv: "conv-repo", when: "2026-08-21T10:00:00Z", workspace: "/repo", tokens: 5},
-		{conv: "conv-repo", when: "2026-08-21T11:00:00Z", workspace: "/repo", tokens: 50},
+		{conv: "conv-repo", when: "2026-08-21T11:00:00Z", workspace: "/repo", tokens: 500},
 		{conv: "conv-unknown", when: "2026-08-21T10:30:00Z", tokens: 7},
 	} {
 		writeGen(t, storage, seed.conv, seed.when, agento11y.Generation{
@@ -333,8 +333,43 @@ func TestServer_ConversationMetrics(t *testing.T) {
 		assert.Equal(t, 0, got.Aggregate.Agents)
 		assert.Equal(t, 2, got.Aggregate.Workspaces)
 		assert.Equal(t, TokenBuckets{FreshInput: 12}, got.Aggregate.TokenBuckets)
+		assert.Equal(t, []WorkspaceAggregate{
+			{
+				Sessions:            1,
+				TokenBuckets:        TokenBuckets{FreshInput: 7},
+				TokenBucketsByModel: map[string]TokenBuckets{"": {FreshInput: 7}},
+				LastActivity:        mustParse(t, "2026-08-21T10:30:00Z"),
+			},
+			{
+				Path:                "/repo",
+				Sessions:            1,
+				TokenBuckets:        TokenBuckets{FreshInput: 5},
+				TokenBucketsByModel: map[string]TokenBuckets{"": {FreshInput: 5}},
+				LastActivity:        mustParse(t, "2026-08-21T10:00:00Z"),
+			},
+		}, got.Aggregate.WorkspaceRows)
 		require.Len(t, got.Conversations, 1)
 		assert.Equal(t, "conv-unknown", got.Conversations[0].ID)
+	})
+
+	t.Run("token ordering precedes the limit", func(t *testing.T) {
+		writeGen(t, storage, "conv-heavy", "g1", agento11y.Generation{
+			StartedAt: mustParse(t, "2026-08-21T09:00:00Z"),
+			Usage:     agento11y.TokenUsage{InputTokens: 100},
+		}, "2026-08-21T09:00:00Z")
+		req := newLocalRequest(http.MethodGet,
+			"/api/v1/metrics/conversations?limit=1&order=tokens&since=2026-08-21T08:00:00Z&before=2026-08-21T11:00:00Z", nil)
+		rr := httptest.NewRecorder()
+		srv.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code)
+		var got struct {
+			Conversations        []ConversationSummary `json:"conversations"`
+			MatchedConversations int                   `json:"matched_conversations"`
+		}
+		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &got))
+		assert.Equal(t, 3, got.MatchedConversations)
+		require.Len(t, got.Conversations, 1)
+		assert.Equal(t, "conv-heavy", got.Conversations[0].ID, "the oldest but largest row is returned")
 	})
 
 	t.Run("present blank workspace selects unknown", func(t *testing.T) {
@@ -352,6 +387,93 @@ func TestServer_ConversationMetrics(t *testing.T) {
 			"/api/v1/metrics/conversations?limit=0",
 			"/api/v1/metrics/conversations?since=",
 			"/api/v1/metrics/conversations?before=tomorrow",
+			"/api/v1/metrics/conversations?order=cost",
+		} {
+			rr := httptest.NewRecorder()
+			srv.ServeHTTP(rr, newLocalRequest(http.MethodGet, path, nil))
+			assert.Equal(t, http.StatusBadRequest, rr.Code, path)
+		}
+	})
+}
+
+func TestServer_ConversationFacetParams(t *testing.T) {
+	srv, storage, _ := newTestServerStorage(t)
+	writeGen(t, storage, "conv-pi", "g1", agento11y.Generation{
+		AgentName: "pi",
+		Model:     agento11y.ModelRef{Name: "claude-opus-5"},
+		StartedAt: mustParse(t, "2026-08-21T10:00:00Z"),
+		Usage:     agento11y.TokenUsage{InputTokens: 10},
+		Tags:      map[string]string{"cwd": "/repo"},
+	}, "2026-08-21T10:00:00Z")
+	writeGen(t, storage, "conv-sub", "g2", agento11y.Generation{
+		AgentName: "pi/explore",
+		Model:     agento11y.ModelRef{Name: "claude-haiku-4-5"},
+		StartedAt: mustParse(t, "2026-08-21T10:10:00Z"),
+		Usage:     agento11y.TokenUsage{InputTokens: 20},
+		CallError: "boom",
+		Tags:      map[string]string{"cwd": "/repo"},
+	}, "2026-08-21T10:10:00Z")
+
+	for _, tc := range []struct {
+		name  string
+		query string
+		want  []string
+	}{
+		{name: "agent host part", query: "agent=pi", want: []string{"conv-sub", "conv-pi"}},
+		{name: "model", query: "model=claude-opus-5", want: []string{"conv-pi"}},
+		{name: "status err", query: "status=err", want: []string{"conv-sub"}},
+		{name: "subagents", query: "subagents=1", want: []string{"conv-sub"}},
+		{name: "facets compose to nothing", query: "agent=pi&model=claude-opus-5&status=err", want: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, path := range []string{"/api/v1/conversations", "/api/v1/metrics/conversations"} {
+				rr := httptest.NewRecorder()
+				srv.ServeHTTP(rr, newLocalRequest(http.MethodGet,
+					path+"?since=2026-08-21T09:00:00Z&before=2026-08-21T11:00:00Z&"+tc.query, nil))
+				require.Equal(t, http.StatusOK, rr.Code, path)
+				var got struct {
+					Conversations        []ConversationSummary `json:"conversations"`
+					MatchedConversations int                   `json:"matched_conversations"`
+				}
+				decodeJSON(t, io.NopCloser(rr.Body), &got)
+				var ids []string
+				for _, conv := range got.Conversations {
+					ids = append(ids, conv.ID)
+				}
+				assert.Equal(t, tc.want, ids, path)
+				if path == "/api/v1/metrics/conversations" {
+					assert.Equal(t, len(tc.want), got.MatchedConversations, path)
+				}
+			}
+		})
+	}
+
+	t.Run("metrics reads the tool filter", func(t *testing.T) {
+		srv, storage, _ := newTestServerStorage(t)
+		lower := mustParse(t, "2026-08-21T10:00:00Z")
+		writeToolGeneration(t, storage, "conv-bash", "g1", "/repo", lower, "call-1", "Bash", false)
+		writeToolGeneration(t, storage, "conv-read", "g1", "/repo", lower, "call-2", "Read", false)
+		rr := httptest.NewRecorder()
+		srv.ServeHTTP(rr, newLocalRequest(http.MethodGet,
+			"/api/v1/metrics/conversations?tool=Bash&since=2026-08-21T09:00:00Z&before=2026-08-21T11:00:00Z", nil))
+		require.Equal(t, http.StatusOK, rr.Code)
+		var got struct {
+			Conversations        []ConversationSummary `json:"conversations"`
+			MatchedConversations int                   `json:"matched_conversations"`
+		}
+		decodeJSON(t, io.NopCloser(rr.Body), &got)
+		require.Len(t, got.Conversations, 1)
+		assert.Equal(t, "conv-bash", got.Conversations[0].ID)
+		assert.Equal(t, 1, got.MatchedConversations)
+	})
+
+	t.Run("invalid facet values are rejected", func(t *testing.T) {
+		for _, path := range []string{
+			"/api/v1/conversations?status=maybe",
+			"/api/v1/conversations?subagents=many",
+			"/api/v1/conversations?subagents=-1",
+			"/api/v1/metrics/conversations?status=maybe",
+			"/api/v1/metrics/conversations?subagents=many",
 		} {
 			rr := httptest.NewRecorder()
 			srv.ServeHTTP(rr, newLocalRequest(http.MethodGet, path, nil))
@@ -395,6 +517,75 @@ func TestServer_ToolMetrics(t *testing.T) {
 	assert.Equal(t, []ToolUsage{{Name: "Bash", Calls: 1, Failures: 1}}, got.Conversations[0].Tools)
 }
 
+func TestServer_SkillsToolsMetricsAndSessionDrilldown(t *testing.T) {
+	srv, storage, _ := newTestServerStorage(t)
+	lower := mustParse(t, "2026-08-21T10:00:00Z")
+	upper := mustParse(t, "2026-08-21T11:00:00Z")
+	writeToolGeneration(t, storage, "conv-match", "g1", "/repo", lower, "call-1", "Bash", true)
+	writeToolGeneration(t, storage, "conv-lower", "g1", "/repo", lower.Add(10*time.Minute), "call-lower", "bash", false)
+	writeToolGeneration(t, storage, "conv-new", "g1", "/repo", upper, "call-2", "Bash", false)
+	_, err := storage.appendToolSpans([]toolSpanRecord{
+		analyticsSpan("conv-match", "trace-1", "span-1", "call-1", "Bash", lower.Add(time.Second), 2*time.Second, false),
+	})
+	require.NoError(t, err)
+
+	t.Run("tools-only exact response", func(t *testing.T) {
+		req := newLocalRequest(http.MethodGet,
+			"/api/v1/metrics/skills-tools?since=2026-08-21T10:00:00Z&before=2026-08-21T11:00:00Z&workspace=%2Frepo&interval=300", nil)
+		rr := httptest.NewRecorder()
+		srv.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code)
+		assert.NotContains(t, rr.Body.String(), `"skills"`)
+		var got SkillsToolsMetricsResponse
+		decodeJSON(t, io.NopCloser(rr.Body), &got)
+		assert.Equal(t, ToolAnalyticsTotals{Calls: 2, Failures: 1, Tools: 1, Sessions: 2, DurationSamples: 1}, got.Tools.Totals)
+		assert.Equal(t, ToolAnalyticsCoverage{GenerationCalls: 2, ProjectedSpans: 1, MatchedCalls: 1}, got.Tools.Coverage)
+		assert.Equal(t, int64(300), got.Tools.IntervalSeconds)
+		require.Len(t, got.Tools.Rows, 1)
+		assert.Equal(t, "Bash", got.Tools.Rows[0].Name)
+		assert.Equal(t, 2, got.Tools.Rows[0].Calls)
+	})
+
+	t.Run("folded row deep link reaches both spellings", func(t *testing.T) {
+		req := newLocalRequest(http.MethodGet,
+			"/api/v1/conversations?limit=2&tool=Bash&workspace=%2Frepo&since=2026-08-21T10:00:00Z&before=2026-08-21T11:00:00Z", nil)
+		rr := httptest.NewRecorder()
+		srv.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code)
+		var got struct {
+			Conversations []ConversationSummary `json:"conversations"`
+		}
+		decodeJSON(t, io.NopCloser(rr.Body), &got)
+		assert.Equal(t, []string{"conv-lower", "conv-match"}, summaryIDs(got.Conversations))
+	})
+
+	t.Run("present blank tool matches no sessions", func(t *testing.T) {
+		req := newLocalRequest(http.MethodGet,
+			"/api/v1/conversations?tool=&since=2026-08-21T10:00:00Z&before=2026-08-21T11:00:00Z", nil)
+		rr := httptest.NewRecorder()
+		srv.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code)
+		var got struct {
+			Conversations []ConversationSummary `json:"conversations"`
+		}
+		decodeJSON(t, io.NopCloser(rr.Body), &got)
+		assert.Empty(t, got.Conversations)
+	})
+
+	t.Run("invalid exact parameters are rejected", func(t *testing.T) {
+		for _, path := range []string{
+			"/api/v1/metrics/skills-tools?interval=0",
+			"/api/v1/metrics/skills-tools?before=tomorrow",
+			"/api/v1/conversations?tool=Bash&since=",
+			"/api/v1/conversations?tool=Bash&before=tomorrow",
+		} {
+			rr := httptest.NewRecorder()
+			srv.ServeHTTP(rr, newLocalRequest(http.MethodGet, path, nil))
+			assert.Equal(t, http.StatusBadRequest, rr.Code, path)
+		}
+	})
+}
+
 func assertFixedSecurityHeaders(t *testing.T, header http.Header) {
 	t.Helper()
 	assert.Equal(t, "nosniff", header.Get("X-Content-Type-Options"))
@@ -431,6 +622,7 @@ func TestServer_Routing(t *testing.T) {
 		{name: "healthz serves JSON", method: http.MethodGet, path: "/healthz", want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"status":"ok"`},
 		{name: "empty conversation metrics serves an array", method: http.MethodGet, path: "/api/v1/metrics/conversations", want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"conversations":[]`},
 		{name: "empty tool metrics serves an array", method: http.MethodGet, path: "/api/v1/metrics/tools", want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"conversations":[]`},
+		{name: "empty skills-tools metrics serves tools only", method: http.MethodGet, path: "/api/v1/metrics/skills-tools", want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"tools":{"totals":{"calls":0`},
 		{name: "unknown route", method: http.MethodPost, path: "/api/v1/unknown", contentType: wire.ContentTypeJSON, body: "{}", want: http.StatusNotFound},
 		{name: "wrong method on generations export", method: http.MethodPut, path: "/api/v1/generations:export", contentType: wire.ContentTypeJSON, body: "{}", want: http.StatusMethodNotAllowed},
 		{name: "hook evaluate serves JSON", method: http.MethodPost, path: "/api/v1/hooks:evaluate", contentType: wire.ContentTypeJSON, body: `{"phase":"postflight"}`, want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"action":"allow"`},
@@ -438,6 +630,8 @@ func TestServer_Routing(t *testing.T) {
 		{name: "form type refused", method: http.MethodPost, path: "/api/v1/generations:export", contentType: "application/x-www-form-urlencoded", body: "generations=[]", want: http.StatusUnsupportedMediaType, wantNoConversations: true},
 		{name: "text type refused", method: http.MethodPost, path: "/api/v1/hooks:evaluate", contentType: "text/plain", body: `{"phase":"postflight"}`, want: http.StatusUnsupportedMediaType, wantBodyNotHas: `"action"`},
 		{name: "absent type refused", method: http.MethodPost, path: "/api/v1/history/runs/r1:cancel", want: http.StatusUnsupportedMediaType},
+		{name: "PATCH text type refused", method: http.MethodPatch, path: "/api/v1/config", contentType: "text/plain", body: `{"theme":"light"}`, want: http.StatusUnsupportedMediaType},
+		{name: "PATCH absent type refused", method: http.MethodPatch, path: "/api/v1/config", body: `{"theme":"light"}`, want: http.StatusUnsupportedMediaType},
 		{name: "charset parameter accepted", method: http.MethodPost, path: "/api/v1/hooks:evaluate", contentType: "application/json; charset=utf-8", body: `{"phase":"postflight"}`, want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"action":"allow"`},
 		{name: "protobuf accepted on OTLP", method: http.MethodPost, path: otlpTracesPath, contentType: wire.ContentTypeProto, body: "protobuf", want: http.StatusOK},
 		{name: "protobuf refused outside OTLP", method: http.MethodPost, path: "/api/v1/generations:export", contentType: wire.ContentTypeProto, body: "protobuf", want: http.StatusUnsupportedMediaType},
@@ -543,6 +737,39 @@ func TestServer_DocumentCSPNonce(t *testing.T) {
 		"frame-ancestors 'none'; "+
 		"base-uri 'none'; "+
 		"form-action 'none'", settingsCSP)
+}
+
+func TestServer_DocumentThemeStamping(t *testing.T) {
+	tests := []struct {
+		name string
+		env  map[string]string
+		want Theme
+	}{
+		{name: "missing defaults dark", want: themeDark},
+		{name: "legacy light", env: map[string]string{"SIGIL_THEME": "light"}, want: themeLight},
+		{name: "system", env: map[string]string{"AGENTO11Y_THEME": "system"}, want: themeSystem},
+		{name: "invalid defaults dark", env: map[string]string{"AGENTO11Y_THEME": "sepia"}, want: themeDark},
+		{
+			name: "preferred wins",
+			env:  map[string]string{"AGENTO11Y_THEME": "light", "SIGIL_THEME": "system"},
+			want: themeLight,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, _ := newTestServer(t)
+			if tt.env != nil {
+				require.NoError(t, dotenv.WriteDotenv(srv.configPath, tt.env, nil))
+			}
+			for _, path := range []string{"/", "/conversations/conv-1", "/conversations/conv-1/", "/settings", "/settings/", "/analytics", "/analytics/"} {
+				rr := httptest.NewRecorder()
+				srv.ServeHTTP(rr, newLocalRequest(http.MethodGet, path, nil))
+				require.Equal(t, http.StatusOK, rr.Code, path)
+				assert.Contains(t, rr.Body.String(), `data-theme="`+string(tt.want)+`"`, path)
+				assert.NotContains(t, rr.Body.String(), themePlaceholder, path)
+			}
+		})
+	}
 }
 
 func TestServer_NonDocumentSecurityHeaders(t *testing.T) {
@@ -1077,6 +1304,16 @@ func putConfig(t *testing.T, s *Server, settings Settings) *http.Response {
 	return rr.Result()
 }
 
+func patchTheme(t *testing.T, s *Server, body string) *http.Response {
+	t.Helper()
+	req := newLocalRequest(http.MethodPatch, "/api/v1/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", "http://127.0.0.1:8765")
+	rr := httptest.NewRecorder()
+	s.ServeHTTP(rr, req)
+	return rr.Result()
+}
+
 // TestServer_Config_RoundTrip saves settings and reads them back, asserting
 // the GET reflects the normalised on-disk state and the file is written.
 func TestServer_Config_RoundTrip(t *testing.T) {
@@ -1089,6 +1326,7 @@ func TestServer_Config_RoundTrip(t *testing.T) {
 	require.Equal(t, http.StatusOK, rr.Code)
 	var got configResponse
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &got))
+	assert.Equal(t, themeDark, got.Settings.Theme)
 	assert.Empty(t, got.Settings.Capture) // unset until the user picks a mode
 	assert.True(t, got.Settings.AutoUpdate)
 	assert.Equal(t, guardsOff, got.Settings.Guards)
@@ -1098,6 +1336,7 @@ func TestServer_Config_RoundTrip(t *testing.T) {
 
 	// Save a non-default configuration.
 	resp := putConfig(t, srv, Settings{
+		Theme:        themeSystem,
 		Endpoint:     "https://cloud.example.test",
 		TenantID:     "12345",
 		Token:        "glc_token",
@@ -1114,6 +1353,7 @@ func TestServer_Config_RoundTrip(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	var saved configResponse
 	decodeJSON(t, resp.Body, &saved)
+	assert.Equal(t, themeSystem, saved.Settings.Theme)
 	assert.Equal(t, "metadata_only", saved.Settings.Capture)
 	assert.Equal(t, guardsFailClosed, saved.Settings.Guards)
 	assert.Equal(t, "2000", saved.Settings.GuardTimeout)
@@ -1136,12 +1376,13 @@ func TestServer_Config_RoundTrip(t *testing.T) {
 	// Preview and on-disk file agree, sorted with the managed header.
 	onDisk, err := os.ReadFile(configPathFor(dir))
 	require.NoError(t, err)
-	assert.Contains(t, string(onDisk), "SIGIL_CONTENT_CAPTURE_MODE=metadata_only")
-	assert.Contains(t, string(onDisk), "SIGIL_GUARDS_TIMEOUT_MS=2000")
-	// Both spellings are written so an older binary still reads the toggle.
+	assert.Contains(t, string(onDisk), "AGENTO11Y_THEME=system")
+	assert.NotContains(t, string(onDisk), "SIGIL_THEME")
+	assert.Contains(t, string(onDisk), "AGENTO11Y_CONTENT_CAPTURE_MODE=metadata_only")
+	assert.Contains(t, string(onDisk), "AGENTO11Y_GUARDS_TIMEOUT_MS=2000")
 	assert.Contains(t, string(onDisk), "AGENTO11Y_LOCAL_FORWARD=true")
-	assert.Contains(t, string(onDisk), "SIGIL_LOCAL_FORWARD=true")
-	assert.Contains(t, saved.Preview, "SIGIL_USER_ID=alice")
+	assert.NotContains(t, string(onDisk), "SIGIL_LOCAL_FORWARD")
+	assert.Contains(t, saved.Preview, "AGENTO11Y_USER_ID=alice")
 	assert.True(t, strings.HasPrefix(saved.Preview, "# Managed by `agento11y login`."))
 
 	// A fresh GET returns the same saved snapshot.
@@ -1152,6 +1393,54 @@ func TestServer_Config_RoundTrip(t *testing.T) {
 	var reread configResponse
 	require.NoError(t, json.Unmarshal(rr2.Body.Bytes(), &reread))
 	assert.Equal(t, saved.Settings, reread.Settings)
+}
+
+func TestServer_Config_PatchTheme(t *testing.T) {
+	srv, dir := newTestServer(t)
+	path := configPathFor(dir)
+	require.NoError(t, dotenv.WriteDotenv(path, envconfig.ExpandAliases(map[string]string{
+		"SIGIL_THEME": "system",
+		"SIGIL_DEBUG": "true",
+		"SIGIL_TAGS":  "team=ai",
+	}), nil))
+
+	resp := patchTheme(t, srv, `{"theme":"light"}`)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var saved configResponse
+	decodeJSON(t, resp.Body, &saved)
+	assert.Equal(t, themeLight, saved.Settings.Theme)
+	assert.True(t, saved.Settings.Debug)
+	assert.Equal(t, []Tag{{Key: "team", Value: "ai"}}, saved.Settings.Tags)
+
+	env := dotenv.LoadDotenv(path, nil)
+	assert.Equal(t, "light", env["AGENTO11Y_THEME"])
+	assert.Equal(t, "light", env["SIGIL_THEME"])
+	assert.Equal(t, "true", env["AGENTO11Y_DEBUG"])
+	assert.Equal(t, "true", env["SIGIL_DEBUG"])
+	assert.Equal(t, "team=ai", env["AGENTO11Y_TAGS"])
+	assert.Equal(t, "team=ai", env["SIGIL_TAGS"])
+}
+
+func TestServer_Config_PatchThemeRejectsInvalidBody(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "missing theme", body: `{}`},
+		{name: "unknown theme", body: `{"theme":"sepia"}`},
+		{name: "malformed JSON", body: `{`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, dir := newTestServer(t)
+			resp := patchTheme(t, srv, tc.body)
+			defer resp.Body.Close()
+			assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+			_, err := os.Stat(configPathFor(dir))
+			assert.ErrorIs(t, err, os.ErrNotExist)
+		})
+	}
 }
 
 // TestServer_Config_StackURL covers the read-only stack URL the connect flow
@@ -1229,7 +1518,7 @@ func TestServer_Config_OtlpHeaders(t *testing.T) {
 func TestServer_Config_Preview(t *testing.T) {
 	srv, dir := newTestServer(t)
 	body, err := json.Marshal(configRequest{Settings: Settings{
-		Capture: "full", Guards: guardsFailOpen, GuardTimeout: "2500", AutoUpdate: true,
+		Theme: themeLight, Capture: "full", Guards: guardsFailOpen, GuardTimeout: "2500", AutoUpdate: true,
 	}})
 	require.NoError(t, err)
 	resp := post(t, srv, "/api/v1/config:preview", "application/json", string(body))
@@ -1239,19 +1528,122 @@ func TestServer_Config_Preview(t *testing.T) {
 		Preview string `json:"preview"`
 	}
 	decodeJSON(t, resp.Body, &got)
-	assert.Contains(t, got.Preview, "SIGIL_GUARDS_FAIL_OPEN=true")
-	assert.Contains(t, got.Preview, "SIGIL_GUARDS_TIMEOUT_MS=2500")
+	assert.Contains(t, got.Preview, "AGENTO11Y_THEME=light")
+	assert.Contains(t, got.Preview, "AGENTO11Y_GUARDS_FAIL_OPEN=true")
+	assert.Contains(t, got.Preview, "AGENTO11Y_GUARDS_TIMEOUT_MS=2500")
 	// Opt-out/opt-in keys at their defaults must not appear.
-	assert.NotContains(t, got.Preview, "SIGIL_AUTO_UPDATE")
-	assert.NotContains(t, got.Preview, "SIGIL_DEBUG")
+	assert.NotContains(t, got.Preview, "AGENTO11Y_AUTO_UPDATE")
+	assert.NotContains(t, got.Preview, "AGENTO11Y_DEBUG")
 	// LOCAL_FORWARD is the exception: off is written as an explicit false,
 	// because the daemon prefers config.env and a missing key cannot override
 	// the value it inherited into its own environment at boot.
 	assert.Contains(t, got.Preview, "AGENTO11Y_LOCAL_FORWARD=false")
-	assert.Contains(t, got.Preview, "SIGIL_LOCAL_FORWARD=false")
+	assert.NotContains(t, got.Preview, "\nSIGIL_")
 	// Preview is read-only: no file should have been created.
 	_, statErr := os.Stat(configPathFor(dir))
 	assert.True(t, os.IsNotExist(statErr))
+}
+
+func TestServer_Config_AuthTokenWrites(t *testing.T) {
+	files := []struct {
+		name         string
+		tokens       map[string]string
+		preserveWant map[string]string
+		replaceWant  map[string]string
+	}{
+		{
+			name:         "legacy only",
+			tokens:       map[string]string{"SIGIL_AUTH_TOKEN": "glc_legacy"},
+			preserveWant: map[string]string{"SIGIL_AUTH_TOKEN": "glc_legacy"},
+			replaceWant: map[string]string{
+				"AGENTO11Y_AUTH_TOKEN": "glc_new",
+				"SIGIL_AUTH_TOKEN":     "glc_new",
+			},
+		},
+		{
+			name:         "preferred only",
+			tokens:       map[string]string{"AGENTO11Y_AUTH_TOKEN": "glc_preferred"},
+			preserveWant: map[string]string{"AGENTO11Y_AUTH_TOKEN": "glc_preferred"},
+			replaceWant:  map[string]string{"AGENTO11Y_AUTH_TOKEN": "glc_new"},
+		},
+		{
+			name: "both spellings",
+			tokens: map[string]string{
+				"AGENTO11Y_AUTH_TOKEN": "glc_preferred",
+				"SIGIL_AUTH_TOKEN":     "glc_legacy",
+			},
+			preserveWant: map[string]string{
+				"AGENTO11Y_AUTH_TOKEN": "glc_preferred",
+				"SIGIL_AUTH_TOKEN":     "glc_legacy",
+			},
+			replaceWant: map[string]string{
+				"AGENTO11Y_AUTH_TOKEN": "glc_new",
+				"SIGIL_AUTH_TOKEN":     "glc_new",
+			},
+		},
+	}
+	for _, file := range files {
+		t.Run(file.name, func(t *testing.T) {
+			actions := []struct {
+				name         string
+				settings     Settings
+				want         map[string]string
+				wantTokenSet bool
+			}{
+				{
+					name:         "preserve",
+					settings:     Settings{TokenSet: true},
+					want:         file.preserveWant,
+					wantTokenSet: true,
+				},
+				{
+					name:         "replace",
+					settings:     Settings{TokenSet: true, Token: "glc_new"},
+					want:         file.replaceWant,
+					wantTokenSet: true,
+				},
+				{
+					name:     "reset",
+					settings: Settings{TokenSet: true, TokenCleared: true},
+					want:     map[string]string{},
+				},
+			}
+			for _, action := range actions {
+				t.Run(action.name, func(t *testing.T) {
+					srv, dir := newTestServer(t)
+					path := configPathFor(dir)
+					seed := maps.Clone(file.tokens)
+					seed["SIGIL_USER_ID_SOURCE"] = "accountUuid"
+					seed["SIGIL_GUARDS_ENABLED"] = "true"
+					seed["AGENTO11Y_LOCAL"] = "true"
+					seed["SIGIL_LOCAL"] = "true"
+					require.NoError(t, dotenv.WriteDotenv(path, seed, nil))
+
+					settings := action.settings
+					settings.Guards = guardsOff
+					settings.AutoUpdate = true
+					resp := putConfig(t, srv, settings)
+					defer resp.Body.Close()
+					require.Equal(t, http.StatusOK, resp.StatusCode)
+
+					env := dotenv.LoadDotenv(path, nil)
+					gotTokens := map[string]string{}
+					for _, key := range []string{"AGENTO11Y_AUTH_TOKEN", "SIGIL_AUTH_TOKEN"} {
+						if value, ok := env[key]; ok {
+							gotTokens[key] = value
+						}
+					}
+					assert.Equal(t, action.want, gotTokens)
+					assert.Equal(t, action.wantTokenSet, ParseSettings(env).TokenSet)
+					assert.Equal(t, "accountUuid", env["SIGIL_USER_ID_SOURCE"])
+					assert.Equal(t, "false", env["AGENTO11Y_GUARDS_ENABLED"])
+					assert.Equal(t, "false", env["SIGIL_GUARDS_ENABLED"])
+					assert.Equal(t, "true", env["AGENTO11Y_LOCAL"])
+					assert.Equal(t, "true", env["SIGIL_LOCAL"])
+				})
+			}
+		})
+	}
 }
 
 // TestServer_Config_DoesNotLeakSecrets confirms the auth token never crosses
@@ -1280,7 +1672,8 @@ func TestServer_Config_DoesNotLeakSecrets(t *testing.T) {
 	assert.Equal(t, "12345", got.Settings.TenantID)
 	assert.True(t, got.Settings.TokenSet)
 	assert.Empty(t, got.Settings.Token)
-	assert.Contains(t, got.Preview, "SIGIL_AUTH_TOKEN=<set>")
+	assert.Contains(t, got.Preview, "AGENTO11Y_AUTH_TOKEN=<set>")
+	assert.NotContains(t, got.Preview, "\nSIGIL_")
 
 	// Saving with a blank token keeps it; endpoint/tenant round-trip; unmanaged
 	// keys survive the merge.
@@ -1296,9 +1689,10 @@ func TestServer_Config_DoesNotLeakSecrets(t *testing.T) {
 
 	onDisk, err := os.ReadFile(path)
 	require.NoError(t, err)
+	assert.NotContains(t, string(onDisk), "AGENTO11Y_AUTH_TOKEN")
 	assert.Contains(t, string(onDisk), "SIGIL_AUTH_TOKEN=glc_supersecret")
 	assert.Contains(t, string(onDisk), "SIGIL_USER_ID_SOURCE=accountUuid")
-	assert.Contains(t, string(onDisk), "SIGIL_USER_ID=alice")
+	assert.Contains(t, string(onDisk), "AGENTO11Y_USER_ID=alice")
 
 	// Resetting the token removes it from disk.
 	resp2 := putConfig(t, srv, Settings{
@@ -1310,7 +1704,9 @@ func TestServer_Config_DoesNotLeakSecrets(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp2.StatusCode)
 	onDisk2, err := os.ReadFile(path)
 	require.NoError(t, err)
+	assert.NotContains(t, string(onDisk2), "AGENTO11Y_AUTH_TOKEN")
 	assert.NotContains(t, string(onDisk2), "SIGIL_AUTH_TOKEN")
+	assert.False(t, ParseSettings(dotenv.LoadDotenv(path, nil)).TokenSet)
 }
 
 // TestServer_Config_RejectsBadBody covers malformed input handling.

@@ -84,9 +84,10 @@ func (c *Client) flushOTel(ctx context.Context) error {
 	return nil
 }
 
-// newOTelHandler builds the otelgenai handler for otel-mode export. When the
-// experimental gate is closed it returns a nil handler and an error, and the
-// caller then falls back to the noop exporter.
+// newOTelHandler builds the otelgenai handler for otel-mode export. It resolves
+// Config.EnableExperimentalFeatures before the environment fallback. When the
+// gate is closed it returns a nil handler and an error, and the caller uses the
+// noop exporter.
 //
 // The handler gets its tracer and spec meter from Config.TracerProvider and
 // Config.MeterProvider, or from the corresponding global providers.
@@ -96,7 +97,7 @@ func (c *Client) flushOTel(ctx context.Context) error {
 // otelHandlerOptions disables operation-details records. A process-wide OTel
 // environment variable must not add a signal the client did not configure.
 func newOTelHandler(cfg Config) (*otelgenai.Handler, error) {
-	if err := RequireExperimental(FeatureOTelGenerationExport); err != nil {
+	if err := requireExperimental(FeatureOTelGenerationExport, cfg.EnableExperimentalFeatures); err != nil {
 		return nil, err
 	}
 	return otelgenai.NewHandler(otelHandlerOptions(cfg)...), nil
@@ -205,7 +206,19 @@ func (c *Client) endOTelGeneration(
 	if invocation == nil {
 		return
 	}
-	applyGenerationToInvocation(invocation, generation, failure, firstTokenAt, capture)
+	priorityAttrs := make([]attribute.KeyValue, 0, 4)
+	if !failure.rejected && generation.ID != "" {
+		priorityAttrs = append(priorityAttrs,
+			attribute.String(otelhook.AttrRecord, "true"),
+			attribute.String(otelhook.AttrGenerationID, generation.ID),
+		)
+	}
+	priorityAttrs = append(priorityAttrs, otelSDKGenerationAttributes(generation)...)
+	// OTel drops newly seen keys after the span attribute limit is reached.
+	// Reserve routing and SDK attributes before optional tag dimensions.
+	invocation.Span().SetAttributes(priorityAttrs...)
+	dimensionalTags := mergeTags(c.config.Tags, TagsFromContext(ctx))
+	applyGenerationToInvocation(invocation, generation, failure, firstTokenAt, capture, dimensionalTags)
 	invocation.MetricAttributes = c.otelMetricAttributes(ctx, generation, failure)
 	// metricExemplarContext strips the context down to its span context, which
 	// is what an exemplar needs, because an exemplar reservoir retains whatever
@@ -236,6 +249,14 @@ func (c *Client) otelMetricAttributes(ctx context.Context, generation Generation
 	return attrs
 }
 
+func otelSDKGenerationAttributes(generation Generation) []attribute.KeyValue {
+	attrs := []attribute.KeyValue{attribute.String(sdkMetadataKeyName, sdkName)}
+	if thinkingBudget, ok := thinkingBudgetFromMetadata(generation.Metadata); ok {
+		attrs = append(attrs, attribute.Int64(spanAttrRequestThinkingBudget, thinkingBudget))
+	}
+	return attrs
+}
+
 // applyGenerationToInvocation maps a normalized generation onto the
 // invocation otelgenai emits. Content arrives already sanitized and, under
 // metadata_only, already stripped.
@@ -245,10 +266,12 @@ func applyGenerationToInvocation(
 	failure generationError,
 	firstTokenAt time.Time,
 	capture ContentCaptureMode,
+	dimensionalTags map[string]string,
 ) {
 	// The client's mode set the handler's default. capture is the mode after
 	// the per-call field and the resolver applied their overrides.
 	invocation.Capture = otelCaptureMode(capture)
+	invocation.Attributes = append(invocation.Attributes, otelSDKGenerationAttributes(generation)...)
 	invocation.Operation = otelOperation(generation.OperationName)
 	invocation.Provider = otelProviderName(generation.Model.Provider)
 	invocation.RequestModel = generation.Model.Name
@@ -305,7 +328,10 @@ func applyGenerationToInvocation(
 		invocation.InputMessages = nil
 		invocation.OutputMessages = nil
 		invocation.ToolDefinitions = nil
-		invocation.Vendor = nil
+		invocation.Vendor = otelhook.Generation{
+			DimensionalTags: dimensionalTags,
+			Rejected:        true,
+		}
 		return
 	}
 
@@ -314,6 +340,7 @@ func applyGenerationToInvocation(
 		UserID:              generation.UserID,
 		ConversationTitle:   generation.ConversationTitle,
 		Tags:                generation.Tags,
+		DimensionalTags:     dimensionalTags,
 		Metadata:            generation.Metadata,
 		Artifacts:           otelArtifacts(generation.Artifacts),
 		ParentGenerationIDs: generation.ParentGenerationIDs,

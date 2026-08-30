@@ -16,6 +16,19 @@ func checkDefaultExportTimeout(t *testing.T, cfg Config) {
 	}
 }
 
+func checkGenerationExportTuning(t *testing.T, cfg Config, wantRetries int, wantBackoff time.Duration, wantQueueSize int) {
+	t.Helper()
+	if cfg.GenerationExport.MaxRetries != wantRetries {
+		t.Errorf("MaxRetries=%d want %d", cfg.GenerationExport.MaxRetries, wantRetries)
+	}
+	if cfg.GenerationExport.MaxBackoff != wantBackoff {
+		t.Errorf("MaxBackoff=%v want %v", cfg.GenerationExport.MaxBackoff, wantBackoff)
+	}
+	if cfg.GenerationExport.QueueSize != wantQueueSize {
+		t.Errorf("QueueSize=%d want %d", cfg.GenerationExport.QueueSize, wantQueueSize)
+	}
+}
+
 func mapLookup(env map[string]string) envLookup {
 	return func(k string) (string, bool) {
 		v, ok := env[k]
@@ -214,6 +227,48 @@ func TestResolveFromEnv(t *testing.T) {
 				if cfg.GenerationExport.ExportTimeout != 1500*time.Millisecond {
 					t.Errorf("ExportTimeout=%v want 1.5s", cfg.GenerationExport.ExportTimeout)
 				}
+			},
+		},
+		{
+			name: "generation export tuning from env",
+			env: map[string]string{
+				"AGENTO11Y_MAX_RETRIES":    "12",
+				"AGENTO11Y_MAX_BACKOFF_MS": "45000",
+				"AGENTO11Y_QUEUE_SIZE":     "5000",
+			},
+			check: func(t *testing.T, cfg Config) {
+				checkGenerationExportTuning(t, cfg, 12, 45*time.Second, 5000)
+			},
+		},
+		{
+			name: "legacy generation export tuning from env",
+			env: map[string]string{
+				"SIGIL_MAX_RETRIES":    "7",
+				"SIGIL_MAX_BACKOFF_MS": "30000",
+				"SIGIL_QUEUE_SIZE":     "4000",
+			},
+			check: func(t *testing.T, cfg Config) {
+				checkGenerationExportTuning(t, cfg, 7, 30*time.Second, 4000)
+			},
+		},
+		{
+			name:            "invalid queue size keeps default",
+			env:             map[string]string{"AGENTO11Y_QUEUE_SIZE": "0"},
+			wantErr:         true,
+			wantErrContains: "AGENTO11Y_QUEUE_SIZE",
+			check: func(t *testing.T, cfg Config) {
+				defaults := DefaultConfig().GenerationExport
+				checkGenerationExportTuning(t, cfg, defaults.MaxRetries, defaults.MaxBackoff, defaults.QueueSize)
+			},
+		},
+		{
+			name:            "zero max retries keeps default",
+			env:             map[string]string{"AGENTO11Y_MAX_RETRIES": "0"},
+			wantErr:         true,
+			wantErrContains: "AGENTO11Y_MAX_RETRIES",
+			check: func(t *testing.T, cfg Config) {
+				defaults := DefaultConfig().GenerationExport
+				checkGenerationExportTuning(t, cfg, defaults.MaxRetries, defaults.MaxBackoff, defaults.QueueSize)
 			},
 		},
 		{
@@ -687,6 +742,23 @@ func TestNewClient_EnvHandling(t *testing.T) {
 				if got := c.config.GenerationExport.ExportTimeout; got != 3*time.Second {
 					t.Errorf("ExportTimeout=%v want 3s (caller wins)", got)
 				}
+			},
+		},
+		{
+			name: "caller generation export tuning wins over env",
+			env: map[string]string{
+				"AGENTO11Y_MAX_RETRIES":    "12",
+				"AGENTO11Y_MAX_BACKOFF_MS": "45000",
+				"AGENTO11Y_QUEUE_SIZE":     "5000",
+				"AGENTO11Y_PROTOCOL":       "none",
+			},
+			cfg: Config{GenerationExport: GenerationExportConfig{
+				MaxRetries: 3,
+				MaxBackoff: 10 * time.Second,
+				QueueSize:  3000,
+			}},
+			check: func(t *testing.T, c *Client) {
+				checkGenerationExportTuning(t, c.config, 3, 10*time.Second, 3000)
 			},
 		},
 		{

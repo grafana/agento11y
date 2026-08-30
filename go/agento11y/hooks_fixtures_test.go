@@ -231,9 +231,10 @@ func postflightGuardHookRequest() HookEvaluateRequest {
 	return HookEvaluateRequest{
 		Phase: HookPhasePostflight,
 		Context: HookContext{
-			AgentName:    "conformance-guard",
-			AgentVersion: "1.2.3",
-			Model:        &HookModel{Provider: "anthropic", Name: "claude-sonnet-4"},
+			AgentName:      "conformance-guard",
+			AgentVersion:   "1.2.3",
+			ConversationID: "conv-hooks-conformance",
+			Model:          &HookModel{Provider: "anthropic", Name: "claude-sonnet-4"},
 		},
 		Input: HookInput{
 			Output: []Message{{

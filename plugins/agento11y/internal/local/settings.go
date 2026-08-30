@@ -10,7 +10,7 @@ import (
 )
 
 // Guard selector values exposed to the viewer. One control encodes both the
-// enabled flag and the fail mode, mapping onto the three SIGIL_GUARDS_* keys.
+// enabled flag and the fail mode, mapping onto the three branded GUARDS_* keys.
 // These are the API/UI values defined by the Settings design; they differ from
 // the labels sigil login uses internally.
 const (
@@ -19,7 +19,31 @@ const (
 	guardsFailClosed = "failclosed"
 )
 
-// tokenMask stands in for SIGIL_AUTH_TOKEN in the live preview. The stored
+type Theme string
+
+const (
+	themeDark   Theme = "dark"
+	themeLight  Theme = "light"
+	themeSystem Theme = "system"
+)
+
+func normalizeTheme(raw Theme) Theme {
+	switch Theme(strings.ToLower(strings.TrimSpace(string(raw)))) {
+	case themeLight:
+		return themeLight
+	case themeSystem:
+		return themeSystem
+	default:
+		return themeDark
+	}
+}
+
+func parseTheme(env map[string]string) Theme {
+	raw, _, _ := envconfig.LookupMap(env, "THEME")
+	return normalizeTheme(Theme(raw))
+}
+
+// tokenMask stands in for AGENTO11Y_AUTH_TOKEN in the live preview. The stored
 // token is never sent to the browser, so the preview shows this marker to
 // signal a token is present without leaking the value.
 const tokenMask = "<set>"
@@ -32,7 +56,7 @@ type Tag struct {
 
 // Settings is the subset of config.env the local viewer's Settings page
 // edits. It is hydrated from the dotenv file by ParseSettings and mapped back
-// to SIGIL_* keys by Updates.
+// to AGENTO11Y_* keys by Updates.
 //
 // The auth token is write-only: Token is never populated on read (the daemon
 // never sends the stored token to the browser). TokenSet reports whether a
@@ -41,6 +65,7 @@ type Tag struct {
 // replaces it, TokenCleared removes it, and otherwise the stored token is left
 // untouched.
 type Settings struct {
+	Theme        Theme  `json:"theme"`
 	Endpoint     string `json:"endpoint"`
 	TenantID     string `json:"tenantId"`
 	OtlpEndpoint string `json:"otlpEndpoint"`
@@ -90,6 +115,7 @@ func ParseSettings(env map[string]string) Settings {
 		return v
 	}
 	return Settings{
+		Theme:        parseTheme(env),
 		Endpoint:     fam("ENDPOINT"),
 		TenantID:     fam("AUTH_TENANT_ID"),
 		OtlpEndpoint: fam("OTEL_EXPORTER_OTLP_ENDPOINT"),
@@ -110,17 +136,18 @@ func ParseSettings(env map[string]string) Settings {
 	}
 }
 
-// Updates maps Settings onto the SIGIL_* keys WriteDotenv persists. An empty
-// value signals a deletion: WriteDotenv removes that key and dotenv.RenderManaged
-// drops it from the preview. The returned map therefore covers the complete
-// set of decisions for the page-managed keys (write a value, or delete it);
-// any key not listed here is left untouched on disk.
+// Updates returns preferred and unbranded updates. An empty value signals a
+// deletion: WriteDotenv removes that key and dotenv.RenderManaged drops it from
+// the preview. The returned map therefore covers the complete set of decisions
+// for the page-managed keys (write a value, or delete it); any key not listed
+// here is left untouched on disk.
 func (s Settings) Updates() map[string]string {
 	u := map[string]string{
-		"SIGIL_TAGS":                        renderTags(s.Tags),
-		"SIGIL_ENDPOINT":                    strings.TrimSpace(s.Endpoint),
-		"SIGIL_AUTH_TENANT_ID":              strings.TrimSpace(s.TenantID),
-		"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT": strings.TrimSpace(s.OtlpEndpoint),
+		"AGENTO11Y_THEME":                       string(normalizeTheme(s.Theme)),
+		"AGENTO11Y_TAGS":                        renderTags(s.Tags),
+		"AGENTO11Y_ENDPOINT":                    strings.TrimSpace(s.Endpoint),
+		"AGENTO11Y_AUTH_TENANT_ID":              strings.TrimSpace(s.TenantID),
+		"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": strings.TrimSpace(s.OtlpEndpoint),
 	}
 
 	// Capture mode is written only when explicitly set. Leaving it unset keeps
@@ -128,7 +155,7 @@ func (s Settings) Updates() map[string]string {
 	// env.go), so saving unrelated settings never silently forces a capture mode
 	// onto config.env.
 	if c := parseCaptureMode(s.Capture); c != "" {
-		u["SIGIL_CONTENT_CAPTURE_MODE"] = c
+		u["AGENTO11Y_CONTENT_CAPTURE_MODE"] = c
 	}
 
 	// The token is write-only and tri-state: an explicit reset deletes it, a
@@ -136,66 +163,63 @@ func (s Settings) Updates() map[string]string {
 	// WriteDotenv preserves whatever is already on disk.
 	switch {
 	case s.TokenCleared:
-		u["SIGIL_AUTH_TOKEN"] = ""
+		u["AGENTO11Y_AUTH_TOKEN"] = ""
 	case strings.TrimSpace(s.Token) != "":
-		u["SIGIL_AUTH_TOKEN"] = strings.TrimSpace(s.Token)
+		u["AGENTO11Y_AUTH_TOKEN"] = strings.TrimSpace(s.Token)
 	}
 
-	// OTEL_EXPORTER_OTLP_HEADERS has no branded spelling: it is the raw
-	// OpenTelemetry variable, which ExpandAliases leaves alone.
+	// OTEL_EXPORTER_OTLP_HEADERS has no branded spelling.
 	if v, ok := s.otlpHeadersUpdate(); ok {
 		u["OTEL_EXPORTER_OTLP_HEADERS"] = v
 	}
 
 	switch s.Guards {
 	case guardsFailOpen, guardsFailClosed:
-		u["SIGIL_GUARDS_ENABLED"] = "true"
+		u["AGENTO11Y_GUARDS_ENABLED"] = "true"
 		if s.Guards == guardsFailOpen {
-			u["SIGIL_GUARDS_FAIL_OPEN"] = "true"
+			u["AGENTO11Y_GUARDS_FAIL_OPEN"] = "true"
 		} else {
-			u["SIGIL_GUARDS_FAIL_OPEN"] = "false"
+			u["AGENTO11Y_GUARDS_FAIL_OPEN"] = "false"
 		}
-		u["SIGIL_GUARDS_TIMEOUT_MS"] = guardTimeoutValue(s.GuardTimeout)
+		u["AGENTO11Y_GUARDS_TIMEOUT_MS"] = guardTimeoutValue(s.GuardTimeout)
 	default:
 		// Disabled: clear the enabled flag and remove the fail mode and
 		// timeout so a later re-enable starts from the documented defaults
 		// rather than a stale value.
-		u["SIGIL_GUARDS_ENABLED"] = "false"
-		u["SIGIL_GUARDS_FAIL_OPEN"] = ""
-		u["SIGIL_GUARDS_TIMEOUT_MS"] = ""
+		u["AGENTO11Y_GUARDS_ENABLED"] = "false"
+		u["AGENTO11Y_GUARDS_FAIL_OPEN"] = ""
+		u["AGENTO11Y_GUARDS_TIMEOUT_MS"] = ""
 	}
 
-	// SIGIL_DEBUG is opt-in: write it only when on, delete otherwise.
+	// AGENTO11Y_DEBUG is opt-in: write it only when on, delete otherwise.
 	if s.Debug {
-		u["SIGIL_DEBUG"] = "true"
+		u["AGENTO11Y_DEBUG"] = "true"
 	} else {
-		u["SIGIL_DEBUG"] = ""
+		u["AGENTO11Y_DEBUG"] = ""
 	}
 
-	// SIGIL_AUTO_UPDATE is opt-out: unset means enabled, so write false only
+	// AGENTO11Y_AUTO_UPDATE is opt-out: unset means enabled, so write false only
 	// when disabled and delete the key otherwise.
 	if s.AutoUpdate {
-		u["SIGIL_AUTO_UPDATE"] = ""
+		u["AGENTO11Y_AUTO_UPDATE"] = ""
 	} else {
-		u["SIGIL_AUTO_UPDATE"] = "false"
+		u["AGENTO11Y_AUTO_UPDATE"] = "false"
 	}
 
-	// SIGIL_LOCAL_FORWARD is written explicitly in both directions rather than
-	// deleted when off, the same trick SIGIL_AUTO_UPDATE uses above. The local
-	// daemon materializes its own environment from config.env at boot and falls
-	// back to it, so a deleted key cannot express "off": only an explicit false
-	// on disk turns a running daemon's forwarding off.
+	// AGENTO11Y_LOCAL_FORWARD is written explicitly in both directions rather
+	// than deleted when off, the same trick AGENTO11Y_AUTO_UPDATE uses above.
+	// The local daemon materializes its own environment from config.env at boot
+	// and falls back to it, so a deleted key cannot express "off": only an
+	// explicit false on disk turns a running daemon's forwarding off.
 	if s.LocalForward {
-		u["SIGIL_LOCAL_FORWARD"] = "true"
+		u["AGENTO11Y_LOCAL_FORWARD"] = "true"
 	} else {
-		u["SIGIL_LOCAL_FORWARD"] = "false"
+		u["AGENTO11Y_LOCAL_FORWARD"] = "false"
 	}
 
-	u["SIGIL_USER_ID"] = strings.TrimSpace(s.UserID)
+	u["AGENTO11Y_USER_ID"] = strings.TrimSpace(s.UserID)
 
-	// Managed values are written and deleted under both branded spellings so
-	// old binaries that only read SIGIL_* keep working.
-	return envconfig.ExpandAliases(u)
+	return u
 }
 
 // otlpHeadersUpdate decides what a write does to OTEL_EXPORTER_OTLP_HEADERS:
@@ -225,19 +249,17 @@ func (s Settings) otlpHeadersUpdate() (string, bool) {
 	}
 }
 
-// previewUpdates returns the keys to render in the live config.env preview. It
-// mirrors Updates but never exposes a credential: a stored or freshly entered
-// token is shown masked (under both spellings), and so are the OTLP headers,
-// which carry a credential of their own. The panel signals that the key is
-// present without leaking the value.
+// previewUpdates returns the preferred keys to render in the live config.env
+// preview. It mirrors Updates but never exposes a credential: a stored or
+// freshly entered token is shown masked, and so are the OTLP headers, which
+// carry a credential of their own. The panel signals that the key is present
+// without leaking the value.
 func (s Settings) previewUpdates() map[string]string {
 	u := s.Updates()
 	if !s.TokenCleared && (strings.TrimSpace(s.Token) != "" || s.TokenSet) {
 		u["AGENTO11Y_AUTH_TOKEN"] = tokenMask
-		u["SIGIL_AUTH_TOKEN"] = tokenMask
 	} else {
 		delete(u, "AGENTO11Y_AUTH_TOKEN")
-		delete(u, "SIGIL_AUTH_TOKEN")
 	}
 	// The headers are masked when the file keeps a value: one this write
 	// carries, or the stored one when the write does not touch the key.
@@ -313,7 +335,7 @@ func renderTags(tags []Tag) string {
 	return strings.Join(parts, ",")
 }
 
-// guardTimeoutValue returns the SIGIL_GUARDS_TIMEOUT_MS value to persist: the
+// guardTimeoutValue returns the AGENTO11Y_GUARDS_TIMEOUT_MS value to persist: the
 // trimmed input when it is a positive integer other than the default, else ""
 // so the key is dropped and the runtime default applies. A non-numeric,
 // non-positive, or default value is treated as "use default".

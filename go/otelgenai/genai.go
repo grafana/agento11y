@@ -539,7 +539,8 @@ func (h *Handler) requestAttributes(inv *Invocation) []attribute.KeyValue {
 		attrs = append(attrs, semconv.GenAIRequestTopP(*inv.TopP))
 	}
 	if inv.TopK != nil {
-		attrs = append(attrs, semconv.GenAIRequestTopK(float64(*inv.TopK)))
+		// The v1.41.0 generated helper uses double, but the GenAI registry requires int.
+		attrs = append(attrs, semconv.GenAIRequestTopKKey.Int64(*inv.TopK))
 	}
 	if inv.FrequencyPenalty != nil {
 		attrs = append(attrs, semconv.GenAIRequestFrequencyPenalty(*inv.FrequencyPenalty))

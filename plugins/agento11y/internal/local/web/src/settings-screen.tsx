@@ -1,6 +1,7 @@
 import type { CSSProperties, ReactNode } from 'react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { markdownURL } from './detail';
+import { formatInteger } from './formatters';
 import { HistoryDatePicker, localDateStartISO } from './history-date-picker';
 import type { NoticeKind } from './notices';
 import {
@@ -20,6 +21,7 @@ import {
   cloudConfigured,
   forwardChipMeta,
   guardStatusMeta,
+  isThemePreference,
   Mono,
   pendingEdits,
   sameSettings,
@@ -34,6 +36,7 @@ import type {
   ImportRun,
   Settings,
   Tag,
+  ThemePreference,
 } from './types';
 
 // ============================================================
@@ -204,7 +207,7 @@ export function useHistoryImport(liveRun: ImportRunView | null | undefined): His
 
 function formatImportTurns(offer: Pick<HistoryOffer, 'turns' | 'approx_turns'>): string {
   const turns = offer.turns || 0;
-  const count = `${turns.toLocaleString()} turn${turns === 1 ? '' : 's'}`;
+  const count = `${formatInteger(turns)} turn${turns === 1 ? '' : 's'}`;
   return offer.approx_turns ? `about ${count}` : count;
 }
 
@@ -498,7 +501,7 @@ function Toggle({ checked, onChange }: ToggleProps) {
         cursor: 'pointer',
         padding: 0,
         flexShrink: 0,
-        background: checked ? 'var(--primary-main)' : 'rgba(204,204,220,0.25)',
+        background: checked ? 'var(--primary-main)' : 'var(--toggle-off-bg)',
         transition: 'background .15s',
       }}
     >
@@ -510,7 +513,8 @@ function Toggle({ checked, onChange }: ToggleProps) {
           width: 16,
           height: 16,
           borderRadius: '50%',
-          background: '#fff',
+          background: 'var(--toggle-knob-bg)',
+          boxShadow: 'var(--toggle-knob-shadow)',
           transform: checked ? 'translateX(16px)' : 'translateX(0)',
           transition: 'transform .15s',
         }}
@@ -540,7 +544,7 @@ function MonoInput({ value, onChange, placeholder, width, align, type }: MonoInp
       style={{
         height: 32,
         width: width || 'auto',
-        background: 'var(--bg-canvas)',
+        background: 'var(--mono-input-bg)',
         border: '1px solid var(--border-medium)',
         borderRadius: 2,
         color: 'var(--fg1)',
@@ -579,7 +583,7 @@ function PrimaryButton({ onClick, children, disabled }: ButtonProps) {
       style={{
         height: 32,
         padding: '0 14px',
-        background: disabled ? 'rgba(204,204,220,0.08)' : 'var(--primary-main)',
+        background: disabled ? 'var(--disabled-control-bg)' : 'var(--primary-main)',
         border: `1px solid ${disabled ? 'transparent' : 'var(--primary-main)'}`,
         color: disabled ? 'var(--fg3)' : '#fff',
         borderRadius: 2,
@@ -767,7 +771,7 @@ function PreviewBody({ text }: PreviewBodyProps) {
           <div key={i}>
             <span style={{ color: 'var(--primary-text)' }}>{line.slice(0, eq)}</span>
             <span style={{ color: 'var(--fg3)' }}>=</span>
-            <span style={{ color: 'var(--viz-green)' }}>{line.slice(eq + 1)}</span>
+            <span style={{ color: 'var(--config-value-text)' }}>{line.slice(eq + 1)}</span>
           </div>
         );
       })}
@@ -800,7 +804,7 @@ function UnsavedBar({ onReset, onSave }: UnsavedBarProps) {
           display: 'flex',
           alignItems: 'center',
           gap: 12,
-          background: 'var(--bg-secondary)',
+          background: 'var(--settings-bar-bg)',
           border: '1px solid var(--border-medium)',
           borderRadius: 2,
           padding: '9px 12px 9px 16px',
@@ -891,10 +895,10 @@ function SettingsTabRail({ tabs, active, onChange }: SettingsTabRailProps) {
               padding: '12px 12px',
               borderRadius: 8,
               border: `1px solid ${isActive ? 'var(--primary-border)' : 'var(--border-weak)'}`,
-              background: isActive ? ACTIVE_PILL_BG : 'rgba(24,27,31,0.68)',
+              background: isActive ? ACTIVE_PILL_BG : 'var(--settings-tab-bg)',
               color: 'var(--fg1)',
               cursor: 'pointer',
-              boxShadow: isActive ? '0 12px 28px rgba(0,0,0,0.20)' : 'none',
+              boxShadow: isActive ? 'var(--settings-tab-shadow)' : 'none',
             }}
           >
             <div
@@ -913,7 +917,7 @@ function SettingsTabRail({ tabs, active, onChange }: SettingsTabRailProps) {
                   alignItems: 'center',
                   justifyContent: 'center',
                   borderRadius: 2,
-                  background: 'rgba(204,204,220,0.06)',
+                  background: 'var(--settings-icon-bg)',
                   color: isActive ? 'var(--brand-orange-text)' : 'var(--fg2)',
                 }}
               >
@@ -967,7 +971,7 @@ function SettingsPreviewPanel({ path, preview, onCopy }: SettingsPreviewPanelPro
           background: SURFACE_BG,
           border: '1px solid var(--border-weak)',
           borderRadius: 8,
-          boxShadow: '0 18px 42px rgba(0,0,0,0.22)',
+          boxShadow: 'var(--settings-preview-shadow)',
         }}
       >
         <div
@@ -987,7 +991,7 @@ function SettingsPreviewPanel({ path, preview, onCopy }: SettingsPreviewPanelPro
               alignItems: 'center',
               justifyContent: 'center',
               borderRadius: 2,
-              background: 'rgba(204,204,220,0.06)',
+              background: 'var(--settings-icon-bg)',
               color: 'var(--fg2)',
             }}
           >
@@ -1041,7 +1045,7 @@ function SettingsPreviewPanel({ path, preview, onCopy }: SettingsPreviewPanelPro
         </div>
         <div
           style={{
-            background: 'rgba(17,18,23,0.84)',
+            background: 'var(--inset-bg)',
             padding: '14px 16px',
             maxHeight: 'calc(100vh - 252px)',
             overflow: 'auto',
@@ -1093,6 +1097,11 @@ const GUARD_OPTIONS = [
   { value: 'failopen', label: 'Fail open' },
   { value: 'failclosed', label: 'Fail closed' },
 ];
+const THEME_OPTIONS = [
+  { value: 'dark', label: 'Dark' },
+  { value: 'light', label: 'Light' },
+  { value: 'system', label: 'Match system' },
+];
 // Connecting turns forwarding on, so the connect flow offers the same modes
 // without the off case.
 const CONNECT_MODE_OPTIONS = FORWARD_LOCAL_OPTIONS.filter((o) => o.value !== 'off');
@@ -1103,7 +1112,7 @@ const SETTINGS_TABS: SettingsTab[] = [
     icon: 'cloud',
     desc: 'Ingest, auth, forwarding',
   },
-  { id: 'local', label: 'Local', icon: 'box', desc: 'Tags and runtime' },
+  { id: 'local', label: 'Local', icon: 'box', desc: 'Tags, appearance, runtime' },
   {
     id: 'history',
     label: 'History',
@@ -1461,7 +1470,7 @@ export function SettingsConnectFlow({
               gap: 6,
               height: 32,
               padding: '0 14px',
-              background: setupHref ? 'var(--primary-main)' : 'rgba(204,204,220,0.08)',
+              background: setupHref ? 'var(--primary-main)' : 'var(--disabled-control-bg)',
               border: `1px solid ${setupHref ? 'var(--primary-main)' : 'transparent'}`,
               color: setupHref ? '#fff' : 'var(--fg3)',
               borderRadius: 2,
@@ -1654,7 +1663,7 @@ export function SettingsConnectFlow({
               borderRadius: 2,
               fontSize: 13,
               fontWeight: 500,
-              background: ok ? 'var(--primary-main)' : 'rgba(204,204,220,0.08)',
+              background: ok ? 'var(--primary-main)' : 'var(--disabled-control-bg)',
               border: `1px solid ${ok ? 'var(--primary-main)' : 'transparent'}`,
               color: ok ? '#fff' : 'var(--fg3)',
               cursor: ok ? 'pointer' : 'not-allowed',
@@ -2361,6 +2370,37 @@ function SettingsTagsEditor({ tags, setTag, addTag, removeTag }: SettingsTagsEdi
   );
 }
 
+interface SettingsAppearanceCardProps {
+  theme: ThemePreference;
+  onChange: (theme: ThemePreference) => void;
+}
+
+export function SettingsAppearanceCard({ theme, onChange }: SettingsAppearanceCardProps) {
+  return (
+    <SettingsCard>
+      <SectionLabel>Appearance</SectionLabel>
+      <SettingRow
+        label="Theme"
+        help={
+          <>
+            Applies to this viewer only. <Mono>Match system</Mono> follows your OS setting and switches without a
+            reload. Press <Mono>c</Mono>, then <Mono>t</Mono> to switch between dark and light.
+          </>
+        }
+      >
+        <PillToggle
+          size="md"
+          value={theme}
+          onChange={(value) => {
+            if (isThemePreference(value)) onChange(value);
+          }}
+          options={THEME_OPTIONS}
+        />
+      </SettingRow>
+    </SettingsCard>
+  );
+}
+
 interface SettingsLocalTabProps {
   form: Settings;
   set: (patch: Partial<Settings>) => void;
@@ -2373,6 +2413,7 @@ function SettingsLocalTab({ form, set, setTag, addTag, removeTag }: SettingsLoca
   return (
     <>
       <SettingsTagsEditor tags={form.tags} setTag={setTag} addTag={addTag} removeTag={removeTag} />
+      <SettingsAppearanceCard theme={form.theme} onChange={(theme) => set({ theme })} />
       <SettingsCard>
         <SectionLabel>Runtime</SectionLabel>
         <SettingRow
@@ -2539,7 +2580,7 @@ export function SettingsHistoryTab({ history }: SettingsHistoryTabProps) {
           ) : planError ? (
             <span style={{ color: 'var(--error-text)' }}>{planError}</span>
           ) : (
-            `${sessions.length} sessions · ${approx ? 'about ' : ''}${turns.toLocaleString()} turns`
+            `${formatInteger(sessions.length)} sessions · ${approx ? 'about ' : ''}${formatInteger(turns)} turns`
           )}
         </div>
       </SettingRow>
@@ -2619,9 +2660,9 @@ function HistoryImportStatus({ run }: HistoryImportStatusProps) {
                 gap: '2px 12px',
               }}
             >
-              <span>{(run.imported || 0).toLocaleString()} turns imported</span>
-              <span>{(run.skipped || 0).toLocaleString()} already imported</span>
-              <span>{(run.failed || 0).toLocaleString()} failed</span>
+              <span>{formatInteger(run.imported || 0)} turns imported</span>
+              <span>{formatInteger(run.skipped || 0)} already imported</span>
+              <span>{formatInteger(run.failed || 0)} failed</span>
             </span>
           </div>
         )}
@@ -2700,6 +2741,7 @@ interface SettingsViewProps {
   activeSettingsTab: string;
   onSelectTab: (tab: string) => void;
   onConfig: (config: ConfigResponse) => void;
+  onThemePreview?: (theme: ThemePreference | null) => void;
 }
 
 // SettingsView edits config.env. It does not fetch it: App() polls
@@ -2712,6 +2754,7 @@ export function SettingsView({
   activeSettingsTab,
   onSelectTab,
   onConfig,
+  onThemePreview,
 }: SettingsViewProps) {
   const [form, setForm] = useState<Settings | null>(null);
   const [saved, setSaved] = useState<Settings | null>(null);
@@ -2776,6 +2819,16 @@ export function SettingsView({
     };
   }, [form]);
 
+  const dirty = !!form && !sameSettings(form, saved);
+  const previewTheme = dirty && form ? form.theme : null;
+  // The App owns the document attribute. Publishing in a layout effect keeps
+  // an optimistic selection, Reset, and a dirty non-theme edit in sync before
+  // the browser paints the corresponding form state.
+  useLayoutEffect(() => {
+    onThemePreview?.(previewTheme);
+  }, [previewTheme, onThemePreview]);
+  useLayoutEffect(() => () => onThemePreview?.(null), [onThemePreview]);
+
   const pageStyle = { paddingBottom: 110 };
   if (!form) {
     return (
@@ -2793,7 +2846,6 @@ export function SettingsView({
     );
   }
 
-  const dirty = !sameSettings(form, saved);
   // Past the early return above `form` is set, and `saved` is set with it:
   // the two are only ever assigned together.
   const set = (patch: Partial<Settings>) => setForm((f) => (f ? { ...f, ...patch } : f));
@@ -2812,7 +2864,16 @@ export function SettingsView({
     );
   const addTag = () => setForm((f) => (f ? { ...f, tags: [...f.tags, { key: '', value: '' }] } : f));
   const removeTag = (i: number) => setForm((f) => (f ? { ...f, tags: f.tags.filter((_, j) => j !== i) } : f));
-  const reset = () => setForm(cloneSettings(saved as Settings));
+  const reset = () => {
+    // A dirty form deliberately ignores hydration from config polls, but
+    // Reset means "adopt what is saved now", not the snapshot from when the
+    // edit began.
+    const latest = config?.settings || (saved as Settings);
+    setForm(cloneSettings(latest));
+    setSaved(cloneSettings(latest));
+    if (config && typeof config.preview === 'string') setPreview(config.preview);
+    if (config?.path) setPath(config.path);
+  };
 
   // persist writes a whole settings object and adopts the response as both
   // the form and the saved snapshot, so the unsaved-changes bar stays down.

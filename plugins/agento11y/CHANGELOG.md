@@ -1,5 +1,46 @@
 # Changelog
 
+## [0.43.0] - 2026-08-27
+
+### Features
+
+- **plugins**: send conversation IDs in guard requests (#694)
+
+### Bug Fixes
+
+- **plugins/agento11y**: show token counts above 1B in the local viewer (#686)
+
+## [0.42.0] - 2026-08-27
+
+### Bug Fixes
+
+- **plugins/agento11y**: fix local viewer analytics tab numbers calculation (#689)
+
+## [0.41.0] - 2026-08-26
+
+### Bug Fixes
+
+- **plugins/agento11y**: fix local viewer session stats row (#685)
+- **plugins/agento11y**: write only agento11y config keys from local UI (#684)
+
+## [0.40.0] - 2026-08-26
+
+### Features
+
+- **plugins/agento11y**: support changing theme with c-t (#682)
+
+## [0.39.0] - 2026-08-26
+
+### Features
+
+- **plugins/agento11y**: add local viewer light theme (#671)
+
+## [0.38.0] - 2026-08-25
+
+### Features
+
+- **plugins/agento11y**: add tools analytics to local viewer (#663)
+
 ## [0.37.0] - 2026-08-24
 
 ### Features

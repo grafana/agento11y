@@ -239,13 +239,13 @@ func TestToolUsagePairsCallsAndResults(t *testing.T) {
 			want: []ToolUsage{{Name: "Bash", Calls: 2, Failures: 1}},
 		},
 		{
-			name: "reused Cursor id pairs only the new cumulative result",
+			name: "reused Cursor id ignores a mixed-case old cumulative result",
 			generations: []agento11y.Generation{
 				call("call-1", "Bash"),
 				result("call-1", "Bash", false),
 				call("call-1", "Bash"),
 				{Input: []agento11y.Message{{Parts: []agento11y.Part{
-					{ToolResult: &agento11y.ToolResult{ToolCallID: "call-1", Name: "Bash"}},
+					{ToolResult: &agento11y.ToolResult{ToolCallID: "call-1", Name: "bash"}},
 					{ToolResult: &agento11y.ToolResult{ToolCallID: "call-1", Name: "Bash", IsError: true}},
 				}}}},
 			},
@@ -261,6 +261,22 @@ func TestToolUsagePairsCallsAndResults(t *testing.T) {
 				},
 			}}}},
 			want: []ToolUsage{{Name: "Read", Calls: 1, Failures: 1}},
+		},
+		{
+			name: "anonymous mixed-case result pairs with its call",
+			generations: []agento11y.Generation{
+				call("", "Bash"),
+				result("", "bash", true),
+			},
+			want: []ToolUsage{{Name: "Bash", Calls: 1, Failures: 1}},
+		},
+		{
+			name: "case-folded usage uses the lexical spelling on a tie",
+			generations: []agento11y.Generation{
+				call("upper", "Bash"),
+				call("lower", "bash"),
+			},
+			want: []ToolUsage{{Name: "Bash", Calls: 2}},
 		},
 		{
 			name: "anonymous same-name failures all count",
@@ -347,6 +363,30 @@ func TestConversationMetricsPeriodClipping(t *testing.T) {
 	assert.Equal(t, 3, aggregate.Workspaces, "unknown workspace has its own group")
 	assert.Equal(t, TokenBuckets{FreshInput: 20, Output: 3}, aggregate.TokenBuckets)
 	assert.Equal(t, []string{"current-model", "zero-model"}, aggregate.Models)
+	assert.Equal(t, []WorkspaceAggregate{
+		{
+			Path:                "/other",
+			Sessions:            1,
+			TokenBucketsByModel: map[string]TokenBuckets{"": {}},
+			LastActivity:        mustParse(t, "2026-05-21T10:45:00Z"),
+		},
+		{
+			Sessions:            1,
+			TokenBucketsByModel: map[string]TokenBuckets{"": {}},
+			LastActivity:        mustParse(t, "2026-05-21T10:40:00Z"),
+		},
+		{
+			Path:         "/repo",
+			Sessions:     1,
+			TokenBuckets: TokenBuckets{FreshInput: 20, Output: 3},
+			TokenBucketsByModel: map[string]TokenBuckets{
+				"current-model": {FreshInput: 20, Output: 3},
+				"zero-model":    {},
+			},
+			DurationSeconds: 30 * 60,
+			LastActivity:    mustParse(t, "2026-05-21T10:30:00Z"),
+		},
+	}, aggregate.WorkspaceRows, "workspace rows cover matches outside the returned page in stable order")
 	require.Len(t, rows, 1)
 	assert.Equal(t, "conv-other", rows[0].ID, "clipped newest activity controls order")
 	assert.Equal(t, mustParse(t, "2026-05-21T10:45:00Z"), rows[0].StartedAt, "missing start uses generation time")
@@ -382,6 +422,17 @@ func TestConversationMetricsPeriodClipping(t *testing.T) {
 		"current-model": {FreshInput: 20, Output: 3},
 		"zero-model":    {},
 	}, aggregate.TokenBucketsByModel)
+	assert.Equal(t, []WorkspaceAggregate{{
+		Path:         "/repo",
+		Sessions:     1,
+		TokenBuckets: TokenBuckets{FreshInput: 20, Output: 3},
+		TokenBucketsByModel: map[string]TokenBuckets{
+			"current-model": {FreshInput: 20, Output: 3},
+			"zero-model":    {},
+		},
+		DurationSeconds: 30 * 60,
+		LastActivity:    mustParse(t, "2026-05-21T10:30:00Z"),
+	}}, aggregate.WorkspaceRows)
 
 	blank := ""
 	rows, matched, _, err = s.ConversationMetrics(ConversationListOptions{Since: since, Before: before, Workspace: &blank})
@@ -402,6 +453,188 @@ func TestConversationMetricsPeriodClipping(t *testing.T) {
 	assert.Equal(t, int64(9), previous[0].InputTokens)
 	assert.Equal(t, []string{"old-agent"}, previous[0].Agents)
 	assert.Equal(t, "err", previous[0].Status)
+
+	tied := aggregateConversationMetrics([]ConversationSummary{
+		{Workspace: "/zeta", LastActivity: before},
+		{Workspace: "/alpha", LastActivity: before},
+	})
+	require.Len(t, tied.WorkspaceRows, 2)
+	assert.Equal(t, "/alpha", tied.WorkspaceRows[0].Path)
+	assert.Equal(t, "/zeta", tied.WorkspaceRows[1].Path)
+}
+
+func TestConversationFacetFilters(t *testing.T) {
+	s := newStorage(t)
+	writeGen(t, s, "conv-pi", "g1", agento11y.Generation{
+		AgentName: "pi",
+		Model:     agento11y.ModelRef{Name: "claude-opus-5"},
+		StartedAt: mustParse(t, "2026-08-21T10:00:00Z"),
+		Usage:     agento11y.TokenUsage{InputTokens: 10},
+	}, "2026-08-21T10:00:00Z")
+	writeGen(t, s, "conv-pi-sub", "g2", agento11y.Generation{
+		AgentName: "pi/explore",
+		Model:     agento11y.ModelRef{Name: "claude-haiku-4-5"},
+		StartedAt: mustParse(t, "2026-08-21T10:10:00Z"),
+		Usage:     agento11y.TokenUsage{InputTokens: 20},
+	}, "2026-08-21T10:10:00Z")
+	writeGen(t, s, "conv-cc", "g3", agento11y.Generation{
+		AgentName: "claude-code",
+		Model:     agento11y.ModelRef{Name: "claude-opus-5"},
+		StartedAt: mustParse(t, "2026-08-21T10:20:00Z"),
+		Usage:     agento11y.TokenUsage{InputTokens: 30},
+		CallError: "rate limited",
+	}, "2026-08-21T10:20:00Z")
+
+	since := mustParse(t, "2026-08-21T09:00:00Z")
+	before := mustParse(t, "2026-08-21T11:00:00Z")
+	for _, tc := range []struct {
+		name string
+		opts ConversationListOptions
+		want []string
+	}{
+		{name: "no facet keeps every conversation", want: []string{"conv-cc", "conv-pi-sub", "conv-pi"}},
+		{name: "agent matches the host part", opts: ConversationListOptions{Agent: "pi"}, want: []string{"conv-pi-sub", "conv-pi"}},
+		{name: "agent matches a plain name", opts: ConversationListOptions{Agent: "claude-code"}, want: []string{"conv-cc"}},
+		{name: "agent does not match a subagent leaf", opts: ConversationListOptions{Agent: "explore"}, want: nil},
+		{name: "model is exact", opts: ConversationListOptions{Model: "claude-opus-5"}, want: []string{"conv-cc", "conv-pi"}},
+		{name: "status err", opts: ConversationListOptions{Status: "err"}, want: []string{"conv-cc"}},
+		{name: "status ok", opts: ConversationListOptions{Status: "ok"}, want: []string{"conv-pi-sub", "conv-pi"}},
+		{name: "subagents", opts: ConversationListOptions{MinSubagents: 1}, want: []string{"conv-pi-sub"}},
+		{name: "facets compose", opts: ConversationListOptions{Agent: "pi", Model: "claude-opus-5"}, want: []string{"conv-pi"}},
+		{name: "facets that share no conversation match none", opts: ConversationListOptions{Agent: "claude-code", Model: "claude-haiku-4-5"}, want: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := tc.opts
+			opts.Since, opts.Before, opts.Exact = since, before, true
+			listed, _, err := s.ListConversations(opts)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, summaryIDs(listed), "list")
+
+			rows, matched, aggregate, err := s.ConversationMetrics(opts)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, summaryIDs(rows), "metrics")
+			assert.Equal(t, len(tc.want), matched, "matched count")
+			assert.Equal(t, len(tc.want), aggregate.Calls, "aggregate covers the matched set only")
+		})
+	}
+
+	rows, matched, aggregate, err := s.ConversationMetrics(ConversationListOptions{
+		Limit: 1, Since: since, Before: before,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"conv-cc"}, summaryIDs(rows))
+	assert.Equal(t, 3, matched)
+	assert.Equal(t, []string{"claude-code", "pi"}, aggregate.AgentHosts)
+	assert.Equal(t, []string{"claude-haiku-4-5", "claude-opus-5"}, aggregate.Models)
+
+	// A facet cuts a candidate before it counts toward the limit, so the page
+	// reaches conversations the unfiltered page would have truncated away.
+	listed, _, err := s.ListConversations(ConversationListOptions{Limit: 1, MinSubagents: 1})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"conv-pi-sub"}, summaryIDs(listed))
+}
+
+// Sessions reads rows from ListConversations and totals from
+// ConversationMetrics, so an error facet that matches only outside the period
+// must exclude the conversation from both.
+func TestConversationFacetsSelectOneSetAcrossQueries(t *testing.T) {
+	s := newStorage(t)
+	writeGen(t, s, "conv-err-old", "g1", agento11y.Generation{
+		AgentName: "pi",
+		Model:     agento11y.ModelRef{Name: "claude-opus-5"},
+		StartedAt: mustParse(t, "2026-08-20T10:00:00Z"),
+		Usage:     agento11y.TokenUsage{InputTokens: 10},
+		CallError: "rate limited",
+	}, "2026-08-20T10:00:00Z")
+	writeGen(t, s, "conv-err-old", "g2", agento11y.Generation{
+		AgentName: "pi",
+		Model:     agento11y.ModelRef{Name: "claude-opus-5"},
+		StartedAt: mustParse(t, "2026-08-26T10:00:00Z"),
+		Usage:     agento11y.TokenUsage{InputTokens: 10},
+	}, "2026-08-26T10:00:00Z")
+
+	opts := ConversationListOptions{
+		Since:  mustParse(t, "2026-08-26T09:00:00Z"),
+		Before: mustParse(t, "2026-08-26T11:00:00Z"),
+		Status: "err",
+		Exact:  true,
+	}
+	listed, _, err := s.ListConversations(opts)
+	require.NoError(t, err)
+	assert.Empty(t, summaryIDs(listed), "the errored generation is outside the period")
+
+	rows, matched, _, err := s.ConversationMetrics(opts)
+	require.NoError(t, err)
+	assert.Empty(t, summaryIDs(rows))
+	assert.Equal(t, 0, matched)
+
+	opts.Status = ""
+	listed, _, err = s.ListConversations(opts)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"conv-err-old"}, summaryIDs(listed))
+	rows, matched, _, err = s.ConversationMetrics(opts)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"conv-err-old"}, summaryIDs(rows))
+	assert.Equal(t, 1, matched)
+}
+
+// A skills-and-tools drill-down can select a reconciled tool call inside the
+// period while its generation is outside. Both queries must keep the
+// conversation, and ConversationMetrics must report zero in-period generation
+// usage.
+func TestConversationMetricsToolCallOutsideItsGeneration(t *testing.T) {
+	s := newStorage(t)
+	generatedAt := mustParse(t, "2026-08-21T10:00:00Z")
+	writeToolGeneration(t, s, "conv-late-span", "g1", "/repo", generatedAt, "call-1", "Bash", false)
+	spanAt := mustParse(t, "2026-08-21T11:30:00Z")
+	_, err := s.appendToolSpans([]toolSpanRecord{
+		analyticsSpan("conv-late-span", "trace-1", "span-1", "call-1", "Bash", spanAt, 2*time.Second, false),
+	})
+	require.NoError(t, err)
+
+	bash := "Bash"
+	for _, tc := range []struct {
+		name   string
+		status string
+		want   []string
+	}{
+		{name: "no status facet", want: []string{"conv-late-span"}},
+		{name: "ok status keeps observation-only session", status: "ok", want: []string{"conv-late-span"}},
+		{name: "error status excludes observation-only session", status: "err"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := ConversationListOptions{
+				Since:  mustParse(t, "2026-08-21T11:00:00Z"),
+				Before: mustParse(t, "2026-08-21T12:00:00Z"),
+				Tool:   &bash,
+				Status: tc.status,
+				Exact:  true,
+			}
+			listed, _, err := s.ListConversations(opts)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, summaryIDs(listed), "list")
+
+			rows, matched, aggregate, err := s.ConversationMetrics(opts)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, summaryIDs(rows), "metrics")
+			assert.Equal(t, len(tc.want), matched)
+			assert.Equal(t, 0, aggregate.Calls, "no generation of its own falls in the period")
+			assert.Equal(t, TokenBuckets{}, aggregate.TokenBuckets)
+			if len(tc.want) > 0 {
+				require.Len(t, rows, 1)
+				assert.Equal(t, spanAt, rows[0].LastActivity, "the call time bounds a row with no in-period generation")
+				assert.Equal(t, "ok", rows[0].Status)
+			}
+		})
+	}
+}
+
+func summaryIDs(rows []ConversationSummary) []string {
+	var out []string
+	for _, row := range rows {
+		out = append(out, row.ID)
+	}
+	return out
 }
 
 func TestToolUsagePeriodClippingAttributesResultsToCalls(t *testing.T) {
@@ -802,8 +1035,8 @@ func TestConversationDetail(t *testing.T) {
 		Output: []agento11y.Message{{Role: agento11y.RoleAssistant, Parts: []agento11y.Part{
 			{Kind: agento11y.PartKindText, Text: "thinking..."},
 			{Kind: agento11y.PartKindToolCall, ToolCall: &agento11y.ToolCall{Name: "bash", InputJSON: bashInput}},
-			// Duplicate name to confirm dedup.
-			{Kind: agento11y.PartKindToolCall, ToolCall: &agento11y.ToolCall{Name: "bash", InputJSON: bashInput}},
+			// Case-only spelling differences are one tool.
+			{Kind: agento11y.PartKindToolCall, ToolCall: &agento11y.ToolCall{Name: "Bash", InputJSON: bashInput}},
 		}}},
 	}, "2026-05-21T10:00:03.19Z")
 
@@ -834,7 +1067,7 @@ func TestConversationDetail(t *testing.T) {
 	if first.TokenBuckets != (TokenBuckets{FreshInput: 10, Output: 5}) {
 		t.Errorf("first.token_buckets = %+v, want fresh=10 output=5", first.TokenBuckets)
 	}
-	// Dedup keeps a single "bash" tool; preview unwraps `command`.
+	// Dedup keeps the first spelling; preview unwraps `command`.
 	if len(first.Tools) != 1 || first.Tools[0] != "bash" {
 		t.Errorf("first.tools = %v, want [bash]", first.Tools)
 	}

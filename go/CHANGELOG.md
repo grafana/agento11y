@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.18.0] - 2026-08-25
+
+### Features
+
+- **go-sdk**: allow for custom retry and queue settings (#668)
+- **sdk-go**: add per-client experimental feature opt-in (#665)
+- **sdk-go**: add experimental OTel generation export (#621)
+- **sdk-go**: add otelhook, the agento11y extension of otelgenai (#605)
+- add experimental GenAI semantic-convention instrumentation Go library (#602)
+
+### Bug Fixes
+
+- **retries**: prevent disabling retries (#669)
+- **sdk-go**: align OTel generation attributes and tag routing (#666)
+- **sdk**: change operation.duration  and client.token.usage description to match semconv (#648)
+- **sdk-go**: resolve OTel full_with_metadata_spans to full (#637)
+
 ## [0.17.0] - 2026-08-17
 
 ### Breaking Changes

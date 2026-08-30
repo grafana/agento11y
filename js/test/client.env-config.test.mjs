@@ -11,6 +11,9 @@ const configFromEnvCases = [
     check: (cfg) => {
       assert.equal(cfg.generationExport.protocol, 'http');
       assert.equal(cfg.generationExport.timeoutMs, 30_000);
+      assert.equal(cfg.generationExport.maxRetries, 5);
+      assert.equal(cfg.generationExport.maxBackoffMs, 5_000);
+      assert.equal(cfg.generationExport.queueSize, 2_000);
       assert.equal(cfg.contentCapture, 'default');
       assert.equal(cfg.agentName, undefined);
       assert.equal(cfg.userId, undefined);
@@ -30,6 +33,19 @@ const configFromEnvCases = [
     env: { AGENTO11Y_EXPORT_TIMEOUT_MS: '2500' },
     check: (cfg) => {
       assert.equal(cfg.generationExport.timeoutMs, 2500);
+    },
+  },
+  {
+    name: 'generation export tuning from env',
+    env: {
+      AGENTO11Y_MAX_RETRIES: '12',
+      AGENTO11Y_MAX_BACKOFF_MS: '45000',
+      AGENTO11Y_QUEUE_SIZE: '5000',
+    },
+    check: (cfg) => {
+      assert.equal(cfg.generationExport.maxRetries, 12);
+      assert.equal(cfg.generationExport.maxBackoffMs, 45_000);
+      assert.equal(cfg.generationExport.queueSize, 5_000);
     },
   },
   {
@@ -299,6 +315,20 @@ const mergeConfigCases = [
     },
   },
   {
+    name: 'caller generation export tuning wins over env',
+    config: { generationExport: { maxRetries: 3, maxBackoffMs: 10_000, queueSize: 3_000 } },
+    env: {
+      AGENTO11Y_MAX_RETRIES: '12',
+      AGENTO11Y_MAX_BACKOFF_MS: '45000',
+      AGENTO11Y_QUEUE_SIZE: '5000',
+    },
+    check: (cfg) => {
+      assert.equal(cfg.generationExport.maxRetries, 3);
+      assert.equal(cfg.generationExport.maxBackoffMs, 10_000);
+      assert.equal(cfg.generationExport.queueSize, 3_000);
+    },
+  },
+  {
     name: 'caller tags merge with preferred env tags',
     config: { tags: { team: 'ai', env: 'staging' } },
     env: { AGENTO11Y_TAGS: 'service=orch,env=prod' },
@@ -329,6 +359,44 @@ for (const value of ['abc', '0', '-1', '1.5', '2147483648', '0x10', '0b101', '0o
       `agento11y: ignoring invalid AGENTO11Y_EXPORT_TIMEOUT_MS: ${value}; expected a whole number from 1 through 2147483647`,
     ]);
   });
+}
+
+for (const { key, defaultValue, invalidValues, minimum } of [
+  { key: 'AGENTO11Y_MAX_RETRIES', defaultValue: 5, invalidValues: ['0', '-1', '1.5', 'abc', '2147483648'], minimum: 1 },
+  {
+    key: 'AGENTO11Y_MAX_BACKOFF_MS',
+    defaultValue: 5_000,
+    invalidValues: ['0', '-1', '1.5', 'abc', '2147483648'],
+    minimum: 1,
+  },
+  {
+    key: 'AGENTO11Y_QUEUE_SIZE',
+    defaultValue: 2_000,
+    invalidValues: ['0', '-1', '1.5', 'abc', '2147483648'],
+    minimum: 1,
+  },
+]) {
+  for (const value of invalidValues) {
+    test(`configFromEnv: invalid ${key} value ${value} falls back and preserves valid siblings`, () => {
+      const warnings = [];
+      const cfg = mergeConfig(
+        { logger: { warn: (message) => warnings.push(message) } },
+        { [key]: value, AGENTO11Y_AGENT_NAME: 'valid-agent' },
+      );
+
+      const field =
+        key === 'AGENTO11Y_MAX_RETRIES'
+          ? 'maxRetries'
+          : key === 'AGENTO11Y_MAX_BACKOFF_MS'
+            ? 'maxBackoffMs'
+            : 'queueSize';
+      assert.equal(cfg.generationExport[field], defaultValue);
+      assert.equal(cfg.agentName, 'valid-agent');
+      assert.deepEqual(warnings, [
+        `agento11y: ignoring invalid ${key}: ${value}; expected a whole number from ${minimum} through 2147483647`,
+      ]);
+    });
+  }
 }
 
 for (const value of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2_147_483_648]) {

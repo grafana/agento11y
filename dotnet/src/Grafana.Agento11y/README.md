@@ -71,6 +71,10 @@ Set it from the environment with `AGENTO11Y_EXPORT_TIMEOUT_MS` (legacy
 inclusive range `1`..`2147483647`. An explicit `ExportTimeout` in code wins over
 the environment variable.
 
+Retry and buffering can also be configured with `AGENTO11Y_MAX_RETRIES`,
+`AGENTO11Y_MAX_BACKOFF_MS`, and `AGENTO11Y_QUEUE_SIZE`. Each accepts a base-10
+integer in the inclusive range `1`..`2147483647`; explicit values in code win.
+
 Generation export transport protocols:
 
 - `GenerationExportProtocol.Grpc`

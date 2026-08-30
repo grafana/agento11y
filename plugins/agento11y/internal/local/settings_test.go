@@ -3,7 +3,6 @@ package local
 import (
 	"testing"
 
-	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -17,11 +16,30 @@ func TestParseSettings(t *testing.T) {
 			name: "empty config leaves capture unset",
 			env:  map[string]string{},
 			want: Settings{
+				Theme:      themeDark,
 				Capture:    "", // unset: not written, so runtime defaults stand
 				Tags:       []Tag{},
 				Guards:     guardsOff,
 				AutoUpdate: true,
 			},
+		},
+		{
+			name: "valid theme",
+			env:  map[string]string{"SIGIL_THEME": "system"},
+			want: Settings{Theme: themeSystem, Capture: "", Tags: []Tag{}, Guards: guardsOff, AutoUpdate: true},
+		},
+		{
+			name: "invalid theme defaults dark",
+			env:  map[string]string{"AGENTO11Y_THEME": "sepia"},
+			want: Settings{Theme: themeDark, Capture: "", Tags: []Tag{}, Guards: guardsOff, AutoUpdate: true},
+		},
+		{
+			name: "preferred theme wins over legacy",
+			env: map[string]string{
+				"AGENTO11Y_THEME": "light",
+				"SIGIL_THEME":     "system",
+			},
+			want: Settings{Theme: themeLight, Capture: "", Tags: []Tag{}, Guards: guardsOff, AutoUpdate: true},
 		},
 		{
 			name: "full config round-trips every field",
@@ -37,6 +55,7 @@ func TestParseSettings(t *testing.T) {
 				"SIGIL_LOCAL_FORWARD":        "true",
 			},
 			want: Settings{
+				Theme:        themeDark,
 				Capture:      "metadata_only",
 				Tags:         []Tag{{Key: "team", Value: "ai"}, {Key: "project", Value: "demo"}},
 				Guards:       guardsFailClosed,
@@ -50,7 +69,7 @@ func TestParseSettings(t *testing.T) {
 		{
 			name: "local forward is opt-in and only truthy values enable it",
 			env:  map[string]string{"SIGIL_LOCAL_FORWARD": "nope"},
-			want: Settings{Capture: "", Tags: []Tag{}, Guards: guardsOff, AutoUpdate: true},
+			want: Settings{Theme: themeDark, Capture: "", Tags: []Tag{}, Guards: guardsOff, AutoUpdate: true},
 		},
 		{
 			name: "preferred local forward spelling wins over legacy",
@@ -58,37 +77,37 @@ func TestParseSettings(t *testing.T) {
 				"AGENTO11Y_LOCAL_FORWARD": "true",
 				"SIGIL_LOCAL_FORWARD":     "false",
 			},
-			want: Settings{Capture: "", Tags: []Tag{}, Guards: guardsOff, AutoUpdate: true, LocalForward: true},
+			want: Settings{Theme: themeDark, Capture: "", Tags: []Tag{}, Guards: guardsOff, AutoUpdate: true, LocalForward: true},
 		},
 		{
 			name: "advanced capture mode is preserved",
 			env:  map[string]string{"SIGIL_CONTENT_CAPTURE_MODE": "no_tool_content"},
-			want: Settings{Capture: "no_tool_content", Tags: []Tag{}, Guards: guardsOff, AutoUpdate: true},
+			want: Settings{Theme: themeDark, Capture: "no_tool_content", Tags: []Tag{}, Guards: guardsOff, AutoUpdate: true},
 		},
 		{
 			name: "unknown capture mode is treated as unset",
 			env:  map[string]string{"SIGIL_CONTENT_CAPTURE_MODE": "bogus"},
-			want: Settings{Capture: "", Tags: []Tag{}, Guards: guardsOff, AutoUpdate: true},
+			want: Settings{Theme: themeDark, Capture: "", Tags: []Tag{}, Guards: guardsOff, AutoUpdate: true},
 		},
 		{
 			name: "default alias is treated as unset",
 			env:  map[string]string{"SIGIL_CONTENT_CAPTURE_MODE": "default"},
-			want: Settings{Capture: "", Tags: []Tag{}, Guards: guardsOff, AutoUpdate: true},
+			want: Settings{Theme: themeDark, Capture: "", Tags: []Tag{}, Guards: guardsOff, AutoUpdate: true},
 		},
 		{
 			name: "guards enabled without fail-open seeds fail-open",
 			env:  map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
-			want: Settings{Capture: "", Tags: []Tag{}, Guards: guardsFailOpen, AutoUpdate: true},
+			want: Settings{Theme: themeDark, Capture: "", Tags: []Tag{}, Guards: guardsFailOpen, AutoUpdate: true},
 		},
 		{
 			name: "auto-update only disabled by explicit falsey value",
 			env:  map[string]string{"SIGIL_AUTO_UPDATE": "off"},
-			want: Settings{Capture: "", Tags: []Tag{}, Guards: guardsOff, AutoUpdate: false},
+			want: Settings{Theme: themeDark, Capture: "", Tags: []Tag{}, Guards: guardsOff, AutoUpdate: false},
 		},
 		{
 			name: "malformed tag pairs are dropped",
 			env:  map[string]string{"SIGIL_TAGS": "team=ai,,bad,empty="},
-			want: Settings{Capture: "", Tags: []Tag{{Key: "team", Value: "ai"}}, Guards: guardsOff, AutoUpdate: true},
+			want: Settings{Theme: themeDark, Capture: "", Tags: []Tag{{Key: "team", Value: "ai"}}, Guards: guardsOff, AutoUpdate: true},
 		},
 	}
 
@@ -109,55 +128,55 @@ func TestSettingsUpdates(t *testing.T) {
 			name: "unset capture is not written",
 			in:   Settings{Capture: "", Guards: guardsOff, AutoUpdate: true},
 			want: map[string]string{
-				"SIGIL_TAGS":              "",
-				"SIGIL_GUARDS_ENABLED":    "false",
-				"SIGIL_GUARDS_FAIL_OPEN":  "",
-				"SIGIL_GUARDS_TIMEOUT_MS": "",
-				"SIGIL_DEBUG":             "",
-				"SIGIL_AUTO_UPDATE":       "",
-				"SIGIL_USER_ID":           "",
+				"AGENTO11Y_TAGS":              "",
+				"AGENTO11Y_GUARDS_ENABLED":    "false",
+				"AGENTO11Y_GUARDS_FAIL_OPEN":  "",
+				"AGENTO11Y_GUARDS_TIMEOUT_MS": "",
+				"AGENTO11Y_DEBUG":             "",
+				"AGENTO11Y_AUTO_UPDATE":       "",
+				"AGENTO11Y_USER_ID":           "",
 			},
 		},
 		{
 			name: "defaults delete opt-in/opt-out keys",
 			in:   Settings{Capture: "full", Guards: guardsOff, AutoUpdate: true},
 			want: map[string]string{
-				"SIGIL_CONTENT_CAPTURE_MODE": "full",
-				"SIGIL_TAGS":                 "",
-				"SIGIL_GUARDS_ENABLED":       "false",
-				"SIGIL_GUARDS_FAIL_OPEN":     "",
-				"SIGIL_GUARDS_TIMEOUT_MS":    "",
-				"SIGIL_DEBUG":                "",
-				"SIGIL_AUTO_UPDATE":          "",
-				"SIGIL_USER_ID":              "",
+				"AGENTO11Y_CONTENT_CAPTURE_MODE": "full",
+				"AGENTO11Y_TAGS":                 "",
+				"AGENTO11Y_GUARDS_ENABLED":       "false",
+				"AGENTO11Y_GUARDS_FAIL_OPEN":     "",
+				"AGENTO11Y_GUARDS_TIMEOUT_MS":    "",
+				"AGENTO11Y_DEBUG":                "",
+				"AGENTO11Y_AUTO_UPDATE":          "",
+				"AGENTO11Y_USER_ID":              "",
 			},
 		},
 		{
 			name: "fail-open with non-default timeout writes timeout",
 			in:   Settings{Capture: "full", Guards: guardsFailOpen, GuardTimeout: "2000", AutoUpdate: true},
 			want: map[string]string{
-				"SIGIL_CONTENT_CAPTURE_MODE": "full",
-				"SIGIL_TAGS":                 "",
-				"SIGIL_GUARDS_ENABLED":       "true",
-				"SIGIL_GUARDS_FAIL_OPEN":     "true",
-				"SIGIL_GUARDS_TIMEOUT_MS":    "2000",
-				"SIGIL_DEBUG":                "",
-				"SIGIL_AUTO_UPDATE":          "",
-				"SIGIL_USER_ID":              "",
+				"AGENTO11Y_CONTENT_CAPTURE_MODE": "full",
+				"AGENTO11Y_TAGS":                 "",
+				"AGENTO11Y_GUARDS_ENABLED":       "true",
+				"AGENTO11Y_GUARDS_FAIL_OPEN":     "true",
+				"AGENTO11Y_GUARDS_TIMEOUT_MS":    "2000",
+				"AGENTO11Y_DEBUG":                "",
+				"AGENTO11Y_AUTO_UPDATE":          "",
+				"AGENTO11Y_USER_ID":              "",
 			},
 		},
 		{
 			name: "default timeout value is dropped",
 			in:   Settings{Capture: "full", Guards: guardsFailClosed, GuardTimeout: "1500", AutoUpdate: true},
 			want: map[string]string{
-				"SIGIL_CONTENT_CAPTURE_MODE": "full",
-				"SIGIL_TAGS":                 "",
-				"SIGIL_GUARDS_ENABLED":       "true",
-				"SIGIL_GUARDS_FAIL_OPEN":     "false",
-				"SIGIL_GUARDS_TIMEOUT_MS":    "",
-				"SIGIL_DEBUG":                "",
-				"SIGIL_AUTO_UPDATE":          "",
-				"SIGIL_USER_ID":              "",
+				"AGENTO11Y_CONTENT_CAPTURE_MODE": "full",
+				"AGENTO11Y_TAGS":                 "",
+				"AGENTO11Y_GUARDS_ENABLED":       "true",
+				"AGENTO11Y_GUARDS_FAIL_OPEN":     "false",
+				"AGENTO11Y_GUARDS_TIMEOUT_MS":    "",
+				"AGENTO11Y_DEBUG":                "",
+				"AGENTO11Y_AUTO_UPDATE":          "",
+				"AGENTO11Y_USER_ID":              "",
 			},
 		},
 		{
@@ -171,43 +190,43 @@ func TestSettingsUpdates(t *testing.T) {
 				UserID:     "  alice  ",
 			},
 			want: map[string]string{
-				"SIGIL_CONTENT_CAPTURE_MODE": "metadata_only",
-				"SIGIL_TAGS":                 "team=ai",
-				"SIGIL_GUARDS_ENABLED":       "false",
-				"SIGIL_GUARDS_FAIL_OPEN":     "",
-				"SIGIL_GUARDS_TIMEOUT_MS":    "",
-				"SIGIL_DEBUG":                "true",
-				"SIGIL_AUTO_UPDATE":          "false",
-				"SIGIL_USER_ID":              "alice",
+				"AGENTO11Y_CONTENT_CAPTURE_MODE": "metadata_only",
+				"AGENTO11Y_TAGS":                 "team=ai",
+				"AGENTO11Y_GUARDS_ENABLED":       "false",
+				"AGENTO11Y_GUARDS_FAIL_OPEN":     "",
+				"AGENTO11Y_GUARDS_TIMEOUT_MS":    "",
+				"AGENTO11Y_DEBUG":                "true",
+				"AGENTO11Y_AUTO_UPDATE":          "false",
+				"AGENTO11Y_USER_ID":              "alice",
 			},
 		},
 		{
 			name: "non-numeric timeout is treated as default",
 			in:   Settings{Capture: "full", Guards: guardsFailOpen, GuardTimeout: "abc", AutoUpdate: true},
 			want: map[string]string{
-				"SIGIL_CONTENT_CAPTURE_MODE": "full",
-				"SIGIL_TAGS":                 "",
-				"SIGIL_GUARDS_ENABLED":       "true",
-				"SIGIL_GUARDS_FAIL_OPEN":     "true",
-				"SIGIL_GUARDS_TIMEOUT_MS":    "",
-				"SIGIL_DEBUG":                "",
-				"SIGIL_AUTO_UPDATE":          "",
-				"SIGIL_USER_ID":              "",
+				"AGENTO11Y_CONTENT_CAPTURE_MODE": "full",
+				"AGENTO11Y_TAGS":                 "",
+				"AGENTO11Y_GUARDS_ENABLED":       "true",
+				"AGENTO11Y_GUARDS_FAIL_OPEN":     "true",
+				"AGENTO11Y_GUARDS_TIMEOUT_MS":    "",
+				"AGENTO11Y_DEBUG":                "",
+				"AGENTO11Y_AUTO_UPDATE":          "",
+				"AGENTO11Y_USER_ID":              "",
 			},
 		},
 		{
 			name: "local forward on is written",
 			in:   Settings{Capture: "full", Guards: guardsOff, AutoUpdate: true, LocalForward: true},
 			want: map[string]string{
-				"SIGIL_CONTENT_CAPTURE_MODE": "full",
-				"SIGIL_TAGS":                 "",
-				"SIGIL_GUARDS_ENABLED":       "false",
-				"SIGIL_GUARDS_FAIL_OPEN":     "",
-				"SIGIL_GUARDS_TIMEOUT_MS":    "",
-				"SIGIL_DEBUG":                "",
-				"SIGIL_AUTO_UPDATE":          "",
-				"SIGIL_USER_ID":              "",
-				"SIGIL_LOCAL_FORWARD":        "true",
+				"AGENTO11Y_CONTENT_CAPTURE_MODE": "full",
+				"AGENTO11Y_TAGS":                 "",
+				"AGENTO11Y_GUARDS_ENABLED":       "false",
+				"AGENTO11Y_GUARDS_FAIL_OPEN":     "",
+				"AGENTO11Y_GUARDS_TIMEOUT_MS":    "",
+				"AGENTO11Y_DEBUG":                "",
+				"AGENTO11Y_AUTO_UPDATE":          "",
+				"AGENTO11Y_USER_ID":              "",
+				"AGENTO11Y_LOCAL_FORWARD":        "true",
 			},
 		},
 	}
@@ -215,19 +234,38 @@ func TestSettingsUpdates(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			// None of these cases set connection fields, so Updates always emits
-			// empty (delete) markers for them and no token key. Every managed
-			// key is written and deleted under both spellings.
+			// empty (delete) markers for them and no token key.
 			want := tc.want
-			want["SIGIL_ENDPOINT"] = ""
-			want["SIGIL_AUTH_TENANT_ID"] = ""
-			want["SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT"] = ""
+			want["AGENTO11Y_THEME"] = string(normalizeTheme(tc.in.Theme))
+			want["AGENTO11Y_ENDPOINT"] = ""
+			want["AGENTO11Y_AUTH_TENANT_ID"] = ""
+			want["AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT"] = ""
 			// LOCAL_FORWARD is written explicitly in both directions: only a
 			// literal false on disk can override the value the daemon
 			// materialized into its own environment at boot.
-			if _, ok := want["SIGIL_LOCAL_FORWARD"]; !ok {
-				want["SIGIL_LOCAL_FORWARD"] = "false"
+			if _, ok := want["AGENTO11Y_LOCAL_FORWARD"]; !ok {
+				want["AGENTO11Y_LOCAL_FORWARD"] = "false"
 			}
-			assert.Equal(t, envconfig.ExpandAliases(want), tc.in.Updates())
+			assert.Equal(t, want, tc.in.Updates())
+		})
+	}
+
+	themeTests := []struct {
+		name  string
+		theme Theme
+		want  string
+	}{
+		{name: "missing theme normalizes dark", want: "dark"},
+		{name: "dark theme", theme: themeDark, want: "dark"},
+		{name: "light theme", theme: themeLight, want: "light"},
+		{name: "system theme", theme: themeSystem, want: "system"},
+		{name: "invalid theme normalizes dark", theme: "sepia", want: "dark"},
+	}
+	for _, tc := range themeTests {
+		t.Run(tc.name, func(t *testing.T) {
+			u := (Settings{Theme: tc.theme, Guards: guardsOff, AutoUpdate: true}).Updates()
+			assert.Equal(t, tc.want, u["AGENTO11Y_THEME"])
+			assert.NotContains(t, u, "SIGIL_THEME")
 		})
 	}
 }
@@ -251,30 +289,35 @@ func TestSettingsConnection(t *testing.T) {
 
 	t.Run("blank token is omitted so the writer preserves it", func(t *testing.T) {
 		u := Settings{Endpoint: "https://x", Guards: guardsOff, AutoUpdate: true, TokenSet: true}.Updates()
-		_, ok := u["SIGIL_AUTH_TOKEN"]
-		assert.False(t, ok)
-		assert.Equal(t, "https://x", u["SIGIL_ENDPOINT"])
+		assert.NotContains(t, u, "AGENTO11Y_AUTH_TOKEN")
+		assert.NotContains(t, u, "SIGIL_AUTH_TOKEN")
+		assert.Equal(t, "https://x", u["AGENTO11Y_ENDPOINT"])
 	})
 
 	t.Run("new token value is written", func(t *testing.T) {
 		u := Settings{Guards: guardsOff, AutoUpdate: true, TokenSet: true, Token: "glc_new"}.Updates()
-		assert.Equal(t, "glc_new", u["SIGIL_AUTH_TOKEN"])
+		assert.Equal(t, "glc_new", u["AGENTO11Y_AUTH_TOKEN"])
+		assert.NotContains(t, u, "SIGIL_AUTH_TOKEN")
 	})
 
 	t.Run("cleared token is deleted", func(t *testing.T) {
 		u := Settings{Guards: guardsOff, AutoUpdate: true, TokenSet: true, TokenCleared: true}.Updates()
-		v, ok := u["SIGIL_AUTH_TOKEN"]
+		v, ok := u["AGENTO11Y_AUTH_TOKEN"]
 		assert.True(t, ok)
 		assert.Empty(t, v) // empty value = delete in WriteDotenv
+		assert.NotContains(t, u, "SIGIL_AUTH_TOKEN")
 	})
 
 	t.Run("preview masks a set token and never shows the value", func(t *testing.T) {
 		p := Settings{Guards: guardsOff, AutoUpdate: true, TokenSet: true, Token: "glc_new"}.previewUpdates()
-		assert.Equal(t, tokenMask, p["SIGIL_AUTH_TOKEN"])
+		assert.Equal(t, tokenMask, p["AGENTO11Y_AUTH_TOKEN"])
+		for key := range p {
+			assert.NotRegexp(t, `^SIGIL_`, key)
+		}
 
 		cleared := Settings{Guards: guardsOff, AutoUpdate: true, TokenSet: true, TokenCleared: true}.previewUpdates()
-		_, ok := cleared["SIGIL_AUTH_TOKEN"]
-		assert.False(t, ok)
+		assert.NotContains(t, cleared, "AGENTO11Y_AUTH_TOKEN")
+		assert.NotContains(t, cleared, "SIGIL_AUTH_TOKEN")
 	})
 
 	// OTEL_EXPORTER_OTLP_HEADERS carries a second copy of the OTLP credential,
@@ -363,6 +406,7 @@ func TestSettingsConnection(t *testing.T) {
 // snapshot the server returns is stable.
 func TestSettingsRoundTrip(t *testing.T) {
 	in := Settings{
+		Theme:        themeSystem,
 		Capture:      "no_tool_content",
 		Tags:         []Tag{{Key: "team", Value: "ai"}},
 		Guards:       guardsFailClosed,

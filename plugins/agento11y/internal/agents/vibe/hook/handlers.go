@@ -100,25 +100,7 @@ func PostAgent(ctx context.Context, p Payload, logger *log.Logger) {
 		turnSeq = 1
 	}
 
-	// The parent session id can arrive on the thin hook payload or, for
-	// subagent sessions, only in meta.json on disk. Prefer the payload and
-	// fall back to meta so subagent linkage is not silently skipped.
-	parentSessionID := p.ParentSessionID
-	if parentSessionID == "" {
-		parentSessionID = m.ParentSessionID
-	}
-
-	// Resolve a real parent edge when this is a subagent session: the
-	// parent session's last export ID is persisted in its own state file.
-	// We only get a session-level parent_session_id from vibe, so this
-	// links to the parent's most recent generation rather than the exact
-	// turn that spawned the child.
-	var parentGenID string
-	if parentSessionID != "" {
-		if parentState, ok := state.Load(parentSessionID); ok {
-			parentGenID = parentState.LastGenerationID
-		}
-	}
+	parentSessionID, parentGenID := resolveParentLineage(p, m)
 
 	mapped := mapper.Map(mapper.Inputs{
 		SessionID:           p.SessionID,
@@ -207,6 +189,22 @@ func PostAgent(ctx context.Context, p Payload, logger *log.Logger) {
 	// The turn is exported; its tool events have been consumed into spans.
 	toolevents.Clear(p.SessionID)
 	logger.Printf("post_agent: done session=%s offset=%d", p.SessionID, newOffset)
+}
+
+// Vibe provides only a parent session ID, so the edge targets that session's
+// most recently exported generation.
+func resolveParentLineage(p Payload, m meta.Meta) (sessionID, generationID string) {
+	sessionID = p.ParentSessionID
+	if sessionID == "" {
+		sessionID = m.ParentSessionID
+	}
+	if sessionID == "" {
+		return "", ""
+	}
+	if parentState, ok := state.Load(sessionID); ok {
+		generationID = parentState.LastGenerationID
+	}
+	return sessionID, generationID
 }
 
 // restoreState rolls back the pre-export state write after a failed export so

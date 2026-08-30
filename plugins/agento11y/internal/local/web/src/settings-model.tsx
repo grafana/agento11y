@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { formatAgo } from './formatters';
-import type { ConfigResponse, ForwardStatus, Settings } from './types';
+import type { ConfigResponse, ForwardStatus, Settings, ThemePreference } from './types';
 
 // ============================================================
 // Settings — edits config.env via the daemon's /api/v1/config endpoints
@@ -50,11 +50,90 @@ export function Mono({ children }: { children?: ReactNode }) {
   );
 }
 
+export function isThemePreference(value: unknown): value is ThemePreference {
+  return value === 'dark' || value === 'light' || value === 'system';
+}
+
+// resolveThemePreference applies the runtime precedence for the document. The
+// server-stamped value is the fallback before the first config response, and
+// dark is used only when that attribute is absent or invalid too.
+export function resolveThemePreference(
+  dirtyFormTheme: unknown,
+  savedTheme: unknown,
+  serverStampedTheme: unknown,
+): ThemePreference {
+  if (isThemePreference(dirtyFormTheme)) return dirtyFormTheme;
+  if (isThemePreference(savedTheme)) return savedTheme;
+  return isThemePreference(serverStampedTheme) ? serverStampedTheme : 'dark';
+}
+
+export function documentThemePreference(root: HTMLElement = document.documentElement): ThemePreference {
+  return resolveThemePreference(null, null, root.getAttribute('data-theme'));
+}
+
+export function applyDocumentTheme(theme: unknown, root: HTMLElement = document.documentElement): ThemePreference {
+  const next = isThemePreference(theme) ? theme : 'dark';
+  root.setAttribute('data-theme', next);
+  return next;
+}
+
+export function toggledThemePreference(theme: unknown, systemTheme: unknown): ThemePreference {
+  const current = theme === 'system' ? systemTheme : theme;
+  return current === 'light' ? 'dark' : 'light';
+}
+
+export function patchThemePreference(theme: ThemePreference): Promise<ConfigResponse> {
+  return fetch('/api/v1/config', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ theme }),
+  }).then((response) =>
+    response.ok
+      ? (response.json() as Promise<ConfigResponse>)
+      : response.text().then((text) => Promise.reject(new Error(text || `HTTP ${response.status}`))),
+  );
+}
+
+export interface ThemeShortcutState {
+  prefix: '' | 'c';
+  at: number;
+}
+
+const THEME_SHORTCUT_TIMEOUT_MS = 800;
+
+function isTextEntryTarget(target: EventTarget | null): boolean {
+  const element = target as HTMLElement | null;
+  if (!element || typeof element.tagName !== 'string') return false;
+  const tag = element.tagName.toLowerCase();
+  return tag === 'input' || tag === 'textarea' || tag === 'select' || element.isContentEditable === true;
+}
+
+export function themeShortcutToggles(
+  event: Pick<KeyboardEvent, 'altKey' | 'ctrlKey' | 'key' | 'metaKey' | 'target'>,
+  state: ThemeShortcutState,
+  now = Date.now(),
+): boolean {
+  if (event.ctrlKey || event.metaKey || event.altKey || isTextEntryTarget(event.target)) {
+    state.prefix = '';
+    return false;
+  }
+  if (state.prefix && now - state.at > THEME_SHORTCUT_TIMEOUT_MS) state.prefix = '';
+  const key = String(event.key || '').toLowerCase();
+  if (state.prefix === 'c' && key === 't') {
+    state.prefix = '';
+    return true;
+  }
+  state.prefix = key === 'c' ? 'c' : '';
+  state.at = now;
+  return false;
+}
+
 // sameSettings is a field-wise deep compare for dirty tracking. Tag order
 // is significant (it survives a round-trip), so it is compared positionally.
 export function sameSettings(a: FormSettings | null | undefined, b: FormSettings | null | undefined): boolean {
   if (!a || !b) return a === b;
   if (
+    a.theme !== b.theme ||
     a.endpoint !== b.endpoint ||
     a.tenantId !== b.tenantId ||
     a.otlpEndpoint !== b.otlpEndpoint ||

@@ -881,27 +881,30 @@ func TestAgentNameOverrideGuardAndExport(t *testing.T) {
 			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 			logger := log.New(io.Discard, "", 0)
 
-			var guardAgents, exportAgents []string
+			var guardAgents, guardConversationIDs, exportAgents, exportConversationIDs []string
 			var exportProviders []string
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				body, _ := io.ReadAll(r.Body)
 				if strings.Contains(r.URL.Path, "hooks:evaluate") {
 					var req struct {
 						Context struct {
-							AgentName string `json:"agent_name"`
+							AgentName      string `json:"agent_name"`
+							ConversationID string `json:"conversation_id"`
 						} `json:"context"`
 					}
 					_ = json.Unmarshal(body, &req)
 					guardAgents = append(guardAgents, req.Context.AgentName)
+					guardConversationIDs = append(guardConversationIDs, req.Context.ConversationID)
 					w.Header().Set("Content-Type", "application/json")
 					_, _ = w.Write([]byte(`{"action":"allow"}`))
 					return
 				}
 				var req struct {
 					Generations []struct {
-						ID        string `json:"id"`
-						AgentName string `json:"agent_name"`
-						Model     struct {
+						ID             string `json:"id"`
+						AgentName      string `json:"agent_name"`
+						ConversationID string `json:"conversation_id"`
+						Model          struct {
 							Provider string `json:"provider"`
 						} `json:"model"`
 					} `json:"generations"`
@@ -910,6 +913,7 @@ func TestAgentNameOverrideGuardAndExport(t *testing.T) {
 				results := make([]map[string]any, 0, len(req.Generations))
 				for _, g := range req.Generations {
 					exportAgents = append(exportAgents, g.AgentName)
+					exportConversationIDs = append(exportConversationIDs, g.ConversationID)
 					exportProviders = append(exportProviders, g.Model.Provider)
 					results = append(results, map[string]any{"generation_id": g.ID, "accepted": true})
 				}
@@ -939,7 +943,9 @@ func TestAgentNameOverrideGuardAndExport(t *testing.T) {
 			Stop(Payload{HookEventNameJSON: "Stop", SessionIDJSON: "sess", Timestamp: []byte(`"2026-05-18T12:00:04Z"`), StopReasonJSON: "end_turn"}, cfg, logger)
 
 			assert.Equal(t, []string{tt.want}, guardAgents, "guard agent names")
+			assert.Equal(t, []string{"sess"}, guardConversationIDs, "guard conversation IDs")
 			assert.Equal(t, []string{tt.want}, exportAgents, "exported agent names")
+			assert.Equal(t, []string{"sess"}, exportConversationIDs, "exported conversation IDs")
 			// Copilot reports no provider on this fragment, so the mapper
 			// falls back to the product name. The override must not move it.
 			assert.Equal(t, []string{mapper.AgentName}, exportProviders, "exported model providers")
