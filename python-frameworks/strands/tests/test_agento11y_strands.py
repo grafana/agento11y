@@ -6,7 +6,14 @@ from datetime import timedelta
 from types import SimpleNamespace
 
 from agento11y import Client, ClientConfig, GenerationExportConfig
-from agento11y.models import ExportGenerationResult, ExportGenerationsResponse, MessageRole, PartKind
+from agento11y.models import (
+    ExportGenerationResult,
+    ExportGenerationsResponse,
+    ExportWorkflowStepResult,
+    ExportWorkflowStepsResponse,
+    MessageRole,
+    PartKind,
+)
 from agento11y_strands import (
     Agento11yStrandsHookProvider,
     create_agento11y_strands_hook_provider,
@@ -17,6 +24,7 @@ from agento11y_strands import (
 class _CapturingExporter:
     def __init__(self) -> None:
         self.requests = []
+        self.workflow_requests = []
 
     def export_generations(self, request):
         self.requests.append(request)
@@ -24,6 +32,12 @@ class _CapturingExporter:
             results=[
                 ExportGenerationResult(generation_id=generation.id, accepted=True) for generation in request.generations
             ]
+        )
+
+    def export_workflow_steps(self, request):
+        self.workflow_requests.append(request)
+        return ExportWorkflowStepsResponse(
+            results=[ExportWorkflowStepResult(step_id=step.id, accepted=True) for step in request.workflow_steps]
         )
 
     def shutdown(self) -> None:
@@ -62,9 +76,9 @@ class _ToolRegistry:
         }
 
 
-def _agent():
+def _agent(name: str = "strands-agent"):
     return SimpleNamespace(
-        name="strands-agent",
+        name=name,
         agent_id="agent-42",
         model=_Model(),
         system_prompt="Be brief.",
@@ -131,6 +145,69 @@ def test_strands_model_lifecycle_exports_generation_with_framework_metadata() ->
         assert generation.tools[0].name == "lookup"
     finally:
         client.shutdown()
+
+
+def test_strands_multi_agent_generations_have_parent_ids_and_workflow_links() -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        hooks = create_agento11y_strands_hook_provider(client=client, provider_resolver="auto")
+        state = {"conversation_id": "conv-lineage"}
+        source = object()
+
+        hooks.before_multi_agent_invocation(SimpleNamespace(source=source, invocation_state=state))
+        hooks.before_node_call(SimpleNamespace(source=source, node_id="one", invocation_state=state))
+        hooks.before_model_call(SimpleNamespace(agent=_agent("one"), invocation_state=state))
+        hooks.after_model_call(
+            SimpleNamespace(
+                agent=_agent("one"),
+                invocation_state=state,
+                stop_response=SimpleNamespace(message={"role": "assistant", "content": [{"text": "one"}]}),
+                exception=None,
+            )
+        )
+        hooks.after_node_call(SimpleNamespace(source=source, node_id="one", invocation_state=state))
+
+        hooks.before_node_call(SimpleNamespace(source=source, node_id="two", invocation_state=state))
+        hooks.before_model_call(SimpleNamespace(agent=_agent("two"), invocation_state=state))
+        hooks.after_model_call(
+            SimpleNamespace(
+                agent=_agent("two"),
+                invocation_state=state,
+                stop_response=SimpleNamespace(message={"role": "assistant", "content": [{"text": "two"}]}),
+                exception=None,
+            )
+        )
+        hooks.after_node_call(SimpleNamespace(source=source, node_id="two", invocation_state=state))
+        hooks.after_multi_agent_invocation(SimpleNamespace(source=source, invocation_state=state))
+
+        client.flush()
+        generations = [generation for request in exporter.requests for generation in request.generations]
+        assert len(generations) == 2
+        assert generations[0].agent_name == "one"
+        assert generations[1].agent_name == "two"
+        assert generations[0].parent_generation_ids == []
+        assert generations[1].parent_generation_ids == [generations[0].id]
+        steps = [step for request in exporter.workflow_requests for step in request.workflow_steps]
+        assert steps[0].linked_generation_ids == [generations[0].id]
+        assert steps[1].linked_generation_ids == [generations[1].id]
+        assert steps[1].parent_step_ids == [steps[0].id]
+    finally:
+        client.shutdown()
+
+
+def test_strands_bedrock_model_id_resolves_to_vendor_provider() -> None:
+    from agento11y_strands.handler import _resolve_provider_name
+
+    assert _resolve_provider_name(
+        "", "auto", "us.anthropic.claude-sonnet-4-20250514-v1:0", {}
+    ) == "anthropic"
+    assert _resolve_provider_name(
+        "", "auto", "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.meta.llama3-3-70b-instruct-v1:0", {}
+    ) == "meta"
+    assert _resolve_provider_name(
+        "", "auto", "us.anthropic.claude-sonnet-4-v1:0", {"provider": "bedrock"}
+    ) == "anthropic"
 
 
 def test_strands_tool_use_turn_exports_tool_call_output_and_agent_name() -> None:

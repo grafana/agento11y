@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -59,6 +60,7 @@ class Agento11yStrandsHandler(Agento11yFrameworkHandlerBase):
         provider: str = "",
         capture_inputs: bool = True,
         capture_outputs: bool = True,
+        capture_workflow_steps: bool = True,
         extra_tags: dict[str, str] | None = None,
         extra_metadata: dict[str, Any] | None = None,
     ) -> None:
@@ -74,6 +76,7 @@ class Agento11yStrandsHandler(Agento11yFrameworkHandlerBase):
             provider=provider,
             capture_inputs=capture_inputs,
             capture_outputs=capture_outputs,
+            capture_workflow_steps=capture_workflow_steps,
             extra_tags=extra_tags,
             extra_metadata=extra_metadata,
         )
@@ -129,6 +132,15 @@ class Agento11yStrandsHandler(Agento11yFrameworkHandlerBase):
         if event_id != "":
             metadata_payload[_metadata_event_id] = event_id
 
+        if parent_run_id is not None:
+            self._run_to_graph_key[run_key] = str(parent_run_id)
+        graph_root_key = self._find_graph_root_key(run_key)
+        parent_generation_ids: list[str] = []
+        if graph_root_key:
+            last_generation_id = self._graph_run_last_generation_id.get(graph_root_key, "")
+            if last_generation_id:
+                parent_generation_ids = [last_generation_id]
+
         tags_payload = dict(self._extra_tags)
         tags_payload["agento11y.framework.name"] = self._framework_name
         tags_payload["agento11y.framework.source"] = self._framework_source
@@ -136,7 +148,7 @@ class Agento11yStrandsHandler(Agento11yFrameworkHandlerBase):
 
         start = GenerationStart(
             conversation_id=conversation_id,
-            agent_name=self._agent_name,
+            agent_name=_first_non_empty(_as_string(run_name), self._agent_name),
             agent_version=self._agent_version,
             mode=GenerationMode.STREAM,
             model=ModelRef(provider=provider_name, name=model_name),
@@ -148,7 +160,14 @@ class Agento11yStrandsHandler(Agento11yFrameworkHandlerBase):
             max_tokens=_optional_int(_read(invocation_params, "max_tokens")),
             top_p=_optional_float(_read(invocation_params, "top_p")),
             tool_choice=_as_string(_read(invocation_params, "tool_choice")) or None,
+            parent_generation_ids=parent_generation_ids,
         )
+        if start.id == "":
+            start.id = f"gen_{secrets.token_hex(8)}"
+        self._track_run_generation_id(run_key, start.id)
+        if graph_root_key:
+            self._graph_run_last_generation_id[graph_root_key] = start.id
+
         recorder = self._client.start_streaming_generation(start)
         self._strands_runs[run_key] = _StrandsRunState(
             recorder=recorder,
@@ -422,6 +441,10 @@ def _resolve_provider_name(
 
     provider = _as_string(_read(invocation_params, "provider"))
     if provider != "":
+        normalized_provider = provider.lower().replace("-", "_")
+        if normalized_provider in {"bedrock", "amazon_bedrock", "aws_bedrock"}:
+            inferred = _infer_provider_from_bedrock_id(model_name)
+            return inferred or provider
         return provider
 
     if callable(provider_resolver):
@@ -442,7 +465,47 @@ def _resolve_provider_name(
         return "anthropic"
     if "gemini" in lower:
         return "gemini"
+    # Strands' BedrockModel exposes `model_id` but not a provider field.  Use
+    # the vendor embedded in the Bedrock model/inference-profile ID so the
+    # backend can match its model catalogue and derive cost where supported.
+    inferred = _infer_provider_from_bedrock_id(model_name)
+    if inferred != "":
+        return inferred
     return "custom" if model_name != "" else ""
+
+
+_BEDROCK_VENDOR_PROVIDERS = {
+    "anthropic": "anthropic",
+    "amazon": "amazon",
+    "cohere": "cohere",
+    "meta": "meta",
+    "mistral": "mistral",
+    "ai21": "ai21",
+    "deepseek": "deepseek",
+    "qwen": "qwen",
+}
+_BEDROCK_RESOURCE_MARKERS = (
+    "application-inference-profile/",
+    "inference-profile/",
+    "foundation-model/",
+)
+_BEDROCK_REGIONAL_PREFIXES = {"us", "eu", "apac", "jp", "global"}
+
+
+def _infer_provider_from_bedrock_id(model_name: str) -> str:
+    normalized = model_name.strip().lower()
+    for marker in _BEDROCK_RESOURCE_MARKERS:
+        if marker in normalized:
+            normalized = normalized.split(marker, 1)[1]
+            break
+    if normalized.startswith("arn:"):
+        # ARN resource forms are handled after the resource marker above.
+        return ""
+    parts = normalized.split(".")
+    vendor_index = 1 if len(parts) >= 3 and parts[0] in _BEDROCK_REGIONAL_PREFIXES else 0
+    if len(parts) > vendor_index:
+        return _BEDROCK_VENDOR_PROVIDERS.get(parts[vendor_index], "")
+    return ""
 
 
 def _resolve_conversation_id(*, framework_name: str, run_key: str, callback_kwargs: dict[str, Any]) -> tuple[str, str]:

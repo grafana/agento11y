@@ -92,11 +92,19 @@ class Agento11yStrandsHookProvider:
         self._agento11y_handler.set_default_agent_name(_agent_name(agent))
         model_name = _model_name(agent)
         invocation_params = _model_invocation_params(agent, model_name=model_name)
+        # A model call made by a multi-agent node should be nested below the
+        # node, not directly below the outer invocation.  Fall back through
+        # the multi-agent and ordinary invocation stacks for non-graph runs.
+        parent_run_id = (
+            self._peek_node_stack(event)
+            or self._peek_stack(self._multi_agent_run_ids, event)
+            or self._peek_stack(self._invocation_run_ids, event)
+        )
         self._agento11y_handler.on_chat_model_start(
             _serialized_agent(agent, model_name=model_name),
             [_agent_messages(agent)],
             run_id=run_id,
-            parent_run_id=self._peek_stack(self._invocation_run_ids, event),
+            parent_run_id=parent_run_id,
             invocation_params=invocation_params,
             metadata=_metadata(event),
             run_name=_agent_name(agent),
@@ -168,7 +176,7 @@ class Agento11yStrandsHookProvider:
             {"name": run_name or "multi_agent"},
             {},
             run_id=run_id,
-            parent_run_id=None,
+            parent_run_id=self._peek_stack(self._invocation_run_ids, event),
             metadata=_metadata(event),
             run_type="multi_agent",
             run_name=run_name or "multi_agent",
@@ -210,6 +218,19 @@ class Agento11yStrandsHookProvider:
     def _peek_stack(self, store: dict[int, list[UUID]], event: Any) -> UUID | None:
         stack = store.get(self._source_key(event), [])
         return stack[-1] if stack else None
+
+    def _peek_node_stack(self, event: Any) -> UUID | None:
+        source_key = self._source_key(event)
+        # Model-call events do not carry node_id.  A graph executes one active
+        # node at a time, so the non-empty stack identifies its enclosing node.
+        node_id = _as_string(_read(event, "node_id"))
+        if node_id:
+            stack = self._node_run_ids.get((source_key, node_id), [])
+            return stack[-1] if stack else None
+        for (key, _), stack in self._node_run_ids.items():
+            if key == source_key and stack:
+                return stack[-1]
+        return None
 
     def _pop_stack(self, store: dict[int, list[UUID]], event: Any) -> UUID | None:
         key = self._source_key(event)
