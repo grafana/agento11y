@@ -24,7 +24,6 @@ from . import _experiments_transport
 from . import conversations as _conversations
 from .config import ClientConfig, HooksConfig, resolve_config
 from .context import (
-    TrialContext,
     _pop_capture_mode,
     _push_capture_mode,
     agent_name_from_context,
@@ -32,7 +31,6 @@ from .context import (
     content_capture_mode_from_context,
     conversation_id_from_context,
     conversation_title_from_context,
-    trial_context_from_context,
     user_id_from_context,
 )
 from .errors import (
@@ -867,11 +865,8 @@ class Client:
 
         seed.conversation_title = seed.conversation_title.strip()
         seed.user_id = seed.user_id.strip()
-        trial_context = trial_context_from_context()
         if seed.conversation_id == "":
-            seed.conversation_id = conversation_id_from_context() or (
-                trial_context.conversation_id if trial_context is not None else ""
-            )
+            seed.conversation_id = conversation_id_from_context() or ""
         if seed.conversation_title == "":
             seed.conversation_title = (conversation_title_from_context() or "").strip()
         if seed.user_id == "":
@@ -890,11 +885,6 @@ class Client:
             merged: dict[str, str] = dict(self._config.tags)
             merged.update(seed.tags)
             seed.tags = merged
-        if trial_context is not None:
-            # Trial routing is authoritative and deliberately bypasses client
-            # tags, which are also copied onto high-cardinality metrics.
-            seed.tags.update(trial_context.generation_tags())
-            seed.metadata = {**trial_context.generation_metadata(), **seed.metadata}
 
         started_at = _to_utc(seed.started_at) if seed.started_at is not None else _to_utc(self._now())
         seed.started_at = started_at
@@ -951,8 +941,6 @@ class Client:
             ),
         )
         self._set_client_tag_attributes(span)
-        if trial_context is not None:
-            span.set_attributes(trial_context.span_attributes())
 
         recorder = GenerationRecorder(
             client=self,
@@ -960,7 +948,6 @@ class Client:
             span=span,
             started_at=started_at,
             _content_capture_mode=cc_mode,
-            _trial_context=trial_context,
         )
         _push_capture_mode(id(recorder), cc_mode)
         return recorder
@@ -1327,7 +1314,6 @@ class GenerationRecorder:
     started_at: datetime
 
     _content_capture_mode: ContentCaptureMode = ContentCaptureMode.NO_TOOL_CONTENT
-    _trial_context: TrialContext | None = field(default=None, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _ended: bool = False
     _call_error: Exception | None = None
@@ -1627,11 +1613,6 @@ class GenerationRecorder:
         if extra_metadata:
             merged_metadata.update(extra_metadata)
         generation.metadata = merged_metadata
-        if self._trial_context is not None:
-            # Provider result mappers may return their own tags/metadata. The
-            # runner's reserved attribution remains authoritative at export.
-            generation.tags.update(self._trial_context.generation_tags())
-            generation.metadata.update(self._trial_context.generation_metadata())
 
         conversation_title = generation.conversation_title.strip()
         if conversation_title == "":

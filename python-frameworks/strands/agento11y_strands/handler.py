@@ -116,6 +116,7 @@ class Agento11yStrandsHandler(Agento11yFrameworkHandlerBase):
             run_key=run_key,
             callback_kwargs=callback_kwargs,
         )
+        conversation_id = self._resolve_graph_conversation_id(conversation_id, parent_run_id)
 
         metadata_payload: dict[str, Any] = dict(self._extra_metadata)
         metadata_payload[_metadata_run_id] = run_key
@@ -285,6 +286,16 @@ class Agento11yStrandsHandler(Agento11yFrameworkHandlerBase):
         run_name: str | None = None,
         **kwargs: Any,
     ) -> None:
+        if run_type == "multi_agent" and self._capture_workflow_steps:
+            # A multi-agent orchestrator is a graph root even when an outer
+            # Agent invocation triggered it. Its nodes must remain direct
+            # children of that root so the base handler promotes them to
+            # workflow steps.
+            run_key = str(run_id)
+            if parent_run_id is not None:
+                self._run_to_graph_key[run_key] = str(parent_run_id)
+            self._graph_root_run_keys.add(run_key)
+            return
         self._on_chain_start(
             serialized=serialized,
             run_id=run_id,
@@ -295,9 +306,11 @@ class Agento11yStrandsHandler(Agento11yFrameworkHandlerBase):
 
     def on_chain_end(self, _outputs: dict[str, Any] | None, *, run_id: UUID, **_kwargs: Any) -> None:
         self._on_chain_end(run_id=run_id)
+        self._run_to_graph_key.pop(str(run_id), None)
 
     def on_chain_error(self, error: BaseException, *, run_id: UUID, **_kwargs: Any) -> None:
         self._on_chain_error(error=error, run_id=run_id)
+        self._run_to_graph_key.pop(str(run_id), None)
 
 
 def _map_chat_inputs(messages: list[list[Any]]) -> list[Message]:
