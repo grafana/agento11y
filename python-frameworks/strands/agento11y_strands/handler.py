@@ -81,6 +81,7 @@ class Agento11yStrandsHandler(Agento11yFrameworkHandlerBase):
             extra_metadata=extra_metadata,
         )
         self._strands_runs: dict[str, _StrandsRunState] = {}
+        self._workflow_step_last_generation_id: dict[str, str] = {}
 
     def set_default_agent_name(self, agent_name: str) -> None:
         """Set the generation agent name from Strands when the caller did not configure one."""
@@ -136,8 +137,17 @@ class Agento11yStrandsHandler(Agento11yFrameworkHandlerBase):
         if parent_run_id is not None:
             self._run_to_graph_key[run_key] = str(parent_run_id)
         graph_root_key = self._find_graph_root_key(run_key)
+        workflow_step = self._find_enclosing_workflow_step(run_key)
         parent_generation_ids: list[str] = []
-        if graph_root_key:
+        if workflow_step is not None:
+            same_step_generation_id = self._workflow_step_last_generation_id.get(workflow_step.step_id, "")
+            if same_step_generation_id:
+                parent_generation_ids = [same_step_generation_id]
+            elif workflow_step.parent_step_ids and graph_root_key:
+                last_generation_id = self._graph_run_last_generation_id.get(graph_root_key, "")
+                if last_generation_id:
+                    parent_generation_ids = [last_generation_id]
+        elif graph_root_key:
             last_generation_id = self._graph_run_last_generation_id.get(graph_root_key, "")
             if last_generation_id:
                 parent_generation_ids = [last_generation_id]
@@ -167,6 +177,8 @@ class Agento11yStrandsHandler(Agento11yFrameworkHandlerBase):
         if start.id == "":
             start.id = f"gen_{secrets.token_hex(8)}"
         self._track_run_generation_id(run_key, start.id)
+        if workflow_step is not None:
+            self._workflow_step_last_generation_id[workflow_step.step_id] = start.id
         if graph_root_key:
             self._graph_run_last_generation_id[graph_root_key] = start.id
 
@@ -286,14 +298,25 @@ class Agento11yStrandsHandler(Agento11yFrameworkHandlerBase):
         run_name: str | None = None,
         **kwargs: Any,
     ) -> None:
+        callback_kwargs = merge_framework_callback_kwargs(kwargs, tags=tags, metadata=metadata, run_name=run_name)
         if run_type == "multi_agent" and self._capture_workflow_steps:
             # A multi-agent orchestrator is a graph root even when an outer
             # Agent invocation triggered it. Its nodes must remain direct
             # children of that root so the base handler promotes them to
             # workflow steps.
             run_key = str(run_id)
+            enclosing_root_key = ""
             if parent_run_id is not None:
                 self._run_to_graph_key[run_key] = str(parent_run_id)
+                enclosing_root_key = self._find_graph_root_key(str(parent_run_id))
+            conversation_id, _ = _resolve_conversation_id(
+                framework_name=self._framework_name,
+                run_key=run_key,
+                callback_kwargs=callback_kwargs,
+            )
+            if enclosing_root_key:
+                conversation_id = self._graph_run_conversation_id.setdefault(enclosing_root_key, conversation_id)
+            self._graph_run_conversation_id[run_key] = conversation_id
             self._graph_root_run_keys.add(run_key)
             return
         self._on_chain_start(
@@ -301,15 +324,21 @@ class Agento11yStrandsHandler(Agento11yFrameworkHandlerBase):
             run_id=run_id,
             parent_run_id=parent_run_id,
             run_type=run_type or "chain",
-            callback_kwargs=merge_framework_callback_kwargs(kwargs, tags=tags, metadata=metadata, run_name=run_name),
+            callback_kwargs=callback_kwargs,
         )
 
     def on_chain_end(self, _outputs: dict[str, Any] | None, *, run_id: UUID, **_kwargs: Any) -> None:
+        workflow_step = self._workflow_step_runs.get(str(run_id))
         self._on_chain_end(run_id=run_id)
+        if workflow_step is not None:
+            self._workflow_step_last_generation_id.pop(workflow_step.step_id, None)
         self._run_to_graph_key.pop(str(run_id), None)
 
     def on_chain_error(self, error: BaseException, *, run_id: UUID, **_kwargs: Any) -> None:
+        workflow_step = self._workflow_step_runs.get(str(run_id))
         self._on_chain_error(error=error, run_id=run_id)
+        if workflow_step is not None:
+            self._workflow_step_last_generation_id.pop(workflow_step.step_id, None)
         self._run_to_graph_key.pop(str(run_id), None)
 
 

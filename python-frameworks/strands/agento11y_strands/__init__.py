@@ -44,6 +44,7 @@ class Agento11yStrandsHookProvider:
     def __init__(self, *, agento11y_handler: Agento11yStrandsHandler) -> None:
         self._agento11y_handler = agento11y_handler
         self._invocation_run_ids: dict[int, list[UUID]] = {}
+        self._invocation_state_run_ids: dict[int, list[UUID]] = {}
         self._model_run_ids: dict[int, list[UUID]] = {}
         self._tool_run_ids: dict[str, UUID] = {}
         self._tool_fallback_run_ids: dict[int, list[UUID]] = {}
@@ -67,6 +68,7 @@ class Agento11yStrandsHookProvider:
     def before_invocation(self, event: Any) -> None:
         run_id = uuid4()
         self._stack_for(self._invocation_run_ids, event, agent_scoped=True).append(run_id)
+        self._stack_for(self._invocation_state_run_ids, event).append(run_id)
         agent = _read(event, "agent")
         run_name = _agent_name(agent)
         self._agento11y_handler.set_default_agent_name(run_name)
@@ -84,6 +86,7 @@ class Agento11yStrandsHookProvider:
         run_id = self._pop_stack(self._invocation_run_ids, event, agent_scoped=True)
         if run_id is None:
             return
+        self._remove_run(self._invocation_state_run_ids, self._state_key(event), run_id)
         self._agento11y_handler.on_chain_end({"status": "completed"}, run_id=run_id)
 
     def before_model_call(self, event: Any) -> None:
@@ -177,7 +180,7 @@ class Agento11yStrandsHookProvider:
             {"name": run_name or "multi_agent"},
             {},
             run_id=run_id,
-            parent_run_id=self._peek_stack(self._invocation_run_ids, event, agent_scoped=True),
+            parent_run_id=(self._peek_node_stack(event) or self._peek_stack(self._invocation_state_run_ids, event)),
             metadata=_metadata(event),
             run_type="multi_agent",
             run_name=run_name or "multi_agent",
@@ -252,9 +255,9 @@ class Agento11yStrandsHookProvider:
         if node_id:
             stack = self._node_run_ids.get((source_key, node_id), [])
             return stack[-1] if stack else None
-        agent = _read(event, "agent") or _read(_read(event, "invocation_state"), "agent")
-        if agent is not None:
-            stack = self._node_executor_run_ids.get((self._state_key(event), id(agent)), [])
+        executor = _read(event, "agent") or _read(event, "source") or _read(_read(event, "invocation_state"), "agent")
+        if executor is not None:
+            stack = self._node_executor_run_ids.get((self._state_key(event), id(executor)), [])
             if stack:
                 return stack[-1]
 
@@ -277,6 +280,13 @@ class Agento11yStrandsHookProvider:
         if not stack:
             store.pop(key, None)
         return run_id
+
+    def _remove_run(self, store: dict[int, list[UUID]], key: int, run_id: UUID) -> None:
+        stack = store.get(key, [])
+        if run_id in stack:
+            stack.remove(run_id)
+        if not stack:
+            store.pop(key, None)
 
     def _state_key(self, event: Any) -> int:
         invocation_state = _read(event, "invocation_state")

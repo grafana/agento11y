@@ -277,6 +277,7 @@ def test_strands_parallel_nodes_keep_model_runs_and_workflow_links_isolated() ->
         generations = [generation for request in exporter.requests for generation in request.generations]
         output_by_agent = {generation.agent_name: generation.output[0].parts[0].text for generation in generations}
         assert output_by_agent == {"first": "first-result", "second": "second-result"}
+        assert all(generation.parent_generation_ids == [] for generation in generations)
 
         steps = [step for request in exporter.workflow_requests for step in request.workflow_steps]
         generation_id_by_agent = {generation.agent_name: generation.id for generation in generations}
@@ -288,12 +289,12 @@ def test_strands_parallel_nodes_keep_model_runs_and_workflow_links_isolated() ->
         client.shutdown()
 
 
-def test_strands_nested_multi_agent_still_exports_node_workflow_steps() -> None:
+def test_strands_nested_multi_agent_inherits_fallback_conversation_and_exports_node_step() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
         hooks = create_agento11y_strands_hook_provider(client=client, provider_resolver="auto")
-        state = {"conversation_id": "conv-nested"}
+        state = {}
         outer_agent = _agent("outer")
         node_agent = _agent("node")
         source = SimpleNamespace(
@@ -302,6 +303,18 @@ def test_strands_nested_multi_agent_still_exports_node_workflow_steps() -> None:
         )
 
         hooks.before_invocation(SimpleNamespace(agent=outer_agent, invocation_state=state))
+        hooks.before_model_call(SimpleNamespace(agent=outer_agent, invocation_state=state))
+        hooks.after_model_call(
+            SimpleNamespace(
+                agent=outer_agent,
+                invocation_state=state,
+                stop_response=SimpleNamespace(
+                    message={"role": "assistant", "content": [{"text": "delegating"}]},
+                    stop_reason="end_turn",
+                ),
+                exception=None,
+            )
+        )
         hooks.before_multi_agent_invocation(SimpleNamespace(source=source, invocation_state=state))
         hooks.before_node_call(SimpleNamespace(source=source, node_id="node", invocation_state=state))
         hooks.before_model_call(SimpleNamespace(agent=node_agent, invocation_state=state))
@@ -321,11 +334,13 @@ def test_strands_nested_multi_agent_still_exports_node_workflow_steps() -> None:
         hooks.after_invocation(SimpleNamespace(agent=outer_agent, invocation_state=state))
         client.flush()
 
-        generation = exporter.requests[0].generations[0]
+        generations = [generation for request in exporter.requests for generation in request.generations]
+        outer_generation = next(generation for generation in generations if generation.agent_name == "outer")
+        node_generation = next(generation for generation in generations if generation.agent_name == "node")
         step = exporter.workflow_requests[0].workflow_steps[0]
         assert step.step_name == "node"
-        assert step.linked_generation_ids == [generation.id]
-        assert step.conversation_id == generation.conversation_id == "conv-nested"
+        assert step.linked_generation_ids == [node_generation.id]
+        assert step.conversation_id == node_generation.conversation_id == outer_generation.conversation_id
     finally:
         client.shutdown()
 
