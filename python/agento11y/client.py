@@ -369,6 +369,12 @@ class Client:
         self._tracer = (
             self._config.tracer if self._config.tracer is not None else trace.get_tracer(_instrumentation_name)
         )
+        if self._config.meter is None and _global_meter_provider_is_proxy():
+            self._log_warn(
+                "OTel metrics are not configured: register a MeterProvider and pass its meter to "
+                "ClientConfig(meter=...). Generation export can still work, but token usage, cost, "
+                "and latency metrics will be missing."
+            )
         self._meter = self._config.meter if self._config.meter is not None else metrics.get_meter(_instrumentation_name)
 
         self._operation_duration_histogram: Histogram = self._meter.create_histogram(
@@ -2564,6 +2570,14 @@ def _require_bool(payload: dict[str, Any], key: str) -> bool:
     if not isinstance(value, bool):
         raise RatingTransportError("agento11y conversation rating transport failed: invalid response payload")
     return value
+
+
+def _global_meter_provider_is_proxy() -> bool:
+    """Returns whether OpenTelemetry is still using its no-op meter proxy."""
+
+    # Avoid importing OpenTelemetry's private implementation type. The public
+    # API intentionally exposes the provider but not the proxy class.
+    return metrics.get_meter_provider().__class__.__name__ == "ProxyMeterProvider"
 
 
 def _rating_error_text(body: str, status: int) -> str:

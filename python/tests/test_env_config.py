@@ -14,6 +14,22 @@ from agento11y.models import ContentCaptureMode, GenerationStart, ModelRef
 _DEFAULT_EXPORT_TIMEOUT = timedelta(seconds=30)
 
 
+def test_client_warns_when_metrics_provider_is_not_registered(monkeypatch, caplog: pytest.LogCaptureFixture) -> None:
+    class ProxyMeterProvider:
+        pass
+
+    monkeypatch.setattr("agento11y.client.metrics.get_meter_provider", ProxyMeterProvider)
+    with caplog.at_level(logging.WARNING, logger="agento11y"):
+        client = Client(
+            ClientConfig(
+                generation_export=GenerationExportConfig(protocol="none"),
+            )
+        )
+        client.shutdown()
+
+    assert any("OTel metrics are not configured" in record.getMessage() for record in caplog.records)
+
+
 def _check_no_env(cfg: ClientConfig) -> None:
     assert cfg.generation_export.endpoint == "localhost:4317"
     assert cfg.generation_export.protocol == "grpc"

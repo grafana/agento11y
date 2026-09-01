@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -59,6 +60,7 @@ class Agento11yStrandsHandler(Agento11yFrameworkHandlerBase):
         provider: str = "",
         capture_inputs: bool = True,
         capture_outputs: bool = True,
+        capture_workflow_steps: bool = True,
         extra_tags: dict[str, str] | None = None,
         extra_metadata: dict[str, Any] | None = None,
     ) -> None:
@@ -74,10 +76,12 @@ class Agento11yStrandsHandler(Agento11yFrameworkHandlerBase):
             provider=provider,
             capture_inputs=capture_inputs,
             capture_outputs=capture_outputs,
+            capture_workflow_steps=capture_workflow_steps,
             extra_tags=extra_tags,
             extra_metadata=extra_metadata,
         )
         self._strands_runs: dict[str, _StrandsRunState] = {}
+        self._workflow_step_last_generation_id: dict[str, str] = {}
 
     def set_default_agent_name(self, agent_name: str) -> None:
         """Set the generation agent name from Strands when the caller did not configure one."""
@@ -113,6 +117,7 @@ class Agento11yStrandsHandler(Agento11yFrameworkHandlerBase):
             run_key=run_key,
             callback_kwargs=callback_kwargs,
         )
+        conversation_id = self._resolve_graph_conversation_id(conversation_id, parent_run_id)
 
         metadata_payload: dict[str, Any] = dict(self._extra_metadata)
         metadata_payload[_metadata_run_id] = run_key
@@ -129,6 +134,24 @@ class Agento11yStrandsHandler(Agento11yFrameworkHandlerBase):
         if event_id != "":
             metadata_payload[_metadata_event_id] = event_id
 
+        if parent_run_id is not None:
+            self._run_to_graph_key[run_key] = str(parent_run_id)
+        graph_root_key = self._find_graph_root_key(run_key)
+        workflow_step = self._find_enclosing_workflow_step(run_key)
+        parent_generation_ids: list[str] = []
+        if workflow_step is not None:
+            same_step_generation_id = self._workflow_step_last_generation_id.get(workflow_step.step_id, "")
+            if same_step_generation_id:
+                parent_generation_ids = [same_step_generation_id]
+            elif workflow_step.parent_step_ids and graph_root_key:
+                last_generation_id = self._graph_run_last_generation_id.get(graph_root_key, "")
+                if last_generation_id:
+                    parent_generation_ids = [last_generation_id]
+        elif graph_root_key:
+            last_generation_id = self._graph_run_last_generation_id.get(graph_root_key, "")
+            if last_generation_id:
+                parent_generation_ids = [last_generation_id]
+
         tags_payload = dict(self._extra_tags)
         tags_payload["agento11y.framework.name"] = self._framework_name
         tags_payload["agento11y.framework.source"] = self._framework_source
@@ -137,7 +160,7 @@ class Agento11yStrandsHandler(Agento11yFrameworkHandlerBase):
         stream = _stream_enabled(invocation_params)
         start = GenerationStart(
             conversation_id=conversation_id,
-            agent_name=self._agent_name,
+            agent_name=_first_non_empty(_as_string(run_name), self._agent_name),
             agent_version=self._agent_version,
             mode=GenerationMode.STREAM if stream else GenerationMode.SYNC,
             model=ModelRef(provider=provider_name, name=model_name),
@@ -149,7 +172,16 @@ class Agento11yStrandsHandler(Agento11yFrameworkHandlerBase):
             max_tokens=_optional_int(_read(invocation_params, "max_tokens")),
             top_p=_optional_float(_read(invocation_params, "top_p")),
             tool_choice=_as_string(_read(invocation_params, "tool_choice")) or None,
+            parent_generation_ids=parent_generation_ids,
         )
+        if start.id == "":
+            start.id = f"gen_{secrets.token_hex(8)}"
+        self._track_run_generation_id(run_key, start.id)
+        if workflow_step is not None:
+            self._workflow_step_last_generation_id[workflow_step.step_id] = start.id
+        if graph_root_key:
+            self._graph_run_last_generation_id[graph_root_key] = start.id
+
         recorder = self._client.start_streaming_generation(start) if stream else self._client.start_generation(start)
         self._strands_runs[run_key] = _StrandsRunState(
             recorder=recorder,
@@ -266,19 +298,48 @@ class Agento11yStrandsHandler(Agento11yFrameworkHandlerBase):
         run_name: str | None = None,
         **kwargs: Any,
     ) -> None:
+        callback_kwargs = merge_framework_callback_kwargs(kwargs, tags=tags, metadata=metadata, run_name=run_name)
+        if run_type == "multi_agent" and self._capture_workflow_steps:
+            # A multi-agent orchestrator is a graph root even when an outer
+            # Agent invocation triggered it. Its nodes must remain direct
+            # children of that root so the base handler promotes them to
+            # workflow steps.
+            run_key = str(run_id)
+            enclosing_root_key = ""
+            if parent_run_id is not None:
+                self._run_to_graph_key[run_key] = str(parent_run_id)
+                enclosing_root_key = self._find_graph_root_key(str(parent_run_id))
+            conversation_id, _ = _resolve_conversation_id(
+                framework_name=self._framework_name,
+                run_key=run_key,
+                callback_kwargs=callback_kwargs,
+            )
+            if enclosing_root_key:
+                conversation_id = self._graph_run_conversation_id.setdefault(enclosing_root_key, conversation_id)
+            self._graph_run_conversation_id[run_key] = conversation_id
+            self._graph_root_run_keys.add(run_key)
+            return
         self._on_chain_start(
             serialized=serialized,
             run_id=run_id,
             parent_run_id=parent_run_id,
             run_type=run_type or "chain",
-            callback_kwargs=merge_framework_callback_kwargs(kwargs, tags=tags, metadata=metadata, run_name=run_name),
+            callback_kwargs=callback_kwargs,
         )
 
     def on_chain_end(self, _outputs: dict[str, Any] | None, *, run_id: UUID, **_kwargs: Any) -> None:
+        workflow_step = self._workflow_step_runs.get(str(run_id))
         self._on_chain_end(run_id=run_id)
+        if workflow_step is not None:
+            self._workflow_step_last_generation_id.pop(workflow_step.step_id, None)
+        self._run_to_graph_key.pop(str(run_id), None)
 
     def on_chain_error(self, error: BaseException, *, run_id: UUID, **_kwargs: Any) -> None:
+        workflow_step = self._workflow_step_runs.get(str(run_id))
         self._on_chain_error(error=error, run_id=run_id)
+        if workflow_step is not None:
+            self._workflow_step_last_generation_id.pop(workflow_step.step_id, None)
+        self._run_to_graph_key.pop(str(run_id), None)
 
 
 def _map_chat_inputs(messages: list[list[Any]]) -> list[Message]:
@@ -423,6 +484,10 @@ def _resolve_provider_name(
 
     provider = _as_string(_read(invocation_params, "provider"))
     if provider != "":
+        normalized_provider = provider.lower().replace("-", "_")
+        if normalized_provider in {"bedrock", "amazon_bedrock", "aws_bedrock"}:
+            inferred = _infer_provider_from_bedrock_id(model_name)
+            return inferred or provider
         return provider
 
     if callable(provider_resolver):
@@ -443,7 +508,47 @@ def _resolve_provider_name(
         return "anthropic"
     if "gemini" in lower:
         return "gemini"
+    # Strands' BedrockModel exposes `model_id` but not a provider field.  Use
+    # the vendor embedded in the Bedrock model/inference-profile ID so the
+    # backend can match its model catalogue and derive cost where supported.
+    inferred = _infer_provider_from_bedrock_id(model_name)
+    if inferred != "":
+        return inferred
     return "custom" if model_name != "" else ""
+
+
+_BEDROCK_VENDOR_PROVIDERS = {
+    "anthropic": "anthropic",
+    "amazon": "amazon",
+    "cohere": "cohere",
+    "meta": "meta",
+    "mistral": "mistral",
+    "ai21": "ai21",
+    "deepseek": "deepseek",
+    "qwen": "qwen",
+}
+_BEDROCK_RESOURCE_MARKERS = (
+    "application-inference-profile/",
+    "inference-profile/",
+    "foundation-model/",
+)
+_BEDROCK_REGIONAL_PREFIXES = {"us", "eu", "apac", "jp", "global"}
+
+
+def _infer_provider_from_bedrock_id(model_name: str) -> str:
+    normalized = model_name.strip().lower()
+    for marker in _BEDROCK_RESOURCE_MARKERS:
+        if marker in normalized:
+            normalized = normalized.split(marker, 1)[1]
+            break
+    if normalized.startswith("arn:"):
+        # ARN resource forms are handled after the resource marker above.
+        return ""
+    parts = normalized.split(".")
+    vendor_index = 1 if len(parts) >= 3 and parts[0] in _BEDROCK_REGIONAL_PREFIXES else 0
+    if len(parts) > vendor_index:
+        return _BEDROCK_VENDOR_PROVIDERS.get(parts[vendor_index], "")
+    return ""
 
 
 def _resolve_conversation_id(*, framework_name: str, run_key: str, callback_kwargs: dict[str, Any]) -> tuple[str, str]:

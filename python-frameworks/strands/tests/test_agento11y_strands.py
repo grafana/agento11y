@@ -6,7 +6,14 @@ from datetime import timedelta
 from types import SimpleNamespace
 
 from agento11y import Client, ClientConfig, GenerationExportConfig
-from agento11y.models import ExportGenerationResult, ExportGenerationsResponse, MessageRole, PartKind
+from agento11y.models import (
+    ExportGenerationResult,
+    ExportGenerationsResponse,
+    ExportWorkflowStepResult,
+    ExportWorkflowStepsResponse,
+    MessageRole,
+    PartKind,
+)
 from agento11y_strands import (
     Agento11yStrandsHookProvider,
     create_agento11y_strands_hook_provider,
@@ -17,6 +24,7 @@ from agento11y_strands import (
 class _CapturingExporter:
     def __init__(self) -> None:
         self.requests = []
+        self.workflow_requests = []
 
     def export_generations(self, request):
         self.requests.append(request)
@@ -24,6 +32,12 @@ class _CapturingExporter:
             results=[
                 ExportGenerationResult(generation_id=generation.id, accepted=True) for generation in request.generations
             ]
+        )
+
+    def export_workflow_steps(self, request):
+        self.workflow_requests.append(request)
+        return ExportWorkflowStepsResponse(
+            results=[ExportWorkflowStepResult(step_id=step.id, accepted=True) for step in request.workflow_steps]
         )
 
     def shutdown(self) -> None:
@@ -78,9 +92,9 @@ class _ToolRegistry:
         }
 
 
-def _agent():
+def _agent(name: str = "strands-agent"):
     return SimpleNamespace(
-        name="strands-agent",
+        name=name,
         agent_id="agent-42",
         model=_Model(),
         system_prompt="Be brief.",
@@ -165,6 +179,222 @@ def test_strands_model_lifecycle_exports_generation_with_framework_metadata() ->
         assert generation.tools[0].name == "lookup"
     finally:
         client.shutdown()
+
+
+def test_strands_multi_agent_generations_have_parent_ids_and_workflow_links() -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        hooks = create_agento11y_strands_hook_provider(client=client, provider_resolver="auto")
+        state = {"conversation_id": "conv-lineage"}
+        source = object()
+        first_agent = _agent("one")
+        second_agent = _agent("two")
+
+        hooks.before_multi_agent_invocation(SimpleNamespace(source=source, invocation_state=state))
+        hooks.before_node_call(SimpleNamespace(source=source, node_id="one", invocation_state=state))
+        hooks.before_model_call(SimpleNamespace(agent=first_agent, invocation_state=state))
+        hooks.after_model_call(
+            SimpleNamespace(
+                agent=first_agent,
+                invocation_state=state,
+                stop_response=SimpleNamespace(message={"role": "assistant", "content": [{"text": "one"}]}),
+                exception=None,
+            )
+        )
+        hooks.after_node_call(SimpleNamespace(source=source, node_id="one", invocation_state=state))
+
+        hooks.before_node_call(SimpleNamespace(source=source, node_id="two", invocation_state=state))
+        hooks.before_model_call(SimpleNamespace(agent=second_agent, invocation_state=state))
+        hooks.after_model_call(
+            SimpleNamespace(
+                agent=second_agent,
+                invocation_state=state,
+                stop_response=SimpleNamespace(message={"role": "assistant", "content": [{"text": "two"}]}),
+                exception=None,
+            )
+        )
+        hooks.after_node_call(SimpleNamespace(source=source, node_id="two", invocation_state=state))
+        hooks.after_multi_agent_invocation(SimpleNamespace(source=source, invocation_state=state))
+
+        client.flush()
+        generations = [generation for request in exporter.requests for generation in request.generations]
+        assert len(generations) == 2
+        assert generations[0].agent_name == "one"
+        assert generations[1].agent_name == "two"
+        assert generations[0].parent_generation_ids == []
+        assert generations[1].parent_generation_ids == [generations[0].id]
+        steps = [step for request in exporter.workflow_requests for step in request.workflow_steps]
+        assert steps[0].linked_generation_ids == [generations[0].id]
+        assert steps[1].linked_generation_ids == [generations[1].id]
+        assert steps[1].parent_step_ids == [steps[0].id]
+    finally:
+        client.shutdown()
+
+
+def test_strands_parallel_nodes_keep_model_runs_and_workflow_links_isolated() -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        hooks = create_agento11y_strands_hook_provider(client=client, provider_resolver="auto")
+        state = {"conversation_id": "conv-parallel"}
+        first_agent = _agent("first")
+        second_agent = _agent("second")
+        source = SimpleNamespace(
+            name="parallel-graph",
+            nodes={
+                "first": SimpleNamespace(executor=first_agent),
+                "second": SimpleNamespace(executor=second_agent),
+            },
+        )
+
+        hooks.before_multi_agent_invocation(SimpleNamespace(source=source, invocation_state=state))
+        hooks.before_node_call(SimpleNamespace(source=source, node_id="first", invocation_state=state))
+        hooks.before_node_call(SimpleNamespace(source=source, node_id="second", invocation_state=state))
+        hooks.before_model_call(SimpleNamespace(agent=first_agent, invocation_state=state))
+        hooks.before_model_call(SimpleNamespace(agent=second_agent, invocation_state=state))
+
+        # Complete the calls in start order. A shared LIFO stack would swap
+        # these results, which is possible when graph nodes run concurrently.
+        for agent, text in ((first_agent, "first-result"), (second_agent, "second-result")):
+            hooks.after_model_call(
+                SimpleNamespace(
+                    agent=agent,
+                    invocation_state=state,
+                    stop_response=SimpleNamespace(
+                        message={"role": "assistant", "content": [{"text": text}]},
+                        stop_reason="end_turn",
+                    ),
+                    exception=None,
+                )
+            )
+
+        hooks.after_node_call(SimpleNamespace(source=source, node_id="first", invocation_state=state))
+        hooks.after_node_call(SimpleNamespace(source=source, node_id="second", invocation_state=state))
+        hooks.after_multi_agent_invocation(SimpleNamespace(source=source, invocation_state=state))
+        client.flush()
+
+        generations = [generation for request in exporter.requests for generation in request.generations]
+        output_by_agent = {generation.agent_name: generation.output[0].parts[0].text for generation in generations}
+        assert output_by_agent == {"first": "first-result", "second": "second-result"}
+        assert all(generation.parent_generation_ids == [] for generation in generations)
+
+        steps = [step for request in exporter.workflow_requests for step in request.workflow_steps]
+        generation_id_by_agent = {generation.agent_name: generation.id for generation in generations}
+        assert {step.step_name: step.linked_generation_ids for step in steps} == {
+            "first": [generation_id_by_agent["first"]],
+            "second": [generation_id_by_agent["second"]],
+        }
+    finally:
+        client.shutdown()
+
+
+def test_strands_nested_multi_agent_inherits_fallback_conversation_and_exports_node_step() -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        hooks = create_agento11y_strands_hook_provider(client=client, provider_resolver="auto")
+        state = {}
+        outer_agent = _agent("outer")
+        node_agent = _agent("node")
+        source = SimpleNamespace(
+            name="nested-graph",
+            nodes={"node": SimpleNamespace(executor=node_agent)},
+        )
+
+        hooks.before_invocation(SimpleNamespace(agent=outer_agent, invocation_state=state))
+        hooks.before_model_call(SimpleNamespace(agent=outer_agent, invocation_state=state))
+        hooks.after_model_call(
+            SimpleNamespace(
+                agent=outer_agent,
+                invocation_state=state,
+                stop_response=SimpleNamespace(
+                    message={"role": "assistant", "content": [{"text": "delegating"}]},
+                    stop_reason="end_turn",
+                ),
+                exception=None,
+            )
+        )
+        hooks.before_multi_agent_invocation(SimpleNamespace(source=source, invocation_state=state))
+        hooks.before_node_call(SimpleNamespace(source=source, node_id="node", invocation_state=state))
+        hooks.before_model_call(SimpleNamespace(agent=node_agent, invocation_state=state))
+        hooks.after_model_call(
+            SimpleNamespace(
+                agent=node_agent,
+                invocation_state=state,
+                stop_response=SimpleNamespace(
+                    message={"role": "assistant", "content": [{"text": "done"}]},
+                    stop_reason="end_turn",
+                ),
+                exception=None,
+            )
+        )
+        hooks.after_node_call(SimpleNamespace(source=source, node_id="node", invocation_state=state))
+        hooks.after_multi_agent_invocation(SimpleNamespace(source=source, invocation_state=state))
+        hooks.after_invocation(SimpleNamespace(agent=outer_agent, invocation_state=state))
+        client.flush()
+
+        generations = [generation for request in exporter.requests for generation in request.generations]
+        outer_generation = next(generation for generation in generations if generation.agent_name == "outer")
+        node_generation = next(generation for generation in generations if generation.agent_name == "node")
+        step = exporter.workflow_requests[0].workflow_steps[0]
+        assert step.step_name == "node"
+        assert step.linked_generation_ids == [node_generation.id]
+        assert step.conversation_id == node_generation.conversation_id == outer_generation.conversation_id
+    finally:
+        client.shutdown()
+
+
+def test_strands_graph_fallback_conversation_id_is_shared_by_steps_and_generations() -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        hooks = create_agento11y_strands_hook_provider(client=client, provider_resolver="auto")
+        state = {}
+        agent = _agent("node")
+        source = SimpleNamespace(name="graph", nodes={"node": SimpleNamespace(executor=agent)})
+
+        hooks.before_multi_agent_invocation(SimpleNamespace(source=source, invocation_state=state))
+        hooks.before_node_call(SimpleNamespace(source=source, node_id="node", invocation_state=state))
+        hooks.before_model_call(SimpleNamespace(agent=agent, invocation_state=state))
+        hooks.after_model_call(
+            SimpleNamespace(
+                agent=agent,
+                invocation_state=state,
+                stop_response=SimpleNamespace(
+                    message={"role": "assistant", "content": [{"text": "done"}]},
+                    stop_reason="end_turn",
+                ),
+                exception=None,
+            )
+        )
+        hooks.after_node_call(SimpleNamespace(source=source, node_id="node", invocation_state=state))
+        hooks.after_multi_agent_invocation(SimpleNamespace(source=source, invocation_state=state))
+        client.flush()
+
+        generation = exporter.requests[0].generations[0]
+        step = exporter.workflow_requests[0].workflow_steps[0]
+        assert generation.conversation_id == step.conversation_id
+    finally:
+        client.shutdown()
+
+
+def test_strands_bedrock_model_id_resolves_to_vendor_provider() -> None:
+    from agento11y_strands.handler import _resolve_provider_name
+
+    assert _resolve_provider_name("", "auto", "us.anthropic.claude-sonnet-4-20250514-v1:0", {}) == "anthropic"
+    assert (
+        _resolve_provider_name(
+            "",
+            "auto",
+            "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.meta.llama3-3-70b-instruct-v1:0",
+            {},
+        )
+        == "meta"
+    )
+    assert (
+        _resolve_provider_name("", "auto", "us.anthropic.claude-sonnet-4-v1:0", {"provider": "bedrock"}) == "anthropic"
+    )
 
 
 def test_strands_tool_use_turn_exports_tool_call_output_and_agent_name() -> None:
