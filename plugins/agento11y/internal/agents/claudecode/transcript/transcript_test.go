@@ -365,3 +365,30 @@ func writeTempFile(t *testing.T, content string) string {
 	}
 	return path
 }
+
+func TestReadSkipsOverlongLineAndKeepsReading(t *testing.T) {
+	prev := maxLineBytes
+	maxLineBytes = 1024
+	defer func() { maxLineBytes = prev }()
+
+	content := `{"type":"user","sessionId":"s","message":{"role":"user","content":"before"}}` + "\n" +
+		`{"type":"user","sessionId":"s","message":{"role":"user","content":"` + strings.Repeat("x", 4096) + `"}}` + "\n" +
+		`{"type":"assistant","sessionId":"s","message":{"model":"m","content":[],"usage":{"output_tokens":1}}}` + "\n"
+	path := filepath.Join(t.TempDir(), "t.jsonl")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lines, pos, err := Read(path, 0)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if len(lines) != 2 || lines[0].Type != "user" || lines[1].Type != "assistant" {
+		t.Fatalf("lines after the oversized one were lost: %+v", lines)
+	}
+	if pos != int64(len(content)) {
+		t.Fatalf("offset %d, want %d (the oversized line must still advance the offset)", pos, len(content))
+	}
+	if lines[1].EndOffset != int64(len(content)) {
+		t.Fatalf("EndOffset %d, want %d", lines[1].EndOffset, len(content))
+	}
+}

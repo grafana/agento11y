@@ -11,13 +11,16 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 )
 
 const (
 	// DefaultMaxLineBytes bounds one rollout line. A tool result can be large,
-	// so this is generous, but a line past it is corruption.
+	// so this is generous. A line past it is skipped when SkipOversizedLines
+	// is set and is an error otherwise; either way the rest of the rollout is
+	// never lost to one oversized line.
 	DefaultMaxLineBytes = 16 * 1024 * 1024
 	// liveMaxLineBytes and liveMaxTranscriptBytes bound the live hook, which
 	// runs inside an agent's stop handler and must not spend unbounded time on
@@ -91,6 +94,12 @@ type ScanOptions struct {
 	// importer sets it: one torn line in a months-old rollout should cost that
 	// line, not the session.
 	SkipMalformedLines bool
+	// SkipOversizedLines drops a line longer than MaxLineBytes and keeps
+	// reading, instead of failing the scan. The importer sets it: a rollout
+	// with one 20MB tool result should still yield every other turn. The live
+	// hook leaves it off, because a line past its cap is budget it must not
+	// spend inside a stop handler.
+	SkipOversizedLines bool
 }
 
 // LiveScanOptions is the budget for the live hook, which runs inside an agent's
@@ -109,7 +118,7 @@ func LiveScanOptions() ScanOptions {
 // cap: an import is expected to read a whole rollout, and rollouts of several
 // hundred megabytes exist.
 func ImportScanOptions() ScanOptions {
-	return ScanOptions{SkipMalformedLines: true}
+	return ScanOptions{SkipMalformedLines: true, SkipOversizedLines: true}
 }
 
 // ScanRecords decodes path one line at a time and calls visit for each record.
@@ -126,21 +135,33 @@ func ScanRecords(path string, opts ScanOptions, visit func(Record) (bool, error)
 	}
 	defer func() { _ = f.Close() }()
 
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), maxLine)
+	r := bufio.NewReaderSize(f, 64*1024)
 	var read int64
 	lineNo := 0
-	for scanner.Scan() {
+	for {
+		line, consumed, tooLong, err := readLine(r, maxLine)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("codexlog: scan: %w", err)
+		}
 		lineNo++
-		read += int64(len(scanner.Bytes())) + 1
+		read += consumed
 		if opts.MaxBytes > 0 && read > opts.MaxBytes {
 			return fmt.Errorf("codexlog: transcript byte budget exceeded")
 		}
-		if len(bytes.TrimSpace(scanner.Bytes())) == 0 {
+		if tooLong {
+			if opts.SkipOversizedLines {
+				continue
+			}
+			return fmt.Errorf("codexlog: line %d: exceeds %d bytes", lineNo, maxLine)
+		}
+		if len(bytes.TrimSpace(line)) == 0 {
 			continue
 		}
 		var rec Record
-		if err := json.Unmarshal(scanner.Bytes(), &rec); err != nil {
+		if err := json.Unmarshal(line, &rec); err != nil {
 			if opts.SkipMalformedLines {
 				continue
 			}
@@ -154,10 +175,45 @@ func ScanRecords(path string, opts ScanOptions, visit func(Record) (bool, error)
 			return nil
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("codexlog: scan: %w", err)
-	}
 	return nil
+}
+
+// readLine returns the next line without its trailing newline, and the bytes
+// consumed including the newline. A line longer than max is discarded as it
+// streams past, never buffered, and reported through tooLong, so one oversized
+// line costs itself and nothing after it. This is the behavior bufio.Scanner
+// cannot give: its ErrTooLong is terminal and abandons the rest of the file.
+// io.EOF is returned only when nothing remains.
+func readLine(r *bufio.Reader, max int) (line []byte, consumed int64, tooLong bool, err error) {
+	var buf []byte
+	for {
+		chunk, rerr := r.ReadSlice('\n')
+		consumed += int64(len(chunk))
+		if !tooLong {
+			if len(buf)+len(chunk) > max {
+				tooLong = true
+				buf = nil
+			} else {
+				buf = append(buf, chunk...)
+			}
+		}
+		if rerr == nil {
+			break
+		}
+		if rerr == bufio.ErrBufferFull {
+			continue
+		}
+		if rerr == io.EOF {
+			if consumed == 0 {
+				return nil, 0, false, io.EOF
+			}
+			break
+		}
+		return nil, consumed, tooLong, rerr
+	}
+	line = bytes.TrimSuffix(buf, []byte("\n"))
+	line = bytes.TrimSuffix(line, []byte("\r"))
+	return line, consumed, tooLong, nil
 }
 
 // ReadSessionMeta returns the session_meta record of a rollout. opts bounds the

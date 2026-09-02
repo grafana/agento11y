@@ -452,3 +452,35 @@ func TestImportScanOptionsHaveNoTotalCap(t *testing.T) {
 		t.Fatal("both budgets must tolerate a torn line")
 	}
 }
+
+func TestScanRecordsSkipsOverlongLineWhenLenient(t *testing.T) {
+	path := writeTranscript(t,
+		`{"type":"session_meta","payload":{"id":"s"}}`,
+		`{"type":"blob","payload":"`+strings.Repeat("a", 4096)+`"}`,
+		`{"type":"turn_context","payload":{"turn_id":"turn-1"}}`,
+	)
+	var types []string
+	opts := ImportScanOptions()
+	opts.MaxLineBytes = 1024
+	err := ScanRecords(path, opts, func(rec Record) (bool, error) {
+		types = append(types, rec.Type)
+		return false, nil
+	})
+	if err != nil {
+		t.Fatalf("ScanRecords: %v", err)
+	}
+	if strings.Join(types, ",") != "session_meta,turn_context" {
+		t.Fatalf("records after the oversized line were lost: %v", types)
+	}
+}
+
+func TestScanRecordsFailsOnOverlongLineWhenStrict(t *testing.T) {
+	path := writeTranscript(t,
+		`{"type":"session_meta","payload":{"id":"s"}}`,
+		`{"type":"blob","payload":"`+strings.Repeat("a", 4096)+`"}`,
+	)
+	err := ScanRecords(path, ScanOptions{MaxLineBytes: 1024}, func(Record) (bool, error) { return false, nil })
+	if err == nil || !strings.Contains(err.Error(), "line 2") {
+		t.Fatalf("expected a line 2 error, got %v", err)
+	}
+}
