@@ -819,6 +819,9 @@ type TokenUsageOptions struct {
 	// Workspace filters by the conversation's lifetime cwd when non-nil. The
 	// empty string selects conversations with no known cwd.
 	Workspace *string
+	// Agent filters to conversations whose agent hosts include this value
+	// when non-empty, matching the conversation list's agent facet.
+	Agent string
 	// Interval is the bucket width. Zero asks for a derived interval that
 	// keeps the response under maxTokenUsageBuckets buckets.
 	Interval time.Duration
@@ -888,6 +891,9 @@ func (s *Storage) TokenUsagePoints(opts TokenUsageOptions) ([]TokenUsagePoint, t
 		// or restore that rewrote modification times orders the files by
 		// something other than their activity.
 		if !workspaceMatches(entry.summary.Workspace, opts.Workspace) {
+			continue
+		}
+		if opts.Agent != "" && !agentHostListed(entry.summary.Agents, opts.Agent) {
 			continue
 		}
 		entryFirst, entryLast, ok := entry.bounds(opts.Since, opts.Before)
