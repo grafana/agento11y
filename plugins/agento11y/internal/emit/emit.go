@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/grafana/agento11y/go/agento11y"
+	"github.com/grafana/agento11y/go/proto/agento11y/wire"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/otel"
@@ -30,10 +31,23 @@ import (
 )
 
 // ExportEndpoint returns the generations export URL derived from the branded
-// ENDPOINT family (trailing slash trimmed) plus the SDK's
-// `/api/v1/generations:export` path.
+// ENDPOINT family via ExportEndpointFor.
 func ExportEndpoint() string {
-	return strings.TrimRight(envconfig.Getenv("ENDPOINT"), "/") + "/api/v1/generations:export"
+	return ExportEndpointFor(envconfig.Getenv("ENDPOINT"))
+}
+
+// ExportEndpointFor returns the generations export URL for a configured base
+// endpoint: trailing slashes trimmed, plus the SDK's
+// `/api/v1/generations:export` path. A pasted full export URL
+// (`https://host/api/v1/generations:export`, a common copy-paste mistake) is
+// accepted too: the path is stripped and reapplied once rather than doubled,
+// matching the OpenCode and Pi plugins.
+func ExportEndpointFor(endpoint string) string {
+	base := strings.TrimRight(strings.TrimSpace(endpoint), "/")
+	if strings.HasSuffix(base, wire.GenerationExportHTTPPath) {
+		base = strings.TrimRight(strings.TrimSuffix(base, wire.GenerationExportHTTPPath), "/")
+	}
+	return base + wire.GenerationExportHTTPPath
 }
 
 // ClientOptions configures NewClient.
