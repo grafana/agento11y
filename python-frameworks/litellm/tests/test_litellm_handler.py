@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
@@ -66,6 +67,17 @@ def _new_span_client(
             embedding_capture=embedding_capture or EmbeddingCaptureConfig(),
         )
     )
+
+
+def _wait_for_finished_span(span_exporter: InMemorySpanExporter, timeout_s: float = 5.0) -> Any:
+    deadline = time.monotonic() + timeout_s
+    while True:
+        spans = span_exporter.get_finished_spans()
+        if spans:
+            return spans[0]
+        if time.monotonic() >= deadline:
+            raise AssertionError(f"timed out waiting {timeout_s}s for LiteLLM callback span")
+        time.sleep(0.01)
 
 
 def _base_embedding_slo(**overrides: Any) -> dict[str, Any]:
@@ -984,7 +996,7 @@ def test_dynamic_conversation_id_from_metadata() -> None:
         client.shutdown()
 
 
-def test_conversation_id_session_id_fallback() -> None:
+def test_conversation_id_session_id_fallback() -> None:  # trufflehog:ignore
     """session_id in metadata is used when conversation_id is absent."""
     exporter = _CapturingExporter()
     client = _new_client(exporter)
@@ -1669,7 +1681,7 @@ def test_aembedding_recorded() -> None:
         client.shutdown()
 
 
-def test_embedding_failure_sets_error_status() -> None:
+def test_embedding_failure_sets_error_status() -> None:  # trufflehog:ignore
     """A failed embedding call produces an error-status span."""
     from opentelemetry.trace import StatusCode
 
@@ -1774,9 +1786,9 @@ def test_embedding_input_text_honours_litellm_redaction() -> None:
             input=["secret one", "secret two"],
             mock_response=[0.1, 0.2, 0.3],
         )
+        span = _wait_for_finished_span(span_exporter)
         client.flush()
 
-        span = span_exporter.get_finished_spans()[0]
         texts = span.attributes.get("gen_ai.embeddings.input_texts")
         assert texts is None or all(not text for text in texts)
     finally:
