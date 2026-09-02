@@ -35,8 +35,8 @@ allowBuilds:
   sqlite3: true
   tree-sitter: true
 minimumReleaseAgeExclude:
-  # Renovate security update: pnpm@11.8.0
-  - pnpm@11.8.0
+  # Renovate security update: pnpm@11.8.0 || 11.11.0
+  - pnpm@11.8.0 || 11.11.0
   # Renovate security update: brace-expansion@5.0.8 || 5.0.9
   - brace-expansion@5.0.8 || 5.0.9
   # Renovate security update: tar@7.5.21
