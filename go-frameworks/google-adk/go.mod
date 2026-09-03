@@ -1,6 +1,7 @@
 module github.com/grafana/agento11y/go-frameworks/google-adk
 
 go 1.25.7
+toolchain go1.25.14
 
 require (
 	github.com/grafana/agento11y/go v0.2.0

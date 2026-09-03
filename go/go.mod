@@ -1,6 +1,7 @@
 module github.com/grafana/agento11y/go
 
 go 1.25.7
+toolchain go1.25.14
 
 require (
 	go.opentelemetry.io/otel v1.45.0
