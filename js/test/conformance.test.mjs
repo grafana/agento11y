@@ -483,6 +483,7 @@ test('conformance tool execution semantics', async () => {
             toolName: 'weather',
             toolCallId: 'call-weather-1',
             toolType: 'function',
+            skillName: '  code-review  ',
             includeContent: true,
           });
           recorder.setResult({
@@ -498,13 +499,18 @@ test('conformance tool execution semantics', async () => {
     await env.client.shutdown();
     const span = env.latestSpanByOperation('execute_tool');
     const metricNames = await env.metricNames();
+    const durationAttributes = await env.metricDataPointAttributes('gen_ai.client.operation.duration');
+    const toolExecution = env.client.debugSnapshot().toolExecutions[0];
 
     assert.equal(env.receivedRequests.length, 0);
+    assert.ok(toolExecution);
     assert.equal(span.name, 'execute_tool weather');
     assert.equal(span.attributes['gen_ai.operation.name'], 'execute_tool');
     assert.equal(span.attributes['gen_ai.tool.name'], 'weather');
     assert.equal(span.attributes['gen_ai.tool.call.id'], 'call-weather-1');
     assert.equal(span.attributes['gen_ai.tool.type'], 'function');
+    assert.equal(span.attributes['agento11y.skill.name'], 'code-review');
+    assert.equal(toolExecution.skillName, 'code-review');
     assert.match(String(span.attributes['gen_ai.tool.call.arguments'] ?? ''), /Paris/);
     assert.match(String(span.attributes['gen_ai.tool.call.result'] ?? ''), /sunny/);
     assert.equal(span.attributes['agento11y.conversation.title'], 'Context title');
@@ -512,6 +518,14 @@ test('conformance tool execution semantics', async () => {
     assert.equal(span.attributes['gen_ai.agent.version'], 'v-context');
     assert.ok(metricNames.includes('gen_ai.client.operation.duration'));
     assert.ok(!metricNames.includes('gen_ai.client.time_to_first_token'));
+    const toolMetricAttributes = durationAttributes.filter(
+      (attributes) => attributes['gen_ai.operation.name'] === 'execute_tool',
+    );
+    assert.ok(toolMetricAttributes.length > 0, 'expected an execute_tool duration metric');
+    assert.ok(
+      toolMetricAttributes.every((attributes) => !Object.hasOwn(attributes, 'agento11y.skill.name')),
+      'skill marker must not be projected onto metric attributes',
+    );
   } finally {
     await env.close();
   }

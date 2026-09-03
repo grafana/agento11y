@@ -1015,6 +1015,7 @@ func TestConformance_ToolExecution(t *testing.T) {
 		ToolCallID:      "call-weather",
 		ToolType:        "function",
 		ToolDescription: "Get weather",
+		SkillName:       " code-review ",
 		RequestModel:    conformanceModel.Name,
 		RequestProvider: conformanceModel.Provider,
 		IncludeContent:  true,
@@ -1042,13 +1043,14 @@ func TestConformance_ToolExecution(t *testing.T) {
 
 	metrics := env.CollectMetrics(t)
 	duration := findHistogram[float64](t, metrics, metricOperationDuration)
-	requireHistogramPointWithAttrs(t, duration, map[string]string{
+	durationPoint := requireHistogramPointWithAttrs(t, duration, map[string]string{
 		spanAttrOperationName: conformanceToolOperation,
 		spanAttrProviderName:  conformanceModel.Provider,
 		spanAttrRequestModel:  conformanceModel.Name,
 		spanAttrToolName:      "weather",
 		spanAttrAgentName:     "agent-tools",
 	})
+	requireMetricAttrAbsent(t, durationPoint.Attributes, spanAttrSkillName)
 
 	env.Shutdown(t)
 
@@ -1063,6 +1065,7 @@ func TestConformance_ToolExecution(t *testing.T) {
 	requireSpanAttr(t, attrs, spanAttrToolCallID, "call-weather")
 	requireSpanAttr(t, attrs, spanAttrToolType, "function")
 	requireSpanAttr(t, attrs, spanAttrToolDescription, "Get weather")
+	requireSpanAttr(t, attrs, spanAttrSkillName, "code-review")
 	requireSpanAttr(t, attrs, spanAttrConversationID, "conv-tool")
 	requireSpanAttr(t, attrs, spanAttrConversationTitle, "Weather lookup")
 	requireSpanAttr(t, attrs, spanAttrAgentName, "agent-tools")
@@ -1072,6 +1075,48 @@ func TestConformance_ToolExecution(t *testing.T) {
 	requireSpanAttr(t, attrs, metadataKeySDKName, sdkNameGo)
 	requireSpanAttrPresent(t, attrs, spanAttrToolCallArguments)
 	requireSpanAttrPresent(t, attrs, spanAttrToolCallResult)
+}
+
+func TestConformance_ToolSkillMarkerSurvivesStrippedModes(t *testing.T) {
+	tests := []struct {
+		name string
+		mode agento11y.ContentCaptureMode
+	}{
+		{name: "metadata_only", mode: agento11y.ContentCaptureModeMetadataOnly},
+		{name: "full_with_metadata_spans", mode: agento11y.ContentCaptureModeFullWithMetadataSpans},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newConformanceEnv(t, withConformanceConfig(func(cfg *agento11y.Config) {
+				cfg.ContentCapture = tc.mode
+			}))
+
+			_, recorder := env.Client.StartToolExecution(context.Background(), agento11y.ToolExecutionStart{
+				ToolName:          "weather",
+				ToolDescription:   "Get sensitive weather",
+				ConversationTitle: "Sensitive tool conversation",
+				SkillName:         " code-review ",
+				IncludeContent:    true,
+			})
+			recorder.SetResult(agento11y.ToolExecutionEnd{
+				Arguments: map[string]any{"city": "Paris"},
+				Result:    map[string]any{"temp_c": 18},
+			})
+			recorder.End()
+			if err := recorder.Err(); err != nil {
+				t.Fatalf("record tool execution: %v", err)
+			}
+
+			span := findSpan(t, env.Spans.Ended(), conformanceToolOperation)
+			attrs := spanAttrs(span)
+			requireSpanAttr(t, attrs, spanAttrSkillName, "code-review")
+			requireSpanAttrAbsent(t, attrs, spanAttrToolDescription)
+			requireSpanAttrAbsent(t, attrs, spanAttrConversationTitle)
+			requireSpanAttrAbsent(t, attrs, spanAttrToolCallArguments)
+			requireSpanAttrAbsent(t, attrs, spanAttrToolCallResult)
+		})
+	}
 }
 
 func TestConformance_Embedding(t *testing.T) {
