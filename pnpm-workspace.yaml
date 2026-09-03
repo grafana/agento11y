@@ -17,7 +17,7 @@ overrides:
   fast-xml-builder: 1.1.7
   '@hono/node-server': 2.0.10
   ip-address: 10.3.1
-  qs: 6.15.2
+  qs: 6.16.0
   'form-data@<2.5.6': 2.5.6
   'brace-expansion@5': 5.0.9
   'uuid@<11.1.1': 11.1.1
@@ -51,3 +51,5 @@ minimumReleaseAgeExclude:
   - ip-address@10.3.1
   # Renovate security update: fast-uri@3.1.5
   - fast-uri@3.1.5
+  # Renovate security update: qs@6.16.0
+  - qs@6.16.0
