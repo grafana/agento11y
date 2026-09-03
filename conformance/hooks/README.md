@@ -66,9 +66,10 @@ the request still goes out.
 field and adding it would change a public type and the generation-export mapping. Go
 and Python cover the field in their own tests.
 
-Media parts are absent, because only Go's `model.Part` can hold one and the server
-has no `media` kind. All three SDKs drop a media part, and a message left with no
-parts serializes as `"parts": []`.
+Media parts are absent, because the server has no `media` kind. Go's `model.Part` and
+Python's `Part` can hold a media part; the JS `MessagePart` union has no media member,
+so JS has none to drop. Go and Python drop theirs, and a message left with no parts
+serializes as `"parts": []` in all three SDKs.
 
 ## Comparison rule
 

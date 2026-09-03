@@ -232,6 +232,12 @@ def _sanitize_part(part: Part, redactor: _SecretRedactor, default_text_mode: str
         if len(part.tool_call.input_json) > 0:
             part.tool_call.input_json = redactor.redact(part.tool_call.input_json.decode("utf-8")).encode("utf-8")
         return
+    if part.kind == PartKind.MEDIA:
+        # A media URL is generation content, but this sanitizer only redacts text
+        # and JSON payloads. metadata_only capture is the only mode that clears a
+        # media URL, and it runs instead of the sanitizer, so under every other
+        # mode the URL is exported as the caller set it.
+        return
     if part.kind == PartKind.TOOL_RESULT and part.tool_result is not None:
         part.tool_result.content = redactor.redact(part.tool_result.content)
         if len(part.tool_result.content_json) > 0:
