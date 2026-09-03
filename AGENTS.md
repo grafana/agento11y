@@ -109,3 +109,4 @@ The `## Reference` section of `plugins/agento11y/internal/skills/content/setup-c
 ## Running checks
 
 `mise run check` is the full local CI gate: lint + typecheck + proto-drift + redaction-drift + every SDK suite. For a focused change, run the matching narrow task (e.g. `mise run test:py:sdk-langgraph`); the full gate is slow.
+- Security issues should be reported via [Grafana's security issue reporting page](https://grafana.com/legal/report-a-security-issue/) and not directly in this repository.
