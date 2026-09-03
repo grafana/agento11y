@@ -62,10 +62,13 @@ func init() {
 
 // Test seams.
 var (
-	lookPath    = exec.LookPath
-	execFn      = syscall.Exec
-	runInstall  = defaultRunInstall
-	runUpdate   = defaultRunUpdate
+	lookPath      = exec.LookPath
+	execFn        = syscall.Exec
+	runInstall    = defaultRunInstall
+	runUpdate     = defaultRunUpdate
+	runUpdateStep = func(ctx context.Context, bin string, w io.Writer, argv []string) error {
+		return launcher.RunSteps(ctx, bin, w, [][]string{argv})
+	}
 	configDirFn = defaultConfigDir
 	cacheDirFn  = defaultCacheDir
 	writeConfig = writeConfigAtomic
@@ -163,10 +166,75 @@ func defaultRunInstall(ctx context.Context, bin string, w io.Writer) error {
 	})
 }
 
-func defaultRunUpdate(ctx context.Context, bin string, w io.Writer) error {
-	return launcher.RunSteps(ctx, bin, w, [][]string{
-		{"plugin", PluginSource, "--global", "--force"},
-	})
+func defaultRunUpdate(ctx context.Context, bin string, w io.Writer) (err error) {
+	backup, err := backupCachedPlugin()
+	if err != nil {
+		return err
+	}
+	if backup != nil {
+		defer func() {
+			if err != nil {
+				err = errors.Join(err, backup.restore())
+				return
+			}
+			err = backup.discard()
+		}()
+	}
+
+	// OpenCode's --force changes config but reuses an existing package directory.
+	// --pure prevents the stale plugin from loading while the updater starts.
+	err = runUpdateStep(ctx, bin, w, []string{"plugin", PluginSource, "--global", "--force", "--pure"})
+	return err
+}
+
+type packageCacheBackup struct {
+	original string
+	root     string
+	cached   string
+}
+
+func backupCachedPlugin() (*packageCacheBackup, error) {
+	original, err := pluginCacheDir()
+	if err != nil {
+		return nil, err
+	}
+	if _, err := os.Stat(original); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("inspect cached OpenCode plugin %s: %w", original, err)
+	}
+
+	root, err := os.MkdirTemp(filepath.Dir(original), ".agento11y-opencode-backup-*")
+	if err != nil {
+		return nil, fmt.Errorf("create OpenCode plugin cache backup: %w", err)
+	}
+	cached := filepath.Join(root, filepath.Base(original))
+	if err := os.Rename(original, cached); err != nil {
+		_ = os.RemoveAll(root)
+		return nil, fmt.Errorf("move cached OpenCode plugin %s: %w", original, err)
+	}
+	return &packageCacheBackup{original: original, root: root, cached: cached}, nil
+}
+
+func (b *packageCacheBackup) restore() error {
+	if err := os.RemoveAll(b.original); err != nil {
+		return fmt.Errorf("remove partial OpenCode plugin update %s: %w", b.original, err)
+	}
+	if err := os.Rename(b.cached, b.original); err != nil {
+		return fmt.Errorf("restore cached OpenCode plugin %s: %w", b.original, err)
+	}
+	if err := os.RemoveAll(b.root); err != nil {
+		return fmt.Errorf("remove OpenCode plugin cache backup %s: %w", b.root, err)
+	}
+	return nil
+}
+
+func (b *packageCacheBackup) discard() error {
+	if err := os.RemoveAll(b.root); err != nil {
+		return fmt.Errorf("remove stale OpenCode plugin cache backup %s: %w", b.root, err)
+	}
+	return nil
 }
 
 // migrateLegacyConfig rewrites legacy @grafana/sigil-opencode entries in
@@ -409,6 +477,14 @@ func cachedPackageSpec(source string) string {
 		return source + "@latest"
 	}
 	return source
+}
+
+func pluginCacheDir() (string, error) {
+	cache, err := cacheDirFn()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(cache, "packages", filepath.FromSlash(cachedPackageSpec(PluginSource))), nil
 }
 
 // packageVersion reads the `version` a package directory's package.json
