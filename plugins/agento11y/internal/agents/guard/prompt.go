@@ -163,8 +163,7 @@ func EvaluatePrompt(ctx context.Context, cfg envconfig.GuardsConfig, in PromptIn
 	}
 
 	var ruleReason string
-	var denied *agento11y.HookDeniedError
-	if errors.As(deniedErr, &denied) {
+	if denied, ok := errors.AsType[*agento11y.HookDeniedError](deniedErr); ok {
 		ruleReason = denied.Reason
 	}
 	ruleID := ""

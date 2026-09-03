@@ -31,7 +31,7 @@ Installs to `~/.local/bin`. Put that directory on your `PATH` if it is not alrea
 brew install grafana/grafana/agento11y
 ```
 
-**Go install (Windows, or any platform with Go 1.25+):**
+**Go install (Windows, or any platform with Go 1.26+):**
 
 ```sh
 go install github.com/grafana/agento11y/plugins/agento11y/cmd/agento11y@latest

@@ -121,7 +121,7 @@ func (c TestCase) EffectiveWeight() float64 {
 }
 
 // Weight returns a pointer suitable for TestCase.Weight, including explicit zero.
-func Weight(value float64) *float64 { return &value }
+func Weight(value float64) *float64 { return new(value) }
 
 // TestSuite is a local or stored portable test suite.
 type TestSuite struct {
@@ -334,7 +334,7 @@ func firstEnv(keys ...string) string {
 func cloneTestCase(in TestCase) TestCase {
 	in.Tags = append([]string(nil), in.Tags...)
 	if in.Weight != nil {
-		in.Weight = Weight(*in.Weight)
+		in.Weight = new(*in.Weight)
 	}
 	in.Metadata = cloneMap(in.Metadata)
 	in.ArtifactRefs = append([]ExperimentArtifactRef(nil), in.ArtifactRefs...)

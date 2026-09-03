@@ -44,8 +44,6 @@ func captureContent(t *testing.T, inv *otelgenai.Invocation, mode otelgenai.Capt
 	return out
 }
 
-func strptr(s string) *string { return &s }
-
 func TestContentEncoding(t *testing.T) {
 	t.Parallel()
 
@@ -71,7 +69,7 @@ func TestContentEncoding(t *testing.T) {
 			inv: otelgenai.Invocation{
 				OutputMessages: []otelgenai.Message{{
 					Role:         otelgenai.RoleAssistant,
-					FinishReason: strptr("stop"),
+					FinishReason: new("stop"),
 					Parts:        []otelgenai.Part{otelgenai.TextPart("It is 18C.")},
 				}},
 			},
@@ -186,7 +184,7 @@ func TestContentEncoding(t *testing.T) {
 					Role: otelgenai.RoleUser,
 					Parts: []otelgenai.Part{{
 						Type:      otelgenai.PartTypeText,
-						Content:   strptr("hello"),
+						Content:   new("hello"),
 						ID:        "call_1",
 						Name:      "weather",
 						Arguments: []byte(`{"city":"Paris"}`),
@@ -204,7 +202,7 @@ func TestContentEncoding(t *testing.T) {
 					Role: otelgenai.RoleUser,
 					Parts: []otelgenai.Part{{
 						Type:    otelgenai.PartTypeText,
-						Content: strptr("real text"),
+						Content: new("real text"),
 						Extensions: map[string]any{
 							"content":    "SHADOW",
 							"type":       "OVERRIDE",
@@ -223,7 +221,7 @@ func TestContentEncoding(t *testing.T) {
 					Role: otelgenai.RoleUser,
 					Parts: []otelgenai.Part{{
 						Type:       otelgenai.PartTypeText,
-						Content:    strptr("hello"),
+						Content:    new("hello"),
 						Extensions: map[string]any{"uri": "https://example.invalid/x"},
 					}},
 				}},
@@ -238,7 +236,7 @@ func TestContentEncoding(t *testing.T) {
 					Role: otelgenai.RoleUser,
 					Parts: []otelgenai.Part{
 						otelgenai.TextPart("kept"),
-						{Type: otelgenai.PartTypeText, Content: strptr("also kept"), Extensions: map[string]any{"vendor.bad": make(chan int)}},
+						{Type: otelgenai.PartTypeText, Content: new("also kept"), Extensions: map[string]any{"vendor.bad": make(chan int)}},
 					},
 				}},
 			},
@@ -253,7 +251,7 @@ func TestContentEncoding(t *testing.T) {
 					Parts: []otelgenai.Part{{
 						Type:       otelgenai.PartTypeCompaction,
 						ID:         "c1",
-						Content:    strptr("summary"),
+						Content:    new("summary"),
 						Extensions: map[string]any{"vendor.turns": 12},
 					}},
 				}},
@@ -326,7 +324,7 @@ func TestContentEncoding(t *testing.T) {
 			inv: otelgenai.Invocation{
 				OutputMessages: []otelgenai.Message{{
 					Role:         otelgenai.RoleAssistant,
-					FinishReason: strptr("stop"),
+					FinishReason: new("stop"),
 					Parts: []otelgenai.Part{{
 						Type:      otelgenai.PartTypeServerToolCall,
 						ID:        "srv_1",
@@ -343,7 +341,7 @@ func TestContentEncoding(t *testing.T) {
 			inv: otelgenai.Invocation{
 				OutputMessages: []otelgenai.Message{{
 					Role:         otelgenai.RoleAssistant,
-					FinishReason: strptr("stop"),
+					FinishReason: new("stop"),
 					Parts: []otelgenai.Part{{
 						Type: otelgenai.PartTypeServerToolCallResponse,
 						ID:   "srv_1",

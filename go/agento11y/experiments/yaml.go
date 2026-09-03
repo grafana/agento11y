@@ -100,7 +100,7 @@ func ParseSuite(data []byte) (*TestSuite, error) {
 		}
 		var weight *float64
 		if rawCase.Weight != nil {
-			weight = Weight(*rawCase.Weight)
+			weight = new(*rawCase.Weight)
 		}
 		suite.TestCases = append(suite.TestCases, TestCase{
 			TestCaseID: id, Name: rawCase.Name, Description: rawCase.Description,
@@ -143,7 +143,7 @@ func MarshalSuite(suite TestSuite) ([]byte, error) {
 			ArtifactRefs: toPortableArtifactRefs(testCase.ArtifactRefs),
 		}
 		if testCase.Weight != nil && *testCase.Weight != 1 {
-			item.Weight = Weight(*testCase.Weight)
+			item.Weight = new(*testCase.Weight)
 		}
 		raw.Cases = append(raw.Cases, item)
 	}

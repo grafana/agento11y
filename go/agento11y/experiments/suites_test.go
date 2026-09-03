@@ -70,7 +70,7 @@ func TestTestSuitesPullPortabilityAndBearerNormalization(t *testing.T) {
 
 func TestZeroWeightIsPreservedInPortableSuiteMetadata(t *testing.T) {
 	remote, err := localCaseToRemote(TestCase{
-		TestCaseID: "disabled", Input: "skip", Weight: Weight(0),
+		TestCaseID: "disabled", Input: "skip", Weight: new(float64(0)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -152,7 +152,7 @@ func TestPushSuiteCreatesDraftPrunesAndPublishes(t *testing.T) {
 	}
 	result, err := client.PushSuite(context.Background(), TestSuite{
 		SuiteID: "suite", Name: "Suite",
-		TestCases: []TestCase{{TestCaseID: "keep", Input: "a", Expected: "b", Weight: Weight(2)}},
+		TestCases: []TestCase{{TestCaseID: "keep", Input: "a", Expected: "b", Weight: new(float64(2))}},
 	}, PushSuiteOptions{Publish: true, Prune: true, Changelog: "new"})
 	if err != nil {
 		t.Fatal(err)

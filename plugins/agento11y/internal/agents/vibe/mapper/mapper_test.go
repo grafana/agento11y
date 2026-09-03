@@ -16,8 +16,6 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe/transcript"
 )
 
-func ptr[T any](v T) *T { return &v }
-
 func TestMap_GoldenFixture(t *testing.T) {
 	tp := filepath.Join("..", "testdata", "messages.jsonl")
 	lines, _, err := transcript.Read(tp, 0)
@@ -208,13 +206,13 @@ func TestMap_TurnCost(t *testing.T) {
 	}{
 		{
 			name:    "first turn no prior uses full session cost",
-			stats:   meta.Stats{Steps: 1, SessionCost: ptr(0.5)},
+			stats:   meta.Stats{Steps: 1, SessionCost: new(0.5)},
 			turnSeq: 1,
 			want:    0.5,
 		},
 		{
 			name:    "free first turn reports zero",
-			stats:   meta.Stats{Steps: 1, SessionCost: ptr(0.0)},
+			stats:   meta.Stats{Steps: 1, SessionCost: new(0.0)},
 			turnSeq: 1,
 			want:    0,
 		},
@@ -226,19 +224,19 @@ func TestMap_TurnCost(t *testing.T) {
 		},
 		{
 			name:       "negative session cost omits the key",
-			stats:      meta.Stats{Steps: 1, SessionCost: ptr(-0.5)},
+			stats:      meta.Stats{Steps: 1, SessionCost: new(-0.5)},
 			turnSeq:    1,
 			wantAbsent: true,
 		},
 		{
 			name:       "state lost mid-session omits the key",
-			stats:      meta.Stats{Steps: 7, SessionCost: ptr(4.2)},
+			stats:      meta.Stats{Steps: 7, SessionCost: new(4.2)},
 			turnSeq:    7,
 			wantAbsent: true,
 		},
 		{
 			name:       "normal delta against prior snapshot",
-			stats:      meta.Stats{SessionCost: ptr(0.5)},
+			stats:      meta.Stats{SessionCost: new(0.5)},
 			prior:      state.Session{SessionCost: 0.3},
 			priorFound: true,
 			turnSeq:    3,
@@ -246,7 +244,7 @@ func TestMap_TurnCost(t *testing.T) {
 		},
 		{
 			name:       "zero delta reports zero",
-			stats:      meta.Stats{SessionCost: ptr(0.3)},
+			stats:      meta.Stats{SessionCost: new(0.3)},
 			prior:      state.Session{SessionCost: 0.3},
 			priorFound: true,
 			turnSeq:    3,
@@ -254,7 +252,7 @@ func TestMap_TurnCost(t *testing.T) {
 		},
 		{
 			name:       "regressed totals omit the key",
-			stats:      meta.Stats{SessionCost: ptr(0.1)},
+			stats:      meta.Stats{SessionCost: new(0.1)},
 			prior:      state.Session{SessionCost: 9.9},
 			priorFound: true,
 			turnSeq:    4,

@@ -6,7 +6,7 @@ Full docs: [Instrument coding agents](https://grafana.com/docs/grafana-cloud/mac
 
 ## Install
 
-On macOS use Homebrew; on Linux and Windows (or any platform with Go 1.25+) use `go install`.
+On macOS use Homebrew; on Linux and Windows (or any platform with Go 1.26+) use `go install`.
 
 **macOS** — Homebrew:
 

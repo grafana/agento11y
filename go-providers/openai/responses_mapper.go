@@ -539,7 +539,7 @@ func mapResponsesRequestControls(payload map[string]any) (*int64, *float64, *flo
 
 	var thinkingEnabled *bool
 	if _, ok := payload["reasoning"]; ok {
-		thinkingEnabled = boolPtr(true)
+		thinkingEnabled = new(true)
 	}
 	thinkingBudget := resolveThinkingBudget(payload["reasoning"])
 

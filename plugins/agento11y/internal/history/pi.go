@@ -557,7 +557,7 @@ func piGeneration(
 		Tags:          piTags(log.header.CWD),
 	}
 	if piHasThinking(blocks) {
-		gen.ThinkingEnabled = piBoolPtr(true)
+		gen.ThinkingEnabled = new(true)
 	}
 	if msg.Usage != nil && msg.Usage.Cost != nil && msg.Usage.Cost.Total != nil {
 		gen.Metadata = map[string]any{"cost_usd": *msg.Usage.Cost.Total}
@@ -1118,5 +1118,3 @@ func piSetMetadata(gen *agento11y.Generation, key, value string) {
 	}
 	gen.Metadata[key] = value
 }
-
-func piBoolPtr(v bool) *bool { return &v }
