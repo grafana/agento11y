@@ -57,3 +57,5 @@ minimumReleaseAgeExclude:
   - ip-address@10.3.1
   # Renovate security update: fast-uri@3.1.5
   - fast-uri@3.1.5
+  # Renovate security update: qs@6.16.0
+  - qs@6.16.0
