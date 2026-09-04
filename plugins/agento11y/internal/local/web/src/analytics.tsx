@@ -29,7 +29,7 @@ import {
   tokenPointTime,
   useModelPrices,
 } from './formatters';
-import { ACTIVE_PILL_BG, Notice, PANEL_BG, SurfaceCard } from './notices';
+import { ACTIVE_PILL_BG, Notice, PANEL_BG, Select, SurfaceCard } from './notices';
 import { conversationPath, conversationsPath, isPlainLeftClick } from './routing';
 import { agentHosts, Icon, iconBtn, ModelPill } from './shell';
 import type {
@@ -76,6 +76,8 @@ export interface AnalyticsViewProps {
   onTimeRangeChange: (v: string) => void;
   workspace: string | null;
   onWorkspaceChange: (v: string | null) => void;
+  agent: string;
+  onAgentChange: (v: string) => void;
   hiddenSeries: ReadonlySet<TokenBucketKey>;
   onToggleSeries: (k: TokenBucketKey) => void;
   onRefresh: () => void;
@@ -1792,6 +1794,15 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
   const facetCost = sumCosts(props.facetAggregate?.workspace_rows || props.facetConversations, prices);
   const facetSessionCount =
     props.facetTotalConversations ?? facetWorkspaces.reduce((sum, workspace) => sum + workspace.count, 0);
+  const agentOptions = (() => {
+    const set = new Set<string>();
+    for (const host of props.facetAggregate?.agent_hosts ?? props.aggregate?.agent_hosts ?? []) set.add(host);
+    if (set.size === 0)
+      for (const conversation of props.facetConversations)
+        for (const host of agentHosts(conversation.agents)) set.add(host);
+    if (props.agent !== 'all') set.add(props.agent);
+    return [...set].sort();
+  })();
   const heaviestConversations = props.heaviestConversations ?? selectedCurrent;
   const heaviestTotalConversations = props.heaviestTotalConversations ?? props.totalConversations;
   const heaviestRankingExact =
@@ -1847,6 +1858,23 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
         </span>
         <UnitToggle value={props.unit} onChange={props.onUnitChange} />
         <div style={{ flex: 1, minWidth: 12 }} />
+        <Select
+          value={props.agent}
+          onChange={props.onAgentChange}
+          title="Filter by agent"
+          trigger={{
+            height: 34,
+            minWidth: 132,
+            padding: '0 30px 0 11px',
+            border: '1px solid var(--border-medium)',
+            borderRadius: 2,
+            background: 'var(--control-bg)',
+            color: 'var(--fg1)',
+            fontSize: 13,
+            fontFamily: 'var(--fontFamily)',
+          }}
+          options={[{ value: 'all', label: 'All agents' }, ...agentOptions.map((host) => ({ value: host, label: host }))]}
+        />
         <WorkspaceFacet
           workspaces={facetWorkspaces}
           selected={props.workspace}
