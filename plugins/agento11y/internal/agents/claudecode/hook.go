@@ -41,7 +41,7 @@ const AgentName = "claude-code"
 func exportConfig(endpoint, tenantID, authToken string) agento11y.GenerationExportConfig {
 	return agento11y.GenerationExportConfig{
 		Protocol: agento11y.GenerationExportProtocolHTTP,
-		Endpoint: endpoint + "/api/v1/generations:export",
+		Endpoint: emit.ExportEndpointFor(endpoint),
 		Headers:  map[string]string{"User-Agent": useragent.For("claude-code")},
 		Auth: agento11y.AuthConfig{
 			Mode:          agento11y.ExportAuthModeBasic,
