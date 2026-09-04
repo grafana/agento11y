@@ -50,7 +50,7 @@ importers:
         version: 1.14.4
       '@grpc/proto-loader':
         specifier: ^0.8.0
-        version: 0.8.0
+        version: 0.8.1
       '@langchain/core':
         specifier: ^1.2.1
         version: 1.2.1(@opentelemetry/api@1.9.1)(@opentelemetry/sdk-trace-base@2.6.1(@opentelemetry/api@1.9.1))(openai@6.33.0(ws@8.21.0)(zod@4.3.6))(ws@8.21.0)
@@ -115,7 +115,7 @@ importers:
         version: 1.14.4
       '@grpc/proto-loader':
         specifier: 0.8.0
-        version: 0.8.0
+        version: 0.8.1
       '@types/node':
         specifier: 24.12.0
         version: 24.12.0
@@ -208,7 +208,7 @@ importers:
         version: 1.14.4
       '@grpc/proto-loader':
         specifier: ^0.8.0
-        version: 0.8.0
+        version: 0.8.1
       '@sinclair/typebox':
         specifier: '*'
         version: 0.34.49
@@ -694,6 +694,7 @@ packages:
   '@google-cloud/opentelemetry-cloud-monitoring-exporter@0.21.0':
     resolution: {integrity: sha512-+lAew44pWt6rA4l8dQ1gGhH7Uo95wZKfq/GBf9aEyuNDDLQ2XppGEEReu6ujesSqTtZ8ueQFt73+7SReSHbwqg==}
     engines: {node: '>=18'}
+    deprecated: Google Cloud Platform now supports native OpenTelemetry Protocol (OTLP) endpoints via the Telemetry API. Please follow https://github.com/GoogleCloudPlatform/opentelemetry-operations-js/blob/main/MIGRATION.md
     peerDependencies:
       '@opentelemetry/api': ^1.9.0
       '@opentelemetry/core': 2.8.0
@@ -703,6 +704,7 @@ packages:
   '@google-cloud/opentelemetry-cloud-trace-exporter@3.0.0':
     resolution: {integrity: sha512-mUfLJBFo+ESbO0dAGboErx2VyZ7rbrHcQvTP99yH/J72dGaPbH2IzS+04TFbTbEd1VW5R9uK3xq2CqawQaG+1Q==}
     engines: {node: '>=18'}
+    deprecated: Google Cloud Platform now supports native OpenTelemetry Protocol (OTLP) endpoints via the Telemetry API. Please follow https://github.com/GoogleCloudPlatform/opentelemetry-operations-js/blob/main/MIGRATION.md
     peerDependencies:
       '@opentelemetry/api': ^1.0.0
       '@opentelemetry/core': 2.8.0
@@ -775,6 +777,11 @@ packages:
 
   '@grpc/proto-loader@0.8.0':
     resolution: {integrity: sha512-rc1hOQtjIWGxcxpb9aHAfLpIctjEnsDehj0DAiVfBlmT84uvR0uUtN2hEi/ecvWVjXUGf5qPF4qEgiLOx1YIMQ==}
+    engines: {node: '>=6'}
+    hasBin: true
+
+  '@grpc/proto-loader@0.8.1':
+    resolution: {integrity: sha512-wtF6h+DY6M3YaDBPAmvuuA6jV8Sif9MjtOI5euKFWRgCDl5PeDpPsHR9u2l6St5ceY8AZgoNDww5+HvEsXFsGg==}
     engines: {node: '>=6'}
     hasBin: true
 
@@ -4017,10 +4024,6 @@ packages:
     resolution: {integrity: sha512-TkRKr9sUTxEH8MdfuCSP7VizJyzRNMjj2J2do2Jr3Kym598JVdEksuzPQCnlFPW4ky9Q+iA+ma9BGm06XQBy8g==}
     engines: {node: '>= 0.6'}
 
-  type-is@2.0.1:
-    resolution: {integrity: sha512-OZs6gsjF4vMp32qrCbiVSkrFmXtG/AZhY3t0iAMrMBiAZyV9oALtXO8hsrHbMXF9x6L3grlFuwW2oAz7cav+Gw==}
-    engines: {node: '>= 0.6'}
-
   type-is@2.1.0:
     resolution: {integrity: sha512-faYHw0anBbc/kWF3zFTEnxSFOAGUX9GFbOBthvDdLsIlEoWOFOtS0zgCiQYwIskL9iGXZL3kAXD8OoZ4GmMATA==}
     engines: {node: '>= 18'}
@@ -4275,6 +4278,10 @@ packages:
 
   yargs@17.7.2:
     resolution: {integrity: sha512-7dSzzRQ++CKnNI/krKnYRV7JKKPUXMEh61soaHKg9mrWEhzFWhFnxPxGl+69cD1Ou63C13NUPCnmIcrvqCuM6w==}
+    engines: {node: '>=12'}
+
+  yargs@17.7.3:
+    resolution: {integrity: sha512-GZtjxm/J/4TSxuL3FNYjCmLktBTnIw/rVmKSIyKeYAZpmJB2ig9VauCC5xsa82GNKVKDAqpOn3KVzNt0zmrU0g==}
     engines: {node: '>=12'}
 
   yauzl@2.10.0:
@@ -5107,7 +5114,7 @@ snapshots:
 
   '@grpc/grpc-js@1.14.4':
     dependencies:
-      '@grpc/proto-loader': 0.8.0
+      '@grpc/proto-loader': 0.8.1
       '@js-sdsl/ordered-map': 4.4.2
 
   '@grpc/proto-loader@0.8.0':
@@ -5116,6 +5123,13 @@ snapshots:
       long: 5.3.2
       protobufjs: 7.6.5
       yargs: 17.7.2
+
+  '@grpc/proto-loader@0.8.1':
+    dependencies:
+      lodash.camelcase: 4.3.0
+      long: 5.3.2
+      protobufjs: 7.6.5
+      yargs: 17.7.3
 
   '@hono/node-server@2.0.10(hono@4.12.34)':
     dependencies:
@@ -7118,7 +7132,7 @@ snapshots:
       send: 1.2.1
       serve-static: 2.2.1
       statuses: 2.0.2
-      type-is: 2.0.1
+      type-is: 2.1.0
       vary: 1.1.2
     transitivePeerDependencies:
       - supports-color
@@ -8910,12 +8924,6 @@ snapshots:
       media-typer: 0.3.0
       mime-types: 2.1.35
 
-  type-is@2.0.1:
-    dependencies:
-      content-type: 1.0.5
-      media-typer: 1.1.0
-      mime-types: 3.0.2
-
   type-is@2.1.0:
     dependencies:
       content-type: 2.1.0
@@ -9139,6 +9147,16 @@ snapshots:
       yargs-parser: 20.2.9
 
   yargs@17.7.2:
+    dependencies:
+      cliui: 8.0.1
+      escalade: 3.2.0
+      get-caller-file: 2.0.5
+      require-directory: 2.1.1
+      string-width: 4.2.3
+      y18n: 5.0.8
+      yargs-parser: 21.1.1
+
+  yargs@17.7.3:
     dependencies:
       cliui: 8.0.1
       escalade: 3.2.0
