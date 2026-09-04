@@ -2,6 +2,7 @@ package transcript
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"io"
 	"os"
@@ -137,11 +138,16 @@ var skipTypes = map[string]bool{
 	"system": true,
 }
 
-const maxScannerBuf = 10 * 1024 * 1024 // 10MB for large tool result lines
+// maxLineBytes bounds one transcript line. Tool results can be large, so this
+// is generous. A line past it is skipped like an unparseable one and reading
+// continues, so one oversized line never costs the rest of the file. A var so
+// tests can lower it.
+var maxLineBytes = 10 * 1024 * 1024
 
 // Read reads JSONL lines from path starting at the given byte offset.
 // Returns parsed lines, the new byte offset, and any I/O error.
-// Unparseable lines are silently skipped.
+// Unparseable lines and lines longer than maxLineBytes are skipped; the
+// returned offset always advances past them.
 func Read(path string, offset int64) ([]Line, int64, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -155,42 +161,74 @@ func Read(path string, offset int64) ([]Line, int64, error) {
 		}
 	}
 
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), maxScannerBuf)
-
-	var lastAdvance int
-	scanner.Split(func(data []byte, atEOF bool) (int, []byte, error) {
-		advance, token, err := bufio.ScanLines(data, atEOF)
-		lastAdvance = advance
-		return advance, token, err
-	})
+	r := bufio.NewReaderSize(f, 64*1024)
 
 	var lines []Line
 	pos := offset
 
-	for scanner.Scan() {
-		data := scanner.Bytes()
-		lineLen := int64(lastAdvance)
+	for {
+		data, consumed, tooLong, err := readLine(r, maxLineBytes)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return lines, pos, err
+		}
+		pos += consumed
+		if tooLong {
+			continue
+		}
 
 		var line Line
 		if err := json.Unmarshal(data, &line); err != nil {
-			pos += lineLen
 			continue
 		}
 
 		if skipTypes[line.Type] {
-			pos += lineLen
 			continue
 		}
 
-		line.EndOffset = pos + lineLen
+		line.EndOffset = pos
 		lines = append(lines, line)
-		pos += lineLen
-	}
-
-	if err := scanner.Err(); err != nil {
-		return lines, pos, err
 	}
 
 	return lines, pos, nil
+}
+
+// readLine returns the next line without its trailing newline, and the bytes
+// consumed including the newline. A line longer than max is discarded as it
+// streams past, never buffered, and reported through tooLong, so one oversized
+// line costs itself and nothing after it. This is the behavior bufio.Scanner
+// cannot give: its ErrTooLong is terminal and abandons the rest of the file.
+// io.EOF is returned only when nothing remains.
+func readLine(r *bufio.Reader, max int) (line []byte, consumed int64, tooLong bool, err error) {
+	var buf []byte
+	for {
+		chunk, rerr := r.ReadSlice('\n')
+		consumed += int64(len(chunk))
+		if !tooLong {
+			if len(buf)+len(chunk) > max {
+				tooLong = true
+				buf = nil
+			} else {
+				buf = append(buf, chunk...)
+			}
+		}
+		if rerr == nil {
+			break
+		}
+		if rerr == bufio.ErrBufferFull {
+			continue
+		}
+		if rerr == io.EOF {
+			if consumed == 0 {
+				return nil, 0, false, io.EOF
+			}
+			break
+		}
+		return nil, consumed, tooLong, rerr
+	}
+	line = bytes.TrimSuffix(buf, []byte("\n"))
+	line = bytes.TrimSuffix(line, []byte("\r"))
+	return line, consumed, tooLong, nil
 }
