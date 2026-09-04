@@ -1,6 +1,7 @@
 module github.com/grafana/agento11y/go/otelgenai/weavertest
 
 go 1.25.7
+toolchain go1.25.14
 
 require (
 	go.opentelemetry.io/proto/otlp v1.11.0

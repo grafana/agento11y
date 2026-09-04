@@ -1,6 +1,7 @@
 module github.com/grafana/agento11y/plugins/agento11y
 
 go 1.25.7
+toolchain go1.25.14
 
 require (
 	github.com/charmbracelet/huh v1.0.0
