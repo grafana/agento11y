@@ -594,6 +594,8 @@ public static class AnthropicGenerationMapper
         var output = ReadLong(usage, "output_tokens");
         var cacheRead = ReadLong(usage, "cache_read_input_tokens");
         var cacheWrite = ReadLong(usage, "cache_creation_input_tokens");
+        var cacheCreation = usage.TryGetProperty("cache_creation", out var value) ? value : default;
+        var cacheWrite1h = ReadLong(cacheCreation, "ephemeral_1h_input_tokens");
         // Anthropic reports input_tokens exclusive of both cache buckets. The
         // OTel GenAI Anthropic rule requires summing them into the inclusive
         // input_tokens this SDK emits.
@@ -612,6 +614,7 @@ public static class AnthropicGenerationMapper
             TotalTokens = total,
             CacheReadInputTokens = cacheRead,
             CacheWriteInputTokens = cacheWrite,
+            CacheWrite1hInputTokens = cacheWrite1h,
             InputSemantics = TokenInputSemantics.Inclusive,
         };
     }

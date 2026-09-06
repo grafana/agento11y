@@ -25,6 +25,7 @@ public final class TokenUsage {
     private long totalTokens;
     private long cacheReadInputTokens;
     private long cacheWriteInputTokens;
+    private long cacheWrite1hInputTokens;
     private long reasoningTokens;
     private TokenInputSemantics inputSemantics = TokenInputSemantics.UNSPECIFIED;
 
@@ -73,6 +74,16 @@ public final class TokenUsage {
         return this;
     }
 
+    /** One-hour subset of {@link #getCacheWriteInputTokens()} when the provider reports cache TTLs. */
+    public long getCacheWrite1hInputTokens() {
+        return cacheWrite1hInputTokens;
+    }
+
+    public TokenUsage setCacheWrite1hInputTokens(long cacheWrite1hInputTokens) {
+        this.cacheWrite1hInputTokens = cacheWrite1hInputTokens;
+        return this;
+    }
+
     public long getReasoningTokens() {
         return reasoningTokens;
     }
@@ -111,6 +122,7 @@ public final class TokenUsage {
                 .setTotalTokens(totalTokens)
                 .setCacheReadInputTokens(cacheReadInputTokens)
                 .setCacheWriteInputTokens(cacheWriteInputTokens)
+                .setCacheWrite1hInputTokens(cacheWrite1hInputTokens)
                 .setReasoningTokens(reasoningTokens)
                 .setInputSemantics(inputSemantics);
     }

@@ -125,6 +125,9 @@ message TokenUsage {
   // Input tokens written to a provider-managed cache. Included in
   // input_tokens under INCLUSIVE semantics.
   int64 cache_write_input_tokens = 5;
+  // One-hour cache writes, when the provider reports their TTL breakdown.
+  // This is a subset of cache_write_input_tokens, never an addition.
+  int64 cache_write1h_input_tokens = 9;
   // Provider-reported reasoning/thinking tokens; explanatory sub-bucket of
   // output_tokens, never additive.
   int64 reasoning_tokens = 6;
