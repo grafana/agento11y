@@ -74,6 +74,29 @@ func TestEmbedContentPreservesProviderErrors(t *testing.T) {
 	}
 }
 
+func TestGenerateContentPreservesProviderResponseWithError(t *testing.T) {
+	client := newProviderTestClient(t)
+	providerErr := errors.New("provider failed after response")
+	expectedResponse := &genai.GenerateContentResponse{ResponseID: "partial-response"}
+
+	response, err := generateContent(
+		context.Background(),
+		client,
+		"gemini-2.5-pro",
+		nil,
+		nil,
+		func(context.Context, string, []*genai.Content, *genai.GenerateContentConfig) (*genai.GenerateContentResponse, error) {
+			return expectedResponse, providerErr
+		},
+	)
+	if !errors.Is(err, providerErr) {
+		t.Fatalf("expected provider error, got %v", err)
+	}
+	if response != expectedResponse {
+		t.Fatalf("expected native provider response pointer to be preserved")
+	}
+}
+
 func TestConformance_GenerateContentErrorMapping(t *testing.T) {
 	client := newProviderTestClient(t)
 	model := "gemini-2.5-pro"

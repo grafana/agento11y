@@ -12,6 +12,7 @@ import (
 func TestFromRequestResponse(t *testing.T) {
 	temperature := float32(0.4)
 	topP := float32(0.75)
+	seed := int32(17)
 	thinkingBudget := int32(2048)
 	model := "gemini-2.5-pro"
 	contents := []*genai.Content{
@@ -27,6 +28,9 @@ func TestFromRequestResponse(t *testing.T) {
 		MaxOutputTokens:   300,
 		Temperature:       &temperature,
 		TopP:              &topP,
+		CandidateCount:    2,
+		Seed:              &seed,
+		ResponseMIMEType:  "application/json",
 		ToolConfig: &genai.ToolConfig{
 			FunctionCallingConfig: &genai.FunctionCallingConfig{
 				Mode: genai.FunctionCallingConfigModeAny,
@@ -143,6 +147,15 @@ func TestFromRequestResponse(t *testing.T) {
 	if generation.TopP == nil || math.Abs(*generation.TopP-0.75) > 1e-6 {
 		t.Fatalf("expected top_p 0.75, got %v", generation.TopP)
 	}
+	if generation.ChoiceCount == nil || *generation.ChoiceCount != 2 {
+		t.Fatalf("expected choice count 2, got %v", generation.ChoiceCount)
+	}
+	if generation.Seed == nil || *generation.Seed != 17 {
+		t.Fatalf("expected seed 17, got %v", generation.Seed)
+	}
+	if generation.OutputType == nil || *generation.OutputType != "json" {
+		t.Fatalf("expected output type json, got %v", generation.OutputType)
+	}
 	if generation.ToolChoice == nil || *generation.ToolChoice != "any" {
 		t.Fatalf("unexpected tool choice %v", generation.ToolChoice)
 	}
@@ -191,15 +204,19 @@ func TestFromRequestResponse(t *testing.T) {
 func TestFromStream(t *testing.T) {
 	temperature := float32(0.2)
 	topP := float32(0.6)
+	seed := int32(29)
 	thinkingBudget := int32(1536)
 	model := "gemini-2.5-pro"
 	contents := []*genai.Content{
 		genai.NewContentFromText("What is the weather in Paris?", genai.RoleUser),
 	}
 	config := &genai.GenerateContentConfig{
-		MaxOutputTokens: 90,
-		Temperature:     &temperature,
-		TopP:            &topP,
+		MaxOutputTokens:  90,
+		Temperature:      &temperature,
+		TopP:             &topP,
+		CandidateCount:   3,
+		Seed:             &seed,
+		ResponseMIMEType: "text/plain",
 		ToolConfig: &genai.ToolConfig{
 			FunctionCallingConfig: &genai.FunctionCallingConfig{
 				Mode: genai.FunctionCallingConfigModeAuto,
@@ -296,11 +313,20 @@ func TestFromStream(t *testing.T) {
 	if generation.TopP == nil || math.Abs(*generation.TopP-0.6) > 1e-6 {
 		t.Fatalf("expected top_p 0.6, got %v", generation.TopP)
 	}
+	if generation.ChoiceCount == nil || *generation.ChoiceCount != 3 {
+		t.Fatalf("expected choice count 3, got %v", generation.ChoiceCount)
+	}
+	if generation.Seed == nil || *generation.Seed != 29 {
+		t.Fatalf("expected seed 29, got %v", generation.Seed)
+	}
+	if generation.OutputType == nil || *generation.OutputType != "text" {
+		t.Fatalf("expected output type text, got %v", generation.OutputType)
+	}
 	if generation.ToolChoice == nil || *generation.ToolChoice != "auto" {
 		t.Fatalf("unexpected tool choice %v", generation.ToolChoice)
 	}
-	if generation.ThinkingEnabled == nil || *generation.ThinkingEnabled {
-		t.Fatalf("expected thinking enabled false, got %v", generation.ThinkingEnabled)
+	if generation.ThinkingEnabled == nil || !*generation.ThinkingEnabled {
+		t.Fatalf("expected positive thinking budget to enable thinking, got %v", generation.ThinkingEnabled)
 	}
 	if generation.Metadata == nil {
 		t.Fatalf("expected metadata map")
@@ -317,6 +343,59 @@ func TestFromStream(t *testing.T) {
 	if len(generation.Artifacts) != 0 {
 		t.Fatalf("expected 0 artifacts by default, got %d", len(generation.Artifacts))
 	}
+}
+
+func TestThinkingEnabledTracksThinkingRequestNotThoughtInclusion(t *testing.T) {
+	tests := []struct {
+		name   string
+		config *genai.ThinkingConfig
+		want   *bool
+	}{
+		{
+			name:   "thinking level with hidden thoughts",
+			config: &genai.ThinkingConfig{ThinkingLevel: genai.ThinkingLevelHigh, IncludeThoughts: false},
+			want:   boolTestPtr(true),
+		},
+		{
+			name:   "thought inclusion alone",
+			config: &genai.ThinkingConfig{IncludeThoughts: true},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config := &genai.GenerateContentConfig{ThinkingConfig: test.config}
+			mappers := map[string]func() (agento11y.Generation, error){
+				"normal": func() (agento11y.Generation, error) {
+					return FromRequestResponse("gemini-2.5-pro", nil, config, &genai.GenerateContentResponse{})
+				},
+				"streaming": func() (agento11y.Generation, error) {
+					return FromStream("gemini-2.5-pro", nil, config, StreamSummary{Responses: []*genai.GenerateContentResponse{{}}})
+				},
+			}
+			for mapperName, mapper := range mappers {
+				t.Run(mapperName, func(t *testing.T) {
+					generation, err := mapper()
+					if err != nil {
+						t.Fatalf("map generation: %v", err)
+					}
+					if test.want == nil {
+						if generation.ThinkingEnabled != nil {
+							t.Fatalf("thinking enabled = %v, want omitted", *generation.ThinkingEnabled)
+						}
+						return
+					}
+					if generation.ThinkingEnabled == nil || *generation.ThinkingEnabled != *test.want {
+						t.Fatalf("thinking enabled = %v, want %v", generation.ThinkingEnabled, *test.want)
+					}
+				})
+			}
+		})
+	}
+}
+
+func boolTestPtr(value bool) *bool {
+	return &value
 }
 
 func TestFromRequestResponseWithRawArtifacts(t *testing.T) {
@@ -490,6 +569,273 @@ func TestFromStreamPreservesWhitespaceOnlyOutput(t *testing.T) {
 	}
 	if generation.Output[0].Parts[0].Text != "   " {
 		t.Fatalf("unexpected output text %q", generation.Output[0].Parts[0].Text)
+	}
+}
+
+func TestFromRequestResponseUsageIncludesThoughtsInOutput(t *testing.T) {
+	generation, err := FromRequestResponse("gemini-2.5-pro", nil, nil, &genai.GenerateContentResponse{
+		UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+			CandidatesTokenCount: 20,
+			ThoughtsTokenCount:   80,
+			TotalTokenCount:      100,
+		},
+	})
+	if err != nil {
+		t.Fatalf("from request/response: %v", err)
+	}
+	if generation.Usage.OutputTokens != 100 || generation.Usage.ReasoningTokens != 80 || generation.Usage.TotalTokens != 100 {
+		t.Fatalf("unexpected inclusive output usage: %#v", generation.Usage)
+	}
+}
+
+func TestFromRequestResponseMapsIntegralTopK(t *testing.T) {
+	want40 := int64(40)
+	cases := []struct {
+		name  string
+		value float32
+		want  *int64
+	}{
+		{name: "integral", value: 40, want: &want40},
+		{name: "fractional", value: 40.5},
+		{name: "out of range", value: math.MaxFloat32},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			generation, err := FromRequestResponse("gemini-2.5-pro", nil, &genai.GenerateContentConfig{TopK: &tc.value}, &genai.GenerateContentResponse{})
+			if err != nil {
+				t.Fatalf("from request/response: %v", err)
+			}
+			if tc.want == nil {
+				if generation.TopK != nil {
+					t.Fatalf("top_k = %v, want omitted", *generation.TopK)
+				}
+				return
+			}
+			if generation.TopK == nil || *generation.TopK != *tc.want {
+				t.Fatalf("top_k = %v, want %d", generation.TopK, *tc.want)
+			}
+		})
+	}
+}
+
+func TestFromRequestResponsePreservesMixedContentOrder(t *testing.T) {
+	contents := []*genai.Content{{
+		Role: genai.RoleUser,
+		Parts: []*genai.Part{
+			genai.NewPartFromText("before"),
+			genai.NewPartFromFunctionResponse("weather", map[string]any{"temperature": 18}),
+			genai.NewPartFromText("after"),
+		},
+	}}
+	generation, err := FromRequestResponse("gemini-2.5-pro", contents, nil, &genai.GenerateContentResponse{})
+	if err != nil {
+		t.Fatalf("from request/response: %v", err)
+	}
+	if len(generation.Input) != 3 {
+		t.Fatalf("input messages = %#v, want user/tool/user", generation.Input)
+	}
+	if generation.Input[0].Role != agento11y.RoleUser || generation.Input[0].Parts[0].Text != "before" ||
+		generation.Input[1].Role != agento11y.RoleTool || generation.Input[1].Parts[0].ToolResult == nil ||
+		generation.Input[2].Role != agento11y.RoleUser || generation.Input[2].Parts[0].Text != "after" {
+		t.Fatalf("input messages = %#v, want user/tool/user in provider order", generation.Input)
+	}
+
+	generation, err = FromRequestResponse("gemini-2.5-pro", []*genai.Content{
+		genai.NewContentFromText("first", genai.RoleUser),
+		genai.NewContentFromText("second", genai.RoleUser),
+	}, nil, &genai.GenerateContentResponse{})
+	if err != nil {
+		t.Fatalf("from consecutive request messages: %v", err)
+	}
+	if len(generation.Input) != 2 || generation.Input[0].Parts[0].Text != "first" || generation.Input[1].Parts[0].Text != "second" {
+		t.Fatalf("consecutive provider messages were merged: %#v", generation.Input)
+	}
+}
+
+func TestGenerationOperationUsesModalities(t *testing.T) {
+	textCandidate := []*genai.Candidate{{Content: genai.NewContentFromText("hello", genai.RoleModel)}}
+	imageCandidate := []*genai.Candidate{{Content: genai.NewContentFromParts([]*genai.Part{
+		genai.NewPartFromBytes([]byte("image"), "image/png"),
+	}, genai.RoleModel)}}
+	nestedMedia := genai.NewContentFromParts([]*genai.Part{
+		genai.NewPartFromFunctionResponseWithParts("inspect", map[string]any{"status": "ok"}, []*genai.FunctionResponsePart{
+			genai.NewFunctionResponsePartFromURI("gs://bucket/result.png", "image/png"),
+		}),
+	}, genai.RoleUser)
+
+	tests := []struct {
+		name       string
+		contents   []*genai.Content
+		config     *genai.GenerateContentConfig
+		candidates []*genai.Candidate
+		want       string
+	}{
+		{name: "text only", contents: []*genai.Content{genai.NewContentFromText("hi", genai.RoleUser)}, candidates: textCandidate, want: "chat"},
+		{name: "non-text input", contents: []*genai.Content{genai.NewContentFromParts([]*genai.Part{genai.NewPartFromURI("gs://bucket/image.png", "image/png")}, genai.RoleUser)}, want: "generate_content"},
+		{name: "configured non-text output", config: &genai.GenerateContentConfig{ResponseModalities: []string{"TEXT", "IMAGE"}}, want: "generate_content"},
+		{name: "nested function-response media", contents: []*genai.Content{nestedMedia}, want: "generate_content"},
+		{name: "actual non-text output", candidates: imageCandidate, want: "generate_content"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := generationOperation(test.contents, test.config, test.candidates); got != test.want {
+				t.Fatalf("operation = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestFromRequestResponseKeepsCandidatesSeparateAndOrdered(t *testing.T) {
+	generation, err := FromRequestResponse("gemini-2.5-pro", nil, nil, &genai.GenerateContentResponse{
+		Candidates: []*genai.Candidate{
+			{Index: 0, FinishReason: genai.FinishReasonStop, Content: genai.NewContentFromText("first", genai.RoleModel)},
+			{Index: 1, FinishReason: genai.FinishReasonMaxTokens, Content: genai.NewContentFromText("second", genai.RoleModel)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("from request/response: %v", err)
+	}
+	if len(generation.Output) != 2 {
+		t.Fatalf("expected two candidate messages, got %#v", generation.Output)
+	}
+	if generation.Output[0].Parts[0].Text != "first" || generation.Output[0].FinishReason != "STOP" {
+		t.Fatalf("unexpected first candidate: %#v", generation.Output[0])
+	}
+	if generation.Output[1].Parts[0].Text != "second" || generation.Output[1].FinishReason != "MAX_TOKENS" {
+		t.Fatalf("unexpected second candidate: %#v", generation.Output[1])
+	}
+}
+
+func TestGeminiPreservesFinishOnlyCandidates(t *testing.T) {
+	emptyToolCall := func() *genai.Content {
+		return genai.NewContentFromParts([]*genai.Part{{FunctionCall: &genai.FunctionCall{}}}, genai.RoleModel)
+	}
+	tests := []struct {
+		name          string
+		mapGeneration func() (agento11y.Generation, error)
+	}{
+		{
+			name: "sync",
+			mapGeneration: func() (agento11y.Generation, error) {
+				return FromRequestResponse("gemini-2.5-pro", nil, nil, &genai.GenerateContentResponse{Candidates: []*genai.Candidate{
+					{Index: 0, FinishReason: genai.FinishReasonStop, Content: genai.NewContentFromText("answer", genai.RoleModel)},
+					{Index: 1, FinishReason: genai.FinishReasonSafety, Content: emptyToolCall()},
+				}})
+			},
+		},
+		{
+			name: "stream",
+			mapGeneration: func() (agento11y.Generation, error) {
+				return FromStream("gemini-2.5-pro", nil, nil, StreamSummary{Responses: []*genai.GenerateContentResponse{{Candidates: []*genai.Candidate{
+					{Index: 0, FinishReason: genai.FinishReasonStop, Content: genai.NewContentFromText("answer", genai.RoleModel)},
+					{Index: 1, FinishReason: genai.FinishReasonSafety, Content: emptyToolCall()},
+				}}}})
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			generation, err := test.mapGeneration()
+			if err != nil {
+				t.Fatalf("map generation: %v", err)
+			}
+			if len(generation.Output) != 2 || len(generation.Output[1].Parts) != 0 || generation.Output[1].FinishReason != "SAFETY" {
+				t.Fatalf("output = %#v, want a finish-only safety candidate", generation.Output)
+			}
+		})
+	}
+}
+
+func TestGeminiMapsInlineAndFileMediaParts(t *testing.T) {
+	input := genai.NewContentFromParts([]*genai.Part{
+		genai.NewPartFromBytes([]byte("png"), "image/png"),
+		genai.NewPartFromURI("gs://bucket/clip.mp3", "audio/mpeg"),
+	}, genai.RoleUser)
+	functionResponse := genai.NewContentFromParts([]*genai.Part{
+		genai.NewPartFromFunctionResponseWithParts("inspect", map[string]any{"ok": true}, []*genai.FunctionResponsePart{
+			genai.NewFunctionResponsePartFromURI("gs://bucket/result.png", "image/png"),
+		}),
+	}, genai.RoleUser)
+	output := genai.NewContentFromParts([]*genai.Part{
+		genai.NewPartFromBytes([]byte("video"), "video/mp4"),
+	}, genai.RoleModel)
+	generation, err := FromRequestResponse("gemini-2.5-pro", []*genai.Content{input, functionResponse}, nil, &genai.GenerateContentResponse{Candidates: []*genai.Candidate{{
+		FinishReason: genai.FinishReasonStop,
+		Content:      output,
+	}}})
+	if err != nil {
+		t.Fatalf("map media generation: %v", err)
+	}
+	if generation.OperationName != "generate_content" || len(generation.Input) != 2 || len(generation.Input[0].Parts) != 2 || len(generation.Input[1].Parts) != 2 || len(generation.Output) != 1 || len(generation.Output[0].Parts) != 1 {
+		t.Fatalf("media generation = %#v", generation)
+	}
+	image := generation.Input[0].Parts[0].Media
+	audio := generation.Input[0].Parts[1].Media
+	nestedImage := generation.Input[1].Parts[1].Media
+	video := generation.Output[0].Parts[0].Media
+	if image == nil || image.Kind != "image" || image.URL != "data:image/png;base64,cG5n" {
+		t.Fatalf("inline image = %#v", image)
+	}
+	if audio == nil || audio.Kind != "audio" || audio.URL != "gs://bucket/clip.mp3" {
+		t.Fatalf("file audio = %#v", audio)
+	}
+	if nestedImage == nil || nestedImage.Kind != "image" || nestedImage.URL != "gs://bucket/result.png" {
+		t.Fatalf("function response image = %#v", nestedImage)
+	}
+	if video == nil || video.Kind != "video" || video.URL != "data:video/mp4;base64,dmlkZW8=" {
+		t.Fatalf("inline video = %#v", video)
+	}
+}
+
+func TestFromStreamAccumulatesCandidatesByIndex(t *testing.T) {
+	tests := []struct {
+		name      string
+		responses []*genai.GenerateContentResponse
+	}{
+		{
+			name: "explicit indexes",
+			responses: []*genai.GenerateContentResponse{
+				{Candidates: []*genai.Candidate{
+					{Index: 1, Content: genai.NewContentFromText("second ", genai.RoleModel)},
+					{Index: 0, Content: genai.NewContentFromText("first ", genai.RoleModel)},
+				}},
+				{Candidates: []*genai.Candidate{
+					{Index: 0, FinishReason: genai.FinishReasonStop, Content: genai.NewContentFromText("candidate", genai.RoleModel)},
+					{Index: 1, FinishReason: genai.FinishReasonMaxTokens, Content: genai.NewContentFromText("candidate", genai.RoleModel)},
+				}},
+			},
+		},
+		{
+			name: "missing indexes use response positions",
+			responses: []*genai.GenerateContentResponse{
+				{Candidates: []*genai.Candidate{
+					{Content: genai.NewContentFromText("first ", genai.RoleModel)},
+					{Content: genai.NewContentFromText("second ", genai.RoleModel)},
+				}},
+				{Candidates: []*genai.Candidate{
+					{FinishReason: genai.FinishReasonStop, Content: genai.NewContentFromText("candidate", genai.RoleModel)},
+					{FinishReason: genai.FinishReasonMaxTokens, Content: genai.NewContentFromText("candidate", genai.RoleModel)},
+				}},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			generation, err := FromStream("gemini-2.5-pro", nil, nil, StreamSummary{Responses: test.responses})
+			if err != nil {
+				t.Fatalf("from stream: %v", err)
+			}
+			if len(generation.Output) != 2 {
+				t.Fatalf("expected two accumulated candidates, got %#v", generation.Output)
+			}
+			if generation.Output[0].Parts[0].Text != "first candidate" || generation.Output[0].FinishReason != "STOP" {
+				t.Fatalf("unexpected index 0 candidate: %#v", generation.Output[0])
+			}
+			if generation.Output[1].Parts[0].Text != "second candidate" || generation.Output[1].FinishReason != "MAX_TOKENS" {
+				t.Fatalf("unexpected index 1 candidate: %#v", generation.Output[1])
+			}
+		})
 	}
 }
 

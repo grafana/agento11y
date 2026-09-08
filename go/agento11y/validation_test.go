@@ -19,6 +19,17 @@ func TestValidateGenerationRolePartCompatibility(t *testing.T) {
 		},
 	}
 
+	t.Run("system and developer text", func(t *testing.T) {
+		g := cloneGeneration(base)
+		g.Input = append(g.Input,
+			Message{Role: RoleSystem, Parts: []Part{TextPart("system")}},
+			Message{Role: RoleDeveloper, Parts: []Part{TextPart("developer")}},
+		)
+		if err := ValidateGeneration(g); err != nil {
+			t.Fatalf("expected valid generation, got %v", err)
+		}
+	})
+
 	t.Run("tool call only assistant", func(t *testing.T) {
 		g := cloneGeneration(base)
 		g.Input = append(g.Input, Message{
@@ -33,7 +44,7 @@ func TestValidateGenerationRolePartCompatibility(t *testing.T) {
 		}
 	})
 
-	t.Run("tool result only tool", func(t *testing.T) {
+	t.Run("tool result rejects assistant input", func(t *testing.T) {
 		g := cloneGeneration(base)
 		g.Input = append(g.Input, Message{
 			Role: RoleAssistant,
@@ -44,6 +55,55 @@ func TestValidateGenerationRolePartCompatibility(t *testing.T) {
 
 		if err := ValidateGeneration(g); err == nil {
 			t.Fatalf("expected validation error")
+		}
+	})
+
+	t.Run("tool result allows assistant output", func(t *testing.T) {
+		g := cloneGeneration(base)
+		g.Output = []Message{{
+			Role: RoleAssistant,
+			Parts: []Part{
+				ToolCallPart(ToolCall{ID: "toolu_1", Name: "weather"}),
+				ToolResultPart(ToolResult{ToolCallID: "toolu_1", Content: "sunny"}),
+				TextPart("It is sunny."),
+			},
+		}}
+
+		if err := ValidateGeneration(g); err != nil {
+			t.Fatalf("expected valid hosted-tool output, got %v", err)
+		}
+	})
+
+	t.Run("finish-only assistant output", func(t *testing.T) {
+		g := cloneGeneration(base)
+		g.Output = []Message{{Role: RoleAssistant, FinishReason: "content_filter"}}
+
+		if err := ValidateGeneration(g); err != nil {
+			t.Fatalf("expected valid finish-only output, got %v", err)
+		}
+	})
+
+	t.Run("matching generation and message finish reasons", func(t *testing.T) {
+		g := cloneGeneration(base)
+		g.StopReason = "stop"
+		g.Output = []Message{{Role: RoleAssistant, FinishReason: "stop", Parts: []Part{TextPart("done")}}}
+
+		if err := ValidateGeneration(g); err != nil {
+			t.Fatalf("expected matching finish reasons to be valid, got %v", err)
+		}
+	})
+
+	t.Run("conflicting generation and first non-empty message finish reasons", func(t *testing.T) {
+		g := cloneGeneration(base)
+		g.StopReason = "stop"
+		g.Output = []Message{
+			{Role: RoleAssistant, Parts: []Part{TextPart("partial")}},
+			{Role: RoleAssistant, FinishReason: "length", Parts: []Part{TextPart("done")}},
+		}
+
+		err := ValidateGeneration(g)
+		if err == nil || !strings.Contains(err.Error(), "stop_reason must match") {
+			t.Fatalf("expected finish-reason consistency error, got %v", err)
 		}
 	})
 

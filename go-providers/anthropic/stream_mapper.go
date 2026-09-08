@@ -24,21 +24,27 @@ func FromStream(req asdk.BetaMessageNewParams, summary StreamSummary, opts ...Op
 		if err != nil {
 			return agento11y.Generation{}, err
 		}
+		if usage, reported, serverToolUsage := mapStreamUsage(summary.Events); reported {
+			generation.Usage = usage
+			generation.Metadata = mergeServerToolUsageMetadata(generation.Metadata, serverToolUsage)
+		}
 		return appendStreamEventsArtifact(generation, summary.Events, opts)
 	}
 
 	if len(summary.Events) == 0 {
 		return agento11y.Generation{}, errors.New("stream summary has no events and no final message")
 	}
+	if !hasMessageStreamEvent(summary.Events) {
+		return agento11y.Generation{}, errors.New("stream summary has no message events and no final message")
+	}
 
 	options := applyOptions(opts)
-	maxTokens, temperature, topP, toolChoice, thinkingEnabled, thinkingBudget := mapRequestControls(req)
+	controls := mapRequestControls(req)
 
-	usage := agento11y.TokenUsage{}
+	usage, _, serverToolUsage := mapStreamUsage(summary.Events)
 	stopReason := ""
 	modelName := req.Model
 	responseID := ""
-	serverToolUsage := asdk.BetaServerToolUsage{}
 
 	blocks := newStreamBlockAccumulator()
 
@@ -56,33 +62,17 @@ func FromStream(req asdk.BetaMessageNewParams, summary StreamSummary, opts ...Op
 		case "content_block_delta":
 			blocks.applyDelta(int(event.Index), event.Delta)
 		case "message_delta":
-			usage = mapDeltaUsage(event.Usage)
-			serverToolUsage = event.Usage.ServerToolUse
 			if event.Delta.StopReason != "" {
 				stopReason = string(event.Delta.StopReason)
 			}
 		}
 	}
 
-	assistantParts, toolParts := blocks.build()
-	metadata := mergeThinkingBudgetMetadata(options.metadata, thinkingBudget)
+	output := blocks.buildMessages(stopReason)
+	metadata := mergeThinkingBudgetMetadata(options.metadata, controls.thinkingBudget)
 	metadata = mergeServerToolUsageMetadata(metadata, serverToolUsage)
 
 	input := mapRequestMessages(req.Messages)
-	output := make([]agento11y.Message, 0, 2)
-	if len(assistantParts) > 0 {
-		output = append(output, agento11y.Message{
-			Role:  agento11y.RoleAssistant,
-			Parts: assistantParts,
-		})
-	}
-	if len(toolParts) > 0 {
-		output = append(output, agento11y.Message{
-			Role:  agento11y.RoleTool,
-			Parts: toolParts,
-		})
-	}
-
 	artifacts := make([]agento11y.Artifact, 0, 4)
 	if options.includeRequestArtifact {
 		artifact, err := agento11y.NewJSONArtifact(agento11y.ArtifactKindRequest, "anthropic.request", req)
@@ -118,11 +108,13 @@ func FromStream(req asdk.BetaMessageNewParams, summary StreamSummary, opts ...Op
 		Input:             input,
 		Output:            output,
 		Tools:             mapTools(req.Tools),
-		MaxTokens:         maxTokens,
-		Temperature:       temperature,
-		TopP:              topP,
-		ToolChoice:        toolChoice,
-		ThinkingEnabled:   thinkingEnabled,
+		MaxTokens:         controls.maxTokens,
+		Temperature:       controls.temperature,
+		TopP:              controls.topP,
+		TopK:              controls.topK,
+		OutputType:        controls.outputType,
+		ToolChoice:        controls.toolChoice,
+		ThinkingEnabled:   controls.thinkingEnabled,
 		Usage:             usage,
 		StopReason:        stopReason,
 		Tags:              cloneStringMap(options.tags),
@@ -135,6 +127,89 @@ func FromStream(req asdk.BetaMessageNewParams, summary StreamSummary, opts ...Op
 	}
 
 	return generation, nil
+}
+
+func hasMessageStreamEvent(events []asdk.BetaRawMessageStreamEventUnion) bool {
+	for _, event := range events {
+		switch event.Type {
+		case "message_start", "message_delta", "message_stop",
+			"content_block_start", "content_block_delta", "content_block_stop":
+			return true
+		}
+	}
+	return false
+}
+
+func mapStreamUsage(events []asdk.BetaRawMessageStreamEventUnion) (agento11y.TokenUsage, bool, asdk.BetaServerToolUsage) {
+	usage := agento11y.TokenUsage{InputSemantics: agento11y.TokenInputSemanticsInclusive}
+	var rawInputTokens int64
+	inputReported := false
+	outputReported := false
+	serverToolUsage := asdk.BetaServerToolUsage{}
+
+	for _, event := range events {
+		switch event.Type {
+		case "message_start":
+			startUsage := event.Message.Usage
+			if tokenCountReported(startUsage.JSON.InputTokens.Valid(), startUsage.InputTokens) {
+				rawInputTokens = startUsage.InputTokens
+				inputReported = true
+			}
+			if tokenCountReported(startUsage.JSON.CacheReadInputTokens.Valid(), startUsage.CacheReadInputTokens) {
+				usage.CacheReadInputTokens = startUsage.CacheReadInputTokens
+				inputReported = true
+			}
+			if tokenCountReported(startUsage.JSON.CacheCreationInputTokens.Valid(), startUsage.CacheCreationInputTokens) {
+				usage.CacheWriteInputTokens = startUsage.CacheCreationInputTokens
+				inputReported = true
+			}
+			if tokenCountReported(startUsage.JSON.OutputTokens.Valid(), startUsage.OutputTokens) {
+				usage.OutputTokens = startUsage.OutputTokens
+				outputReported = true
+			}
+			if serverToolUsageReported(startUsage.ServerToolUse) {
+				serverToolUsage = startUsage.ServerToolUse
+			}
+		case "message_delta":
+			deltaUsage := event.Usage
+			if tokenCountReported(deltaUsage.JSON.InputTokens.Valid(), deltaUsage.InputTokens) {
+				rawInputTokens = deltaUsage.InputTokens
+				inputReported = true
+			}
+			if tokenCountReported(deltaUsage.JSON.CacheReadInputTokens.Valid(), deltaUsage.CacheReadInputTokens) {
+				usage.CacheReadInputTokens = deltaUsage.CacheReadInputTokens
+				inputReported = true
+			}
+			if tokenCountReported(deltaUsage.JSON.CacheCreationInputTokens.Valid(), deltaUsage.CacheCreationInputTokens) {
+				usage.CacheWriteInputTokens = deltaUsage.CacheCreationInputTokens
+				inputReported = true
+			}
+			if tokenCountReported(deltaUsage.JSON.OutputTokens.Valid(), deltaUsage.OutputTokens) {
+				usage.OutputTokens = deltaUsage.OutputTokens
+				outputReported = true
+			}
+			if serverToolUsageReported(deltaUsage.ServerToolUse) {
+				serverToolUsage = deltaUsage.ServerToolUse
+			}
+		}
+	}
+
+	usage.InputTokens = rawInputTokens + usage.CacheReadInputTokens + usage.CacheWriteInputTokens
+	usage.InputTokensReported = inputReported
+	usage.OutputTokensReported = outputReported
+	if inputReported && outputReported {
+		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+	}
+	return usage, inputReported || outputReported, serverToolUsage
+}
+
+func tokenCountReported(fieldPresent bool, value int64) bool {
+	return fieldPresent || value != 0
+}
+
+func serverToolUsageReported(usage asdk.BetaServerToolUsage) bool {
+	return usage.WebSearchRequests != 0 || usage.WebFetchRequests != 0 ||
+		usage.JSON.WebSearchRequests.Valid() || usage.JSON.WebFetchRequests.Valid()
 }
 
 func appendStreamEventsArtifact(generation agento11y.Generation, events []asdk.BetaRawMessageStreamEventUnion, opts []Option) (agento11y.Generation, error) {
@@ -262,24 +337,26 @@ func (a *streamBlockAccumulator) applyDelta(index int, delta asdk.BetaRawMessage
 	}
 }
 
-// build produces the final assistant and tool parts in block-index order.
-func (a *streamBlockAccumulator) build() (assistantParts, toolParts []agento11y.Part) {
+func (a *streamBlockAccumulator) buildMessages(finishReason string) []agento11y.Message {
+	parts := make([]agento11y.Part, 0, len(a.blocks))
 	for i := 0; i <= a.maxIndex; i++ {
-		b, ok := a.blocks[i]
+		block, ok := a.blocks[i]
 		if !ok {
 			continue
 		}
-		part, isTool, ok := b.toPart()
-		if !ok {
-			continue
-		}
-		if isTool {
-			toolParts = append(toolParts, part)
-		} else {
-			assistantParts = append(assistantParts, part)
+		part, _, ok := block.toPart()
+		if ok {
+			parts = append(parts, part)
 		}
 	}
-	return
+	if len(parts) == 0 && finishReason == "" {
+		return nil
+	}
+	return []agento11y.Message{{
+		Role:         agento11y.RoleAssistant,
+		Parts:        parts,
+		FinishReason: finishReason,
+	}}
 }
 
 func (b *streamBlock) toPart() (agento11y.Part, bool, bool) {

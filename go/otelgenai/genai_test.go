@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/log/logtest"
@@ -80,10 +79,7 @@ func TestNewHandlerReportsInstrumentErrorsAndRecordsSpans(t *testing.T) {
 		meter:         failingMeter,
 	}
 
-	var reported []error
-	previous := otel.GetErrorHandler()
-	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) { reported = append(reported, err) }))
-	t.Cleanup(func() { otel.SetErrorHandler(previous) })
+	testOTelErrors.reset()
 
 	handler, recorder := newRecordingHandler(t, otelgenai.WithMeterProvider(meterProvider))
 	if handler == nil {
@@ -92,6 +88,7 @@ func TestNewHandlerReportsInstrumentErrorsAndRecordsSpans(t *testing.T) {
 	if failingMeter.calls != 4 {
 		t.Errorf("histogram constructor calls = %d, want 4", failingMeter.calls)
 	}
+	reported := testOTelErrors.read()
 	if len(reported) != 1 {
 		t.Fatalf("error handler calls = %d, want 1", len(reported))
 	}
@@ -108,10 +105,7 @@ func TestNewHandlerReportsInstrumentErrorsAndRecordsSpans(t *testing.T) {
 }
 
 func TestInvalidInvocationCaptureReportsAndFallsBack(t *testing.T) {
-	var reported error
-	previous := otel.GetErrorHandler()
-	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) { reported = err }))
-	t.Cleanup(func() { otel.SetErrorHandler(previous) })
+	testOTelErrors.reset()
 
 	handler, recorder := newRecordingHandler(t, otelgenai.WithCaptureMode(otelgenai.CaptureSpanOnly))
 	inv := chatInvocation()
@@ -119,8 +113,9 @@ func TestInvalidInvocationCaptureReportsAndFallsBack(t *testing.T) {
 	ctx := handler.Start(context.Background(), inv)
 	handler.End(ctx, inv)
 
-	if reported == nil || !strings.Contains(reported.Error(), "unrecognized invocation capture mode") {
-		t.Fatalf("reported error = %v, want an invalid invocation capture error", reported)
+	reported := testOTelErrors.read()
+	if len(reported) != 1 || !strings.Contains(reported[0].Error(), "unrecognized invocation capture mode") {
+		t.Fatalf("reported errors = %v, want one invalid invocation capture error", reported)
 	}
 	ended := recorder.Ended()
 	if len(ended) != 1 {
@@ -478,6 +473,15 @@ func TestSpanLifecycle(t *testing.T) {
 			wantKind: trace.SpanKindClient,
 		},
 		{
+			name: "unnamed agent invocation does not fall back to the model",
+			mutate: func(inv *otelgenai.Invocation) {
+				inv.Operation = otelgenai.OperationInvokeAgent
+				inv.AgentName = ""
+			},
+			wantName: "invoke_agent",
+			wantKind: trace.SpanKindClient,
+		},
+		{
 			name: "text completion is named for the model",
 			mutate: func(inv *otelgenai.Invocation) {
 				inv.Operation = otelgenai.OperationTextCompletion
@@ -493,6 +497,14 @@ func TestSpanLifecycle(t *testing.T) {
 			},
 			wantName: "retrieval knowledge-base",
 			wantKind: trace.SpanKindClient,
+			checkStarted: func(t *testing.T, span sdktrace.ReadOnlySpan) {
+				attrs := spanAttrs(span)
+				for _, key := range []string{"gen_ai.provider.name", "gen_ai.request.model"} {
+					if _, ok := attrs[key]; ok {
+						t.Errorf("non-sampling retrieval attribute %s was set at span start", key)
+					}
+				}
+			},
 		},
 		{
 			name: "fetch response never names the model",
@@ -528,6 +540,15 @@ func TestSpanLifecycle(t *testing.T) {
 			wantKind: trace.SpanKindInternal,
 		},
 		{
+			name: "unnamed plan does not fall back to the model",
+			mutate: func(inv *otelgenai.Invocation) {
+				inv.Operation = otelgenai.OperationPlan
+				inv.AgentName = ""
+			},
+			wantName: "plan",
+			wantKind: trace.SpanKindInternal,
+		},
+		{
 			name: "an explicit span kind wins",
 			mutate: func(inv *otelgenai.Invocation) {
 				inv.Operation = otelgenai.OperationInvokeAgent
@@ -556,9 +577,8 @@ func TestSpanLifecycle(t *testing.T) {
 				inv.DimensionCount = testPtr(int64(1536))
 			},
 			checkStarted: func(t *testing.T, span sdktrace.ReadOnlySpan) {
-				attrs := spanAttrs(span)
-				if got := attrs["gen_ai.embeddings.dimension.count"].AsInt64(); got != 1536 {
-					t.Errorf("start gen_ai.embeddings.dimension.count = %d, want 1536", got)
+				if _, ok := spanAttrs(span)["gen_ai.embeddings.dimension.count"]; ok {
+					t.Error("non-sampling embedding dimensions were set at span start")
 				}
 			},
 			check: func(t *testing.T, span sdktrace.ReadOnlySpan) {
@@ -694,6 +714,56 @@ func TestSpanLifecycle(t *testing.T) {
 			},
 		},
 		{
+			name: "independently reported input zero omits unknown output",
+			mutate: func(inv *otelgenai.Invocation) {
+				inv.Usage = otelgenai.Usage{InputTokensReported: true}
+			},
+			check: func(t *testing.T, span sdktrace.ReadOnlySpan) {
+				attrs := spanAttrs(span)
+				if got, ok := attrs["gen_ai.usage.input_tokens"]; !ok || got.AsInt64() != 0 {
+					t.Errorf("gen_ai.usage.input_tokens = %v, present = %v, want known zero", got, ok)
+				}
+				if _, ok := attrs["gen_ai.usage.output_tokens"]; ok {
+					t.Error("unknown output count reached the span")
+				}
+			},
+		},
+		{
+			name: "independently reported output zero omits unknown input",
+			mutate: func(inv *otelgenai.Invocation) {
+				inv.Usage = otelgenai.Usage{OutputTokensReported: true}
+			},
+			check: func(t *testing.T, span sdktrace.ReadOnlySpan) {
+				attrs := spanAttrs(span)
+				if got, ok := attrs["gen_ai.usage.output_tokens"]; !ok || got.AsInt64() != 0 {
+					t.Errorf("gen_ai.usage.output_tokens = %v, present = %v, want known zero", got, ok)
+				}
+				if _, ok := attrs["gen_ai.usage.input_tokens"]; ok {
+					t.Error("unknown input count reached the span")
+				}
+			},
+		},
+		{
+			name: "fetch response omits usage attributes",
+			mutate: func(inv *otelgenai.Invocation) {
+				inv.Operation = otelgenai.OperationFetchResponse
+			},
+			check: func(t *testing.T, span sdktrace.ReadOnlySpan) {
+				attrs := spanAttrs(span)
+				for _, key := range []string{
+					"gen_ai.usage.input_tokens",
+					"gen_ai.usage.output_tokens",
+					"gen_ai.usage.cache_read.input_tokens",
+					"gen_ai.usage.cache_creation.input_tokens",
+					"gen_ai.usage.reasoning_tokens",
+				} {
+					if _, ok := attrs[key]; ok {
+						t.Errorf("fetch_response carries %s", key)
+					}
+				}
+			},
+		},
+		{
 			name: "an all-zero usage the provider returned is emitted as zeros",
 			mutate: func(inv *otelgenai.Invocation) {
 				inv.Usage = otelgenai.Usage{Reported: true}
@@ -719,6 +789,47 @@ func TestSpanLifecycle(t *testing.T) {
 			check: func(t *testing.T, span sdktrace.ReadOnlySpan) {
 				if _, ok := spanAttrs(span)["gen_ai.usage.input_tokens"]; ok {
 					t.Error("an invocation with no usage carries gen_ai.usage.input_tokens")
+				}
+			},
+		},
+		{
+			name: "a hook can clear finish-time request attributes",
+			options: []otelgenai.Option{otelgenai.WithEndHook(
+				otelgenai.EndHookFunc(func(_ context.Context, inv *otelgenai.Invocation, _ otelgenai.CaptureMode) []attribute.KeyValue {
+					inv.ConversationID = ""
+					inv.ToolDescription = ""
+					inv.MaxTokens = nil
+					inv.AgentDescription = ""
+					inv.AgentVersion = ""
+					inv.AgentID = ""
+					inv.StreamCursor = ""
+					inv.DimensionCount = nil
+					return nil
+				}),
+			)},
+			mutate: func(inv *otelgenai.Invocation) {
+				inv.ToolDescription = "sensitive tool description"
+				inv.MaxTokens = testPtr(int64(100))
+				inv.AgentDescription = "sensitive agent description"
+				inv.AgentID = "agent-1"
+				inv.StreamCursor = "cursor-1"
+				inv.DimensionCount = testPtr(int64(1536))
+			},
+			check: func(t *testing.T, span sdktrace.ReadOnlySpan) {
+				attrs := spanAttrs(span)
+				for _, key := range []string{
+					"gen_ai.conversation.id",
+					"gen_ai.tool.description",
+					"gen_ai.request.max_tokens",
+					"gen_ai.agent.description",
+					"gen_ai.agent.version",
+					"gen_ai.agent.id",
+					"gen_ai.request.stream_cursor",
+					"gen_ai.embeddings.dimension.count",
+				} {
+					if _, ok := attrs[key]; ok {
+						t.Errorf("hook-cleared %s remains on the span", key)
+					}
 				}
 			},
 		},
@@ -840,6 +951,182 @@ func TestSpanLifecycle(t *testing.T) {
 				tc.check(t, span)
 			}
 		})
+	}
+}
+
+func TestHookPanicRestoresCallerAndLifecycleState(t *testing.T) {
+	sensitiveAttrs := []attribute.KeyValue{
+		attribute.String("caller.sensitive", "synthetic-original"),
+		attribute.String("caller.removed", "synthetic-removed"),
+		attribute.String("caller.safe", "keep"),
+	}
+	cases := []struct {
+		name   string
+		attrs  []attribute.KeyValue
+		redact func([]attribute.KeyValue) []attribute.KeyValue
+		want   []attribute.KeyValue
+	}{
+		{
+			name:  "first hook panic",
+			attrs: []attribute.KeyValue{attribute.String("caller.safe", "keep")},
+			want:  []attribute.KeyValue{attribute.String("caller.safe", "keep")},
+		},
+		{name: "first hook panic with nil attributes"},
+		{
+			name:  "earlier redaction and deletion",
+			attrs: sensitiveAttrs,
+			redact: func(attrs []attribute.KeyValue) []attribute.KeyValue {
+				attrs[0] = attribute.String("caller.sensitive", "[redacted]")
+				copy(attrs[1:], attrs[2:])
+				return attrs[:2]
+			},
+			want: []attribute.KeyValue{
+				attribute.String("caller.sensitive", "[redacted]"),
+				attribute.String("caller.safe", "keep"),
+			},
+		},
+		{
+			name:   "earlier deletion to nil",
+			attrs:  sensitiveAttrs,
+			redact: func([]attribute.KeyValue) []attribute.KeyValue { return nil },
+		},
+		{
+			name:   "earlier deletion reuses backing slices",
+			attrs:  sensitiveAttrs,
+			redact: func(attrs []attribute.KeyValue) []attribute.KeyValue { return attrs[:0] },
+			want:   []attribute.KeyValue{},
+		},
+	}
+	for _, tc := range cases {
+		for _, mutation := range []string{"in place", "replace invocation"} {
+			t.Run(tc.name+"/"+mutation, func(t *testing.T) {
+				checkInvocationAttrs := func(inv *otelgenai.Invocation) {
+					t.Helper()
+					for name, attrs := range map[string][]attribute.KeyValue{
+						"span": inv.Attributes, "metric": inv.MetricAttributes,
+					} {
+						if !slices.Equal(attrs, tc.want) || (tc.want == nil && attrs != nil) {
+							t.Errorf("invocation %s attributes = %v, want %v", name, attrs, tc.want)
+						}
+					}
+				}
+				meterOption, collect := newMetricRecorder(t)
+				options := []otelgenai.Option{meterOption, otelgenai.WithCaptureMode(otelgenai.CaptureSpanOnly)}
+				if tc.redact != nil {
+					options = append(options, otelgenai.WithEndHook(otelgenai.EndHookFunc(
+						func(_ context.Context, inv *otelgenai.Invocation, _ otelgenai.CaptureMode) []attribute.KeyValue {
+							inv.Attributes = tc.redact(inv.Attributes)
+							inv.MetricAttributes = tc.redact(inv.MetricAttributes)
+							return []attribute.KeyValue{attribute.String("hook.before_panic", "discard")}
+						},
+					)))
+				}
+				var realSpan trace.SpanContext
+				var laterHookSawRealSpan bool
+				options = append(options,
+					otelgenai.WithEndHook(otelgenai.EndHookFunc(
+						func(_ context.Context, inv *otelgenai.Invocation, _ otelgenai.CaptureMode) []attribute.KeyValue {
+							checkInvocationAttrs(inv)
+							if len(inv.Attributes) > 0 {
+								inv.Attributes[0] = attribute.String("caller.sensitive", "corrupt")
+								inv.MetricAttributes[0] = attribute.String("caller.sensitive", "corrupt")
+							}
+							inv.Attributes = append(inv.Attributes, attribute.String("caller.added", "discard"))
+							inv.MetricAttributes = append(inv.MetricAttributes, attribute.String("caller.added", "discard"))
+							if mutation == "replace invocation" {
+								*inv = otelgenai.Invocation{
+									Attributes:       inv.Attributes,
+									MetricAttributes: inv.MetricAttributes,
+									Usage:            inv.Usage,
+									InputMessages:    inv.InputMessages,
+								}
+							}
+							panic("hook exploded")
+						},
+					)),
+					otelgenai.WithEndHook(otelgenai.EndHookFunc(
+						func(_ context.Context, inv *otelgenai.Invocation, _ otelgenai.CaptureMode) []attribute.KeyValue {
+							checkInvocationAttrs(inv)
+							spanContext := inv.Span().SpanContext()
+							laterHookSawRealSpan = inv.Span().IsRecording() && realSpan.IsValid() &&
+								spanContext.TraceID() == realSpan.TraceID() &&
+								spanContext.SpanID() == realSpan.SpanID()
+							return []attribute.KeyValue{attribute.String("hook.after_panic", "discard")}
+						},
+					)),
+				)
+				handler, recorder := newRecordingHandler(t, options...)
+				inv := chatInvocation()
+				inv.Stream = true
+				inv.FirstChunkAt = startedAt.Add(250 * time.Millisecond)
+				if tc.attrs != nil {
+					inv.Attributes = append(make([]attribute.KeyValue, 0, 4), tc.attrs...)
+					inv.MetricAttributes = append(make([]attribute.KeyValue, 0, 4), tc.attrs...)
+				}
+				ctx := handler.Start(context.Background(), inv)
+				realSpan = inv.Span().SpanContext()
+				handler.End(ctx, inv)
+				handler.End(ctx, inv)
+
+				checkInvocationAttrs(inv)
+				if !laterHookSawRealSpan {
+					t.Error("a later hook did not receive the real invocation span")
+				}
+				ended := recorder.Ended()
+				if len(ended) != 1 {
+					t.Fatalf("recorded %d spans, want 1", len(ended))
+				}
+				if !ended[0].StartTime().Equal(startedAt) || !ended[0].EndTime().Equal(completedAt) {
+					t.Error("hook panic changed span timestamps")
+				}
+				attrs := spanAttrs(ended[0])
+				if !attrs["gen_ai.request.stream"].AsBool() || attrs["gen_ai.response.time_to_first_chunk"].AsFloat64() != 0.25 {
+					t.Error("hook panic changed streaming state")
+				}
+				for _, key := range []string{"hook.before_panic", "hook.after_panic", "gen_ai.input.messages"} {
+					if _, ok := attrs[key]; ok {
+						t.Errorf("%s survived a hook panic", key)
+					}
+				}
+				checkExportedAttrs := func(source string, attrs map[string]string) {
+					t.Helper()
+					for _, kv := range tc.want {
+						if got := attrs[string(kv.Key)]; got != kv.Value.AsString() {
+							t.Errorf("%s %s = %q, want %q", source, kv.Key, got, kv.Value.AsString())
+						}
+					}
+					for key, value := range attrs {
+						if strings.HasPrefix(key, "caller.") && !slices.ContainsFunc(tc.want, func(kv attribute.KeyValue) bool {
+							return string(kv.Key) == key
+						}) {
+							t.Errorf("%s has unexpected %s = %q", source, key, value)
+						}
+					}
+				}
+				spanValues := make(map[string]string)
+				for key, value := range attrs {
+					spanValues[key] = value.AsString()
+				}
+				checkExportedAttrs("span", spanValues)
+				metrics := collect()
+				for _, name := range []string{
+					"gen_ai.client.operation.duration",
+					"gen_ai.client.operation.time_to_first_chunk",
+					"gen_ai.client.token.usage",
+				} {
+					points := metricPointAttributes(t, metrics[name])
+					if len(points) == 0 {
+						t.Errorf("%s has no data points", name)
+					}
+					for _, point := range points {
+						checkExportedAttrs(name, point)
+					}
+				}
+				if got := histogramCount(t, metrics["gen_ai.client.operation.duration"]); got != 1 {
+					t.Errorf("duration count = %d, want 1", got)
+				}
+			})
+		}
 	}
 }
 

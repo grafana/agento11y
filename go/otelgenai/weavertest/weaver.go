@@ -177,11 +177,11 @@ func Start(ctx context.Context, assets Assets) (*Weaver, error) {
 			return weaver, nil
 		}
 		lastErr = err
-		if !isAddressInUse(err) {
+		if !isRetriableStartError(err) {
 			return nil, err
 		}
 	}
-	return nil, fmt.Errorf("start Weaver after %d port-allocation attempts: %w", maxAttempts, lastErr)
+	return nil, fmt.Errorf("start Weaver after %d attempts: %w", maxAttempts, lastErr)
 }
 
 func startWeaver(ctx context.Context, binary string, assets Assets) (*Weaver, error) {
@@ -196,7 +196,7 @@ func startWeaver(ctx context.Context, binary string, assets Assets) (*Weaver, er
 	}
 	weaver.command = exec.Command(binary,
 		"registry", "live-check",
-		"--inactivity-timeout=30",
+		"--inactivity-timeout=60",
 		"--otlp-grpc-address=127.0.0.1",
 		"--otlp-grpc-port="+strconv.Itoa(otlpPort),
 		"--admin-port="+strconv.Itoa(adminPort),
@@ -227,8 +227,14 @@ func startWeaver(ctx context.Context, binary string, assets Assets) (*Weaver, er
 	return nil, fmt.Errorf("%w\nstdout:\n%s\nstderr:\n%s", readyErr, weaver.stdout.String(), weaver.stderr.String())
 }
 
-func isAddressInUse(err error) bool {
-	return err != nil && strings.Contains(strings.ToLower(err.Error()), "address already in use")
+func isRetriableStartError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "address already in use") ||
+		strings.Contains(message, "weaver exited before becoming ready: <nil>") ||
+		strings.Contains(message, "weaver did not become ready")
 }
 
 // Endpoint is the host and port of Weaver's OTLP gRPC listener.
@@ -240,7 +246,7 @@ func (w *Weaver) waitForReady(ctx context.Context) (bool, error) {
 	client := &http.Client{Timeout: time.Second}
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
-	timeout := time.NewTimer(10 * time.Second)
+	timeout := time.NewTimer(30 * time.Second)
 	defer timeout.Stop()
 	for {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, w.adminURL+"/health", nil)
@@ -259,7 +265,7 @@ func (w *Weaver) waitForReady(ctx context.Context) (bool, error) {
 			return true, fmt.Errorf("Weaver exited before becoming ready: %v", err)
 		case <-ticker.C:
 		case <-timeout.C:
-			return false, errors.New("Weaver did not become ready in 10 seconds")
+			return false, errors.New("Weaver did not become ready in 30 seconds")
 		case <-ctx.Done():
 			return false, ctx.Err()
 		}

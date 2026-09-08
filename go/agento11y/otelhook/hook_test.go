@@ -33,12 +33,13 @@ func TestOnEnd(t *testing.T) {
 	thinking := true
 
 	cases := []struct {
-		name    string
-		vendor  any
-		capture otelgenai.CaptureMode
-		want    map[string]string
-		absent  []string
-		check   func(t *testing.T)
+		name      string
+		operation otelgenai.Operation
+		vendor    any
+		capture   otelgenai.CaptureMode
+		want      map[string]string
+		absent    []string
+		check     func(t *testing.T)
 	}{
 		{
 			name: "full generation",
@@ -74,6 +75,23 @@ func TestOnEnd(t *testing.T) {
 			absent: []string{
 				otelhook.AttrTagPrefix + "team",
 				otelhook.AttrTagPrefix + "env",
+			},
+		},
+		{
+			name:      "fetch response omits proprietary usage",
+			operation: otelgenai.OperationFetchResponse,
+			vendor: otelhook.Generation{
+				ID:                      "gen-fetch",
+				TotalTokens:             162,
+				InclusiveTokenSemantics: true,
+			},
+			want: map[string]string{
+				"agento11y.record":        "true",
+				"agento11y.generation.id": "gen-fetch",
+			},
+			absent: []string{
+				"agento11y.gen_ai.usage.total_tokens",
+				"gen_ai.token.semantics",
 			},
 		},
 		{
@@ -207,7 +225,10 @@ func TestOnEnd(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := attributeMap(otelhook.New().OnEnd(context.Background(), &otelgenai.Invocation{Vendor: tc.vendor}, tc.capture))
+			got := attributeMap(otelhook.New().OnEnd(context.Background(), &otelgenai.Invocation{
+				Operation: tc.operation,
+				Vendor:    tc.vendor,
+			}, tc.capture))
 			for key, want := range tc.want {
 				if got[key] != want {
 					t.Errorf("%s = %q, want %q", key, got[key], want)

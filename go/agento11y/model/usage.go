@@ -25,6 +25,10 @@ type TokenUsage struct {
 	TotalTokens           int64 `json:"total_tokens,omitempty"`
 	CacheReadInputTokens  int64 `json:"cache_read_input_tokens,omitempty"`
 	CacheWriteInputTokens int64 `json:"cache_write_input_tokens,omitempty"`
+	// InputTokensReported and OutputTokensReported distinguish a provider's
+	// known zero from a counter the provider did not return.
+	InputTokensReported  bool `json:"input_tokens_reported,omitempty"`
+	OutputTokensReported bool `json:"output_tokens_reported,omitempty"`
 	// ReasoningTokens is an explanatory sub-bucket of OutputTokens when the
 	// provider reports it, never an additive bucket.
 	ReasoningTokens int64 `json:"reasoning_tokens,omitempty"`
@@ -34,11 +38,19 @@ type TokenUsage struct {
 	InputSemantics TokenInputSemantics `json:"input_semantics,omitempty"`
 }
 
+// Normalize derives TotalTokens when both component counters are known. For
+// compatibility, a non-zero counter is known even when its Reported flag is
+// unset; the flags are needed to distinguish a known zero from an omitted
+// counter.
 func (u TokenUsage) Normalize() TokenUsage {
 	if u.TotalTokens != 0 {
 		return u
 	}
 
-	u.TotalTokens = u.InputTokens + u.OutputTokens
+	inputKnown := u.InputTokensReported || u.InputTokens != 0
+	outputKnown := u.OutputTokensReported || u.OutputTokens != 0
+	if inputKnown && outputKnown {
+		u.TotalTokens = u.InputTokens + u.OutputTokens
+	}
 	return u
 }

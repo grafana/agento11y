@@ -36,21 +36,6 @@ const (
 	otelToolExtSchemaB64    = "agento11y.input_schema_b64"
 )
 
-// otelProviderStoredToWire maps the SDK's stored provider values to the OTel
-// GenAI registry spellings. The backend applies the inverse mapping, so the
-// round trip leaves a stored record unchanged.
-var otelProviderStoredToWire = map[string]string{
-	"gemini":             "gcp.gemini",
-	"mistral":            "mistral_ai",
-	"moonshotai":         "moonshot_ai",
-	"vertex":             "gcp.vertex_ai",
-	"bedrock":            "aws.bedrock",
-	"azure-openai":       "azure.ai.openai",
-	"azure-ai-inference": "azure.ai.inference",
-	"watsonx":            "ibm.watsonx.ai",
-	"x-ai":               "x_ai",
-}
-
 // otelExportEnabled reports whether generations leave this client as GenAI
 // spans instead of proprietary export payloads.
 func (c *Client) otelExportEnabled() bool {
@@ -163,6 +148,9 @@ func (c *Client) startOTelGeneration(
 		MaxTokens:      cloneInt64Ptr(seed.MaxTokens),
 		Temperature:    cloneFloat64Ptr(seed.Temperature),
 		TopP:           cloneFloat64Ptr(seed.TopP),
+		TopK:           cloneInt64Ptr(seed.TopK),
+		ChoiceCount:    cloneInt64Ptr(seed.ChoiceCount),
+		Seed:           cloneInt64Ptr(seed.Seed),
 		StartedAt:      startedAt,
 	}
 	ctx = c.otelHandler.Start(ctx, invocation)
@@ -237,7 +225,7 @@ func (c *Client) otelMetricAttributes(ctx context.Context, generation Generation
 	if failure.category != "" {
 		attrs = append(attrs, metricStringAttribute(spanAttrErrorCategory, failure.category))
 	}
-	if generation.Usage.InputSemantics == TokenInputSemanticsInclusive {
+	if generation.Usage.InputSemantics == TokenInputSemanticsInclusive && otelOperation(generation.OperationName) != otelgenai.OperationFetchResponse {
 		attrs = append(attrs, metricStringAttribute(attrTokenSemantics, tokenSemanticsInclusive))
 	}
 	if generation.AgentName != "" {
@@ -285,14 +273,15 @@ func applyGenerationToInvocation(
 	invocation.InputMessages = otelMessages(generation.Input, nil)
 	invocation.OutputMessages = otelMessages(generation.Output, &generation.StopReason)
 	invocation.ToolDefinitions = otelToolDefinitions(generation.Tools)
-	if generation.StopReason != "" {
-		invocation.FinishReasons = []string{generation.StopReason}
+	invocation.FinishReasons = generationFinishReasons(generation)
+	if generation.ResponseStatus != nil {
+		invocation.ResponseStatus = *generation.ResponseStatus
 	}
-	// Reported stays unset: the SDK cannot distinguish an all-zero usage that a
-	// provider returned from a usage the SDK never received, and otelgenai
-	// counts any non-zero count as reported. Setting Reported here would export
-	// input and output tokens of 0 for a call that never reached a provider.
+	// Independent presence flags preserve known zeros without marking the other
+	// counter as reported, so the compatibility shorthand remains unset.
 	invocation.Usage = otelgenai.Usage{
+		InputTokensReported:   generation.Usage.InputTokensReported,
+		OutputTokensReported:  generation.Usage.OutputTokensReported,
 		InputTokens:           generation.Usage.InputTokens,
 		OutputTokens:          generation.Usage.OutputTokens,
 		CacheReadInputTokens:  generation.Usage.CacheReadInputTokens,
@@ -302,6 +291,12 @@ func applyGenerationToInvocation(
 	invocation.MaxTokens = cloneInt64Ptr(generation.MaxTokens)
 	invocation.Temperature = cloneFloat64Ptr(generation.Temperature)
 	invocation.TopP = cloneFloat64Ptr(generation.TopP)
+	invocation.TopK = cloneInt64Ptr(generation.TopK)
+	invocation.ChoiceCount = cloneInt64Ptr(generation.ChoiceCount)
+	invocation.Seed = cloneInt64Ptr(generation.Seed)
+	if generation.OutputType != nil {
+		invocation.OutputType = *generation.OutputType
+	}
 	// This function does not reassign StartedAt. Start fixed the span's start
 	// instant and the metrics measure from it, so a generation's own start would
 	// disagree with both. A mapper that reports a provider-side start therefore
@@ -388,23 +383,48 @@ func otelArtifacts(artifacts []Artifact) []otelhook.Artifact {
 	return out
 }
 
-// otelProviderName returns the registry spelling of a stored provider value.
-func otelProviderName(provider string) string {
-	if wire, ok := otelProviderStoredToWire[provider]; ok {
-		return wire
+func generationFinishReasons(generation Generation) []string {
+	out := make([]string, 0, len(generation.Output))
+	for _, message := range generation.Output {
+		if message.FinishReason != "" {
+			out = append(out, message.FinishReason)
+		}
 	}
-	return provider
+	if len(out) == 0 && generation.StopReason != "" {
+		return []string{generation.StopReason}
+	}
+	return out
 }
 
 // otelMessages maps SDK messages onto the conventions' message schema.
-// finishReason is non-nil for output messages, where the schema requires the
-// key even when the value is empty.
-func otelMessages(messages []Message, finishReason *string) []otelgenai.Message {
+// fallbackFinishReason supplies the first message's value for legacy callers
+// only when no message has its own reason. A non-nil fallback also marks every
+// message as output, where the schema requires the finish_reason key even when
+// its value is empty.
+func otelMessages(messages []Message, fallbackFinishReason *string) []otelgenai.Message {
 	if len(messages) == 0 {
 		return nil
 	}
+	hasMessageFinishReason := false
+	for i := range messages {
+		if messages[i].FinishReason != "" {
+			hasMessageFinishReason = true
+			break
+		}
+	}
 	out := make([]otelgenai.Message, 0, len(messages))
-	for _, message := range messages {
+	for i, message := range messages {
+		var finishReason *string
+		if message.FinishReason != "" {
+			value := message.FinishReason
+			finishReason = &value
+		} else if fallbackFinishReason != nil {
+			value := ""
+			if i == 0 && !hasMessageFinishReason {
+				value = *fallbackFinishReason
+			}
+			finishReason = &value
+		}
 		converted := otelgenai.Message{
 			Role:         otelgenai.Role(message.Role),
 			Name:         message.Name,

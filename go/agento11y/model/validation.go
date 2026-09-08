@@ -52,6 +52,9 @@ func ValidateGeneration(g Generation) error {
 			return err
 		}
 	}
+	if finishReason := firstOutputFinishReason(g.Output); g.StopReason != "" && finishReason != "" && g.StopReason != finishReason {
+		return errors.New("generation.stop_reason must match the first non-empty generation.output finish_reason")
+	}
 
 	for i := range g.Tools {
 		if strings.TrimSpace(g.Tools[i].Name) == "" {
@@ -85,6 +88,15 @@ func ValidateWorkflowStep(step WorkflowStep) error {
 	return nil
 }
 
+func firstOutputFinishReason(output []Message) string {
+	for i := range output {
+		if output[i].FinishReason != "" {
+			return output[i].FinishReason
+		}
+	}
+	return ""
+}
+
 func isContentStripped(g Generation) bool {
 	if g.Metadata == nil {
 		return false
@@ -95,12 +107,15 @@ func isContentStripped(g Generation) bool {
 
 func validateMessage(path string, index int, message Message, contentStripped bool) error {
 	switch message.Role {
-	case RoleUser, RoleAssistant, RoleTool:
+	case RoleUser, RoleAssistant, RoleTool, RoleSystem, RoleDeveloper:
 	default:
-		return fmt.Errorf("%s[%d].role must be one of user|assistant|tool", path, index)
+		return fmt.Errorf("%s[%d].role must be one of user|assistant|tool|system|developer", path, index)
 	}
 
 	if len(message.Parts) == 0 {
+		if path == "generation.output" && message.Role == RoleAssistant && strings.TrimSpace(message.FinishReason) != "" {
+			return nil
+		}
 		return fmt.Errorf("%s[%d].parts must not be empty", path, index)
 	}
 
@@ -164,8 +179,8 @@ func validatePart(path string, messageIndex, partIndex int, role Role, part Part
 			return fmt.Errorf("%s[%d].parts[%d].tool_call.name is required", path, messageIndex, partIndex)
 		}
 	case PartKindToolResult:
-		if role != RoleTool {
-			return fmt.Errorf("%s[%d].parts[%d].tool_result only allowed for tool role", path, messageIndex, partIndex)
+		if role != RoleTool && !(path == "generation.output" && role == RoleAssistant) {
+			return fmt.Errorf("%s[%d].parts[%d].tool_result only allowed for tool role or assistant output", path, messageIndex, partIndex)
 		}
 		if part.ToolResult == nil {
 			return fmt.Errorf("%s[%d].parts[%d].tool_result is required", path, messageIndex, partIndex)

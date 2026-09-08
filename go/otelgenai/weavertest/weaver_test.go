@@ -78,12 +78,25 @@ func TestFreePortsReturnsDistinctPorts(t *testing.T) {
 	}
 }
 
-func TestIsAddressInUse(t *testing.T) {
-	if !isAddressInUse(errors.New("bind failed: Address already in use (os error 48)")) {
-		t.Error("address-in-use error was not recognized")
+func TestIsRetriableStartError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "address in use", err: errors.New("bind failed: Address already in use (os error 48)"), want: true},
+		{name: "clean early exit", err: errors.New("Weaver exited before becoming ready: <nil>"), want: true},
+		{name: "readiness timeout", err: errors.New("Weaver did not become ready in 30 seconds"), want: true},
+		{name: "process failure", err: errors.New("Weaver exited before becoming ready: exit status 1")},
+		{name: "registry failure", err: errors.New("registry failed to load")},
+		{name: "nil", err: nil},
 	}
-	if isAddressInUse(errors.New("registry failed to load")) {
-		t.Error("unrelated error was recognized as an address collision")
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := isRetriableStartError(test.err); got != test.want {
+				t.Errorf("isRetriableStartError(%v) = %t, want %t", test.err, got, test.want)
+			}
+		})
 	}
 }
 

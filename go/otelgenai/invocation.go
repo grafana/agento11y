@@ -8,9 +8,10 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// Operation is the value of gen_ai.operation.name. A span is named
-// "<operation> <subject>", and the operation decides which field is the
-// subject:
+// Operation is the value of gen_ai.operation.name. A span is named with the
+// operation followed by a space and its subject when that subject is non-empty;
+// otherwise, it is named with the operation alone. The operation decides which
+// field supplies the subject:
 //
 //	execute_tool                      ToolName
 //	invoke_agent, create_agent, plan  AgentName
@@ -19,9 +20,9 @@ import (
 //	fetch_response                    no subject
 //	every other operation             RequestModel
 //
-// Except for fetch_response, an empty operation-specific subject falls back
-// to RequestModel. If the subject field and RequestModel are both empty, the
-// span name is the operation alone.
+// Except for fetch_response, invoke_agent, and plan, an empty
+// operation-specific subject falls back to RequestModel. For invoke_agent and
+// plan, an empty AgentName makes the span name the operation alone.
 type Operation string
 
 const (
@@ -43,6 +44,7 @@ type Role string
 
 const (
 	RoleSystem    Role = "system"
+	RoleDeveloper Role = "developer"
 	RoleUser      Role = "user"
 	RoleAssistant Role = "assistant"
 	RoleTool      Role = "tool"
@@ -136,17 +138,16 @@ type ToolDefinition struct {
 	Extensions map[string]any
 }
 
-// Usage holds the token counts of one invocation. Every field maps to a
-// gen_ai.usage.* attribute; zero values are omitted except for input and
-// output tokens, which are always emitted when the usage counts as reported.
-// The handler leaves unreported usage off the span and out of
-// gen_ai.client.token.usage, so counts a provider did not return are never
-// summed as zeros.
+// Usage holds the token counts of one invocation. Every count maps to a
+// gen_ai.usage.* attribute. Input and output counts can be marked as known
+// independently, so a known zero is emitted while an unknown count is omitted.
+// The handler leaves unknown usage off the span and token metric.
 type Usage struct {
-	// Reported marks that the provider returned usage. Set it for an
-	// all-zero usage the provider really did return; any non-zero count
-	// already counts as reported without it.
+	// Reported marks both input and output counts as returned. Use the
+	// per-counter flags when only one count is known.
 	Reported             bool
+	InputTokensReported  bool
+	OutputTokensReported bool
 	InputTokens          int64
 	OutputTokens         int64
 	CacheReadInputTokens int64
@@ -155,13 +156,17 @@ type Usage struct {
 	ReasoningTokens       int64
 }
 
-// reported reports whether the invocation carries usage data. A non-zero
-// count counts on its own; Reported is needed only for the all-zero usage a
-// provider did return.
+func (u Usage) inputTokensReported() bool {
+	return u.Reported || u.InputTokensReported || u.InputTokens != 0
+}
+
+func (u Usage) outputTokensReported() bool {
+	return u.Reported || u.OutputTokensReported || u.OutputTokens != 0
+}
+
 func (u Usage) reported() bool {
-	return u.Reported ||
-		u.InputTokens != 0 ||
-		u.OutputTokens != 0 ||
+	return u.inputTokensReported() ||
+		u.outputTokensReported() ||
 		u.CacheReadInputTokens != 0 ||
 		u.CacheWriteInputTokens != 0 ||
 		u.ReasoningTokens != 0
@@ -292,16 +297,21 @@ func (inv *Invocation) operation() Operation {
 	return inv.Operation
 }
 
-// spanName is the conventions' span name, "<operation> <subject>". The
-// Operation doc lists the subject field of each operation, including the
-// fallbacks and the fetch_response exception.
+// spanName returns the operation followed by its non-empty subject, separated
+// by one space, or the operation alone when there is no subject. The Operation
+// doc lists each subject field and its fallback rules.
 func (inv *Invocation) spanName() string {
 	op := inv.operation()
 	var subject string
 	switch op {
 	case OperationExecuteTool:
 		subject = inv.ToolName
-	case OperationInvokeAgent, OperationCreateAgent, OperationPlan:
+	case OperationInvokeAgent, OperationPlan:
+		if inv.AgentName == "" {
+			return string(op)
+		}
+		subject = inv.AgentName
+	case OperationCreateAgent:
 		subject = inv.AgentName
 	case OperationRetrieval:
 		subject = inv.DataSourceID

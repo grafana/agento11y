@@ -47,6 +47,7 @@ func ToProto(g model.Generation) (*agento11yv1.Generation, error) {
 	if err != nil {
 		return nil, fmt.Errorf("map metadata: %w", err)
 	}
+	systemPrompt, input := inputToProto(g.SystemPrompt, g.Input)
 
 	out := &agento11yv1.Generation{
 		Id:             g.ID,
@@ -63,8 +64,8 @@ func ToProto(g model.Generation) (*agento11yv1.Generation, error) {
 		},
 		ResponseId:          g.ResponseID,
 		ResponseModel:       g.ResponseModel,
-		SystemPrompt:        g.SystemPrompt,
-		Input:               messagesToProto(g.Input),
+		SystemPrompt:        systemPrompt,
+		Input:               input,
 		Output:              messagesToProto(g.Output),
 		Tools:               toolsToProto(g.Tools),
 		Usage:               usageToProto(g.Usage),
@@ -164,6 +165,32 @@ func generationModeToProto(mode model.GenerationMode) agento11yv1.GenerationMode
 	default:
 		return agento11yv1.GenerationMode_GENERATION_MODE_UNSPECIFIED
 	}
+}
+
+// Generation ingest has no system or developer role. Protobuf exports move
+// their text into system_prompt. OTel reads the model with roles and positions.
+func inputToProto(systemPrompt string, messages []model.Message) (string, []*agento11yv1.Message) {
+	prompts := make([]string, 0, 1)
+	if systemPrompt != "" {
+		prompts = append(prompts, systemPrompt)
+	}
+	input := make([]model.Message, 0, len(messages))
+	for i := range messages {
+		if messages[i].Role != model.RoleSystem && messages[i].Role != model.RoleDeveloper {
+			input = append(input, messages[i])
+			continue
+		}
+		parts := make([]string, 0, len(messages[i].Parts))
+		for _, part := range messages[i].Parts {
+			if part.Kind == model.PartKindText && part.Text != "" {
+				parts = append(parts, part.Text)
+			}
+		}
+		if len(parts) > 0 {
+			prompts = append(prompts, strings.Join(parts, "\n"))
+		}
+	}
+	return strings.Join(prompts, "\n\n"), messagesToProto(input)
 }
 
 func messagesToProto(messages []model.Message) []*agento11yv1.Message {

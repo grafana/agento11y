@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -55,10 +56,13 @@ const (
 // must check capture.SpanContent() and withhold that content itself.
 //
 // The package reports a hook panic to the OTel error handler. A panic in
-// any hook drops the attributes from every hook and does not reach the
+// any hook drops the returned attributes from every hook and does not reach the
 // instrumented application. The span still closes, and no content goes on
 // it: a hook that died partway through may have redacted some of the content
 // and left the rest raw.
+//
+// A panic restores Attributes and MetricAttributes to their state at that
+// hook's entry. Changes from successful hooks remain.
 //
 // A hook may set the invocation's exported fields, including replacing the
 // whole struct: End reads the span handle, the timestamps and the Stream flag
@@ -292,9 +296,8 @@ func (h *Handler) captureFor(inv *Invocation) CaptureMode {
 // conventions give that operation. It starts at inv.StartedAt, which Start
 // fills with the current time when that field is zero.
 //
-// Start passes the request attributes to the tracer, so a sampler sees them.
-// End writes them again from the finished invocation, and that second set is
-// what an exporter reads.
+// Start passes sampling-relevant request attributes to the tracer. End writes
+// the full request state from the finished invocation for the exporter.
 //
 // Starting an invocation twice would orphan the first span, so the second
 // call returns the context unchanged.
@@ -315,7 +318,7 @@ func (h *Handler) Start(ctx context.Context, inv *Invocation) context.Context {
 	ctx, span := h.tracer.Start(ctx, inv.spanName(),
 		trace.WithSpanKind(inv.spanKind()),
 		trace.WithTimestamp(inv.StartedAt),
-		trace.WithAttributes(h.requestAttributes(inv)...),
+		trace.WithAttributes(h.samplingAttributes(inv)...),
 	)
 	inv.span = span
 	inv.spanStartedAt = inv.StartedAt
@@ -403,33 +406,17 @@ func (h *Handler) End(ctx context.Context, inv *Invocation) {
 	capture := h.captureFor(inv)
 	emitEvent := h.shouldEmitEvent(capture)
 
-	// End reads the span handle, the timestamps and the stream flag before the
-	// hooks run, and puts them back afterwards. A hook that rebuilds the invocation would
-	// otherwise leave the span unclosed, its metrics unrecorded, or a second
-	// End free to record everything twice.
-	span := inv.span
-	startedAt := inv.StartedAt
-	spanStartedAt := inv.spanStartedAt
-	completedAt := inv.CompletedAt
-	firstChunkAt := inv.FirstChunkAt
-	lastChunkAt := inv.lastChunkAt
-	ttfcRecorded := inv.ttfcRecorded
-	stream := inv.Stream
-
+	// Hooks can replace the whole invocation. Keep the original span and timestamps.
+	lifecycle := snapshotLifecycle(inv)
 	hookAttrs, panicked := h.runHooks(ctx, inv, capture)
-	inv.ended = true
-	inv.StartedAt = startedAt
-	inv.spanStartedAt = spanStartedAt
-	inv.CompletedAt = completedAt
-	inv.FirstChunkAt = firstChunkAt
-	inv.lastChunkAt = lastChunkAt
-	inv.ttfcRecorded = ttfcRecorded
-	inv.Stream = stream
 	if panicked {
-		// The hook is the redaction step, and it died partway through. Which
-		// fields are still raw is unknowable, so no content goes on the span.
+		// A hook that died partway through may have left content only partly
+		// redacted, so no content or returned hook attributes are safe to emit.
 		capture = CaptureNoContent
 	}
+	span := lifecycle.span
+	spanStartedAt := lifecycle.spanStartedAt
+	completedAt := lifecycle.completedAt
 
 	if span != nil {
 		span.SetName(inv.spanName())
@@ -477,12 +464,59 @@ func (h *Handler) runHooks(ctx context.Context, inv *Invocation, capture Capture
 	return attrs, false
 }
 
+type invocationLifecycle struct {
+	span          trace.Span
+	startedAt     time.Time
+	spanStartedAt time.Time
+	completedAt   time.Time
+	firstChunkAt  time.Time
+	lastChunkAt   time.Time
+	stream        bool
+	ttfcRecorded  bool
+	ended         bool
+}
+
+func snapshotLifecycle(inv *Invocation) invocationLifecycle {
+	return invocationLifecycle{
+		span:          inv.span,
+		startedAt:     inv.StartedAt,
+		spanStartedAt: inv.spanStartedAt,
+		completedAt:   inv.CompletedAt,
+		firstChunkAt:  inv.FirstChunkAt,
+		lastChunkAt:   inv.lastChunkAt,
+		stream:        inv.Stream,
+		ttfcRecorded:  inv.ttfcRecorded,
+		ended:         inv.ended,
+	}
+}
+
+func (state invocationLifecycle) restore(inv *Invocation) {
+	inv.span = state.span
+	inv.StartedAt = state.startedAt
+	inv.spanStartedAt = state.spanStartedAt
+	inv.CompletedAt = state.completedAt
+	inv.FirstChunkAt = state.firstChunkAt
+	inv.lastChunkAt = state.lastChunkAt
+	inv.Stream = state.stream
+	inv.ttfcRecorded = state.ttfcRecorded
+	inv.ended = state.ended
+}
+
 // runHook calls one hook and contains its panic. Instrumentation must not
 // bring down the application it observes, so the panic is reported and the
 // hook contributes nothing.
 func runHook(ctx context.Context, hook EndHook, inv *Invocation, capture CaptureMode) (attrs []attribute.KeyValue, panicked bool) {
+	lifecycle := snapshotLifecycle(inv)
+	// Copy at each hook's entry so a panic cannot undo an earlier redaction,
+	// even when hooks reuse the attribute slices' backing arrays.
+	callerAttrs := append([]attribute.KeyValue(nil), inv.Attributes...)
+	callerMetricAttrs := append([]attribute.KeyValue(nil), inv.MetricAttributes...)
 	defer func() {
+		// Restore lifecycle state after every hook so later hooks receive the real span.
+		lifecycle.restore(inv)
 		if recovered := recover(); recovered != nil {
+			inv.Attributes = callerAttrs
+			inv.MetricAttributes = callerMetricAttrs
 			attrs = nil
 			panicked = true
 			otel.Handle(fmt.Errorf("otelgenai: end hook %T panicked: %v", hook, recovered))
@@ -491,7 +525,67 @@ func runHook(ctx context.Context, hook EndHook, inv *Invocation, capture Capture
 	return hook.OnEnd(ctx, inv, capture), false
 }
 
-// requestAttributes are the attributes known before the provider replies.
+// samplingAttributes returns only attributes marked sampling-relevant for the
+// invocation's span type. End hooks can still remove every other request field.
+func (h *Handler) samplingAttributes(inv *Invocation) []attribute.KeyValue {
+	attrs := []attribute.KeyValue{
+		semconv.GenAIOperationNameKey.String(string(inv.operation())),
+	}
+	appendProviderEndpointModel := func() {
+		if inv.Provider != "" {
+			attrs = append(attrs, semconv.GenAIProviderNameKey.String(inv.Provider))
+		}
+		if inv.ServerAddress != "" {
+			attrs = append(attrs, semconv.ServerAddress(inv.ServerAddress))
+		}
+		if inv.ServerPort != 0 {
+			attrs = append(attrs, semconv.ServerPort(inv.ServerPort))
+		}
+		if inv.RequestModel != "" {
+			attrs = append(attrs, semconv.GenAIRequestModel(inv.RequestModel))
+		}
+	}
+
+	switch inv.operation() {
+	case OperationExecuteTool:
+		if inv.ToolName != "" {
+			attrs = append(attrs, semconv.GenAIToolName(inv.ToolName))
+		}
+		if inv.ToolType != "" {
+			attrs = append(attrs, semconv.GenAIToolTypeKey.String(inv.ToolType))
+		}
+	case OperationInvokeWorkflow, OperationPlan:
+	case OperationInvokeAgent:
+		if inv.spanKind() == trace.SpanKindClient {
+			appendProviderEndpointModel()
+		} else if inv.RequestModel != "" {
+			attrs = append(attrs, semconv.GenAIRequestModel(inv.RequestModel))
+		}
+		if inv.AgentName != "" {
+			attrs = append(attrs, semconv.GenAIAgentName(inv.AgentName))
+		}
+	case OperationCreateAgent:
+		appendProviderEndpointModel()
+		if inv.AgentName != "" {
+			attrs = append(attrs, semconv.GenAIAgentName(inv.AgentName))
+		}
+	case OperationRetrieval:
+	case OperationFetchResponse:
+		if inv.Provider != "" {
+			attrs = append(attrs, semconv.GenAIProviderNameKey.String(inv.Provider))
+		}
+		if inv.ServerAddress != "" {
+			attrs = append(attrs, semconv.ServerAddress(inv.ServerAddress))
+		}
+		if inv.ServerPort != 0 {
+			attrs = append(attrs, semconv.ServerPort(inv.ServerPort))
+		}
+	default:
+		appendProviderEndpointModel()
+	}
+	return attrs
+}
+
 func (h *Handler) requestAttributes(inv *Invocation) []attribute.KeyValue {
 	attrs := []attribute.KeyValue{
 		semconv.GenAIOperationNameKey.String(string(inv.operation())),
@@ -606,13 +700,13 @@ func (h *Handler) responseAttributes(inv *Invocation) []attribute.KeyValue {
 	if ttfc, ok := inv.timeToFirstChunk(); ok {
 		attrs = append(attrs, semconv.GenAIResponseTimeToFirstChunk(ttfc))
 	}
-	if inv.Usage.reported() {
-		// Always emit the input and output counts so a zero-valued usage still
-		// decodes as present.
-		attrs = append(attrs,
-			semconv.GenAIUsageInputTokens(int(inv.Usage.InputTokens)),
-			semconv.GenAIUsageOutputTokens(int(inv.Usage.OutputTokens)),
-		)
+	if inv.operation() != OperationFetchResponse && inv.Usage.reported() {
+		if inv.Usage.inputTokensReported() {
+			attrs = append(attrs, semconv.GenAIUsageInputTokens(int(inv.Usage.InputTokens)))
+		}
+		if inv.Usage.outputTokensReported() {
+			attrs = append(attrs, semconv.GenAIUsageOutputTokens(int(inv.Usage.OutputTokens)))
+		}
 		if inv.Usage.CacheReadInputTokens != 0 {
 			attrs = append(attrs, semconv.GenAIUsageCacheReadInputTokens(int(inv.Usage.CacheReadInputTokens)))
 		}
@@ -668,18 +762,18 @@ func (h *Handler) contentAttributes(inv *Invocation, capture CaptureMode) []attr
 		return encodeToolDefinitions(inv.ToolDefinitions)
 	}, len(inv.ToolDefinitions) > 0)
 	encode(semconv.GenAIToolCallArgumentsKey, func() (string, error) {
-		payload, err := rawJSONField(inv.ToolCallArguments, "tool call arguments")
+		payload, err := rawJSONObjectField(inv.ToolCallArguments, "tool call arguments")
 		return string(payload), err
 	}, len(inv.ToolCallArguments) > 0)
 	encode(semconv.GenAIToolCallResultKey, func() (string, error) {
-		payload, err := rawJSONField(inv.ToolCallResult, "tool call result")
+		payload, err := rawJSONObjectField(inv.ToolCallResult, "tool call result")
 		return string(payload), err
 	}, len(inv.ToolCallResult) > 0)
 	if inv.RetrievalQueryText != "" {
 		attrs = append(attrs, semconv.GenAIRetrievalQueryText(inv.RetrievalQueryText))
 	}
 	encode(semconv.GenAIRetrievalDocumentsKey, func() (string, error) {
-		payload, err := rawJSONField(inv.RetrievalDocuments, "retrieval documents")
+		payload, err := rawJSONObjectArrayField(inv.RetrievalDocuments, "retrieval documents")
 		return string(payload), err
 	}, len(inv.RetrievalDocuments) > 0)
 	return attrs

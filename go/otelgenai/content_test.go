@@ -2,8 +2,10 @@ package otelgenai_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
+	"go.opentelemetry.io/otel/log/logtest"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
@@ -45,6 +47,12 @@ func captureContent(t *testing.T, inv *otelgenai.Invocation, mode otelgenai.Capt
 }
 
 func strptr(s string) *string { return &s }
+
+type panickingExtension struct{}
+
+func (panickingExtension) MarshalJSON() ([]byte, error) {
+	panic("extension marshal exploded")
+}
 
 func TestContentEncoding(t *testing.T) {
 	t.Parallel()
@@ -501,6 +509,38 @@ func TestContentCaptureGating(t *testing.T) {
 				inv.RetrievalDocuments = []byte(`[{"id":`)
 			},
 		},
+		{
+			name: "tool call arguments must be an object",
+			mode: otelgenai.CaptureSpanOnly,
+			key:  "gen_ai.tool.call.arguments",
+			set: func(inv *otelgenai.Invocation) {
+				inv.ToolCallArguments = []byte(`["Paris"]`)
+			},
+		},
+		{
+			name: "tool call result must be an object",
+			mode: otelgenai.CaptureSpanOnly,
+			key:  "gen_ai.tool.call.result",
+			set: func(inv *otelgenai.Invocation) {
+				inv.ToolCallResult = []byte(`null`)
+			},
+		},
+		{
+			name: "retrieval documents must be an array",
+			mode: otelgenai.CaptureSpanOnly,
+			key:  "gen_ai.retrieval.documents",
+			set: func(inv *otelgenai.Invocation) {
+				inv.RetrievalDocuments = []byte(`{"id":"doc-1"}`)
+			},
+		},
+		{
+			name: "every retrieval document must be an object",
+			mode: otelgenai.CaptureSpanOnly,
+			key:  "gen_ai.retrieval.documents",
+			set: func(inv *otelgenai.Invocation) {
+				inv.RetrievalDocuments = []byte(`[{"id":"doc-1"},null]`)
+			},
+		},
 	}
 
 	for _, tc := range cases {
@@ -517,6 +557,89 @@ func TestContentCaptureGating(t *testing.T) {
 			}
 			if present && got != tc.value {
 				t.Errorf("%s = %q, want %q", tc.key, got, tc.value)
+			}
+		})
+	}
+}
+
+func TestExtensionMarshalPanicKeepsSafeContentAndClosesSpan(t *testing.T) {
+	cases := []struct {
+		name      string
+		mode      otelgenai.CaptureMode
+		wantSpan  bool
+		wantEvent bool
+	}{
+		{name: "span only", mode: otelgenai.CaptureSpanOnly, wantSpan: true},
+		{name: "event only", mode: otelgenai.CaptureEventOnly, wantEvent: true},
+		{name: "span and event", mode: otelgenai.CaptureSpanAndEvent, wantSpan: true, wantEvent: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			testOTelErrors.reset()
+			logRecorder := logtest.NewRecorder()
+			handler, spanRecorder := newRecordingHandler(t,
+				otelgenai.WithCaptureMode(tc.mode),
+				otelgenai.WithLoggerProvider(logRecorder),
+			)
+			inv := chatInvocation()
+			inv.InputMessages = []otelgenai.Message{{
+				Role: otelgenai.RoleUser,
+				Parts: []otelgenai.Part{
+					{
+						Type:    otelgenai.PartTypeText,
+						Content: strptr("safe one"),
+						Extensions: map[string]any{
+							"vendor.bad":  panickingExtension{},
+							"vendor.safe": "kept",
+						},
+					},
+					otelgenai.TextPart("safe two"),
+				},
+			}}
+
+			ctx := handler.Start(context.Background(), inv)
+			handler.End(ctx, inv)
+
+			ended := spanRecorder.Ended()
+			if len(ended) != 1 {
+				t.Fatalf("recorded %d spans, want 1", len(ended))
+			}
+			spanContent, spanPresent := spanAttrs(ended[0])["gen_ai.input.messages"]
+			if spanPresent != tc.wantSpan {
+				t.Errorf("span content present = %v, want %v", spanPresent, tc.wantSpan)
+			}
+			records, _ := recordedEvents(t, logRecorder)
+			wantEvents := 0
+			if tc.wantEvent {
+				wantEvents = 1
+			}
+			if got := len(records); got != wantEvents {
+				t.Fatalf("recorded %d events, want %d", got, wantEvents)
+			}
+
+			var content string
+			if spanPresent {
+				content += spanContent.AsString()
+			}
+			if len(records) == 1 {
+				content += logAttributes(records[0])["gen_ai.input.messages"].Emit()
+			}
+			for _, safe := range []string{"safe one", "safe two", "vendor.safe", "kept"} {
+				if !strings.Contains(content, safe) {
+					t.Errorf("input messages %q do not retain %q", content, safe)
+				}
+			}
+			if strings.Contains(content, "vendor.bad") {
+				t.Errorf("input messages retain panicking extension: %s", content)
+			}
+			var found bool
+			for _, err := range testOTelErrors.read() {
+				if strings.Contains(err.Error(), "MarshalJSON panicked") {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("OTel errors = %v, want extension MarshalJSON panic", testOTelErrors.read())
 			}
 		})
 	}

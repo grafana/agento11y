@@ -9,6 +9,7 @@ import (
 	"maps"
 	"reflect"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -261,6 +262,11 @@ const (
 	spanAttrRequestMaxTokens       = "gen_ai.request.max_tokens"
 	spanAttrRequestTemperature     = "gen_ai.request.temperature"
 	spanAttrRequestTopP            = "gen_ai.request.top_p"
+	spanAttrRequestTopK            = "gen_ai.request.top_k"
+	spanAttrRequestChoiceCount     = "gen_ai.request.choice.count"
+	spanAttrRequestSeed            = "gen_ai.request.seed"
+	spanAttrOutputType             = "gen_ai.output.type"
+	spanAttrResponseStatus         = "gen_ai.response.status"
 	spanAttrRequestToolChoice      = "agento11y.gen_ai.request.tool_choice"
 	spanAttrRequestThinkingEnabled = "agento11y.gen_ai.request.thinking.enabled"
 	spanAttrRequestThinkingBudget  = "agento11y.gen_ai.request.thinking.budget_tokens"
@@ -410,10 +416,11 @@ type GenerationRecorder struct {
 	span   trace.Span
 	// invocation is non-nil in otel export mode, where the otelgenai package
 	// owns the span's attributes, status, and metrics.
-	invocation         *otelgenai.Invocation
-	seed               GenerationStart
-	startedAt          time.Time
-	contentCaptureMode ContentCaptureMode
+	invocation          *otelgenai.Invocation
+	seed                GenerationStart
+	startedAt           time.Time
+	contentCaptureMode  ContentCaptureMode
+	mapErrorCaptureMode ContentCaptureMode
 
 	mu             sync.Mutex
 	ended          bool
@@ -789,6 +796,10 @@ func (c *Client) startGeneration(ctx context.Context, start GenerationStart, def
 		MaxTokens:         cloneInt64Ptr(seed.MaxTokens),
 		Temperature:       cloneFloat64Ptr(seed.Temperature),
 		TopP:              cloneFloat64Ptr(seed.TopP),
+		TopK:              cloneInt64Ptr(seed.TopK),
+		ChoiceCount:       cloneInt64Ptr(seed.ChoiceCount),
+		Seed:              cloneInt64Ptr(seed.Seed),
+		OutputType:        cloneStringPtr(seed.OutputType),
 		ToolChoice:        cloneStringPtr(seed.ToolChoice),
 		ThinkingEnabled:   cloneBoolPtr(seed.ThinkingEnabled),
 	}
@@ -816,13 +827,14 @@ func (c *Client) startGeneration(ctx context.Context, start GenerationStart, def
 	callCtx = withContentCaptureMode(callCtx, contextMode)
 
 	recorder := &GenerationRecorder{
-		client:             c,
-		ctx:                callCtx,
-		span:               span,
-		invocation:         invocation,
-		seed:               seed,
-		startedAt:          startedAt,
-		contentCaptureMode: ccMode,
+		client:              c,
+		ctx:                 callCtx,
+		span:                span,
+		invocation:          invocation,
+		seed:                seed,
+		startedAt:           startedAt,
+		contentCaptureMode:  ccMode,
+		mapErrorCaptureMode: contextMode,
 	}
 	if hasExperimentRun {
 		experimentRun.captureRecorder(recorder)
@@ -880,6 +892,7 @@ func (c *Client) StartEmbedding(ctx context.Context, start EmbeddingStart) (cont
 		embeddingSpanName(seed.Model.Name),
 		trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithTimestamp(startedAt),
+		trace.WithAttributes(embeddingSpanSamplingAttributes(seed)...),
 	)
 	span.SetAttributes(embeddingSpanStartAttributes(seed)...)
 	setSpanTagAttributes(span, c.config.Tags)
@@ -978,6 +991,7 @@ func (c *Client) StartToolExecution(ctx context.Context, start ToolExecutionStar
 		toolSpanName(seed.ToolName),
 		trace.WithSpanKind(trace.SpanKindInternal),
 		trace.WithTimestamp(startedAt),
+		trace.WithAttributes(toolSpanSamplingAttributes(seed)...),
 	)
 	span.SetAttributes(toolSpanAttributes(seed)...)
 	setSpanTagAttributes(span, c.config.Tags)
@@ -1113,12 +1127,11 @@ func (r *GenerationRecorder) End() {
 	if r.contentCaptureMode == ContentCaptureModeFullWithMetadataSpans && callErr != nil {
 		spanCallError = callErrorCategory
 	}
-	// spanMapError redacts mapping errors on the span under
-	// FullWithMetadataSpans (parity with the other SDKs which already skip
-	// recording mapping errors on spans under both stripped modes). The
-	// MetadataOnly path keeps the existing pre-feature behavior to stay
-	// scoped to this change.
-	redactMapErr := r.contentCaptureMode == ContentCaptureModeFullWithMetadataSpans
+	// Mapping errors can contain request or response content, so stripped modes
+	// expose only the SDK classification on the span.
+	redactMapErr := r.contentCaptureMode == ContentCaptureModeMetadataOnly ||
+		r.contentCaptureMode == ContentCaptureModeFullWithMetadataSpans ||
+		r.mapErrorCaptureMode == ContentCaptureModeFullWithMetadataSpans
 
 	// In otel mode otelgenai writes the span's name and attributes at End from
 	// the invocation, so this code skips the metadata-span encoding.
@@ -1492,32 +1505,23 @@ func (r *ToolExecutionRecorder) End() {
 	r.span.SetName(toolSpanName(r.seed.ToolName))
 	r.span.SetAttributes(toolSpanAttributes(r.seed)...)
 
-	var contentErr error
 	if r.includeContent {
 		arguments, err := serializeToolContent(end.Arguments)
 		if err != nil {
-			contentErr = fmt.Errorf("serialize tool arguments: %w", err)
+			otel.Handle(fmt.Errorf("agento11y: encode tool arguments: %w", err))
 		} else if arguments != "" {
 			r.span.SetAttributes(attribute.String(spanAttrToolCallArguments, arguments))
 		}
 
 		result, err := serializeToolContent(end.Result)
-		if err != nil && contentErr == nil {
-			contentErr = fmt.Errorf("serialize tool result: %w", err)
-		} else if err == nil && result != "" {
+		if err != nil {
+			otel.Handle(fmt.Errorf("agento11y: encode tool result: %w", err))
+		} else if result != "" {
 			r.span.SetAttributes(attribute.String(spanAttrToolCallResult, result))
 		}
 	}
 
-	var finalErr error
-	switch {
-	case execErr != nil && contentErr != nil:
-		finalErr = errors.Join(execErr, contentErr)
-	case execErr != nil:
-		finalErr = execErr
-	case contentErr != nil:
-		finalErr = contentErr
-	}
+	finalErr := execErr
 	if finalErr != nil {
 		// Tools have no proto export; under both stripped modes the span
 		// must not echo raw provider exception text via record-error
@@ -1603,7 +1607,10 @@ func (r *GenerationRecorder) normalizeGeneration(raw Generation, completedAt tim
 	if g.Model.Name == "" {
 		g.Model.Name = r.seed.Model.Name
 	}
-	if g.SystemPrompt == "" {
+	// Result instructions replace the seed even when stored in message history.
+	if g.SystemPrompt == "" && !slices.ContainsFunc(g.Input, func(message Message) bool {
+		return message.Role == RoleSystem || message.Role == RoleDeveloper
+	}) {
 		g.SystemPrompt = r.seed.SystemPrompt
 	}
 	if len(g.Tools) == 0 {
@@ -1617,6 +1624,18 @@ func (r *GenerationRecorder) normalizeGeneration(raw Generation, completedAt tim
 	}
 	if g.TopP == nil {
 		g.TopP = cloneFloat64Ptr(r.seed.TopP)
+	}
+	if g.TopK == nil {
+		g.TopK = cloneInt64Ptr(r.seed.TopK)
+	}
+	if g.ChoiceCount == nil {
+		g.ChoiceCount = cloneInt64Ptr(r.seed.ChoiceCount)
+	}
+	if g.Seed == nil {
+		g.Seed = cloneInt64Ptr(r.seed.Seed)
+	}
+	if g.OutputType == nil {
+		g.OutputType = cloneStringPtr(r.seed.OutputType)
 	}
 	if g.ToolChoice == nil {
 		g.ToolChoice = cloneStringPtr(r.seed.ToolChoice)
@@ -1678,8 +1697,24 @@ func (r *GenerationRecorder) normalizeGeneration(raw Generation, completedAt tim
 		g.Metadata[metadataKeyCallError] = callErr.Error()
 	}
 
+	normalizeGenerationFinishReason(&g)
 	g.Usage = g.Usage.Normalize()
 	return g
+}
+
+func normalizeGenerationFinishReason(g *Generation) {
+	if g == nil || len(g.Output) == 0 {
+		return
+	}
+	for i := range g.Output {
+		if g.Output[i].FinishReason != "" {
+			g.StopReason = g.Output[i].FinishReason
+			return
+		}
+	}
+	if g.StopReason != "" {
+		g.Output[0].FinishReason = g.StopReason
+	}
 }
 
 func (r *EmbeddingRecorder) normalizeEmbeddingResult(raw EmbeddingResult) EmbeddingResult {
@@ -1799,6 +1834,7 @@ func (c *Client) startSpan(ctx context.Context, generation Generation, kind trac
 	opts := []trace.SpanStartOption{
 		trace.WithSpanKind(kind),
 		trace.WithTimestamp(startedAt),
+		trace.WithAttributes(generationSpanSamplingAttributes(generation)...),
 	}
 
 	tracer := c.tracer
@@ -1830,12 +1866,34 @@ func embeddingSpanName(model string) string {
 	return defaultEmbeddingOperationName + " " + model
 }
 
+func generationSpanSamplingAttributes(g Generation) []attribute.KeyValue {
+	attrs := []attribute.KeyValue{attribute.String(spanAttrOperationName, operationName(g))}
+	if provider := otelProviderName(g.Model.Provider); provider != "" {
+		attrs = append(attrs, attribute.String(spanAttrProviderName, provider))
+	}
+	if model := strings.TrimSpace(g.Model.Name); model != "" {
+		attrs = append(attrs, attribute.String(spanAttrRequestModel, model))
+	}
+	return attrs
+}
+
+func embeddingSpanSamplingAttributes(start EmbeddingStart) []attribute.KeyValue {
+	attrs := []attribute.KeyValue{attribute.String(spanAttrOperationName, defaultEmbeddingOperationName)}
+	if provider := otelProviderName(start.Model.Provider); provider != "" {
+		attrs = append(attrs, attribute.String(spanAttrProviderName, provider))
+	}
+	if model := strings.TrimSpace(start.Model.Name); model != "" {
+		attrs = append(attrs, attribute.String(spanAttrRequestModel, model))
+	}
+	return attrs
+}
+
 func embeddingSpanStartAttributes(start EmbeddingStart) []attribute.KeyValue {
 	attrs := []attribute.KeyValue{
 		attribute.String(spanAttrOperationName, defaultEmbeddingOperationName),
 		attribute.String(sdkMetadataKeyName, sdkName),
 	}
-	if provider := strings.TrimSpace(start.Model.Provider); provider != "" {
+	if provider := otelProviderName(start.Model.Provider); provider != "" {
 		attrs = append(attrs, attribute.String(spanAttrProviderName, provider))
 	}
 	if model := strings.TrimSpace(start.Model.Name); model != "" {
@@ -1905,7 +1963,7 @@ func generationSpanAttributes(g Generation) []attribute.KeyValue {
 	if agentVersion := strings.TrimSpace(g.AgentVersion); agentVersion != "" {
 		attrs = append(attrs, attribute.String(spanAttrAgentVersion, agentVersion))
 	}
-	if provider := strings.TrimSpace(g.Model.Provider); provider != "" {
+	if provider := otelProviderName(g.Model.Provider); provider != "" {
 		attrs = append(attrs, attribute.String(spanAttrProviderName, provider))
 	}
 	if model := strings.TrimSpace(g.Model.Name); model != "" {
@@ -1926,6 +1984,18 @@ func generationSpanAttributes(g Generation) []attribute.KeyValue {
 	if g.TopP != nil {
 		attrs = append(attrs, attribute.Float64(spanAttrRequestTopP, *g.TopP))
 	}
+	if g.TopK != nil {
+		attrs = append(attrs, attribute.Int64(spanAttrRequestTopK, *g.TopK))
+	}
+	if g.ChoiceCount != nil {
+		attrs = append(attrs, attribute.Int64(spanAttrRequestChoiceCount, *g.ChoiceCount))
+	}
+	if g.Seed != nil {
+		attrs = append(attrs, attribute.Int64(spanAttrRequestSeed, *g.Seed))
+	}
+	if g.OutputType != nil && strings.TrimSpace(*g.OutputType) != "" {
+		attrs = append(attrs, attribute.String(spanAttrOutputType, strings.TrimSpace(*g.OutputType)))
+	}
 	if g.ToolChoice != nil {
 		if toolChoice := strings.TrimSpace(*g.ToolChoice); toolChoice != "" {
 			attrs = append(attrs, attribute.String(spanAttrRequestToolChoice, toolChoice))
@@ -1937,28 +2007,33 @@ func generationSpanAttributes(g Generation) []attribute.KeyValue {
 	if thinkingBudget, ok := thinkingBudgetFromMetadata(g.Metadata); ok {
 		attrs = append(attrs, attribute.Int64(spanAttrRequestThinkingBudget, thinkingBudget))
 	}
-	if g.StopReason != "" {
-		attrs = append(attrs,
-			attribute.StringSlice(spanAttrFinishReasons, []string{g.StopReason}),
-		)
+	if finishReasons := generationFinishReasons(g); len(finishReasons) > 0 {
+		attrs = append(attrs, attribute.StringSlice(spanAttrFinishReasons, finishReasons))
 	}
-	if g.Usage.InputTokens != 0 {
-		attrs = append(attrs, attribute.Int64(spanAttrInputTokens, g.Usage.InputTokens))
+	if g.ResponseStatus != nil && strings.TrimSpace(*g.ResponseStatus) != "" {
+		attrs = append(attrs, attribute.String(spanAttrResponseStatus, strings.TrimSpace(*g.ResponseStatus)))
 	}
-	if g.Usage.OutputTokens != 0 {
-		attrs = append(attrs, attribute.Int64(spanAttrOutputTokens, g.Usage.OutputTokens))
-	}
-	if g.Usage.CacheReadInputTokens != 0 {
-		attrs = append(attrs, attribute.Int64(spanAttrCacheReadTokens, g.Usage.CacheReadInputTokens))
-	}
-	if g.Usage.CacheWriteInputTokens != 0 {
-		attrs = append(attrs, attribute.Int64(spanAttrCacheWriteTokens, g.Usage.CacheWriteInputTokens))
-	}
-	if g.Usage.ReasoningTokens != 0 {
-		attrs = append(attrs, attribute.Int64(spanAttrReasoningTokens, g.Usage.ReasoningTokens))
-	}
-	if g.Usage.InputSemantics == TokenInputSemanticsInclusive {
-		attrs = append(attrs, attribute.String(attrTokenSemantics, tokenSemanticsInclusive))
+	// fetch_response observes polling rather than model inference, so no usage
+	// belongs on its span, including the SDK's extended token attributes.
+	if operationName(g) != string(otelgenai.OperationFetchResponse) {
+		if g.Usage.InputTokensReported || g.Usage.InputTokens != 0 {
+			attrs = append(attrs, attribute.Int64(spanAttrInputTokens, g.Usage.InputTokens))
+		}
+		if g.Usage.OutputTokensReported || g.Usage.OutputTokens != 0 {
+			attrs = append(attrs, attribute.Int64(spanAttrOutputTokens, g.Usage.OutputTokens))
+		}
+		if g.Usage.CacheReadInputTokens != 0 {
+			attrs = append(attrs, attribute.Int64(spanAttrCacheReadTokens, g.Usage.CacheReadInputTokens))
+		}
+		if g.Usage.CacheWriteInputTokens != 0 {
+			attrs = append(attrs, attribute.Int64(spanAttrCacheWriteTokens, g.Usage.CacheWriteInputTokens))
+		}
+		if g.Usage.ReasoningTokens != 0 {
+			attrs = append(attrs, attribute.Int64(spanAttrReasoningTokens, g.Usage.ReasoningTokens))
+		}
+		if g.Usage.InputSemantics == TokenInputSemanticsInclusive {
+			attrs = append(attrs, attribute.String(attrTokenSemantics, tokenSemanticsInclusive))
+		}
 	}
 
 	return attrs
@@ -2257,8 +2332,8 @@ func (c *Client) recordGenerationMetrics(ctx context.Context, generation Generat
 	)
 	c.instruments.operationDuration.Record(metricCtx, duration, metric.WithAttributes(durationAttrs...))
 
-	recordToken := func(tokenType string, value int64) {
-		if value == 0 {
+	recordToken := func(tokenType string, value int64, reported bool) {
+		if value == 0 && !reported {
 			return
 		}
 		tokenAttrs := append(
@@ -2273,11 +2348,13 @@ func (c *Client) recordGenerationMetrics(ctx context.Context, generation Generat
 		c.instruments.tokenUsage.Record(metricCtx, value, metric.WithAttributes(tokenAttrs...))
 	}
 
-	recordToken(metricTokenTypeInput, generation.Usage.InputTokens)
-	recordToken(metricTokenTypeOutput, generation.Usage.OutputTokens)
-	recordToken(metricTokenTypeCacheRead, generation.Usage.CacheReadInputTokens)
-	recordToken(metricTokenTypeCacheWrite, generation.Usage.CacheWriteInputTokens)
-	recordToken(metricTokenTypeReasoning, generation.Usage.ReasoningTokens)
+	if operationName(generation) != string(otelgenai.OperationFetchResponse) {
+		recordToken(metricTokenTypeInput, generation.Usage.InputTokens, generation.Usage.InputTokensReported)
+		recordToken(metricTokenTypeOutput, generation.Usage.OutputTokens, generation.Usage.OutputTokensReported)
+		recordToken(metricTokenTypeCacheRead, generation.Usage.CacheReadInputTokens, false)
+		recordToken(metricTokenTypeCacheWrite, generation.Usage.CacheWriteInputTokens, false)
+		recordToken(metricTokenTypeReasoning, generation.Usage.ReasoningTokens, false)
+	}
 
 	toolCalls := countToolCalls(generation.Output)
 	toolCallAttrs := append(append([]attribute.KeyValue(nil), identityAttrs...), tagAttrs...)
@@ -2432,7 +2509,7 @@ func (c *Client) clientTagMetricAttributes() []attribute.KeyValue {
 
 func metricIdentityAttributes(provider, model, agentName, agentVersion string) []attribute.KeyValue {
 	attrs := []attribute.KeyValue{
-		metricStringAttribute(spanAttrProviderName, strings.TrimSpace(provider)),
+		metricStringAttribute(spanAttrProviderName, otelProviderName(provider)),
 		metricStringAttribute(spanAttrRequestModel, strings.TrimSpace(model)),
 		metricStringAttribute(spanAttrAgentName, strings.TrimSpace(agentName)),
 	}
@@ -2477,6 +2554,17 @@ func toolSpanName(toolName string) string {
 	return "execute_tool " + name
 }
 
+func toolSpanSamplingAttributes(start ToolExecutionStart) []attribute.KeyValue {
+	attrs := []attribute.KeyValue{
+		attribute.String(spanAttrOperationName, "execute_tool"),
+		attribute.String(spanAttrToolName, start.ToolName),
+	}
+	if toolType := strings.TrimSpace(start.ToolType); toolType != "" {
+		attrs = append(attrs, attribute.String(spanAttrToolType, toolType))
+	}
+	return attrs
+}
+
 func toolSpanAttributes(start ToolExecutionStart) []attribute.KeyValue {
 	attrs := []attribute.KeyValue{
 		attribute.String(spanAttrOperationName, "execute_tool"),
@@ -2505,7 +2593,7 @@ func toolSpanAttributes(start ToolExecutionStart) []attribute.KeyValue {
 	if agentVersion := strings.TrimSpace(start.AgentVersion); agentVersion != "" {
 		attrs = append(attrs, attribute.String(spanAttrAgentVersion, agentVersion))
 	}
-	if provider := strings.TrimSpace(start.RequestProvider); provider != "" {
+	if provider := otelProviderName(start.RequestProvider); provider != "" {
 		attrs = append(attrs, attribute.String(spanAttrProviderName, provider))
 	}
 	if model := strings.TrimSpace(start.RequestModel); model != "" {
@@ -2515,49 +2603,40 @@ func toolSpanAttributes(start ToolExecutionStart) []attribute.KeyValue {
 	return attrs
 }
 
-func serializeToolContent(value any) (string, error) {
+func serializeToolContent(value any) (payload string, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			payload = ""
+			err = fmt.Errorf("JSON marshaler panicked: %v", recovered)
+		}
+	}()
 	if value == nil {
 		return "", nil
 	}
 
+	var encoded []byte
 	switch v := value.(type) {
 	case string:
-		trimmed := strings.TrimSpace(v)
-		if trimmed == "" {
-			return "", nil
-		}
-		if json.Valid([]byte(trimmed)) {
-			return trimmed, nil
-		}
-		data, err := json.Marshal(trimmed)
-		if err != nil {
-			return "", err
-		}
-		return string(data), nil
+		encoded = []byte(strings.TrimSpace(v))
 	case []byte:
-		trimmed := strings.TrimSpace(string(v))
-		if trimmed == "" {
-			return "", nil
-		}
-		if json.Valid([]byte(trimmed)) {
-			return trimmed, nil
-		}
-		data, err := json.Marshal(trimmed)
-		if err != nil {
-			return "", err
-		}
-		return string(data), nil
+		encoded = []byte(strings.TrimSpace(string(v)))
 	default:
-		data, err := json.Marshal(v)
+		encoded, err = json.Marshal(v)
 		if err != nil {
 			return "", err
 		}
-		trimmed := strings.TrimSpace(string(data))
-		if trimmed == "null" {
-			return "", nil
-		}
-		return trimmed, nil
 	}
+	if len(encoded) == 0 {
+		return "", nil
+	}
+	if string(encoded) == "null" {
+		return "", errors.New("expected a JSON object")
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &object); err != nil || object == nil {
+		return "", errors.New("expected a JSON object")
+	}
+	return string(encoded), nil
 }
 
 func applyTraceContextFromSpan(span trace.Span, generation *Generation) {
