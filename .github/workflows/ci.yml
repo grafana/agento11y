@@ -127,6 +127,9 @@ jobs:
       - name: GenAI semantic-convention live check
         run: mise run test:go:conformance
 
+      - name: OTel GenAI race tests
+        run: mise run test:go:otelgenai-race
+
   go-module:
     name: Go module
     runs-on: ubuntu-latest

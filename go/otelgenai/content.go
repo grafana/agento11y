@@ -473,15 +473,39 @@ func encodeGenericPart(part Part) (json.RawMessage, error) {
 	return payload, errors.Join(problems...)
 }
 
-// rawJSONField returns a raw JSON document for a schema field that carries one.
-// rawJSONField drops invalid JSON rather than emitting it, because the
-// enclosing marshal would fail on it and lose the whole attribute.
 func rawJSONField(raw json.RawMessage, field string) (json.RawMessage, error) {
 	if len(raw) == 0 {
 		return nil, nil
 	}
 	if !json.Valid(raw) {
 		return nil, fmt.Errorf("otelgenai: drop %s: not valid JSON", field)
+	}
+	return raw, nil
+}
+
+func rawJSONObjectField(raw json.RawMessage, field string) (json.RawMessage, error) {
+	if payload, err := rawJSONField(raw, field); err != nil || payload == nil {
+		return payload, err
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil || object == nil {
+		return nil, fmt.Errorf("otelgenai: drop %s: expected a JSON object", field)
+	}
+	return raw, nil
+}
+
+func rawJSONObjectArrayField(raw json.RawMessage, field string) (json.RawMessage, error) {
+	if payload, err := rawJSONField(raw, field); err != nil || payload == nil {
+		return payload, err
+	}
+	var documents []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &documents); err != nil || documents == nil {
+		return nil, fmt.Errorf("otelgenai: drop %s: expected an array of JSON objects", field)
+	}
+	for _, document := range documents {
+		if document == nil {
+			return nil, fmt.Errorf("otelgenai: drop %s: expected an array of JSON objects", field)
+		}
 	}
 	return raw, nil
 }
@@ -525,7 +549,7 @@ func appendExtensions(payload json.RawMessage, extensions map[string]any, schema
 			problems = append(problems, fmt.Errorf("otelgenai: drop extension key %q: the message schema already uses it", key))
 			continue
 		}
-		value, err := json.Marshal(extensions[key])
+		value, err := marshalExtensionValue(extensions[key])
 		if err != nil {
 			problems = append(problems, fmt.Errorf("otelgenai: drop extension key %q: %w", key, err))
 			continue
@@ -559,6 +583,16 @@ func appendExtensions(payload json.RawMessage, extensions map[string]any, schema
 	out = append(out, encoded...)
 	out = append(out, '}')
 	return out, errors.Join(problems...)
+}
+
+func marshalExtensionValue(value any) (payload []byte, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			payload = nil
+			err = fmt.Errorf("MarshalJSON panicked: %v", recovered)
+		}
+	}()
+	return json.Marshal(value)
 }
 
 // objectKeys returns the top-level keys of an encoded JSON object.

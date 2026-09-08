@@ -17,8 +17,10 @@ returns the paths Weaver needs:
 assets, err := weavertest.Setup(ctx, os.Getenv("SEMCONV_GENAI_REF"))
 ```
 
-A cold run downloads that commit and the upstream semantic-conventions release
-its `versions.env` names.
+A cold run downloads that commit and its upstream semantic-conventions
+release. Older revisions name the release in `versions.env`. Newer revisions
+use a Git dependency in `model/manifest.yaml`. `Setup` accepts both layouts and
+rewrites the dependency to the local filtered registry.
 
 ## Two runners
 
@@ -28,6 +30,13 @@ its `versions.env` names.
 `LiveCheck` runs Weaver over recorded spans passed as `Sample` values and
 returns `Finding`s. Use it to check fixtures with no SDK in the loop. `Sample`
 values come from `SampleFromSpan`, which converts an OTLP `tracepb.Span`.
+`Finding.Target` is empty for a span and uses these exact forms elsewhere:
+
+- span attribute: `<attribute>`
+- event: `event[N]:<event-name>`
+- event attribute: `event[N]:<event-name>/<attribute>`
+- link: `link[N]`
+- link attribute: `link[N]/<attribute>`
 
 Both need the `weaver` binary on `PATH` and report `ErrNotInstalled` when it is
 missing. Pin the version: this package is developed against Weaver 0.25.1.
@@ -44,14 +53,22 @@ reads them.
 GenAI registry. It also promotes `undefined_enum_variant` to a violation, so an
 operation name outside the registry fails the check.
 
-The policies add what the registry cannot express on its own:
+`Setup` generates `coverage-model.json` from the pinned registry with the
+pinned Weaver binary. Both runners load that model with the registry's content
+schemas as advice data. The policies add what the registry cannot express on
+its own:
 
-- `genai_span_validation.rego`: span names, span kinds, operation-specific
-  attribute sets, operation-name values, span status, and `error.type`.
-- `genai_content_validation.rego`: captured content against the JSON schemas in
-  the GenAI registry.
+- `genai_span_validation.rego`: registry-derived attribute and span-kind
+  expectations, plus explicit operation classification and span-name rules.
+- `span_validation.rego`: span status and `error.type` invariants.
+- `genai_content_validation.rego`: string-valued captured content against the
+  GenAI registry's JSON schemas.
 
-The two policy files start from
+Weaver's OTLP receiver does not retain original structured log values in its
+report. Tests that need to compare those values must use an in-memory log
+recorder beside the Weaver exporter.
+
+The two GenAI-specific policy files start from
 `open-telemetry/opentelemetry-python-genai` at commit
 `8d11494c5417d13a1007f1546f1f16d5cae558df`. This copy drops that repository's
 handwritten operation allowlist, because Weaver checks operation values against
