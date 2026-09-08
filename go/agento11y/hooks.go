@@ -233,9 +233,10 @@ type hookWireInput struct {
 }
 
 type hookWireMessage struct {
-	Role  hookWireRole   `json:"role"`
-	Name  string         `json:"name,omitempty"`
-	Parts []hookWirePart `json:"parts,omitempty"`
+	Role         hookWireRole   `json:"role"`
+	Name         string         `json:"name,omitempty"`
+	Parts        []hookWirePart `json:"parts,omitempty"`
+	FinishReason string         `json:"finish_reason,omitempty"`
 }
 
 type hookWirePart struct {
@@ -265,6 +266,12 @@ type hookWireToolResult struct {
 // encoding/json would send. Python and JS accept the same two forms.
 type hookWireRole Role
 
+// Hook JSON accepts these numeric roles independently from generation ingest.
+const (
+	hookWireRoleSystemValue    = 4
+	hookWireRoleDeveloperValue = 5
+)
+
 func (r *hookWireRole) UnmarshalJSON(data []byte) error {
 	var name string
 	if err := json.Unmarshal(data, &name); err == nil {
@@ -273,6 +280,10 @@ func (r *hookWireRole) UnmarshalJSON(data []byte) error {
 			*r = hookWireRole(RoleAssistant)
 		case string(RoleTool):
 			*r = hookWireRole(RoleTool)
+		case string(RoleSystem):
+			*r = hookWireRole(RoleSystem)
+		case string(RoleDeveloper):
+			*r = hookWireRole(RoleDeveloper)
 		default:
 			*r = hookWireRole(RoleUser)
 		}
@@ -287,6 +298,10 @@ func (r *hookWireRole) UnmarshalJSON(data []byte) error {
 		*r = hookWireRole(RoleAssistant)
 	case int32(agento11yv1.MessageRole_MESSAGE_ROLE_TOOL):
 		*r = hookWireRole(RoleTool)
+	case hookWireRoleSystemValue:
+		*r = hookWireRole(RoleSystem)
+	case hookWireRoleDeveloperValue:
+		*r = hookWireRole(RoleDeveloper)
 	default:
 		*r = hookWireRole(RoleUser)
 	}
@@ -463,9 +478,10 @@ func hookWireMessagesToMessages(msgs []hookWireMessage) []Message {
 	out := make([]Message, 0, len(msgs))
 	for _, msg := range msgs {
 		converted := Message{
-			Role:  Role(msg.Role),
-			Name:  msg.Name,
-			Parts: make([]Part, 0, len(msg.Parts)),
+			Role:         Role(msg.Role),
+			Name:         msg.Name,
+			Parts:        make([]Part, 0, len(msg.Parts)),
+			FinishReason: msg.FinishReason,
 		}
 		if converted.Role == "" {
 			converted.Role = RoleUser

@@ -200,8 +200,8 @@ func resolveRedactInputMessages(lookup envLookup, explicit *bool) bool {
 // safe for concurrent use.
 //
 // By default it redacts Generation.Output (assistant + tool), Generation.SystemPrompt,
-// Generation.ConversationTitle, Generation.CallError, and the assistant /
-// tool messages in Generation.Input. User messages in Generation.Input are
+// Generation.ConversationTitle, Generation.CallError, and the system / developer /
+// assistant / tool messages in Generation.Input. User messages in Generation.Input are
 // only redacted when input redaction is enabled, resolved as:
 // explicit RedactInputMessages > SIGIL_REDACT_INPUT_MESSAGES > false.
 // An invalid env value is logged and ignored. Email redaction is on unless
@@ -260,7 +260,7 @@ func inputTextMode(role Role, redactUserInput bool) textMode {
 			return textModeFull
 		}
 		return textModeSkip
-	case RoleTool:
+	case RoleSystem, RoleDeveloper, RoleTool:
 		return textModeFull
 	case RoleAssistant:
 		return textModeLight

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"google.golang.org/genai"
 
 	"github.com/grafana/agento11y/go/agento11y"
@@ -101,90 +102,127 @@ func TestConformance_GeminiSyncMapping(t *testing.T) {
 }
 
 func TestConformance_GeminiStreamMapping(t *testing.T) {
-	env := testkit.NewEnv(t)
+	for _, tc := range []struct {
+		operation  string
+		modalities []string
+	}{
+		{operation: "chat"},
+		{operation: "generate_content", modalities: []string{"IMAGE"}},
+	} {
+		t.Run(tc.operation, func(t *testing.T) {
+			env := testkit.NewEnv(t)
 
-	model, contents, config := geminiConformanceRequest()
-	summary := StreamSummary{
-		FirstChunkAt: time.Unix(1_741_780_200, 0).UTC(),
-		Responses: []*genai.GenerateContentResponse{
-			{
-				ResponseID:   "resp_gemini_stream_1",
-				ModelVersion: "gemini-2.5-pro-001",
-				Candidates: []*genai.Candidate{
+			model, contents, config := geminiConformanceRequest()
+			config.ResponseModalities = tc.modalities
+			summary := StreamSummary{
+				FirstChunkAt: time.Unix(1_741_780_200, 0).UTC(),
+				Responses: []*genai.GenerateContentResponse{
 					{
-						Content: genai.NewContentFromParts([]*genai.Part{
-							{Text: "need weather tool", Thought: true},
+						ResponseID:   "resp_gemini_stream_1",
+						ModelVersion: "gemini-2.5-pro-001",
+						Candidates: []*genai.Candidate{
 							{
-								FunctionCall: &genai.FunctionCall{
-									ID:   "call_weather",
-									Name: "weather",
-									Args: map[string]any{"city": "Paris"},
-								},
+								Content: genai.NewContentFromParts([]*genai.Part{
+									{Text: "need weather tool", Thought: true},
+									{
+										FunctionCall: &genai.FunctionCall{
+											ID:   "call_weather",
+											Name: "weather",
+											Args: map[string]any{"city": "Paris"},
+										},
+									},
+								}, genai.RoleModel),
 							},
-						}, genai.RoleModel),
+						},
 					},
-				},
-			},
-			{
-				ResponseID:   "resp_gemini_stream_2",
-				ModelVersion: "gemini-2.5-pro-001",
-				Candidates: []*genai.Candidate{
 					{
-						FinishReason: genai.FinishReasonStop,
-						Content:      genai.NewContentFromText("It is 18C and sunny.", genai.RoleModel),
+						ResponseID:   "resp_gemini_stream_2",
+						ModelVersion: "gemini-2.5-pro-001",
+						Candidates: []*genai.Candidate{
+							{
+								FinishReason: genai.FinishReasonStop,
+								Content:      genai.NewContentFromText("It is 18C and sunny.", genai.RoleModel),
+							},
+						},
+						UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+							PromptTokenCount:        20,
+							CandidatesTokenCount:    6,
+							TotalTokenCount:         35,
+							ThoughtsTokenCount:      4,
+							ToolUsePromptTokenCount: 5,
+						},
 					},
 				},
-				UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
-					PromptTokenCount:        20,
-					CandidatesTokenCount:    6,
-					TotalTokenCount:         26,
-					ThoughtsTokenCount:      4,
-					ToolUsePromptTokenCount: 5,
-				},
-			},
-		},
-	}
-	start := agento11y.GenerationStart{
-		ConversationID: "conv-gemini-stream",
-		AgentName:      "agent-gemini-stream",
-		AgentVersion:   "v-gemini-stream",
-		Model:          agento11y.ModelRef{Provider: "gemini", Name: model},
-	}
+			}
+			start := agento11y.GenerationStart{
+				ConversationID: "conv-gemini-stream",
+				StartedAt:      summary.FirstChunkAt.Add(-250 * time.Millisecond),
+				AgentName:      "agent-gemini-stream",
+				AgentVersion:   "v-gemini-stream",
+				Model:          agento11y.ModelRef{Provider: "gemini", Name: model},
+			}
 
-	generation, err := FromStream(
-		model,
-		contents,
-		config,
-		summary,
-		WithConversationID(start.ConversationID),
-		WithAgentName(start.AgentName),
-		WithAgentVersion(start.AgentVersion),
-	)
-	testkit.RecordStreamingGeneration(t, env, start, summary.FirstChunkAt, generation, err)
-	env.Shutdown(t)
+			generation, err := FromStream(
+				model,
+				contents,
+				config,
+				summary,
+				WithConversationID(start.ConversationID),
+				WithAgentName(start.AgentName),
+				WithAgentVersion(start.AgentVersion),
+			)
+			generation.CompletedAt = start.StartedAt.Add(time.Second)
+			testkit.RecordStreamingGeneration(t, env, start, summary.FirstChunkAt, generation, err)
+			attrs := testkit.SpanAttributes(testkit.FindSpan(t, env.Spans.Ended(), tc.operation+" "+model))
+			requireGeminiOTelString(t, attrs, geminiOTelOperation, tc.operation)
+			metrics := collectGeminiOTelMetrics(t, env)
+			var ttftPoints []metricdata.HistogramDataPoint[float64]
+			for _, scope := range metrics.ScopeMetrics {
+				for _, metric := range scope.Metrics {
+					if metric.Name == "gen_ai.client.time_to_first_token" {
+						histogram, ok := metric.Data.(metricdata.Histogram[float64])
+						if !ok {
+							t.Fatalf("TTFT data = %T, want float64 histogram", metric.Data)
+						}
+						ttftPoints = append(ttftPoints, histogram.DataPoints...)
+					}
+				}
+			}
+			if len(ttftPoints) != 1 {
+				t.Fatalf("TTFT datapoints = %d, want 1", len(ttftPoints))
+			}
+			if point := ttftPoints[0]; point.Count != 1 || point.Sum != 0.25 {
+				t.Fatalf("TTFT count/sum = %d/%v, want 1/0.25", point.Count, point.Sum)
+			}
+			env.Shutdown(t)
 
-	exported := env.SingleGenerationJSON(t)
+			exported := env.SingleGenerationJSON(t)
 
-	if got := testkit.StringValue(t, exported, "mode"); got != "GENERATION_MODE_STREAM" {
-		t.Fatalf("unexpected mode: got %q want %q\n%s", got, "GENERATION_MODE_STREAM", testkit.DebugJSON(exported))
-	}
-	if got := testkit.StringValue(t, exported, "response_id"); got != "resp_gemini_stream_2" {
-		t.Fatalf("unexpected response_id: got %q want %q", got, "resp_gemini_stream_2")
-	}
-	if got := testkit.StringValue(t, exported, "stop_reason"); got != "STOP" {
-		t.Fatalf("unexpected stop_reason: got %q want %q", got, "STOP")
-	}
-	if got := testkit.StringValue(t, exported, "output", 0, "parts", 0, "thinking"); got != "need weather tool" {
-		t.Fatalf("unexpected streamed thinking part: got %q want %q", got, "need weather tool")
-	}
-	if got := testkit.StringValue(t, exported, "output", 0, "parts", 1, "tool_call", "name"); got != "weather" {
-		t.Fatalf("unexpected streamed tool_call.name: got %q want %q", got, "weather")
-	}
-	if got := testkit.StringValue(t, exported, "output", 1, "parts", 0, "text"); got != "It is 18C and sunny." {
-		t.Fatalf("unexpected streamed output text: got %q want %q", got, "It is 18C and sunny.")
-	}
-	if got := testkit.StringValue(t, exported, "usage", "total_tokens"); got != "26" {
-		t.Fatalf("unexpected usage.total_tokens: got %q want %q", got, "26")
+			if got := testkit.StringValue(t, exported, "mode"); got != "GENERATION_MODE_STREAM" {
+				t.Fatalf("unexpected mode: got %q want %q\n%s", got, "GENERATION_MODE_STREAM", testkit.DebugJSON(exported))
+			}
+			if got := testkit.StringValue(t, exported, "response_id"); got != "resp_gemini_stream_2" {
+				t.Fatalf("unexpected response_id: got %q want %q", got, "resp_gemini_stream_2")
+			}
+			if got := testkit.StringValue(t, exported, "stop_reason"); got != "STOP" {
+				t.Fatalf("unexpected stop_reason: got %q want %q", got, "STOP")
+			}
+			if got := testkit.StringValue(t, exported, "output", 0, "parts", 0, "thinking"); got != "need weather tool" {
+				t.Fatalf("unexpected streamed thinking part: got %q want %q", got, "need weather tool")
+			}
+			if got := testkit.StringValue(t, exported, "output", 0, "parts", 1, "tool_call", "name"); got != "weather" {
+				t.Fatalf("unexpected streamed tool_call.name: got %q want %q", got, "weather")
+			}
+			if got := testkit.StringValue(t, exported, "output", 0, "parts", 2, "text"); got != "It is 18C and sunny." {
+				t.Fatalf("unexpected streamed output text: got %q want %q", got, "It is 18C and sunny.")
+			}
+			if got := testkit.StringValue(t, exported, "usage", "output_tokens"); got != "10" {
+				t.Fatalf("unexpected usage.output_tokens: got %q want %q", got, "10")
+			}
+			if got := testkit.StringValue(t, exported, "usage", "total_tokens"); got != "35" {
+				t.Fatalf("unexpected usage.total_tokens: got %q want %q", got, "35")
+			}
+		})
 	}
 }
 
@@ -512,7 +550,7 @@ func TestConformance_GenerateContentStreamNormalization(t *testing.T) {
 				UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
 					PromptTokenCount:        20,
 					CandidatesTokenCount:    6,
-					TotalTokenCount:         26,
+					TotalTokenCount:         35,
 					ThoughtsTokenCount:      4,
 					ToolUsePromptTokenCount: 5,
 				},
@@ -539,11 +577,11 @@ func TestConformance_GenerateContentStreamNormalization(t *testing.T) {
 	if generation.StopReason != "STOP" {
 		t.Fatalf("unexpected stop reason: %q", generation.StopReason)
 	}
-	if generation.Usage.TotalTokens != 26 || generation.Usage.ReasoningTokens != 4 {
+	if generation.Usage.OutputTokens != 10 || generation.Usage.TotalTokens != 35 || generation.Usage.ReasoningTokens != 4 {
 		t.Fatalf("unexpected usage mapping: %#v", generation.Usage)
 	}
-	if len(generation.Output) != 2 {
-		t.Fatalf("expected streamed thinking/tool output plus final text, got %#v", generation.Output)
+	if len(generation.Output) != 1 {
+		t.Fatalf("expected one accumulated candidate, got %#v", generation.Output)
 	}
 	if generation.Output[0].Parts[0].Kind != agento11y.PartKindThinking || generation.Output[0].Parts[0].Thinking != "reasoning trace" {
 		t.Fatalf("unexpected streamed thinking output: %#v", generation.Output[0].Parts[0])
@@ -551,8 +589,8 @@ func TestConformance_GenerateContentStreamNormalization(t *testing.T) {
 	if generation.Output[0].Parts[1].Kind != agento11y.PartKindToolCall {
 		t.Fatalf("expected streamed tool call output, got %#v", generation.Output[0].Parts[1])
 	}
-	if generation.Output[1].Parts[0].Kind != agento11y.PartKindText || generation.Output[1].Parts[0].Text != "It is 18C and sunny." {
-		t.Fatalf("unexpected streamed text output: %#v", generation.Output[1].Parts[0])
+	if generation.Output[0].Parts[2].Kind != agento11y.PartKindText || generation.Output[0].Parts[2].Text != "It is 18C and sunny." {
+		t.Fatalf("unexpected streamed text output: %#v", generation.Output[0].Parts[2])
 	}
 	requireGeminiArtifactKinds(t, generation.Artifacts,
 		agento11y.ArtifactKindRequest,

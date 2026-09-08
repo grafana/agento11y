@@ -113,7 +113,7 @@ func TestConformance_RunLifecycleExportsFrameworkTelemetry(t *testing.T) {
 	requireStringAttr(t, attrs, spanAttrConversationID, "session-42")
 	requireStringAttr(t, attrs, spanAttrAgentName, "triage-agent")
 	requireStringAttr(t, attrs, spanAttrAgentVersion, "1.2.3")
-	requireStringAttr(t, attrs, spanAttrProviderName, "gemini")
+	requireStringAttr(t, attrs, spanAttrProviderName, "gcp.gemini")
 	requireStringAttr(t, attrs, spanAttrRequestModel, "gemini-2.5-pro")
 	requireStringAttr(t, attrs, spanAttrResponseModel, "gemini-2.5-pro")
 	requireStringAttr(t, attrs, spanAttrGenerationID, mustString(t, generation, "id"))

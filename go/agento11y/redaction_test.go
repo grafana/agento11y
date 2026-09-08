@@ -155,13 +155,18 @@ func TestSecretRedactionSanitizerInputRedactionByRole(t *testing.T) {
 	secretToken := "glc_abcdefghijklmnopqrstuvwxyz1234"
 	envSecret := "DATABASE_PASSWORD=hunter2secret123"
 	bearerToken := strings.Repeat("a", 30)
+	instructionText := secretToken + "\n" + envSecret + "\ncontact example@example.com"
+	wantInstructionText := "[REDACTED:grafana-cloud-token]\nDATABASE_PASSWORD=[REDACTED:env-secret-value]\ncontact [REDACTED:email]"
 
 	build := func() Generation {
 		return Generation{
-			ID:    "gen-1",
-			Mode:  GenerationModeSync,
-			Model: ModelRef{Provider: "openai", Name: "gpt-5"},
+			ID:           "gen-1",
+			Mode:         GenerationModeSync,
+			Model:        ModelRef{Provider: "openai", Name: "gpt-5"},
+			SystemPrompt: instructionText,
 			Input: []Message{
+				{Role: RoleSystem, Parts: []Part{TextPart(instructionText)}},
+				{Role: RoleDeveloper, Parts: []Part{TextPart(instructionText)}},
 				{Role: RoleUser, Parts: []Part{{Kind: PartKindText, Text: "user pasted " + secretToken}}},
 				{Role: RoleAssistant, Parts: []Part{
 					{Kind: PartKindText, Text: "assistant response with " + secretToken},
@@ -189,6 +194,7 @@ func TestSecretRedactionSanitizerInputRedactionByRole(t *testing.T) {
 		wantUserRedacted bool
 	}{
 		{name: "default preserves user only", opts: SecretRedactionOptions{}, wantUserRedacted: false},
+		{name: "explicit false preserves user only", opts: SecretRedactionOptions{RedactInputMessages: boolPtr(false)}, wantUserRedacted: false},
 		{name: "opt-in redacts user too", opts: SecretRedactionOptions{RedactInputMessages: boolPtr(true)}, wantUserRedacted: true},
 		{name: "env enables when option nil", env: map[string]string{"SIGIL_REDACT_INPUT_MESSAGES": "true"}, wantUserRedacted: true},
 		{name: "explicit false beats env true", opts: SecretRedactionOptions{RedactInputMessages: boolPtr(false)}, env: map[string]string{"SIGIL_REDACT_INPUT_MESSAGES": "true"}, wantUserRedacted: false},
@@ -198,7 +204,16 @@ func TestSecretRedactionSanitizerInputRedactionByRole(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			sanitized := newSecretRedactionSanitizer(mapLookup(tc.env), tc.opts)(build())
 
-			userText := sanitized.Input[0].Parts[0].Text
+			if got := sanitized.SystemPrompt; got != wantInstructionText {
+				t.Errorf("system prompt = %q, want %q", got, wantInstructionText)
+			}
+			for _, message := range sanitized.Input[:2] {
+				if got := message.Parts[0].Text; got != wantInstructionText {
+					t.Errorf("%s input = %q, want %q", message.Role, got, wantInstructionText)
+				}
+			}
+
+			userText := sanitized.Input[2].Parts[0].Text
 			if tc.wantUserRedacted {
 				if strings.Contains(userText, secretToken) {
 					t.Errorf("user input not redacted: %q", userText)
@@ -210,15 +225,15 @@ func TestSecretRedactionSanitizerInputRedactionByRole(t *testing.T) {
 				t.Errorf("user input should be unchanged, got %q", userText)
 			}
 
-			assistantText := sanitized.Input[1].Parts[0].Text
+			assistantText := sanitized.Input[3].Parts[0].Text
 			if strings.Contains(assistantText, secretToken) {
 				t.Errorf("assistant text not redacted: %q", assistantText)
 			}
-			toolCall := string(sanitized.Input[1].Parts[1].ToolCall.InputJSON)
+			toolCall := string(sanitized.Input[3].Parts[1].ToolCall.InputJSON)
 			if strings.Contains(toolCall, "Bearer "+bearerToken) {
 				t.Errorf("assistant tool-call bearer not redacted: %q", toolCall)
 			}
-			toolResult := sanitized.Input[2].Parts[0].ToolResult.Content
+			toolResult := sanitized.Input[4].Parts[0].ToolResult.Content
 			if strings.Contains(toolResult, "hunter2secret123") {
 				t.Errorf("tool result env secret not redacted: %q", toolResult)
 			}

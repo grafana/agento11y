@@ -8,6 +8,8 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+
+	"github.com/grafana/agento11y/go/otelgenai"
 )
 
 const clientTagProjectKey = spanAttrTagPrefix + "project"
@@ -46,6 +48,178 @@ func TestClientTagsOnGenerationSpanAndMetrics(t *testing.T) {
 	_ = findHistogramPointForTags(t, findHistogram(t, collected, metricOperationDuration), map[string]string{
 		clientTagProjectKey: "checkout-svc",
 	})
+}
+
+func TestGenerationTimeToFirstTokenUsesStreamMode(t *testing.T) {
+	for _, operation := range []string{"chat", "generate_content", defaultOperationNameStream} {
+		for _, tc := range []struct {
+			name       string
+			stream     bool
+			firstToken bool
+			wantPoints int
+		}{
+			{name: "stream with timestamp", stream: true, firstToken: true, wantPoints: 1},
+			{name: "sync with timestamp", firstToken: true},
+			{name: "stream without timestamp", stream: true},
+		} {
+			t.Run(operation+"/"+tc.name, func(t *testing.T) {
+				metricReader := sdkmetric.NewManualReader()
+				meterProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(metricReader))
+				t.Cleanup(func() { _ = meterProvider.Shutdown(context.Background()) })
+				client, spans, _ := newTestClient(t, Config{
+					Meter: meterProvider.Meter("agento11y-test"),
+				})
+				startedAt := time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC)
+				start := GenerationStart{
+					OperationName: operation,
+					Model:         ModelRef{Provider: "gemini", Name: "gemini-2.5-pro"},
+					StartedAt:     startedAt,
+				}
+				startGeneration := client.StartGeneration
+				if tc.stream {
+					startGeneration = client.StartStreamingGeneration
+				}
+				_, rec := startGeneration(context.Background(), start)
+				if tc.firstToken {
+					rec.SetFirstTokenAt(startedAt.Add(250 * time.Millisecond))
+				}
+				rec.SetResult(Generation{CompletedAt: startedAt.Add(time.Second)}, nil)
+				rec.End()
+				if err := rec.Err(); err != nil {
+					t.Fatalf("record generation: %v", err)
+				}
+				attrs := spanAttributeMap(onlyGenerationSpan(t, spans.Ended()))
+				if got := attrs[spanAttrOperationName].AsString(); got != operation {
+					t.Fatalf("operation = %q, want %q", got, operation)
+				}
+
+				collected := collectMetrics(t, metricReader)
+				if got := histogramPointCountFloat64(collected, metricTimeToFirstToken); got != tc.wantPoints {
+					t.Fatalf("TTFT datapoints = %d, want %d", got, tc.wantPoints)
+				}
+				if tc.wantPoints != 0 {
+					point := findHistogram(t, collected, metricTimeToFirstToken).DataPoints[0]
+					if point.Count != 1 || point.Sum != 0.25 {
+						t.Fatalf("TTFT count/sum = %d/%v, want 1/0.25", point.Count, point.Sum)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestGenerationTokenMetricsPreserveReportedZero(t *testing.T) {
+	tests := []struct {
+		name      string
+		tokenType string
+		usage     func(int64) TokenUsage
+	}{
+		{
+			name:      "input",
+			tokenType: metricTokenTypeInput,
+			usage: func(value int64) TokenUsage {
+				return TokenUsage{InputTokens: value, InputTokensReported: true}
+			},
+		},
+		{
+			name:      "output",
+			tokenType: metricTokenTypeOutput,
+			usage: func(value int64) TokenUsage {
+				return TokenUsage{OutputTokens: value, OutputTokensReported: true}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			metricReader := sdkmetric.NewManualReader()
+			meterProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(metricReader))
+			t.Cleanup(func() { _ = meterProvider.Shutdown(context.Background()) })
+			client, _, _ := newTestClient(t, Config{
+				Meter: meterProvider.Meter("agento11y-test"),
+				Now:   time.Now,
+			})
+
+			for _, value := range []int64{0, 10} {
+				_, rec := client.StartGeneration(context.Background(), GenerationStart{
+					Model: ModelRef{Provider: "openai", Name: "gpt-5"},
+				})
+				rec.SetResult(Generation{Usage: test.usage(value)}, nil)
+				rec.End()
+				if err := rec.Err(); err != nil {
+					t.Fatalf("record %s token count %d: %v", test.tokenType, value, err)
+				}
+			}
+
+			collected := collectMetrics(t, metricReader)
+			for _, scope := range collected.ScopeMetrics {
+				for _, metric := range scope.Metrics {
+					if metric.Name != metricTokenUsage {
+						continue
+					}
+					histogram, ok := metric.Data.(metricdata.Histogram[int64])
+					if !ok {
+						t.Fatalf("%s data = %T, want int64 histogram", metricTokenUsage, metric.Data)
+					}
+					for _, point := range histogram.DataPoints {
+						tokenType, _ := point.Attributes.Value(attribute.Key(metricAttrTokenType))
+						if tokenType.AsString() == test.tokenType {
+							if point.Count != 2 || point.Sum != 10 {
+								t.Fatalf("%s token count = %d, sum = %d; want 2 and 10", test.tokenType, point.Count, point.Sum)
+							}
+							return
+						}
+					}
+				}
+			}
+			t.Fatalf("%s token histogram point not found", test.tokenType)
+		})
+	}
+}
+
+func TestFetchResponseSuppressesProprietaryUsageTelemetry(t *testing.T) {
+	metricReader := sdkmetric.NewManualReader()
+	meterProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(metricReader))
+	t.Cleanup(func() { _ = meterProvider.Shutdown(context.Background()) })
+
+	client, recorder, _ := newTestClient(t, Config{
+		Meter: meterProvider.Meter("agento11y-test"),
+		Now:   time.Now,
+	})
+	_, rec := client.StartGeneration(context.Background(), GenerationStart{
+		OperationName: string(otelgenai.OperationFetchResponse),
+		Model:         ModelRef{Provider: "openai", Name: "gpt-5"},
+	})
+	rec.SetResult(Generation{Usage: TokenUsage{
+		InputTokens:          7,
+		OutputTokens:         3,
+		TotalTokens:          10,
+		CacheReadInputTokens: 2,
+		ReasoningTokens:      1,
+		InputSemantics:       TokenInputSemanticsInclusive,
+	}}, nil)
+	rec.End()
+
+	attrs := spanAttributeMap(onlyGenerationSpan(t, recorder.Ended()))
+	for _, key := range []string{
+		spanAttrInputTokens,
+		spanAttrOutputTokens,
+		spanAttrCacheReadTokens,
+		spanAttrReasoningTokens,
+		attrTokenSemantics,
+	} {
+		if _, ok := attrs[key]; ok {
+			t.Errorf("fetch_response span carries %s", key)
+		}
+	}
+	collected := collectMetrics(t, metricReader)
+	for _, scope := range collected.ScopeMetrics {
+		for _, metric := range scope.Metrics {
+			if metric.Name == metricTokenUsage {
+				t.Errorf("fetch_response records %s", metricTokenUsage)
+			}
+		}
+	}
 }
 
 func TestClientTagsOnEmbeddingAndToolSpans(t *testing.T) {
