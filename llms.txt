@@ -331,10 +331,12 @@ Provider wrappers (use these before hand-instrumenting an SDK call):
 
 Framework adapters:
 
-- Python: `python-frameworks/{langchain,langgraph,openai-agents,llamaindex,google-adk,strands,claude-agent-sdk,litellm,pydantic-ai}`; each is its own pip package (e.g. `agento11y-langgraph`).
+- Python: `python-frameworks/{langchain,langgraph,openai-agents,llamaindex,google-adk,strands,claude-agent-sdk,litellm,open-webui,pydantic-ai}`; each is its own pip package (e.g. `agento11y-langgraph`).
 - JS/TS: subpath exports like `@grafana/agento11y/langgraph`, `@grafana/agento11y/vercel-ai-sdk`; single npm package, multiple entry points.
 - Go: `go-frameworks/google-adk`.
 - Java: `java/frameworks/google-adk`.
+
+`agento11y-open-webui` is an administrator-installed Open WebUI Filter. Do not add it to application code as a callback handler. It records completed response snapshots rather than individual provider calls.
 
 ## Telemetry fields to prioritize
 

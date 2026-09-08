@@ -1,0 +1,29 @@
+[project]
+name = "agento11y-open-webui"
+version = "0.17.0"
+description = "Open WebUI Filter for the Grafana Agent Observability Python SDK"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dependencies = [
+  "agento11y>=0.17.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=9.0.3",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agento11y_open_webui*"]
+
+[tool.setuptools.package-data]
+agento11y_open_webui = ["py.typed"]
