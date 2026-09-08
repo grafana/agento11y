@@ -100,19 +100,18 @@ func (i instruments) record(ctx context.Context, inv *Invocation, extra []attrib
 		}
 	}
 
-	// Skip unreported usage for the same reason the span omits it: a count the
-	// provider never returned is not a zero, and summing it would understate
-	// the average.
-	if !inv.Usage.reported() {
+	// fetch_response observes polling latency, not model token consumption.
+	if inv.operation() == OperationFetchResponse || !inv.Usage.reported() {
 		return
 	}
 	type tokenBucket struct {
 		tokenType string
 		value     int64
+		reported  bool
 	}
 	buckets := []tokenBucket{
-		{string(genaiconv.TokenTypeInput), inv.Usage.InputTokens},
-		{string(genaiconv.TokenTypeOutput), inv.Usage.OutputTokens},
+		{string(genaiconv.TokenTypeInput), inv.Usage.InputTokens, inv.Usage.inputTokensReported()},
+		{string(genaiconv.TokenTypeOutput), inv.Usage.OutputTokens, inv.Usage.outputTokensReported()},
 	}
 	if i.extendedTokenTypes {
 		cacheWriteType := TokenTypeCacheWrite
@@ -120,13 +119,13 @@ func (i instruments) record(ctx context.Context, inv *Invocation, extra []attrib
 			cacheWriteType = TokenTypeCacheCreation
 		}
 		buckets = append(buckets,
-			tokenBucket{TokenTypeCacheRead, inv.Usage.CacheReadInputTokens},
-			tokenBucket{cacheWriteType, inv.Usage.CacheWriteInputTokens},
-			tokenBucket{TokenTypeReasoning, inv.Usage.ReasoningTokens},
+			tokenBucket{TokenTypeCacheRead, inv.Usage.CacheReadInputTokens, inv.Usage.CacheReadInputTokens != 0},
+			tokenBucket{cacheWriteType, inv.Usage.CacheWriteInputTokens, inv.Usage.CacheWriteInputTokens != 0},
+			tokenBucket{TokenTypeReasoning, inv.Usage.ReasoningTokens, inv.Usage.ReasoningTokens != 0},
 		)
 	}
 	for _, bucket := range buckets {
-		if bucket.value == 0 {
+		if !bucket.reported {
 			continue
 		}
 		attrs := append([]attribute.KeyValue(nil), extra...)
@@ -141,6 +140,9 @@ func (i instruments) record(ctx context.Context, inv *Invocation, extra []attrib
 }
 
 func metricAttributeSet(inv *Invocation, attrs ...attribute.KeyValue) attribute.Set {
+	// NewSet sorts in place. Clone first so one instrument cannot alter the
+	// shared dimensions subsequently used by another instrument.
+	attrs = append([]attribute.KeyValue(nil), attrs...)
 	attrs = append(attrs, semconv.GenAIOperationNameKey.String(string(inv.operation())))
 	if inv.Provider != "" {
 		attrs = append(attrs, semconv.GenAIProviderNameKey.String(inv.Provider))
