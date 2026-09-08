@@ -23,6 +23,11 @@ func TestExportEndpoint(t *testing.T) {
 		{"trailing slash trimmed", "http://localhost:8080/", "http://localhost:8080/api/v1/generations:export"},
 		{"multiple trailing slashes trimmed", "http://localhost:8080///", "http://localhost:8080/api/v1/generations:export"},
 		{"empty endpoint", "", "/api/v1/generations:export"},
+		{"pasted full export URL", "http://localhost:8080/api/v1/generations:export", "http://localhost:8080/api/v1/generations:export"},
+		{"pasted full export URL with trailing slash", "http://localhost:8080/api/v1/generations:export/", "http://localhost:8080/api/v1/generations:export"},
+		{"pasted full export URL under a path prefix", "https://host.example/prefix/api/v1/generations:export", "https://host.example/prefix/api/v1/generations:export"},
+		{"surrounding whitespace trimmed", "  http://localhost:8080  ", "http://localhost:8080/api/v1/generations:export"},
+		{"path prefix kept", "https://host.example/prefix", "https://host.example/prefix/api/v1/generations:export"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
