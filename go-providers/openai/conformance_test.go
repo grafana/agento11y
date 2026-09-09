@@ -88,10 +88,10 @@ func TestConformance_OpenAIResponsesSyncMapping(t *testing.T) {
 	if got := testkit.StringValue(t, exported, "input", 1, "parts", 0, "tool_result", "tool_call_id"); got != "call_weather" {
 		t.Fatalf("unexpected tool_result.tool_call_id: got %q want %q", got, "call_weather")
 	}
-	if got := testkit.StringValue(t, exported, "output", 1, "parts", 0, "metadata", "provider_type"); got != "tool_call" {
+	if got := testkit.StringValue(t, exported, "output", 0, "parts", 1, "metadata", "provider_type"); got != "tool_call" {
 		t.Fatalf("unexpected tool call provider_type: got %q want %q", got, "tool_call")
 	}
-	if got := testkit.StringValue(t, exported, "output", 1, "parts", 0, "tool_call", "name"); got != "weather" {
+	if got := testkit.StringValue(t, exported, "output", 0, "parts", 1, "tool_call", "name"); got != "weather" {
 		t.Fatalf("unexpected tool_call.name: got %q want %q", got, "weather")
 	}
 }
@@ -132,16 +132,16 @@ func TestConformance_OpenAIResponsesStreamMapping(t *testing.T) {
 	if got := testkit.StringValue(t, exported, "output", 0, "parts", 0, "text"); got != "checking weather" {
 		t.Fatalf("unexpected streamed output text: got %q want %q", got, "checking weather")
 	}
-	if got := testkit.StringValue(t, exported, "output", 1, "parts", 0, "metadata", "provider_type"); got != "tool_call" {
+	if got := testkit.StringValue(t, exported, "output", 0, "parts", 1, "metadata", "provider_type"); got != "tool_call" {
 		t.Fatalf("unexpected streamed tool call provider_type: got %q want %q", got, "tool_call")
 	}
-	if got := testkit.StringValue(t, exported, "output", 1, "parts", 0, "tool_call", "id"); got != "call_weather" {
+	if got := testkit.StringValue(t, exported, "output", 0, "parts", 1, "tool_call", "id"); got != "call_weather" {
 		t.Fatalf("unexpected streamed tool_call.id: got %q want %q", got, "call_weather")
 	}
-	if got := testkit.StringValue(t, exported, "output", 1, "parts", 0, "tool_call", "name"); got != "weather" {
+	if got := testkit.StringValue(t, exported, "output", 0, "parts", 1, "tool_call", "name"); got != "weather" {
 		t.Fatalf("unexpected streamed tool_call.name: got %q want %q", got, "weather")
 	}
-	if got := testkit.StringValue(t, exported, "output", 1, "parts", 0, "tool_call", "input_json"); got != "eyJjaXR5IjoiUGFyaXMifQ==" {
+	if got := testkit.StringValue(t, exported, "output", 0, "parts", 1, "tool_call", "input_json"); got != "eyJjaXR5IjoiUGFyaXMifQ==" {
 		t.Fatalf("unexpected streamed tool_call.input_json: got %q want %q", got, "eyJjaXR5IjoiUGFyaXMifQ==")
 	}
 	if got := testkit.StringValue(t, exported, "usage", "total_tokens"); got != "26" {
@@ -432,8 +432,8 @@ func TestConformance_ChatCompletionsSyncNormalization(t *testing.T) {
 	if generation.ResponseID != "chatcmpl_1" || generation.ResponseModel != "gpt-4o-mini" {
 		t.Fatalf("unexpected response mapping: id=%q model=%q", generation.ResponseID, generation.ResponseModel)
 	}
-	if generation.SystemPrompt != "You are concise." {
-		t.Fatalf("unexpected system prompt: %q", generation.SystemPrompt)
+	if generation.SystemPrompt != "" {
+		t.Fatalf("chat history was duplicated into system prompt: %q", generation.SystemPrompt)
 	}
 	if generation.StopReason != "tool_calls" {
 		t.Fatalf("unexpected stop reason: %q", generation.StopReason)
@@ -461,6 +461,30 @@ func TestConformance_ChatCompletionsSyncNormalization(t *testing.T) {
 	}
 	if generation.Tags["tenant"] != "t-123" {
 		t.Fatalf("expected tenant tag")
+	}
+	for _, protocol := range []agento11y.GenerationExportProtocol{agento11y.GenerationExportProtocolGRPC, agento11y.GenerationExportProtocolOTel} {
+		t.Run(string(protocol), func(t *testing.T) {
+			newEnv := testkit.NewEnv
+			if protocol == agento11y.GenerationExportProtocolOTel {
+				newEnv = testkit.NewOTelEnv
+			}
+			env := newEnv(t)
+			testkit.RecordGeneration(t, env, agento11y.GenerationStart{SystemPrompt: "You are concise."}, generation, nil)
+			env.Shutdown(t)
+			if protocol == agento11y.GenerationExportProtocolGRPC {
+				if got := testkit.StringValue(t, env.SingleGenerationJSON(t), "system_prompt"); got != "You are concise." {
+					t.Fatalf("system_prompt = %q, want one instruction", got)
+				}
+				return
+			}
+			attrs := testkit.SpanAttributes(testkit.FindSpan(t, env.Spans.Ended(), "chat gpt-4o-mini"))
+			if _, ok := attrs["gen_ai.system_instructions"]; ok {
+				t.Error("seed instructions duplicated input history")
+			}
+			if got := strings.Count(attrs["gen_ai.input.messages"].AsString(), "You are concise."); got != 1 {
+				t.Errorf("input instruction count = %d, want 1", got)
+			}
+		})
 	}
 	requireOpenAIArtifactKinds(t, generation.Artifacts,
 		agento11y.ArtifactKindRequest,
@@ -648,14 +672,14 @@ func TestConformance_ResponsesSyncNormalization(t *testing.T) {
 	if generation.Usage.TotalTokens != 100 || generation.Usage.CacheReadInputTokens != 2 || generation.Usage.ReasoningTokens != 3 {
 		t.Fatalf("unexpected usage mapping: %#v", generation.Usage)
 	}
-	if len(generation.Output) != 2 {
-		t.Fatalf("expected text + tool call outputs, got %#v", generation.Output)
+	if len(generation.Output) != 1 || len(generation.Output[0].Parts) != 2 {
+		t.Fatalf("expected one candidate with text + tool call parts, got %#v", generation.Output)
 	}
 	if generation.Output[0].Parts[0].Text != "world" {
 		t.Fatalf("unexpected response text: %q", generation.Output[0].Parts[0].Text)
 	}
-	if generation.Output[1].Parts[0].Kind != agento11y.PartKindToolCall {
-		t.Fatalf("expected response tool call, got %#v", generation.Output[1].Parts[0])
+	if generation.Output[0].Parts[1].Kind != agento11y.PartKindToolCall {
+		t.Fatalf("expected response tool call, got %#v", generation.Output[0].Parts[1])
 	}
 	requireOpenAIArtifactKinds(t, generation.Artifacts,
 		agento11y.ArtifactKindRequest,

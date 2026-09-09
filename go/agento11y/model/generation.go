@@ -66,14 +66,21 @@ type Generation struct {
 	MaxTokens           *int64           `json:"max_tokens,omitempty"`
 	Temperature         *float64         `json:"temperature,omitempty"`
 	TopP                *float64         `json:"top_p,omitempty"`
+	TopK                *int64           `json:"top_k,omitempty"`
+	ChoiceCount         *int64           `json:"choice_count,omitempty"`
+	Seed                *int64           `json:"seed,omitempty"`
+	OutputType          *string          `json:"output_type,omitempty"`
 	ToolChoice          *string          `json:"tool_choice,omitempty"`
 	ThinkingEnabled     *bool            `json:"thinking_enabled,omitempty"`
+	ResponseStatus      *string          `json:"response_status,omitempty"`
 	ParentGenerationIDs []string         `json:"parent_generation_ids,omitempty"`
 	EffectiveVersion    string           `json:"effective_version,omitempty"`
 	// Usage/StartedAt/CompletedAt are value-type structs where `omitempty` has
 	// no effect (gostructs are never "empty" in encoding/json's sense). The tag
 	// is intentionally omitted so the JSON shape matches the actual behavior.
-	Usage       TokenUsage        `json:"usage"`
+	Usage TokenUsage `json:"usage"`
+	// StopReason is the legacy generation-level mirror of the first non-empty
+	// output FinishReason. Per-message values are the source of truth.
 	StopReason  string            `json:"stop_reason,omitempty"`
 	StartedAt   time.Time         `json:"started_at"`
 	CompletedAt time.Time         `json:"completed_at"`

@@ -154,11 +154,16 @@ func (h *Hook) OnEnd(_ context.Context, inv *otelgenai.Invocation, capture otelg
 	if generation.UserID != "" {
 		attrs = append(attrs, attribute.String(AttrUserID, generation.UserID))
 	}
-	if generation.TotalTokens != 0 {
-		attrs = append(attrs, attribute.Int64(AttrUsageTotalTokens, generation.TotalTokens))
-	}
-	if generation.InclusiveTokenSemantics {
-		attrs = append(attrs, attribute.String(AttrTokenSemantics, TokenSemanticsInclusive))
+	// fetch_response is polling, not model inference. Keep proprietary usage
+	// off it just as otelgenai keeps the standard usage attributes and metrics
+	// off it.
+	if inv.Operation != otelgenai.OperationFetchResponse {
+		if generation.TotalTokens != 0 {
+			attrs = append(attrs, attribute.Int64(AttrUsageTotalTokens, generation.TotalTokens))
+		}
+		if generation.InclusiveTokenSemantics {
+			attrs = append(attrs, attribute.String(AttrTokenSemantics, TokenSemanticsInclusive))
+		}
 	}
 	if generation.ToolChoice != nil {
 		if toolChoice := strings.TrimSpace(*generation.ToolChoice); toolChoice != "" {

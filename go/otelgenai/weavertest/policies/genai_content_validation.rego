@@ -25,6 +25,28 @@ deny contains result if {
 	is_string(attr_value)
 
 	key := _genai_content_schema_keys[attr_name]
+	data[key]
+	not json.is_valid(attr_value)
+
+	result := {
+		"id":    "genai_content_schema",
+		"level": "violation",
+		"context": {
+			"attribute": attr_name,
+			"errors":    ["invalid JSON"],
+		},
+		"message": sprintf("Attribute '%v' value is not valid JSON", [attr_name]),
+	}
+}
+
+deny contains result if {
+	input.sample.attribute
+	attr_name := input.sample.attribute.name
+	attr_value := input.sample.attribute.value
+	is_string(attr_value)
+	json.is_valid(attr_value)
+
+	key := _genai_content_schema_keys[attr_name]
 	# Undefined (so the rule skips this attribute) when the schema isn't loaded
 	# for the pinned semconv version yet — e.g. forward-looking attributes like
 	# `gen_ai.tool.definitions` before upstream ships the schema.

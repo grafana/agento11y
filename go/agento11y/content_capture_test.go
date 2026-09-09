@@ -395,8 +395,8 @@ func TestToolExecutionContentCaptureInheritance(t *testing.T) {
 				ConversationTitle: "Sensitive topic",
 			})
 			toolRec.SetResult(ToolExecutionEnd{
-				Arguments: "args",
-				Result:    "result",
+				Arguments: map[string]any{"value": "args"},
+				Result:    map[string]any{"value": "result"},
 			})
 			toolRec.End()
 

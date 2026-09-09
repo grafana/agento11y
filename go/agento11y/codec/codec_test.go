@@ -60,20 +60,26 @@ func TestToProtoInputSemantics(t *testing.T) {
 
 func TestToProtoRolesAndParts(t *testing.T) {
 	g := model.Generation{
-		Input: []model.Message{{
-			Role: model.RoleUser,
-			Parts: []model.Part{
-				{Kind: model.PartKindText, Text: "hi"},
-				{Kind: model.PartKindMedia, Media: &model.Media{
-					Kind:     "image",
-					URL:      "data:image/png;base64,abc123",
-					MIMEType: "image/png",
-					Name:     "prompt.png",
-				}},
+		SystemPrompt: "top-level",
+		Input: []model.Message{
+			{Role: model.RoleSystem, Parts: []model.Part{{Kind: model.PartKindText, Text: "system"}}},
+			{Role: model.RoleDeveloper, Parts: []model.Part{{Kind: model.PartKindText, Text: "developer"}}},
+			{
+				Role: model.RoleUser,
+				Parts: []model.Part{
+					{Kind: model.PartKindText, Text: "hi"},
+					{Kind: model.PartKindMedia, Media: &model.Media{
+						Kind:     "image",
+						URL:      "data:image/png;base64,abc123",
+						MIMEType: "image/png",
+						Name:     "prompt.png",
+					}},
+				},
 			},
-		}},
+		},
 		Output: []model.Message{{
-			Role: model.RoleAssistant,
+			Role:         model.RoleAssistant,
+			FinishReason: "tool_calls",
 			Parts: []model.Part{
 				{Kind: model.PartKindThinking, Thinking: "let me think"},
 				{Kind: model.PartKindToolCall, ToolCall: &model.ToolCall{
@@ -93,6 +99,7 @@ func TestToProtoRolesAndParts(t *testing.T) {
 				}},
 			},
 		}},
+		StopReason: "tool_calls",
 	}
 
 	got, err := codec.ToProto(g)
@@ -100,14 +107,21 @@ func TestToProtoRolesAndParts(t *testing.T) {
 		t.Fatalf("ToProto: %v", err)
 	}
 
-	if got.GetInput()[0].GetRole() != agento11yv1.MessageRole_MESSAGE_ROLE_USER {
-		t.Errorf("expected USER role, got %v", got.GetInput()[0].GetRole())
+	if got.GetSystemPrompt() != "top-level\n\nsystem\n\ndeveloper" {
+		t.Errorf("system prompt = %q, want combined instructions", got.GetSystemPrompt())
+	}
+	if len(got.GetInput()) != 1 || got.GetInput()[0].GetRole() != agento11yv1.MessageRole_MESSAGE_ROLE_USER {
+		t.Errorf("input = %+v, want one USER message", got.GetInput())
 	}
 	if got.GetOutput()[0].GetRole() != agento11yv1.MessageRole_MESSAGE_ROLE_ASSISTANT {
 		t.Errorf("expected ASSISTANT role, got %v", got.GetOutput()[0].GetRole())
 	}
 	if got.GetOutput()[1].GetRole() != agento11yv1.MessageRole_MESSAGE_ROLE_TOOL {
 		t.Errorf("expected TOOL role, got %v", got.GetOutput()[1].GetRole())
+	}
+
+	if got.GetStopReason() != "tool_calls" {
+		t.Errorf("stop reason = %q, want tool_calls", got.GetStopReason())
 	}
 
 	textPart := got.GetInput()[0].GetParts()[0]

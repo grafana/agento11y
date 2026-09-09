@@ -53,7 +53,11 @@ func ChatCompletionsFromRequestResponse(req osdk.ChatCompletionNewParams, resp *
 	if responseModel == "" {
 		responseModel = requestModel
 	}
-	maxTokens, temperature, topP, toolChoice, thinkingEnabled, thinkingBudget := mapRequestControls(req)
+	controls := mapRequestControls(req)
+	usage := agento11y.TokenUsage{}
+	if completionUsagePresent(resp.Usage) {
+		usage = mapUsage(resp.Usage)
+	}
 
 	generation := agento11y.Generation{
 		ConversationID:    options.conversationID,
@@ -67,15 +71,18 @@ func ChatCompletionsFromRequestResponse(req osdk.ChatCompletionNewParams, resp *
 		Input:             input,
 		Output:            output,
 		Tools:             mapTools(req.Tools),
-		MaxTokens:         maxTokens,
-		Temperature:       temperature,
-		TopP:              topP,
-		ToolChoice:        toolChoice,
-		ThinkingEnabled:   thinkingEnabled,
-		Usage:             mapUsage(resp.Usage),
+		MaxTokens:         controls.maxTokens,
+		Temperature:       controls.temperature,
+		TopP:              controls.topP,
+		ChoiceCount:       controls.choiceCount,
+		Seed:              controls.seed,
+		OutputType:        controls.outputType,
+		ToolChoice:        controls.toolChoice,
+		ThinkingEnabled:   controls.thinkingEnabled,
+		Usage:             usage,
 		StopReason:        firstFinishReason(resp.Choices),
 		Tags:              cloneStringMap(options.tags),
-		Metadata:          mergeThinkingBudgetMetadata(options.metadata, thinkingBudget),
+		Metadata:          mergeThinkingBudgetMetadata(options.metadata, controls.thinkingBudget),
 		Artifacts:         artifacts,
 	}
 
@@ -116,14 +123,19 @@ func mapRequestMessages(messages []osdk.ChatCompletionMessageParamUnion) ([]agen
 	}
 
 	out := make([]agento11y.Message, 0, len(messages))
-	systemPrompts := make([]string, 0, 2)
 
 	for i := range messages {
 		switch {
 		case messages[i].OfSystem != nil:
-			systemPrompts = append(systemPrompts, extractTextFromSystem(messages[i].OfSystem))
+			text := extractTextFromSystem(messages[i].OfSystem)
+			if text != "" {
+				out = append(out, agento11y.Message{Role: agento11y.RoleSystem, Parts: []agento11y.Part{agento11y.TextPart(text)}})
+			}
 		case messages[i].OfDeveloper != nil:
-			systemPrompts = append(systemPrompts, extractTextFromDeveloper(messages[i].OfDeveloper))
+			text := extractTextFromDeveloper(messages[i].OfDeveloper)
+			if text != "" {
+				out = append(out, agento11y.Message{Role: agento11y.RoleDeveloper, Parts: []agento11y.Part{agento11y.TextPart(text)}})
+			}
 		case messages[i].OfUser != nil:
 			parts := mapUserParts(messages[i].OfUser)
 			if len(parts) > 0 {
@@ -147,7 +159,7 @@ func mapRequestMessages(messages []osdk.ChatCompletionMessageParamUnion) ([]agen
 		}
 	}
 
-	return out, strings.Join(systemPrompts, "\n\n")
+	return out, ""
 }
 
 func mapResponseMessages(choices []osdk.ChatCompletionChoice) []agento11y.Message {
@@ -155,35 +167,41 @@ func mapResponseMessages(choices []osdk.ChatCompletionChoice) []agento11y.Messag
 		return nil
 	}
 
-	message := choices[0].Message
-	parts := make([]agento11y.Part, 0, 1+len(message.ToolCalls))
+	out := make([]agento11y.Message, 0, len(choices))
+	for i := range choices {
+		choice := choices[i]
+		message := choice.Message
+		parts := make([]agento11y.Part, 0, 2+len(message.ToolCalls))
 
-	if text := message.Content; text != "" {
-		parts = append(parts, agento11y.TextPart(text))
-	}
-	if refusal := message.Refusal; refusal != "" {
-		parts = append(parts, agento11y.TextPart(refusal))
-	}
-	for _, call := range message.ToolCalls {
-		part := agento11y.ToolCallPart(agento11y.ToolCall{
-			ID:        call.ID,
-			Name:      call.Function.Name,
-			InputJSON: parseJSONOrString(call.Function.Arguments),
+		if text := message.Content; text != "" {
+			parts = append(parts, agento11y.TextPart(text))
+		}
+		if refusal := message.Refusal; refusal != "" {
+			parts = append(parts, agento11y.TextPart(refusal))
+		}
+		for _, call := range message.ToolCalls {
+			if strings.TrimSpace(call.Function.Name) == "" {
+				continue
+			}
+			part := agento11y.ToolCallPart(agento11y.ToolCall{
+				ID:        call.ID,
+				Name:      call.Function.Name,
+				InputJSON: parseJSONOrString(call.Function.Arguments),
+			})
+			part.Metadata.ProviderType = "tool_call"
+			parts = append(parts, part)
+		}
+
+		if len(parts) == 0 && choice.FinishReason == "" {
+			continue
+		}
+		out = append(out, agento11y.Message{
+			Role:         agento11y.RoleAssistant,
+			Parts:        parts,
+			FinishReason: choice.FinishReason,
 		})
-		part.Metadata.ProviderType = "tool_call"
-		parts = append(parts, part)
 	}
-
-	if len(parts) == 0 {
-		return nil
-	}
-
-	return []agento11y.Message{
-		{
-			Role:  agento11y.RoleAssistant,
-			Parts: parts,
-		},
-	}
+	return out
 }
 
 func mapUserParts(message *osdk.ChatCompletionUserMessageParam) []agento11y.Part {
@@ -334,8 +352,15 @@ func mapUsage(usage osdk.CompletionUsage) agento11y.TokenUsage {
 		TotalTokens:          usage.TotalTokens,
 		CacheReadInputTokens: usage.PromptTokensDetails.CachedTokens,
 		ReasoningTokens:      usage.CompletionTokensDetails.ReasoningTokens,
+		InputTokensReported:  usage.JSON.PromptTokens.Valid() || usage.PromptTokens != 0,
+		OutputTokensReported: usage.JSON.CompletionTokens.Valid() || usage.CompletionTokens != 0,
 		InputSemantics:       agento11y.TokenInputSemanticsInclusive,
 	}
+}
+
+func completionUsagePresent(usage osdk.CompletionUsage) bool {
+	return usage.JSON.PromptTokens.Valid() || usage.JSON.CompletionTokens.Valid() || usage.JSON.TotalTokens.Valid() ||
+		usage.PromptTokens != 0 || usage.CompletionTokens != 0 || usage.TotalTokens != 0
 }
 
 func firstFinishReason(choices []osdk.ChatCompletionChoice) string {
@@ -347,31 +372,60 @@ func firstFinishReason(choices []osdk.ChatCompletionChoice) string {
 	return ""
 }
 
-func mapRequestControls(req osdk.ChatCompletionNewParams) (*int64, *float64, *float64, *string, *bool, *int64) {
+type requestControls struct {
+	maxTokens       *int64
+	temperature     *float64
+	topP            *float64
+	choiceCount     *int64
+	seed            *int64
+	outputType      *string
+	toolChoice      *string
+	thinkingEnabled *bool
+	thinkingBudget  *int64
+}
+
+func mapRequestControls(req osdk.ChatCompletionNewParams) requestControls {
 	payload := marshalRequest(req)
 	if payload == nil {
-		return nil, nil, nil, nil, nil, nil
+		return requestControls{}
 	}
 
-	maxTokens := readInt64(payload, "max_completion_tokens")
-	if maxTokens == nil {
-		maxTokens = readInt64(payload, "max_tokens")
+	controls := requestControls{
+		maxTokens:   readInt64(payload, "max_completion_tokens"),
+		temperature: readFloat64(payload, "temperature"),
+		topP:        readFloat64(payload, "top_p"),
+		choiceCount: readInt64(payload, "n"),
+		seed:        readInt64(payload, "seed"),
+		outputType:  canonicalOutputType(payload["response_format"]),
+		toolChoice:  canonicalToolChoice(payload["tool_choice"]),
+	}
+	if controls.maxTokens == nil {
+		controls.maxTokens = readInt64(payload, "max_tokens")
 	}
 
-	temperature := readFloat64(payload, "temperature")
-	topP := readFloat64(payload, "top_p")
-	toolChoice := canonicalToolChoice(payload["tool_choice"])
-
-	var thinkingEnabled *bool
-	if _, ok := payload["reasoning"]; ok {
-		thinkingEnabled = boolPtr(true)
-	} else if _, ok := payload["reasoning_effort"]; ok {
-		thinkingEnabled = boolPtr(true)
+	if reasoning, ok := payload["reasoning"]; ok {
+		controls.thinkingEnabled = boolPtr(reasoningEnabled(reasoning))
+	} else if effort, ok := payload["reasoning_effort"]; ok {
+		controls.thinkingEnabled = boolPtr(reasoningEnabled(effort))
 	}
+	controls.thinkingBudget = resolveThinkingBudget(payload["reasoning"])
 
-	thinkingBudget := resolveThinkingBudget(payload["reasoning"])
+	return controls
+}
 
-	return maxTokens, temperature, topP, toolChoice, thinkingEnabled, thinkingBudget
+func reasoningEnabled(value any) bool {
+	if value == nil {
+		return false
+	}
+	if effort, ok := value.(string); ok {
+		return strings.TrimSpace(strings.ToLower(effort)) != "none"
+	}
+	if object, ok := value.(map[string]any); ok {
+		if effort, present := object["effort"]; present {
+			return reasoningEnabled(effort)
+		}
+	}
+	return true
 }
 
 func marshalRequest(req osdk.ChatCompletionNewParams) map[string]any {
@@ -414,6 +468,26 @@ func readFloat64(payload map[string]any, key string) *float64 {
 		return &typed
 	}
 	return nil
+}
+
+func canonicalOutputType(value any) *string {
+	object, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	formatType, ok := object["type"].(string)
+	if !ok {
+		return nil
+	}
+	normalized := strings.ToLower(strings.TrimSpace(formatType))
+	switch normalized {
+	case "json_object", "json_schema":
+		normalized = "json"
+	}
+	if normalized == "" {
+		return nil
+	}
+	return &normalized
 }
 
 func canonicalToolChoice(value any) *string {

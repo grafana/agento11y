@@ -29,7 +29,7 @@ func FromRequestResponse(req asdk.BetaMessageNewParams, resp *asdk.BetaMessage, 
 	options := applyOptions(opts)
 
 	input := mapRequestMessages(req.Messages)
-	output := mapResponseMessages(resp.Content)
+	output := mapResponseMessages(resp.Content, string(resp.StopReason))
 
 	artifacts := make([]agento11y.Artifact, 0, 3)
 	if options.includeRequestArtifact {
@@ -59,8 +59,8 @@ func FromRequestResponse(req asdk.BetaMessageNewParams, resp *asdk.BetaMessage, 
 	if responseModel == "" {
 		responseModel = requestModel
 	}
-	maxTokens, temperature, topP, toolChoice, thinkingEnabled, thinkingBudget := mapRequestControls(req)
-	metadata := mergeThinkingBudgetMetadata(options.metadata, thinkingBudget)
+	controls := mapRequestControls(req)
+	metadata := mergeThinkingBudgetMetadata(options.metadata, controls.thinkingBudget)
 	metadata = mergeServerToolUsageMetadata(metadata, resp.Usage.ServerToolUse)
 
 	generation := agento11y.Generation{
@@ -75,11 +75,13 @@ func FromRequestResponse(req asdk.BetaMessageNewParams, resp *asdk.BetaMessage, 
 		Input:             input,
 		Output:            output,
 		Tools:             mapTools(req.Tools),
-		MaxTokens:         maxTokens,
-		Temperature:       temperature,
-		TopP:              topP,
-		ToolChoice:        toolChoice,
-		ThinkingEnabled:   thinkingEnabled,
+		MaxTokens:         controls.maxTokens,
+		Temperature:       controls.temperature,
+		TopP:              controls.topP,
+		TopK:              controls.topK,
+		OutputType:        controls.outputType,
+		ToolChoice:        controls.toolChoice,
+		ThinkingEnabled:   controls.thinkingEnabled,
 		Usage:             mapUsage(resp.Usage),
 		StopReason:        string(resp.StopReason),
 		Tags:              cloneStringMap(options.tags),
@@ -101,74 +103,46 @@ func mapRequestMessages(messages []asdk.BetaMessageParam) []agento11y.Message {
 
 	out := make([]agento11y.Message, 0, len(messages))
 	for i := range messages {
-		role := mapRequestRole(messages[i].Role)
-		normalParts := make([]agento11y.Part, 0, len(messages[i].Content))
-		toolParts := make([]agento11y.Part, 0, 1)
-
+		requestRole := mapRequestRole(messages[i].Role)
+		messageStart := len(out)
 		for _, block := range messages[i].Content {
 			part, ok := mapRequestBlock(block)
 			if !ok {
 				continue
 			}
-			if part.Kind == agento11y.PartKindToolResult {
-				toolParts = append(toolParts, part)
-				continue
+			partRole := requestRole
+			switch {
+			case part.Kind == agento11y.PartKindToolResult:
+				partRole = agento11y.RoleTool
+			case part.Kind == agento11y.PartKindToolCall && requestRole != agento11y.RoleAssistant:
+				partRole = agento11y.RoleAssistant
 			}
-			normalParts = append(normalParts, part)
-		}
-
-		if len(normalParts) > 0 {
-			out = append(out, agento11y.Message{
-				Role:  role,
-				Parts: normalParts,
-			})
-		}
-		if len(toolParts) > 0 {
-			out = append(out, agento11y.Message{
-				Role:  agento11y.RoleTool,
-				Parts: toolParts,
-			})
+			if len(out) == messageStart || out[len(out)-1].Role != partRole {
+				out = append(out, agento11y.Message{Role: partRole})
+			}
+			out[len(out)-1].Parts = append(out[len(out)-1].Parts, part)
 		}
 	}
 
 	return out
 }
 
-func mapResponseMessages(content []asdk.BetaContentBlockUnion) []agento11y.Message {
-	if len(content) == 0 {
-		return nil
-	}
-
-	assistantParts := make([]agento11y.Part, 0, len(content))
-	toolParts := make([]agento11y.Part, 0, 1)
-
+func mapResponseMessages(content []asdk.BetaContentBlockUnion, finishReason string) []agento11y.Message {
+	parts := make([]agento11y.Part, 0, len(content))
 	for _, block := range content {
 		part, ok := mapResponseBlock(block)
-		if !ok {
-			continue
+		if ok {
+			parts = append(parts, part)
 		}
-		if part.Kind == agento11y.PartKindToolResult {
-			toolParts = append(toolParts, part)
-			continue
-		}
-		assistantParts = append(assistantParts, part)
 	}
-
-	out := make([]agento11y.Message, 0, 2)
-	if len(assistantParts) > 0 {
-		out = append(out, agento11y.Message{
-			Role:  agento11y.RoleAssistant,
-			Parts: assistantParts,
-		})
+	if len(parts) == 0 && finishReason == "" {
+		return nil
 	}
-	if len(toolParts) > 0 {
-		out = append(out, agento11y.Message{
-			Role:  agento11y.RoleTool,
-			Parts: toolParts,
-		})
-	}
-
-	return out
+	return []agento11y.Message{{
+		Role:         agento11y.RoleAssistant,
+		Parts:        parts,
+		FinishReason: finishReason,
+	}}
 }
 
 // thinkingPart builds a thinking Part, skipping blocks with empty content.
@@ -513,26 +487,22 @@ func mapUsage(usage asdk.BetaUsage) agento11y.TokenUsage {
 	// GenAI Anthropic page requires summing them into gen_ai.usage.input_tokens,
 	// which is the inclusive contract this SDK emits.
 	inputTokens := usage.InputTokens + usage.CacheReadInputTokens + usage.CacheCreationInputTokens
-	return agento11y.TokenUsage{
+	inputReported := usage.JSON.InputTokens.Valid() || usage.JSON.CacheReadInputTokens.Valid() ||
+		usage.JSON.CacheCreationInputTokens.Valid() || inputTokens != 0
+	outputReported := usage.JSON.OutputTokens.Valid() || usage.OutputTokens != 0
+	mapped := agento11y.TokenUsage{
 		InputTokens:           inputTokens,
 		OutputTokens:          usage.OutputTokens,
-		TotalTokens:           inputTokens + usage.OutputTokens,
 		CacheReadInputTokens:  usage.CacheReadInputTokens,
 		CacheWriteInputTokens: usage.CacheCreationInputTokens,
+		InputTokensReported:   inputReported,
+		OutputTokensReported:  outputReported,
 		InputSemantics:        agento11y.TokenInputSemanticsInclusive,
 	}
-}
-
-func mapDeltaUsage(usage asdk.BetaMessageDeltaUsage) agento11y.TokenUsage {
-	inputTokens := usage.InputTokens + usage.CacheReadInputTokens + usage.CacheCreationInputTokens
-	return agento11y.TokenUsage{
-		InputTokens:           inputTokens,
-		OutputTokens:          usage.OutputTokens,
-		TotalTokens:           inputTokens + usage.OutputTokens,
-		CacheReadInputTokens:  usage.CacheReadInputTokens,
-		CacheWriteInputTokens: usage.CacheCreationInputTokens,
-		InputSemantics:        agento11y.TokenInputSemanticsInclusive,
+	if inputReported && outputReported {
+		mapped.TotalTokens = inputTokens + usage.OutputTokens
 	}
+	return mapped
 }
 
 func mapRequestRole(role asdk.BetaMessageParamRole) agento11y.Role {
@@ -542,27 +512,68 @@ func mapRequestRole(role asdk.BetaMessageParamRole) agento11y.Role {
 	return agento11y.RoleUser
 }
 
-func mapRequestControls(req asdk.BetaMessageNewParams) (*int64, *float64, *float64, *string, *bool, *int64) {
+type requestControls struct {
+	maxTokens       *int64
+	temperature     *float64
+	topP            *float64
+	topK            *int64
+	outputType      *string
+	toolChoice      *string
+	thinkingEnabled *bool
+	thinkingBudget  *int64
+}
+
+func mapRequestControls(req asdk.BetaMessageNewParams) requestControls {
 	payload := marshalRequest(req)
 	if payload == nil {
-		return nil, nil, nil, nil, nil, nil
+		return requestControls{}
 	}
 
-	maxTokens := readInt64(payload, "max_tokens")
-	temperature := readFloat64(payload, "temperature")
-	topP := readFloat64(payload, "top_p")
-	toolChoice := canonicalToolChoice(payload["tool_choice"])
+	controls := requestControls{
+		maxTokens:   readInt64(payload, "max_tokens"),
+		temperature: readFloat64(payload, "temperature"),
+		topP:        readFloat64(payload, "top_p"),
+		topK:        readInt64(payload, "top_k"),
+		outputType:  requestOutputType(payload),
+		toolChoice:  canonicalToolChoice(payload["tool_choice"]),
+	}
 
-	var thinkingEnabled *bool
-	var thinkingBudget *int64
 	if thinkingValue, ok := payload["thinking"]; ok {
 		if resolved, ok := resolveThinkingEnabled(thinkingValue); ok {
-			thinkingEnabled = &resolved
+			controls.thinkingEnabled = &resolved
 		}
-		thinkingBudget = resolveThinkingBudget(thinkingValue)
+		controls.thinkingBudget = resolveThinkingBudget(thinkingValue)
 	}
 
-	return maxTokens, temperature, topP, toolChoice, thinkingEnabled, thinkingBudget
+	return controls
+}
+
+func requestOutputType(payload map[string]any) *string {
+	if outputConfig, ok := payload["output_config"].(map[string]any); ok {
+		if format, present := outputConfig["format"]; present {
+			return canonicalOutputType(format)
+		}
+	}
+	return canonicalOutputType(payload["output_format"])
+}
+
+func canonicalOutputType(value any) *string {
+	format, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	formatType, ok := format["type"].(string)
+	if !ok {
+		return nil
+	}
+	normalized := strings.ToLower(strings.TrimSpace(formatType))
+	if normalized == "json_schema" || normalized == "json_object" {
+		normalized = "json"
+	}
+	if normalized == "" {
+		return nil
+	}
+	return &normalized
 }
 
 func marshalRequest(req asdk.BetaMessageNewParams) map[string]any {

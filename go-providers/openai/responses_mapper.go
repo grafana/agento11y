@@ -31,7 +31,13 @@ func ResponsesFromRequestResponse(req responses.ResponseNewParams, resp *respons
 	input, systemPrompt := mapResponsesRequestInput(requestPayload)
 	output := mapResponsesOutput(resp.Output)
 	tools := mapResponsesTools(requestPayload["tools"])
-	maxTokens, temperature, topP, toolChoice, thinkingEnabled, thinkingBudget := mapResponsesRequestControls(requestPayload)
+	controls := mapResponsesRequestControls(requestPayload)
+	stopReason := normalizeResponsesStopReason(resp)
+	setResponsesOutputFinishReason(output, stopReason)
+	usage := agento11y.TokenUsage{}
+	if responsesUsagePresent(resp.Usage) {
+		usage = mapResponsesUsage(resp.Usage)
+	}
 
 	requestModel := req.Model
 	responseModel := resp.Model
@@ -74,15 +80,19 @@ func ResponsesFromRequestResponse(req responses.ResponseNewParams, resp *respons
 		Input:             input,
 		Output:            output,
 		Tools:             tools,
-		MaxTokens:         maxTokens,
-		Temperature:       temperature,
-		TopP:              topP,
-		ToolChoice:        toolChoice,
-		ThinkingEnabled:   thinkingEnabled,
-		Usage:             mapResponsesUsage(resp.Usage),
-		StopReason:        normalizeResponsesStopReason(resp),
+		MaxTokens:         controls.maxTokens,
+		Temperature:       controls.temperature,
+		TopP:              controls.topP,
+		ChoiceCount:       controls.choiceCount,
+		Seed:              controls.seed,
+		OutputType:        controls.outputType,
+		ToolChoice:        controls.toolChoice,
+		ThinkingEnabled:   controls.thinkingEnabled,
+		ResponseStatus:    responsesStatus(resp),
+		Usage:             usage,
+		StopReason:        stopReason,
 		Tags:              cloneStringMap(options.tags),
-		Metadata:          mergeThinkingBudgetMetadata(options.metadata, thinkingBudget),
+		Metadata:          mergeThinkingBudgetMetadata(options.metadata, controls.thinkingBudget),
 		Artifacts:         artifacts,
 	}
 
@@ -100,6 +110,24 @@ func ResponsesFromStream(req responses.ResponseNewParams, summary ResponsesStrea
 		if err != nil {
 			return agento11y.Generation{}, err
 		}
+		// Failed terminal responses commonly contain no output. Reconstruct the
+		// events in that case so deltas observed before the failure are not lost.
+		if len(generation.Output) == 0 && len(summary.Events) > 0 {
+			eventsOnly := summary
+			eventsOnly.FinalResponse = nil
+			observed, observedErr := ResponsesFromStream(req, eventsOnly, opts...)
+			if observedErr != nil {
+				return agento11y.Generation{}, observedErr
+			}
+			generation.Output = observed.Output
+			if !responsesUsagePresent(summary.FinalResponse.Usage) {
+				generation.Usage = observed.Usage
+			}
+			setResponsesOutputFinishReason(generation.Output, generation.StopReason)
+			if err := generation.Validate(); err != nil {
+				return agento11y.Generation{}, err
+			}
+		}
 		return appendResponsesStreamEventsArtifact(generation, summary.Events, opts)
 	}
 
@@ -110,14 +138,16 @@ func ResponsesFromStream(req responses.ResponseNewParams, summary ResponsesStrea
 	requestPayload := marshalAny(req)
 	input, systemPrompt := mapResponsesRequestInput(requestPayload)
 	tools := mapResponsesTools(requestPayload["tools"])
-	maxTokens, temperature, topP, toolChoice, thinkingEnabled, thinkingBudget := mapResponsesRequestControls(requestPayload)
+	controls := mapResponsesRequestControls(requestPayload)
 	options := applyOptions(opts)
 
 	responseID := ""
 	responseModel := req.Model
 	usage := agento11y.TokenUsage{}
 	stopReason := ""
-	text := strings.Builder{}
+	var responseStatus *string
+	textParts := map[string]*responsesStreamTextPart{}
+	textPartOrder := []string{}
 	toolCalls := map[string]*responsesStreamToolCall{}
 	toolCallOrder := []string{}
 
@@ -130,24 +160,30 @@ func ResponsesFromStream(req responses.ResponseNewParams, summary ResponsesStrea
 			if model := event.Response.Model; model != "" {
 				responseModel = model
 			}
-			usage = mapResponsesUsage(event.Response.Usage)
+			if responsesUsagePresent(event.Response.Usage) {
+				usage = mapResponsesUsage(event.Response.Usage)
+			}
 			if reason := normalizeResponsesStopReason(&event.Response); reason != "" {
 				stopReason = reason
+			}
+			if status := responsesStatus(&event.Response); status != nil {
+				responseStatus = status
 			}
 		}
 
 		switch eventType {
 		case "response.output_text.delta", "response.refusal.delta":
-			if event.Delta != "" {
-				text.WriteString(event.Delta)
-			}
+			part := ensureResponsesStreamTextPart(textParts, &textPartOrder, event.ItemID, eventType, event.OutputIndex, event.ContentIndex)
+			part.text.WriteString(event.Delta)
 		case "response.output_text.done":
-			if text.Len() == 0 && event.Text != "" {
-				text.WriteString(event.Text)
+			part := ensureResponsesStreamTextPart(textParts, &textPartOrder, event.ItemID, eventType, event.OutputIndex, event.ContentIndex)
+			if part.text.Len() == 0 {
+				part.text.WriteString(event.Text)
 			}
 		case "response.refusal.done":
-			if text.Len() == 0 && event.Refusal != "" {
-				text.WriteString(event.Refusal)
+			part := ensureResponsesStreamTextPart(textParts, &textPartOrder, event.ItemID, eventType, event.OutputIndex, event.ContentIndex)
+			if part.text.Len() == 0 {
+				part.text.WriteString(event.Refusal)
 			}
 		case "response.output_item.added", "response.output_item.done":
 			if event.Item.Type != "function_call" {
@@ -179,10 +215,12 @@ func ResponsesFromStream(req responses.ResponseNewParams, summary ResponsesStrea
 				call.arguments.WriteString(event.Arguments)
 			}
 		case "response.completed":
+			responseStatus = stringPtr("completed")
 			if stopReason == "" {
 				stopReason = "stop"
 			}
 		case "response.incomplete":
+			responseStatus = stringPtr("incomplete")
 			if stopReason == "" {
 				reason := strings.TrimSpace(event.Response.IncompleteDetails.Reason)
 				if reason != "" {
@@ -191,22 +229,25 @@ func ResponsesFromStream(req responses.ResponseNewParams, summary ResponsesStrea
 					stopReason = "incomplete"
 				}
 			}
-		case "response.failed":
+		case "response.failed", "error":
+			responseStatus = stringPtr("failed")
 			if stopReason == "" {
 				stopReason = "failed"
 			}
 		case "response.cancelled":
+			responseStatus = stringPtr("cancelled")
 			if stopReason == "" {
 				stopReason = "cancelled"
 			}
 		}
 	}
 
-	output := []agento11y.Message{}
-	if generated := text.String(); generated != "" {
-		output = append(output, agento11y.Message{Role: agento11y.RoleAssistant, Parts: []agento11y.Part{agento11y.TextPart(generated)}})
+	outputParts := mapResponsesStreamOutput(textParts, textPartOrder, toolCalls, toolCallOrder)
+	var output []agento11y.Message
+	if len(outputParts) > 0 {
+		output = []agento11y.Message{{Role: agento11y.RoleAssistant, Parts: outputParts}}
 	}
-	output = append(output, mapResponsesStreamToolCalls(toolCalls, toolCallOrder)...)
+	setResponsesOutputFinishReason(output, stopReason)
 
 	artifacts := make([]agento11y.Artifact, 0, 3)
 	if options.includeRequestArtifact {
@@ -243,15 +284,19 @@ func ResponsesFromStream(req responses.ResponseNewParams, summary ResponsesStrea
 		Input:             input,
 		Output:            output,
 		Tools:             tools,
-		MaxTokens:         maxTokens,
-		Temperature:       temperature,
-		TopP:              topP,
-		ToolChoice:        toolChoice,
-		ThinkingEnabled:   thinkingEnabled,
+		MaxTokens:         controls.maxTokens,
+		Temperature:       controls.temperature,
+		TopP:              controls.topP,
+		ChoiceCount:       controls.choiceCount,
+		Seed:              controls.seed,
+		OutputType:        controls.outputType,
+		ToolChoice:        controls.toolChoice,
+		ThinkingEnabled:   controls.thinkingEnabled,
+		ResponseStatus:    responseStatus,
 		Usage:             usage,
 		StopReason:        stopReason,
 		Tags:              cloneStringMap(options.tags),
-		Metadata:          mergeThinkingBudgetMetadata(options.metadata, thinkingBudget),
+		Metadata:          mergeThinkingBudgetMetadata(options.metadata, controls.thinkingBudget),
 		Artifacts:         artifacts,
 	}
 
@@ -262,6 +307,13 @@ func ResponsesFromStream(req responses.ResponseNewParams, summary ResponsesStrea
 	return generation, nil
 }
 
+type responsesStreamTextPart struct {
+	outputIndex  int64
+	contentIndex int64
+	order        int
+	text         strings.Builder
+}
+
 type responsesStreamToolCall struct {
 	itemID      string
 	callID      string
@@ -269,6 +321,25 @@ type responsesStreamToolCall struct {
 	outputIndex int64
 	order       int
 	arguments   strings.Builder
+}
+
+func ensureResponsesStreamTextPart(parts map[string]*responsesStreamTextPart, order *[]string, itemID, eventType string, outputIndex, contentIndex int64) *responsesStreamTextPart {
+	kind := "text"
+	if strings.Contains(eventType, "refusal") {
+		kind = "refusal"
+	}
+	key := fmt.Sprintf("%s:%s:%d:%d", strings.TrimSpace(itemID), kind, outputIndex, contentIndex)
+	if existing, ok := parts[key]; ok {
+		return existing
+	}
+	part := &responsesStreamTextPart{
+		outputIndex:  outputIndex,
+		contentIndex: contentIndex,
+		order:        len(*order),
+	}
+	parts[key] = part
+	*order = append(*order, key)
+	return part
 }
 
 func ensureResponsesStreamToolCall(calls map[string]*responsesStreamToolCall, order *[]string, itemID string, outputIndex int64) *responsesStreamToolCall {
@@ -293,28 +364,31 @@ func ensureResponsesStreamToolCall(calls map[string]*responsesStreamToolCall, or
 	return call
 }
 
-func mapResponsesStreamToolCalls(calls map[string]*responsesStreamToolCall, order []string) []agento11y.Message {
-	if len(order) == 0 {
-		return nil
+func mapResponsesStreamOutput(texts map[string]*responsesStreamTextPart, textOrder []string, calls map[string]*responsesStreamToolCall, callOrder []string) []agento11y.Part {
+	type orderedPart struct {
+		outputIndex  int64
+		contentIndex int64
+		order        int
+		part         agento11y.Part
 	}
-
-	ordered := make([]*responsesStreamToolCall, 0, len(order))
-	for _, key := range order {
+	ordered := make([]orderedPart, 0, len(textOrder)+len(callOrder))
+	for _, key := range textOrder {
+		text := texts[key]
+		if text == nil || text.text.Len() == 0 {
+			continue
+		}
+		ordered = append(ordered, orderedPart{
+			outputIndex:  text.outputIndex,
+			contentIndex: text.contentIndex,
+			order:        text.order,
+			part:         agento11y.TextPart(text.text.String()),
+		})
+	}
+	for _, key := range callOrder {
 		call := calls[key]
 		if call == nil || strings.TrimSpace(call.name) == "" {
 			continue
 		}
-		ordered = append(ordered, call)
-	}
-	sort.SliceStable(ordered, func(i, j int) bool {
-		if ordered[i].outputIndex == ordered[j].outputIndex {
-			return ordered[i].order < ordered[j].order
-		}
-		return ordered[i].outputIndex < ordered[j].outputIndex
-	})
-
-	out := make([]agento11y.Message, 0, len(ordered))
-	for _, call := range ordered {
 		callID := strings.TrimSpace(call.callID)
 		if callID == "" {
 			callID = call.itemID
@@ -325,7 +399,25 @@ func mapResponsesStreamToolCalls(calls map[string]*responsesStreamToolCall, orde
 			InputJSON: parseJSONOrString(call.arguments.String()),
 		})
 		part.Metadata.ProviderType = "tool_call"
-		out = append(out, agento11y.Message{Role: agento11y.RoleAssistant, Parts: []agento11y.Part{part}})
+		ordered = append(ordered, orderedPart{
+			outputIndex: call.outputIndex,
+			order:       call.order,
+			part:        part,
+		})
+	}
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if ordered[i].outputIndex != ordered[j].outputIndex {
+			return ordered[i].outputIndex < ordered[j].outputIndex
+		}
+		if ordered[i].contentIndex != ordered[j].contentIndex {
+			return ordered[i].contentIndex < ordered[j].contentIndex
+		}
+		return ordered[i].order < ordered[j].order
+	})
+
+	out := make([]agento11y.Part, len(ordered))
+	for i := range ordered {
+		out[i] = ordered[i].part
 	}
 	return out
 }
@@ -376,8 +468,22 @@ func mapResponsesRequestInput(payload map[string]any) ([]agento11y.Message, stri
 			itemType := strings.TrimSpace(fmt.Sprintf("%v", item["type"]))
 			role := strings.ToLower(strings.TrimSpace(fmt.Sprintf("%v", item["role"])))
 
-			if itemType == "message" && (role == "system" || role == "developer") {
-				systemPrompts = append(systemPrompts, extractResponsesText(item["content"]))
+			if itemType == "function_call" {
+				name := responsesMapString(item, "name")
+				if name == "" {
+					continue
+				}
+				callID := responsesMapString(item, "call_id", "callId")
+				if callID == "" {
+					callID = responsesMapString(item, "id")
+				}
+				part := agento11y.ToolCallPart(agento11y.ToolCall{
+					ID:        callID,
+					Name:      name,
+					InputJSON: parseJSONOrString(jsonValueOrString(item["arguments"])),
+				})
+				part.Metadata.ProviderType = "tool_call"
+				input = append(input, agento11y.Message{Role: agento11y.RoleAssistant, Parts: []agento11y.Part{part}})
 				continue
 			}
 
@@ -401,8 +507,8 @@ func mapResponsesRequestInput(payload map[string]any) ([]agento11y.Message, stri
 			}
 
 			if itemType == "message" || role != "" {
-				content := extractResponsesText(item["content"])
-				if content == "" {
+				parts := mapResponsesInputContent(item["content"])
+				if len(parts) == 0 {
 					continue
 				}
 
@@ -412,9 +518,13 @@ func mapResponsesRequestInput(payload map[string]any) ([]agento11y.Message, stri
 					mappedRole = agento11y.RoleAssistant
 				case "tool":
 					mappedRole = agento11y.RoleTool
+				case "system":
+					mappedRole = agento11y.RoleSystem
+				case "developer":
+					mappedRole = agento11y.RoleDeveloper
 				}
 
-				input = append(input, agento11y.Message{Role: mappedRole, Parts: []agento11y.Part{agento11y.TextPart(content)}})
+				input = append(input, agento11y.Message{Role: mappedRole, Parts: parts})
 			}
 		}
 	}
@@ -422,21 +532,82 @@ func mapResponsesRequestInput(payload map[string]any) ([]agento11y.Message, stri
 	return input, strings.Join(systemPrompts, "\n\n")
 }
 
+func mapResponsesInputContent(value any) []agento11y.Part {
+	switch typed := value.(type) {
+	case string:
+		if typed == "" {
+			return nil
+		}
+		return []agento11y.Part{agento11y.TextPart(typed)}
+	case []any:
+		parts := make([]agento11y.Part, 0, len(typed))
+		for _, item := range typed {
+			parts = append(parts, mapResponsesInputContent(item)...)
+		}
+		return parts
+	case map[string]any:
+		itemType := strings.ToLower(strings.TrimSpace(responsesMapString(typed, "type")))
+		switch itemType {
+		case "input_image":
+			url := responsesMapString(typed, "image_url", "file_id")
+			if url == "" {
+				return nil
+			}
+			return []agento11y.Part{agento11y.MediaPart(agento11y.Media{
+				Kind:     "image",
+				URL:      url,
+				MIMEType: responsesMapString(typed, "mime_type"),
+				Name:     responsesMapString(typed, "file_id"),
+			})}
+		case "input_file":
+			url := responsesMapString(typed, "file_url", "file_id")
+			if url == "" {
+				if data := responsesMapString(typed, "file_data"); data != "" {
+					if strings.HasPrefix(strings.ToLower(data), "data:") {
+						url = data
+					} else {
+						url = "data:application/octet-stream;base64," + data
+					}
+				}
+			}
+			if url == "" {
+				return nil
+			}
+			return []agento11y.Part{agento11y.MediaPart(agento11y.Media{
+				Kind:     "file",
+				URL:      url,
+				MIMEType: responsesMapString(typed, "mime_type"),
+				Name:     responsesMapString(typed, "filename", "file_id"),
+			})}
+		default:
+			if text := extractResponsesText(typed); text != "" {
+				return []agento11y.Part{agento11y.TextPart(text)}
+			}
+		}
+	}
+	return nil
+}
+
+func setResponsesOutputFinishReason(output []agento11y.Message, finishReason string) {
+	if finishReason == "" {
+		return
+	}
+	for i := range output {
+		output[i].FinishReason = finishReason
+	}
+}
+
 func mapResponsesOutput(items []responses.ResponseOutputItemUnion) []agento11y.Message {
 	if len(items) == 0 {
 		return nil
 	}
 
-	out := make([]agento11y.Message, 0, len(items))
+	parts := make([]agento11y.Part, 0, len(items))
 	for i := range items {
 		item := items[i]
 		switch item.Type {
 		case "message":
-			text := extractResponsesOutputMessageText(item.Content)
-			if text == "" {
-				continue
-			}
-			out = append(out, agento11y.Message{Role: agento11y.RoleAssistant, Parts: []agento11y.Part{agento11y.TextPart(text)}})
+			parts = append(parts, mapResponsesOutputMessageParts(item.Content)...)
 		case "function_call":
 			if strings.TrimSpace(item.Name) == "" {
 				continue
@@ -447,16 +618,18 @@ func mapResponsesOutput(items []responses.ResponseOutputItemUnion) []agento11y.M
 				InputJSON: parseResponsesOutputArguments(item.Arguments),
 			})
 			part.Metadata.ProviderType = "tool_call"
-			out = append(out, agento11y.Message{Role: agento11y.RoleAssistant, Parts: []agento11y.Part{part}})
+			parts = append(parts, part)
 		default:
-			fallback := extractResponsesOutputFallback(item)
-			if fallback != "" {
-				out = append(out, agento11y.Message{Role: agento11y.RoleAssistant, Parts: []agento11y.Part{agento11y.TextPart(fallback)}})
+			if fallback := extractResponsesOutputFallback(item); fallback != "" {
+				parts = append(parts, agento11y.TextPart(fallback))
 			}
 		}
 	}
 
-	return out
+	if len(parts) == 0 {
+		return nil
+	}
+	return []agento11y.Message{{Role: agento11y.RoleAssistant, Parts: parts}}
 }
 
 func mapResponsesTools(value any) []agento11y.ToolDefinition {
@@ -507,8 +680,27 @@ func mapResponsesUsage(usage responses.ResponseUsage) agento11y.TokenUsage {
 		TotalTokens:          usage.TotalTokens,
 		CacheReadInputTokens: usage.InputTokensDetails.CachedTokens,
 		ReasoningTokens:      usage.OutputTokensDetails.ReasoningTokens,
+		InputTokensReported:  usage.JSON.InputTokens.Valid() || usage.InputTokens != 0,
+		OutputTokensReported: usage.JSON.OutputTokens.Valid() || usage.OutputTokens != 0,
 		InputSemantics:       agento11y.TokenInputSemanticsInclusive,
 	}
+}
+
+func responsesUsagePresent(usage responses.ResponseUsage) bool {
+	return usage.JSON.InputTokens.Valid() || usage.JSON.OutputTokens.Valid() || usage.JSON.TotalTokens.Valid() ||
+		usage.InputTokens != 0 || usage.OutputTokens != 0 || usage.TotalTokens != 0 ||
+		usage.InputTokensDetails.CachedTokens != 0 || usage.OutputTokensDetails.ReasoningTokens != 0
+}
+
+func responsesStatus(resp *responses.Response) *string {
+	if resp == nil {
+		return nil
+	}
+	status := strings.ToLower(strings.TrimSpace(string(resp.Status)))
+	if status == "" {
+		return nil
+	}
+	return &status
 }
 
 func normalizeResponsesStopReason(resp *responses.Response) string {
@@ -531,19 +723,23 @@ func normalizeResponsesStopReason(resp *responses.Response) string {
 	return statusLower
 }
 
-func mapResponsesRequestControls(payload map[string]any) (*int64, *float64, *float64, *string, *bool, *int64) {
-	maxTokens := readInt64(payload, "max_output_tokens")
-	temperature := readFloat64(payload, "temperature")
-	topP := readFloat64(payload, "top_p")
-	toolChoice := canonicalToolChoice(payload["tool_choice"])
-
-	var thinkingEnabled *bool
-	if _, ok := payload["reasoning"]; ok {
-		thinkingEnabled = boolPtr(true)
+func mapResponsesRequestControls(payload map[string]any) requestControls {
+	controls := requestControls{
+		maxTokens:   readInt64(payload, "max_output_tokens"),
+		temperature: readFloat64(payload, "temperature"),
+		topP:        readFloat64(payload, "top_p"),
+		choiceCount: readInt64(payload, "n"),
+		seed:        readInt64(payload, "seed"),
+		toolChoice:  canonicalToolChoice(payload["tool_choice"]),
 	}
-	thinkingBudget := resolveThinkingBudget(payload["reasoning"])
-
-	return maxTokens, temperature, topP, toolChoice, thinkingEnabled, thinkingBudget
+	if text, ok := payload["text"].(map[string]any); ok {
+		controls.outputType = canonicalOutputType(text["format"])
+	}
+	if reasoning, ok := payload["reasoning"]; ok {
+		controls.thinkingEnabled = boolPtr(reasoningEnabled(reasoning))
+	}
+	controls.thinkingBudget = resolveThinkingBudget(payload["reasoning"])
+	return controls
 }
 
 func extractResponsesText(value any) string {
@@ -572,22 +768,22 @@ func extractResponsesText(value any) string {
 	return ""
 }
 
-func extractResponsesOutputMessageText(content []responses.ResponseOutputMessageContentUnion) string {
-	parts := make([]string, 0, len(content))
+func mapResponsesOutputMessageParts(content []responses.ResponseOutputMessageContentUnion) []agento11y.Part {
+	parts := make([]agento11y.Part, 0, len(content))
 	for i := range content {
 		item := content[i]
 		switch item.Type {
 		case "output_text":
 			if text := item.Text; text != "" {
-				parts = append(parts, text)
+				parts = append(parts, agento11y.TextPart(text))
 			}
 		case "refusal":
 			if refusal := item.Refusal; refusal != "" {
-				parts = append(parts, refusal)
+				parts = append(parts, agento11y.TextPart(refusal))
 			}
 		}
 	}
-	return strings.Join(parts, "\n")
+	return parts
 }
 
 func extractResponsesOutputFallback(item responses.ResponseOutputItemUnion) string {
@@ -652,6 +848,17 @@ func jsonValueText(value any) string {
 		return ""
 	}
 	return string(data)
+}
+
+func jsonValueOrString(value any) string {
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return jsonValueText(value)
+}
+
+func stringPtr(value string) *string {
+	return &value
 }
 
 func responsesMapString(item map[string]any, keys ...string) string {

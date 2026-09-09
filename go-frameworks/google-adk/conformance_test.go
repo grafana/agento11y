@@ -196,7 +196,9 @@ func TestConformance_StreamingRunTriggersGenerationExport(t *testing.T) {
 	env.Shutdown(t)
 
 	generationSpan := findSpanByOperationName(t, env.Spans.Ended(), "streamText")
-	requireSpanAttr(t, spanAttrs(generationSpan), spanAttrRequestModel, "gemini-2.5-pro")
+	generationAttrs := spanAttrs(generationSpan)
+	requireSpanAttr(t, generationAttrs, spanAttrProviderName, "gcp.gemini")
+	requireSpanAttr(t, generationAttrs, spanAttrRequestModel, "gemini-2.5-pro")
 
 	generation := env.Export.SingleGeneration(t)
 	if got := stringValue(t, generation, "operation_name"); got != "streamText" {

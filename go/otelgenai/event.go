@@ -88,7 +88,9 @@ func eventContentAttributes(inv *Invocation, capture CaptureMode) []attribute.Ke
 		value, err := structuredLogValue(payload)
 		if err != nil {
 			otel.Handle(fmt.Errorf("otelgenai: structuring %s for event: %w", key, err))
-			return
+			if value.Type() == attribute.INVALID {
+				return
+			}
 		}
 		attrs = append(attrs, attribute.KeyValue{Key: key, Value: value})
 	}
@@ -106,18 +108,18 @@ func eventContentAttributes(inv *Invocation, capture CaptureMode) []attribute.Ke
 		return encodeToolDefinitions(inv.ToolDefinitions)
 	}, len(inv.ToolDefinitions) > 0)
 	encode(semconv.GenAIToolCallArgumentsKey, func() (string, error) {
-		payload, err := rawJSONField(inv.ToolCallArguments, "tool call arguments")
+		payload, err := rawJSONObjectField(inv.ToolCallArguments, "tool call arguments")
 		return string(payload), err
 	}, len(inv.ToolCallArguments) > 0)
 	encode(semconv.GenAIToolCallResultKey, func() (string, error) {
-		payload, err := rawJSONField(inv.ToolCallResult, "tool call result")
+		payload, err := rawJSONObjectField(inv.ToolCallResult, "tool call result")
 		return string(payload), err
 	}, len(inv.ToolCallResult) > 0)
 	if inv.RetrievalQueryText != "" {
 		attrs = append(attrs, attribute.String(string(semconv.GenAIRetrievalQueryTextKey), inv.RetrievalQueryText))
 	}
 	encode(semconv.GenAIRetrievalDocumentsKey, func() (string, error) {
-		payload, err := rawJSONField(inv.RetrievalDocuments, "retrieval documents")
+		payload, err := rawJSONObjectArrayField(inv.RetrievalDocuments, "retrieval documents")
 		return string(payload), err
 	}, len(inv.RetrievalDocuments) > 0)
 	return attrs
@@ -158,24 +160,32 @@ func logValue(value any) (attribute.Value, error) {
 		return attribute.Float64Value(decimal), nil
 	case []any:
 		items := make([]attribute.Value, 0, len(value))
-		for _, item := range value {
+		var problems []error
+		for index, item := range value {
 			converted, err := logValue(item)
 			if err != nil {
-				return attribute.Value{}, err
+				problems = append(problems, fmt.Errorf("item %d: %w", index, err))
+				if converted.Type() == attribute.INVALID {
+					continue
+				}
 			}
 			items = append(items, converted)
 		}
-		return attribute.SliceValue(items...), nil
+		return attribute.SliceValue(items...), errors.Join(problems...)
 	case map[string]any:
 		items := make([]attribute.KeyValue, 0, len(value))
+		var problems []error
 		for _, key := range slices.Sorted(maps.Keys(value)) {
 			converted, err := logValue(value[key])
 			if err != nil {
-				return attribute.Value{}, err
+				problems = append(problems, fmt.Errorf("key %q: %w", key, err))
+				if converted.Type() == attribute.INVALID {
+					continue
+				}
 			}
 			items = append(items, attribute.KeyValue{Key: attribute.Key(key), Value: converted})
 		}
-		return attribute.MapValue(items...), nil
+		return attribute.MapValue(items...), errors.Join(problems...)
 	default:
 		return attribute.Value{}, fmt.Errorf("unsupported JSON value %T", value)
 	}

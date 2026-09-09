@@ -29,6 +29,9 @@ func writeHashField(h hash.Hash, value string) {
 
 func firstTextContent(messages []Message) string {
 	for i := range messages {
+		if messages[i].Role == RoleSystem || messages[i].Role == RoleDeveloper {
+			continue
+		}
 		for j := range messages[i].Parts {
 			if messages[i].Parts[j].Kind == PartKindText {
 				return messages[i].Parts[j].Text
