@@ -689,7 +689,7 @@ class TestToolContentCapture:
             client.shutdown()
             provider.shutdown()
 
-    def test_client_default_legacy_true_includes(self):
+    def test_client_default_legacy_true_includes(self):  # trufflehog:ignore
         client, span_exporter, provider = self._make_tool_client(ContentCaptureMode.DEFAULT)
         try:
             with client.start_tool_execution(ToolExecutionStart(tool_name="test_tool", include_content=True)) as rec:
@@ -1121,7 +1121,7 @@ class TestRatingCommentStripping:
 
         return _Handler
 
-    def test_metadata_only_strips_rating_comment(self):
+    def test_metadata_only_strips_rating_comment(self):  # trufflehog:ignore
         captured: dict = {}
         handler = self._make_rating_handler(captured)
         server = HTTPServer(("127.0.0.1", 0), handler)
@@ -1295,6 +1295,7 @@ class TestFullWithMetadataSpans:
                 ToolExecutionStart(
                     tool_name="weather",
                     tool_call_id="call_1",
+                    skill_name="  weather-lookup  ",
                     include_content=True,
                     conversation_title="Sensitive tool title",
                     tool_description="Get weather: free-form provider-supplied text",
@@ -1309,6 +1310,7 @@ class TestFullWithMetadataSpans:
             assert "gen_ai.tool.description" not in tool_span.attributes
             # Identity attributes still emitted.
             assert tool_span.attributes.get("gen_ai.tool.name") == "weather"
+            assert tool_span.attributes.get("agento11y.skill.name") == "weather-lookup"
 
     @pytest.mark.parametrize("mode", _STRIPPED_MODES)
     def test_stripped_modes_tool_span_redacts_call_error(self, mode):
@@ -1320,13 +1322,16 @@ class TestFullWithMetadataSpans:
                 ToolExecutionStart(
                     tool_name="weather",
                     tool_call_id="call_1",
+                    skill_name="  weather-lookup  ",
                     include_content=True,
                 )
             ) as rec:
                 rec.set_exec_error(RuntimeError(raw_err))
                 rec.set_result(arguments={"city": "Paris"}, result={"temp_c": 18})
 
-            _assert_span_error_redacted(env.tool_span(), "tool_execution_error")
+            tool_span = env.tool_span()
+            _assert_span_error_redacted(tool_span, "tool_execution_error")
+            assert tool_span.attributes.get("agento11y.skill.name") == "weather-lookup"
 
     @pytest.mark.parametrize("mode", _STRIPPED_MODES)
     def test_stripped_modes_embedding_span_omits_input_texts(self, mode):

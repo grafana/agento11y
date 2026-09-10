@@ -460,6 +460,7 @@ public sealed class ConformanceTests
             ToolName = "weather",
             ToolCallId = "call-weather-1",
             ToolType = "function",
+            SkillName = "  code-review  ",
             RequestProvider = "openai",
             RequestModel = "gpt-5",
             ContentCapture = ContentCaptureMode.Full,
@@ -486,6 +487,7 @@ public sealed class ConformanceTests
         Assert.Equal("weather", span.GetTagItem("gen_ai.tool.name"));
         Assert.Equal("call-weather-1", span.GetTagItem("gen_ai.tool.call.id"));
         Assert.Equal("function", span.GetTagItem("gen_ai.tool.type"));
+        Assert.Equal("code-review", span.GetTagItem("agento11y.skill.name")?.ToString());
         Assert.Contains("Paris", span.GetTagItem("gen_ai.tool.call.arguments")?.ToString());
         Assert.Contains("sunny", span.GetTagItem("gen_ai.tool.call.result")?.ToString());
         Assert.Equal("openai", span.GetTagItem("gen_ai.provider.name")?.ToString());
@@ -495,6 +497,73 @@ public sealed class ConformanceTests
         Assert.Equal("v-context", span.GetTagItem("gen_ai.agent.version")?.ToString());
         Assert.Contains("gen_ai.client.operation.duration", env.MetricNames);
         Assert.DoesNotContain("gen_ai.client.time_to_first_token", env.MetricNames);
+        var durationMeasurements = env.MetricMeasurements
+            .Where(measurement =>
+                string.Equals(measurement.Name, "gen_ai.client.operation.duration", StringComparison.Ordinal)
+                && measurement.Tags.TryGetValue("gen_ai.operation.name", out var operation)
+                && string.Equals(operation?.ToString(), "execute_tool", StringComparison.Ordinal))
+            .ToList();
+        Assert.NotEmpty(durationMeasurements);
+        Assert.All(durationMeasurements, measurement =>
+            Assert.False(measurement.Tags.ContainsKey("agento11y.skill.name")));
+    }
+
+    [Theory]
+    [InlineData(null, null, false)]
+    [InlineData(" \t\r\n ", null, false)]
+    [InlineData("  failure-recovery  ", "failure-recovery", true)]
+    public async Task ToolExecutionSkillMarkerSemantics(string? skillName, string? expected, bool failed)
+    {
+        await using var env = new ConformanceEnv();
+        var start = new ToolExecutionStart
+        {
+            ToolName = "skill-marker-tool",
+        };
+        if (skillName != null)
+        {
+            start.SkillName = skillName;
+        }
+
+        var recorder = env.Client.StartToolExecution(start);
+        if (failed)
+        {
+            recorder.SetExecutionError(new InvalidOperationException("tool failed"));
+        }
+        recorder.End();
+
+        await env.ShutdownAsync();
+
+        var span = env.OperationSpan("execute_tool");
+        Assert.Equal("execute_tool", span.GetTagItem("gen_ai.operation.name"));
+        if (expected == null)
+        {
+            Assert.DoesNotContain("agento11y.skill.name", span.TagObjects.Select(tag => tag.Key));
+        }
+        else
+        {
+            Assert.Equal(expected, span.GetTagItem("agento11y.skill.name")?.ToString());
+        }
+        Assert.Equal(failed ? ActivityStatusCode.Error : ActivityStatusCode.Ok, span.Status);
+    }
+
+    [Fact]
+    public async Task ToolExecutionStartDeepCloneIsolatesSkillName()
+    {
+        await using var env = new ConformanceEnv();
+        var start = new ToolExecutionStart
+        {
+            ToolName = "isolated-tool",
+            SkillName = "original-skill",
+        };
+
+        var recorder = env.Client.StartToolExecution(start);
+        start.SkillName = "mutated-after-start";
+        recorder.End();
+
+        await env.ShutdownAsync();
+
+        var span = env.OperationSpan("execute_tool");
+        Assert.Equal("original-skill", span.GetTagItem("agento11y.skill.name")?.ToString());
     }
 
     [Fact]

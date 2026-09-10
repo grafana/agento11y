@@ -38,6 +38,10 @@ const (
 	genAIResponseStatusKey      attribute.Key = "gen_ai.response.status"
 )
 
+// agento11ySkillNameKey is a vendor attribute and is intentionally separate
+// from the pinned semantic-convention registry.
+const agento11ySkillNameKey attribute.Key = "agento11y.skill.name"
+
 // EndHook observes a finished invocation before its span closes. It returns
 // extra span attributes, and may transform the invocation itself, which is how
 // content redaction plugs in.
@@ -434,6 +438,10 @@ func (h *Handler) End(ctx context.Context, inv *Invocation) {
 	if span != nil {
 		span.SetName(inv.spanName())
 		attrs := h.requestAttributes(inv)
+		// End hooks can change the operation, but attributes set by Start cannot be removed.
+		if skillName := strings.TrimSpace(inv.SkillName); inv.operation() == OperationExecuteTool && skillName != "" {
+			attrs = append(attrs, agento11ySkillNameKey.String(skillName))
+		}
 		attrs = append(attrs, h.responseAttributes(inv)...)
 		attrs = append(attrs, h.contentAttributes(inv, capture)...)
 		attrs = append(attrs, inv.Attributes...)

@@ -12,7 +12,11 @@ import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 class Agento11yClientSpansTest {
     @Test
@@ -62,6 +66,63 @@ class Agento11yClientSpansTest {
         assertThat(span.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
 
         provider.shutdown();
+    }
+
+    @Test
+    void toolExecutionStartHasFluentFlatSkillNameField() {
+        ToolExecutionStart start = new ToolExecutionStart();
+
+        assertThat(start.setSkillName("  code-review  ")).isSameAs(start);
+        assertThat(start.getSkillName()).isEqualTo("  code-review  ");
+        assertThat(start.copy().getSkillName()).isEqualTo("  code-review  ");
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("toolSkillMarkerCases")
+    void toolSkillMarkerSemantics(String description, String skillName, String expectedSkillName, boolean failed) {
+        InMemorySpanExporter spanExporter = InMemorySpanExporter.create();
+        SdkTracerProvider provider = SdkTracerProvider.builder()
+                .addSpanProcessor(SimpleSpanProcessor.create(spanExporter))
+                .build();
+
+        Agento11yClientConfig config = new Agento11yClientConfig()
+                .setTracer(provider.get("test"))
+                .setGenerationExporter(new TestFixtures.CapturingExporter())
+                .setGenerationExport(new GenerationExportConfig()
+                        .setBatchSize(100)
+                        .setFlushInterval(Duration.ofMinutes(10))
+                        .setMaxRetries(0));
+
+        try (Agento11yClient client = new Agento11yClient(config)) {
+            ToolExecutionStart start = new ToolExecutionStart().setToolName("ordinary_tool");
+            if (skillName != null) {
+                start.setSkillName(skillName);
+            }
+            ToolExecutionRecorder recorder = client.startToolExecution(start);
+            if (failed) {
+                recorder.setCallError(new IllegalStateException("tool failed"));
+            }
+            recorder.end();
+        }
+
+        assertThat(spanExporter.getFinishedSpanItems()).hasSize(1);
+        SpanData span = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(span.getName()).isEqualTo("execute_tool ordinary_tool");
+        assertThat(span.getAttributes().get(AttributeKey.stringKey("agento11y.skill.name")))
+                .isEqualTo(expectedSkillName);
+        assertThat(span.getStatus().getStatusCode()).isEqualTo(failed ? StatusCode.ERROR : StatusCode.OK);
+
+        provider.shutdown();
+    }
+
+    private static Stream<Arguments> toolSkillMarkerCases() {
+        return Stream.of(
+                Arguments.of("trimmed marker", "  code-review\t", "code-review", false),
+                Arguments.of("non-breaking spaces are trimmed", "\u00a0code-review\u00a0", "code-review", false),
+                Arguments.of("failed execution retains marker", "failure-analysis", "failure-analysis", true),
+                Arguments.of("omitted marker", null, null, false),
+                Arguments.of("whitespace marker", " \t\n ", null, false),
+                Arguments.of("non-breaking whitespace marker", "\u00a0", null, false));
     }
 
     @Test
