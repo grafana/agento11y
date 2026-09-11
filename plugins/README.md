@@ -30,7 +30,7 @@ The command was renamed from `sigil`; the old name still works but will be remov
 
 ## Launch your agent
 
-Launch with `agento11y <agent>`, where `<agent>` is `claude`, `codex`, `copilot`, `opencode`, `pi`, or `vibe`. A first launch asks where sessions go, saves the answer to `~/.config/agento11y/config.env`, then installs the agent plugin or extension and launches the agent. **Grafana Cloud** continues to the credential questions. **Local only** sets `AGENTO11Y_LOCAL=true` and starts the local receiver for that launch. The launcher asks nothing when local mode is already on (`--local` or `AGENTO11Y_LOCAL=true`) or when stdin is not a terminal. The destination question also needs macOS or Linux, with no destination and no credentials saved yet; Windows cannot run the local receiver, so its flow starts at the Cloud questions.
+Launch with `agento11y <agent>`, where `<agent>` is `claude`, `codex`, `copilot`, `dsh`, `opencode`, `pi`, or `vibe`. DeepSeek Harness requires a profile, so launch its web app with `agento11y dsh -- web`. The `dsh` launcher runs on macOS and Linux only. A first launch asks where sessions go, saves the answer to `~/.config/agento11y/config.env`, then installs the agent plugin or extension and launches the agent. **Grafana Cloud** continues to the credential questions. **Local only** sets `AGENTO11Y_LOCAL=true` and starts the local receiver for that launch. The launcher asks nothing when local mode is already on (`--local` or `AGENTO11Y_LOCAL=true`) or when stdin is not a terminal. The destination question also needs macOS or Linux, with no destination and no credentials saved yet; Windows cannot run the local receiver, so its flow starts at the Cloud questions.
 
 Cursor has no launcher; see [`cursor/README.md`](cursor/README.md) for setup.
 
@@ -42,6 +42,7 @@ Cursor has no launcher; see [`cursor/README.md`](cursor/README.md) for setup.
 | [Codex](https://developers.openai.com/codex) | [`codex/`](codex/) | Experimental |
 | [Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli/using-github-copilot-in-the-cli) | [`copilot/`](copilot/) | Experimental |
 | [Cursor](https://cursor.com) | [`cursor/`](cursor/) | Available |
+| [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) | [`dsh/`](dsh/) | Experimental (macOS/Linux) |
 | [OpenCode](https://opencode.ai) | [`opencode/`](opencode/) | Available |
 | [Pi](https://github.com/earendil-works/pi) | [`pi/`](pi/) | Available |
 | [Vibe](https://github.com/mistralai/mistral-vibe) | [`vibe/`](vibe/) | Experimental |

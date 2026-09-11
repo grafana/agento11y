@@ -4,7 +4,7 @@
   <img src="../../.github/img/agento11y.gif" alt="agento11y capturing a coding agent session" width="80%" />
 </p>
 
-Monitor the coding agents you already use — Cursor, Claude Code, Codex, Copilot CLI, OpenCode, Pi, Vibe, and others. Observe usage, cost, tokens, and tools across all of them in one place. Keep sessions on your machine with the local Agent Observability app, or send them to [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/).
+Monitor the coding agents you already use — Cursor, Claude Code, Codex, Copilot CLI, DeepSeek Harness (`dsh`), OpenCode, Pi, Vibe, and others. Observe usage, cost, tokens, and tools across all of them in one place. Keep sessions on your machine with the local Agent Observability app, or send them to [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/).
 
 ## Quick start
 
@@ -69,11 +69,12 @@ agento11y claude
 | [Codex](https://developers.openai.com/codex) | `agento11y codex` |
 | [Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli/using-github-copilot-in-the-cli) | `agento11y copilot` |
 | [Cursor](https://cursor.com) | `agento11y cursor install`, then start Cursor |
+| [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) | `agento11y dsh -- web` (macOS/Linux) |
 | [OpenCode](https://opencode.ai) | `agento11y opencode` |
 | [Pi](https://github.com/earendil-works/pi) | `agento11y pi` |
 | [Vibe](https://github.com/mistralai/vibe) | `agento11y vibe` |
 
-Cursor has no launcher. Run `agento11y cursor install` once, then start Cursor normally. Remove its hooks with `agento11y cursor uninstall`. See also [`cursor/README.md`](../cursor/README.md). Per-agent notes and glue live under [`plugins/`](../).
+Cursor has no launcher. Run `agento11y cursor install` once, then start Cursor normally. Remove its hooks with `agento11y cursor uninstall`. See also [`cursor/README.md`](../cursor/README.md). The dsh launcher is available on macOS and Linux only, and capture applies only to dsh processes it starts. Per-agent notes and glue live under [`plugins/`](../).
 
 ## Skills
 
@@ -163,7 +164,7 @@ The shared `agento11y` binary defaults to `metadata_only`: only model, tokens, t
 AGENTO11Y_CONTENT_CAPTURE_MODE=full
 ```
 
-Unknown values fall back to `metadata_only` with a warning. `default` is accepted as an alias for `metadata_only` so the shared binary matches the Go envconfig resolver rather than the JS SDK's client-level default of `no_tool_content`. The Pi (`@grafana/agento11y-pi`) and OpenCode (`@grafana/agento11y-opencode`) plugins ship their own parsers but accept the same set of values.
+Unknown values fall back to `metadata_only` with a warning. `default` is accepted as an alias for `metadata_only` so the shared binary matches the Go envconfig resolver rather than the JS SDK's client-level default of `no_tool_content`. The Pi (`@grafana/agento11y-pi`), OpenCode (`@grafana/agento11y-opencode`), and dsh (`@grafana/agento11y-dsh`) plugins ship their own parsers but accept the same set of values.
 
 A plugin can only export fields the host agent passes through to it, so individual plugins may capture less than the SDK matrix shows. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md) for the SDK-level behavior matrix and plugin defaults.
 
@@ -207,7 +208,7 @@ agento11y claude --tag project=hackathon --tag team=ai
 agento11y claude --tag project=hackathon -- --resume
 ```
 
-The same flag works for every launcher (`claude`, `codex`, `copilot`, `opencode`, `pi`, `vibe`) and combines with `--local`.
+The same flag works for every launcher (`claude`, `codex`, `copilot`, `dsh`, `opencode`, `pi`, `vibe`) and combines with `--local`.
 
 #### Automatic tags
 
@@ -270,7 +271,7 @@ agento11y agents reconcile --agents all --json
 
 ### Auto-update
 
-`agento11y claude`, `agento11y codex`, and `agento11y opencode` refresh the installed host plugin automatically. Set `AGENTO11Y_AUTO_UPDATE=false` to opt out.
+`agento11y claude`, `agento11y codex`, `agento11y dsh`, and `agento11y opencode` refresh the installed host plugin automatically. Set `AGENTO11Y_AUTO_UPDATE=false` to opt out.
 
 `AGENTO11Y_AUTO_UPDATE` does not apply to the other launchers. `agento11y copilot` rewrites its own `agento11y.json` hooks file, and `agento11y vibe` re-upserts its three entries into vibe's `hooks.toml`, so both always point at the installed binary. `agento11y pi` leaves upgrades to pi's own installer.
 

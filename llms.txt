@@ -4,7 +4,7 @@ You are a coding agent. The user wants help with [Grafana Agent observability](h
 
 There are two distinct things this file covers. Pick the path that matches the request before doing anything else.
 
-- Path A, [Monitor a coding agent](#path-a-monitor-a-coding-agent): the user wants telemetry from Claude Code, Codex, Copilot CLI, Cursor, OpenCode, Pi, or Vibe sent to Grafana Agent observability. They are not changing application code.
+- Path A, [Monitor a coding agent](#path-a-monitor-a-coding-agent): the user wants telemetry from Claude Code, Codex, Copilot CLI, Cursor, DeepSeek Harness (`dsh`), OpenCode, Pi, or Vibe sent to Grafana Agent observability. They are not changing application code.
 - Path B, [Instrument an LLM app or agent](#path-b-instrument-an-llm-app-or-agent): the user wants their own code (an app, agent, framework pipeline) to send generations to Grafana Agent observability.
 
 If you cannot tell, ask one clarifying question and stop.
@@ -81,6 +81,7 @@ A binary older than that command prints `agento11y: unknown agent "skills"` and 
 | [Codex](https://developers.openai.com/codex) | [`plugins/codex/`](https://github.com/grafana/agento11y/tree/main/plugins/codex) | Shared `agento11y` Go binary via hooks |
 | [Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) | [`plugins/copilot/`](https://github.com/grafana/agento11y/tree/main/plugins/copilot) | Shared `agento11y` Go binary via hooks |
 | [Cursor](https://cursor.com) | [`plugins/cursor/`](https://github.com/grafana/agento11y/tree/main/plugins/cursor) | Shared `agento11y` Go binary via hooks |
+| [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) | [`plugins/dsh/`](https://github.com/grafana/agento11y/tree/main/plugins/dsh) | Installs `@grafana/agento11y-dsh` as a launch overlay; macOS and Linux only |
 | [OpenCode](https://opencode.ai) | [`plugins/opencode/`](https://github.com/grafana/agento11y/tree/main/plugins/opencode) | Shared `agento11y` Go binary, installs `@grafana/agento11y-opencode` |
 | [Pi](https://github.com/earendil-works/pi) | [`plugins/pi/`](https://github.com/grafana/agento11y/tree/main/plugins/pi) | Independent npm package `@grafana/agento11y-pi` |
 | [Vibe](https://github.com/mistralai/mistral-vibe) | [`plugins/vibe/`](https://github.com/grafana/agento11y/tree/main/plugins/vibe) | Shared `agento11y` Go binary via `hooks.toml` |
@@ -95,9 +96,11 @@ Install the `agento11y` binary (renamed from `sigil`; the old name still works b
 
 The script installs to `~/.local/bin`; `go install` puts the binary in `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`.
 
-Launch your agent with `agento11y <agent>`, where `<agent>` is `claude`, `codex`, `copilot`, `opencode`, `pi`, or `vibe`. A first launch asks where sessions go, with two options: **Local only**, and **Grafana Cloud**. **Local only** needs no Cloud credentials, starts the local receiver, and does not forward sessions. **Grafana Cloud** continues to the credential questions. Its interactive preferences on macOS and Linux include **Local web UI**. The question starts on **Yes** by default and remembers an earlier answer. **Yes** keeps a full local copy and forwards a Cloud copy. **No** sends directly to Cloud without a local copy. The launcher asks nothing when local mode is already on (`--local` or `AGENTO11Y_LOCAL=true`) or when stdin is not a terminal. Windows has no local receiver, so it shows neither local choice.
+Launch your agent with `agento11y <agent>`, where `<agent>` is `claude`, `codex`, `copilot`, `dsh`, `opencode`, `pi`, or `vibe`. DeepSeek Harness requires a profile, so launch its web app with `agento11y dsh -- web`. The `dsh` launcher runs on macOS and Linux only. A first launch asks where sessions go, with two options: **Local only**, and **Grafana Cloud**. **Local only** needs no Cloud credentials, starts the local receiver, and does not forward sessions. **Grafana Cloud** continues to the credential questions. Its interactive preferences on macOS and Linux include **Local web UI**. The question starts on **Yes** by default and remembers an earlier answer. **Yes** keeps a full local copy and forwards a Cloud copy. **No** sends directly to Cloud without a local copy. The launcher asks nothing when local mode is already on (`--local` or `AGENTO11Y_LOCAL=true`) or when stdin is not a terminal. Windows has no local receiver, so it shows neither local choice.
 
 Cursor has no launcher because it is a GUI app. After installing the binary, wire its hooks once with `agento11y cursor install`. The command merges into `~/.cursor/hooks.json`, and asks the same first-run destination question under the same conditions. **Local only** there takes effect on the next Cursor hook, because the install does not start the receiver itself. `agento11y cursor uninstall` removes the hooks. See [`plugins/cursor/`](https://github.com/grafana/agento11y/tree/main/plugins/cursor) for details.
+
+`agento11y claude`, `agento11y codex`, `agento11y dsh`, and `agento11y opencode` refresh their managed plugins automatically. Set `AGENTO11Y_AUTO_UPDATE=false` to opt out. Copilot and Vibe reconcile their hooks on each launch; Pi uses its own installer for upgrades.
 
 To skip the prompt, pass the values as flags:
 
@@ -132,11 +135,13 @@ Coding-agent plugins default to `metadata_only`: only model, tokens, tool names,
 
 Accepted values depend on the plugin surface:
 
-- Claude Code, Codex, Copilot, Cursor, Vibe (shared `agento11y` binary), OpenCode (`@grafana/agento11y-opencode`), and Pi (`@grafana/agento11y-pi`): `full`, `no_tool_content`, `metadata_only`, `full_with_metadata_spans`. `default` is accepted as an alias for `metadata_only`.
+- Claude Code, Codex, Copilot, Cursor, Vibe (shared `agento11y` binary), OpenCode (`@grafana/agento11y-opencode`), Pi (`@grafana/agento11y-pi`), and dsh (`@grafana/agento11y-dsh`): `full`, `no_tool_content`, `metadata_only`, `full_with_metadata_spans`. `default` is accepted as an alias for `metadata_only`.
+
+For dsh, `no_tool_content` keeps tool-call arguments and tool-result content in generation messages, but omits bodies from tool-execution spans. Generation messages omit image, file, and extension blocks that the JavaScript SDK cannot represent.
 
 Unknown values fall back to `metadata_only` with a warning. Capture modes choose which fields ship, not whether the shipped fields are scrubbed.
 
-When a plugin ships content, it redacts known secret formats first, using the same pattern table the SDKs use. This covers user prompts, system prompts, assistant text, thinking, conversation titles, error messages, tool arguments, and tool results, on the generation and on the tool-execution span. Set `AGENTO11Y_REDACT_INPUT_MESSAGES=false` to send prompts without redaction; everything else stays redacted. Prompts, system prompts and tool payloads also get the key/value heuristics (`PASSWORD=…`), which prose fields do not, so a prompt containing `sort key: name` comes out with the word after the colon replaced. Treat content capture as opt-in for shared/production machines.
+When a plugin ships content, it redacts known secret formats first, using the same pattern table the SDKs use. This covers user prompts, system prompts, assistant text, thinking, conversation titles, error messages, tool arguments, and tool results, on the generation and on the tool-execution span. Set `AGENTO11Y_REDACT_INPUT_MESSAGES=false` to send prompts without redaction; everything else stays redacted. Prompts, system prompts and tool payloads also get the key/value heuristics (`PASSWORD=…`), which prose fields do not, so a prompt containing `sort key: name` comes out with the word after the colon replaced. In dsh, the plugin pre-redacts title, error, and tool payload fields, while the SDK sanitizer handles messages and system prompts. Tags, metadata, user IDs, and cwd values are not scrubbed. Treat content capture as opt-in for shared/production machines.
 
 ## Verifying the install
 

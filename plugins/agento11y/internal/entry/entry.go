@@ -1,12 +1,13 @@
 // Package entry implements the shared CLI entrypoint behind the
 // cmd/agento11y and cmd/agento11y binaries. Both commands are the same single
-// binary used by the Claude Code, Codex, Copilot, Cursor, OpenCode, pi, and
-// Vibe agent plugins. It accepts:
+// binary used by the Claude Code, Codex, Copilot, Cursor, DeepSeek Harness,
+// OpenCode, pi, and Vibe agent plugins. It accepts:
 //
 //	agento11y <agent> hook                                            — dispatch a JSON hook payload on stdin to <agent>
 //	agento11y claude   [--local|--no-local] [--tag k=v] [-- args...]  — exec claude after bootstrapping the agento11y-claude-code plugin
 //	agento11y codex    [--local|--no-local] [--tag k=v] [-- args...]  — exec codex after bootstrapping the agento11y-codex plugin
 //	agento11y copilot  [--local|--no-local] [--tag k=v] [-- args...]  — exec copilot after bootstrapping the sigil-copilot plugin
+//	agento11y dsh      [--local|--no-local] [--tag k=v] [-- args...]: exec dsh after bootstrapping the @grafana/agento11y-dsh plugin
 //	agento11y opencode [--local|--no-local] [--tag k=v] [-- args...]  — exec opencode after bootstrapping the @grafana/agento11y-opencode plugin
 //	agento11y pi       [--local|--no-local] [--tag k=v] [-- args...]  — exec pi after bootstrapping the @grafana/agento11y-pi extension
 //	agento11y vibe     [--local|--no-local] [--tag k=v] [-- args...]  — exec vibe after installing the sigil hook in vibe's hooks.toml
@@ -30,8 +31,8 @@
 // stderr. For hook agents the binary must never crash the calling agent
 // process; once argv parsing succeeds, all errors are swallowed (and logged
 // when SIGIL_DEBUG=true) and the process exits 0. Launcher agents (`claude`,
-// `codex`, `copilot`, `opencode`, `pi`, and `vibe`) are invoked by a human,
-// so errors surface on stderr with a non-zero exit code.
+// `codex`, `copilot`, `dsh`, `opencode`, `pi`, and `vibe`) are invoked by a
+// human, so errors surface on stderr with a non-zero exit code.
 package entry
 
 import (
@@ -57,6 +58,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/copilot"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor"
 	cursorinstall "github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/install"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/dsh"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/opencode"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/pi"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe"
@@ -137,7 +139,7 @@ func usageLine() string {
 		"agento11y <claude|copilot|opencode|pi> install [--json] | agento11y agents reconcile --agents all|name[,name...] --json | " +
 		"agento11y skills list|show <name> | agento11y local start|open|status [--json]|stop|restart | " +
 		"agento11y history import <" + historyAgentNames() + "> | agento11y cursor install|uninstall | agento11y <agent> hook | " +
-		"agento11y <claude|codex|copilot|opencode|pi|vibe> [--local|--no-local] [--tag key=value]... [-- args...]"
+		"agento11y <claude|codex|copilot|dsh|opencode|pi|vibe> [--local|--no-local] [--tag key=value]... [-- args...]"
 }
 
 // version is the build version received from the calling main package via
@@ -175,6 +177,7 @@ var launchers = map[string]agentLauncher{
 	"claude":   claudecode.Launch,
 	"codex":    codex.Launch,
 	"copilot":  copilot.Launch,
+	"dsh":      dsh.Launch,
 	"opencode": opencode.Launch,
 	"pi":       pi.Launch,
 	"vibe":     vibe.Launch,
@@ -1229,7 +1232,7 @@ func setupLocalLaunch(stderr io.Writer, envKey string) (endpoint, otlp string, e
 }
 
 // localStatusPayload is the `agento11y local status --json` result. The
-// in-process pi and OpenCode plugins parse it to attach to a running
+// in-process dsh, pi, and OpenCode plugins parse it to attach to a running
 // receiver, so the field names must stay stable and `running` must stay
 // unconditional: they read it as the running/stopped signal, and the other
 // fields are omitempty.

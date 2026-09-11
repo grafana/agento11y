@@ -61,7 +61,7 @@ func Output(ctx context.Context, bin string, args ...string) ([]byte, error) {
 
 // RunSteps invokes `bin argv...` for each step in order, writing the child's
 // stdout/stderr to w. On a step failure it stops and returns an error of the
-// form "<bin> <argv>: <err>". claudecode, codex, and opencode all compose
+// form "<bin> <argv>: <err>". claudecode, codex, dsh, and opencode all compose
 // their install/update sequences this way.
 func RunSteps(ctx context.Context, bin string, w io.Writer, steps [][]string) error {
 	name := bin
@@ -112,8 +112,8 @@ func RunFirst(ctx context.Context, bin string, w io.Writer, candidates [][]strin
 
 // BootstrapSpec describes the per-agent variation Bootstrap needs to drive
 // the shared lookup → probe → install/update → exec sequence. Each adapter
-// (claudecode, codex, opencode, pi) builds a spec from its package-level test
-// seams; closures capture those vars so test stubs swapped in via
+// (claudecode, codex, dsh, opencode, pi) builds a spec from its package-level
+// test seams; closures capture those vars so test stubs swapped in via
 // withRunInstall/withPluginList still take effect. copilot does not fit this
 // flow (it writes a hooks file and removes a stale plugin instead of
 // installing one) and only shares Output.
@@ -127,9 +127,10 @@ type BootstrapSpec struct {
 	// register/refresh messages.
 	BinName string
 	// PluginLabel identifies the plugin in user-facing messages.
-	// claudecode/codex pass the plugin name ("sigil-cc"); pi and opencode
-	// pass the npm source ("npm:@grafana/agento11y-pi") because that's what the
-	// user types to retry by hand.
+	// claudecode/codex pass the plugin name ("sigil-cc"); dsh passes its npm
+	// package name ("@grafana/agento11y-dsh"). pi and opencode pass the npm source
+	// ("npm:@grafana/agento11y-pi") because that's what the user types to retry
+	// by hand.
 	PluginLabel string
 
 	// LookPath and ExecFn are the test seams forwarded from the adapter so
@@ -137,7 +138,10 @@ type BootstrapSpec struct {
 	LookPath func(string) (string, error)
 	ExecFn   ExecFunc
 	Args     []string
-	Env      []string
+	// Deferred construction lets adapters omit arguments that reference files
+	// an install failed to create.
+	ArgsFn func() []string
+	Env    []string
 
 	// Logger receives SIGIL_DEBUG diagnostics (probe failures, install/update
 	// errors). Stderr is the user-facing channel for the "registering",
@@ -176,6 +180,7 @@ type BootstrapSpec struct {
 	// RegisterMessage overrides the default
 	// "agento11y: registering <label> with <bin>\n" line printed before Install.
 	// pi and opencode override it to "agento11y: installing <source> into <bin>\n".
+	// dsh overrides it to "agento11y: installing <name> for dsh\n".
 	RegisterMessage string
 }
 
@@ -232,7 +237,14 @@ func Bootstrap(ctx context.Context, spec BootstrapSpec) error {
 		updatecheck.Record(spec.PluginLabel, spec.BinaryVersion)
 	}
 
-	return Exec(spec.ExecFn, bin, spec.BinName, spec.Args, spec.Env)
+	return Exec(spec.ExecFn, bin, spec.BinName, spec.execArgs(), spec.Env)
+}
+
+func (s BootstrapSpec) execArgs() []string {
+	if s.ArgsFn != nil {
+		return s.ArgsFn()
+	}
+	return s.Args
 }
 
 func registerMessage(spec BootstrapSpec) string {

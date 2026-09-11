@@ -1,6 +1,7 @@
 // Command agento11y is the single binary used by the Claude Code, Codex,
-// Copilot, Cursor, OpenCode, pi, and Vibe agent plugins. The CLI itself
-// lives in internal/entry so the legacy cmd/sigil entrypoint can share it.
+// Copilot, Cursor, DeepSeek Harness, OpenCode, pi, and Vibe agent plugins. The
+// CLI itself lives in internal/entry so the legacy cmd/sigil entrypoint can
+// share it.
 package main
 
 import "github.com/grafana/agento11y/plugins/agento11y/internal/entry"

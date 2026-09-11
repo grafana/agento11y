@@ -95,9 +95,10 @@ choice. The SDKs redact addresses by default (`RedactEmailAddresses`). The
 routinely carry commit authors and reviewer addresses, and redacting them costs
 more context than it protects.
 
-The pi plugin is the exception among the plugins. It redacts through the SDK's
-generation sanitizer instead of its own mapper, so it takes the SDK default and
-does redact addresses. Unlike the tiering, this has not been unified.
+The Pi and dsh plugins use the SDK's generation sanitizer for messages, so they
+take the SDK default and redact addresses. Dsh also handles title, error, and
+tool payload fields at its host boundaries. Unlike the tiering, email handling
+has not been unified.
 
 ## Known limitations
 
@@ -119,8 +120,9 @@ does redact addresses. Unlike the tiering, this has not been unified.
   replaced, and the surviving `"` ends the string early. The secret is redacted
   and the JSON no longer parses. This applies wherever an engine redacts encoded
   JSON as text, which is what the SDKs' sanitizers do to `input_json`, and what
-  the OpenCode and Pi plugins do to tool payloads. The shared `agento11y` binary
-  decodes first (`RedactJSON`), so it is unaffected. Adding `\` to the class
+  the OpenCode and Pi plugins do to tool payloads. Dsh replaces an exported JSON
+  payload with `"[REDACTED:json]"` if this happens. The shared `agento11y`
+  binary decodes first (`RedactJSON`), so it is unaffected. Adding `\` to the class
   would fix the escape and truncate a secret that really does contain a
   backslash, which is why it has not been changed.
 - Whitespace stops at U+00A0. The wider Unicode spaces (U+2000 to U+200A,
