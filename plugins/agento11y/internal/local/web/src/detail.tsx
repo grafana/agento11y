@@ -311,6 +311,39 @@ function firstUserText(step: Generation): string {
   return '';
 }
 
+function turnUserText(step: Generation, previous: Generation | undefined): string {
+  const input = step.input || [];
+  let userIndex = input.length - 1;
+  while (userIndex >= 0 && input[userIndex]?.role !== 'user') userIndex--;
+  if (userIndex < 0) return '';
+
+  // SDK generations can carry the entire input history, not just new messages.
+  // A user message in the shared prefix followed by assistant/tool work is
+  // historical. A newly appended occurrence still starts a turn, even when its
+  // text is identical. A standalone prompt has no such evidence: keep it as a
+  // new turn, as required by delta-only producers. This is best-effort:
+  // rewritten/truncated histories need explicit turn identity to be reliable.
+  const priorInput = previous?.input || [];
+  let shared = 0;
+  while (
+    shared <= userIndex &&
+    shared < priorInput.length &&
+    JSON.stringify(input[shared]) === JSON.stringify(priorInput[shared])
+  ) {
+    shared++;
+  }
+  if (
+    userIndex < shared &&
+    input.slice(userIndex + 1).some((message) => message.role === 'assistant' || message.role === 'tool')
+  ) {
+    return '';
+  }
+  return (input[userIndex]?.parts || [])
+    .filter((part) => partKind(part) === 'text' && (part.text || '').trim())
+    .map((part) => part.text || '')
+    .join('\n\n');
+}
+
 function leadingAssistantText(step: Generation): string {
   for (const message of step.output || []) {
     for (const part of message.parts || []) {
@@ -754,11 +787,15 @@ export function buildTranscript(steps: Generation[] | null | undefined): Transcr
     });
   }
   const previousTopLevelByAgent = new Map<string, Generation>();
+  const previousByID = new Map<string, Generation>();
   for (const gen of ordered) {
     if (isSubagent(gen.agent_name)) continue;
     const agent = gen.agent_name || '';
     const previous = previousTopLevelByAgent.get(agent);
-    if (previous) nextByID.set(previous.generation_id, gen);
+    if (previous) {
+      nextByID.set(previous.generation_id, gen);
+      previousByID.set(gen.generation_id, previous);
+    }
     previousTopLevelByAgent.set(agent, gen);
   }
   const consumedResults = new Set<ToolResult>();
@@ -813,7 +850,7 @@ export function buildTranscript(steps: Generation[] | null | undefined): Transcr
   };
 
   for (const row of rows) {
-    const userText = row.depth === 0 ? firstUserText(row.gen) : '';
+    const userText = row.depth === 0 ? turnUserText(row.gen, previousByID.get(row.gen.generation_id)) : '';
     if (row.depth === 0 && userText) {
       finishTurn(current);
       current = startTurn(row.gen, userText);

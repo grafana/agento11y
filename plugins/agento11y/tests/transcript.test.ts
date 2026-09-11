@@ -74,6 +74,78 @@ function turnBlocks(steps: Generation[]): TranscriptBlock[] {
   return turn.blocks;
 }
 
+describe('user turn boundaries', () => {
+  it('keeps full-history model and tool steps in one user turn', () => {
+    const steps: Generation[] = [];
+    let input = userTurn('Investigate the alert');
+    for (let index = 0; index < 20; index++) {
+      const output = [
+        message('assistant', [callPart(`call-${index}`, 'Read')]),
+        message('tool', [resultPart(`call-${index}`, 'Read', `result ${index}`)]),
+      ];
+      steps.push(
+        generation(`step-${index}`, input, output, {
+          agent_name: 'investigator',
+          started_at: new Date(Date.UTC(2026, 0, 1, 0, 0, index * 2)).toISOString(),
+          completed_at: new Date(Date.UTC(2026, 0, 1, 0, 0, index * 2 + 1)).toISOString(),
+          total_tokens: 10,
+        }),
+      );
+      input = [...input, ...output];
+    }
+    const turns = buildTranscript(steps);
+    expect(turns).toHaveLength(1);
+    expect(turns[0]?.userText).toBe('Investigate the alert');
+    expect(turns[0]?.genIds).toEqual(steps.map((step) => step.generation_id));
+    expect(turns[0]?.toolCount).toBe(20);
+    expect(buildTranscriptMetrics(steps, turns).totalTokens).toBe(200);
+  });
+
+  it.each(['A different follow-up', 'question'])('starts a turn for an appended user message: %s', (text) => {
+    const first = generation('g1', userTurn(), [message('assistant', [{ kind: 'text', text: 'answer' }])]);
+    const second = generation(
+      'g2',
+      [...(first.input || []), ...(first.output || []), ...userTurn(text)],
+      [message('assistant', [callPart('follow-up', 'Read')])],
+    );
+    const third = generation(
+      'g3',
+      [...(second.input || []), ...(second.output || []), message('tool', [resultPart('follow-up', 'Read', 'done')])],
+      [],
+    );
+    const turns = buildTranscript([first, second, third]);
+    expect(turns.map((turn) => turn.userText)).toEqual(['question', text]);
+    expect(turns.map((turn) => turn.genIds)).toEqual([['g1'], ['g2', 'g3']]);
+  });
+
+  it('does not deduplicate identical delta-only prompts', () => {
+    const first = generation('g1', userTurn(), [message('assistant', [{ kind: 'text', text: 'answer' }])]);
+    const second = generation('g2', userTurn(), []);
+    expect(buildTranscript([first, second]).map((turn) => turn.userText)).toEqual(['question', 'question']);
+  });
+
+  it('shows the latest user message when the capture starts with existing history', () => {
+    const step = generation(
+      'g1',
+      [
+        ...userTurn('Old prompt'),
+        message('assistant', [{ kind: 'text', text: 'Old answer' }]),
+        ...userTurn('Current prompt'),
+      ],
+      [],
+    );
+    expect(buildTranscript([step])[0]?.userText).toBe('Current prompt');
+  });
+
+  it("does not mistake another agent's matching input for history", () => {
+    const first = generation('g1', userTurn(), []);
+    const second = generation('g2', [...userTurn(), message('assistant', [callPart('a', 'Read')])], [], {
+      agent_name: 'other',
+    });
+    expect(buildTranscript([first, second])).toHaveLength(2);
+  });
+});
+
 describe('pairing a tool call with its result', () => {
   it('pairs a call and a result recorded in the same generation', () => {
     const same = generation('g1', userTurn(), [
