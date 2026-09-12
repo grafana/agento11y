@@ -26,6 +26,7 @@ A/B testing is just two runs with different experiment ids or tags over the same
 | Prompt optimizer | Go + `agento11y/go/experiments` | [`go/prompt-optimization/`](go/prompt-optimization/) |
 | Stored evaluator | Go + `agento11y/go/experiments` | [`go/cloud-evaluator/`](go/cloud-evaluator/) |
 | Stored evaluator | TypeScript + `@grafana/agento11y/experiments` | [`typescript/`](typescript/) |
+| Claude plugin eval exporter | Claude Code + `agento11y` CLI | [`claude-plugin-evals/`](claude-plugin-evals/) |
 
 For credentials, see the [credentials section in the repo README](../../README.md#grafana-cloud-credentials).
 Each example's own README covers the run command and the canned-vs-real-model

@@ -108,6 +108,8 @@ Launch a coding agent (wires the plugin, then runs it):
       Wire (or remove) the Cursor hook. Cursor is a GUI app and has no launcher.
   claude install [--json]
       Register the Claude Code plugin without launching it or prompting.
+  claude eval import <results.json> [flags]
+      Export Claude plugin eval results to Experiments. Use --dry-run to preview.
 
 Commands:
   login       Save endpoint, tenant, token, and OTLP endpoint to config.env.

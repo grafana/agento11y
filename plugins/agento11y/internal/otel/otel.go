@@ -16,10 +16,12 @@ package otel
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -44,8 +46,41 @@ const DefaultServiceName = "agento11y"
 
 // Providers holds initialized OTel providers. All methods are nil-safe.
 type Providers struct {
-	tp *sdktrace.TracerProvider
-	mp *sdkmetric.MeterProvider
+	tp          *sdktrace.TracerProvider
+	mp          *sdkmetric.MeterProvider
+	traceExport *checkedTraceExporter
+}
+
+// A batch can fail before ForceFlush runs. The SDK reports that failure to its
+// global error handler and empties the queue; a later ForceFlush alone would
+// incorrectly report success. Remember failures until the caller checks them.
+type checkedTraceExporter struct {
+	sdktrace.SpanExporter
+	mu  sync.Mutex
+	err error
+}
+
+func (e *checkedTraceExporter) ExportSpans(ctx context.Context, spans []sdktrace.ReadOnlySpan) error {
+	err := e.SpanExporter.ExportSpans(ctx, spans)
+	if err != nil {
+		e.mu.Lock()
+		if e.err == nil {
+			e.err = err
+		}
+		e.mu.Unlock()
+	}
+	return err
+}
+
+func (e *checkedTraceExporter) takeError() error {
+	if e == nil {
+		return nil
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	err := e.err
+	e.err = nil
+	return err
 }
 
 type exporterConfig struct {
@@ -89,7 +124,7 @@ func (p *Providers) ForceFlush() error {
 			first = err
 		}
 	}
-	return first
+	return errors.Join(first, p.traceExport.takeError())
 }
 
 // Shutdown flushes and shuts down both providers concurrently. The
@@ -113,7 +148,7 @@ func (p *Providers) Shutdown(ctx context.Context) error {
 			first = err
 		}
 	}
-	return first
+	return errors.Join(first, p.traceExport.takeError())
 }
 
 // Options overrides the exporter configuration Setup otherwise reads from
@@ -124,6 +159,8 @@ func (p *Providers) Shutdown(ctx context.Context) error {
 // not leak the ambient Authorization header to its own endpoint passes an
 // explicit map, which may be empty.
 type Options struct {
+	// IDGenerator optionally preserves trace identities during historical imports.
+	IDGenerator sdktrace.IDGenerator
 	// Endpoint replaces the environment OTLP endpoint when non-empty. Its
 	// scheme also decides the transport, so AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE
 	// cannot downgrade an https endpoint named here to cleartext.
@@ -175,10 +212,15 @@ func SetupWithOptions(ctx context.Context, instanceID string, opts Options) (*Pr
 	if err != nil {
 		return nil, err
 	}
-	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(traceExp, sdktrace.WithBatchTimeout(time.Second)),
+	checked := &checkedTraceExporter{SpanExporter: traceExp}
+	traceOpts := []sdktrace.TracerProviderOption{
+		sdktrace.WithBatcher(checked, sdktrace.WithBatchTimeout(time.Second)),
 		sdktrace.WithResource(res),
-	)
+	}
+	if opts.IDGenerator != nil {
+		traceOpts = append(traceOpts, sdktrace.WithIDGenerator(opts.IDGenerator))
+	}
+	tp := sdktrace.NewTracerProvider(traceOpts...)
 	metricExp, err := otlpmetrichttp.New(setupCtx, metricOptions(cfg)...)
 	if err != nil {
 		_ = tp.Shutdown(ctx)
@@ -188,7 +230,7 @@ func SetupWithOptions(ctx context.Context, instanceID string, opts Options) (*Pr
 		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExp, sdkmetric.WithInterval(time.Second))),
 		sdkmetric.WithResource(res),
 	)
-	return &Providers{tp: tp, mp: mp}, nil
+	return &Providers{tp: tp, mp: mp, traceExport: checked}, nil
 }
 
 // EndpointFromEnv returns the configured OTLP endpoint, preferring the

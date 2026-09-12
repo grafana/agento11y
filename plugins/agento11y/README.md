@@ -75,6 +75,24 @@ agento11y claude
 
 Cursor has no launcher. Run `agento11y cursor install` once, then start Cursor normally. Remove its hooks with `agento11y cursor uninstall`. See also [`cursor/README.md`](../cursor/README.md). Per-agent notes and glue live under [`plugins/`](../).
 
+## Claude plugin evals
+
+Export `claude plugin eval` results, conversations, traces, and usage without
+another runner or judge. Run Claude with `--keep-temp`, then:
+
+```sh
+agento11y claude eval import results.json --trace-root /tmp --include-content
+```
+
+Use `--dry-run` to preview and `--expect-tenant <stack-id>` to guard the destination.
+`--trace-root` authorizes retained trace files under that directory; omit it for
+results-only import. Content requires `--include-content`; without it, trajectory
+capture preserves identities, model/tool spans and usage but not message bodies.
+The command imports both baseline arms and reuses the saved Cloud/OTLP connection.
+See the [example and CI workflow](../../examples/experiments/claude-plugin-evals/)
+for build instructions, scoring details, and verification with `gcx`. This is a
+new command in this checkout, not a promise about older installed releases.
+
 ## Skills
 
 The binary carries agent skills: markdown workflows a coding agent reads and follows. They ship inside the binary, so there is nothing to fetch and no second CLI to install. Upgrading `agento11y` upgrades them.
