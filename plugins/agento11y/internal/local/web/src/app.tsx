@@ -244,6 +244,7 @@ export function App() {
     () => true,
   );
   const analyticsWorkspace = decodeAnalyticsWorkspace(analyticsWorkspaceValue);
+  const [analyticsAgent, setAnalyticsAgent] = usePersistedState('sigil.local.analyticsAgent', 'all', () => true);
   const [analyticsHiddenValue, setAnalyticsHiddenValue] = usePersistedState(
     'sigil.local.analyticsHiddenSeries',
     '',
@@ -607,7 +608,7 @@ export function App() {
       setErrAnalyticsHeaviest(null);
       setAnalyticsHeaviestTotalConversations(null);
       setAnalyticsHeaviestRankingExact(false);
-      const scope = JSON.stringify([analyticsRange, analyticsWorkspace]);
+      const scope = JSON.stringify([analyticsRange, analyticsWorkspace, analyticsAgent]);
       if (reset && analyticsHeaviestScopeRef.current !== scope) {
         setAnalyticsHeaviestConversations([]);
       }
@@ -620,6 +621,7 @@ export function App() {
       });
       if (range.ms != null) params.set('since', new Date(now - range.ms).toISOString());
       if (analyticsWorkspace != null) params.set('workspace', analyticsWorkspace);
+      if (analyticsAgent !== 'all') params.set('agent', analyticsAgent);
 
       let limit = HEAVIEST_INITIAL_LIMIT;
       try {
@@ -656,7 +658,7 @@ export function App() {
         if (analyticsHeaviestSeqRef.current === seq) setLoadingAnalyticsHeaviest(false);
       }
     },
-    [analyticsModelPrices, analyticsRange, analyticsWorkspace, readJSON],
+    [analyticsModelPrices, analyticsRange, analyticsWorkspace, analyticsAgent, readJSON],
   );
 
   const fetchAnalytics = useCallback(
@@ -701,6 +703,12 @@ export function App() {
         previousParams.set('workspace', analyticsWorkspace);
         tokenParams.set('workspace', analyticsWorkspace);
       }
+      if (analyticsAgent !== 'all') {
+        currentParams.set('agent', analyticsAgent);
+        previousParams.set('agent', analyticsAgent);
+        tokenParams.set('agent', analyticsAgent);
+      }
+      const facetActive = analyticsWorkspace != null || analyticsAgent !== 'all';
 
       const currentRequest = fetch(`/api/v1/metrics/conversations?${currentParams}`).then((response) =>
         readJSON<ConversationMetricsResponse>(response),
@@ -711,12 +719,11 @@ export function App() {
           : fetch(`/api/v1/metrics/conversations?${previousParams}`).then((response) =>
               readJSON<ConversationMetricsResponse>(response),
             );
-      const facetRequest =
-        analyticsWorkspace == null
-          ? Promise.resolve<ConversationMetricsResponse | null>(null)
-          : fetch(`/api/v1/metrics/conversations?${facetParams}`).then((response) =>
-              readJSON<ConversationMetricsResponse>(response),
-            );
+      const facetRequest = !facetActive
+        ? Promise.resolve<ConversationMetricsResponse | null>(null)
+        : fetch(`/api/v1/metrics/conversations?${facetParams}`).then((response) =>
+            readJSON<ConversationMetricsResponse>(response),
+          );
       const tokenRequest = fetch(`/api/v1/metrics/tokens?${tokenParams}`).then((response) =>
         readJSON<TokenUsageResponse>(response),
       );
@@ -739,7 +746,7 @@ export function App() {
             setAnalyticsTotalConversations(
               Number.isFinite(value.matched_conversations) ? value.matched_conversations : null,
             );
-            if (analyticsWorkspace == null) {
+            if (!facetActive) {
               setAnalyticsFacetConversations(value.conversations || []);
               setAnalyticsFacetAggregate(value.aggregate || null);
               setAnalyticsFacetTotalConversations(
@@ -791,7 +798,7 @@ export function App() {
         setLoadingAnalytics(false);
       });
     },
-    [analyticsRange, analyticsWorkspace, readJSON],
+    [analyticsRange, analyticsWorkspace, analyticsAgent, readJSON],
   );
 
   const skillsToolsSeqRef = useRef(0);
@@ -848,6 +855,7 @@ export function App() {
         interval: '900',
       });
       if (analyticsWorkspace != null) params.set('workspace', analyticsWorkspace);
+      if (analyticsAgent !== 'all') params.set('agent', analyticsAgent);
       return fetch(`/api/v1/metrics/tokens?${params}`)
         .then((response) => readJSON<TokenUsageResponse>(response))
         .then((body) => {
@@ -863,7 +871,7 @@ export function App() {
           setLoadingAnalyticsHeatmap(false);
         });
     },
-    [analyticsWorkspace, readJSON],
+    [analyticsWorkspace, analyticsAgent, readJSON],
   );
 
   const analyticsRefreshInFlightRef = useRef(false);
@@ -1389,6 +1397,8 @@ export function App() {
                 onTimeRangeChange={setAnalyticsRange}
                 workspace={analyticsWorkspace}
                 onWorkspaceChange={(path) => setAnalyticsWorkspaceValue(encodeAnalyticsWorkspace(path))}
+                agent={analyticsAgent}
+                onAgentChange={setAnalyticsAgent}
                 hiddenSeries={analyticsHiddenSeries}
                 onToggleSeries={toggleAnalyticsSeries}
                 onRefresh={refreshAnalytics}

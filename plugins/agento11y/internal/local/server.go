@@ -962,6 +962,7 @@ func (s *Server) handleTokenMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	points, used, err := s.storage.TokenUsagePoints(TokenUsageOptions{
 		Since: since, Before: before, Workspace: workspace, Interval: interval,
+		Agent: r.URL.Query().Get("agent"),
 	})
 	if err != nil {
 		s.logger.Printf("local: token metrics: %v", err)
