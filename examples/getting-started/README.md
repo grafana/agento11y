@@ -28,9 +28,10 @@ Minimal, self-contained examples that make a real LLM call and record the genera
 ### Multi-agent dependency graph
 
 
-| Language | Directory                                    | LLM provider      |
-| -------- | -------------------------------------------- | ----------------- |
-| Python   | `[python-multi-agent/](python-multi-agent/)` | OpenAI            |
+| Language                  | Directory                                                                      | LLM provider |
+| ------------------------- | ------------------------------------------------------------------------------ | ------------ |
+| Python                    | `[python-multi-agent/](python-multi-agent/)`                                   | OpenAI       |
+| Python + Claude Agent SDK | `[python-claude-agent-sdk-multi-agent/](python-claude-agent-sdk-multi-agent/)` | Anthropic    |
 
 
 Each example configures OpenTelemetry, creates an SDK client, makes LLM calls, records generations, and shuts down cleanly.
