@@ -1,0 +1,161 @@
+{
+  "schemaVersion": 1,
+  "claudeVersion": "2.1.269",
+  "startedAt": "2026-09-12T03:13:49.651Z",
+  "durationSeconds": 9,
+  "costUsd": 0.1387119,
+  "partial": false,
+  "suite": {
+    "ablation": "with-without",
+    "modelOverride": "claude-sonnet-4-6",
+    "judgeModel": "claude-haiku-4-5",
+    "caseFilter": "rename",
+    "threshold": 1,
+    "concurrency": 1,
+    "plugins": [
+      {
+        "name": "commit-messages",
+        "version": "1.0.0"
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "rename",
+      "promptMarkdown": "Write me a commit message for this change: I renamed getUser to fetchUser and updated the three call sites.",
+      "runsPerCase": 3,
+      "timeoutSeconds": 300,
+      "maxTurns": 10,
+      "graders": [
+        {
+          "name": "criteria",
+          "type": "llm",
+          "weight": 1,
+          "graderMarkdown": "PASS if the reply describes renaming getUser to fetchUser and updating the call sites, without claiming new behavior or unrelated changes.\nFAIL if the rename direction is wrong, either part of the change is missing, or unrelated changes are invented. Ignore formatting.",
+          "config": {
+            "criteria": "PASS if the reply describes renaming getUser to fetchUser and updating the call sites, without claiming new behavior or unrelated changes.\nFAIL if the rename direction is wrong, either part of the change is missing, or unrelated changes are invented. Ignore formatting.",
+            "focus": "last_message"
+          }
+        },
+        {
+          "name": "format",
+          "type": "regex",
+          "weight": 1,
+          "config": {
+            "target": "last_message",
+            "pattern": "^refactor: [^\\r\\n]{1,62}$",
+            "flags": "",
+            "match": "contains"
+          }
+        },
+        {
+          "name": "skill-fired",
+          "type": "tool_used",
+          "weight": 1,
+          "config": {
+            "tool": "Skill",
+            "input_match": "\"skill\"\\s*:\\s*\"(?:[\\w-]+:)?commit-message\""
+          }
+        }
+      ],
+      "arms": {
+        "with": [
+          {
+            "score": 1,
+            "passed": true,
+            "turns": 3,
+            "costUsd": 0.0948087,
+            "judgeCostUsd": 0.001389,
+            "durationSeconds": 5,
+            "startedAt": "2026-09-12T03:13:49.668Z",
+            "error": null,
+            "skippedPaidGraders": false,
+            "graders": [
+              {
+                "name": "criteria",
+                "passed": true,
+                "weight": 1,
+                "explanation": "judge votes: PASS PASS PASS",
+                "withOnly": false,
+                "scored": true,
+                "judgeVotes": [
+                  true,
+                  true,
+                  true
+                ],
+                "evidence": "refactor: rename getUser to fetchUser and update call sites"
+              },
+              {
+                "name": "format",
+                "passed": true,
+                "weight": 1,
+                "explanation": "matched ^refactor: [^\\r\\n]{1,62}$",
+                "withOnly": false,
+                "scored": true
+              },
+              {
+                "name": "skill-fired",
+                "passed": true,
+                "weight": 1,
+                "explanation": "Skill called 1x (expected 1..\u221e)",
+                "withOnly": true,
+                "scored": false
+              }
+            ]
+          }
+        ],
+        "without": [
+          {
+            "score": 0.5,
+            "passed": false,
+            "turns": 1,
+            "costUsd": 0.0439032,
+            "judgeCostUsd": 0.0014789999999999998,
+            "durationSeconds": 4,
+            "startedAt": "2026-09-12T03:13:54.748Z",
+            "error": null,
+            "skippedPaidGraders": false,
+            "graders": [
+              {
+                "name": "criteria",
+                "passed": true,
+                "weight": 1,
+                "explanation": "judge votes: PASS PASS PASS",
+                "withOnly": false,
+                "scored": true,
+                "judgeVotes": [
+                  true,
+                  true,
+                  true
+                ],
+                "evidence": "`feat: rename getUser to fetchUser and update call sites`\n\nOr if this is more of a housekeeping change:\n\n`refactor: rename getUser to fetchUser and update call sites`"
+              },
+              {
+                "name": "format",
+                "passed": false,
+                "weight": 1,
+                "explanation": "pattern not found in last_message",
+                "withOnly": false,
+                "scored": true
+              }
+            ]
+          }
+        ]
+      },
+      "aggregates": {
+        "score": 1,
+        "passRate": 1,
+        "scoreWithout": 0.5,
+        "passRateWithout": 0,
+        "delta": 0.5
+      }
+    }
+  ],
+  "aggregates": {
+    "casesTotal": 1,
+    "casesPassed": 1,
+    "overallScore": 1,
+    "overallPassRate": 1,
+    "meanDelta": 0.5
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "name": "commit-messages",
+  "version": "1.0.0",
+  "description": "Draft concise conventional commit messages from a description of a change."
+}

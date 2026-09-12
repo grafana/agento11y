@@ -108,4 +108,16 @@ The `## Reference` section of `plugins/agento11y/internal/skills/content/setup-c
 
 ## Running checks
 
+Run plugin Go tests with a clean environment and an isolated HOME. Legacy tests
+may otherwise inherit live `AGENTO11Y_*`/OTLP credentials, send test traffic to
+Cloud, or print authentication headers on assertion failure. This standalone
+recipe preserves tool caches but passes no live credentials or personal config:
+
+```sh
+go_root=$(go env GOROOT); go_path=$(go env GOPATH); go_cache=$(go env GOCACHE)
+test_home=$(mktemp -d)
+(cd plugins/agento11y && env -i PATH="$go_root/bin:$PATH" HOME="$test_home" \
+  GOPATH="$go_path" GOCACHE="$go_cache" TMPDIR=/tmp GOWORK=off "$go_root/bin/go" test ./...)
+```
+
 `mise run check` is the full local CI gate: lint + typecheck + proto-drift + redaction-drift + every SDK suite. For a focused change, run the matching narrow task (e.g. `mise run test:py:sdk-langgraph`); the full gate is slow.

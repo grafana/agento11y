@@ -135,6 +135,7 @@ func usageLine() string {
 	return "usage: agento11y login [--endpoint url] [--tenant id] [--token value|--token-stdin] " +
 		"[--otlp-endpoint url] [--no-verify] [--yes] | agento11y doctor [--json] | " +
 		"agento11y <claude|copilot|opencode|pi> install [--json] | agento11y agents reconcile --agents all|name[,name...] --json | " +
+		"agento11y claude eval import <results.json> [flags] | " +
 		"agento11y skills list|show <name> | agento11y local start|open|status [--json]|stop|restart | " +
 		"agento11y history import <" + historyAgentNames() + "> | agento11y cursor install|uninstall | agento11y <agent> hook | " +
 		"agento11y <claude|codex|copilot|opencode|pi|vibe> [--local|--no-local] [--tag key=value]... [-- args...]"
@@ -278,6 +279,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 	// dispatch, so an agent named `skills` cannot shadow it.
 	if args[0] == skills.Command {
 		runSkillsCommand(args[1:], stdout, stderr)
+		return
+	}
+
+	if len(args) >= 2 && args[0] == "claude" && args[1] == "eval" {
+		runClaudeEvalCommand(args[2:], stdout, stderr)
 		return
 	}
 

@@ -91,6 +91,28 @@ tail -f ~/.local/state/agento11y/logs/agento11y.log
 
 Common culprits: `agento11y --version` doesn't work (binary not on `PATH`), a missing token, or a token without the `sigil:write` scope.
 
+## Export plugin evals to Experiments
+
+Run `claude plugin eval <plugin> --json results.json --no-publish --keep-temp`,
+then import with the `agento11y` binary from this checkout:
+
+```sh
+agento11y claude eval import results.json --trace-root /tmp --include-content
+```
+
+This creates separate with/without-plugin runs with attempts, scores, judge
+evidence, cost, real conversations, model/tool traces, and authoritative token
+usage. Trials and scores link to their actual attempt, not the launcher session.
+`--trace-root` authorizes retained trace files and requires the normal Cloud/OTLP
+configuration. Omit it for results-only import. Message/tool content requires
+`--include-content`; use `--dry-run` to preview. No additional judge calls are
+made. Session hooks are not used: Claude's sandbox excludes other plugins.
+
+See the [runnable example](../../examples/experiments/claude-plugin-evals/) for the
+Anthropic-inspired commit-message suite, CI failure handling, verification with
+`gcx`, and source-build instructions. Requires Claude Code 2.1.269+; older
+`agento11y` releases do not include the import command.
+
 ## Guards
 
 Guards apply [Agent Observability rules](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/guides/guards/) to submitted messages and tool calls.
