@@ -32,14 +32,15 @@ type Payload struct {
 	Prompt string `json:"prompt"`
 
 	// afterAgentResponse / stop / common schema
-	Text             string `json:"text"`
-	Model            string `json:"model"`
-	ModelID          string `json:"model_id"`
-	Provider         string `json:"provider"`
-	InputTokens      *int64 `json:"input_tokens"`
-	OutputTokens     *int64 `json:"output_tokens"`
-	CacheReadTokens  *int64 `json:"cache_read_tokens"`
-	CacheWriteTokens *int64 `json:"cache_write_tokens"`
+	Text             string       `json:"text"`
+	Model            string       `json:"model"`
+	ModelID          string       `json:"model_id"`
+	ModelParams      []ModelParam `json:"model_params"`
+	Provider         string       `json:"provider"`
+	InputTokens      *int64       `json:"input_tokens"`
+	OutputTokens     *int64       `json:"output_tokens"`
+	CacheReadTokens  *int64       `json:"cache_read_tokens"`
+	CacheWriteTokens *int64       `json:"cache_write_tokens"`
 
 	// postToolUse(Failure)
 	ToolName   string          `json:"tool_name"`
@@ -52,6 +53,18 @@ type Payload struct {
 
 	// stop / postToolUseFailure: error is `string | {message,code}`
 	Error json.RawMessage `json:"error"`
+}
+
+// ModelParam is one entry of Cursor's common-schema `model_params` list: the
+// parameters selected for the composer, such as thinking, context, effort,
+// and Auto's optimize_for.
+//
+// Value is documented as a string but decoded raw: the dispatcher drops the
+// whole event when json.Unmarshal fails, so a future bool/number value here
+// must not cost us the turn's telemetry.
+type ModelParam struct {
+	ID    string          `json:"id"`
+	Value json.RawMessage `json:"value"`
 }
 
 // Timestamp returns the payload timestamp, falling back to the current time

@@ -94,6 +94,8 @@ Captured prompt, assistant, and tool content is redacted before export.
 
 Use Cursor's agent for one turn, then open **Agent Observability → Conversations** in Grafana Cloud. A new generation should appear within a few seconds.
 
+Cursor's selected model parameters are exported as `model_param.<id>` tags. Auto turns all report the same model slug, so the routing mode you picked shows up as `model_param.optimize_for` (`cost`, `balanced`, or `intelligence`). The model the router actually chose is not in the hook payload, so it is not exported.
+
 If nothing shows up, add `AGENTO11Y_DEBUG=true` to `~/.config/agento11y/config.env` (Cursor launches from the GUI, so a shell env var won't reach the hooks) and tail the log:
 
 ```sh
@@ -129,7 +131,7 @@ Each message can wait up to `AGENTO11Y_GUARDS_TIMEOUT_MS` (1500 ms by default) b
 | `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP endpoint. Without it, the Agent Observability latency and tool-call panels stay empty. |
 | `AGENTO11Y_OTEL_AUTH_TOKEN` | `AGENTO11Y_AUTH_TOKEN` | Override the OTel password. |
 | `AGENTO11Y_CONTENT_CAPTURE_MODE` | `metadata_only` | `metadata_only`, `no_tool_content`, `full`, or `full_with_metadata_spans`. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md). |
-| `AGENTO11Y_TAGS` | — | `key=value,key=value` tags on every generation and as `agento11y.tag.<key>` on OTel spans/metrics (e.g. `project=my-app`). Built-ins (`git.branch`, `cwd`, `subagent`) win on generation-export tag collision. |
+| `AGENTO11Y_TAGS` | — | `key=value,key=value` tags on every generation and as `agento11y.tag.<key>` on OTel spans/metrics (e.g. `project=my-app`). Built-ins (`git.branch`, `cwd`, `subagent`, `model_param.<id>`) win on generation-export tag collision. |
 | `AGENTO11Y_AUTO_CODING_AGENT_TAGS` | `false` | Opt in to client tags resolved for the session: the user, the repository, and the branch. Unlike the built-ins, these reach OTel metrics as `agento11y_tag_*` labels. See [Tags and Metadata](../../docs/concepts/tags-and-metadata.md#opt-in-automatic-tags-agento11y_auto_coding_agent_tags) for the cardinality and personal-data trade-offs. |
 | `AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES` | all names | Narrows the switch above to a comma-separated subset of `user`, `repo`, `branch` (`all` is also accepted). Does nothing while the switch is off. |
 | `AGENTO11Y_USER_ID` | from Cursor | Override the user id. |

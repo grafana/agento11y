@@ -127,6 +127,7 @@ func MapFragment(in Inputs) Mapped {
 		Cwd:               firstToolCwd(frag.Tools),
 		GitBranch:         gitbranch.Resolve(workspaceRoot),
 		IsBackgroundAgent: isBackgroundAgent,
+		ModelParams:       frag.ModelParams,
 	})
 
 	uid := resolveUserID(in.UserIDOverride, userEmail)

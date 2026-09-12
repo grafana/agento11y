@@ -136,6 +136,7 @@ The coding-agent plugins (claude-code, codex, copilot, cursor, opencode, pi, vib
 | `cwd` | Working directory of the session. For pi, the directory pi was launched from, which can be a subdirectory of the repo. | all launchers |
 | `git.branch` | Branch checked out in that directory, or a short commit SHA when HEAD is detached. Omitted outside a git checkout. | all launchers |
 | `subagent` | `"true"` on generations from a subagent run. Absent otherwise, never `"false"`. | claude-code, codex, cursor, opencode |
+| `model_param.<id>` | One of the model parameters selected for the turn, such as `model_param.optimize_for` (`cost` / `balanced` / `intelligence`) for an Auto turn, or `model_param.thinking`. The set of ids is Cursor's, not ours. Absent when the host sends no parameters. | cursor |
 | `pi.call_kind` | The host made this model call outside a user turn: `compaction` for context compaction, `branch_summary` for a tree-navigation summary. Absent on ordinary turns. | pi |
 
 Launchers also set a few keys specific to one host, so this table is not the full list of what arrives on a generation.
