@@ -369,12 +369,13 @@ func TestToProtoEffectiveVersionEmptyOrWhitespace(t *testing.T) {
 func TestToProtoUsage(t *testing.T) {
 	g := model.Generation{
 		Usage: model.TokenUsage{
-			InputTokens:           10,
-			OutputTokens:          5,
-			TotalTokens:           15,
-			CacheReadInputTokens:  3,
-			CacheWriteInputTokens: 2,
-			ReasoningTokens:       1,
+			InputTokens:             10,
+			OutputTokens:            5,
+			TotalTokens:             15,
+			CacheReadInputTokens:    3,
+			CacheWriteInputTokens:   2,
+			CacheWrite1hInputTokens: 1,
+			ReasoningTokens:         1,
 		},
 	}
 	got, err := codec.ToProto(g)
@@ -385,7 +386,7 @@ func TestToProtoUsage(t *testing.T) {
 	if u.GetInputTokens() != 10 || u.GetOutputTokens() != 5 || u.GetTotalTokens() != 15 {
 		t.Errorf("usage tokens mismatch: %+v", u)
 	}
-	if u.GetCacheReadInputTokens() != 3 || u.GetCacheWriteInputTokens() != 2 || u.GetReasoningTokens() != 1 {
+	if u.GetCacheReadInputTokens() != 3 || u.GetCacheWriteInputTokens() != 2 || u.GetCacheWrite1HInputTokens() != 1 || u.GetReasoningTokens() != 1 {
 		t.Errorf("usage cache/reasoning tokens mismatch: %+v", u)
 	}
 }

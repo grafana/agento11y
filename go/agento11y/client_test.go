@@ -630,10 +630,11 @@ func TestGenerationRecorderEndSetsGenAIAttributes(t *testing.T) {
 			"agento11y.gen_ai.request.thinking.budget_tokens": int64(4096),
 		},
 		Usage: TokenUsage{
-			InputTokens:           10,
-			OutputTokens:          4,
-			CacheReadInputTokens:  3,
-			CacheWriteInputTokens: 2,
+			InputTokens:             10,
+			OutputTokens:            4,
+			CacheReadInputTokens:    3,
+			CacheWriteInputTokens:   2,
+			CacheWrite1hInputTokens: 1,
 		},
 		Input: []Message{
 			{Role: RoleUser, Parts: []Part{TextPart("prompt")}},
@@ -690,6 +691,9 @@ func TestGenerationRecorderEndSetsGenAIAttributes(t *testing.T) {
 	}
 	if attrs[spanAttrCacheWriteTokens].AsInt64() != 2 {
 		t.Fatalf("expected gen_ai.usage.cache_write_input_tokens=2")
+	}
+	if attrs[spanAttrCacheWrite1hTokens].AsInt64() != 1 {
+		t.Fatalf("expected gen_ai.usage.cache_write1h_input_tokens=1")
 	}
 	if _, ok := attrs[attrTokenSemantics]; ok {
 		t.Fatalf("did not expect gen_ai.token.semantics for manual (unmarked) usage")

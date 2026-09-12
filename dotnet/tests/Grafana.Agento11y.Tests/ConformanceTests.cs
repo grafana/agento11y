@@ -94,6 +94,7 @@ public sealed class ConformanceTests
                 TotalTokens = 19,
                 CacheReadInputTokens = 2,
                 CacheWriteInputTokens = 1,
+                CacheWrite1hInputTokens = 1,
                 ReasoningTokens = 4,
             },
             StopReason = "stop",
@@ -139,6 +140,7 @@ public sealed class ConformanceTests
         Assert.Equal(19L, generation.Usage.TotalTokens);
         Assert.Equal(2L, generation.Usage.CacheReadInputTokens);
         Assert.Equal(1L, generation.Usage.CacheWriteInputTokens);
+        Assert.Equal(1L, generation.Usage.CacheWrite1HInputTokens);
         Assert.Equal(4L, generation.Usage.ReasoningTokens);
         Assert.Equal("stop", generation.StopReason);
         Assert.Equal("dev", generation.Tags["tenant"]);

@@ -35,6 +35,7 @@ func FromStream(req asdk.BetaMessageNewParams, summary StreamSummary, opts ...Op
 	maxTokens, temperature, topP, toolChoice, thinkingEnabled, thinkingBudget := mapRequestControls(req)
 
 	usage := agento11y.TokenUsage{}
+	cacheWrite1hInputTokens := int64(0)
 	stopReason := ""
 	modelName := req.Model
 	responseID := ""
@@ -51,12 +52,14 @@ func FromStream(req asdk.BetaMessageNewParams, summary StreamSummary, opts ...Op
 			if event.Message.Model != "" {
 				modelName = event.Message.Model
 			}
+			cacheWrite1hInputTokens = event.Message.Usage.CacheCreation.Ephemeral1hInputTokens
 		case "content_block_start":
 			blocks.startBlock(int(event.Index), event.ContentBlock)
 		case "content_block_delta":
 			blocks.applyDelta(int(event.Index), event.Delta)
 		case "message_delta":
 			usage = mapDeltaUsage(event.Usage)
+			usage.CacheWrite1hInputTokens = cacheWrite1hInputTokens
 			serverToolUsage = event.Usage.ServerToolUse
 			if event.Delta.StopReason != "" {
 				stopReason = string(event.Delta.StopReason)

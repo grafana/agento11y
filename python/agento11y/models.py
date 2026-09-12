@@ -121,6 +121,8 @@ class TokenUsage:
     total_tokens: int = 0
     cache_read_input_tokens: int = 0
     cache_write_input_tokens: int = 0
+    # One-hour subset of cache_write_input_tokens when the provider reports cache TTLs.
+    cache_write_1h_input_tokens: int = 0
     reasoning_tokens: int = 0
     #: Set only by SDK adapters that positively identified the provider
     #: payload shape. Manual user-supplied usage leaves it UNSPECIFIED.
@@ -135,6 +137,7 @@ class TokenUsage:
             total_tokens=self.total_tokens,
             cache_read_input_tokens=self.cache_read_input_tokens,
             cache_write_input_tokens=self.cache_write_input_tokens,
+            cache_write_1h_input_tokens=self.cache_write_1h_input_tokens,
             reasoning_tokens=self.reasoning_tokens,
             input_semantics=self.input_semantics,
         )

@@ -118,6 +118,7 @@ public static class AnthropicGenerationMapper
         var stopReason = string.Empty;
         var usage = new TokenUsage();
         var usageMetadata = new JsonElement();
+        long? cacheWrite1hInputTokens = null;
 
         var assistantParts = new List<Part>();
         var toolParts = new List<Part>();
@@ -136,6 +137,12 @@ public static class AnthropicGenerationMapper
                         var message = ReadObject(json, "message");
                         responseId = FirstNonEmpty(ReadString(message, "id"), responseId);
                         responseModel = FirstNonEmpty(ReadString(message, "model"), responseModel);
+                        var messageUsage = ReadObject(message, "usage");
+                        var cacheCreation = ReadObject(messageUsage, "cache_creation");
+                        if (cacheCreation.ValueKind == JsonValueKind.Object)
+                        {
+                            cacheWrite1hInputTokens = ReadLong(cacheCreation, "ephemeral_1h_input_tokens");
+                        }
 
                         var messageParts = MapResponseContent(message);
                         foreach (var mapped in messageParts)
@@ -208,6 +215,11 @@ public static class AnthropicGenerationMapper
                         break;
                     }
             }
+        }
+
+        if (cacheWrite1hInputTokens.HasValue)
+        {
+            usage.CacheWrite1hInputTokens = cacheWrite1hInputTokens.Value;
         }
 
         metadata = MergeServerToolUsageMetadata(metadata, usageMetadata);
@@ -594,6 +606,8 @@ public static class AnthropicGenerationMapper
         var output = ReadLong(usage, "output_tokens");
         var cacheRead = ReadLong(usage, "cache_read_input_tokens");
         var cacheWrite = ReadLong(usage, "cache_creation_input_tokens");
+        var cacheCreation = usage.TryGetProperty("cache_creation", out var value) ? value : default;
+        var cacheWrite1h = ReadLong(cacheCreation, "ephemeral_1h_input_tokens");
         // Anthropic reports input_tokens exclusive of both cache buckets. The
         // OTel GenAI Anthropic rule requires summing them into the inclusive
         // input_tokens this SDK emits.
@@ -612,6 +626,7 @@ public static class AnthropicGenerationMapper
             TotalTokens = total,
             CacheReadInputTokens = cacheRead,
             CacheWriteInputTokens = cacheWrite,
+            CacheWrite1hInputTokens = cacheWrite1h,
             InputSemantics = TokenInputSemantics.Inclusive,
         };
     }
