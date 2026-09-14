@@ -150,7 +150,7 @@ describe('App theme shortcut', () => {
     render(<App />);
     await waitFor(() => expect(screen.getByRole('button', { name: 'Dark' })).toBeTruthy());
 
-    fireEvent.click(screen.getAllByRole('switch')[0] as HTMLElement);
+    fireEvent.click(screen.getByRole('switch', { name: 'Debug logging' }));
     pressThemeShortcut();
 
     await waitFor(() => expect(document.documentElement.getAttribute('data-theme')).toBe('dark'));

@@ -309,6 +309,28 @@ export interface ForwardStatus {
   hookFailOpens?: number;
 }
 
+/** One local protection pack from GET /api/v1/guards. */
+export interface GuardPack {
+  id: string;
+  title: string;
+  description: string;
+  kind: 'redact' | 'deny' | string;
+  detail: string;
+  preview?: string[];
+  enabled: boolean;
+}
+
+/** guardsFileResponse in guardsfile.go: GET /api/v1/guards. */
+export interface GuardsFile {
+  path?: string;
+  exists: boolean;
+  enabled: boolean;
+  errors?: string[];
+  enforcing: number;
+  packs: GuardPack[];
+  rules: unknown[];
+}
+
 /** configResponse in server.go: GET /api/v1/config. */
 export interface ConfigResponse {
   settings: Settings;

@@ -2,10 +2,14 @@ package local
 
 import (
 	"crypto/sha256"
+	"encoding/json"
+	"io"
 	"log"
+	"net/http"
 	"os"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/guardeval"
 )
 
@@ -51,4 +55,168 @@ func (s *Server) localEngine() *guardeval.Engine {
 // the same AGENTO11Y_-then-SIGIL_ resolution the Settings page uses.
 func guardsEnvEnabled(configEnvPath string, logger *log.Logger) bool {
 	return ParseSettings(dotenv.LoadDotenv(configEnvPath, logger)).Guards != guardsOff
+}
+
+type guardsFileResponse struct {
+	Path      string           `json:"path,omitempty"`
+	Exists    bool             `json:"exists"`
+	Enabled   bool             `json:"enabled"`
+	Errors    []string         `json:"errors,omitempty"`
+	Enforcing int              `json:"enforcing"`
+	Packs     []guardPack      `json:"packs"`
+	Rules     []guardeval.Rule `json:"rules"`
+}
+
+type guardsFileRequest struct {
+	Enabled *bool           `json:"enabled"`
+	Packs   map[string]bool `json:"packs"`
+}
+
+func (s *Server) handleGetGuards(w http.ResponseWriter, _ *http.Request) {
+	s.writeGuardsResponse(w)
+}
+
+func (s *Server) handlePutGuards(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxHookBodyBytes+1))
+	if err != nil {
+		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if len(body) > maxHookBodyBytes {
+		http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	var req guardsFileRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Enabled == nil && len(req.Packs) == 0 {
+		http.Error(w, "enabled or packs is required", http.StatusBadRequest)
+		return
+	}
+	// Turning the master switch off also turns every catalog pack off so a
+	// later re-enable does not silently start enforcing the previous set.
+	if req.Enabled != nil && !*req.Enabled {
+		if req.Packs == nil {
+			req.Packs = make(map[string]bool, len(catalogPacks()))
+		}
+		for _, p := range catalogPacks() {
+			req.Packs[p.ID] = false
+		}
+	}
+	if req.Enabled != nil {
+		if s.configPath == "" {
+			http.Error(w, "config persistence disabled", http.StatusServiceUnavailable)
+			return
+		}
+		value := "false"
+		if *req.Enabled {
+			value = "true"
+		}
+		s.configMu.Lock()
+		err := dotenv.UpdateDotenv(s.configPath, func(stored map[string]string) map[string]string {
+			return envconfig.UpdateExistingLegacyAliases(stored, map[string]string{
+				"AGENTO11Y_GUARDS_ENABLED": value,
+			})
+		}, s.logger)
+		s.configMu.Unlock()
+		if err != nil {
+			s.logger.Printf("local: write guards enabled: %v", err)
+			http.Error(w, "write config: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	if len(req.Packs) > 0 {
+		if s.guards.RulesPath == "" {
+			http.Error(w, "guards persistence disabled", http.StatusServiceUnavailable)
+			return
+		}
+		s.guardsMu.Lock()
+		rules, _, _, err := readGuardRules(s.guards.RulesPath)
+		if err != nil {
+			s.guardsMu.Unlock()
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		next, err := applyPackUpdates(rules, req.Packs)
+		if err != nil {
+			s.guardsMu.Unlock()
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := guardeval.WriteRules(s.guards.RulesPath, next); err != nil {
+			s.guardsMu.Unlock()
+			s.logger.Printf("local: write guards: %v", err)
+			http.Error(w, "write guards: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.guardsEngine = nil
+		s.guardsDigest = [sha256.Size]byte{}
+		s.writeGuardsResponseLocked(w)
+		s.guardsMu.Unlock()
+		return
+	}
+	s.writeGuardsResponse(w)
+}
+
+func (s *Server) writeGuardsResponse(w http.ResponseWriter) {
+	s.guardsMu.Lock()
+	defer s.guardsMu.Unlock()
+	s.writeGuardsResponseLocked(w)
+}
+
+func (s *Server) writeGuardsResponseLocked(w http.ResponseWriter) {
+	path := s.guards.RulesPath
+	rules, exists, _, err := readGuardRules(path)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	engine := guardeval.NewEngineFromContents(path, mustReadGuards(path), s.guards.Logger)
+	if rules == nil {
+		rules = []guardeval.Rule{}
+	}
+	s.writeJSON(w, http.StatusOK, guardsFileResponse{
+		Path:      displayConfigPath(path),
+		Exists:    exists,
+		Enabled:   guardsEnvEnabled(s.configPath, s.logger),
+		Errors:    engine.Status().Errors,
+		Enforcing: engine.Status().Enforcing,
+		Packs:     packsFromRules(rules),
+		Rules:     rules,
+	})
+}
+
+func mustReadGuards(path string) []byte {
+	if path == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	return data
+}
+
+func readGuardRules(path string) (rules []guardeval.Rule, exists bool, errs []string, err error) {
+	if path == "" {
+		return nil, false, nil, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil, nil
+		}
+		return nil, false, nil, err
+	}
+	raw, err := guardeval.ParseRules(data)
+	if err != nil {
+		return nil, true, []string{err.Error()}, nil
+	}
+	decoded, decodeErrs := guardeval.DecodeRules(raw)
+	for _, e := range decodeErrs {
+		errs = append(errs, e.Error())
+	}
+	return decoded, true, errs, nil
 }

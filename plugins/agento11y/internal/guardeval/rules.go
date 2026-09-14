@@ -18,15 +18,15 @@ import (
 // (selector, short_circuit, evaluator_ids, server-managed metadata) are absent
 // here and round-trip through the raw JSON the guards API stores.
 type Rule struct {
-	RuleID       string            `json:"rule_id"`
-	Enabled      *bool             `json:"enabled,omitempty"`        // default true
-	Phase        string            `json:"phase,omitempty"`          // default "postflight"
-	Priority     int               `json:"priority,omitempty"`       // ascending; lower runs first
-	Match        map[string]any    `json:"match,omitempty"`          // agent_name, model.name, tags.*, ... globs
-	ActionOnFail string            `json:"action_on_fail,omitempty"` // deny, warn, or allow (case-insensitive); empty or unknown denies
-	ToolFilter   *ToolFilterConfig `json:"tool_filter,omitempty"`
-	Transform    *TransformConfig  `json:"transform,omitempty"`
-	Evaluators   []EvaluatorSpec   `json:"evaluators,omitempty"` // inline deterministic evaluators run locally (see below)
+	RuleID       string            `json:"rule_id" toml:"rule_id"`
+	Enabled      *bool             `json:"enabled,omitempty" toml:"enabled,omitempty"`               // default true
+	Phase        string            `json:"phase,omitempty" toml:"phase,omitempty"`                   // default "postflight"
+	Priority     int               `json:"priority,omitempty" toml:"priority,omitempty"`             // ascending; lower runs first
+	Match        map[string]any    `json:"match,omitempty" toml:"match,omitempty"`                   // agent_name, model.name, tags.*, ... globs
+	ActionOnFail string            `json:"action_on_fail,omitempty" toml:"action_on_fail,omitempty"` // deny, warn, or allow (case-insensitive); empty or unknown denies
+	ToolFilter   *ToolFilterConfig `json:"tool_filter,omitempty" toml:"tool_filter,omitempty"`
+	Transform    *TransformConfig  `json:"transform,omitempty" toml:"transform,omitempty"`
+	Evaluators   []EvaluatorSpec   `json:"evaluators,omitempty" toml:"evaluators,omitempty"` // inline deterministic evaluators run locally (see below)
 }
 
 // EvaluatorSpec is an inline evaluator definition on a local rule. The cloud
@@ -36,25 +36,25 @@ type Rule struct {
 // but skipped. evaluator_ids (cloud refs) stay inert locally: only this field
 // is enforced.
 type EvaluatorSpec struct {
-	Kind   string         `json:"kind"`
-	Config map[string]any `json:"config,omitempty"`
+	Kind   string         `json:"kind" toml:"kind"`
+	Config map[string]any `json:"config,omitempty" toml:"config,omitempty"`
 }
 
 // ToolFilterConfig is the tool-filter block config.
 type ToolFilterConfig struct {
-	BlockedNames []string `json:"blocked_names"`
+	BlockedNames []string `json:"blocked_names" toml:"blocked_names"`
 }
 
 // TransformConfig is the redaction config.
 type TransformConfig struct {
-	Patterns []TransformPattern `json:"patterns"`
+	Patterns []TransformPattern `json:"patterns" toml:"patterns"`
 }
 
 // TransformPattern is one redaction pattern.
 type TransformPattern struct {
-	ID          string `json:"id,omitempty"`
-	Regex       string `json:"regex"`
-	Replacement string `json:"replacement,omitempty"`
+	ID          string `json:"id,omitempty" toml:"id,omitempty"`
+	Regex       string `json:"regex" toml:"regex"`
+	Replacement string `json:"replacement,omitempty" toml:"replacement,omitempty"`
 }
 
 // CompiledRule is a compiled, normalized rule ready for evaluation.

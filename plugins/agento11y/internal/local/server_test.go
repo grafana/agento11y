@@ -631,6 +631,7 @@ func TestServer_Routing(t *testing.T) {
 		{name: "unknown route", method: http.MethodPost, path: "/api/v1/unknown", contentType: wire.ContentTypeJSON, body: "{}", want: http.StatusNotFound},
 		{name: "wrong method on generations export", method: http.MethodPut, path: "/api/v1/generations:export", contentType: wire.ContentTypeJSON, body: "{}", want: http.StatusMethodNotAllowed},
 		{name: "hook evaluate serves JSON", method: http.MethodPost, path: "/api/v1/hooks:evaluate", contentType: wire.ContentTypeJSON, body: `{"phase":"postflight"}`, want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"action":"allow"`},
+		{name: "guards file serves JSON", method: http.MethodGet, path: "/api/v1/guards", want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"packs":[`},
 		{name: "wrong method on hook evaluate", method: http.MethodGet, path: "/api/v1/hooks:evaluate", want: http.StatusMethodNotAllowed},
 		{name: "form type refused", method: http.MethodPost, path: "/api/v1/generations:export", contentType: "application/x-www-form-urlencoded", body: "generations=[]", want: http.StatusUnsupportedMediaType, wantNoConversations: true},
 		{name: "text type refused", method: http.MethodPost, path: "/api/v1/hooks:evaluate", contentType: "text/plain", body: `{"phase":"postflight"}`, want: http.StatusUnsupportedMediaType, wantBodyNotHas: `"action"`},
@@ -3269,9 +3270,9 @@ func TestServer_Forwarding_DoesNotRelayForwardedPayload(t *testing.T) {
 	assert.Empty(t, hits)
 }
 
-// The guards-management endpoints (GET/PUT /api/v1/guards, POST
-// /api/v1/guards:test). The engine they call is unit-tested in
-// internal/guardeval; what follows covers the HTTP layer over it.
+// The guards-management endpoints (GET/PUT /api/v1/guards). The engine they
+// call is unit-tested in internal/guardeval; what follows covers the HTTP
+// layer over it, including the protection packs the Local tab toggles.
 
 // newGuardsServer builds a server with explicit guards and config.env paths the
 // guards-management tests can inspect and rewrite. Both GUARDS_ENABLED
@@ -3444,4 +3445,213 @@ func TestServer_HookEvaluate_CallerAbortDoesNotFailClosed(t *testing.T) {
 	assert.NotEqual(t, guard.EvaluationFailureRuleID, out.RuleID)
 	assert.Zero(t, s.forward.status().HookFailOpens)
 	assert.Zero(t, cloud.count())
+}
+
+func TestServer_Guards_PackToggle(t *testing.T) {
+	s, guardsPath, _ := newGuardsServer(t)
+	require.NoError(t, os.WriteFile(guardsPath, []byte(`
+[[rules]]
+rule_id = "block.rm"
+phase = "postflight"
+action_on_fail = "deny"
+tool_filter.blocked_names = ["Bash(*rm -rf*)"]
+`), 0o600))
+
+	resp := doReq(t, s, http.MethodGet, "/api/v1/guards", "")
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var got guardsFileResponse
+	decodeJSON(t, resp.Body, &got)
+	require.Len(t, got.Packs, len(catalogPacks()))
+	assert.False(t, got.Packs[0].Enabled)
+	assert.Equal(t, 1, got.Enforcing)
+	require.Len(t, got.Rules, 1)
+	assert.Equal(t, "block.rm", got.Rules[0].RuleID)
+
+	resp = doReq(t, s, http.MethodPut, "/api/v1/guards", `{"packs":{"destructive":true,"git":true}}`)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	decodeJSON(t, resp.Body, &got)
+	on := map[string]bool{}
+	for _, p := range got.Packs {
+		on[p.ID] = p.Enabled
+	}
+	assert.False(t, on[packSecrets])
+	assert.True(t, on[packGit])
+	assert.True(t, on[packDestructive])
+	assert.False(t, on[packPermissions])
+	assert.False(t, on[packDisk])
+	ids := make([]string, 0, len(got.Rules))
+	for _, r := range got.Rules {
+		ids = append(ids, r.RuleID)
+	}
+	assert.Equal(t, []string{"block.rm", packRuleID(packGit), packRuleID(packDestructive)}, ids)
+
+	status, out := postHook(t, s, hookRmToolCallBody, nil)
+	require.Equal(t, http.StatusOK, status)
+	assert.Equal(t, agento11y.HookActionDeny, out.Action)
+
+	gitBody := `{"phase":"postflight","context":{"agent_name":"claude-code"},"input":{"output":[{"role":"assistant",` +
+		`"parts":[{"kind":"tool_call","tool_call":{"id":"c1","name":"Bash","input_json":{"command":"git reset --hard HEAD"}}}]}]}}`
+	status, out = postHook(t, s, gitBody, nil)
+	require.Equal(t, http.StatusOK, status)
+	assert.Equal(t, agento11y.HookActionDeny, out.Action)
+	assert.Equal(t, packRuleID(packGit), out.RuleID)
+
+	resp = doReq(t, s, http.MethodPut, "/api/v1/guards", `{"packs":{"git":false}}`)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	decodeJSON(t, resp.Body, &got)
+	ids = ids[:0]
+	for _, r := range got.Rules {
+		ids = append(ids, r.RuleID)
+	}
+	assert.Equal(t, []string{"block.rm", packRuleID(packDestructive)}, ids)
+
+	status, out = postHook(t, s, gitBody, nil)
+	require.Equal(t, http.StatusOK, status)
+	assert.Equal(t, agento11y.HookActionAllow, out.Action)
+}
+
+func TestServer_Guards_EnableFlag(t *testing.T) {
+	s, _, configPath := newGuardsServer(t)
+	require.NoError(t, os.WriteFile(configPath, []byte("AGENTO11Y_GUARDS_ENABLED=false\nSIGIL_GUARDS_ENABLED=false\n"), 0o600))
+
+	resp := doReq(t, s, http.MethodGet, "/api/v1/guards", "")
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var got guardsFileResponse
+	decodeJSON(t, resp.Body, &got)
+	assert.False(t, got.Enabled)
+
+	resp = doReq(t, s, http.MethodPut, "/api/v1/guards", `{}`)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	resp = doReq(t, s, http.MethodPut, "/api/v1/guards", `{"enabled":true}`)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	decodeJSON(t, resp.Body, &got)
+	assert.True(t, got.Enabled)
+	env := dotenv.LoadDotenv(configPath, nil)
+	assert.Equal(t, "true", env["AGENTO11Y_GUARDS_ENABLED"])
+	assert.Equal(t, "true", env["SIGIL_GUARDS_ENABLED"])
+
+	resp = doReq(t, s, http.MethodPut, "/api/v1/guards", `{"packs":{"git":true,"destructive":true}}`)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	resp = doReq(t, s, http.MethodPut, "/api/v1/guards", `{"enabled":false}`)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	decodeJSON(t, resp.Body, &got)
+	assert.False(t, got.Enabled)
+	for _, p := range got.Packs {
+		assert.False(t, p.Enabled, p.ID)
+	}
+	env = dotenv.LoadDotenv(configPath, nil)
+	assert.Equal(t, "false", env["AGENTO11Y_GUARDS_ENABLED"])
+	assert.Equal(t, "false", env["SIGIL_GUARDS_ENABLED"])
+}
+
+func TestServer_Guards_ExtraPacksDeny(t *testing.T) {
+	s, _, _ := newGuardsServer(t)
+	resp := doReq(t, s, http.MethodPut, "/api/v1/guards", `{"packs":{"git":true,"permissions":true,"disk":true}}`)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	cases := []struct {
+		cmd  string
+		rule string
+	}{
+		{"git stash drop", packRuleID(packGit)},
+		{"chmod -R 755 /", packRuleID(packPermissions)},
+		{"dd if=/dev/zero of=/dev/sda", packRuleID(packDisk)},
+	}
+	for _, tc := range cases {
+		status, out := postHook(t, s, hookToolJSON("Bash", fmt.Sprintf(`{"command":%q}`, tc.cmd)), nil)
+		require.Equal(t, http.StatusOK, status, tc.cmd)
+		assert.Equal(t, agento11y.HookActionDeny, out.Action, tc.cmd)
+		assert.Equal(t, tc.rule, out.RuleID, tc.cmd)
+	}
+
+	status, out := postHook(t, s, hookToolJSON("run_command", `{"command":"git reset --hard HEAD"}`), nil)
+	require.Equal(t, http.StatusOK, status)
+	assert.Equal(t, agento11y.HookActionDeny, out.Action)
+	assert.Equal(t, packRuleID(packGit), out.RuleID)
+
+	status, out = postHook(t, s, hookToolJSON("Bash", `{"command":"chmod -R 755 /tmp"}`), nil)
+	require.Equal(t, http.StatusOK, status)
+	assert.Equal(t, agento11y.HookActionAllow, out.Action)
+}
+
+func TestServer_Guards_FilePackDeniesEnvAcrossTools(t *testing.T) {
+	s, _, _ := newGuardsServer(t)
+	resp := doReq(t, s, http.MethodPut, "/api/v1/guards", `{"packs":{"files":true}}`)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	denied := []struct{ tool, input string }{
+		{"Read", `{"file_path":".env"}`},
+		{"read_file", `{"path":"/app/.env.local"}`},
+		{"view_file", `{"path":".env.production"}`},
+		{"Write", `{"path":".env"}`},
+		{"Edit", `{"file_path":"/repo/.env"}`},
+		{"MultiEdit", `{"file_path":".env"}`},
+		{"str_replace_editor", `{"path":".env"}`},
+		{"apply_patch", `{"path":".env"}`},
+		{"create_file", `{"path":".env"}`},
+		{"Bash", `{"command":"cat .env"}`},
+		{"shell", `{"command":"cat .env"}`},
+		{"run_terminal_cmd", `{"command":"cat .env"}`},
+		{"execute_command", `{"command":"cat .env"}`},
+		{"run_command", `{"command":"cat .env"}`},
+	}
+	for _, tc := range denied {
+		status, out := postHook(t, s, hookToolJSON(tc.tool, tc.input), nil)
+		require.Equal(t, http.StatusOK, status, tc.tool)
+		assert.Equal(t, agento11y.HookActionDeny, out.Action, tc.tool+" "+tc.input)
+		assert.Equal(t, packRuleID(packFiles), out.RuleID, tc.tool)
+	}
+
+	allowed := []struct{ tool, input string }{
+		{"Read", `{"file_path":"main.go"}`},
+		{"Write", `{"path":"src/environment.ts"}`},
+		{"Bash", `{"command":"ls"}`},
+		{"Read", `{"file_path":"config.env"}`},
+	}
+	for _, tc := range allowed {
+		status, out := postHook(t, s, hookToolJSON(tc.tool, tc.input), nil)
+		require.Equal(t, http.StatusOK, status, tc.tool)
+		assert.Equal(t, agento11y.HookActionAllow, out.Action, tc.tool+" "+tc.input)
+	}
+}
+
+func hookToolJSON(tool, inputJSON string) string {
+	return fmt.Sprintf(`{"phase":"postflight","context":{"agent_name":"claude-code"},"input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"c1","name":%q,"input_json":%s}}]}]}}`, tool, inputJSON)
+}
+
+func TestServer_Guards_SecretPackRedacts(t *testing.T) {
+	s, _, _ := newGuardsServer(t)
+	resp := doReq(t, s, http.MethodPut, "/api/v1/guards", `{"packs":{"secrets":true}}`)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	body := `{"phase":"postflight","context":{"agent_name":"claude-code"},"input":{"output":[{"role":"assistant",` +
+		`"parts":[{"kind":"tool_call","tool_call":{"id":"c1","name":"Bash","input_json":{"command":"echo ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}]}]}}`
+	status, out := postHook(t, s, body, nil)
+	require.Equal(t, http.StatusOK, status)
+	assert.Equal(t, agento11y.HookActionAllow, out.Action)
+	require.NotNil(t, out.TransformedInput)
+	raw, err := json.Marshal(out.TransformedInput)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), "REDACTED")
+	assert.NotContains(t, string(raw), "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+}
+
+func TestServer_Guards_UnknownPackRejected(t *testing.T) {
+	s, _, _ := newGuardsServer(t)
+	resp := doReq(t, s, http.MethodPut, "/api/v1/guards", `{"packs":{"nope":true}}`)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }

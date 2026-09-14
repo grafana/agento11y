@@ -3,21 +3,22 @@ package guardeval
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/pelletier/go-toml/v2"
 )
 
-// The rules file is TOML, hand-written, and read-only to this process. TOML
-// buys two things JSON cannot: comments next to the rule they explain, and
-// literal strings, so a pattern reads '(?i)\bgit\s+reset\b' rather than the
-// double-escaped "(?i)\\bgit\\s+reset\\b" that a regex in JSON becomes.
+// The rules file is TOML so a hand-written rule can keep a comment next to the
+// pattern it explains, and so a regex can be a literal string rather than the
+// double-escaped JSON form. The local viewer also writes this file: a save
+// re-encodes the ruleset and drops comments, which is the same trade-off
+// config.env already makes.
 //
-// Nothing here writes the file. Re-encoding TOML from a decoded map would drop
-// the comments and reorder the keys, so a save would quietly destroy the two
-// things the format was chosen for.
-//
-// Rules are converted to JSON once, at this boundary, and the rest of the
+// Rules are converted to JSON once, at the read boundary, and the rest of the
 // package works in JSON: the compile path is shared with rules that arrive over
 // the wire, and a raw JSON rule round-trips fields the local evaluator ignores
 // instead of dropping them.
@@ -91,4 +92,219 @@ func flattenMatch(match map[string]any) map[string]any {
 		}
 	}
 	return out
+}
+
+const rulesFileHeader = "# Local guard rules. Saving from Settings → Local rewrites this file.\n\n"
+
+// EncodeRules writes a ruleset as a guards.toml document. Empty input is a
+// comment-only file, which ParseRules reads as an empty ruleset. Every rule is
+// stamped postflight when phase is unset, which is the only phase the local
+// viewer writes.
+//
+// Nested fields use dotted keys and inline tables so a save keeps the compact
+// hand-written shape (`tool_filter.blocked_names = [...]`,
+// `transform.patterns = [{ ... }]`). go-toml's default marshaler expands those
+// into [rules.tool_filter] tables instead.
+func EncodeRules(rules []Rule) ([]byte, error) {
+	if len(rules) == 0 {
+		return []byte(rulesFileHeader), nil
+	}
+	var b strings.Builder
+	b.WriteString(rulesFileHeader)
+	for i, rule := range rules {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		if err := writeCompactRule(&b, rule); err != nil {
+			return nil, err
+		}
+	}
+	return []byte(b.String()), nil
+}
+
+func writeCompactRule(b *strings.Builder, rule Rule) error {
+	phase := strings.TrimSpace(rule.Phase)
+	if phase == "" {
+		phase = hookPhasePostflight
+	}
+	b.WriteString("[[rules]]\n")
+	writeTomlKey(b, "rule_id", rule.RuleID)
+	if rule.Enabled != nil {
+		writeTomlKey(b, "enabled", *rule.Enabled)
+	}
+	writeTomlKey(b, "phase", phase)
+	if rule.Priority != 0 {
+		writeTomlKey(b, "priority", rule.Priority)
+	}
+	if action := strings.TrimSpace(rule.ActionOnFail); action != "" {
+		writeTomlKey(b, "action_on_fail", action)
+	}
+	if len(rule.Match) > 0 {
+		keys := make([]string, 0, len(rule.Match))
+		for key := range rule.Match {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			writeTomlKey(b, "match."+key, rule.Match[key])
+		}
+	}
+	if rule.ToolFilter != nil && len(rule.ToolFilter.BlockedNames) > 0 {
+		writeTomlKey(b, "tool_filter.blocked_names", rule.ToolFilter.BlockedNames)
+	}
+	if rule.Transform != nil && len(rule.Transform.Patterns) > 0 {
+		b.WriteString("transform.patterns = [")
+		for i, p := range rule.Transform.Patterns {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString("{ ")
+			first := true
+			if id := strings.TrimSpace(p.ID); id != "" {
+				b.WriteString("id = ")
+				b.WriteString(encodeTomlString(id))
+				first = false
+			}
+			if !first {
+				b.WriteString(", ")
+			}
+			b.WriteString("regex = ")
+			b.WriteString(encodeTomlString(p.Regex))
+			if p.Replacement != "" {
+				b.WriteString(", replacement = ")
+				b.WriteString(encodeTomlString(p.Replacement))
+			}
+			b.WriteString(" }")
+		}
+		b.WriteString("]\n")
+	}
+	for _, ev := range rule.Evaluators {
+		b.WriteString("\n[[rules.evaluators]]\n")
+		writeTomlKey(b, "kind", ev.Kind)
+		if len(ev.Config) == 0 {
+			continue
+		}
+		keys := make([]string, 0, len(ev.Config))
+		for key := range ev.Config {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			writeTomlKey(b, "config."+key, ev.Config[key])
+		}
+	}
+	return nil
+}
+
+func writeTomlKey(b *strings.Builder, key string, value any) {
+	b.WriteString(key)
+	b.WriteString(" = ")
+	b.WriteString(encodeTomlValue(value))
+	b.WriteByte('\n')
+}
+
+func encodeTomlValue(value any) string {
+	switch v := value.(type) {
+	case nil:
+		return `""`
+	case bool:
+		if v {
+			return "true"
+		}
+		return "false"
+	case int:
+		return strconv.Itoa(v)
+	case int64:
+		return strconv.FormatInt(v, 10)
+	case float64:
+		if v == float64(int(v)) {
+			return strconv.Itoa(int(v))
+		}
+		return strconv.FormatFloat(v, 'g', -1, 64)
+	case string:
+		return encodeTomlString(v)
+	case []string:
+		items := make([]any, len(v))
+		for i, s := range v {
+			items[i] = s
+		}
+		return encodeTomlArray(items)
+	case []any:
+		return encodeTomlArray(v)
+	default:
+		return encodeTomlString(fmt.Sprint(v))
+	}
+}
+
+func encodeTomlArray(items []any) string {
+	var b strings.Builder
+	b.WriteByte('[')
+	for i, item := range items {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(encodeTomlValue(item))
+	}
+	b.WriteByte(']')
+	return b.String()
+}
+
+// encodeTomlString quotes a value the way a hand-written guards.toml does:
+// literal quotes when the string holds backslashes (regexes), otherwise a
+// basic double-quoted string.
+func encodeTomlString(s string) string {
+	if strings.Contains(s, `\`) && !strings.ContainsAny(s, "'\n") {
+		return "'" + s + "'"
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 2)
+	b.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '"', '\\':
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\t':
+			b.WriteString(`\t`)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
+// WriteRules encodes rules and writes them to path with 0600 permissions,
+// creating the parent directory if needed.
+func WriteRules(path string, rules []Rule) error {
+	if path == "" {
+		return fmt.Errorf("no guards.toml path")
+	}
+	data, err := EncodeRules(rules)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), "guards-*.toml")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }()
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }

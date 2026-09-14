@@ -74,6 +74,18 @@ func TestShellCommandTarget_RegexDeniesAcrossToolsAndKeys(t *testing.T) {
 			wantAction: agento11y.HookActionDeny,
 		},
 		{
+			name:       "run_terminal_cmd with command",
+			tool:       "run_terminal_cmd",
+			input:      `{"command":"rm -rf /var/tmp"}`,
+			wantAction: agento11y.HookActionDeny,
+		},
+		{
+			name:       "run_command with command",
+			tool:       "run_command",
+			input:      `{"command":"rm -rf /var/tmp"}`,
+			wantAction: agento11y.HookActionDeny,
+		},
+		{
 			name:       "argv array still matches a plain pattern",
 			tool:       "Bash",
 			input:      `{"command":["rm","-rf","/var/tmp"]}`,

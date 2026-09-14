@@ -198,3 +198,49 @@ rule_id = "redact"
 	require.Len(t, rules[0].transform.patterns, 1)
 	assert.Equal(t, `(?i)glsa_[A-Za-z0-9]{32}`, rules[0].transform.patterns[0].re.String())
 }
+
+func TestEncodeRulesRoundTrip(t *testing.T) {
+	in := []Rule{
+		{
+			RuleID:       "block.rm",
+			Phase:        "postflight",
+			ActionOnFail: "deny",
+			ToolFilter:   &ToolFilterConfig{BlockedNames: []string{"Bash(*rm -rf*)"}},
+		},
+		{
+			RuleID: "redact.key",
+			Phase:  "postflight",
+			Transform: &TransformConfig{
+				Patterns: []TransformPattern{{ID: "api_key", Regex: `sk-[A-Za-z0-9]+`}},
+			},
+		},
+	}
+	data, err := EncodeRules(in)
+	require.NoError(t, err)
+	raw, err := ParseRules(data)
+	require.NoError(t, err)
+	out, errs := DecodeRules(raw)
+	require.Empty(t, errs)
+	require.Len(t, out, 2)
+	assert.Equal(t, "block.rm", out[0].RuleID)
+	require.NotNil(t, out[0].ToolFilter)
+	assert.Equal(t, []string{"Bash(*rm -rf*)"}, out[0].ToolFilter.BlockedNames)
+	assert.Equal(t, "redact.key", out[1].RuleID)
+	require.NotNil(t, out[1].Transform)
+	require.Len(t, out[1].Transform.Patterns, 1)
+	assert.Equal(t, "sk-[A-Za-z0-9]+", out[1].Transform.Patterns[0].Regex)
+
+	got := string(data)
+	assert.Contains(t, got, `tool_filter.blocked_names = ["Bash(*rm -rf*)"]`)
+	assert.Contains(t, got, `transform.patterns = [{ id = "api_key", regex = "sk-[A-Za-z0-9]+" }]`)
+	assert.NotContains(t, got, "[rules.tool_filter]")
+	assert.NotContains(t, got, "[[rules.transform.patterns]]")
+}
+
+func TestEncodeRulesEmptyIsCommentOnly(t *testing.T) {
+	data, err := EncodeRules(nil)
+	require.NoError(t, err)
+	raw, err := ParseRules(data)
+	require.NoError(t, err)
+	assert.Empty(t, raw)
+}

@@ -17,10 +17,10 @@ import (
 
 // defaultShellToolNames are the tool names treated as "runs a shell command"
 // with no configuration. They cover the spellings the supported hosts emit
-// (Claude Code's Bash, Cursor's run_terminal_cmd, the MCP-ish execute_command /
-// terminal / shell). Matching is case-insensitive, so "Bash" and "bash" are the
-// same tool.
-var defaultShellToolNames = []string{"bash", "shell", "run_terminal_cmd", "execute_command", "terminal", "powershell", "pwsh"}
+// (Claude Code's Bash, Cursor's run_terminal_cmd, Codex/Copilot's
+// execute_command / run_command, and generic terminal / shell). Matching is
+// case-insensitive, so "Bash" and "bash" are the same tool.
+var defaultShellToolNames = []string{"bash", "shell", "run_terminal_cmd", "execute_command", "run_command", "terminal", "powershell", "pwsh"}
 
 // defaultShellCommandKeys are the argument keys that hold the command line,
 // in the order they are tried. The first key present with a non-empty string
