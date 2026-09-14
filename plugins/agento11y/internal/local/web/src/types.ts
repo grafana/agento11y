@@ -55,6 +55,16 @@ export interface WorkspaceMetricsAggregate {
   last_activity: string;
 }
 
+export interface BranchMetricsAggregate {
+  name: string;
+  workspace?: string;
+  sessions: number;
+  token_buckets: TokenBuckets;
+  token_buckets_by_model: Record<string, TokenBuckets>;
+  duration_seconds: number;
+  last_activity: string;
+}
+
 export interface ConversationMetricsAggregate {
   calls: number;
   errored: number;
@@ -65,6 +75,7 @@ export interface ConversationMetricsAggregate {
   token_buckets_by_model: Record<string, TokenBuckets>;
   models: string[];
   workspace_rows?: WorkspaceMetricsAggregate[];
+  branch_rows?: BranchMetricsAggregate[];
 }
 
 export interface ConversationMetricsResponse {

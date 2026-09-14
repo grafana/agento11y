@@ -59,10 +59,23 @@ type ConversationMetricsAggregate struct {
 	TokenBucketsByModel map[string]TokenBuckets `json:"token_buckets_by_model"`
 	Models              []string                `json:"models"`
 	WorkspaceRows       []WorkspaceAggregate    `json:"workspace_rows"`
+	BranchRows          []BranchAggregate       `json:"branch_rows"`
 }
 
 type WorkspaceAggregate struct {
 	Path                string                  `json:"path"`
+	Sessions            int                     `json:"sessions"`
+	TokenBuckets        TokenBuckets            `json:"token_buckets"`
+	TokenBucketsByModel map[string]TokenBuckets `json:"token_buckets_by_model"`
+	DurationSeconds     float64                 `json:"duration_seconds"`
+	LastActivity        time.Time               `json:"last_activity"`
+}
+
+// BranchAggregate is one (workspace, branch) group in conversation metrics.
+// The same branch name in two workspaces stays two rows.
+type BranchAggregate struct {
+	Name                string                  `json:"name"`
+	Workspace           string                  `json:"workspace,omitempty"`
 	Sessions            int                     `json:"sessions"`
 	TokenBuckets        TokenBuckets            `json:"token_buckets"`
 	TokenBucketsByModel map[string]TokenBuckets `json:"token_buckets_by_model"`
@@ -461,10 +474,12 @@ func aggregateConversationMetrics(rows []ConversationSummary) ConversationMetric
 		TokenBucketsByModel: map[string]TokenBuckets{},
 		Models:              []string{},
 		WorkspaceRows:       []WorkspaceAggregate{},
+		BranchRows:          []BranchAggregate{},
 	}
 	agents := map[string]struct{}{}
 	models := map[string]struct{}{}
 	workspaces := map[string]*WorkspaceAggregate{}
+	branches := map[string]*BranchAggregate{}
 	for _, row := range rows {
 		aggregate.Calls += row.Calls
 		if row.Status == "err" {
@@ -502,6 +517,27 @@ func aggregateConversationMetrics(rows []ConversationSummary) ConversationMetric
 		if row.LastActivity.After(workspace.LastActivity) {
 			workspace.LastActivity = row.LastActivity
 		}
+		branchKey := row.Workspace + "\x00" + row.Branch
+		branch := branches[branchKey]
+		if branch == nil {
+			branch = &BranchAggregate{
+				Name:                row.Branch,
+				Workspace:           row.Workspace,
+				TokenBucketsByModel: map[string]TokenBuckets{},
+			}
+			branches[branchKey] = branch
+		}
+		branch.Sessions++
+		branch.TokenBuckets = branch.TokenBuckets.plus(row.TokenBuckets)
+		for model, buckets := range row.TokenBucketsByModel {
+			branch.TokenBucketsByModel[model] = branch.TokenBucketsByModel[model].plus(buckets)
+		}
+		if !row.StartedAt.IsZero() && !row.LastActivity.IsZero() && !row.LastActivity.Before(row.StartedAt) {
+			branch.DurationSeconds += row.LastActivity.Sub(row.StartedAt).Seconds()
+		}
+		if row.LastActivity.After(branch.LastActivity) {
+			branch.LastActivity = row.LastActivity
+		}
 	}
 	aggregate.AgentHosts = sortedKeys(agents)
 	aggregate.Agents = len(aggregate.AgentHosts)
@@ -515,6 +551,18 @@ func aggregateConversationMetrics(rows []ConversationSummary) ConversationMetric
 			return aggregate.WorkspaceRows[i].LastActivity.After(aggregate.WorkspaceRows[j].LastActivity)
 		}
 		return aggregate.WorkspaceRows[i].Path < aggregate.WorkspaceRows[j].Path
+	})
+	for _, branch := range branches {
+		aggregate.BranchRows = append(aggregate.BranchRows, *branch)
+	}
+	sort.Slice(aggregate.BranchRows, func(i, j int) bool {
+		if !aggregate.BranchRows[i].LastActivity.Equal(aggregate.BranchRows[j].LastActivity) {
+			return aggregate.BranchRows[i].LastActivity.After(aggregate.BranchRows[j].LastActivity)
+		}
+		if aggregate.BranchRows[i].Name != aggregate.BranchRows[j].Name {
+			return aggregate.BranchRows[i].Name < aggregate.BranchRows[j].Name
+		}
+		return aggregate.BranchRows[i].Workspace < aggregate.BranchRows[j].Workspace
 	})
 	return aggregate
 }

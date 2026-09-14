@@ -879,7 +879,12 @@ export function App() {
     const request =
       analyticsTab === 'skills'
         ? fetchSkillsTools()
-        : Promise.all([fetchAnalytics(false, now), fetchAnalyticsHeaviest(false, now), fetchAnalyticsHeatmap()]);
+        : Promise.all([
+            fetchAnalytics(false, now),
+            fetchAnalyticsHeaviest(false, now),
+            fetchAnalyticsHeatmap(),
+            fetchSkillsTools(),
+          ]);
     Promise.resolve(request).finally(() => {
       analyticsRefreshInFlightRef.current = false;
       if (!analyticsRefreshDirtyRef.current) return;
@@ -988,8 +993,8 @@ export function App() {
   }, [view, analyticsTab, fetchAnalyticsHeatmap]);
 
   useEffect(() => {
-    if (view === 'analytics' && analyticsTab === 'skills') fetchSkillsTools(true);
-  }, [view, analyticsTab, fetchSkillsTools]);
+    if (view === 'analytics') fetchSkillsTools(true);
+  }, [view, fetchSkillsTools]);
 
   useEffect(() => {
     const onPopState = () => {
@@ -1392,10 +1397,17 @@ export function App() {
                 hiddenSeries={analyticsHiddenSeries}
                 onToggleSeries={toggleAnalyticsSeries}
                 onRefresh={refreshAnalytics}
-                refreshing={loadingAnalytics || loadingAnalyticsHeaviest || loadingAnalyticsHeatmap}
+                refreshing={
+                  loadingAnalytics || loadingAnalyticsHeaviest || loadingAnalyticsHeatmap || loadingSkillsTools
+                }
                 onOpenConversation={openConv}
                 onOpenWorkspace={openAnalyticsWorkspace}
                 onOpenBucket={openAnalyticsBucket}
+                onOpenSessions={openToolSessions}
+                onSelectTab={selectAnalyticsTab}
+                toolAnalytics={skillsTools}
+                toolsLoading={loadingSkillsTools}
+                toolsError={errSkillsTools}
               />
             ) : (
               <SkillsToolsContent

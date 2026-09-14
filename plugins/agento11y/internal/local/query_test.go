@@ -387,6 +387,31 @@ func TestConversationMetricsPeriodClipping(t *testing.T) {
 			LastActivity:    mustParse(t, "2026-05-21T10:30:00Z"),
 		},
 	}, aggregate.WorkspaceRows, "workspace rows cover matches outside the returned page in stable order")
+	assert.Equal(t, []BranchAggregate{
+		{
+			Workspace:           "/other",
+			Sessions:            1,
+			TokenBucketsByModel: map[string]TokenBuckets{"": {}},
+			LastActivity:        mustParse(t, "2026-05-21T10:45:00Z"),
+		},
+		{
+			Sessions:            1,
+			TokenBucketsByModel: map[string]TokenBuckets{"": {}},
+			LastActivity:        mustParse(t, "2026-05-21T10:40:00Z"),
+		},
+		{
+			Name:         "main",
+			Workspace:    "/repo",
+			Sessions:     1,
+			TokenBuckets: TokenBuckets{FreshInput: 20, Output: 3},
+			TokenBucketsByModel: map[string]TokenBuckets{
+				"current-model": {FreshInput: 20, Output: 3},
+				"zero-model":    {},
+			},
+			DurationSeconds: 30 * 60,
+			LastActivity:    mustParse(t, "2026-05-21T10:30:00Z"),
+		},
+	}, aggregate.BranchRows, "branch rows keep the same branch name in two workspaces apart")
 	require.Len(t, rows, 1)
 	assert.Equal(t, "conv-other", rows[0].ID, "clipped newest activity controls order")
 	assert.Equal(t, mustParse(t, "2026-05-21T10:45:00Z"), rows[0].StartedAt, "missing start uses generation time")
@@ -433,6 +458,18 @@ func TestConversationMetricsPeriodClipping(t *testing.T) {
 		DurationSeconds: 30 * 60,
 		LastActivity:    mustParse(t, "2026-05-21T10:30:00Z"),
 	}}, aggregate.WorkspaceRows)
+	assert.Equal(t, []BranchAggregate{{
+		Name:         "main",
+		Workspace:    "/repo",
+		Sessions:     1,
+		TokenBuckets: TokenBuckets{FreshInput: 20, Output: 3},
+		TokenBucketsByModel: map[string]TokenBuckets{
+			"current-model": {FreshInput: 20, Output: 3},
+			"zero-model":    {},
+		},
+		DurationSeconds: 30 * 60,
+		LastActivity:    mustParse(t, "2026-05-21T10:30:00Z"),
+	}}, aggregate.BranchRows)
 
 	blank := ""
 	rows, matched, _, err = s.ConversationMetrics(ConversationListOptions{Since: since, Before: before, Workspace: &blank})
@@ -461,6 +498,19 @@ func TestConversationMetricsPeriodClipping(t *testing.T) {
 	require.Len(t, tied.WorkspaceRows, 2)
 	assert.Equal(t, "/alpha", tied.WorkspaceRows[0].Path)
 	assert.Equal(t, "/zeta", tied.WorkspaceRows[1].Path)
+
+	tiedBranches := aggregateConversationMetrics([]ConversationSummary{
+		{Workspace: "/zeta", Branch: "main", LastActivity: before},
+		{Workspace: "/alpha", Branch: "main", LastActivity: before},
+		{Workspace: "/alpha", Branch: "feat", LastActivity: before},
+	})
+	require.Len(t, tiedBranches.BranchRows, 3)
+	assert.Equal(t, "feat", tiedBranches.BranchRows[0].Name)
+	assert.Equal(t, "/alpha", tiedBranches.BranchRows[0].Workspace)
+	assert.Equal(t, "main", tiedBranches.BranchRows[1].Name)
+	assert.Equal(t, "/alpha", tiedBranches.BranchRows[1].Workspace)
+	assert.Equal(t, "main", tiedBranches.BranchRows[2].Name)
+	assert.Equal(t, "/zeta", tiedBranches.BranchRows[2].Workspace)
 }
 
 func TestConversationFacetFilters(t *testing.T) {

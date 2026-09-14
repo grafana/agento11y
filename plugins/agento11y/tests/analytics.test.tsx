@@ -8,6 +8,8 @@ import {
   type AnalyticsViewProps,
   heaviestCostPageNeedsMore,
   heaviestCostRankingIsExact,
+  isMcpToolName,
+  parseMcpToolName,
 } from '../internal/local/web/src/analytics';
 import { App } from '../internal/local/web/src/app';
 import { conversationsPath, workspaceFromLocation } from '../internal/local/web/src/routing';
@@ -17,6 +19,7 @@ import type {
   ModelPrices,
   TokenBuckets,
   TokenUsagePoint,
+  ToolAnalytics,
 } from '../internal/local/web/src/types';
 
 afterEach(() => {
@@ -158,11 +161,43 @@ function firstAttribute(selector: string, attribute: string): string | null {
   return document.querySelector(selector)?.getAttribute(attribute) || null;
 }
 
+function mcpTools(overrides: Partial<ToolAnalytics> = {}): ToolAnalytics {
+  return {
+    totals: { calls: 31, failures: 2, tools: 3, sessions: 4, duration_samples: 21 },
+    rows: [
+      { name: 'Bash', calls: 99, failures: 0, sessions: 4, duration_samples: 20 },
+      {
+        name: 'mcp__grafana__query',
+        calls: 10,
+        failures: 1,
+        sessions: 2,
+        duration_samples: 1,
+      },
+      { name: 'mcp__slack__post', calls: 20, failures: 0, sessions: 3, duration_samples: 3 },
+    ],
+    buckets: [],
+    workspaces: [],
+    interval_seconds: 300,
+    coverage: { generation_calls: 25, projected_spans: 21, matched_calls: 15 },
+    ...overrides,
+  };
+}
+
 function kpiCard(label: string): HTMLElement {
   const card = screen.getByText(label).parentElement?.parentElement;
   if (!card) throw new Error(`missing ${label} KPI card`);
   return card;
 }
+
+describe('MCP tool names', () => {
+  it('parses mcp__server__tool and rejects other names', () => {
+    expect(isMcpToolName('mcp__grafana__query')).toBe(true);
+    expect(isMcpToolName('Bash')).toBe(false);
+    expect(parseMcpToolName('mcp__grafana__query')).toEqual({ server: 'grafana', tool: 'query' });
+    expect(parseMcpToolName('mcp__only')).toEqual({ server: '', tool: 'mcp__only' });
+    expect(parseMcpToolName('Read')).toEqual({ server: '', tool: 'Read' });
+  });
+});
 
 describe('analytics workspace routing', () => {
   it('keeps All and the unknown workspace as separate routes', () => {
@@ -423,12 +458,14 @@ describe('AnalyticsView', () => {
 
     expect(firstAttribute('[data-model-row]', 'data-model-row')).toBe('costly-model');
     expect(firstAttribute('a[href^="/?workspace="]', 'href')).toContain('costly');
+    expect(firstAttribute('[data-branch-row]', 'data-branch-row')).toBe('/worktrees/costly::');
     expect(firstAttribute('[data-session-id]', 'data-session-id')).toBe('session-costly');
 
     fireEvent.click(screen.getByRole('button', { name: 'Tokens' }));
     expect(onChange).toHaveBeenCalledWith('tokens');
     expect(firstAttribute('[data-model-row]', 'data-model-row')).toBe('efficient-model');
     expect(firstAttribute('a[href^="/?workspace="]', 'href')).toContain('efficient');
+    expect(firstAttribute('[data-branch-row]', 'data-branch-row')).toBe('/worktrees/efficient::');
     expect(firstAttribute('[data-session-id]', 'data-session-id')).toBe('session-efficient');
   });
 
@@ -527,13 +564,118 @@ describe('AnalyticsView', () => {
       />,
     );
 
-    for (const title of ['Cost over time', 'Workspaces', 'Models', 'Sessions', 'Heaviest sessions']) {
+    for (const title of [
+      'Cost over time',
+      'Workspaces',
+      'Models',
+      'Branches',
+      'MCP tools',
+      'Sessions',
+      'Heaviest sessions',
+    ]) {
       const panels = screen.getAllByText(title);
       expect(
         panels.some((heading) => heading.parentElement?.parentElement?.textContent?.includes('Last 24 hours')),
       ).toBe(true);
     }
     expect(screen.getByText('No agent usage in the last 7 days.')).toBeTruthy();
+  });
+
+  it('ranks branches by cost and keeps the same branch name in two workspaces apart', () => {
+    render(
+      <AnalyticsView
+        {...viewProps({
+          conversations: [
+            conversation({ branch: 'main' }),
+            efficientConversation({ branch: 'main' }),
+            conversation({
+              id: 'session-feat',
+              workspace: '/worktrees/costly',
+              branch: 'feat',
+              token_buckets: { ...EMPTY, fresh_input: 1_000 },
+              token_buckets_by_model: { 'costly-model': { ...EMPTY, fresh_input: 1_000 } },
+            }),
+          ],
+        })}
+      />,
+    );
+
+    const rows = [...document.querySelectorAll('[data-branch-row]')].map((row) => row.getAttribute('data-branch-row'));
+    expect(rows).toEqual(['/worktrees/costly::main', '/worktrees/efficient::main', '/worktrees/costly::feat']);
+    expect(screen.getByText('feat')).toBeTruthy();
+    expect(screen.getAllByText('main')).toHaveLength(2);
+  });
+
+  it('reads branch ranking from the uncapped aggregate', () => {
+    const listed = conversation({ branch: 'listed', token_buckets: { ...EMPTY, fresh_input: 1_000 } });
+    render(
+      <AnalyticsView
+        {...viewProps({
+          conversations: [listed],
+          aggregate: {
+            calls: 2,
+            errored: 0,
+            agents: 1,
+            agent_hosts: ['pi'],
+            workspaces: 2,
+            token_buckets: { ...EMPTY, fresh_input: 400_000 },
+            token_buckets_by_model: { 'costly-model': { ...EMPTY, fresh_input: 400_000 } },
+            models: ['costly-model'],
+            branch_rows: [
+              {
+                name: 'expensive',
+                workspace: '/worktrees/costly',
+                sessions: 1,
+                token_buckets: { ...EMPTY, fresh_input: 300_000 },
+                token_buckets_by_model: { 'costly-model': { ...EMPTY, fresh_input: 300_000 } },
+                duration_seconds: 60,
+                last_activity: listed.last_activity,
+              },
+              {
+                name: 'listed',
+                workspace: '/worktrees/costly',
+                sessions: 1,
+                token_buckets: { ...EMPTY, fresh_input: 1_000 },
+                token_buckets_by_model: { 'costly-model': { ...EMPTY, fresh_input: 1_000 } },
+                duration_seconds: 60,
+                last_activity: listed.last_activity,
+              },
+            ],
+          },
+        })}
+      />,
+    );
+    expect(firstAttribute('[data-branch-row]', 'data-branch-row')).toBe('/worktrees/costly::expensive');
+  });
+
+  it('ranks MCP tools by calls and hides non-MCP names', () => {
+    const onOpenSessions = vi.fn();
+    render(<AnalyticsView {...viewProps({ toolAnalytics: mcpTools(), onOpenSessions })} />);
+
+    const rows = [...document.querySelectorAll('[data-mcp-row]')].map((row) => row.getAttribute('data-mcp-row'));
+    expect(rows).toEqual(['mcp__slack__post', 'mcp__grafana__query']);
+    expect(screen.getByText('post')).toBeTruthy();
+    expect(screen.getByText('slack')).toBeTruthy();
+    expect(screen.queryByText('Bash')).toBeNull();
+
+    const slack = document.querySelector<HTMLAnchorElement>('a[data-mcp-row="mcp__slack__post"]');
+    if (!slack) throw new Error('missing MCP row');
+    fireEvent.click(slack, { button: 0 });
+    expect(onOpenSessions).toHaveBeenCalledWith({ tool: 'mcp__slack__post', workspace: null });
+  });
+
+  it('says when the range has sessions but no MCP tool calls', () => {
+    render(
+      <AnalyticsView
+        {...viewProps({
+          toolAnalytics: mcpTools({
+            rows: [{ name: 'Bash', calls: 4, failures: 0, sessions: 1, duration_samples: 1 }],
+          }),
+        })}
+      />,
+    );
+    expect(screen.getByText('No MCP tool calls in this range.')).toBeTruthy();
+    expect(document.querySelector('[data-mcp-row]')).toBeNull();
   });
 
   it('discloses current and previous range coverage', () => {

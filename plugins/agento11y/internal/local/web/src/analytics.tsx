@@ -30,15 +30,26 @@ import {
   useModelPrices,
 } from './formatters';
 import { ACTIVE_PILL_BG, Notice, PANEL_BG, SurfaceCard } from './notices';
-import { conversationPath, conversationsPath, isPlainLeftClick } from './routing';
+import {
+  type AnalyticsTab,
+  analyticsPath,
+  conversationPath,
+  conversationsPath,
+  isPlainLeftClick,
+  type ToolSessionFilters,
+  toolSessionsPath,
+} from './routing';
 import { agentHosts, Icon, iconBtn, ModelPill } from './shell';
 import type {
+  BranchMetricsAggregate,
   ConversationMetricsAggregate,
   ConversationSummary,
   ModelPrices,
   TokenBucketKey,
   TokenBuckets,
   TokenUsagePoint,
+  ToolAnalytics,
+  ToolAnalyticsRow,
   WorkspaceMetricsAggregate,
 } from './types';
 
@@ -83,6 +94,11 @@ export interface AnalyticsViewProps {
   onOpenConversation: (c: { id: string }) => void;
   onOpenWorkspace: (path: string) => void;
   onOpenBucket: (span: TimeSpan) => void;
+  onOpenSessions?: (filters: ToolSessionFilters) => void;
+  onSelectTab?: (tab: AnalyticsTab) => void;
+  toolAnalytics?: ToolAnalytics | null;
+  toolsLoading?: boolean;
+  toolsError?: string | null;
   now?: number;
   prices?: ModelPrices | null;
 }
@@ -100,6 +116,17 @@ interface ModelUsageSource {
 }
 
 interface WorkspaceRow extends WorkspaceAggregate {}
+
+interface BranchRow {
+  workspace: string;
+  name: string;
+  count: number;
+  cost: number | null;
+  costComplete: boolean;
+  tokens: number;
+  dur: number;
+  last: number;
+}
 
 interface SparkValue {
   key: number;
@@ -132,6 +159,7 @@ const EMPTY_BUCKETS: TokenBuckets = {
   reasoning: 0,
 };
 const WORKSPACE_GRID = 'minmax(96px, 1fr) minmax(56px, 110px) 52px 52px 56px';
+const MCP_GRID = 'minmax(96px, 1fr) minmax(56px, 110px) 52px 56px 56px';
 const MODEL_GRID = 'minmax(72px, 1fr) 70px 68px 56px';
 const SHAPE_GRID = '82px minmax(0, 1fr) 26px';
 const SESSION_GRID = '26px minmax(0, 1fr) 130px 84px 88px 128px 88px';
@@ -264,6 +292,83 @@ function aggregateWorkspaces(
     if (last != null) row.last = Math.max(row.last, last);
   }
   return [...rows.values()];
+}
+
+function branchKey(workspace: string, name: string) {
+  return `${workspace}\0${name}`;
+}
+
+function branchAggregateRows(branches: readonly BranchMetricsAggregate[], prices: ModelPrices | null): BranchRow[] {
+  return branches.map((branch) => {
+    const estimate = conversationCostEstimateByModel(branch, prices);
+    const last = Date.parse(branch.last_activity);
+    return {
+      workspace: branch.workspace || '',
+      name: branch.name || '',
+      count: branch.sessions,
+      cost: estimate.value,
+      costComplete: estimate.complete,
+      tokens: tokenTotal(branch.token_buckets),
+      dur: branch.duration_seconds,
+      last: Number.isFinite(last) ? last : 0,
+    };
+  });
+}
+
+function aggregateBranches(conversations: readonly ConversationSummary[], prices: ModelPrices | null): BranchRow[] {
+  const rows = new Map<string, BranchRow>();
+  for (const conversation of conversations) {
+    const workspace = conversation.workspace || '';
+    const name = conversation.branch || '';
+    const key = branchKey(workspace, name);
+    let row = rows.get(key);
+    if (!row) {
+      row = {
+        workspace,
+        name,
+        count: 0,
+        cost: null,
+        costComplete: true,
+        tokens: 0,
+        dur: 0,
+        last: 0,
+      };
+      rows.set(key, row);
+    }
+    row.count++;
+    row.tokens += tokenTotal(conversation.token_buckets);
+    const estimate = conversationCostEstimateByModel(conversation, prices);
+    if (!estimate.complete) row.costComplete = false;
+    if (estimate.value != null) row.cost = (row.cost || 0) + estimate.value;
+    const duration = durationBetweenSeconds(conversation.started_at, conversation.last_activity);
+    if (duration != null) row.dur += duration;
+    const last = conversationTime(conversation);
+    if (last != null) row.last = Math.max(row.last, last);
+  }
+  return [...rows.values()];
+}
+
+const MCP_NAME = /^mcp__/i;
+
+export function isMcpToolName(name: string) {
+  return MCP_NAME.test(name);
+}
+
+export function parseMcpToolName(name: string): { server: string; tool: string } {
+  if (!isMcpToolName(name)) return { server: '', tool: name };
+  const rest = name.slice(5);
+  const separator = rest.indexOf('__');
+  if (separator <= 0 || separator >= rest.length - 2) return { server: '', tool: name };
+  const server = rest.slice(0, separator);
+  const tool = rest.slice(separator + 2);
+  if (!server || !tool) return { server: '', tool: name };
+  return { server, tool };
+}
+
+function mcpToolRows(data: ToolAnalytics | null | undefined): ToolAnalyticsRow[] {
+  return (data?.rows || [])
+    .filter((row) => isMcpToolName(row.name))
+    .sort((a, b) => b.calls - a.calls || a.name.localeCompare(b.name));
 }
 
 function aggregateModels(conversations: readonly ModelUsageSource[], prices: ModelPrices | null): ModelAggregate[] {
@@ -1100,6 +1205,316 @@ function WorkspacesPanel({
   );
 }
 
+function BranchesPanel({
+  rows,
+  unit,
+  onOpen,
+  empty,
+}: {
+  rows: BranchRow[];
+  unit: AnalyticsUnit;
+  onOpen: (path: string) => void;
+  empty: React.ReactNode;
+}) {
+  const sorted = sortByUnit(rows, unit).slice(0, 6);
+  const costComplete = rows.every((row) => row.costComplete);
+  const total = rows.reduce((sum, row) => sum + (unit === 'cost' ? row.cost || 0 : row.tokens), 0);
+  const max = Math.max(1, ...sorted.map((row) => (unit === 'cost' ? row.cost || 0 : row.tokens)));
+  return (
+    <SurfaceCard style={{ boxShadow: 'none', minWidth: 0 }}>
+      <PanelHeader
+        title="Branches"
+        meta={`sorted by ${unit}${unit === 'cost' && !costComplete ? ' · partial estimate' : ''}`}
+      />
+      {sorted.length === 0 ? (
+        <EmptyPanel>{empty}</EmptyPanel>
+      ) : (
+        <div style={{ padding: '0 18px 14px' }}>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: WORKSPACE_GRID,
+              gap: 10,
+              padding: '11px 0 9px',
+              borderBottom: '1px solid var(--border-weak)',
+              color: 'var(--fg3)',
+              fontSize: 11,
+            }}
+          >
+            <span>Branch</span>
+            <span>Share</span>
+            <span style={{ textAlign: 'right' }}>Sessions</span>
+            <span style={{ textAlign: 'right' }}>Tokens</span>
+            <span style={{ textAlign: 'right' }}>Cost</span>
+          </div>
+          {sorted.map((row) => {
+            const workspace = splitWorkspacePath(row.workspace);
+            const value = unit === 'cost' ? row.cost || 0 : row.tokens;
+            const share = total > 0 ? Math.round((value / total) * 100) : 0;
+            const branchLabel = row.name || '(unknown)';
+            return (
+              <a
+                key={branchKey(row.workspace, row.name)}
+                data-branch-row={`${row.workspace}::${row.name}`}
+                href={conversationsPath(row.workspace)}
+                onClick={(event) => {
+                  if (!isPlainLeftClick(event)) return;
+                  event.preventDefault();
+                  onOpen(row.workspace);
+                }}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: WORKSPACE_GRID,
+                  alignItems: 'center',
+                  gap: 10,
+                  padding: '11px 0',
+                  borderBottom: '1px solid var(--border-weak)',
+                  color: 'inherit',
+                  fontFamily: 'var(--fontFamilyMonospace)',
+                  fontSize: 12,
+                  textDecoration: 'none',
+                }}
+                onMouseEnter={(event) => (event.currentTarget.style.background = 'var(--row-hover)')}
+                onMouseLeave={(event) => (event.currentTarget.style.background = 'transparent')}
+              >
+                <span
+                  title={`${branchLabel}${row.workspace ? ` · ${row.workspace}` : ''}`}
+                  style={{
+                    minWidth: 0,
+                    display: 'flex',
+                    alignItems: 'baseline',
+                    gap: 5,
+                    overflow: 'hidden',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  <span
+                    style={{
+                      flex: '0 0 auto',
+                      color: 'var(--fg-max)',
+                      fontFamily: 'var(--fontFamily)',
+                      fontSize: 12.5,
+                      fontWeight: 600,
+                    }}
+                  >
+                    {branchLabel}
+                  </span>
+                  <span
+                    style={{
+                      flex: '0 1 auto',
+                      minWidth: 0,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      color: 'var(--fg3)',
+                      fontSize: 11,
+                    }}
+                  >
+                    {workspace.leaf}
+                  </span>
+                </span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span
+                    style={{
+                      flex: 1,
+                      height: 6,
+                      borderRadius: 2,
+                      overflow: 'hidden',
+                      background: 'var(--bar-track)',
+                    }}
+                  >
+                    <span
+                      style={{
+                        display: 'block',
+                        width: `${Math.max(0, Math.min(100, (value / max) * 100))}%`,
+                        height: '100%',
+                        background: unit === 'cost' ? 'var(--brand-orange)' : 'var(--viz-green)',
+                      }}
+                    />
+                  </span>
+                  <span style={{ width: 26, textAlign: 'right', color: 'var(--fg3)', fontSize: 10.5 }}>
+                    {unit === 'cost' && !costComplete ? '—' : `${share}%`}
+                  </span>
+                </span>
+                <span style={{ textAlign: 'right', color: 'var(--fg2)' }}>{formatInteger(row.count)}</span>
+                <span style={{ textAlign: 'right', color: unit === 'tokens' ? 'var(--fg-max)' : 'var(--fg1)' }}>
+                  {formatTokens(row.tokens)}
+                </span>
+                <span
+                  title={costEstimateTitle({ value: row.cost, complete: row.costComplete })}
+                  style={{ textAlign: 'right', color: unit === 'cost' ? 'var(--fg-max)' : 'var(--fg1)' }}
+                >
+                  {formatCostEstimate({ value: row.cost, complete: row.costComplete })}
+                </span>
+              </a>
+            );
+          })}
+        </div>
+      )}
+    </SurfaceCard>
+  );
+}
+
+function McpToolsPanel({
+  rows,
+  empty,
+  workspace,
+  onOpenSessions,
+  onSelectTab,
+}: {
+  rows: ToolAnalyticsRow[];
+  empty: React.ReactNode;
+  workspace: string | null;
+  onOpenSessions?: (filters: ToolSessionFilters) => void;
+  onSelectTab?: (tab: AnalyticsTab) => void;
+}) {
+  const sorted = rows.slice(0, 6);
+  const total = rows.reduce((sum, row) => sum + (row.calls || 0), 0);
+  const max = Math.max(1, ...sorted.map((row) => row.calls || 0));
+  return (
+    <SurfaceCard style={{ boxShadow: 'none', minWidth: 0 }}>
+      <PanelHeader
+        title="MCP tools"
+        meta={
+          <a
+            href={analyticsPath('skills')}
+            onClick={(event) => {
+              if (!onSelectTab || !isPlainLeftClick(event)) return;
+              event.preventDefault();
+              onSelectTab('skills');
+            }}
+            style={{ color: 'inherit', textDecoration: 'none' }}
+          >
+            all tools
+          </a>
+        }
+      />
+      {sorted.length === 0 ? (
+        <EmptyPanel>{empty}</EmptyPanel>
+      ) : (
+        <div style={{ padding: '0 18px 14px' }}>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: MCP_GRID,
+              gap: 10,
+              padding: '11px 0 9px',
+              borderBottom: '1px solid var(--border-weak)',
+              color: 'var(--fg3)',
+              fontSize: 11,
+            }}
+          >
+            <span>Tool</span>
+            <span>Share</span>
+            <span style={{ textAlign: 'right' }}>Calls</span>
+            <span style={{ textAlign: 'right' }}>Failures</span>
+            <span style={{ textAlign: 'right' }}>Sessions</span>
+          </div>
+          {sorted.map((row) => {
+            const parsed = parseMcpToolName(row.name);
+            const share = total > 0 ? Math.round((row.calls / total) * 100) : 0;
+            const filters = { tool: row.name, workspace };
+            return (
+              <a
+                key={row.name}
+                data-mcp-row={row.name}
+                href={toolSessionsPath(filters)}
+                onClick={(event) => {
+                  if (!onOpenSessions || !isPlainLeftClick(event)) return;
+                  event.preventDefault();
+                  onOpenSessions(filters);
+                }}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: MCP_GRID,
+                  alignItems: 'center',
+                  gap: 10,
+                  padding: '11px 0',
+                  borderBottom: '1px solid var(--border-weak)',
+                  color: 'inherit',
+                  fontFamily: 'var(--fontFamilyMonospace)',
+                  fontSize: 12,
+                  textDecoration: 'none',
+                }}
+                onMouseEnter={(event) => (event.currentTarget.style.background = 'var(--row-hover)')}
+                onMouseLeave={(event) => (event.currentTarget.style.background = 'transparent')}
+              >
+                <span
+                  title={row.name}
+                  style={{
+                    minWidth: 0,
+                    display: 'flex',
+                    alignItems: 'baseline',
+                    gap: 5,
+                    overflow: 'hidden',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  <span
+                    style={{
+                      flex: '0 0 auto',
+                      color: 'var(--fg-max)',
+                      fontFamily: 'var(--fontFamily)',
+                      fontSize: 12.5,
+                      fontWeight: 600,
+                    }}
+                  >
+                    {parsed.tool}
+                  </span>
+                  {parsed.server ? (
+                    <span
+                      style={{
+                        flex: '0 1 auto',
+                        minWidth: 0,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        color: 'var(--fg3)',
+                        fontSize: 11,
+                      }}
+                    >
+                      {parsed.server}
+                    </span>
+                  ) : null}
+                </span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span
+                    style={{
+                      flex: 1,
+                      height: 6,
+                      borderRadius: 2,
+                      overflow: 'hidden',
+                      background: 'var(--bar-track)',
+                    }}
+                  >
+                    <span
+                      style={{
+                        display: 'block',
+                        width: `${Math.max(0, Math.min(100, (row.calls / max) * 100))}%`,
+                        height: '100%',
+                        background: 'var(--viz-blue)',
+                      }}
+                    />
+                  </span>
+                  <span style={{ width: 26, textAlign: 'right', color: 'var(--fg3)', fontSize: 10.5 }}>{share}%</span>
+                </span>
+                <span style={{ textAlign: 'right', color: 'var(--fg-max)' }}>{formatInteger(row.calls)}</span>
+                <span
+                  style={{
+                    textAlign: 'right',
+                    color: (row.failures || 0) > 0 ? 'var(--error-text)' : 'var(--fg1)',
+                  }}
+                >
+                  {formatInteger(row.failures || 0)}
+                </span>
+                <span style={{ textAlign: 'right', color: 'var(--fg2)' }}>{formatInteger(row.sessions || 0)}</span>
+              </a>
+            );
+          })}
+        </div>
+      )}
+    </SurfaceCard>
+  );
+}
+
 function ModelsPanel({ rows, unit, empty }: { rows: ModelAggregate[]; unit: AnalyticsUnit; empty: React.ReactNode }) {
   const sorted = sortByUnit(rows, unit).slice(0, 8);
   return (
@@ -1702,6 +2117,14 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
         : aggregateWorkspaces(selectedCurrent, prices),
     [props.aggregate, selectedCurrent, prices],
   );
+  const branchRows = useMemo(
+    () =>
+      props.aggregate?.branch_rows
+        ? branchAggregateRows(props.aggregate.branch_rows, prices)
+        : aggregateBranches(selectedCurrent, prices),
+    [props.aggregate, selectedCurrent, prices],
+  );
+  const mcpRows = useMemo(() => mcpToolRows(props.toolAnalytics), [props.toolAnalytics]);
   const modelRows = useMemo(
     () => aggregateModels(props.aggregate ? [props.aggregate] : selectedCurrent, prices),
     [props.aggregate, selectedCurrent, prices],
@@ -1782,6 +2205,13 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
   const currentSessionCount =
     props.aggregate && props.totalConversations != null ? props.totalConversations : selectedCurrent.length;
   const empty = props.loading && selectedCurrent.length === 0 ? 'Loading analytics…' : emptyRangeMessage(range.label);
+  const mcpEmpty = props.toolsError
+    ? `Failed to load MCP tools: ${props.toolsError}`
+    : props.toolsLoading && mcpRows.length === 0
+      ? 'Loading MCP tools…'
+      : selectedCurrent.length === 0
+        ? empty
+        : 'No MCP tool calls in this range.';
   const chartEmpty = props.tokenError
     ? `Failed to load token usage: ${props.tokenError}`
     : props.tokenLoading
@@ -2007,6 +2437,24 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
       >
         <WorkspacesPanel rows={workspaceRows} unit={props.unit} onOpen={props.onOpenWorkspace} empty={empty} />
         <ModelsPanel rows={modelRows} unit={props.unit} empty={empty} />
+      </div>
+
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'minmax(0, 1.35fr) minmax(0, 1fr)',
+          gap: 12,
+          marginBottom: 12,
+        }}
+      >
+        <BranchesPanel rows={branchRows} unit={props.unit} onOpen={props.onOpenWorkspace} empty={empty} />
+        <McpToolsPanel
+          rows={mcpRows}
+          empty={mcpEmpty}
+          workspace={props.workspace}
+          onOpenSessions={props.onOpenSessions}
+          onSelectTab={props.onSelectTab}
+        />
       </div>
 
       <div
