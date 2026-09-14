@@ -631,6 +631,7 @@ func TestServer_Routing(t *testing.T) {
 		{name: "unknown route", method: http.MethodPost, path: "/api/v1/unknown", contentType: wire.ContentTypeJSON, body: "{}", want: http.StatusNotFound},
 		{name: "wrong method on generations export", method: http.MethodPut, path: "/api/v1/generations:export", contentType: wire.ContentTypeJSON, body: "{}", want: http.StatusMethodNotAllowed},
 		{name: "hook evaluate serves JSON", method: http.MethodPost, path: "/api/v1/hooks:evaluate", contentType: wire.ContentTypeJSON, body: `{"phase":"postflight"}`, want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"action":"allow"`},
+		{name: "guards file serves JSON", method: http.MethodGet, path: "/api/v1/guards", want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"packs":[`},
 		{name: "wrong method on hook evaluate", method: http.MethodGet, path: "/api/v1/hooks:evaluate", want: http.StatusMethodNotAllowed},
 		{name: "form type refused", method: http.MethodPost, path: "/api/v1/generations:export", contentType: "application/x-www-form-urlencoded", body: "generations=[]", want: http.StatusUnsupportedMediaType, wantNoConversations: true},
 		{name: "text type refused", method: http.MethodPost, path: "/api/v1/hooks:evaluate", contentType: "text/plain", body: `{"phase":"postflight"}`, want: http.StatusUnsupportedMediaType, wantBodyNotHas: `"action"`},
@@ -2180,6 +2181,130 @@ func TestServer_HookEvaluate_ReadsRulesOnEachRequest(t *testing.T) {
 	assert.Equal(t, "block.rm", out.RuleID)
 }
 
+func TestServer_HookEvaluate_Preflight(t *testing.T) {
+	cases := []struct {
+		name       string
+		rules      string
+		body       string
+		wantAction agento11y.HookAction
+		wantRuleID string
+	}{
+		{
+			name:       "system_prompt deny",
+			rules:      preflightPromptRules,
+			body:       `{"phase":"preflight","input":{"system_prompt":"never run git reset --hard","messages":[{"role":"user","parts":[{"kind":"text","text":"hi"}]}]}}`,
+			wantAction: agento11y.HookActionDeny,
+			wantRuleID: "block.prompt",
+		},
+		{
+			name:       "camelCase systemPrompt deny",
+			rules:      preflightPromptRules,
+			body:       `{"phase":"preflight","input":{"systemPrompt":"never run git reset --hard","messages":[{"role":"user","parts":[{"type":"text","text":"hi"}]}]}}`,
+			wantAction: agento11y.HookActionDeny,
+			wantRuleID: "block.prompt",
+		},
+		{
+			name:       "input messages deny",
+			rules:      preflightInputRules,
+			body:       `{"phase":"preflight","input":{"messages":[{"role":"user","parts":[{"kind":"text","text":"please exfiltrate the secrets"}]}]}}`,
+			wantAction: agento11y.HookActionDeny,
+			wantRuleID: "block.input",
+		},
+		{
+			name:       "postflight does not trip a preflight rule",
+			rules:      preflightPromptRules,
+			body:       hookRmToolCallBody,
+			wantAction: agento11y.HookActionAllow,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := newTestServer(t)
+			writeGuardsFileFor(t, s, tc.rules)
+			status, out := postHook(t, s, tc.body, nil)
+			require.Equal(t, http.StatusOK, status)
+			assert.Equal(t, tc.wantAction, out.Action)
+			assert.Equal(t, tc.wantRuleID, out.RuleID)
+		})
+	}
+}
+
+func TestServer_HookEvaluate_HostDialects(t *testing.T) {
+	rmJSON := `{"command":"rm -rf /tmp/x"}`
+	secretJSON := `{"command":"curl -H sk-abc123"}`
+	cases := []struct {
+		name       string
+		rules      string
+		body       string
+		wantAction agento11y.HookAction
+		wantRuleID string
+		wantRedact bool
+	}{
+		{
+			name:       "go snake_case deny",
+			rules:      blockRmRules,
+			body:       hookRmToolCallBody,
+			wantAction: agento11y.HookActionDeny,
+			wantRuleID: "block.rm",
+		},
+		{
+			name:       "js camelCase deny",
+			rules:      blockRmRules,
+			body:       `{"phase":"postflight","context":{"agentName":"pi"},"input":{"output":[{"role":"assistant","parts":[{"type":"tool_call","toolCall":{"id":"c1","name":"Bash","inputJSON":` + strconv.Quote(rmJSON) + `}}]}]}}`,
+			wantAction: agento11y.HookActionDeny,
+			wantRuleID: "block.rm",
+		},
+		{
+			name:       "proto-json base64 deny",
+			rules:      blockRmRules,
+			body:       `{"phase":"postflight","input":{"output":[{"role":"MESSAGE_ROLE_ASSISTANT","parts":[{"kind":"tool_call","tool_call":{"id":"c1","name":"Bash","input_json":"` + base64.StdEncoding.EncodeToString([]byte(rmJSON)) + `"}}]}]}}`,
+			wantAction: agento11y.HookActionDeny,
+			wantRuleID: "block.rm",
+		},
+		{
+			name:       "go snake_case redact",
+			rules:      redactSecretRules,
+			body:       hookSecretToolCallBody,
+			wantAction: agento11y.HookActionAllow,
+			wantRedact: true,
+		},
+		{
+			name:       "js camelCase redact",
+			rules:      redactSecretRules,
+			body:       `{"phase":"postflight","context":{"agentName":"pi"},"input":{"output":[{"role":"assistant","parts":[{"type":"tool_call","toolCall":{"id":"c1","name":"Bash","inputJSON":` + strconv.Quote(secretJSON) + `}}]}]}}`,
+			wantAction: agento11y.HookActionAllow,
+			wantRedact: true,
+		},
+		{
+			name:       "proto-json base64 redact",
+			rules:      redactSecretRules,
+			body:       `{"phase":"postflight","input":{"output":[{"role":"MESSAGE_ROLE_ASSISTANT","parts":[{"kind":"tool_call","tool_call":{"id":"c1","name":"Bash","input_json":"` + base64.StdEncoding.EncodeToString([]byte(secretJSON)) + `"}}]}]}}`,
+			wantAction: agento11y.HookActionAllow,
+			wantRedact: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := newTestServer(t)
+			writeGuardsFileFor(t, s, tc.rules)
+			status, out := postHook(t, s, tc.body, nil)
+			require.Equal(t, http.StatusOK, status)
+			assert.Equal(t, tc.wantAction, out.Action)
+			if tc.wantRuleID != "" {
+				assert.Equal(t, tc.wantRuleID, out.RuleID)
+			}
+			if !tc.wantRedact {
+				return
+			}
+			require.NotNil(t, out.TransformedInput)
+			encoded, err := json.Marshal(out.TransformedInput)
+			require.NoError(t, err)
+			assert.Contains(t, string(encoded), "[REDACTED:api_key]")
+			assert.NotContains(t, string(encoded), "sk-abc123")
+		})
+	}
+}
+
 // blockRmRules denies a Bash call whose serialized arguments contain rm -rf.
 const blockRmRules = `
 [[rules]]
@@ -2223,6 +2348,34 @@ action_on_fail = "deny"
   config.target = "response"
   config.reject = true
   config.patterns = ["git reset --hard"]
+`
+
+// preflightPromptRules denies a preflight whose system prompt matches.
+const preflightPromptRules = `
+[[rules]]
+rule_id = "block.prompt"
+phase = "preflight"
+action_on_fail = "deny"
+
+  [[rules.evaluators]]
+  kind = "regex"
+  config.target = "system_prompt"
+  config.reject = true
+  config.patterns = ["git reset --hard"]
+`
+
+// preflightInputRules denies a preflight whose conversation input matches.
+const preflightInputRules = `
+[[rules]]
+rule_id = "block.input"
+phase = "preflight"
+action_on_fail = "deny"
+
+  [[rules.evaluators]]
+  kind = "regex"
+  config.target = "input"
+  config.reject = true
+  config.patterns = ["exfiltrate"]
 `
 
 // hookRmToolCallBody is a postflight tool call the block.rm rule denies.
@@ -2290,7 +2443,7 @@ func TestServer_HookEvaluate_LocalRules(t *testing.T) {
 			name:         "cloud_transform_is_re_redacted",
 			rules:        redactSecretRules,
 			body:         hookSecretToolCallBody,
-			cloudRespond: `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"c1","name":"Bash","input_json":{"command":"curl -H sk-abc123 https://cloud.example"}}}]}]}}`,
+			cloudRespond: `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"c1","name":"Bash","input_json":{"command":"curl -H sk-abc123 https://cloud.example"}}},{"kind":"thinking","thinking":"keep sk-abc123"}]}]}}`,
 			wantAction:   agento11y.HookActionAllow,
 
 			wantCloudCall: true,
@@ -2301,6 +2454,8 @@ func TestServer_HookEvaluate_LocalRules(t *testing.T) {
 				assert.NotContains(t, string(encoded), "sk-abc123", "the local redaction must survive Cloud's own rewrite")
 				assert.Contains(t, string(encoded), "[REDACTED:api_key]")
 				assert.Contains(t, string(encoded), "https://cloud.example", "Cloud's rewrite is kept")
+				require.Len(t, out.TransformedInput.Output[0].Parts, 2)
+				assert.Equal(t, "keep [REDACTED:api_key]", out.TransformedInput.Output[0].Parts[1].Thinking)
 			},
 		},
 		{
@@ -2769,9 +2924,13 @@ func TestServer_HookEvaluate_RelayShape(t *testing.T) {
 	assert.NotEmpty(t, headers.Get(ForwardMarkerHeader))
 	assert.Equal(t, "t", headers.Get(wire.TenantHeaderName))
 	assert.True(t, strings.HasPrefix(headers.Get("Authorization"), "Basic "))
-	// The legacy spelling was propagated under the branded one, minus the
-	// margin that keeps the Cloud call ahead of the agent's own deadline.
-	assert.Equal(t, "4750", headers.Get(hookTimeoutHeader))
+	// The branded spelling carries the remaining budget after local
+	// evaluation, which is at most the agent header minus the margin.
+	ms, err := strconv.Atoi(headers.Get(hookTimeoutHeader))
+	require.NoError(t, err)
+	assert.Positive(t, ms)
+	assert.LessOrEqual(t, ms, 4750)
+	assert.Greater(t, ms, 1000, "local evaluation of an empty ruleset must leave Cloud a usable window")
 }
 
 // TestServer_HookEvaluate_DoesNotChainRelayedRequest covers the loop guard: a
@@ -3111,9 +3270,9 @@ func TestServer_Forwarding_DoesNotRelayForwardedPayload(t *testing.T) {
 	assert.Empty(t, hits)
 }
 
-// The guards-management endpoints (GET/PUT /api/v1/guards, POST
-// /api/v1/guards:test). The engine they call is unit-tested in
-// internal/guardeval; what follows covers the HTTP layer over it.
+// The guards-management endpoints (GET/PUT /api/v1/guards). The engine they
+// call is unit-tested in internal/guardeval; what follows covers the HTTP
+// layer over it, including the protection packs the Local tab toggles.
 
 // newGuardsServer builds a server with explicit guards and config.env paths the
 // guards-management tests can inspect and rewrite. Both GUARDS_ENABLED
@@ -3246,4 +3405,253 @@ tool_filter.blocked_names = ["x"]
 	assert.Contains(t, keys, "path")
 	assert.Contains(t, keys, "enabled")
 	assert.NotContains(t, keys, "Posture")
+}
+
+// A local evaluation that hits the agent's hook deadline is an evaluation
+// failure: the call is denied and never relayed, even when Cloud fail-open is
+// on.
+func TestServer_HookEvaluate_LocalTimeoutDeniesWithoutCloud(t *testing.T) {
+	cloud := newHookCloud(t)
+	s, _ := newForwardingTestServer(t, cloud.srv, hookEnv(cloud.srv.URL, nil))
+	writeGuardsFileFor(t, s, blockRmRules)
+
+	status, out := postHook(t, s, hookRmToolCallBody, nil, func(r *http.Request) *http.Request {
+		ctx, cancel := context.WithDeadline(r.Context(), time.Now().Add(-time.Second))
+		t.Cleanup(cancel)
+		return r.WithContext(ctx)
+	})
+	require.Equal(t, http.StatusOK, status)
+	assert.Equal(t, agento11y.HookActionDeny, out.Action)
+	assert.Equal(t, guard.EvaluationFailureRuleID, out.RuleID)
+	assert.Zero(t, cloud.count(), "a timed-out local evaluation must not be relayed")
+	assert.Zero(t, s.forward.status().HookFailOpens)
+}
+
+// The agent cancelling its wait is not a completed verdict. It must not
+// fail-close as an evaluation failure or count as a Cloud fail-open.
+func TestServer_HookEvaluate_CallerAbortDoesNotFailClosed(t *testing.T) {
+	cloud := newHookCloud(t)
+	s, _ := newForwardingTestServer(t, cloud.srv, hookEnv(cloud.srv.URL, map[string]string{
+		"AGENTO11Y_GUARDS_FAIL_OPEN": "false",
+	}))
+	writeGuardsFileFor(t, s, blockRmRules)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	status, out := postHook(t, s, hookRmToolCallBody, nil, func(r *http.Request) *http.Request {
+		return r.WithContext(ctx)
+	})
+	require.Equal(t, http.StatusOK, status)
+	assert.NotEqual(t, guard.EvaluationFailureRuleID, out.RuleID)
+	assert.Zero(t, s.forward.status().HookFailOpens)
+	assert.Zero(t, cloud.count())
+}
+
+func TestServer_Guards_PackToggle(t *testing.T) {
+	s, guardsPath, _ := newGuardsServer(t)
+	require.NoError(t, os.WriteFile(guardsPath, []byte(`
+[[rules]]
+rule_id = "block.rm"
+phase = "postflight"
+action_on_fail = "deny"
+tool_filter.blocked_names = ["Bash(*rm -rf*)"]
+`), 0o600))
+
+	resp := doReq(t, s, http.MethodGet, "/api/v1/guards", "")
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var got guardsFileResponse
+	decodeJSON(t, resp.Body, &got)
+	require.Len(t, got.Packs, len(catalogPacks()))
+	assert.False(t, got.Packs[0].Enabled)
+	assert.Equal(t, 1, got.Enforcing)
+	require.Len(t, got.Rules, 1)
+	assert.Equal(t, "block.rm", got.Rules[0].RuleID)
+
+	resp = doReq(t, s, http.MethodPut, "/api/v1/guards", `{"packs":{"destructive":true,"git":true}}`)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	decodeJSON(t, resp.Body, &got)
+	on := map[string]bool{}
+	for _, p := range got.Packs {
+		on[p.ID] = p.Enabled
+	}
+	assert.False(t, on[packSecrets])
+	assert.True(t, on[packGit])
+	assert.True(t, on[packDestructive])
+	assert.False(t, on[packPermissions])
+	assert.False(t, on[packDisk])
+	ids := make([]string, 0, len(got.Rules))
+	for _, r := range got.Rules {
+		ids = append(ids, r.RuleID)
+	}
+	assert.Equal(t, []string{"block.rm", packRuleID(packGit), packRuleID(packDestructive)}, ids)
+
+	status, out := postHook(t, s, hookRmToolCallBody, nil)
+	require.Equal(t, http.StatusOK, status)
+	assert.Equal(t, agento11y.HookActionDeny, out.Action)
+
+	gitBody := `{"phase":"postflight","context":{"agent_name":"claude-code"},"input":{"output":[{"role":"assistant",` +
+		`"parts":[{"kind":"tool_call","tool_call":{"id":"c1","name":"Bash","input_json":{"command":"git reset --hard HEAD"}}}]}]}}`
+	status, out = postHook(t, s, gitBody, nil)
+	require.Equal(t, http.StatusOK, status)
+	assert.Equal(t, agento11y.HookActionDeny, out.Action)
+	assert.Equal(t, packRuleID(packGit), out.RuleID)
+
+	resp = doReq(t, s, http.MethodPut, "/api/v1/guards", `{"packs":{"git":false}}`)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	decodeJSON(t, resp.Body, &got)
+	ids = ids[:0]
+	for _, r := range got.Rules {
+		ids = append(ids, r.RuleID)
+	}
+	assert.Equal(t, []string{"block.rm", packRuleID(packDestructive)}, ids)
+
+	status, out = postHook(t, s, gitBody, nil)
+	require.Equal(t, http.StatusOK, status)
+	assert.Equal(t, agento11y.HookActionAllow, out.Action)
+}
+
+func TestServer_Guards_EnableFlag(t *testing.T) {
+	s, _, configPath := newGuardsServer(t)
+	require.NoError(t, os.WriteFile(configPath, []byte("AGENTO11Y_GUARDS_ENABLED=false\nSIGIL_GUARDS_ENABLED=false\n"), 0o600))
+
+	resp := doReq(t, s, http.MethodGet, "/api/v1/guards", "")
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var got guardsFileResponse
+	decodeJSON(t, resp.Body, &got)
+	assert.False(t, got.Enabled)
+
+	resp = doReq(t, s, http.MethodPut, "/api/v1/guards", `{}`)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	resp = doReq(t, s, http.MethodPut, "/api/v1/guards", `{"enabled":true}`)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	decodeJSON(t, resp.Body, &got)
+	assert.True(t, got.Enabled)
+	env := dotenv.LoadDotenv(configPath, nil)
+	assert.Equal(t, "true", env["AGENTO11Y_GUARDS_ENABLED"])
+	assert.Equal(t, "true", env["SIGIL_GUARDS_ENABLED"])
+
+	resp = doReq(t, s, http.MethodPut, "/api/v1/guards", `{"packs":{"git":true,"destructive":true}}`)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	resp = doReq(t, s, http.MethodPut, "/api/v1/guards", `{"enabled":false}`)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	decodeJSON(t, resp.Body, &got)
+	assert.False(t, got.Enabled)
+	for _, p := range got.Packs {
+		assert.False(t, p.Enabled, p.ID)
+	}
+	env = dotenv.LoadDotenv(configPath, nil)
+	assert.Equal(t, "false", env["AGENTO11Y_GUARDS_ENABLED"])
+	assert.Equal(t, "false", env["SIGIL_GUARDS_ENABLED"])
+}
+
+func TestServer_Guards_ExtraPacksDeny(t *testing.T) {
+	s, _, _ := newGuardsServer(t)
+	resp := doReq(t, s, http.MethodPut, "/api/v1/guards", `{"packs":{"git":true,"permissions":true,"disk":true}}`)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	cases := []struct {
+		cmd  string
+		rule string
+	}{
+		{"git stash drop", packRuleID(packGit)},
+		{"chmod -R 755 /", packRuleID(packPermissions)},
+		{"dd if=/dev/zero of=/dev/sda", packRuleID(packDisk)},
+	}
+	for _, tc := range cases {
+		status, out := postHook(t, s, hookToolJSON("Bash", fmt.Sprintf(`{"command":%q}`, tc.cmd)), nil)
+		require.Equal(t, http.StatusOK, status, tc.cmd)
+		assert.Equal(t, agento11y.HookActionDeny, out.Action, tc.cmd)
+		assert.Equal(t, tc.rule, out.RuleID, tc.cmd)
+	}
+
+	status, out := postHook(t, s, hookToolJSON("run_command", `{"command":"git reset --hard HEAD"}`), nil)
+	require.Equal(t, http.StatusOK, status)
+	assert.Equal(t, agento11y.HookActionDeny, out.Action)
+	assert.Equal(t, packRuleID(packGit), out.RuleID)
+
+	status, out = postHook(t, s, hookToolJSON("Bash", `{"command":"chmod -R 755 /tmp"}`), nil)
+	require.Equal(t, http.StatusOK, status)
+	assert.Equal(t, agento11y.HookActionAllow, out.Action)
+}
+
+func TestServer_Guards_FilePackDeniesEnvAcrossTools(t *testing.T) {
+	s, _, _ := newGuardsServer(t)
+	resp := doReq(t, s, http.MethodPut, "/api/v1/guards", `{"packs":{"files":true}}`)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	denied := []struct{ tool, input string }{
+		{"Read", `{"file_path":".env"}`},
+		{"read_file", `{"path":"/app/.env.local"}`},
+		{"view_file", `{"path":".env.production"}`},
+		{"Write", `{"path":".env"}`},
+		{"Edit", `{"file_path":"/repo/.env"}`},
+		{"MultiEdit", `{"file_path":".env"}`},
+		{"str_replace_editor", `{"path":".env"}`},
+		{"apply_patch", `{"path":".env"}`},
+		{"create_file", `{"path":".env"}`},
+		{"Bash", `{"command":"cat .env"}`},
+		{"shell", `{"command":"cat .env"}`},
+		{"run_terminal_cmd", `{"command":"cat .env"}`},
+		{"execute_command", `{"command":"cat .env"}`},
+		{"run_command", `{"command":"cat .env"}`},
+	}
+	for _, tc := range denied {
+		status, out := postHook(t, s, hookToolJSON(tc.tool, tc.input), nil)
+		require.Equal(t, http.StatusOK, status, tc.tool)
+		assert.Equal(t, agento11y.HookActionDeny, out.Action, tc.tool+" "+tc.input)
+		assert.Equal(t, packRuleID(packFiles), out.RuleID, tc.tool)
+	}
+
+	allowed := []struct{ tool, input string }{
+		{"Read", `{"file_path":"main.go"}`},
+		{"Write", `{"path":"src/environment.ts"}`},
+		{"Bash", `{"command":"ls"}`},
+		{"Read", `{"file_path":"config.env"}`},
+	}
+	for _, tc := range allowed {
+		status, out := postHook(t, s, hookToolJSON(tc.tool, tc.input), nil)
+		require.Equal(t, http.StatusOK, status, tc.tool)
+		assert.Equal(t, agento11y.HookActionAllow, out.Action, tc.tool+" "+tc.input)
+	}
+}
+
+func hookToolJSON(tool, inputJSON string) string {
+	return fmt.Sprintf(`{"phase":"postflight","context":{"agent_name":"claude-code"},"input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"c1","name":%q,"input_json":%s}}]}]}}`, tool, inputJSON)
+}
+
+func TestServer_Guards_SecretPackRedacts(t *testing.T) {
+	s, _, _ := newGuardsServer(t)
+	resp := doReq(t, s, http.MethodPut, "/api/v1/guards", `{"packs":{"secrets":true}}`)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	body := `{"phase":"postflight","context":{"agent_name":"claude-code"},"input":{"output":[{"role":"assistant",` +
+		`"parts":[{"kind":"tool_call","tool_call":{"id":"c1","name":"Bash","input_json":{"command":"echo ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}]}]}}`
+	status, out := postHook(t, s, body, nil)
+	require.Equal(t, http.StatusOK, status)
+	assert.Equal(t, agento11y.HookActionAllow, out.Action)
+	require.NotNil(t, out.TransformedInput)
+	raw, err := json.Marshal(out.TransformedInput)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), "REDACTED")
+	assert.NotContains(t, string(raw), "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+}
+
+func TestServer_Guards_UnknownPackRejected(t *testing.T) {
+	s, _, _ := newGuardsServer(t)
+	resp := doReq(t, s, http.MethodPut, "/api/v1/guards", `{"packs":{"nope":true}}`)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }

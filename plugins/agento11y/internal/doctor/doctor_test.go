@@ -83,6 +83,17 @@ func writeConfigApp(t *testing.T, app, content string) {
 	}
 }
 
+func writeGuards(t *testing.T, content string) {
+	t.Helper()
+	path := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "agento11y", "guards.toml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestParseFlags(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -1151,7 +1162,7 @@ func TestCollectConfig_Guards(t *testing.T) {
 			name: "enabled fail-open", osEnv: map[string]string{"AGENTO11Y_GUARDS_ENABLED": "true"},
 			wantEnabled: true, wantTimeoutMs: 1500, wantFailOpen: true,
 			wantKey: "AGENTO11Y_GUARDS_ENABLED", wantSource: sourceEnv,
-			wantRendered: "guards:           enabled, timeout 1500ms, fail-open (AGENTO11Y_GUARDS_ENABLED, env)",
+			wantRendered: "guards:           enabled, timeout 1500ms, Cloud fail-open (AGENTO11Y_GUARDS_ENABLED, env)",
 		},
 		{
 			name: "enabled fail-closed with timeout from config.env",
@@ -1162,13 +1173,13 @@ func TestCollectConfig_Guards(t *testing.T) {
 			},
 			wantEnabled: true, wantTimeoutMs: 500, wantFailOpen: false,
 			wantKey: "AGENTO11Y_GUARDS_ENABLED", wantSource: sourceConfig,
-			wantRendered: "guards:           enabled, timeout 500ms, fail-closed (AGENTO11Y_GUARDS_ENABLED, config.env)",
+			wantRendered: "guards:           enabled, timeout 500ms, Cloud fail-closed (AGENTO11Y_GUARDS_ENABLED, config.env)",
 		},
 		{
 			name: "legacy spelling", osEnv: map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
 			wantEnabled: true, wantTimeoutMs: 1500, wantFailOpen: true,
 			wantKey: "SIGIL_GUARDS_ENABLED", wantSource: sourceEnv,
-			wantRendered: "guards:           enabled, timeout 1500ms, fail-open (SIGIL_GUARDS_ENABLED, env)",
+			wantRendered: "guards:           enabled, timeout 1500ms, Cloud fail-open (SIGIL_GUARDS_ENABLED, env)",
 		},
 		{
 			// The rejected value did not decide whether guards run, so the row credits
@@ -1190,7 +1201,7 @@ func TestCollectConfig_Guards(t *testing.T) {
 			wantEnabled: true, wantTimeoutMs: 1500, wantFailOpen: true, wantFellBack: true,
 			wantKey: "AGENTO11Y_GUARDS_ENABLED", wantSource: sourceEnv, wantHealth: HealthWarn,
 			wantMsg:      "the AGENTO11Y_GUARDS_TIMEOUT_MS value is invalid; guards use the default",
-			wantRendered: "guards:           enabled, timeout 1500ms, fail-open (AGENTO11Y_GUARDS_ENABLED, env)",
+			wantRendered: "guards:           enabled, timeout 1500ms, Cloud fail-open (AGENTO11Y_GUARDS_ENABLED, env)",
 		},
 		{
 			// The fail mode is the third family, and it is the one the row never names.
@@ -1202,7 +1213,7 @@ func TestCollectConfig_Guards(t *testing.T) {
 			wantEnabled: true, wantTimeoutMs: 1500, wantFailOpen: true, wantFellBack: true,
 			wantKey: "AGENTO11Y_GUARDS_ENABLED", wantSource: sourceConfig, wantHealth: HealthWarn,
 			wantMsg:      "the AGENTO11Y_GUARDS_FAIL_OPEN value is invalid; guards use the default",
-			wantRendered: "guards:           enabled, timeout 1500ms, fail-open (AGENTO11Y_GUARDS_ENABLED, config.env)",
+			wantRendered: "guards:           enabled, timeout 1500ms, Cloud fail-open (AGENTO11Y_GUARDS_ENABLED, config.env)",
 		},
 		{
 			// Only GUARDS_ENABLED names the row, and it is unset, so the row
@@ -1252,6 +1263,99 @@ func TestCollectConfig_Guards(t *testing.T) {
 			renderHuman(&buf, &Report{Config: sec}, false)
 			if !strings.Contains(buf.String(), tc.wantRendered) {
 				t.Fatalf("rendered report missing %q:\n%s", tc.wantRendered, buf.String())
+			}
+		})
+	}
+}
+
+func TestCollectConfig_GuardsFile(t *testing.T) {
+	const oneRule = `
+[[rules]]
+rule_id = "block.rm"
+phase = "postflight"
+tool_filter.blocked_names = ["Bash(*rm -rf*)"]
+`
+	tests := []struct {
+		name         string
+		writeConfig  bool
+		guards       string
+		wantExists   bool
+		wantRules    int
+		wantErrorHas string
+		wantMsg      string
+		wantHealth   Health
+	}{
+		{
+			name:        "missing file is not a problem",
+			writeConfig: true,
+			wantHealth:  HealthOK,
+		},
+		{
+			name:        "enforcing rule is counted",
+			writeConfig: true,
+			guards:      oneRule,
+			wantExists:  true,
+			wantRules:   1,
+			wantHealth:  HealthOK,
+		},
+		{
+			name:         "parse error fail-opens the file",
+			writeConfig:  true,
+			guards:       "[[rules]\nrule_id = ",
+			wantExists:   true,
+			wantErrorHas: "parse",
+			wantMsg:      "parse",
+			wantHealth:   HealthWarn,
+		},
+		{
+			name:        "file exists with nothing enforceable",
+			writeConfig: true,
+			guards: `
+[[rules]]
+rule_id = "cloud.only"
+phase = "postflight"
+  [[rules.evaluators]]
+  kind = "llm_judge"
+  config.model = "gpt-4"
+`,
+			wantExists: true,
+			wantHealth: HealthWarn,
+			wantMsg:    "guards.toml exists but has 0 rules that can enforce locally",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateEnv(t)
+			if tc.writeConfig {
+				writeConfig(t, "")
+			}
+			if tc.guards != "" {
+				writeGuards(t, tc.guards)
+			}
+
+			sec := collectConfig(nil, nil)
+			if sec.GuardsFileExists != tc.wantExists {
+				t.Fatalf("GuardsFileExists = %v, want %v", sec.GuardsFileExists, tc.wantExists)
+			}
+			if sec.GuardsFileRules != tc.wantRules {
+				t.Fatalf("GuardsFileRules = %d, want %d", sec.GuardsFileRules, tc.wantRules)
+			}
+			if tc.wantErrorHas != "" && !strings.Contains(sec.GuardsFileError, tc.wantErrorHas) {
+				t.Fatalf("GuardsFileError = %q, want substring %q", sec.GuardsFileError, tc.wantErrorHas)
+			}
+			if tc.wantHealth != "" && sec.Health != tc.wantHealth {
+				t.Fatalf("health = %q, want %q (messages %v)", sec.Health, tc.wantHealth, sec.Messages)
+			}
+			if tc.wantMsg != "" && !strings.Contains(strings.Join(sec.Messages, " "), tc.wantMsg) {
+				t.Fatalf("messages %v missing %q", sec.Messages, tc.wantMsg)
+			}
+			if !strings.HasSuffix(sec.GuardsFile, "guards.toml") {
+				t.Fatalf("GuardsFile = %q, want a guards.toml path", sec.GuardsFile)
+			}
+			var buf bytes.Buffer
+			renderHuman(&buf, &Report{Config: sec}, false)
+			if !strings.Contains(buf.String(), "local rules:") {
+				t.Fatalf("rendered report missing local rules row:\n%s", buf.String())
 			}
 		})
 	}

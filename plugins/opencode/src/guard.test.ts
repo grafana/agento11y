@@ -297,7 +297,7 @@ describe("runToolCallGuard", () => {
     expect(asBlock(res).reason).toContain("Reason: pii detected");
   });
 
-  it("ignores a transform whose tool_call id does not match", async () => {
+  it("ignores a transform aimed at a different toolCallId even when it is the only rewritten call", async () => {
     const client = {
       evaluateHook: async () => ({
         action: "allow",
@@ -333,6 +333,52 @@ describe("runToolCallGuard", () => {
     });
 
     expect(res).toBeUndefined();
+  });
+
+  it("matches a rewritten call by tool name when the echoed name has surrounding whitespace", async () => {
+    const client = {
+      evaluateHook: async () => ({
+        action: "allow",
+        evaluations: [],
+        transformedInput: {
+          output: [
+            {
+              role: "assistant",
+              parts: [
+                {
+                  type: "tool_call",
+                  toolCall: {
+                    id: "other",
+                    name: "read",
+                    inputJSON: JSON.stringify({ path: "a" }),
+                  },
+                },
+                {
+                  type: "tool_call",
+                  toolCall: {
+                    id: "other-call",
+                    name: " Bash ",
+                    inputJSON: JSON.stringify({ command: "x" }),
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    };
+
+    const res = await runToolCallGuard({
+      client: client as any,
+      agentName: "opencode",
+      model: { provider: "anthropic", name: "claude" },
+      toolCallId: "c1",
+      toolName: "bash",
+      input: { command: "ls" },
+      failOpen: true,
+    });
+
+    expect(asTransform(res).transform).toEqual({ command: "x" });
   });
 
   it("drops a transform whose arguments are not a JSON object", async () => {

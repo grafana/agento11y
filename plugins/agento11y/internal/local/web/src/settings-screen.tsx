@@ -16,6 +16,7 @@ import {
   SurfaceCard,
 } from './notices';
 import { fieldInput } from './routing';
+import { SettingsLocalGuardsCard } from './settings-local-guards';
 import {
   cloneSettings,
   cloudConfigured,
@@ -483,13 +484,15 @@ export function forwardLocalPatch(form: ForwardModeSettings, mode: string): Part
 interface ToggleProps {
   checked: boolean;
   onChange: (checked: boolean) => void;
+  label?: string;
 }
 
-function Toggle({ checked, onChange }: ToggleProps) {
+function Toggle({ checked, onChange, label }: ToggleProps) {
   return (
     <button
       type="button"
       role="switch"
+      aria-label={label}
       aria-checked={checked}
       onClick={() => onChange(!checked)}
       style={{
@@ -1112,7 +1115,7 @@ const SETTINGS_TABS: SettingsTab[] = [
     icon: 'cloud',
     desc: 'Ingest, auth, forwarding',
   },
-  { id: 'local', label: 'Local', icon: 'box', desc: 'Tags, appearance, runtime' },
+  { id: 'local', label: 'Local', icon: 'box', desc: 'Guards, tags, appearance' },
   {
     id: 'history',
     label: 'History',
@@ -2407,11 +2410,13 @@ interface SettingsLocalTabProps {
   setTag: (index: number, patch: Partial<Tag>) => void;
   addTag: () => void;
   removeTag: (index: number) => void;
+  onGuardsEnabled?: (enabled: boolean) => void;
 }
 
-function SettingsLocalTab({ form, set, setTag, addTag, removeTag }: SettingsLocalTabProps) {
+function SettingsLocalTab({ form, set, setTag, addTag, removeTag, onGuardsEnabled }: SettingsLocalTabProps) {
   return (
     <>
+      <SettingsLocalGuardsCard onEnabledChange={onGuardsEnabled} />
       <SettingsTagsEditor tags={form.tags} setTag={setTag} addTag={addTag} removeTag={removeTag} />
       <SettingsAppearanceCard theme={form.theme} onChange={(theme) => set({ theme })} />
       <SettingsCard>
@@ -2424,13 +2429,13 @@ function SettingsLocalTab({ form, set, setTag, addTag, removeTag }: SettingsLoca
             </>
           }
         >
-          <Toggle checked={form.debug} onChange={(v) => set({ debug: v })} />
+          <Toggle checked={form.debug} onChange={(v) => set({ debug: v })} label="Debug logging" />
         </SettingRow>
         <SettingRow
           label="Automatic updates"
           help={<>Keep host agent plugins refreshed automatically. Turn off to pin the current versions.</>}
         >
-          <Toggle checked={form.autoUpdate} onChange={(v) => set({ autoUpdate: v })} />
+          <Toggle checked={form.autoUpdate} onChange={(v) => set({ autoUpdate: v })} label="Automatic updates" />
         </SettingRow>
       </SettingsCard>
       <SettingsCard>
@@ -2688,6 +2693,7 @@ interface SettingsTabPanelsProps {
   onConnect: (parsed: ConnectBlock, mode: string) => void;
   onDisconnect: () => void;
   onMode: (mode: string, forceLocalOff?: boolean) => void;
+  onGuardsEnabled?: (enabled: boolean) => void;
   history: HistoryImport;
 }
 
@@ -2707,6 +2713,7 @@ function SettingsTabPanels({
   onConnect,
   onDisconnect,
   onMode,
+  onGuardsEnabled,
   history,
 }: SettingsTabPanelsProps) {
   return (
@@ -2727,7 +2734,14 @@ function SettingsTabPanels({
         />
       )}
       {activeSettingsTab === 'local' && (
-        <SettingsLocalTab form={form} set={set} setTag={setTag} addTag={addTag} removeTag={removeTag} />
+        <SettingsLocalTab
+          form={form}
+          set={set}
+          setTag={setTag}
+          addTag={addTag}
+          removeTag={removeTag}
+          onGuardsEnabled={onGuardsEnabled}
+        />
       )}
       {activeSettingsTab === 'history' && <SettingsHistoryTab history={history} />}
     </>
@@ -2849,6 +2863,24 @@ export function SettingsView({
   // Past the early return above `form` is set, and `saved` is set with it:
   // the two are only ever assigned together.
   const set = (patch: Partial<Settings>) => setForm((f) => (f ? { ...f, ...patch } : f));
+  // The Local Guards switch writes AGENTO11Y_GUARDS_ENABLED immediately. Keep
+  // the Cloud fail-mode field in step so a later Save does not overwrite it,
+  // and so the form does not look dirty from this toggle alone.
+  const adoptGuardsEnabled = (enabled: boolean) => {
+    const nextGuards = (current: string) => (enabled ? (current === 'off' ? 'failopen' : current) : 'off');
+    fetch('/api/v1/config')
+      .then((r) => (r.ok ? (r.json() as Promise<ConfigResponse>) : Promise.reject(new Error('load config'))))
+      .then((body) => {
+        onConfig(body);
+        if (typeof body.preview === 'string') setPreview(body.preview);
+        setForm((f) => (f ? { ...f, guards: body.settings.guards } : f));
+        setSaved((s) => (s ? { ...s, guards: body.settings.guards } : s));
+      })
+      .catch(() => {
+        setForm((f) => (f ? { ...f, guards: nextGuards(f.guards) } : f));
+        setSaved((s) => (s ? { ...s, guards: nextGuards(s.guards) } : s));
+      });
+  };
   // A failed poll drops the hero stat and the Cloud status line to Unknown,
   // the way it drops the header chip. The form keeps hydrating from the
   // last good response.
@@ -3020,6 +3052,7 @@ export function SettingsView({
             onConnect={connect}
             onDisconnect={disconnect}
             onMode={commitMode}
+            onGuardsEnabled={adoptGuardsEnabled}
             history={history}
           />
         </div>

@@ -15,6 +15,7 @@ agento11y doctor v0.22.0
   content capture:  metadata_only (default)
   prompt redaction: enabled
   guards:           disabled (default)
+  local rules:      missing (/home/u/.config/agento11y/guards.toml)
 
 Coding agents
   claude:           plugin not installed

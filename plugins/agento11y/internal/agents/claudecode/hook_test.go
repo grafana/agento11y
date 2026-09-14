@@ -270,7 +270,7 @@ func TestHandlePreToolUse(t *testing.T) {
 			},
 		},
 		{
-			name:             "enabled_allow_unusable_transform_stays_silent",
+			name:             "enabled_allow_mismatched_id_keeps_original_input",
 			env:              map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
 			serverResponds:   `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"tu_other","name":"Bash","input_json":{"command":"echo X"}}}]}]}}`,
 			expectServerCall: true,

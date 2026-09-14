@@ -32,6 +32,7 @@ func TestEvaluateToolCall(t *testing.T) {
 		// endpoint set, to exercise the LocalAuthPlaceholders path.
 		clearCredsKeepEndpoint    bool
 		toolName                  string
+		toolCallID                string
 		conversationID            string
 		wantConversationID        string
 		wantConversationIDOmitted bool
@@ -145,9 +146,29 @@ func TestEvaluateToolCall(t *testing.T) {
 			wantServerCalled: true,
 		},
 		{
-			name:             "transform for different tool call id is ignored",
+			name:             "mismatched id is ignored when it is the only rewritten call",
 			cfg:              envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true},
-			serverResponds:   `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"tu_other","name":"bash","input_json":{"cmd":"echo X"}}}]}]}}`,
+			serverResponds:   `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"tu_other","name":"bash","input_json":{"cmd":"echo [REDACTED]"}}}]}]}}`,
+			toolName:         "bash",
+			wantAction:       agento11y.HookActionAllow,
+			wantLogSub:       "tool-call transform present but no part matched tu_1",
+			wantServerCalled: true,
+		},
+		{
+			name:             "empty id still applies when it is the only rewritten call",
+			cfg:              envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true},
+			serverResponds:   `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"name":"bash","input_json":{"cmd":"echo [REDACTED]"}}}]}]}}`,
+			toolName:         "bash",
+			toolCallID:       " ",
+			wantAction:       agento11y.HookActionAllow,
+			wantUpdatedInput: `{"cmd":"echo [REDACTED]"}`,
+			wantLogSub:       "transform_applied=true",
+			wantServerCalled: true,
+		},
+		{
+			name:             "transform among several same-name calls is not guessed by id miss",
+			cfg:              envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true},
+			serverResponds:   `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"tu_other","name":"bash","input_json":{"cmd":"echo X"}}},{"kind":"tool_call","tool_call":{"id":"tu_also","name":"bash","input_json":{"cmd":"echo Y"}}}]}]}}`,
 			toolName:         "bash",
 			wantAction:       agento11y.HookActionAllow,
 			wantLogSub:       "tool-call transform present but no part matched tu_1",
@@ -256,6 +277,10 @@ func TestEvaluateToolCall(t *testing.T) {
 			}
 
 			var logBuf bytes.Buffer
+			toolCallID := tt.toolCallID
+			if toolCallID == "" {
+				toolCallID = "tu_1"
+			}
 			res := EvaluateToolCall(context.Background(), tt.cfg, ToolCallInput{
 				AgentName:      "copilot",
 				AgentVersion:   "dev",
@@ -263,7 +288,7 @@ func TestEvaluateToolCall(t *testing.T) {
 				ModelName:      "gpt-4",
 				ConversationID: tt.conversationID,
 				ToolName:       tt.toolName,
-				ToolCallID:     "tu_1",
+				ToolCallID:     toolCallID,
 				ToolInputJSON:  json.RawMessage(`{"cmd":"echo hi"}`),
 			}, log.New(&logBuf, "", 0))
 

@@ -269,7 +269,7 @@ describe("runToolCallGuard", () => {
     );
   });
 
-  it("ignores transformed_input that targets a different toolCallId", async () => {
+  it("ignores a transform aimed at a different toolCallId even when it is the only rewritten call", async () => {
     const { client } = makeClient(async () => ({
       action: "allow",
       evaluations: [],
@@ -292,22 +292,56 @@ describe("runToolCallGuard", () => {
       },
     }));
 
-    // A transform was present but none of its parts matched this call, so the
-    // original input is left unchanged. Log it so a no-op transform is
-    // distinguishable from a plain allow in the debug log.
-    const warn = vi.fn();
     const result = await runToolCallGuard(
       makeArgs({
         client,
         toolCallId: "c1",
         toolName: "bash",
-        logger: { warn },
       }),
     );
     expect(result).toBeUndefined();
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("no part matched c1"),
+  });
+
+  it("matches a rewritten call by tool name when the echoed name has surrounding whitespace", async () => {
+    const { client } = makeClient(async () => ({
+      action: "allow",
+      evaluations: [],
+      transformedInput: {
+        output: [
+          {
+            role: "assistant",
+            parts: [
+              {
+                type: "tool_call",
+                toolCall: {
+                  id: "other",
+                  name: "read",
+                  inputJSON: '{"path":"a"}',
+                },
+              },
+              {
+                type: "tool_call",
+                toolCall: {
+                  id: "different-call-id",
+                  name: " Bash ",
+                  inputJSON: '{"command":"echo X"}',
+                },
+              },
+            ],
+          },
+        ],
+      },
+    }));
+
+    const result = await runToolCallGuard(
+      makeArgs({
+        client,
+        toolCallId: "c1",
+        toolName: "bash",
+      }),
     );
+    expectTransform(result);
+    expect(result.transform).toEqual({ command: "echo X" });
   });
 
   it("logs and drops a transform whose inputJSON cannot be parsed", async () => {

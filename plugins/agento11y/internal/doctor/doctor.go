@@ -32,6 +32,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/autotag"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/guardeval"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/updatecheck"
 )
@@ -195,6 +196,14 @@ type ConfigSection struct {
 	// built-in default rather than crediting a rejected value.
 	GuardsKey    string `json:"guards_key,omitempty"`
 	GuardsSource string `json:"guards_source,omitempty"`
+	// GuardsFile is guards.toml next to config.env. Exists is false until the
+	// file is written. Rules is the count of compiled rules that can act
+	// locally. Error joins parse and compile problems; those rules that did
+	// compile still count in Rules.
+	GuardsFile       string `json:"guards_file,omitempty"`
+	GuardsFileExists bool   `json:"guards_file_exists"`
+	GuardsFileRules  int    `json:"guards_file_rules"`
+	GuardsFileError  string `json:"guards_file_error,omitempty"`
 	// AgentName is the AGENT_NAME family: the value every adapter stamps on its
 	// generations and guard requests instead of its own product name. Empty
 	// means no override is set, so each adapter keeps its own name and the row
@@ -813,6 +822,8 @@ func collectConfig(osEnv, fileEnv map[string]string) ConfigSection {
 		sec.GuardsSource = guardsEnabled.source
 	}
 
+	collectGuardsFile(&sec, path)
+
 	// The AGENT_NAME family renames the agent every hook reports. A rule or
 	// dashboard filtered on the product name stops matching once it is set, so
 	// the effective value and its source have to be visible here.
@@ -941,6 +952,13 @@ func collectConfig(osEnv, fileEnv map[string]string) ConfigSection {
 		sec.Messages = append(sec.Messages,
 			fmt.Sprintf("the %s value is invalid; guards use the default", key))
 	}
+	if sec.GuardsFileError != "" {
+		sec.Health = HealthWarn
+		sec.Messages = append(sec.Messages, sec.GuardsFileError)
+	} else if sec.GuardsFileExists && sec.GuardsFileRules == 0 {
+		sec.Health = HealthWarn
+		sec.Messages = append(sec.Messages, "guards.toml exists but has 0 rules that can enforce locally")
+	}
 	if agentName.conflict {
 		sec.Messages = append(sec.Messages, conflictMessage(agentName))
 	}
@@ -1036,6 +1054,23 @@ func collectConfig(osEnv, fileEnv map[string]string) ConfigSection {
 			"local mode sends `agento11y <agent>` launches and agento11y hooks to the local viewer; Cloud forwarding still requires AGENTO11Y_LOCAL_FORWARD")
 	}
 	return sec
+}
+
+// collectGuardsFile compiles guards.toml next to config.env so doctor reports
+// the same path, errors, and enforcing count the daemon uses. A missing file
+// is not a problem: that is the machine that has written none.
+func collectGuardsFile(sec *ConfigSection, configPath string) {
+	path := guardeval.FilePath(configPath)
+	sec.GuardsFile = path
+	if path == "" {
+		return
+	}
+	if _, err := os.Stat(path); err == nil {
+		sec.GuardsFileExists = true
+	}
+	st := guardeval.NewEngine(guardeval.Config{RulesPath: path}).Status()
+	sec.GuardsFileRules = st.Enforcing
+	sec.GuardsFileError = strings.Join(st.Errors, "; ")
 }
 
 // invalidGuardKeys names the GUARDS_* variables whose values envconfig rejects,

@@ -322,9 +322,8 @@ both signals when an endpoint is set.
 - **content capture**: the effective mode and where it came from. An invalid
   value falls back to `metadata_only` and the section message names the variable
   to fix.
-- **guards**: `disabled`, or `enabled` with the timeout and fail-open/fail-closed
-  mode. With local forwarding, **local guard checks** says whether guard content
-  reaches Grafana Cloud.
+- **guards**: `disabled`, or `enabled` with timeout and Cloud fail-open/closed.
+  **local rules** names `guards.toml`; **local guard checks** reports Cloud relay.
 - **Coding agents**: one row per agent. `not found on PATH` means doctor cannot
   find that CLI. `on PATH, plugin not installed` describes current state; the
   integration may never have been installed, may have been removed, or may be
@@ -383,7 +382,7 @@ All hosts read the resolved config path. The default is `~/.config/agento11y/con
 | `AGENTO11Y_AUTO_CODING_AGENT_TAGS` | Opt-in automatic user, repo, and branch tags |
 | `AGENTO11Y_GUARDS_ENABLED` | Send supported preflight and tool calls for guard evaluation |
 | `AGENTO11Y_GUARDS_TIMEOUT_MS` | Guard evaluation timeout in milliseconds |
-| `AGENTO11Y_GUARDS_FAIL_OPEN` | Allow the operation when guard evaluation fails |
+| `AGENTO11Y_GUARDS_FAIL_OPEN` | Allow the operation when Cloud guard evaluation fails |
 | `AGENTO11Y_LOCAL` | A true value routes `agento11y <agent>` launches, agento11y hooks, and history imports to the local daemon |
 | `AGENTO11Y_LOCAL_FORWARD` | Forward local-mode captures to Grafana Cloud |
 | `AGENTO11Y_THEME` | Local viewer theme: `dark`, `light`, or `system`; defaults to `dark` |
@@ -460,8 +459,9 @@ full generation content in its JSONL store. It forwards full content only when
 sends directly to Cloud without a local copy. `--no-local` uses Cloud once without
 changing either saved alias family. The launcher prints the viewer URL. Manage
 the daemon with `agento11y local start|open|status|stop|restart`. Local mode runs
-on macOS and Linux only. A launcher starts the receiver in the same invocation;
-a saved choice from Cursor install applies to the next hook.
+on macOS and Linux only. A launcher starts the receiver in the same invocation; a saved choice from Cursor install applies to the next hook.
+With `AGENTO11Y_GUARDS_ENABLED=true`, evaluate `guards.toml` next to `config.env`.
+`reject = true` blocks on match; `shell_command` is for shell policies. Fail-open is Cloud-only.
 
 ### History import
 

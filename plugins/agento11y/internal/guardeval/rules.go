@@ -18,15 +18,19 @@ import (
 // (selector, short_circuit, evaluator_ids, server-managed metadata) are absent
 // here and round-trip through the raw JSON the guards API stores.
 type Rule struct {
-	RuleID       string            `json:"rule_id"`
-	Enabled      *bool             `json:"enabled,omitempty"`        // default true
-	Phase        string            `json:"phase,omitempty"`          // default "postflight"
-	Priority     int               `json:"priority,omitempty"`       // ascending; lower runs first
-	Match        map[string]any    `json:"match,omitempty"`          // agent_name, model.name, tags.*, ... globs
-	ActionOnFail string            `json:"action_on_fail,omitempty"` // deny, warn, or allow (case-insensitive); empty or unknown denies
-	ToolFilter   *ToolFilterConfig `json:"tool_filter,omitempty"`
-	Transform    *TransformConfig  `json:"transform,omitempty"`
-	Evaluators   []EvaluatorSpec   `json:"evaluators,omitempty"` // inline deterministic evaluators run locally (see below)
+	RuleID       string            `json:"rule_id" toml:"rule_id"`
+	Enabled      *bool             `json:"enabled,omitempty" toml:"enabled,omitempty"`               // default true
+	Phase        string            `json:"phase,omitempty" toml:"phase,omitempty"`                   // default "postflight"
+	Priority     int               `json:"priority,omitempty" toml:"priority,omitempty"`             // ascending; lower runs first
+	Match        map[string]any    `json:"match,omitempty" toml:"match,omitempty"`                   // agent_name, model.name, tags.*, ... globs
+	ActionOnFail string            `json:"action_on_fail,omitempty" toml:"action_on_fail,omitempty"` // deny, warn, or allow (case-insensitive); empty or unknown denies
+	ToolFilter   *ToolFilterConfig `json:"tool_filter,omitempty" toml:"tool_filter,omitempty"`
+	Transform    *TransformConfig  `json:"transform,omitempty" toml:"transform,omitempty"`
+	Evaluators   []EvaluatorSpec   `json:"evaluators,omitempty" toml:"evaluators,omitempty"` // inline deterministic evaluators run locally (see below)
+	// extra holds JSON keys this struct does not model (evaluator_ids,
+	// short_circuit, selector, …). DecodeRules keeps them so a Settings save
+	// can write them back instead of stripping them from custom rules.
+	extra map[string]any `json:"-"`
 }
 
 // EvaluatorSpec is an inline evaluator definition on a local rule. The cloud
@@ -36,25 +40,25 @@ type Rule struct {
 // but skipped. evaluator_ids (cloud refs) stay inert locally: only this field
 // is enforced.
 type EvaluatorSpec struct {
-	Kind   string         `json:"kind"`
-	Config map[string]any `json:"config,omitempty"`
+	Kind   string         `json:"kind" toml:"kind"`
+	Config map[string]any `json:"config,omitempty" toml:"config,omitempty"`
 }
 
 // ToolFilterConfig is the tool-filter block config.
 type ToolFilterConfig struct {
-	BlockedNames []string `json:"blocked_names"`
+	BlockedNames []string `json:"blocked_names" toml:"blocked_names"`
 }
 
 // TransformConfig is the redaction config.
 type TransformConfig struct {
-	Patterns []TransformPattern `json:"patterns"`
+	Patterns []TransformPattern `json:"patterns" toml:"patterns"`
 }
 
 // TransformPattern is one redaction pattern.
 type TransformPattern struct {
-	ID          string `json:"id,omitempty"`
-	Regex       string `json:"regex"`
-	Replacement string `json:"replacement,omitempty"`
+	ID          string `json:"id,omitempty" toml:"id,omitempty"`
+	Regex       string `json:"regex" toml:"regex"`
+	Replacement string `json:"replacement,omitempty" toml:"replacement,omitempty"`
 }
 
 // CompiledRule is a compiled, normalized rule ready for evaluation.
@@ -87,18 +91,22 @@ const (
 )
 
 // parseEffect maps a rule's action_on_fail onto an Effect, case-insensitively.
-// Anything else is EffectDeny: an empty value, a misspelling, or a word from a
-// newer schema this build does not know ("block"). Degrading an unrecognized
-// policy word to warn or allow would let through a call the rule editor renders
-// as "Deny".
-func parseEffect(actionOnFail string) Effect {
-	switch Effect(strings.ToLower(strings.TrimSpace(actionOnFail))) {
+// Empty is EffectDeny, the schema default. Anything else unknown is also
+// EffectDeny: a misspelling or a word from a newer schema this build does not
+// know ("block") must not degrade to warn or allow, which would let through a
+// call the rule editor renders as "Deny". The error names the written word so
+// the loader can report it instead of enforcing a silent default.
+func parseEffect(actionOnFail string) (Effect, error) {
+	trimmed := strings.TrimSpace(actionOnFail)
+	switch Effect(strings.ToLower(trimmed)) {
 	case EffectWarn:
-		return EffectWarn
+		return EffectWarn, nil
 	case EffectAllow:
-		return EffectAllow
+		return EffectAllow, nil
+	case EffectDeny, "":
+		return EffectDeny, nil
 	default:
-		return EffectDeny
+		return EffectDeny, fmt.Errorf("action_on_fail %q is not deny, warn, or allow", trimmed)
 	}
 }
 
@@ -140,6 +148,48 @@ func DecodeRules(raw []json.RawMessage) ([]Rule, []error) {
 		out = append(out, rule)
 	}
 	return out, errs
+}
+
+var knownRuleJSONKeys = map[string]struct{}{
+	"rule_id":        {},
+	"enabled":        {},
+	"phase":          {},
+	"priority":       {},
+	"match":          {},
+	"action_on_fail": {},
+	"tool_filter":    {},
+	"transform":      {},
+	"evaluators":     {},
+}
+
+// UnmarshalJSON fills the modelled fields and stashes every other key in extra
+// so a later EncodeRules can round-trip Cloud-only attributes.
+func (r *Rule) UnmarshalJSON(data []byte) error {
+	type alias Rule
+	var parsed alias
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return err
+	}
+	*r = Rule(parsed)
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	for key := range knownRuleJSONKeys {
+		delete(raw, key)
+	}
+	if len(raw) == 0 {
+		return nil
+	}
+	r.extra = make(map[string]any, len(raw))
+	for key, val := range raw {
+		var decoded any
+		if err := json.Unmarshal(val, &decoded); err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		r.extra[key] = decoded
+	}
+	return nil
 }
 
 // compileGuardRules drops disabled rules, applies the write-body defaults
@@ -201,6 +251,11 @@ func compileGuardRules(raw []Rule) ([]CompiledRule, []error) {
 			continue
 		}
 
+		effect, err := parseEffect(r.ActionOnFail)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("rule %q: %w", r.RuleID, err))
+		}
+
 		out = append(out, CompiledRule{
 			id:         r.RuleID,
 			phase:      phase,
@@ -209,7 +264,7 @@ func compileGuardRules(raw []Rule) ([]CompiledRule, []error) {
 			filter:     filter,
 			transform:  transform,
 			evaluators: evaluators,
-			effect:     parseEffect(r.ActionOnFail),
+			effect:     effect,
 		})
 	}
 
@@ -230,25 +285,33 @@ func sortCompiledRules(rules []CompiledRule) {
 	})
 }
 
-// ValidateRuleIDs requires a present and unique rule_id. Consumers treat
+// filterRuleIDs requires a present and unique rule_id. Consumers treat
 // rule_id as identity (the conversation view's deep link, exported guard
-// metadata, the doctor row), so a blank or duplicated id breaks them silently.
+// metadata, the doctor row), so a blank or duplicated id is dropped rather
+// than compiled twice under the same name.
 //
-// The engine reports a bad id and keeps enforcing, because a ruleset already on
-// disk should not stop guarding over a naming fault.
-func ValidateRuleIDs(rules []Rule) error {
+// Every problem is reported so a file with two faults names both. The first
+// occurrence of a duplicated id is kept; later copies are skipped. A ruleset
+// already on disk should not stop guarding over a naming fault on a sibling.
+func filterRuleIDs(rules []Rule) ([]Rule, []error) {
 	seen := map[string]int{}
+	out := make([]Rule, 0, len(rules))
+	var errs []error
 	for i, r := range rules {
 		id := strings.TrimSpace(r.RuleID)
 		if id == "" {
-			return fmt.Errorf("rule[%d]: rule_id is required", i)
+			errs = append(errs, fmt.Errorf("rule[%d]: rule_id is required", i))
+			continue
 		}
 		if prev, ok := seen[id]; ok {
-			return fmt.Errorf("rule[%d]: rule_id %q duplicates rule[%d]", i, id, prev)
+			errs = append(errs, fmt.Errorf("rule[%d]: rule_id %q duplicates rule[%d]", i, id, prev))
+			continue
 		}
 		seen[id] = i
+		r.RuleID = id
+		out = append(out, r)
 	}
-	return nil
+	return out, errs
 }
 
 // compileTransform compiles a transform config into ready-to-run patterns.

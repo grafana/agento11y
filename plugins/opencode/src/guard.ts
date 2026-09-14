@@ -389,6 +389,7 @@ export async function runToolCallGuard(args: GuardArgs): Promise<GuardResult> {
     const transform = extractToolCallTransform(
       resp.transformedInput?.output,
       args.toolCallId,
+      args.toolName,
       args.logger,
     );
     if (transform) {
@@ -409,9 +410,12 @@ export async function runToolCallGuard(args: GuardArgs): Promise<GuardResult> {
 
 /**
  * Walks the server-returned `transformed_input.output` for the tool_call part
- * matching `toolCallId` and parses its `inputJSON` into an object. Returns
- * `undefined` on any mismatch or parse failure so the caller falls through to
- * the original tool input unchanged.
+ * matching `toolCallId` and parses its `inputJSON` into an object. When the
+ * id does not match, falls back to the only rewritten tool call if that call
+ * has no id (or the client sent none), or to the only rewritten call with
+ * the same tool name among several. A single call with a different populated
+ * id is ignored. Returns `undefined` on any mismatch or parse failure so the
+ * caller falls through to the original tool input.
  *
  * Mirrors `extractToolCallTransform` in `plugins/pi/src/guard.ts`; keep the two
  * aligned so both plugins consume the server transform identically.
@@ -419,41 +423,84 @@ export async function runToolCallGuard(args: GuardArgs): Promise<GuardResult> {
 function extractToolCallTransform(
   output: Message[] | undefined,
   toolCallId: string | undefined,
+  toolName: string | undefined,
   logger?: { warn: (msg: string) => void },
 ): Record<string, unknown> | undefined {
-  if (!output || output.length === 0 || !toolCallId) return undefined;
+  if (!output || output.length === 0) return undefined;
+
+  const all: { id?: string; name?: string; raw: unknown }[] = [];
   for (const msg of output) {
     if (!msg.parts) continue;
     for (const part of msg.parts) {
       if (part.type !== "tool_call") continue;
       const tc = part.toolCall;
-      if (!tc || tc.id !== toolCallId) continue;
-      const raw = tc.inputJSON;
-      if (typeof raw !== "string" || raw.length === 0) {
-        logger?.warn(
-          `tool-call transform for ${toolCallId} dropped: empty arguments`,
-        );
-        return undefined;
-      }
-      try {
-        const parsed = JSON.parse(raw) as unknown;
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-          // Extraction only — the caller logs whether the transform was
-          // actually applied, so a parse here is never mistaken for success.
-          return parsed as Record<string, unknown>;
-        }
-        logger?.warn(
-          `tool-call transform for ${toolCallId} dropped: arguments were not a JSON object`,
-        );
-        return undefined;
-      } catch {
-        logger?.warn(
-          `tool-call transform for ${toolCallId} dropped: invalid JSON arguments`,
-        );
-        return undefined;
-      }
+      if (!tc) continue;
+      all.push({ id: tc.id, name: tc.name, raw: tc.inputJSON });
     }
   }
-  logger?.warn(`tool-call transform present but no part matched ${toolCallId}`);
+  if (all.length === 0) return undefined;
+
+  const id = toolCallId?.trim() ?? "";
+  if (id) {
+    const matched = all.find((c) => c.id === id);
+    if (matched) return parseTransformArgs(matched.raw, id, logger);
+  }
+
+  const label = id || toolName?.trim() || "tool";
+  const only = all.length === 1 ? all[0] : undefined;
+  if (only) {
+    const onlyId = only.id?.trim() ?? "";
+    if (!id || !onlyId || onlyId === id) {
+      return parseTransformArgs(only.raw, label, logger);
+    }
+  }
+
+  if (all.length > 1) {
+    const name = toolName?.trim() ?? "";
+    const named = name ? all.filter((c) => toolNamesEqual(c.name, name)) : [];
+    const namedOnly = named.length === 1 ? named[0] : undefined;
+    if (namedOnly) {
+      return parseTransformArgs(namedOnly.raw, label, logger);
+    }
+  }
+
+  logger?.warn(`tool-call transform present but no part matched ${label}`);
   return undefined;
+}
+
+/** Same contract as Go `strings.EqualFold(strings.TrimSpace(a), b)`. */
+function toolNamesEqual(candidate: string | undefined, want: string): boolean {
+  return (
+    (candidate ?? "").trim().localeCompare(want, undefined, {
+      sensitivity: "accent",
+    }) === 0
+  );
+}
+
+function parseTransformArgs(
+  raw: unknown,
+  label: string,
+  logger?: { warn: (msg: string) => void },
+): Record<string, unknown> | undefined {
+  if (typeof raw !== "string" || raw.length === 0) {
+    logger?.warn(`tool-call transform for ${label} dropped: empty arguments`);
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      // Extraction only — the caller logs whether the transform was
+      // actually applied, so a parse here is never mistaken for success.
+      return parsed as Record<string, unknown>;
+    }
+    logger?.warn(
+      `tool-call transform for ${label} dropped: arguments were not a JSON object`,
+    );
+    return undefined;
+  } catch {
+    logger?.warn(
+      `tool-call transform for ${label} dropped: invalid JSON arguments`,
+    );
+    return undefined;
+  }
 }

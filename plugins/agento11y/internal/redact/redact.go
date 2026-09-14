@@ -83,6 +83,24 @@ func (r *Redactor) redactTier1(text string) string {
 	return text
 }
 
+// PatternSpec is one secret pattern as the generated table stores it: an id
+// used in the replacement marker, and the source regex.
+type PatternSpec struct {
+	ID    string
+	Regex string
+}
+
+// Tier1Specs returns the high-confidence secret formats. The local viewer
+// installs them as a redaction pack so captured tool calls use the same table
+// the transcript redactor does.
+func Tier1Specs() []PatternSpec {
+	out := make([]PatternSpec, len(tier1Patterns))
+	for i, p := range tier1Patterns {
+		out[i] = PatternSpec{ID: p.id, Regex: p.re.String()}
+	}
+	return out
+}
+
 func replaceTier1(s string) string {
 	matches := tier1Combined.FindAllStringSubmatchIndex(s, -1)
 	if len(matches) == 0 {

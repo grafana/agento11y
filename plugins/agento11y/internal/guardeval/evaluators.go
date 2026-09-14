@@ -213,7 +213,11 @@ func parseTargetAndShell(config map[string]any) (string, shellConfig, error) {
 	if err != nil {
 		return "", shellConfig{}, err
 	}
-	return target, parseShellConfig(), nil
+	shell, err := parseShellConfig(config)
+	if err != nil {
+		return "", shellConfig{}, err
+	}
+	return target, shell, nil
 }
 
 // subjectsFor returns the subjects an evaluator judges for the given target. It

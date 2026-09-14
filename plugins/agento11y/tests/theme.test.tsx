@@ -468,7 +468,7 @@ describe('SettingsView theme preview', () => {
     expect(screen.getByRole('button', { name: 'Light' }).getAttribute('aria-pressed')).toBe('true');
     expect(onThemePreview).toHaveBeenLastCalledWith(null);
 
-    fireEvent.click(screen.getAllByRole('switch')[0] as HTMLElement);
+    fireEvent.click(screen.getByRole('switch', { name: 'Debug logging' }));
     expect(onThemePreview).toHaveBeenLastCalledWith('light');
     rendered.rerender(<SettingsView {...props} config={dark} />);
     expect(screen.getByRole('button', { name: 'Light' }).getAttribute('aria-pressed')).toBe('true');

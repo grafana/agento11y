@@ -162,11 +162,11 @@ func (l *forwardLoader) recordHookFailure(format string, args ...any) error {
 	return fmt.Errorf(format, args...)
 }
 
-// hookTimeoutFromHeader resolves the budget for the daemon's Cloud hook call
-// from the deadline the calling agent propagated, falling back to the given
-// value when no usable header is present. Both header spellings are read, the
-// branded one wins, and a margin is shaved off so the Cloud call returns before
-// the agent's own hook deadline fires.
+// hookTimeoutFromHeader resolves the budget for local evaluation and the
+// Cloud hook call from the deadline the calling agent propagated, falling back
+// to the given value when no usable header is present. Both header spellings
+// are read, the branded one wins, and a margin is shaved off so the daemon
+// returns before the agent's own hook deadline fires.
 //
 // fallback is expected to be positive; intFamily guarantees that for the only
 // production caller.

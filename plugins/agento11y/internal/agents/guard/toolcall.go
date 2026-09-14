@@ -245,7 +245,7 @@ func EvaluateToolCall(ctx context.Context, cfg envconfig.GuardsConfig, in ToolCa
 	// usable transform, so only the allow path looks for one.
 	var updatedInput json.RawMessage
 	if deniedErr == nil {
-		updatedInput = extractToolCallTransform(resp, strings.TrimSpace(in.ToolCallID), logger)
+		updatedInput = extractToolCallTransform(resp, strings.TrimSpace(in.ToolCallID), in.ToolName, logger)
 	}
 
 	if resp != nil && logger != nil {
@@ -294,62 +294,102 @@ func EvaluateToolCall(ctx context.Context, cfg envconfig.GuardsConfig, in ToolCa
 
 // extractToolCallTransform walks the server-returned transformed_input for
 // the tool_call part matching toolCallID and returns its arguments as raw
-// JSON. Returns nil on any mismatch or parse failure so the caller falls
-// through to the original tool input unchanged. Mirrors pi guard.ts
-// extractToolCallTransform; keep the two in sync.
-func extractToolCallTransform(resp *agento11y.HookEvaluateResponse, toolCallID string, logger *log.Logger) json.RawMessage {
-	// Treat an absent or empty output the same way: there is no transform to
-	// apply, so stay silent. This mirrors pi guard.ts, whose early return also
-	// covers the empty-output case; the no-match line below is reserved for a
-	// transform that carried parts but none for this tool call.
+// JSON. When the id does not match, it falls back to the only rewritten
+// tool call if that call has no id (or the client sent none), or to the
+// only rewritten call with the same tool name among several. A single
+// call with a different populated id is ignored so a transform aimed at
+// another toolCallId cannot land here. Returns nil on any mismatch or
+// parse failure so the caller falls through to the original tool input
+// unchanged. Mirrors pi guard.ts extractToolCallTransform; keep the two
+// in sync.
+func extractToolCallTransform(resp *agento11y.HookEvaluateResponse, toolCallID, toolName string, logger *log.Logger) json.RawMessage {
 	if resp == nil || resp.TransformedInput == nil || len(resp.TransformedInput.Output) == 0 {
 		return nil
 	}
+	type candidate struct {
+		id, name string
+		raw      json.RawMessage
+	}
+	var all []candidate
 	for _, msg := range resp.TransformedInput.Output {
 		for _, part := range msg.Parts {
-			if part.Kind != agento11y.PartKindToolCall || part.ToolCall == nil || part.ToolCall.ID != toolCallID {
+			if part.Kind != agento11y.PartKindToolCall || part.ToolCall == nil {
 				continue
 			}
-			// A matching tool_call whose args we cannot parse means the
-			// server sent a transform we cannot apply; log it. The no-match
-			// case stays silent, since that just means there is no redaction
-			// for this call.
 			raw := part.ToolCall.InputJSON
 			if len(raw) > 0 {
 				raw = unwrapProtoJSONBytes(raw)
 			}
-			if len(raw) == 0 {
-				if logger != nil {
-					logger.Printf("guard: tool-call transform for %s dropped: empty arguments", toolCallID)
-				}
-				return nil
-			}
-			if !json.Valid(raw) {
-				if logger != nil {
-					logger.Printf("guard: tool-call transform for %s dropped: invalid JSON arguments", toolCallID)
-				}
-				return nil
-			}
-			var obj map[string]any
-			if err := json.Unmarshal(raw, &obj); err != nil || obj == nil {
-				if logger != nil {
-					logger.Printf("guard: tool-call transform for %s dropped: arguments were not a JSON object", toolCallID)
-				}
-				return nil
-			}
-			if logger != nil {
-				logger.Printf("guard: tool-call transform for %s applied", toolCallID)
-			}
-			return raw
+			all = append(all, candidate{id: part.ToolCall.ID, name: part.ToolCall.Name, raw: raw})
 		}
 	}
-	// A transform was present in the response but none of its tool_call parts
-	// matched this call's ID, so the original input is left unchanged. Worth a
-	// line because it is otherwise indistinguishable from a plain allow.
+	if len(all) == 0 {
+		return nil
+	}
+
+	id := strings.TrimSpace(toolCallID)
+	if id != "" {
+		for _, c := range all {
+			if c.id == id {
+				return parseTransformArgs(c.raw, id, logger)
+			}
+		}
+	}
+
+	label := id
+	if label == "" {
+		label = strings.TrimSpace(toolName)
+	}
+	if len(all) == 1 {
+		onlyID := strings.TrimSpace(all[0].id)
+		if id == "" || onlyID == "" || onlyID == id {
+			return parseTransformArgs(all[0].raw, label, logger)
+		}
+	}
+
+	name := strings.TrimSpace(toolName)
+	if len(all) > 1 && name != "" {
+		var named []candidate
+		for _, c := range all {
+			if strings.EqualFold(strings.TrimSpace(c.name), name) {
+				named = append(named, c)
+			}
+		}
+		if len(named) == 1 {
+			return parseTransformArgs(named[0].raw, label, logger)
+		}
+	}
+
 	if logger != nil {
-		logger.Printf("guard: tool-call transform present but no part matched %s", toolCallID)
+		logger.Printf("guard: tool-call transform present but no part matched %s", label)
 	}
 	return nil
+}
+
+func parseTransformArgs(raw json.RawMessage, label string, logger *log.Logger) json.RawMessage {
+	if len(raw) == 0 {
+		if logger != nil {
+			logger.Printf("guard: tool-call transform for %s dropped: empty arguments", label)
+		}
+		return nil
+	}
+	if !json.Valid(raw) {
+		if logger != nil {
+			logger.Printf("guard: tool-call transform for %s dropped: invalid JSON arguments", label)
+		}
+		return nil
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err != nil || obj == nil {
+		if logger != nil {
+			logger.Printf("guard: tool-call transform for %s dropped: arguments were not a JSON object", label)
+		}
+		return nil
+	}
+	if logger != nil {
+		logger.Printf("guard: tool-call transform for %s applied", label)
+	}
+	return raw
 }
 
 // unwrapProtoJSONBytes unwraps transform arguments that arrived as a JSON

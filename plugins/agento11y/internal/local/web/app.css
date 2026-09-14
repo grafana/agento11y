@@ -508,6 +508,14 @@
       border: 0;
     }
 
+    .pack-preview-toggle {
+      color: var(--fg1);
+    }
+    .pack-preview-toggle:hover,
+    .pack-preview-toggle:focus-visible {
+      color: var(--primary-text);
+    }
+
     .analytics-subtabs {
       display: flex;
       align-items: stretch;

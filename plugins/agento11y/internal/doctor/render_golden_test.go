@@ -106,6 +106,7 @@ func goldenHealthyReport() *Report {
 			RedactInput:   true,
 			GuardsEnabled: true, GuardsTimeoutMs: 1500, GuardsFailOpen: true,
 			GuardsKey: "AGENTO11Y_GUARDS_ENABLED", GuardsSource: sourceConfig,
+			GuardsFile: "/home/u/.config/agento11y/guards.toml",
 			Tags:       map[string]string{"team": "assistant", "env": "prod"},
 			TagsKey:    "AGENTO11Y_TAGS",
 			TagsSource: sourceConfig,
@@ -148,7 +149,8 @@ func goldenMinimalReport() *Report {
 			ContentCaptureMode: "metadata_only",
 			RedactInput:        true,
 			GuardsTimeoutMs:    1500, GuardsFailOpen: true,
-			Health: HealthOK,
+			GuardsFile: "/home/u/.config/agento11y/guards.toml",
+			Health:     HealthOK,
 		},
 		Agents: []AgentStatus{
 			{Name: "claude", OnPath: false, Install: InstallStateNotInstalled, Health: HealthWarn},
@@ -180,6 +182,7 @@ func goldenBrokenReport() *Report {
 			// name. The timeout is the value that fell back.
 			GuardsEnabled: false, GuardsTimeoutMs: 1500, GuardsFailOpen: true, GuardsFellBack: true,
 			GuardsKey: "SIGIL_GUARDS_ENABLED", GuardsSource: sourceEnv,
+			GuardsFile: "/home/u/.config/agento11y/guards.toml",
 			// The launcher ignores this value, so the row reports the state in force.
 			Local:        envValue{Set: true, Value: "enabled", Source: sourceEnv, Key: "AGENTO11Y_LOCAL"},
 			LocalInvalid: true,
