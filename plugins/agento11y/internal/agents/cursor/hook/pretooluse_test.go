@@ -86,11 +86,11 @@ func TestPreToolUse(t *testing.T) {
 			wantStdout:       permissive,
 		},
 		{
-			name:             "enabled_allow_mismatched_id_still_applies_the_only_rewrite",
+			name:             "enabled_allow_mismatched_id_keeps_original_input",
 			env:              map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
 			serverResponds:   `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"tu_other","name":"Shell","input_json":{"command":"echo X"}}}]}]}}`,
 			expectServerCall: true,
-			wantStdout:       `{"permission":"allow","updated_input":{"command":"echo X"}}` + "\n",
+			wantStdout:       permissive,
 		},
 		{
 			name:            "transport_error_fail_open_responds_permissive",
