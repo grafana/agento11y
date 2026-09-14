@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
@@ -133,10 +134,15 @@ func (s *Server) handlePutGuards(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.guardsMu.Lock()
-		rules, _, _, err := readGuardRules(s.guards.RulesPath)
+		rules, _, errs, err := readGuardRules(s.guards.RulesPath)
 		if err != nil {
 			s.guardsMu.Unlock()
 			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if len(errs) > 0 {
+			s.guardsMu.Unlock()
+			http.Error(w, "guards.toml is invalid; fix it before changing packs: "+strings.Join(errs, "; "), http.StatusBadRequest)
 			return
 		}
 		next, err := applyPackUpdates(rules, req.Packs)
@@ -199,6 +205,10 @@ func mustReadGuards(path string) []byte {
 	return data
 }
 
+// readGuardRules loads the on-disk ruleset. A missing file is empty, not an
+// error. A parse or decode fault is reported in errs with a nil error so GET
+// can still render the page; PUT must refuse to write when errs is non-empty,
+// or it would rebuild the file from the rules that decoded and drop the rest.
 func readGuardRules(path string) (rules []guardeval.Rule, exists bool, errs []string, err error) {
 	if path == "" {
 		return nil, false, nil, nil
