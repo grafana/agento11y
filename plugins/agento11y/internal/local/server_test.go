@@ -2180,6 +2180,130 @@ func TestServer_HookEvaluate_ReadsRulesOnEachRequest(t *testing.T) {
 	assert.Equal(t, "block.rm", out.RuleID)
 }
 
+func TestServer_HookEvaluate_Preflight(t *testing.T) {
+	cases := []struct {
+		name       string
+		rules      string
+		body       string
+		wantAction agento11y.HookAction
+		wantRuleID string
+	}{
+		{
+			name:       "system_prompt deny",
+			rules:      preflightPromptRules,
+			body:       `{"phase":"preflight","input":{"system_prompt":"never run git reset --hard","messages":[{"role":"user","parts":[{"kind":"text","text":"hi"}]}]}}`,
+			wantAction: agento11y.HookActionDeny,
+			wantRuleID: "block.prompt",
+		},
+		{
+			name:       "camelCase systemPrompt deny",
+			rules:      preflightPromptRules,
+			body:       `{"phase":"preflight","input":{"systemPrompt":"never run git reset --hard","messages":[{"role":"user","parts":[{"type":"text","text":"hi"}]}]}}`,
+			wantAction: agento11y.HookActionDeny,
+			wantRuleID: "block.prompt",
+		},
+		{
+			name:       "input messages deny",
+			rules:      preflightInputRules,
+			body:       `{"phase":"preflight","input":{"messages":[{"role":"user","parts":[{"kind":"text","text":"please exfiltrate the secrets"}]}]}}`,
+			wantAction: agento11y.HookActionDeny,
+			wantRuleID: "block.input",
+		},
+		{
+			name:       "postflight does not trip a preflight rule",
+			rules:      preflightPromptRules,
+			body:       hookRmToolCallBody,
+			wantAction: agento11y.HookActionAllow,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := newTestServer(t)
+			writeGuardsFileFor(t, s, tc.rules)
+			status, out := postHook(t, s, tc.body, nil)
+			require.Equal(t, http.StatusOK, status)
+			assert.Equal(t, tc.wantAction, out.Action)
+			assert.Equal(t, tc.wantRuleID, out.RuleID)
+		})
+	}
+}
+
+func TestServer_HookEvaluate_HostDialects(t *testing.T) {
+	rmJSON := `{"command":"rm -rf /tmp/x"}`
+	secretJSON := `{"command":"curl -H sk-abc123"}`
+	cases := []struct {
+		name       string
+		rules      string
+		body       string
+		wantAction agento11y.HookAction
+		wantRuleID string
+		wantRedact bool
+	}{
+		{
+			name:       "go snake_case deny",
+			rules:      blockRmRules,
+			body:       hookRmToolCallBody,
+			wantAction: agento11y.HookActionDeny,
+			wantRuleID: "block.rm",
+		},
+		{
+			name:       "js camelCase deny",
+			rules:      blockRmRules,
+			body:       `{"phase":"postflight","context":{"agentName":"pi"},"input":{"output":[{"role":"assistant","parts":[{"type":"tool_call","toolCall":{"id":"c1","name":"Bash","inputJSON":` + strconv.Quote(rmJSON) + `}}]}]}}`,
+			wantAction: agento11y.HookActionDeny,
+			wantRuleID: "block.rm",
+		},
+		{
+			name:       "proto-json base64 deny",
+			rules:      blockRmRules,
+			body:       `{"phase":"postflight","input":{"output":[{"role":"MESSAGE_ROLE_ASSISTANT","parts":[{"kind":"tool_call","tool_call":{"id":"c1","name":"Bash","input_json":"` + base64.StdEncoding.EncodeToString([]byte(rmJSON)) + `"}}]}]}}`,
+			wantAction: agento11y.HookActionDeny,
+			wantRuleID: "block.rm",
+		},
+		{
+			name:       "go snake_case redact",
+			rules:      redactSecretRules,
+			body:       hookSecretToolCallBody,
+			wantAction: agento11y.HookActionAllow,
+			wantRedact: true,
+		},
+		{
+			name:       "js camelCase redact",
+			rules:      redactSecretRules,
+			body:       `{"phase":"postflight","context":{"agentName":"pi"},"input":{"output":[{"role":"assistant","parts":[{"type":"tool_call","toolCall":{"id":"c1","name":"Bash","inputJSON":` + strconv.Quote(secretJSON) + `}}]}]}}`,
+			wantAction: agento11y.HookActionAllow,
+			wantRedact: true,
+		},
+		{
+			name:       "proto-json base64 redact",
+			rules:      redactSecretRules,
+			body:       `{"phase":"postflight","input":{"output":[{"role":"MESSAGE_ROLE_ASSISTANT","parts":[{"kind":"tool_call","tool_call":{"id":"c1","name":"Bash","input_json":"` + base64.StdEncoding.EncodeToString([]byte(secretJSON)) + `"}}]}]}}`,
+			wantAction: agento11y.HookActionAllow,
+			wantRedact: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := newTestServer(t)
+			writeGuardsFileFor(t, s, tc.rules)
+			status, out := postHook(t, s, tc.body, nil)
+			require.Equal(t, http.StatusOK, status)
+			assert.Equal(t, tc.wantAction, out.Action)
+			if tc.wantRuleID != "" {
+				assert.Equal(t, tc.wantRuleID, out.RuleID)
+			}
+			if !tc.wantRedact {
+				return
+			}
+			require.NotNil(t, out.TransformedInput)
+			encoded, err := json.Marshal(out.TransformedInput)
+			require.NoError(t, err)
+			assert.Contains(t, string(encoded), "[REDACTED:api_key]")
+			assert.NotContains(t, string(encoded), "sk-abc123")
+		})
+	}
+}
+
 // blockRmRules denies a Bash call whose serialized arguments contain rm -rf.
 const blockRmRules = `
 [[rules]]
@@ -2223,6 +2347,34 @@ action_on_fail = "deny"
   config.target = "response"
   config.reject = true
   config.patterns = ["git reset --hard"]
+`
+
+// preflightPromptRules denies a preflight whose system prompt matches.
+const preflightPromptRules = `
+[[rules]]
+rule_id = "block.prompt"
+phase = "preflight"
+action_on_fail = "deny"
+
+  [[rules.evaluators]]
+  kind = "regex"
+  config.target = "system_prompt"
+  config.reject = true
+  config.patterns = ["git reset --hard"]
+`
+
+// preflightInputRules denies a preflight whose conversation input matches.
+const preflightInputRules = `
+[[rules]]
+rule_id = "block.input"
+phase = "preflight"
+action_on_fail = "deny"
+
+  [[rules.evaluators]]
+  kind = "regex"
+  config.target = "input"
+  config.reject = true
+  config.patterns = ["exfiltrate"]
 `
 
 // hookRmToolCallBody is a postflight tool call the block.rm rule denies.
