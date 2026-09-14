@@ -269,7 +269,7 @@ describe("runToolCallGuard", () => {
     );
   });
 
-  it("ignores transformed_input that targets a different toolCallId", async () => {
+  it("applies transformed_input when it is the only rewritten call even if the id differs", async () => {
     const { client } = makeClient(async () => ({
       action: "allow",
       evaluations: [],
@@ -292,22 +292,14 @@ describe("runToolCallGuard", () => {
       },
     }));
 
-    // A transform was present but none of its parts matched this call, so the
-    // original input is left unchanged. Log it so a no-op transform is
-    // distinguishable from a plain allow in the debug log.
-    const warn = vi.fn();
     const result = await runToolCallGuard(
       makeArgs({
         client,
         toolCallId: "c1",
         toolName: "bash",
-        logger: { warn },
       }),
     );
-    expect(result).toBeUndefined();
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("no part matched c1"),
-    );
+    expect(result).toEqual({ transform: { command: "echo X" } });
   });
 
   it("logs and drops a transform whose inputJSON cannot be parsed", async () => {

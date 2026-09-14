@@ -297,7 +297,7 @@ describe("runToolCallGuard", () => {
     expect(asBlock(res).reason).toContain("Reason: pii detected");
   });
 
-  it("ignores a transform whose tool_call id does not match", async () => {
+  it("applies a transform when it is the only rewritten call even if the id differs", async () => {
     const client = {
       evaluateHook: async () => ({
         action: "allow",
@@ -332,7 +332,8 @@ describe("runToolCallGuard", () => {
       failOpen: true,
     });
 
-    expect(res).toBeUndefined();
+    const t = asTransform(res);
+    expect(t.transform).toEqual({ command: "x" });
   });
 
   it("drops a transform whose arguments are not a JSON object", async () => {

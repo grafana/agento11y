@@ -197,6 +197,7 @@ export async function runToolCallGuard(args: GuardArgs): Promise<GuardResult> {
     const transform = extractToolCallTransform(
       resp.transformedInput?.output,
       args.toolCallId,
+      args.toolName,
       args.logger,
     );
     if (transform) {
@@ -218,51 +219,77 @@ export async function runToolCallGuard(args: GuardArgs): Promise<GuardResult> {
 /**
  * Walks the server-returned `transformed_input.output` for the tool_call
  * part matching `toolCallId` and parses its `inputJSON` into an object.
- * Returns `undefined` on any mismatch or parse failure so the caller can
- * fall through to the original tool input unchanged.
+ * When the id does not match, falls back to the only rewritten tool call,
+ * or the only rewritten call with the same tool name, so a missing id
+ * cannot drop a redaction. Returns `undefined` on any mismatch or parse
+ * failure so the caller can fall through to the original tool input.
  */
 function extractToolCallTransform(
   output: Message[] | undefined,
-  toolCallId: string,
+  toolCallId: string | undefined,
+  toolName: string | undefined,
   logger?: { warn: (msg: string) => void },
 ): Record<string, unknown> | undefined {
   if (!output || output.length === 0) return undefined;
+
+  const all: { id?: string; name?: string; raw: unknown }[] = [];
   for (const msg of output) {
     if (!msg.parts) continue;
     for (const part of msg.parts) {
       if (part.type !== "tool_call") continue;
       const tc = part.toolCall;
-      if (!tc || tc.id !== toolCallId) continue;
-      // A matching tool_call whose args we cannot parse means the server sent
-      // a transform we cannot apply; log it.
-      const raw = tc.inputJSON;
-      if (typeof raw !== "string" || raw.length === 0) {
-        logger?.warn(
-          `tool-call transform for ${toolCallId} dropped: empty arguments`,
-        );
-        return undefined;
-      }
-      try {
-        const parsed = JSON.parse(raw) as unknown;
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-          logger?.warn(`tool-call transform for ${toolCallId} applied`);
-          return parsed as Record<string, unknown>;
-        }
-        logger?.warn(
-          `tool-call transform for ${toolCallId} dropped: arguments were not a JSON object`,
-        );
-        return undefined;
-      } catch {
-        logger?.warn(
-          `tool-call transform for ${toolCallId} dropped: invalid JSON arguments`,
-        );
-        return undefined;
-      }
+      if (!tc) continue;
+      all.push({ id: tc.id, name: tc.name, raw: tc.inputJSON });
     }
   }
-  // A transform was present in the response but none of its tool_call parts
-  // matched this call's id, so the original input is left unchanged. Worth a
-  // line because it is otherwise indistinguishable from a plain allow.
-  logger?.warn(`tool-call transform present but no part matched ${toolCallId}`);
+  if (all.length === 0) return undefined;
+
+  const id = toolCallId?.trim() ?? "";
+  if (id) {
+    const matched = all.find((c) => c.id === id);
+    if (matched) return parseTransformArgs(matched.raw, id, logger);
+  }
+
+  const label = id || toolName?.trim() || "tool";
+  if (all.length === 1) return parseTransformArgs(all[0].raw, label, logger);
+
+  const name = toolName?.trim() ?? "";
+  const named = name
+    ? all.filter(
+        (c) => (c.name ?? "").toLowerCase() === name.toLowerCase(),
+      )
+    : [];
+  if (named.length === 1) {
+    return parseTransformArgs(named[0].raw, label, logger);
+  }
+
+  logger?.warn(`tool-call transform present but no part matched ${label}`);
   return undefined;
+}
+
+function parseTransformArgs(
+  raw: unknown,
+  label: string,
+  logger?: { warn: (msg: string) => void },
+): Record<string, unknown> | undefined {
+  if (typeof raw !== "string" || raw.length === 0) {
+    logger?.warn(`tool-call transform for ${label} dropped: empty arguments`);
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      logger?.warn(`tool-call transform for ${label} applied`);
+      return parsed as Record<string, unknown>;
+    }
+    logger?.warn(
+      `tool-call transform for ${label} dropped: arguments were not a JSON object`,
+    );
+    return undefined;
+  } catch {
+    logger?.warn(
+      `tool-call transform for ${label} dropped: invalid JSON arguments`,
+    );
+    return undefined;
+  }
 }
