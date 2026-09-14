@@ -87,18 +87,22 @@ const (
 )
 
 // parseEffect maps a rule's action_on_fail onto an Effect, case-insensitively.
-// Anything else is EffectDeny: an empty value, a misspelling, or a word from a
-// newer schema this build does not know ("block"). Degrading an unrecognized
-// policy word to warn or allow would let through a call the rule editor renders
-// as "Deny".
-func parseEffect(actionOnFail string) Effect {
-	switch Effect(strings.ToLower(strings.TrimSpace(actionOnFail))) {
+// Empty is EffectDeny, the schema default. Anything else unknown is also
+// EffectDeny: a misspelling or a word from a newer schema this build does not
+// know ("block") must not degrade to warn or allow, which would let through a
+// call the rule editor renders as "Deny". The error names the written word so
+// the loader can report it instead of enforcing a silent default.
+func parseEffect(actionOnFail string) (Effect, error) {
+	trimmed := strings.TrimSpace(actionOnFail)
+	switch Effect(strings.ToLower(trimmed)) {
 	case EffectWarn:
-		return EffectWarn
+		return EffectWarn, nil
 	case EffectAllow:
-		return EffectAllow
+		return EffectAllow, nil
+	case EffectDeny, "":
+		return EffectDeny, nil
 	default:
-		return EffectDeny
+		return EffectDeny, fmt.Errorf("action_on_fail %q is not deny, warn, or allow", trimmed)
 	}
 }
 
@@ -201,6 +205,11 @@ func compileGuardRules(raw []Rule) ([]CompiledRule, []error) {
 			continue
 		}
 
+		effect, err := parseEffect(r.ActionOnFail)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("rule %q: %w", r.RuleID, err))
+		}
+
 		out = append(out, CompiledRule{
 			id:         r.RuleID,
 			phase:      phase,
@@ -209,7 +218,7 @@ func compileGuardRules(raw []Rule) ([]CompiledRule, []error) {
 			filter:     filter,
 			transform:  transform,
 			evaluators: evaluators,
-			effect:     parseEffect(r.ActionOnFail),
+			effect:     effect,
 		})
 	}
 
@@ -230,25 +239,33 @@ func sortCompiledRules(rules []CompiledRule) {
 	})
 }
 
-// ValidateRuleIDs requires a present and unique rule_id. Consumers treat
+// filterRuleIDs requires a present and unique rule_id. Consumers treat
 // rule_id as identity (the conversation view's deep link, exported guard
-// metadata, the doctor row), so a blank or duplicated id breaks them silently.
+// metadata, the doctor row), so a blank or duplicated id is dropped rather
+// than compiled twice under the same name.
 //
-// The engine reports a bad id and keeps enforcing, because a ruleset already on
-// disk should not stop guarding over a naming fault.
-func ValidateRuleIDs(rules []Rule) error {
+// Every problem is reported so a file with two faults names both. The first
+// occurrence of a duplicated id is kept; later copies are skipped. A ruleset
+// already on disk should not stop guarding over a naming fault on a sibling.
+func filterRuleIDs(rules []Rule) ([]Rule, []error) {
 	seen := map[string]int{}
+	out := make([]Rule, 0, len(rules))
+	var errs []error
 	for i, r := range rules {
 		id := strings.TrimSpace(r.RuleID)
 		if id == "" {
-			return fmt.Errorf("rule[%d]: rule_id is required", i)
+			errs = append(errs, fmt.Errorf("rule[%d]: rule_id is required", i))
+			continue
 		}
 		if prev, ok := seen[id]; ok {
-			return fmt.Errorf("rule[%d]: rule_id %q duplicates rule[%d]", i, id, prev)
+			errs = append(errs, fmt.Errorf("rule[%d]: rule_id %q duplicates rule[%d]", i, id, prev))
+			continue
 		}
 		seen[id] = i
+		r.RuleID = id
+		out = append(out, r)
 	}
-	return nil
+	return out, errs
 }
 
 // compileTransform compiles a transform config into ready-to-run patterns.

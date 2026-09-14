@@ -67,46 +67,59 @@ func TestParseEffect(t *testing.T) {
 		name         string
 		actionOnFail string
 		want         Effect
+		wantErr      bool
 	}{
 		{name: "deny", actionOnFail: "deny", want: EffectDeny},
 		{name: "warn", actionOnFail: "warn", want: EffectWarn},
 		{name: "allow", actionOnFail: "allow", want: EffectAllow},
 		{name: "case and padding are ignored", actionOnFail: "  WaRn ", want: EffectWarn},
 		{name: "allow in caps", actionOnFail: "ALLOW", want: EffectAllow},
-		// An unset action_on_fail is the schema default, and a word this build
-		// does not know has to resolve the same way: to the strict end, so no
-		// unrecognized policy word can quietly stop blocking.
+		// An unset action_on_fail is the schema default.
 		{name: "empty defaults to deny", actionOnFail: "", want: EffectDeny},
-		{name: "unknown word denies", actionOnFail: "block", want: EffectDeny},
-		{name: "misspelling denies", actionOnFail: "waarn", want: EffectDeny},
+		// A word this build does not know still denies, and is reported so the
+		// typo is visible instead of silently enforcing.
+		{name: "unknown word denies and is reported", actionOnFail: "block", want: EffectDeny, wantErr: true},
+		{name: "misspelling denies and is reported", actionOnFail: "waarn", want: EffectDeny, wantErr: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, parseEffect(tc.actionOnFail))
+			got, err := parseEffect(tc.actionOnFail)
+			assert.Equal(t, tc.want, got)
+			if tc.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.actionOnFail)
+				return
+			}
+			assert.NoError(t, err)
 		})
 	}
 }
 
-func TestValidateRuleIDs(t *testing.T) {
+func TestFilterRuleIDs(t *testing.T) {
 	cases := []struct {
-		name     string
-		rules    []Rule
-		wantErr  string
-		wantPass bool
+		name    string
+		rules   []Rule
+		wantIDs []string
+		wantErr string
 	}{
-		{name: "unique ids pass", rules: []Rule{{RuleID: "a"}, {RuleID: "b"}}, wantPass: true},
-		{name: "blank id is rejected", rules: []Rule{{RuleID: " "}}, wantErr: "rule_id is required"},
-		{name: "duplicate id is rejected", rules: []Rule{{RuleID: "a"}, {RuleID: "a"}}, wantErr: "duplicates"},
+		{name: "unique ids pass", rules: []Rule{{RuleID: "a"}, {RuleID: "b"}}, wantIDs: []string{"a", "b"}},
+		{name: "blank id is dropped", rules: []Rule{{RuleID: " "}, {RuleID: "kept"}}, wantIDs: []string{"kept"}, wantErr: "rule_id is required"},
+		{name: "duplicate id keeps the first", rules: []Rule{{RuleID: "a"}, {RuleID: "a"}, {RuleID: "b"}}, wantIDs: []string{"a", "b"}, wantErr: "duplicates"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := ValidateRuleIDs(tc.rules)
-			if tc.wantPass {
-				assert.NoError(t, err)
+			got, errs := filterRuleIDs(tc.rules)
+			ids := make([]string, 0, len(got))
+			for _, r := range got {
+				ids = append(ids, r.RuleID)
+			}
+			assert.Equal(t, tc.wantIDs, ids)
+			if tc.wantErr == "" {
+				assert.Empty(t, errs)
 				return
 			}
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), tc.wantErr)
+			require.NotEmpty(t, errs)
+			assert.Contains(t, errs[0].Error(), tc.wantErr)
 		})
 	}
 }
@@ -189,6 +202,27 @@ func TestNewRulesEngine_Compile(t *testing.T) {
 			rules:     nil,
 			wantIDs:   []string{},
 			wantRules: 0,
+		},
+		{
+			name: "a duplicate id keeps the first rule and still enforces",
+			rules: rawRules(t,
+				toolFilterRule("shared", 0, "", "Bash"),
+				toolFilterRule("shared", 1, "", "Read"),
+			),
+			wantIDs:       []string{"shared"},
+			wantRules:     1,
+			wantEnforcing: 1,
+			wantErrors:    []string{`rule_id "shared" duplicates`},
+		},
+		{
+			name: "an unknown action_on_fail is reported and still denies",
+			rules: rawRules(t,
+				toolFilterRule("typo", 0, "block", "Bash"),
+			),
+			wantIDs:       []string{"typo"},
+			wantRules:     1,
+			wantEnforcing: 1,
+			wantErrors:    []string{`action_on_fail "block"`},
 		},
 	}
 
@@ -324,6 +358,15 @@ func TestEngine_Evaluate(t *testing.T) {
 			wantAction: agento11y.HookActionDeny,
 			wantRuleID: "no-bash",
 			wantEvals:  []wantEval{{ruleID: "no-bash", effect: "deny"}},
+		},
+		{
+			name:          "an unknown action_on_fail still denies",
+			rules:         rawRules(t, toolFilterRule("typo", 0, "block", "Bash")),
+			input:         toolCallInput("output", "Bash", `{"command":"ls"}`),
+			wantAction:    agento11y.HookActionDeny,
+			wantRuleID:    "typo",
+			wantReasonHas: []string{`rule "typo"`, "denied the call"},
+			wantEvals:     []wantEval{{ruleID: "typo", effect: "deny"}},
 		},
 	}
 

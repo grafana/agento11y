@@ -118,24 +118,23 @@ func (e *Engine) problem(msg string) {
 
 // compile decodes, validates and compiles the raw rules into the engine. The
 // step order matters: decode rule by rule so one malformed object does not stop
-// the rest, validate ids before compiling so a duplicate is named as written,
-// drop disabled rules, then compile.
+// the rest, drop disabled rules, drop blank and duplicate ids so a naming
+// fault cannot compile twice, then compile.
 func (e *Engine) compile(raw []json.RawMessage) {
 	rules, decodeErrs := DecodeRules(raw)
 	for _, err := range decodeErrs {
 		e.problem(err.Error())
 	}
-	if err := ValidateRuleIDs(rules); err != nil {
-		e.problem(err.Error())
-	}
-
 	enabled := make([]Rule, 0, len(rules))
 	for _, rule := range rules {
 		if rule.Enabled != nil && !*rule.Enabled {
 			continue
 		}
-		rule.RuleID = strings.TrimSpace(rule.RuleID)
 		enabled = append(enabled, rule)
+	}
+	enabled, idErrs := filterRuleIDs(enabled)
+	for _, err := range idErrs {
+		e.problem(err.Error())
 	}
 
 	compiled, errs := compileGuardRules(enabled)
