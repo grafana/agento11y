@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.44.0] - 2026-09-14
+
+### Features
+
+- **plugins**: add claude plugin eval export support (#743)
+
+### Bug Fixes
+
+- **local**: avoid repeating historical user prompts (#742)
+- **plugins/agento11y**: keep reading transcripts past an oversized line (#711)
+- **plugins/agento11y**: accept a pasted full export URL as the endpoint (#714)
+- **security**: resolve 75 CVEs across the npm, Python and Go dependency trees (#718)
+- **security/high/plugins/agento11y**: update module google.golang.org/grpc to v1.83.1 [security] (#703)
+
 ## [0.43.0] - 2026-08-27
 
 ### Features
