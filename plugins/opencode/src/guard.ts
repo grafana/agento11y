@@ -449,9 +449,7 @@ function extractToolCallTransform(
 
   const name = toolName?.trim() ?? "";
   const named = name
-    ? all.filter(
-        (c) => (c.name ?? "").toLowerCase() === name.toLowerCase(),
-      )
+    ? all.filter((c) => (c.name ?? "").toLowerCase() === name.toLowerCase())
     : [];
   if (named.length === 1) {
     return parseTransformArgs(named[0].raw, label, logger);
