@@ -447,12 +447,14 @@ function extractToolCallTransform(
   const label = id || toolName?.trim() || "tool";
   // One rewritten call: apply it even if the id differs so a missing or
   // rewritten id cannot drop a redaction. Matches the Go plugin.
-  if (all.length === 1) return parseTransformArgs(all[0].raw, label, logger);
+  const only = all.length === 1 ? all[0] : undefined;
+  if (only) return parseTransformArgs(only.raw, label, logger);
 
   const name = toolName?.trim() ?? "";
   const named = name ? all.filter((c) => toolNamesEqual(c.name, name)) : [];
-  if (named.length === 1) {
-    return parseTransformArgs(named[0].raw, label, logger);
+  const namedOnly = named.length === 1 ? named[0] : undefined;
+  if (namedOnly) {
+    return parseTransformArgs(namedOnly.raw, label, logger);
   }
 
   logger?.warn(`tool-call transform present but no part matched ${label}`);

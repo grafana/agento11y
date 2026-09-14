@@ -123,7 +123,7 @@ var gitPreview = []string{
 
 var gitPatterns = []string{
 	`(?i)\bgit[[:space:]]+reset[[:space:]]+--hard\b`,
-	`(?i)\bgit[[:space:]]+push\b.*[[:space:]](?:--force|-f)(?:[[:space:]]|$)`,
+	`(?i)\bgit[[:space:]]+push\b.*[[:space:]](?:--force|-f)(?:[[:space:]]|$|[^[:alnum:]_-])`,
 	`(?i)\bgit[[:space:]]+clean\b.*-[a-zA-Z]*f`,
 	`(?i)\bgit[[:space:]]+checkout[[:space:]]+--[[:space:]]`,
 	`(?i)\bgit[[:space:]]+stash[[:space:]]+drop\b`,
