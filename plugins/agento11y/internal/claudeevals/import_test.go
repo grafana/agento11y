@@ -55,6 +55,9 @@ func TestRealClaudeResult(t *testing.T) {
 				if (i == 0) != (score.ScoreKey == "final") {
 					t.Fatalf("only the aggregate score may be final: %q", score.ScoreKey)
 				}
+				if i > 0 && len(score.EvaluatorVersion) > 64 {
+					t.Fatalf("grader evaluator version exceeds backend limit: %d", len(score.EvaluatorVersion))
+				}
 			}
 		}
 	}

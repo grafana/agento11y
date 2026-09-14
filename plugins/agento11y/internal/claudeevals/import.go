@@ -267,7 +267,7 @@ func Parse(reader io.Reader, opts Options) (*Plan, error) {
 					}
 					score := agento11y.ScoreItem{
 						ScoreID: stableID("score", []string{trialID, "grader", g.Name}), TrialID: trialID,
-						EvaluatorID: "claude-plugin-eval." + def.Type, EvaluatorVersion: stableID("grader", def),
+						EvaluatorID: "claude-plugin-eval." + def.Type, EvaluatorVersion: strings.TrimPrefix(stableID("grader", def), "grader-"),
 						ScoreKey: "grader." + g.Name, Value: agento11y.BoolScoreValue(*g.Passed), Passed: g.Passed,
 						Metadata: map[string]any{"weight": g.Weight, "scored": *g.Scored, "with_only": g.WithOnly, "judge_votes": g.JudgeVotes},
 					}

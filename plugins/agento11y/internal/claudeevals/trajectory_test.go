@@ -234,6 +234,8 @@ func TestTrajectoryExportsLinkedGenerationsAndOTLP(t *testing.T) {
 	}
 	defer func() { _ = telemetry.Shutdown(context.Background()) }()
 	trajectory := fixtureTrajectory(t)
+	// A failed tool call is part of a valid Claude trajectory, not an import failure.
+	trajectory.Activities[1].Error = true
 	if err := telemetry.export(context.Background(), trajectory, true); err != nil {
 		t.Fatal(err)
 	}

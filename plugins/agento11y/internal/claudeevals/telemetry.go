@@ -132,11 +132,6 @@ func (t *Telemetry) export(ctx context.Context, trajectory *Trajectory, includeC
 			tool.SetExecError(errors.New("tool returned an error"))
 		}
 		tool.End()
-		if err := tool.Err(); err != nil {
-			rec.SetCallError(err)
-			rec.End()
-			return err
-		}
 	}
 	for _, activity := range trajectory.Activities {
 		if activity.Kind != "chat" {
