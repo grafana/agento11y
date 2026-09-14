@@ -140,6 +140,7 @@ describe('SettingsLocalGuardsCard', () => {
     );
     render(<SettingsLocalGuardsCard />);
     const view = await screen.findByRole('button', { name: 'View Git safety' });
+    expect(view.textContent).toContain('view');
     expect(screen.queryByText('git stash drop')).toBeNull();
     fireEvent.click(view);
     expect(screen.getByText('git stash drop')).toBeTruthy();

@@ -139,6 +139,16 @@ func writeCompactRule(b *strings.Builder, rule Rule) error {
 	if action := strings.TrimSpace(rule.ActionOnFail); action != "" {
 		writeTomlKey(b, "action_on_fail", action)
 	}
+	if len(rule.extra) > 0 {
+		keys := make([]string, 0, len(rule.extra))
+		for key := range rule.extra {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			writeTomlKey(b, key, rule.extra[key])
+		}
+	}
 	if len(rule.Match) > 0 {
 		keys := make([]string, 0, len(rule.Match))
 		for key := range rule.Match {
@@ -197,7 +207,7 @@ func writeCompactRule(b *strings.Builder, rule Rule) error {
 }
 
 func writeTomlKey(b *strings.Builder, key string, value any) {
-	b.WriteString(key)
+	b.WriteString(encodeTomlKeyPath(key))
 	b.WriteString(" = ")
 	b.WriteString(encodeTomlValue(value))
 	b.WriteByte('\n')
@@ -231,6 +241,8 @@ func encodeTomlValue(value any) string {
 		return encodeTomlArray(items)
 	case []any:
 		return encodeTomlArray(v)
+	case map[string]any:
+		return encodeTomlInlineTable(v)
 	default:
 		return encodeTomlString(fmt.Sprint(v))
 	}
@@ -249,11 +261,60 @@ func encodeTomlArray(items []any) string {
 	return b.String()
 }
 
+func encodeTomlInlineTable(m map[string]any) string {
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	b.WriteByte('{')
+	for i, key := range keys {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(encodeTomlKeyPart(key))
+		b.WriteString(" = ")
+		b.WriteString(encodeTomlValue(m[key]))
+	}
+	b.WriteByte('}')
+	return b.String()
+}
+
+func encodeTomlKeyPath(key string) string {
+	parts := strings.Split(key, ".")
+	for i, part := range parts {
+		parts[i] = encodeTomlKeyPart(part)
+	}
+	return strings.Join(parts, ".")
+}
+
+func encodeTomlKeyPart(part string) string {
+	if isBareTomlKey(part) {
+		return part
+	}
+	return encodeTomlString(part)
+}
+
+func isBareTomlKey(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '_', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // encodeTomlString quotes a value the way a hand-written guards.toml does:
 // literal quotes when the string holds backslashes (regexes), otherwise a
 // basic double-quoted string.
 func encodeTomlString(s string) string {
-	if strings.Contains(s, `\`) && !strings.ContainsAny(s, "'\n") {
+	if strings.Contains(s, `\`) && !strings.ContainsAny(s, "'\n\r") && !hasCtl(s) {
 		return "'" + s + "'"
 	}
 	var b strings.Builder
@@ -268,12 +329,31 @@ func encodeTomlString(s string) string {
 			b.WriteString(`\n`)
 		case '\t':
 			b.WriteString(`\t`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\b':
+			b.WriteString(`\b`)
+		case '\f':
+			b.WriteString(`\f`)
 		default:
-			b.WriteRune(r)
+			if r < 0x20 {
+				fmt.Fprintf(&b, `\u%04x`, r)
+			} else {
+				b.WriteRune(r)
+			}
 		}
 	}
 	b.WriteByte('"')
 	return b.String()
+}
+
+func hasCtl(s string) bool {
+	for _, r := range s {
+		if r < 0x20 {
+			return true
+		}
+	}
+	return false
 }
 
 // WriteRules encodes rules and writes them to path with 0600 permissions,

@@ -445,18 +445,27 @@ function extractToolCallTransform(
   }
 
   const label = id || toolName?.trim() || "tool";
+  // One rewritten call: apply it even if the id differs so a missing or
+  // rewritten id cannot drop a redaction. Matches the Go plugin.
   if (all.length === 1) return parseTransformArgs(all[0].raw, label, logger);
 
   const name = toolName?.trim() ?? "";
-  const named = name
-    ? all.filter((c) => (c.name ?? "").toLowerCase() === name.toLowerCase())
-    : [];
+  const named = name ? all.filter((c) => toolNamesEqual(c.name, name)) : [];
   if (named.length === 1) {
     return parseTransformArgs(named[0].raw, label, logger);
   }
 
   logger?.warn(`tool-call transform present but no part matched ${label}`);
   return undefined;
+}
+
+/** Same contract as Go `strings.EqualFold(strings.TrimSpace(a), b)`. */
+function toolNamesEqual(candidate: string | undefined, want: string): boolean {
+  return (
+    (candidate ?? "").trim().localeCompare(want, undefined, {
+      sensitivity: "accent",
+    }) === 0
+  );
 }
 
 function parseTransformArgs(

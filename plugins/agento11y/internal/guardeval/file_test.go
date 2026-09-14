@@ -237,6 +237,72 @@ func TestEncodeRulesRoundTrip(t *testing.T) {
 	assert.NotContains(t, got, "[[rules.transform.patterns]]")
 }
 
+func TestEncodeRulesPreservesUnknownFields(t *testing.T) {
+	raw, err := ParseRules([]byte(`
+[[rules]]
+rule_id = "block.rm"
+phase = "postflight"
+action_on_fail = "deny"
+short_circuit = true
+evaluator_ids = ["ev-1"]
+tool_filter.blocked_names = ["Bash(*rm -rf*)"]
+`))
+	require.NoError(t, err)
+	rules, errs := DecodeRules(raw)
+	require.Empty(t, errs)
+	require.Len(t, rules, 1)
+	assert.Equal(t, true, rules[0].extra["short_circuit"])
+	assert.Equal(t, []any{"ev-1"}, rules[0].extra["evaluator_ids"])
+
+	data, err := EncodeRules(rules)
+	require.NoError(t, err)
+	got := string(data)
+	assert.Contains(t, got, "short_circuit = true")
+	assert.Contains(t, got, `evaluator_ids = ["ev-1"]`)
+}
+
+func TestEncodeRulesNestedEvaluatorConfig(t *testing.T) {
+	rules := []Rule{{
+		RuleID: "check.nested",
+		Phase:  "postflight",
+		Evaluators: []EvaluatorSpec{{
+			Kind: "regex",
+			Config: map[string]any{
+				"target": "response",
+				"flags":  map[string]any{"i": true},
+			},
+		}},
+	}}
+	data, err := EncodeRules(rules)
+	require.NoError(t, err)
+	got := string(data)
+	assert.Contains(t, got, "config.target = \"response\"")
+	assert.Contains(t, got, "config.flags = {i = true}")
+	assert.NotContains(t, got, "map[")
+}
+
+func TestEncodeTomlStringEscapesCarriageReturn(t *testing.T) {
+	data, err := EncodeRules([]Rule{{
+		RuleID: "block.cr",
+		Phase:  "postflight",
+		Match:  map[string]any{"agent name": "claude"},
+		Transform: &TransformConfig{
+			Patterns: []TransformPattern{{Regex: "a\rb"}},
+		},
+	}})
+	require.NoError(t, err)
+	got := string(data)
+	assert.Contains(t, got, `regex = "a\rb"`)
+	assert.Contains(t, got, `match."agent name" = "claude"`)
+	raw, err := ParseRules(data)
+	require.NoError(t, err)
+	out, errs := DecodeRules(raw)
+	require.Empty(t, errs)
+	require.Len(t, out, 1)
+	require.NotNil(t, out[0].Transform)
+	assert.Equal(t, "a\rb", out[0].Transform.Patterns[0].Regex)
+}
+
 func TestEncodeRulesEmptyIsCommentOnly(t *testing.T) {
 	data, err := EncodeRules(nil)
 	require.NoError(t, err)

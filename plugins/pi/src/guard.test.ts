@@ -302,6 +302,48 @@ describe("runToolCallGuard", () => {
     expect(result).toEqual({ transform: { command: "echo X" } });
   });
 
+  it("matches a rewritten call by tool name when the echoed name has surrounding whitespace", async () => {
+    const { client } = makeClient(async () => ({
+      action: "allow",
+      evaluations: [],
+      transformedInput: {
+        output: [
+          {
+            role: "assistant",
+            parts: [
+              {
+                type: "tool_call",
+                toolCall: {
+                  id: "other",
+                  name: "read",
+                  inputJSON: '{"path":"a"}',
+                },
+              },
+              {
+                type: "tool_call",
+                toolCall: {
+                  id: "different-call-id",
+                  name: " Bash ",
+                  inputJSON: '{"command":"echo X"}',
+                },
+              },
+            ],
+          },
+        ],
+      },
+    }));
+
+    const result = await runToolCallGuard(
+      makeArgs({
+        client,
+        toolCallId: "c1",
+        toolName: "bash",
+      }),
+    );
+    expectTransform(result);
+    expect(result.transform).toEqual({ command: "echo X" });
+  });
+
   it("logs and drops a transform whose inputJSON cannot be parsed", async () => {
     const { client } = makeClient(async () => ({
       action: "allow",

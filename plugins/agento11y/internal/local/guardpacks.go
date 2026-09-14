@@ -123,12 +123,12 @@ var gitPreview = []string{
 
 var gitPatterns = []string{
 	`(?i)\bgit[[:space:]]+reset[[:space:]]+--hard\b`,
-	`(?i)\bgit[[:space:]]+push\b.*[[:space:]](--force|-f)\b`,
+	`(?i)\bgit[[:space:]]+push\b.*[[:space:]](?:--force|-f)(?:[[:space:]]|$)`,
 	`(?i)\bgit[[:space:]]+clean\b.*-[a-zA-Z]*f`,
 	`(?i)\bgit[[:space:]]+checkout[[:space:]]+--[[:space:]]`,
 	`(?i)\bgit[[:space:]]+stash[[:space:]]+drop\b`,
 	`(?i)\bgit[[:space:]]+stash[[:space:]]+clear\b`,
-	`(?i)\bgit[[:space:]]+branch[[:space:]]+-D\b`,
+	`(?i)\bgit[[:space:]]+branch[[:space:]]+(?-i)-D\b`,
 }
 
 var permissionsPreview = []string{
@@ -301,9 +301,10 @@ func packsFromRules(rules []guardeval.Rule) []guardPack {
 }
 
 // applyPackUpdates turns packs on or off against an existing ruleset. Keys
-// not in updates keep their current on/off state, but every still-on pack is
-// rewritten from the current catalog so a binary upgrade refreshes patterns.
-// Custom rules (anything not pack.*) are never removed.
+// not in updates keep their current on/off state, but every still-on catalog
+// pack is rewritten from the current catalog so a binary upgrade refreshes
+// patterns. Custom rules are never removed, including pack.* ids this binary
+// does not know (a newer pack, or a hand-named rule).
 func applyPackUpdates(existing []guardeval.Rule, updates map[string]bool) ([]guardeval.Rule, error) {
 	known := packByID()
 	for id := range updates {
@@ -316,6 +317,10 @@ func applyPackUpdates(existing []guardeval.Rule, updates map[string]bool) ([]gua
 	for _, rule := range existing {
 		id, isPack := packIDFromRule(rule.RuleID)
 		if !isPack {
+			custom = append(custom, rule)
+			continue
+		}
+		if _, ok := known[id]; !ok {
 			custom = append(custom, rule)
 			continue
 		}

@@ -24,6 +24,18 @@ func TestApplyPackUpdates_PreservesCustomRules(t *testing.T) {
 	assert.Equal(t, packRuleID(packGit), out[1].RuleID)
 }
 
+func TestApplyPackUpdates_PreservesUnknownPackPrefix(t *testing.T) {
+	future := guardeval.Rule{RuleID: "pack.newfeature", Phase: "postflight"}
+	hand := guardeval.Rule{RuleID: "pack.myown", Phase: "postflight"}
+	out, err := applyPackUpdates([]guardeval.Rule{future, hand}, map[string]bool{packGit: true})
+	require.NoError(t, err)
+	ids := make([]string, 0, len(out))
+	for _, r := range out {
+		ids = append(ids, r.RuleID)
+	}
+	assert.Equal(t, []string{"pack.newfeature", "pack.myown", packRuleID(packGit)}, ids)
+}
+
 func TestApplyPackUpdates_UnknownPack(t *testing.T) {
 	_, err := applyPackUpdates(nil, map[string]bool{"nope": true})
 	require.Error(t, err)

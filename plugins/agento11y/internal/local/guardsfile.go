@@ -98,7 +98,8 @@ func (s *Server) handlePutGuards(w http.ResponseWriter, r *http.Request) {
 	}
 	// Turning the master switch off also turns every catalog pack off so a
 	// later re-enable does not silently start enforcing the previous set.
-	if req.Enabled != nil && !*req.Enabled {
+	disableGuards := req.Enabled != nil && !*req.Enabled
+	if disableGuards {
 		if req.Packs == nil {
 			req.Packs = make(map[string]bool, len(catalogPacks()))
 		}
@@ -106,11 +107,55 @@ func (s *Server) handlePutGuards(w http.ResponseWriter, r *http.Request) {
 			req.Packs[p.ID] = false
 		}
 	}
-	if req.Enabled != nil {
-		if s.configPath == "" {
-			http.Error(w, "config persistence disabled", http.StatusServiceUnavailable)
+	if req.Enabled != nil && s.configPath == "" {
+		http.Error(w, "config persistence disabled", http.StatusServiceUnavailable)
+		return
+	}
+	if len(req.Packs) > 0 && s.guards.RulesPath == "" {
+		http.Error(w, "guards persistence disabled", http.StatusServiceUnavailable)
+		return
+	}
+	// Write packs before the enabled flag. If both are in the request and the
+	// toml write fails, leaving GUARDS_ENABLED already flipped would disable
+	// (or enable) hooks against a file that still has the old packs.
+	var next []guardeval.Rule
+	wrotePacks := false
+	if len(req.Packs) > 0 {
+		s.guardsMu.Lock()
+		rules, _, errs, err := readGuardRules(s.guards.RulesPath)
+		if err != nil {
+			s.guardsMu.Unlock()
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		if len(errs) > 0 {
+			s.guardsMu.Unlock()
+			// Disable is the escape hatch from a broken file. Skip the pack
+			// rewrite so GUARDS_ENABLED can still flip off.
+			if !disableGuards {
+				http.Error(w, "guards.toml is invalid; fix it before changing packs: "+strings.Join(errs, "; "), http.StatusBadRequest)
+				return
+			}
+		} else {
+			next, err = applyPackUpdates(rules, req.Packs)
+			if err != nil {
+				s.guardsMu.Unlock()
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if err := guardeval.WriteRules(s.guards.RulesPath, next); err != nil {
+				s.guardsMu.Unlock()
+				s.logger.Printf("local: write guards: %v", err)
+				http.Error(w, "write guards: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+			s.guardsEngine = nil
+			s.guardsDigest = [sha256.Size]byte{}
+			wrotePacks = true
+			s.guardsMu.Unlock()
+		}
+	}
+	if req.Enabled != nil {
 		value := "false"
 		if *req.Enabled {
 			value = "true"
@@ -128,41 +173,14 @@ func (s *Server) handlePutGuards(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if len(req.Packs) > 0 {
-		if s.guards.RulesPath == "" {
-			http.Error(w, "guards persistence disabled", http.StatusServiceUnavailable)
-			return
-		}
+	if wrotePacks {
 		s.guardsMu.Lock()
-		rules, _, errs, err := readGuardRules(s.guards.RulesPath)
-		if err != nil {
-			s.guardsMu.Unlock()
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		if len(errs) > 0 {
-			s.guardsMu.Unlock()
-			http.Error(w, "guards.toml is invalid; fix it before changing packs: "+strings.Join(errs, "; "), http.StatusBadRequest)
-			return
-		}
-		next, err := applyPackUpdates(rules, req.Packs)
-		if err != nil {
-			s.guardsMu.Unlock()
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		if err := guardeval.WriteRules(s.guards.RulesPath, next); err != nil {
-			s.guardsMu.Unlock()
-			s.logger.Printf("local: write guards: %v", err)
-			http.Error(w, "write guards: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		s.guardsEngine = nil
-		s.guardsDigest = [sha256.Size]byte{}
-		s.writeGuardsResponseLocked(w)
+		s.writeGuardsPutOKLocked(w, next)
 		s.guardsMu.Unlock()
 		return
 	}
+	// After GUARDS_ENABLED has been written, never fail the response on a
+	// broken guards.toml: the UI treats a non-OK PUT as "switch unchanged".
 	s.writeGuardsResponse(w)
 }
 
@@ -174,7 +192,7 @@ func (s *Server) writeGuardsResponse(w http.ResponseWriter) {
 
 func (s *Server) writeGuardsResponseLocked(w http.ResponseWriter) {
 	path := s.guards.RulesPath
-	rules, exists, _, err := readGuardRules(path)
+	rules, exists, decodeErrs, err := readGuardRules(path)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -183,9 +201,33 @@ func (s *Server) writeGuardsResponseLocked(w http.ResponseWriter) {
 	if rules == nil {
 		rules = []guardeval.Rule{}
 	}
+	errors := engine.Status().Errors
+	if len(errors) == 0 && len(decodeErrs) > 0 {
+		errors = decodeErrs
+	}
 	s.writeJSON(w, http.StatusOK, guardsFileResponse{
 		Path:      displayConfigPath(path),
 		Exists:    exists,
+		Enabled:   guardsEnvEnabled(s.configPath, s.logger),
+		Errors:    errors,
+		Enforcing: engine.Status().Enforcing,
+		Packs:     packsFromRules(rules),
+		Rules:     rules,
+	})
+}
+
+// writeGuardsPutOKLocked answers a successful pack write from the ruleset that
+// just landed, so a follow-up read error cannot turn a completed mutation into
+// HTTP 500.
+func (s *Server) writeGuardsPutOKLocked(w http.ResponseWriter, rules []guardeval.Rule) {
+	path := s.guards.RulesPath
+	if rules == nil {
+		rules = []guardeval.Rule{}
+	}
+	engine := guardeval.NewEngineFromContents(path, mustReadGuards(path), s.guards.Logger)
+	s.writeJSON(w, http.StatusOK, guardsFileResponse{
+		Path:      displayConfigPath(path),
+		Exists:    true,
 		Enabled:   guardsEnvEnabled(s.configPath, s.logger),
 		Errors:    engine.Status().Errors,
 		Enforcing: engine.Status().Enforcing,

@@ -27,6 +27,10 @@ type Rule struct {
 	ToolFilter   *ToolFilterConfig `json:"tool_filter,omitempty" toml:"tool_filter,omitempty"`
 	Transform    *TransformConfig  `json:"transform,omitempty" toml:"transform,omitempty"`
 	Evaluators   []EvaluatorSpec   `json:"evaluators,omitempty" toml:"evaluators,omitempty"` // inline deterministic evaluators run locally (see below)
+	// extra holds JSON keys this struct does not model (evaluator_ids,
+	// short_circuit, selector, …). DecodeRules keeps them so a Settings save
+	// can write them back instead of stripping them from custom rules.
+	extra map[string]any `json:"-"`
 }
 
 // EvaluatorSpec is an inline evaluator definition on a local rule. The cloud
@@ -144,6 +148,48 @@ func DecodeRules(raw []json.RawMessage) ([]Rule, []error) {
 		out = append(out, rule)
 	}
 	return out, errs
+}
+
+var knownRuleJSONKeys = map[string]struct{}{
+	"rule_id":        {},
+	"enabled":        {},
+	"phase":          {},
+	"priority":       {},
+	"match":          {},
+	"action_on_fail": {},
+	"tool_filter":    {},
+	"transform":      {},
+	"evaluators":     {},
+}
+
+// UnmarshalJSON fills the modelled fields and stashes every other key in extra
+// so a later EncodeRules can round-trip Cloud-only attributes.
+func (r *Rule) UnmarshalJSON(data []byte) error {
+	type alias Rule
+	var parsed alias
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return err
+	}
+	*r = Rule(parsed)
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	for key := range knownRuleJSONKeys {
+		delete(raw, key)
+	}
+	if len(raw) == 0 {
+		return nil
+	}
+	r.extra = make(map[string]any, len(raw))
+	for key, val := range raw {
+		var decoded any
+		if err := json.Unmarshal(val, &decoded); err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		r.extra[key] = decoded
+	}
+	return nil
 }
 
 // compileGuardRules drops disabled rules, applies the write-body defaults

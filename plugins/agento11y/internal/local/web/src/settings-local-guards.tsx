@@ -182,6 +182,7 @@ function PackRow({
             {preview.length > 0 && (
               <button
                 type="button"
+                className="pack-preview-toggle"
                 aria-expanded={open}
                 aria-controls={previewId}
                 aria-label={`View ${pack.title}`}
@@ -193,14 +194,13 @@ function PackRow({
                   border: 'none',
                   background: 'none',
                   padding: 0,
-                  color: 'var(--primary-text)',
                   fontSize: 12,
                   fontWeight: 500,
                   cursor: 'pointer',
                 }}
               >
-                View
-                <Icon name={open ? 'chevron' : 'cright'} size={12} style={{ color: 'var(--primary-text)' }} />
+                view
+                <Icon name={open ? 'chevron' : 'cright'} size={12} />
               </button>
             )}
           </div>
