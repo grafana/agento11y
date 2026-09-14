@@ -88,6 +88,8 @@ export interface AnalyticsViewProps {
   workspace: string | null;
   onWorkspaceChange: (v: string | null) => void;
   agent: string;
+  agentOptions?: string[] | null;
+  agentOptionsError?: string | null;
   onAgentChange: (v: string) => void;
   hiddenSeries: ReadonlySet<TokenBucketKey>;
   onToggleSeries: (k: TokenBucketKey) => void;
@@ -2597,11 +2599,11 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
   const facetSessionCount =
     props.facetTotalConversations ?? facetWorkspaces.reduce((sum, workspace) => sum + workspace.count, 0);
   const agentOptions = (() => {
-    const set = new Set<string>();
-    for (const host of props.facetAggregate?.agent_hosts ?? props.aggregate?.agent_hosts ?? []) set.add(host);
-    if (set.size === 0)
-      for (const conversation of props.facetConversations)
-        for (const host of agentHosts(conversation.agents)) set.add(host);
+    const set = new Set(
+      props.agentOptions ??
+        props.aggregate?.agent_hosts ??
+        selectedCurrent.flatMap((conversation) => agentHosts(conversation.agents)),
+    );
     if (props.agent !== 'all') set.add(props.agent);
     return [...set].sort();
   })();
@@ -2626,6 +2628,13 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
         <div style={{ marginBottom: 14 }}>
           <Notice kind="warning" title="Previous-period comparisons are unavailable">
             {props.previousError}
+          </Notice>
+        </div>
+      )}
+      {props.agentOptionsError && (
+        <div style={{ marginBottom: 14 }}>
+          <Notice kind="warning" title="Agent options did not refresh">
+            {props.agentOptionsError}
           </Notice>
         </div>
       )}
@@ -2675,7 +2684,10 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
             fontSize: 13,
             fontFamily: 'var(--fontFamily)',
           }}
-          options={[{ value: 'all', label: 'All agents' }, ...agentOptions.map((host) => ({ value: host, label: host }))]}
+          options={[
+            { value: 'all', label: 'All agents' },
+            ...agentOptions.map((host) => ({ value: host, label: host })),
+          ]}
         />
         <WorkspaceFacet
           workspaces={facetWorkspaces}
