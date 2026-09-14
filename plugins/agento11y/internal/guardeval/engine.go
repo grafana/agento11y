@@ -1,6 +1,7 @@
 package guardeval
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -93,12 +94,20 @@ func NewRulesEngine(raw []json.RawMessage, logger *log.Logger) *Engine {
 func NewEngine(cfg Config) *Engine {
 	e := newEngine(cfg.Logger)
 	path := userRulesPath(cfg)
-	raw, err := readRules(path)
+	data, err := readRulesBytes(path)
 	if err != nil {
 		e.problem(err.Error())
 		return e
 	}
-	e.compile(raw)
+	compileContents(e, path, data)
+	return e
+}
+
+// NewEngineFromContents compiles an already-read rules file. The daemon uses
+// this so it can cache by content hash without reading the file twice.
+func NewEngineFromContents(path string, data []byte, logger *log.Logger) *Engine {
+	e := newEngine(logger)
+	compileContents(e, path, data)
 	return e
 }
 
@@ -151,6 +160,21 @@ func (e *Engine) compile(raw []json.RawMessage) {
 	}
 }
 
+func compileContents(e *Engine, path string, data []byte) {
+	if len(data) == 0 {
+		return
+	}
+	raw, err := ParseRules(data)
+	if err != nil {
+		if path == "" {
+			path = ConfigFile
+		}
+		e.problem(fmt.Sprintf("parse %s: %v (no rules)", path, err))
+		return
+	}
+	e.compile(raw)
+}
+
 // userRulesPath is the file the rules are read from: the override, or
 // guards.toml next to config.env. Empty when neither is set, and empty
 // opens no file, because a relative default would resolve against the working
@@ -165,10 +189,10 @@ func userRulesPath(cfg Config) string {
 	return filepath.Join(cfg.ConfigDir, ConfigFile)
 }
 
-// readRules reads and parses the rules file. A missing file is no rules and no
+// readRulesBytes reads the rules file. A missing file is no rules and no
 // complaint, which is the machine that has written none. An empty path opens
 // nothing.
-func readRules(path string) ([]json.RawMessage, error) {
+func readRulesBytes(path string) ([]byte, error) {
 	if path == "" {
 		return nil, nil
 	}
@@ -179,28 +203,26 @@ func readRules(path string) ([]json.RawMessage, error) {
 		}
 		return nil, fmt.Errorf("read %s: %v (no rules)", path, err)
 	}
-	raw, err := ParseRules(data)
-	if err != nil {
-		return nil, fmt.Errorf("parse %s: %v (no rules)", path, err)
-	}
-	return raw, nil
+	return data, nil
 }
 
 // Evaluate runs the ruleset for one hook request. A nil Engine allows
 // everything, so a caller that has not compiled one need not branch.
 func (e *Engine) Evaluate(req agento11y.HookEvaluateRequest) Response {
-	resp, _ := e.EvaluateWithTransform(req)
+	resp, _, _ := e.EvaluateWithTransform(context.Background(), req)
 	return resp
 }
 
 // EvaluateWithTransform is Evaluate, also returning the transform the matching
 // rules applied so a caller can re-run those patterns over an input another
-// stage rewrote. See evaluateWithTransform for the ordering rules.
-func (e *Engine) EvaluateWithTransform(req agento11y.HookEvaluateRequest) (Response, *Transform) {
+// stage rewrote. See evaluateWithTransform for the ordering rules. ctx is
+// checked between rules; a cancelled or expired context returns without a
+// completed allow, so a slow ruleset cannot fail-open past a deny.
+func (e *Engine) EvaluateWithTransform(ctx context.Context, req agento11y.HookEvaluateRequest) (Response, *Transform, error) {
 	if e == nil {
-		return evaluateWithTransform(nil, nil, req)
+		return evaluateWithTransform(ctx, nil, nil, req)
 	}
-	return evaluateWithTransform(e.rules, e.logger, req)
+	return evaluateWithTransform(ctx, e.rules, e.logger, req)
 }
 
 // Status reports what the engine compiled. The value is a copy: a caller

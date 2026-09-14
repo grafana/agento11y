@@ -1,18 +1,48 @@
 package local
 
 import (
+	"crypto/sha256"
 	"log"
+	"os"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/guardeval"
 )
 
 func (s *Server) localGuardsStatus() localGuardsStatus {
-	engine := guardeval.NewEngine(s.guards)
+	engine := s.localEngine()
 	return localGuardsStatus{
 		Posture: engine.Status().Posture(displayConfigPath(s.guards.RulesPath)),
 		Enabled: guardsEnvEnabled(s.configPath, s.logger),
 	}
+}
+
+// localEngine returns the compiled ruleset for the current guards.toml
+// contents. Missing files compile to an empty ruleset and are cached as such.
+// Other read errors are not cached, so a later request retries.
+func (s *Server) localEngine() *guardeval.Engine {
+	path := s.guards.RulesPath
+	var data []byte
+	if path != "" {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				return guardeval.NewEngine(s.guards)
+			}
+		} else {
+			data = b
+		}
+	}
+	sum := sha256.Sum256(data)
+	s.guardsMu.Lock()
+	defer s.guardsMu.Unlock()
+	if s.guardsEngine != nil && s.guardsDigest == sum {
+		return s.guardsEngine
+	}
+	engine := guardeval.NewEngineFromContents(path, data, s.guards.Logger)
+	s.guardsEngine = engine
+	s.guardsDigest = sum
+	return engine
 }
 
 // guardsEnvEnabled reports whether config.env enables guards. It reads the file

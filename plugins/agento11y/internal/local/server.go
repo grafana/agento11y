@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -47,6 +48,12 @@ type Server struct {
 	configPath   string
 	configMu     sync.Mutex
 	guards       guardeval.Config
+	// guardsMu protects the compiled-engine cache. The cache is keyed by the
+	// SHA-256 of the file bytes so a rewrite is picked up on the next request
+	// without recompiling an unchanged ruleset on every hook.
+	guardsMu     sync.Mutex
+	guardsDigest [sha256.Size]byte
+	guardsEngine *guardeval.Engine
 	allowedHosts []string
 	mux          *http.ServeMux
 	forward      *forwardLoader
@@ -578,30 +585,47 @@ func (s *Server) handleHookEvaluate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, localTransform := guardeval.NewEngine(s.guards).EvaluateWithTransform(req)
+	cfg := s.forward.load()
+	fallback := time.Duration(cfg.timeoutMs) * time.Millisecond
+	if fallback <= 0 {
+		fallback = time.Duration(envconfig.DefaultGuardsTimeoutMs) * time.Millisecond
+	}
+	timeout := hookTimeoutFromHeader(r, fallback)
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	defer cancel()
+
+	resp, localTransform, err := s.localEngine().EvaluateWithTransform(ctx, req)
+	if err != nil {
+		if isCallerAbort(err) {
+			s.writeJSON(w, http.StatusOK, encodeHookEvaluateResponse(resp))
+			return
+		}
+		// A local timeout is an evaluation failure, not a Cloud fail-open: the
+		// ruleset did not finish, so the call is denied rather than relayed.
+		s.writeJSON(w, http.StatusOK, encodeHookEvaluateResponse(guardeval.FromHookResponse(denyFromCloudError(body, err))))
+		return
+	}
 	if resp.Action == agento11y.HookActionDeny {
 		s.writeJSON(w, http.StatusOK, encodeHookEvaluateResponse(resp))
 		return
 	}
 
 	// Never chain a payload another daemon relayed here, which would loop.
-	if !isForwardedRequest(r) {
-		if cfg := s.forward.load(); cfg.hookURL != "" {
-			relayBody, redacted, prepareErr := prepareHookRelayBody(body, req, localTransform, s.logger)
-			if prepareErr != nil {
-				prepareErr = s.forward.recordHookFailure("prepare Cloud hook relay: %v", prepareErr)
-				if cfg.failOpen {
-					s.forward.recordFailOpen()
-				} else {
-					resp = guardeval.FromHookResponse(denyFromCloudError(body, prepareErr))
-				}
+	if !isForwardedRequest(r) && cfg.hookURL != "" {
+		relayBody, redacted, prepareErr := prepareHookRelayBody(body, req, localTransform, s.logger)
+		if prepareErr != nil {
+			prepareErr = s.forward.recordHookFailure("prepare Cloud hook relay: %v", prepareErr)
+			if cfg.failOpen {
+				s.forward.recordFailOpen()
 			} else {
-				if redacted {
-					// AGENTO11Y_DEBUG only: confirms relay redaction without logging values.
-					s.logger.Printf("local guards: relaying a redacted body to Cloud")
-				}
-				s.chainHookEvaluate(r, cfg, body, relayBody, localTransform, &resp)
+				resp = guardeval.FromHookResponse(denyFromCloudError(body, prepareErr))
 			}
+		} else {
+			if redacted {
+				// AGENTO11Y_DEBUG only: confirms relay redaction without logging values.
+				s.logger.Printf("local guards: relaying a redacted body to Cloud")
+			}
+			s.chainHookEvaluate(ctx, cfg, body, relayBody, localTransform, &resp)
 		}
 	}
 	s.writeJSON(w, http.StatusOK, encodeHookEvaluateResponse(resp))
@@ -627,13 +651,23 @@ func prepareHookRelayBody(body []byte, req agento11y.HookEvaluateRequest, localT
 
 // chainHookEvaluate merges the Cloud verdict after the local verdict. Cloud
 // supplies the action, rule ID, and reason. A local transform survives when
-// Cloud supplies none, and local evaluations remain first. On failure,
-// fail-open keeps the local verdict; fail-closed returns an evaluation-failure
-// deny.
-func (s *Server) chainHookEvaluate(r *http.Request, cfg forwardConfig, originalBody, body []byte, localTransform *guardeval.Transform, resp *guardeval.Response) {
-	timeout := hookTimeoutFromHeader(r, time.Duration(cfg.timeoutMs)*time.Millisecond)
-	ctx, cancel := context.WithTimeout(r.Context(), timeout)
-	defer cancel()
+// Cloud supplies none, and local evaluations remain first. The Cloud call
+// uses whatever of ctx remains after local evaluation, so the two stages
+// share the agent's hook budget. On failure, fail-open keeps the local
+// verdict; fail-closed returns an evaluation-failure deny.
+func (s *Server) chainHookEvaluate(ctx context.Context, cfg forwardConfig, originalBody, body []byte, localTransform *guardeval.Transform, resp *guardeval.Response) {
+	timeout := time.Duration(cfg.timeoutMs) * time.Millisecond
+	if deadline, ok := ctx.Deadline(); ok {
+		timeout = time.Until(deadline)
+		if timeout <= 0 {
+			if cfg.failOpen {
+				s.forward.recordFailOpen()
+			} else {
+				*resp = guardeval.FromHookResponse(denyFromCloudError(originalBody, context.DeadlineExceeded))
+			}
+			return
+		}
+	}
 
 	cloud, err := s.forward.evaluateCloudHook(ctx, cfg, timeout, body)
 	switch {

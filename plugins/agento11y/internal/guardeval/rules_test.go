@@ -1,6 +1,7 @@
 package guardeval
 
 import (
+	"context"
 	"log"
 	"testing"
 
@@ -19,7 +20,7 @@ func compileRulesForTest(t *testing.T, raw ...Rule) []CompiledRule {
 }
 
 func evaluateForTest(rules []CompiledRule, logger *log.Logger, req agento11y.HookEvaluateRequest) Response {
-	resp, _ := evaluateWithTransform(rules, logger, req)
+	resp, _, _ := evaluateWithTransform(context.Background(), rules, logger, req)
 	return resp
 }
 

@@ -2,12 +2,14 @@ package guardeval
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/stretchr/testify/assert"
@@ -373,10 +375,11 @@ func TestEngine_Evaluate(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			engine := NewRulesEngine(tc.rules, nil)
-			resp, transform := engine.EvaluateWithTransform(agento11y.HookEvaluateRequest{
+			resp, transform, err := engine.EvaluateWithTransform(context.Background(), agento11y.HookEvaluateRequest{
 				Phase: agento11y.HookPhasePostflight,
 				Input: tc.input,
 			})
+			require.NoError(t, err)
 
 			assert.Equal(t, tc.wantAction, resp.Action)
 			assert.Equal(t, tc.wantRuleID, resp.RuleID)
@@ -503,5 +506,31 @@ tool_filter.blocked_names = ["Bash"]
 
 		engine := NewEngine(Config{ConfigDir: dir})
 		assert.Contains(t, joinStrings(engine.Status().Errors), "permission denied")
+	})
+}
+
+// A cancelled or expired context must not complete as an allow: the daemon
+// fail-closes from the error rather than from a finished verdict.
+func TestEvaluateWithTransform_StopsOnContextError(t *testing.T) {
+	engine := NewRulesEngine(rawRules(t, toolFilterRule("no-bash", 0, "deny", "Bash")), nil)
+	req := agento11y.HookEvaluateRequest{
+		Phase: agento11y.HookPhasePostflight,
+		Input: toolCallInput("output", "Bash", `{"command":"ls"}`),
+	}
+
+	t.Run("canceled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		resp, _, err := engine.EvaluateWithTransform(ctx, req)
+		require.ErrorIs(t, err, context.Canceled)
+		assert.Empty(t, resp.Action)
+	})
+
+	t.Run("deadline exceeded", func(t *testing.T) {
+		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		t.Cleanup(cancel)
+		resp, _, err := engine.EvaluateWithTransform(ctx, req)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		assert.Empty(t, resp.Action)
 	})
 }

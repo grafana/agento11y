@@ -2,6 +2,7 @@ package guardeval
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -31,9 +32,12 @@ const (
 // from later rules. Rewrites accumulate separately in transformed_input. For
 // non-deny results, the second return value lets callers reapply local patterns
 // to input rewritten from an unredacted relay. logger may be nil.
-func evaluateWithTransform(rules []CompiledRule, logger *log.Logger, req agento11y.HookEvaluateRequest) (Response, *Transform) {
+func evaluateWithTransform(ctx context.Context, rules []CompiledRule, logger *log.Logger, req agento11y.HookEvaluateRequest) (Response, *Transform, error) {
 	if logger == nil {
 		logger = log.New(io.Discard, "", 0)
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 
 	phase := strings.ToLower(strings.TrimSpace(string(req.Phase)))
@@ -85,6 +89,9 @@ func evaluateWithTransform(rules []CompiledRule, logger *log.Logger, req agento1
 	}
 
 	for _, rule := range rules {
+		if err := ctx.Err(); err != nil {
+			return Response{}, nil, err
+		}
 		if rule.phase != phase {
 			continue
 		}
@@ -126,7 +133,7 @@ func evaluateWithTransform(rules []CompiledRule, logger *log.Logger, req agento1
 			he.Reason = reason
 			out = append(out, he)
 			if resp, applied, stop := tripped(rule, reason); stop {
-				return resp, applied
+				return resp, applied, nil
 			}
 			// A warning records the tool-filter result and moves to the next
 			// rule. Evaluators on this rule do not report the same rejection again.
@@ -154,7 +161,7 @@ func evaluateWithTransform(rules []CompiledRule, logger *log.Logger, req agento1
 			he.Reason = reason
 			out = append(out, he)
 			if resp, applied, stop := tripped(rule, reason); stop {
-				return resp, applied
+				return resp, applied, nil
 			}
 		}
 	}
@@ -164,7 +171,7 @@ func evaluateWithTransform(rules []CompiledRule, logger *log.Logger, req agento1
 		RuleID:           transformRuleID,
 		TransformedInput: snapshot(),
 		Evaluations:      out,
-	}, transformOf(appliedPatterns)
+	}, transformOf(appliedPatterns), nil
 }
 
 // tripReason names the rule and describes the tripped check using its actual

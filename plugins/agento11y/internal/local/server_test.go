@@ -2771,9 +2771,13 @@ func TestServer_HookEvaluate_RelayShape(t *testing.T) {
 	assert.NotEmpty(t, headers.Get(ForwardMarkerHeader))
 	assert.Equal(t, "t", headers.Get(wire.TenantHeaderName))
 	assert.True(t, strings.HasPrefix(headers.Get("Authorization"), "Basic "))
-	// The legacy spelling was propagated under the branded one, minus the
-	// margin that keeps the Cloud call ahead of the agent's own deadline.
-	assert.Equal(t, "4750", headers.Get(hookTimeoutHeader))
+	// The branded spelling carries the remaining budget after local
+	// evaluation, which is at most the agent header minus the margin.
+	ms, err := strconv.Atoi(headers.Get(hookTimeoutHeader))
+	require.NoError(t, err)
+	assert.Positive(t, ms)
+	assert.LessOrEqual(t, ms, 4750)
+	assert.Greater(t, ms, 1000, "local evaluation of an empty ruleset must leave Cloud a usable window")
 }
 
 // TestServer_HookEvaluate_DoesNotChainRelayedRequest covers the loop guard: a
@@ -3248,4 +3252,44 @@ tool_filter.blocked_names = ["x"]
 	assert.Contains(t, keys, "path")
 	assert.Contains(t, keys, "enabled")
 	assert.NotContains(t, keys, "Posture")
+}
+
+// A local evaluation that hits the agent's hook deadline is an evaluation
+// failure: the call is denied and never relayed, even when Cloud fail-open is
+// on.
+func TestServer_HookEvaluate_LocalTimeoutDeniesWithoutCloud(t *testing.T) {
+	cloud := newHookCloud(t)
+	s, _ := newForwardingTestServer(t, cloud.srv, hookEnv(cloud.srv.URL, nil))
+	writeGuardsFileFor(t, s, blockRmRules)
+
+	status, out := postHook(t, s, hookRmToolCallBody, nil, func(r *http.Request) *http.Request {
+		ctx, cancel := context.WithDeadline(r.Context(), time.Now().Add(-time.Second))
+		t.Cleanup(cancel)
+		return r.WithContext(ctx)
+	})
+	require.Equal(t, http.StatusOK, status)
+	assert.Equal(t, agento11y.HookActionDeny, out.Action)
+	assert.Equal(t, guard.EvaluationFailureRuleID, out.RuleID)
+	assert.Zero(t, cloud.count(), "a timed-out local evaluation must not be relayed")
+	assert.Zero(t, s.forward.status().HookFailOpens)
+}
+
+// The agent cancelling its wait is not a completed verdict. It must not
+// fail-close as an evaluation failure or count as a Cloud fail-open.
+func TestServer_HookEvaluate_CallerAbortDoesNotFailClosed(t *testing.T) {
+	cloud := newHookCloud(t)
+	s, _ := newForwardingTestServer(t, cloud.srv, hookEnv(cloud.srv.URL, map[string]string{
+		"AGENTO11Y_GUARDS_FAIL_OPEN": "false",
+	}))
+	writeGuardsFileFor(t, s, blockRmRules)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	status, out := postHook(t, s, hookRmToolCallBody, nil, func(r *http.Request) *http.Request {
+		return r.WithContext(ctx)
+	})
+	require.Equal(t, http.StatusOK, status)
+	assert.NotEqual(t, guard.EvaluationFailureRuleID, out.RuleID)
+	assert.Zero(t, s.forward.status().HookFailOpens)
+	assert.Zero(t, cloud.count())
 }
