@@ -124,6 +124,27 @@ The daemon always stores full session content locally. It forwards full generati
 
 Manage the app with `agento11y local start|open|status|stop|restart`. `agento11y local open` starts the receiver if needed, prints its address, and tries to open the app.
 
+### Local guards
+
+With `AGENTO11Y_GUARDS_ENABLED=true`, each host POSTs preflight and tool-call checks to the daemon. Put `guards.toml` next to `config.env` (`~/.config/agento11y/guards.toml`). A local deny always denies. `AGENTO11Y_GUARDS_FAIL_OPEN` only applies to Cloud relay failures; a broken or empty rules file allows every call.
+
+`reject = true` blocks when the pattern matches. `config.target = "shell_command"` evaluates the decoded command line of a shell tool instead of the JSON-escaped tool-call text. Cloud-only evaluator kinds (`llm_judge`, `heuristic`, `prompt_guard`, `json_schema`) load and never fire locally.
+
+```toml
+[[rules]]
+rule_id = "block.reset"
+phase = "postflight"
+action_on_fail = "deny"
+
+  [[rules.evaluators]]
+  kind = "regex"
+  config.target = "shell_command"
+  config.reject = true
+  config.patterns = ['(?i)\bgit\s+reset\s+--hard\b']
+```
+
+`agento11y doctor` reports the file path, compile errors, and how many rules can enforce locally.
+
 ### History import
 
 The local Agent Observability app starts empty: it only has sessions captured after you installed agento11y. To backfill earlier sessions, prefer the app — a banner on the Sessions page, or Settings → History. Imports run in the background with live progress; you can cancel them, and a cancelled run keeps what it already imported.
