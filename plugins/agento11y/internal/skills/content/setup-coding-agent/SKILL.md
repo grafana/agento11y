@@ -322,9 +322,10 @@ both signals when an endpoint is set.
 - **content capture**: the effective mode and where it came from. An invalid
   value falls back to `metadata_only` and the section message names the variable
   to fix.
-- **guards**: `disabled`, or `enabled` with the timeout and fail-open/fail-closed
-  mode. With local forwarding, **local guard checks** says whether guard content
-  reaches Grafana Cloud.
+- **guards**: `disabled`, or `enabled` with the timeout and Cloud fail-open/fail-closed
+  mode (`AGENTO11Y_GUARDS_FAIL_OPEN` applies to Cloud relay only). **local rules**
+  names `guards.toml` and how many rules can enforce locally. With local
+  forwarding, **local guard checks** says whether guard content reaches Grafana Cloud.
 - **Coding agents**: one row per agent. `not found on PATH` means doctor cannot
   find that CLI. `on PATH, plugin not installed` describes current state; the
   integration may never have been installed, may have been removed, or may be

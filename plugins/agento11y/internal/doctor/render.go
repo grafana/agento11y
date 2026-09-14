@@ -160,6 +160,9 @@ func renderHuman(w io.Writer, r *Report, color bool) {
 		describeSource(p, provenanceParts(r.Config.ContentModeKey, r.Config.ContentModeSource)...)))
 	b.kv("prompt redaction", describeRedactInput(p, r.Config))
 	b.kv("guards", describeGuards(p, r.Config))
+	if r.Config.GuardsFile != "" {
+		b.kv("local rules", describeLocalRules(p, r.Config))
+	}
 	// Only printed when an override is set: with the family unset each adapter
 	// reports its own product name, and there is no single value to show.
 	if r.Config.AgentName != "" {
@@ -353,21 +356,33 @@ func describeRedactInput(p palette, c ConfigSection) string {
 }
 
 // describeGuards renders the resolved guard feature flags. Guards default off,
-// so a plain "disabled" is the common line; when on, the timeout and fail mode
-// matter (fail-closed blocks the tool call when a guard errors or times out).
-// The trailer names the GUARDS_ENABLED spelling alone. GUARDS_TIMEOUT_MS and
-// GUARDS_FAIL_OPEN are separate families, and this row does not attribute them;
-// an invalid value in either is named by a section message.
+// so a plain "disabled" is the common line; when on, the timeout and Cloud
+// fail mode matter. GUARDS_FAIL_OPEN is Cloud-only: a local deny always
+// denies, and a broken rules file allows everything. The trailer names the
+// GUARDS_ENABLED spelling alone. GUARDS_TIMEOUT_MS and GUARDS_FAIL_OPEN are
+// separate families, and this row does not attribute them; an invalid value in
+// either is named by a section message.
 func describeGuards(p palette, c ConfigSection) string {
 	trailer := describeSource(p, provenanceParts(c.GuardsKey, c.GuardsSource)...)
 	if !c.GuardsEnabled {
 		return withTrailer(p.faint("disabled"), trailer)
 	}
-	failMode := "fail-open"
+	failMode := "Cloud fail-open"
 	if !c.GuardsFailOpen {
-		failMode = "fail-closed"
+		failMode = "Cloud fail-closed"
 	}
 	return withTrailer(fmt.Sprintf("enabled, timeout %dms, %s", c.GuardsTimeoutMs, failMode), trailer)
+}
+
+// describeLocalRules renders guards.toml posture. Compile errors and a file
+// that exists with nothing enforceable are section messages, so this row is
+// the path plus the enforcing count.
+func describeLocalRules(p palette, c ConfigSection) string {
+	trailer := describeSource(p, c.GuardsFile)
+	if !c.GuardsFileExists {
+		return withTrailer(p.faint("missing"), trailer)
+	}
+	return withTrailer(fmt.Sprintf("%d enforcing", c.GuardsFileRules), trailer)
 }
 
 // describeLocalHookForward renders whether a --local session's guard checks
