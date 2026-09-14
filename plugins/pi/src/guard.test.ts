@@ -269,7 +269,7 @@ describe("runToolCallGuard", () => {
     );
   });
 
-  it("applies transformed_input when it is the only rewritten call even if the id differs", async () => {
+  it("ignores a transform aimed at a different toolCallId even when it is the only rewritten call", async () => {
     const { client } = makeClient(async () => ({
       action: "allow",
       evaluations: [],
@@ -299,7 +299,7 @@ describe("runToolCallGuard", () => {
         toolName: "bash",
       }),
     );
-    expect(result).toEqual({ transform: { command: "echo X" } });
+    expect(result).toBeUndefined();
   });
 
   it("matches a rewritten call by tool name when the echoed name has surrounding whitespace", async () => {

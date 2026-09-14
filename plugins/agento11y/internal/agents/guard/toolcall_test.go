@@ -146,13 +146,12 @@ func TestEvaluateToolCall(t *testing.T) {
 			wantServerCalled: true,
 		},
 		{
-			name:             "mismatched id still applies when it is the only rewritten call",
+			name:             "mismatched id is ignored when it is the only rewritten call",
 			cfg:              envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true},
 			serverResponds:   `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"tu_other","name":"bash","input_json":{"cmd":"echo [REDACTED]"}}}]}]}}`,
 			toolName:         "bash",
 			wantAction:       agento11y.HookActionAllow,
-			wantUpdatedInput: `{"cmd":"echo [REDACTED]"}`,
-			wantLogSub:       "transform_applied=true",
+			wantLogSub:       "tool-call transform present but no part matched tu_1",
 			wantServerCalled: true,
 		},
 		{

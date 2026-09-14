@@ -295,11 +295,13 @@ func EvaluateToolCall(ctx context.Context, cfg envconfig.GuardsConfig, in ToolCa
 // extractToolCallTransform walks the server-returned transformed_input for
 // the tool_call part matching toolCallID and returns its arguments as raw
 // JSON. When the id does not match, it falls back to the only rewritten
-// tool call, or the only rewritten call with the same tool name, so a
-// missing or rewritten id cannot drop a redaction. Returns nil on any
-// mismatch or parse failure so the caller falls through to the original
-// tool input unchanged. Mirrors pi guard.ts extractToolCallTransform; keep
-// the two in sync.
+// tool call if that call has no id (or the client sent none), or to the
+// only rewritten call with the same tool name among several. A single
+// call with a different populated id is ignored so a transform aimed at
+// another toolCallId cannot land here. Returns nil on any mismatch or
+// parse failure so the caller falls through to the original tool input
+// unchanged. Mirrors pi guard.ts extractToolCallTransform; keep the two
+// in sync.
 func extractToolCallTransform(resp *agento11y.HookEvaluateResponse, toolCallID, toolName string, logger *log.Logger) json.RawMessage {
 	if resp == nil || resp.TransformedInput == nil || len(resp.TransformedInput.Output) == 0 {
 		return nil
@@ -339,20 +341,23 @@ func extractToolCallTransform(resp *agento11y.HookEvaluateResponse, toolCallID, 
 		label = strings.TrimSpace(toolName)
 	}
 	if len(all) == 1 {
-		return parseTransformArgs(all[0].raw, label, logger)
+		onlyID := strings.TrimSpace(all[0].id)
+		if id == "" || onlyID == "" || onlyID == id {
+			return parseTransformArgs(all[0].raw, label, logger)
+		}
 	}
 
 	name := strings.TrimSpace(toolName)
-	var named []candidate
-	if name != "" {
+	if len(all) > 1 && name != "" {
+		var named []candidate
 		for _, c := range all {
 			if strings.EqualFold(strings.TrimSpace(c.name), name) {
 				named = append(named, c)
 			}
 		}
-	}
-	if len(named) == 1 {
-		return parseTransformArgs(named[0].raw, label, logger)
+		if len(named) == 1 {
+			return parseTransformArgs(named[0].raw, label, logger)
+		}
 	}
 
 	if logger != nil {

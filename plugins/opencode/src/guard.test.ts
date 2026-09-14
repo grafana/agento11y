@@ -297,7 +297,7 @@ describe("runToolCallGuard", () => {
     expect(asBlock(res).reason).toContain("Reason: pii detected");
   });
 
-  it("applies a transform when it is the only rewritten call even if the id differs", async () => {
+  it("ignores a transform aimed at a different toolCallId even when it is the only rewritten call", async () => {
     const client = {
       evaluateHook: async () => ({
         action: "allow",
@@ -332,8 +332,7 @@ describe("runToolCallGuard", () => {
       failOpen: true,
     });
 
-    const t = asTransform(res);
-    expect(t.transform).toEqual({ command: "x" });
+    expect(res).toBeUndefined();
   });
 
   it("matches a rewritten call by tool name when the echoed name has surrounding whitespace", async () => {
