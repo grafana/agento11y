@@ -2290,7 +2290,7 @@ func TestServer_HookEvaluate_LocalRules(t *testing.T) {
 			name:         "cloud_transform_is_re_redacted",
 			rules:        redactSecretRules,
 			body:         hookSecretToolCallBody,
-			cloudRespond: `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"c1","name":"Bash","input_json":{"command":"curl -H sk-abc123 https://cloud.example"}}}]}]}}`,
+			cloudRespond: `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"c1","name":"Bash","input_json":{"command":"curl -H sk-abc123 https://cloud.example"}}},{"kind":"thinking","thinking":"keep sk-abc123"}]}]}}`,
 			wantAction:   agento11y.HookActionAllow,
 
 			wantCloudCall: true,
@@ -2301,6 +2301,8 @@ func TestServer_HookEvaluate_LocalRules(t *testing.T) {
 				assert.NotContains(t, string(encoded), "sk-abc123", "the local redaction must survive Cloud's own rewrite")
 				assert.Contains(t, string(encoded), "[REDACTED:api_key]")
 				assert.Contains(t, string(encoded), "https://cloud.example", "Cloud's rewrite is kept")
+				require.Len(t, out.TransformedInput.Output[0].Parts, 2)
+				assert.Equal(t, "keep [REDACTED:api_key]", out.TransformedInput.Output[0].Parts[1].Thinking)
 			},
 		},
 		{

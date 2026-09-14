@@ -662,9 +662,10 @@ func (s *Server) chainHookEvaluate(r *http.Request, cfg forwardConfig, originalB
 //
 //   - Cloud sends no transform: its silence means "no opinion", so the local
 //     rewrite stands.
-//   - Cloud sends one: the local patterns run over it again because Cloud does
-//     not state whether its transformed input came from the redacted relay. If
-//     that would produce invalid JSON, the local rewrite stands instead.
+//   - Cloud sends one: the local patterns run over it again with the relay
+//     transform, including thinking, because Cloud does not state whether its
+//     transformed input came from the redacted relay. If that would produce
+//     invalid JSON, the local rewrite stands instead.
 //   - Cloud denies: the call does not run, so the local rewrite is not
 //     re-attached. Only what Cloud sent survives.
 func mergeCloudVerdict(resp *guardeval.Response, cloud agento11y.HookEvaluateResponse, localTransform *guardeval.Transform, logger *log.Logger) {
@@ -680,7 +681,7 @@ func mergeCloudVerdict(resp *guardeval.Response, cloud agento11y.HookEvaluateRes
 	case cloud.TransformedInput == nil:
 		resp.TransformedInput = localTransformed
 	case localTransform != nil:
-		redacted, _, drops := guardeval.ApplyTransform(*cloud.TransformedInput, localTransform, logger)
+		redacted, _, drops := guardeval.ApplyRelayTransform(*cloud.TransformedInput, localTransform, logger)
 		dropped = drops
 		if len(drops) > 0 {
 			resp.TransformedInput = localTransformed
