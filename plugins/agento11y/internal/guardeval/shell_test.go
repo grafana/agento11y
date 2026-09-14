@@ -62,9 +62,21 @@ func TestShellCommandTarget_RegexDeniesAcrossToolsAndKeys(t *testing.T) {
 			wantAction: agento11y.HookActionDeny,
 		},
 		{
-			name:       "run_terminal_cmd with script",
-			tool:       "run_terminal_cmd",
-			input:      `{"script":"rm -rf /var/tmp"}`,
+			name:       "powershell with command",
+			tool:       "powershell",
+			input:      `{"command":"rm -rf /var/tmp"}`,
+			wantAction: agento11y.HookActionDeny,
+		},
+		{
+			name:       "pwsh with command",
+			tool:       "pwsh",
+			input:      `{"command":"rm -rf /var/tmp"}`,
+			wantAction: agento11y.HookActionDeny,
+		},
+		{
+			name:       "argv array still matches a plain pattern",
+			tool:       "Bash",
+			input:      `{"command":["rm","-rf","/var/tmp"]}`,
 			wantAction: agento11y.HookActionDeny,
 		},
 		{
@@ -243,8 +255,13 @@ func TestShellCommands(t *testing.T) {
 			want: []string{"b"},
 		},
 		{
-			name: "a non-string command falls through to the next key",
-			in:   agento11y.HookInput{Output: msg(call("Bash", `{"command":["rm","-rf","/"],"cmd":"echo hi"}`))},
+			name: "an argv array is joined for matching",
+			in:   agento11y.HookInput{Output: msg(call("Bash", `{"command":["rm","-rf","/"]}`))},
+			want: []string{"rm -rf /"},
+		},
+		{
+			name: "a non-string non-array command falls through to the next key",
+			in:   agento11y.HookInput{Output: msg(call("Bash", `{"command":{"line":"rm"},"cmd":"echo hi"}`))},
 			want: []string{"echo hi"},
 		},
 		{
@@ -292,7 +309,7 @@ func TestShellCommands(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, shellCommands(tc.in, parseShellConfig()))
+			assert.Equal(t, tc.want, shellCommands(tc.in, mustShellConfig(t, nil)))
 		})
 	}
 }
@@ -312,9 +329,58 @@ func TestParseEvalTarget_AcceptsShellCommand(t *testing.T) {
 // text, so the subjects are asserted per target.
 func TestSubjectsFor_ProjectsShellCommandsOnlyForThatTarget(t *testing.T) {
 	in := toolCall("Bash", `{"command":"rm -rf /var/tmp"}`).Input
-	cfg := parseShellConfig()
+	cfg := mustShellConfig(t, nil)
 
 	assert.Equal(t, []string{"rm -rf /var/tmp"}, subjectsFor(evalTargetShellCommand, in, cfg))
 	assert.Equal(t, []string{`[tool_call] Bash {"command":"rm -rf /var/tmp"}`}, subjectsFor(evalTargetResponse, in, cfg))
 	assert.Equal(t, []string{""}, subjectsFor(evalTargetInput, in, cfg))
+}
+
+func mustShellConfig(t *testing.T, config map[string]any) shellConfig {
+	t.Helper()
+	cfg, err := parseShellConfig(config)
+	require.NoError(t, err)
+	return cfg
+}
+
+func TestParseShellConfig_OverridesDefaults(t *testing.T) {
+	cfg := mustShellConfig(t, map[string]any{
+		"tool_names":   []any{"MyShell"},
+		"command_keys": []any{"line"},
+	})
+	in := agento11y.HookInput{Output: []agento11y.Message{{
+		Role: "assistant",
+		Parts: []agento11y.Part{{
+			Kind:     agento11y.PartKindToolCall,
+			ToolCall: &agento11y.ToolCall{Name: "myshell", InputJSON: json.RawMessage(`{"line":"rm -rf /","command":"echo hi"}`)},
+		}},
+	}}}
+	assert.Equal(t, []string{"rm -rf /"}, shellCommands(in, cfg))
+	assert.Empty(t, shellCommands(toolCall("Bash", `{"command":"rm -rf /"}`).Input, cfg),
+		"a custom tool_names list replaces the defaults, so Bash is not a shell tool")
+}
+
+func TestParseShellConfig_RejectsInvalidLists(t *testing.T) {
+	_, err := parseShellConfig(map[string]any{"tool_names": 1})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "tool_names")
+
+	_, err = parseShellConfig(map[string]any{"command_keys": []any{}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "command_keys")
+}
+
+func TestCompileEvaluator_InvalidShellConfigSkipsTheRule(t *testing.T) {
+	rules, errs := compileGuardRules([]Rule{{
+		RuleID: "custom-shell",
+		Evaluators: []EvaluatorSpec{{Kind: "regex", Config: map[string]any{
+			"target":     "shell_command",
+			"pattern":    "rm",
+			"reject":     true,
+			"tool_names": 1,
+		}}},
+	}})
+	require.Empty(t, rules)
+	require.Len(t, errs, 1)
+	assert.Contains(t, errs[0].Error(), "tool_names")
 }

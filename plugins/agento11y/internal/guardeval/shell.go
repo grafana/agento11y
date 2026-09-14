@@ -2,6 +2,7 @@ package guardeval
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -19,7 +20,7 @@ import (
 // (Claude Code's Bash, Cursor's run_terminal_cmd, the MCP-ish execute_command /
 // terminal / shell). Matching is case-insensitive, so "Bash" and "bash" are the
 // same tool.
-var defaultShellToolNames = []string{"bash", "shell", "run_terminal_cmd", "execute_command", "terminal"}
+var defaultShellToolNames = []string{"bash", "shell", "run_terminal_cmd", "execute_command", "terminal", "powershell", "pwsh"}
 
 // defaultShellCommandKeys are the argument keys that hold the command line,
 // in the order they are tried. The first key present with a non-empty string
@@ -33,11 +34,65 @@ type shellConfig struct {
 	commandKeys []string
 }
 
-func parseShellConfig() shellConfig {
-	return shellConfig{
-		toolNames:   defaultShellToolNames,
-		commandKeys: defaultShellCommandKeys,
+func parseShellConfig(config map[string]any) (shellConfig, error) {
+	out := shellConfig{
+		toolNames:   append([]string(nil), defaultShellToolNames...),
+		commandKeys: append([]string(nil), defaultShellCommandKeys...),
 	}
+	if config == nil {
+		return out, nil
+	}
+	if raw, ok := config["tool_names"]; ok {
+		names, err := cfgStringList(raw, "tool_names")
+		if err != nil {
+			return shellConfig{}, err
+		}
+		out.toolNames = lowerCopy(names)
+	}
+	if raw, ok := config["command_keys"]; ok {
+		keys, err := cfgStringList(raw, "command_keys")
+		if err != nil {
+			return shellConfig{}, err
+		}
+		out.commandKeys = lowerCopy(keys)
+	}
+	return out, nil
+}
+
+func cfgStringList(raw any, field string) ([]string, error) {
+	switch typed := raw.(type) {
+	case string:
+		trimmed := strings.TrimSpace(typed)
+		if trimmed == "" {
+			return nil, fmt.Errorf("%s has no value", field)
+		}
+		return []string{trimmed}, nil
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, v := range typed {
+			s, ok := v.(string)
+			if !ok {
+				return nil, fmt.Errorf("%s entries must be strings", field)
+			}
+			if trimmed := strings.TrimSpace(s); trimmed != "" {
+				out = append(out, trimmed)
+			}
+		}
+		if len(out) == 0 {
+			return nil, fmt.Errorf("%s has no value", field)
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("%s must be a string or a list of strings", field)
+	}
+}
+
+func lowerCopy(in []string) []string {
+	out := make([]string, len(in))
+	for i, s := range in {
+		out[i] = strings.ToLower(s)
+	}
+	return out
 }
 
 // matchesTool reports whether a tool name is one of the shell tools, comparing
@@ -95,16 +150,13 @@ func shellCommandOf(tc *agento11y.ToolCall, cfg shellConfig) (string, bool) {
 		if !ok {
 			continue
 		}
-		// A key holding something other than a string (a number, an argv array,
-		// an object) is skipped in favour of the next key rather than ending the
-		// search: reassembling an argv array into a command line means deciding
-		// how to quote it, which is the shell parsing this target does not do.
-		s, ok := raw.(string)
-		if !ok {
-			continue
-		}
-		if trimmed := strings.TrimSpace(s); trimmed != "" {
-			return trimmed, true
+		// A string is used as-is. An argv array is joined with spaces so a
+		// pattern written against `rm -rf /` still sees a Codex/Copilot
+		// payload that sent ["rm","-rf","/"]. Quoting is not reconstructed:
+		// this is a match subject, not a shell. Any other type falls through
+		// to the next key.
+		if command, ok := commandString(raw); ok {
+			return command, true
 		}
 	}
 	return "", false
@@ -128,4 +180,29 @@ func lookupArg(args map[string]any, key string) (any, bool) {
 		}
 	}
 	return nil, false
+}
+
+func commandString(raw any) (string, bool) {
+	switch typed := raw.(type) {
+	case string:
+		if trimmed := strings.TrimSpace(typed); trimmed != "" {
+			return trimmed, true
+		}
+	case []any:
+		if len(typed) == 0 {
+			return "", false
+		}
+		parts := make([]string, 0, len(typed))
+		for _, item := range typed {
+			s, ok := item.(string)
+			if !ok {
+				return "", false
+			}
+			parts = append(parts, s)
+		}
+		if joined := strings.TrimSpace(strings.Join(parts, " ")); joined != "" {
+			return joined, true
+		}
+	}
+	return "", false
 }
