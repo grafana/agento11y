@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.46.0] - 2026-09-15
+
+### Features
+
+- **local**: add Branches and MCP tools cards to analytics overview (#748)
+- **plugins/agento11y**: set the built-in entrypoint tag on Cursor generations (#753)
+
 ## [0.45.0] - 2026-09-15
 
 ### Features
