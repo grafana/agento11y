@@ -60,6 +60,11 @@ description = "Format OpenCode plugin code"
 depends = ["deps"]
 run = "pnpm --filter @grafana/agento11y-opencode run lint:fix"
 
+[tasks."format:ts:plugin-dsh"]
+description = "Format dsh plugin code"
+depends = ["deps"]
+run = "pnpm --filter @grafana/agento11y-dsh run lint:fix"
+
 [tasks."format:ts:local-viewer"]
 description = "Format local viewer code"
 depends = ["deps"]
@@ -67,7 +72,7 @@ run = "pnpm --filter @grafana/agento11y-local-viewer run lint:fix"
 
 [tasks.format]
 description = "Format all code"
-depends = ["format:go", "format:py", "format:cs", "format:ts:sdk-js", "format:ts:plugin-pi", "format:ts:plugin-opencode", "format:ts:local-viewer"]
+depends = ["format:go", "format:py", "format:cs", "format:ts:sdk-js", "format:ts:plugin-pi", "format:ts:plugin-opencode", "format:ts:plugin-dsh", "format:ts:local-viewer"]
 
 # --- Linting ---
 
@@ -130,6 +135,11 @@ description = "Lint OpenCode plugin code"
 depends = ["deps"]
 run = "pnpm --filter @grafana/agento11y-opencode run lint"
 
+[tasks."lint:ts:plugin-dsh"]
+description = "Lint dsh plugin code"
+depends = ["deps"]
+run = "pnpm --filter @grafana/agento11y-dsh run lint"
+
 [tasks."lint:ts:local-viewer"]
 description = "Lint local viewer code"
 depends = ["deps"]
@@ -146,7 +156,7 @@ run = "pnpm run check:js-dependency-pinning"
 
 [tasks.lint]
 description = "Run all linting"
-depends = ["lint:go", "lint:py", "lint:cs", "lint:ts:sdk-js", "lint:ts:plugin-pi", "lint:ts:plugin-opencode", "lint:ts:local-viewer", "lint:ts:redaction-generator", "lint:js-dependency-pinning"]
+depends = ["lint:go", "lint:py", "lint:cs", "lint:ts:sdk-js", "lint:ts:plugin-pi", "lint:ts:plugin-opencode", "lint:ts:plugin-dsh", "lint:ts:local-viewer", "lint:ts:redaction-generator", "lint:js-dependency-pinning"]
 
 # --- Type checking ---
 
@@ -165,6 +175,11 @@ description = "Type-check OpenCode plugin code"
 depends = ["deps", "build:ts:sdk-js"]
 run = "pnpm --filter @grafana/agento11y-opencode run typecheck"
 
+[tasks."typecheck:ts:plugin-dsh"]
+description = "Type-check dsh plugin code"
+depends = ["deps", "build:ts:sdk-js"]
+run = "pnpm --filter @grafana/agento11y-dsh run typecheck"
+
 [tasks."typecheck:ts:local-viewer"]
 description = "Type-check local viewer code"
 depends = ["deps"]
@@ -176,6 +191,7 @@ depends = [
   "typecheck:ts:sdk-js",
   "typecheck:ts:plugin-pi",
   "typecheck:ts:plugin-opencode",
+  "typecheck:ts:plugin-dsh",
   "typecheck:ts:local-viewer",
 ]
 
@@ -208,6 +224,11 @@ run = "pnpm --filter @grafana/agento11y-pi run build"
 description = "Build OpenCode plugin bundle"
 depends = ["deps", "build:ts:sdk-js"]
 run = "pnpm --filter @grafana/agento11y-opencode run build"
+
+[tasks."build:ts:plugin-dsh"]
+description = "Build dsh plugin bundle"
+depends = ["deps", "build:ts:sdk-js"]
+run = "pnpm --filter @grafana/agento11y-dsh run build"
 
 # --- Go SDK tests ---
 
@@ -264,6 +285,11 @@ run = "pnpm --filter @grafana/agento11y-pi run test"
 description = "Run OpenCode plugin tests"
 depends = ["deps", "build:ts:sdk-js"]
 run = "pnpm --filter @grafana/agento11y-opencode run test"
+
+[tasks."test:ts:plugin-dsh"]
+description = "Run dsh plugin tests"
+depends = ["deps", "build:ts:sdk-js"]
+run = "pnpm --filter @grafana/agento11y-dsh run test"
 
 [tasks."test:ts:local-viewer"]
 description = "Run local viewer tests"
@@ -672,6 +698,7 @@ mise run test:go:plugin
 mise run test:ts:sdk-js
 mise run test:ts:plugin-pi
 mise run test:ts:plugin-opencode
+mise run test:ts:plugin-dsh
 mise run test:ts:local-viewer
 mise run test:py:sdk-core
 mise run test:py:sdk-provider-conformance

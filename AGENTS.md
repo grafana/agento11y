@@ -39,11 +39,11 @@ CI runs `mise run check:redaction` in the same job as the proto drift check. `re
 
 ## Releases run off `.github/sdk-releases.json`
 
-That table holds each release line's id, tag prefix, changelog path, and the commit paths its changelog section is generated from. Seven lines are listed: the five SDKs plus `plugins/pi` and `plugins/opencode`.
+That table holds each release line's id, tag prefix, changelog path, and the commit paths its changelog section is generated from. Eight lines are listed: the five SDKs plus `plugins/pi`, `plugins/opencode` and `plugins/dsh`.
 
-The commit paths live only there, and every release workflow reads them with `jq`. Tag prefixes and changelog paths are duplicated: the five SDK workflows still spell out their own `sdk-python/v*`-style prefix and `python/CHANGELOG.md`-style path inline, and `sdk-github-releases.yml` hand-copies all seven prefixes into `on.push.tags`, which GitHub cannot template from a file. So a new release line needs a row *and* a pass over those workflows; a row on its own gets the line tagged with no release page.
+The commit paths live only there, and every release workflow reads them with `jq`. Tag prefixes and changelog paths are duplicated: the five SDK workflows still spell out their own `sdk-python/v*`-style prefix and `python/CHANGELOG.md`-style path inline, and `sdk-github-releases.yml` hand-copies all eight prefixes into `on.push.tags`, which GitHub cannot template from a file. So a new release line needs a row *and* a pass over those workflows; a row on its own gets the line tagged with no release page.
 
-Each SDK row carries `:(exclude)` pathspecs for tests and READMEs, because a conformance test under `go/` would otherwise put a JS-only commit in the Go changelog. The two plugin rows own their whole directory and need no excludes.
+Each SDK row has `:(exclude)` pathspecs for tests and READMEs, because a conformance test under `go/` would otherwise put a JS-only commit in the Go changelog. The three plugin rows own their whole directory and need no excludes.
 
 Three steps run per release, and none of them creates a tag on the release PR:
 
@@ -67,13 +67,14 @@ Three steps run per release, and none of them creates a tag on the release PR:
 
 | Plugin dir | What it actually is |
 |------------|---------------------|
-| `plugins/agento11y/` | The shared Go binary, installed as `agento11y` (`brew install grafana/grafana/agento11y`; the old `sigil` name still works but will be removed). Has subcommands `claude`, `codex`, `copilot`, `cursor`, `opencode`, `pi`, `vibe`, `login`, `doctor`, `local`, `history`, `skills`, `help`. This is also what consumers use. |
+| `plugins/agento11y/` | The shared Go binary, installed as `agento11y` (`brew install grafana/grafana/agento11y`; the old `sigil` name still works but will be removed). Has subcommands `claude`, `codex`, `copilot`, `cursor`, `dsh`, `opencode`, `pi`, `vibe`, `login`, `doctor`, `local`, `history`, `skills`, `help`. This is also what consumers use. |
 | `plugins/claude-code/`, `plugins/codex/`, `plugins/copilot/`, `plugins/cursor/` | Thin glue: hook scripts and READMEs that wire the host agent to the shared `agento11y` binary. No independent code paths. |
 | `plugins/opencode/` | Independent npm package `@grafana/agento11y-opencode`. Runs in-process inside opencode through its TypeScript plugin API; `agento11y opencode` installs and launches it. |
 | `plugins/pi/` | Independent npm package `@grafana/agento11y-pi`. Runs in-process inside pi; `agento11y pi` installs and launches it. |
+| `plugins/dsh/` | Independent npm package `@grafana/agento11y-dsh`. A cordis plugin that runs in-process inside DeepSeek Harness. `agento11y dsh` npm-installs it into agento11y's own state directory and names it by absolute path in a `--patch` overlay, so no dsh profile or `$DSH_HOME` file is touched and capture applies under `agento11y dsh` only. |
 | `plugins/vibe/` | README only. `agento11y vibe` upserts three `[[hooks]]` entries into `hooks.toml` under `$VIBE_HOME` (default `~/.vibe`) and sets `VIBE_ENABLE_EXPERIMENTAL_HOOKS=true` on the child, which only a vibe below 2.21.0 needs. Vibe 2.21.0 renamed all three hook types, so the install path picks the spelling from `vibe --version` and the hook dispatcher answers to both. See `internal/agents/vibe/version.go`. |
 
-If you change shared-binary behavior, the four glue plugins and vibe all see it. The OpenCode and pi plugins evolve independently, but the shared binary owns their install/launch flow.
+If you change shared-binary behavior, the four glue plugins and vibe all see it. The OpenCode, pi, and dsh plugins evolve independently, but the shared binary owns their install/launch flow.
 
 ## Cross-language conventions
 
