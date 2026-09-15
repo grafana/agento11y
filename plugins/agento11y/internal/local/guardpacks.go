@@ -132,15 +132,11 @@ var gitPatterns = []string{
 }
 
 const (
-	// shellArgToken is one argv word, or glued pieces like
-	// HEAD:$(git branch --show-current). $() and backticks are opaque so a
-	// pipe inside a substitution does not look like a pipeline, and a later
-	// flag is still seen.
-	shellArgToken    = `(?:[^\s;&|()\x60#]+|\$\([^)]*\)|\x60[^\x60]*\x60)+`
-	shellArgumentGap = `[ \t]+(?:` + shellArgToken + `[ \t]+)*`
-	shellArgumentEnd = `(?:[[:space:];&|()"']|$)`
-	rmRecursiveFlag  = `(?:--recursive|-[a-z]*r[a-z]*)`
-	rmForceFlag      = `(?:--force|-[a-z]*f[a-z]*)`
+	shellSubstitution = `(?:\$\([^()]*\)|\x60(?:\\.|[^\\\x60])*\x60)`
+	shellArgumentGap  = `[ \t]+(?:(?:[^\s;&|()\x60#]|` + shellSubstitution + `)+[ \t]+)*`
+	shellArgumentEnd  = `(?:[[:space:];&|()"']|$)`
+	rmRecursiveFlag   = `(?:--recursive|-[a-z]*r[a-z]*)`
+	rmForceFlag       = `(?:--force|-[a-z]*f[a-z]*)`
 )
 
 var destructivePatterns = []string{
