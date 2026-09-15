@@ -357,6 +357,7 @@ class ToolExecutionStart:
     include_content: bool = False
     content_capture: ContentCaptureMode = ContentCaptureMode.DEFAULT
     started_at: datetime | None = None
+    skill_name: str = ""
 
 
 @dataclass(slots=True)

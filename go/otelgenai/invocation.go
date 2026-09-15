@@ -206,6 +206,7 @@ type Invocation struct {
 	ToolCallID      string
 	ToolType        string
 	ToolDescription string
+	SkillName       string
 
 	// ServerAddress and ServerPort locate the provider endpoint. The
 	// conventions treat them as sampling-relevant, so set them before Start.

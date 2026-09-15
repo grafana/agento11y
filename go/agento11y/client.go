@@ -280,6 +280,7 @@ const (
 	spanAttrToolCallID             = "gen_ai.tool.call.id"
 	spanAttrToolType               = "gen_ai.tool.type"
 	spanAttrToolDescription        = contentcapture.ToolDescriptionAttributeKey
+	spanAttrSkillName              = "agento11y.skill.name"
 	spanAttrToolCallArguments      = contentcapture.ToolCallArgumentsAttributeKey
 	spanAttrToolCallResult         = contentcapture.ToolCallResultAttributeKey
 	spanAttrTagPrefix              = "agento11y.tag."
@@ -2483,6 +2484,7 @@ func toolSpanAttributes(start ToolExecutionStart) []attribute.KeyValue {
 		attribute.String(spanAttrToolName, start.ToolName),
 		attribute.String(sdkMetadataKeyName, sdkName),
 	}
+	attrs = appendSkillNameAttribute(attrs, start.SkillName)
 
 	if callID := strings.TrimSpace(start.ToolCallID); callID != "" {
 		attrs = append(attrs, attribute.String(spanAttrToolCallID, callID))
@@ -2512,6 +2514,13 @@ func toolSpanAttributes(start ToolExecutionStart) []attribute.KeyValue {
 		attrs = append(attrs, attribute.String(spanAttrRequestModel, model))
 	}
 
+	return attrs
+}
+
+func appendSkillNameAttribute(attrs []attribute.KeyValue, skillName string) []attribute.KeyValue {
+	if skillName = strings.TrimSpace(skillName); skillName != "" {
+		attrs = append(attrs, attribute.String(spanAttrSkillName, skillName))
+	}
 	return attrs
 }
 

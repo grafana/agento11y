@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from datetime import timedelta
 
+import pytest
 from agento11y import (
     Client,
     ClientConfig,
@@ -115,7 +116,7 @@ def test_flush_retries_failed_exports_with_backoff() -> None:
         client.shutdown()
 
 
-def test_shutdown_flushes_pending_generation() -> None:
+def test_shutdown_flushes_pending_generation() -> None:  # trufflehog:ignore
     exporter = CapturingGenerationExporter()
     client = _new_client(exporter, batch_size=10)
 
@@ -626,6 +627,46 @@ def test_tool_execution_attributes_and_content_capture() -> None:
         assert span.attributes.get("gen_ai.provider.name") == "openai"
         assert span.attributes.get("gen_ai.request.model") == "gpt-5"
         assert span.attributes.get("agento11y.sdk.name") == "sdk-python"
+    finally:
+        client.shutdown()
+        provider.shutdown()
+
+
+@pytest.mark.parametrize(
+    "start_kwargs, exec_error, expected_skill_name",
+    [
+        pytest.param({}, None, None, id="omitted"),
+        pytest.param({"skill_name": " \t "}, None, None, id="whitespace"),
+        pytest.param(
+            {"skill_name": "  failed-skill  "},
+            RuntimeError("the skill failed"),
+            "failed-skill",
+            id="failure-retains-marker",
+        ),
+    ],
+)
+def test_tool_execution_skill_marker_edges(
+    start_kwargs: dict[str, str],
+    exec_error: RuntimeError | None,
+    expected_skill_name: str | None,
+) -> None:
+    exporter = CapturingGenerationExporter()
+    span_exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    client = _new_client(exporter, tracer=provider.get_tracer("agento11y-test"))
+
+    try:
+        rec = client.start_tool_execution(ToolExecutionStart(tool_name="weather", **start_kwargs))
+        if exec_error is not None:
+            rec.set_exec_error(exec_error)
+        rec.end()
+
+        span = span_exporter.get_finished_spans()[-1]
+        if expected_skill_name is None:
+            assert "agento11y.skill.name" not in span.attributes
+        else:
+            assert span.attributes.get("agento11y.skill.name") == expected_skill_name
     finally:
         client.shutdown()
         provider.shutdown()

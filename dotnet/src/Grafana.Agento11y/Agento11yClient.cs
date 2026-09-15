@@ -50,6 +50,7 @@ public sealed partial class Agento11yClient : IAsyncDisposable
     internal const string SpanAttrToolCallId = "gen_ai.tool.call.id";
     internal const string SpanAttrToolType = "gen_ai.tool.type";
     internal const string SpanAttrToolDescription = "gen_ai.tool.description";
+    internal const string SpanAttrSkillName = "agento11y.skill.name";
     internal const string SpanAttrToolCallArguments = "gen_ai.tool.call.arguments";
     internal const string SpanAttrToolCallResult = "gen_ai.tool.call.result";
     internal const string SpanAttrTagPrefix = "agento11y.tag.";
@@ -1441,6 +1442,8 @@ public sealed partial class Agento11yClient : IAsyncDisposable
             activity.SetTag(SpanAttrToolDescription, tool.ToolDescription);
         }
 
+        ApplySkillNameSpanAttribute(activity, tool.SkillName);
+
         if (!string.IsNullOrWhiteSpace(tool.ConversationId))
         {
             activity.SetTag(SpanAttrConversationId, tool.ConversationId);
@@ -1467,6 +1470,15 @@ public sealed partial class Agento11yClient : IAsyncDisposable
         if (!string.IsNullOrWhiteSpace(tool.RequestModel))
         {
             activity.SetTag(SpanAttrRequestModel, tool.RequestModel);
+        }
+    }
+
+    private static void ApplySkillNameSpanAttribute(Activity activity, string? skillName)
+    {
+        var projected = skillName?.Trim();
+        if (!string.IsNullOrEmpty(projected))
+        {
+            activity.SetTag(SpanAttrSkillName, projected);
         }
     }
 
