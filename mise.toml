@@ -85,11 +85,11 @@ while IFS= read -r moddir; do
     continue
   fi
   echo "==> golangci-lint ${moddir}"
-  lint_args=()
+  extra_args=()
   if [[ "${moddir}" == "./go/otelgenai/conformance" ]]; then
-    lint_args+=(--build-tags=conformance)
+    extra_args+=(--build-tags=conformance)
   fi
-  (cd "${moddir}" && GOWORK=off golangci-lint run "${lint_args[@]}" ./...)
+  (cd "${moddir}" && GOWORK=off golangci-lint run ${extra_args[@]+"${extra_args[@]}"} ./...)
 done < <(find . \\( -path './examples' -o -path './node_modules' \\) -prune -o -name go.mod -print | while IFS= read -r mod; do dirname "$mod"; done | sort)
 """
 

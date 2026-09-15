@@ -7,7 +7,12 @@ import {
   toolSessionFiltersFromLocation,
   toolSessionsPath,
 } from '../internal/local/web/src/routing';
-import { SkillsToolsView, type SkillsToolsViewProps } from '../internal/local/web/src/skills-tools';
+import {
+  filterToolAnalytics,
+  isMcpToolName,
+  SkillsToolsView,
+  type SkillsToolsViewProps,
+} from '../internal/local/web/src/skills-tools';
 import type { ToolAnalytics } from '../internal/local/web/src/types';
 import { metricsResponse, response } from './fixtures';
 
@@ -197,6 +202,90 @@ describe('Tools analytics component', () => {
     expect(search.compareDocumentPosition(workspace) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(workspace.compareDocumentPosition(range) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(range.compareDocumentPosition(refresh) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('treats mcp__ and MCP: names as MCP tools', () => {
+    expect(isMcpToolName('mcp__grafana__query')).toBe(true);
+    expect(isMcpToolName('MCP:browser_cdp')).toBe(true);
+    expect(isMcpToolName('mcp:browser_navigate')).toBe(true);
+    expect(isMcpToolName('Bash')).toBe(false);
+    expect(isMcpToolName('Read')).toBe(false);
+  });
+
+  it('keeps unique session totals when filtering to overlapping MCP tools', () => {
+    const filtered = filterToolAnalytics(
+      {
+        ...DATA,
+        totals: { calls: 12, failures: 0, tools: 3, sessions: 4, duration_samples: 2 },
+        rows: [
+          { name: 'mcp__a', calls: 5, failures: 0, sessions: 3, duration_samples: 1 },
+          { name: 'mcp__b', calls: 5, failures: 0, sessions: 3, duration_samples: 1 },
+          { name: 'Bash', calls: 2, failures: 0, sessions: 2, duration_samples: 0 },
+        ],
+        buckets: [],
+      },
+      true,
+    );
+    expect(filtered?.totals).toEqual({
+      calls: 10,
+      failures: 0,
+      tools: 2,
+      sessions: 4,
+      duration_samples: 2,
+    });
+  });
+
+  it('limits the table, chart, and totals to MCP tools', () => {
+    render(
+      <SkillsToolsView
+        {...props({
+          data: {
+            ...DATA,
+            rows: [
+              ...DATA.rows,
+              {
+                name: 'MCP:browser_cdp',
+                calls: 5,
+                failures: 0,
+                sessions: 1,
+                duration_samples: 2,
+              },
+            ],
+            buckets: [...DATA.buckets, { t: '2026-08-21T10:00:00Z', name: 'MCP:browser_cdp', calls: 3, failures: 0 }],
+          },
+        })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Only MCP tools' }));
+
+    expect(toolRowNames()).toEqual(['mcp__grafana__query', 'MCP:browser_cdp']);
+    expect(screen.queryByRole('link', { name: 'Bash' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Read' })).toBeNull();
+    expect(screen.getByRole('link', { name: /mcp__grafana__query, 1 call/ })).toBeTruthy();
+    expect(screen.getByRole('link', { name: /MCP:browser_cdp, 3 calls/ })).toBeTruthy();
+    expect(screen.queryByRole('link', { name: /Bash, 2 calls/ })).toBeNull();
+    expect(screen.getByText('tool calls').parentElement?.textContent).toContain('15');
+    expect(screen.getByText('tools used').parentElement?.textContent).toContain('2');
+  });
+
+  it('says when the range has tools but no MCP tools', () => {
+    render(
+      <SkillsToolsView
+        {...props({
+          data: {
+            ...DATA,
+            rows: DATA.rows.filter((row) => row.name === 'Bash'),
+            buckets: DATA.buckets.filter((bucket) => bucket.name === 'Bash'),
+            totals: { calls: 20, failures: 1, tools: 1, sessions: 3, duration_samples: 20 },
+          },
+        })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Only MCP tools' }));
+    expect(screen.getByText('No MCP tools in this range.')).toBeTruthy();
+    expect(screen.getByText('No tool calls to chart in this range.')).toBeTruthy();
   });
 
   it('filters rows after a local debounce without fetching', async () => {

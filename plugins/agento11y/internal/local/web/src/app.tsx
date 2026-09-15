@@ -58,7 +58,7 @@ import {
   useHistoryImport,
 } from './settings-screen';
 import { TopBar } from './shell';
-import { SkillsToolsContent, skillsToolsHeroStats } from './skills-tools';
+import { filterToolAnalytics, SkillsToolsContent, skillsToolsHeroStats } from './skills-tools';
 import type {
   ConfigResponse,
   ConversationDetail,
@@ -175,6 +175,7 @@ export function App() {
   const [showSettings, setShowSettings] = useState(settingsRouteActive);
   const [showAnalytics, setShowAnalytics] = useState(analyticsRouteActive);
   const [analyticsTab, setAnalyticsTab] = useState<AnalyticsTab>(analyticsTabFromLocation);
+  const [mcpToolsOnly, setMcpToolsOnly] = useState(false);
   const [toolSessionFilters, setToolSessionFilters] = useState<ToolSessionFilters | null>(
     toolSessionFiltersFromLocation,
   );
@@ -879,12 +880,7 @@ export function App() {
     const request =
       analyticsTab === 'skills'
         ? fetchSkillsTools()
-        : Promise.all([
-            fetchAnalytics(false, now),
-            fetchAnalyticsHeaviest(false, now),
-            fetchAnalyticsHeatmap(),
-            fetchSkillsTools(),
-          ]);
+        : Promise.all([fetchAnalytics(false, now), fetchAnalyticsHeaviest(false, now), fetchAnalyticsHeatmap()]);
     Promise.resolve(request).finally(() => {
       analyticsRefreshInFlightRef.current = false;
       if (!analyticsRefreshDirtyRef.current) return;
@@ -993,8 +989,8 @@ export function App() {
   }, [view, analyticsTab, fetchAnalyticsHeatmap]);
 
   useEffect(() => {
-    if (view === 'analytics') fetchSkillsTools(true);
-  }, [view, fetchSkillsTools]);
+    if (view === 'analytics' && analyticsTab === 'skills') fetchSkillsTools(true);
+  }, [view, analyticsTab, fetchSkillsTools]);
 
   useEffect(() => {
     const onPopState = () => {
@@ -1355,7 +1351,7 @@ export function App() {
                     aggregate: analyticsAggregate,
                     totalConversations: analyticsTotalConversations,
                   })
-                : skillsToolsHeroStats(skillsTools)
+                : skillsToolsHeroStats(filterToolAnalytics(skillsTools, mcpToolsOnly))
             }
             tabs={{ active: analyticsTab, onSelect: selectAnalyticsTab }}
             style={analyticsTab === 'skills' ? { paddingBottom: 40 } : undefined}
@@ -1397,17 +1393,10 @@ export function App() {
                 hiddenSeries={analyticsHiddenSeries}
                 onToggleSeries={toggleAnalyticsSeries}
                 onRefresh={refreshAnalytics}
-                refreshing={
-                  loadingAnalytics || loadingAnalyticsHeaviest || loadingAnalyticsHeatmap || loadingSkillsTools
-                }
+                refreshing={loadingAnalytics || loadingAnalyticsHeaviest || loadingAnalyticsHeatmap}
                 onOpenConversation={openConv}
                 onOpenWorkspace={openAnalyticsWorkspace}
                 onOpenBucket={openAnalyticsBucket}
-                onOpenSessions={openToolSessions}
-                onSelectTab={selectAnalyticsTab}
-                toolAnalytics={skillsTools}
-                toolsLoading={loadingSkillsTools}
-                toolsError={errSkillsTools}
               />
             ) : (
               <SkillsToolsContent
@@ -1422,6 +1411,8 @@ export function App() {
                 onRefresh={refreshAnalytics}
                 refreshing={loadingSkillsTools}
                 onOpenSessions={openToolSessions}
+                mcpToolsOnly={mcpToolsOnly}
+                onMcpToolsOnlyChange={setMcpToolsOnly}
               />
             )}
           </AnalyticsPage>

@@ -63,6 +63,7 @@ export interface BranchMetricsAggregate {
   token_buckets_by_model: Record<string, TokenBuckets>;
   duration_seconds: number;
   last_activity: string;
+  merge_status?: 'default' | 'merged' | 'open' | 'closed';
 }
 
 export interface ConversationMetricsAggregate {

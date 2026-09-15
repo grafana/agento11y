@@ -119,6 +119,14 @@ export function Icon({ name, size = 16, style, className }: IconProps) {
     times: <path d="M6 6l12 12M18 6 6 18" />,
     cloud: <path d="M7 18a4 4 0 0 1-.5-7.97 5 5 0 0 1 9.6-1.37A3.5 3.5 0 0 1 16.5 18H7Z" />,
     sparkle: <path d="M12 3l1.5 5L18 9.5l-5 1.5L12 16l-1.5-5.5L5 9.5 10.5 8 12 3Z" />,
+    gitbranch: (
+      <>
+        <path d="M6 3v12" />
+        <circle cx="18" cy="6" r="3" />
+        <circle cx="6" cy="18" r="3" />
+        <path d="M18 9a9 9 0 0 1-9 9" />
+      </>
+    ),
   };
   return (
     <svg

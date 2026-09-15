@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/grafana/agento11y/go/agento11y"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/gitbranch"
 )
 
 // ConversationSummary is one row in the viewer's list screen. Numeric
@@ -81,6 +82,9 @@ type BranchAggregate struct {
 	TokenBucketsByModel map[string]TokenBuckets `json:"token_buckets_by_model"`
 	DurationSeconds     float64                 `json:"duration_seconds"`
 	LastActivity        time.Time               `json:"last_activity"`
+	// MergeStatus is default, merged, open, or closed against the
+	// workspace's current git default branch. Empty when git cannot tell.
+	MergeStatus string `json:"merge_status,omitempty"`
 }
 
 // GenerationView is one step in the conversation thread.
@@ -462,6 +466,7 @@ func (s *Storage) ConversationMetrics(opts ConversationListOptions) ([]Conversat
 	})
 	matched := len(out)
 	aggregate := aggregateConversationMetrics(out)
+	annotateBranchMergeStatus(aggregate.BranchRows)
 	if opts.Limit > 0 && len(out) > opts.Limit {
 		out = out[:opts.Limit]
 	}
@@ -565,6 +570,23 @@ func aggregateConversationMetrics(rows []ConversationSummary) ConversationMetric
 		return aggregate.BranchRows[i].Workspace < aggregate.BranchRows[j].Workspace
 	})
 	return aggregate
+}
+
+func annotateBranchMergeStatus(rows []BranchAggregate) {
+	stop := time.Now().Add(2 * time.Second)
+	byWorkspace := map[string]*gitbranch.RepoMerges{}
+	for i := range rows {
+		workspace := rows[i].Workspace
+		state := byWorkspace[workspace]
+		if state == nil {
+			if time.Now().After(stop) {
+				continue
+			}
+			state = gitbranch.InspectMerges(workspace)
+			byWorkspace[workspace] = state
+		}
+		rows[i].MergeStatus = state.Status(rows[i].Name)
+	}
 }
 
 // ToolUsage returns period-clipped per-conversation tool totals. When Tool and

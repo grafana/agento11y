@@ -618,6 +618,23 @@
       font: 12.5px var(--fontFamily);
     }
     .tools-search input::placeholder { color: var(--placeholder-fg); }
+    .tools-mcp-filter {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      height: 34px;
+      padding: 0 12px;
+      border: 1px solid var(--border-medium);
+      border-radius: 2px;
+      background: var(--control-bg);
+      color: var(--fg1);
+      font: 12.5px var(--fontFamily);
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+    }
+    .tools-mcp-filter:hover { background: var(--action-hover); }
+    .tools-mcp-filter input { margin: 0; accent-color: var(--primary-text); }
     .tools-filter-spacer { flex: 1; min-width: 12px; }
 
     .tools-table-panel, .tools-chart-panel { box-shadow: none !important; }

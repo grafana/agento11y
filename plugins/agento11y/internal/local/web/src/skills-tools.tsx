@@ -6,7 +6,7 @@ import { formatBucketLabel, formatInteger, timeRangeOption } from './formatters'
 import { Notice, SurfaceCard } from './notices';
 import { type AnalyticsTab, isPlainLeftClick, type ToolSessionFilters, toolSessionsPath } from './routing';
 import { Icon, iconBtn } from './shell';
-import type { ToolAnalytics, ToolAnalyticsBucket, ToolAnalyticsRow } from './types';
+import type { ToolAnalytics, ToolAnalyticsBucket, ToolAnalyticsRow, ToolAnalyticsTotals } from './types';
 
 const SEARCH_DEBOUNCE_MS = 150;
 const SKELETON_ROWS = ['one', 'two', 'three', 'four', 'five', 'six'] as const;
@@ -32,6 +32,36 @@ export interface SkillsToolsViewProps {
   refreshing: boolean;
   onSelectTab: (tab: AnalyticsTab) => void;
   onOpenSessions: (filters: ToolSessionFilters) => void;
+  mcpToolsOnly?: boolean;
+  onMcpToolsOnlyChange?: (value: boolean) => void;
+}
+
+export function isMcpToolName(name: string) {
+  const lower = name.toLowerCase();
+  return lower.startsWith('mcp__') || lower.startsWith('mcp:');
+}
+
+function sumToolTotals(rows: readonly ToolAnalyticsRow[], uniqueSessions: number): ToolAnalyticsTotals {
+  return {
+    calls: rows.reduce((sum, row) => sum + (row.calls || 0), 0),
+    failures: rows.reduce((sum, row) => sum + (row.failures || 0), 0),
+    tools: rows.length,
+    // Per-row session counts overlap across tools. Keep the backend unique
+    // conversation total instead of summing, which would double-count.
+    sessions: rows.length === 0 ? 0 : uniqueSessions,
+    duration_samples: rows.reduce((sum, row) => sum + (row.duration_samples || 0), 0),
+  };
+}
+
+export function filterToolAnalytics(data: ToolAnalytics | null, mcpOnly: boolean): ToolAnalytics | null {
+  if (!data || !mcpOnly) return data;
+  const rows = data.rows.filter((row) => isMcpToolName(row.name));
+  return {
+    ...data,
+    rows,
+    buckets: data.buckets.filter((bucket) => isMcpToolName(bucket.name)),
+    totals: sumToolTotals(rows, data.totals.sessions),
+  };
 }
 
 function duration(value: number | undefined) {
@@ -155,6 +185,7 @@ interface ToolTableProps {
   workspace: string | null;
   window: SkillsToolsViewProps['window'];
   onOpenSessions: SkillsToolsViewProps['onOpenSessions'];
+  filterEmpty?: string;
 }
 
 function ToolTable({
@@ -169,6 +200,7 @@ function ToolTable({
   workspace,
   window,
   onOpenSessions,
+  filterEmpty = 'No tools match that filter.',
 }: ToolTableProps) {
   const maxCalls = Math.max(1, ...(data?.rows || []).map((row) => row.calls));
   return (
@@ -219,9 +251,7 @@ function ToolTable({
             {!loading && !error && rows.length === 0 && (
               <tr>
                 <td colSpan={8} className="tools-state-cell">
-                  {filtered
-                    ? 'No tools match that filter.'
-                    : 'No tools recorded in this range. Try a wider time range.'}
+                  {filtered ? filterEmpty : 'No tools recorded in this range. Try a wider time range.'}
                 </td>
               </tr>
             )}
@@ -410,13 +440,17 @@ export function skillsToolsHeroStats(data: ToolAnalytics | null) {
 export function SkillsToolsContent(props: SkillsToolsContentProps) {
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
+  const [localMcpOnly, setLocalMcpOnly] = useState(false);
   const [sort, setSort] = useState<ToolTableSort>({ key: 'calls', direction: 'desc' });
+  const mcpToolsOnly = props.mcpToolsOnly ?? localMcpOnly;
+  const setMcpToolsOnly = props.onMcpToolsOnlyChange ?? setLocalMcpOnly;
   useEffect(() => {
     const id = window.setTimeout(() => setDebouncedQuery(query.trim().toLowerCase()), SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(id);
   }, [query]);
 
-  const data = props.data;
+  const source = props.data;
+  const data = useMemo(() => filterToolAnalytics(source, mcpToolsOnly), [source, mcpToolsOnly]);
   const rows = useMemo(
     () =>
       sortToolRows(
@@ -443,7 +477,7 @@ export function SkillsToolsContent(props: SkillsToolsContentProps) {
   const range = timeRangeOption(props.timeRange);
   const workspaces = useMemo<WorkspaceAggregate[]>(
     () =>
-      (data?.workspaces || []).map((facet) => ({
+      (source?.workspaces || []).map((facet) => ({
         path: facet.path,
         count: facet.sessions,
         cost: null,
@@ -452,9 +486,10 @@ export function SkillsToolsContent(props: SkillsToolsContentProps) {
         dur: 0,
         last: 0,
       })),
-    [data?.workspaces],
+    [source?.workspaces],
   );
   const totalSessions = workspaces.reduce((sum, workspace) => sum + workspace.count, 0);
+  const nameFiltered = debouncedQuery.length > 0;
 
   return (
     <>
@@ -484,6 +519,10 @@ export function SkillsToolsContent(props: SkillsToolsContentProps) {
           <Icon name="search" size={14} />
           <span className="sr-only">Filter tools</span>
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter tools" />
+        </label>
+        <label className="tools-mcp-filter">
+          <input type="checkbox" checked={mcpToolsOnly} onChange={(event) => setMcpToolsOnly(event.target.checked)} />
+          Only MCP tools
         </label>
         <div className="tools-filter-spacer" />
         <WorkspaceFacet
@@ -515,7 +554,8 @@ export function SkillsToolsContent(props: SkillsToolsContentProps) {
         data={data}
         loading={props.loading}
         error={props.error}
-        filtered={debouncedQuery.length > 0}
+        filtered={nameFiltered || mcpToolsOnly}
+        filterEmpty={nameFiltered ? 'No tools match that filter.' : 'No MCP tools in this range.'}
         sort={sort}
         onSort={onSort}
         workspace={props.workspace}
@@ -536,14 +576,17 @@ export function SkillsToolsContent(props: SkillsToolsContentProps) {
 }
 
 export function SkillsToolsView(props: SkillsToolsViewProps) {
-  const { onSelectTab, ...contentProps } = props;
+  const { onSelectTab, mcpToolsOnly: mcpToolsOnlyProp, onMcpToolsOnlyChange, ...contentProps } = props;
+  const [localMcpOnly, setLocalMcpOnly] = useState(false);
+  const mcpToolsOnly = mcpToolsOnlyProp ?? localMcpOnly;
+  const setMcpToolsOnly = onMcpToolsOnlyChange ?? setLocalMcpOnly;
   return (
     <AnalyticsPage
-      stats={skillsToolsHeroStats(props.data)}
+      stats={skillsToolsHeroStats(filterToolAnalytics(props.data, mcpToolsOnly))}
       tabs={{ active: 'skills', onSelect: onSelectTab }}
       style={{ paddingBottom: 40 }}
     >
-      <SkillsToolsContent {...contentProps} />
+      <SkillsToolsContent {...contentProps} mcpToolsOnly={mcpToolsOnly} onMcpToolsOnlyChange={setMcpToolsOnly} />
     </AnalyticsPage>
   );
 }

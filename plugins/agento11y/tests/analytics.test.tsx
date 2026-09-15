@@ -8,8 +8,6 @@ import {
   type AnalyticsViewProps,
   heaviestCostPageNeedsMore,
   heaviestCostRankingIsExact,
-  isMcpToolName,
-  parseMcpToolName,
 } from '../internal/local/web/src/analytics';
 import { App } from '../internal/local/web/src/app';
 import { conversationsPath, workspaceFromLocation } from '../internal/local/web/src/routing';
@@ -19,7 +17,6 @@ import type {
   ModelPrices,
   TokenBuckets,
   TokenUsagePoint,
-  ToolAnalytics,
 } from '../internal/local/web/src/types';
 
 afterEach(() => {
@@ -161,43 +158,11 @@ function firstAttribute(selector: string, attribute: string): string | null {
   return document.querySelector(selector)?.getAttribute(attribute) || null;
 }
 
-function mcpTools(overrides: Partial<ToolAnalytics> = {}): ToolAnalytics {
-  return {
-    totals: { calls: 31, failures: 2, tools: 3, sessions: 4, duration_samples: 21 },
-    rows: [
-      { name: 'Bash', calls: 99, failures: 0, sessions: 4, duration_samples: 20 },
-      {
-        name: 'mcp__grafana__query',
-        calls: 10,
-        failures: 1,
-        sessions: 2,
-        duration_samples: 1,
-      },
-      { name: 'mcp__slack__post', calls: 20, failures: 0, sessions: 3, duration_samples: 3 },
-    ],
-    buckets: [],
-    workspaces: [],
-    interval_seconds: 300,
-    coverage: { generation_calls: 25, projected_spans: 21, matched_calls: 15 },
-    ...overrides,
-  };
-}
-
 function kpiCard(label: string): HTMLElement {
   const card = screen.getByText(label).parentElement?.parentElement;
   if (!card) throw new Error(`missing ${label} KPI card`);
   return card;
 }
-
-describe('MCP tool names', () => {
-  it('parses mcp__server__tool and rejects other names', () => {
-    expect(isMcpToolName('mcp__grafana__query')).toBe(true);
-    expect(isMcpToolName('Bash')).toBe(false);
-    expect(parseMcpToolName('mcp__grafana__query')).toEqual({ server: 'grafana', tool: 'query' });
-    expect(parseMcpToolName('mcp__only')).toEqual({ server: '', tool: 'mcp__only' });
-    expect(parseMcpToolName('Read')).toEqual({ server: '', tool: 'Read' });
-  });
-});
 
 describe('analytics workspace routing', () => {
   it('keeps All and the unknown workspace as separate routes', () => {
@@ -260,6 +225,7 @@ describe('App analytics loading', () => {
       }),
     ).toBe(true);
     expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/v1/metrics/tools?'))).toBe(false);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/v1/metrics/skills-tools?'))).toBe(false);
 
     const session = document.querySelector<HTMLAnchorElement>('a[data-session-id="session-costly"]');
     if (!session) throw new Error('missing analytics session link');
@@ -569,7 +535,7 @@ describe('AnalyticsView', () => {
       'Workspaces',
       'Models',
       'Branches',
-      'MCP tools',
+      'Merge status',
       'Sessions',
       'Heaviest sessions',
     ]) {
@@ -648,34 +614,139 @@ describe('AnalyticsView', () => {
     expect(firstAttribute('[data-branch-row]', 'data-branch-row')).toBe('/worktrees/costly::expensive');
   });
 
-  it('ranks MCP tools by calls and hides non-MCP names', () => {
-    const onOpenSessions = vi.fn();
-    render(<AnalyticsView {...viewProps({ toolAnalytics: mcpTools(), onOpenSessions })} />);
-
-    const rows = [...document.querySelectorAll('[data-mcp-row]')].map((row) => row.getAttribute('data-mcp-row'));
-    expect(rows).toEqual(['mcp__slack__post', 'mcp__grafana__query']);
-    expect(screen.getByText('post')).toBeTruthy();
-    expect(screen.getByText('slack')).toBeTruthy();
-    expect(screen.queryByText('Bash')).toBeNull();
-
-    const slack = document.querySelector<HTMLAnchorElement>('a[data-mcp-row="mcp__slack__post"]');
-    if (!slack) throw new Error('missing MCP row');
-    fireEvent.click(slack, { button: 0 });
-    expect(onOpenSessions).toHaveBeenCalledWith({ tool: 'mcp__slack__post', workspace: null });
-  });
-
-  it('says when the range has sessions but no MCP tool calls', () => {
+  it('shows git merge status from the aggregate', () => {
+    const listed = conversation({ branch: 'feat' });
     render(
       <AnalyticsView
         {...viewProps({
-          toolAnalytics: mcpTools({
-            rows: [{ name: 'Bash', calls: 4, failures: 0, sessions: 1, duration_samples: 1 }],
-          }),
+          conversations: [listed],
+          aggregate: {
+            calls: 3,
+            errored: 0,
+            agents: 1,
+            agent_hosts: ['pi'],
+            workspaces: 1,
+            token_buckets: listed.token_buckets,
+            token_buckets_by_model: listed.token_buckets_by_model || {},
+            models: listed.models,
+            branch_rows: [
+              {
+                name: 'feat',
+                workspace: '/worktrees/costly',
+                sessions: 1,
+                token_buckets: listed.token_buckets,
+                token_buckets_by_model: listed.token_buckets_by_model || {},
+                duration_seconds: 60,
+                last_activity: listed.last_activity,
+                merge_status: 'open',
+              },
+              {
+                name: 'done',
+                workspace: '/worktrees/costly',
+                sessions: 1,
+                token_buckets: { ...EMPTY, fresh_input: 10_000 },
+                token_buckets_by_model: { 'costly-model': { ...EMPTY, fresh_input: 10_000 } },
+                duration_seconds: 60,
+                last_activity: listed.last_activity,
+                merge_status: 'merged',
+              },
+              {
+                name: 'old',
+                workspace: '/worktrees/costly',
+                sessions: 1,
+                token_buckets: { ...EMPTY, fresh_input: 1_000 },
+                token_buckets_by_model: { 'costly-model': { ...EMPTY, fresh_input: 1_000 } },
+                duration_seconds: 60,
+                last_activity: listed.last_activity,
+                merge_status: 'closed',
+              },
+              {
+                name: 'main',
+                workspace: '/worktrees/costly',
+                sessions: 1,
+                token_buckets: { ...EMPTY, fresh_input: 2_000 },
+                token_buckets_by_model: { 'costly-model': { ...EMPTY, fresh_input: 2_000 } },
+                duration_seconds: 60,
+                last_activity: listed.last_activity,
+                merge_status: 'default',
+              },
+            ],
+          },
         })}
       />,
     );
-    expect(screen.getByText('No MCP tool calls in this range.')).toBeTruthy();
-    expect(document.querySelector('[data-mcp-row]')).toBeNull();
+    expect(firstAttribute('[data-merge-status="open"]', 'data-merge-status')).toBe('open');
+    expect(firstAttribute('[data-merge-status="open"]', 'title')).toBe('open');
+    expect(firstAttribute('[data-merge-status="merged"]', 'title')).toBe('merged');
+    expect(firstAttribute('[data-merge-status="closed"]', 'title')).toBe('closed');
+    expect(document.querySelector('[data-merge-status="open"] svg')).toBeTruthy();
+    expect(document.querySelector('[data-merge-status="merged"] svg')).toBeTruthy();
+    expect(document.querySelector('[data-merge-status="closed"] svg')).toBeTruthy();
+    expect(document.querySelector('[data-merge-status="default"] svg')).toBeNull();
+    expect(document.querySelector('[data-merge-status-row="default"] svg')).toBeTruthy();
+    expect(document.querySelector('[data-merge-status-row="open"] svg')).toBeTruthy();
+    expect(screen.getAllByTitle(/last fetch/).length).toBe(2);
+    expect(
+      [...document.querySelectorAll('[data-merge-status-row]')].map((row) => row.getAttribute('data-merge-status-row')),
+    ).toEqual(['open', 'merged', 'default', 'closed']);
+  });
+
+  it('rolls branch spend up by git merge status', () => {
+    const listed = conversation({ branch: 'feat' });
+    render(
+      <AnalyticsView
+        {...viewProps({
+          conversations: [listed],
+          aggregate: {
+            calls: 3,
+            errored: 0,
+            agents: 1,
+            agent_hosts: ['pi'],
+            workspaces: 1,
+            token_buckets: listed.token_buckets,
+            token_buckets_by_model: listed.token_buckets_by_model || {},
+            models: listed.models,
+            branch_rows: [
+              {
+                name: 'feat',
+                workspace: '/worktrees/costly',
+                sessions: 2,
+                token_buckets: { ...EMPTY, fresh_input: 300_000 },
+                token_buckets_by_model: { 'costly-model': { ...EMPTY, fresh_input: 300_000 } },
+                duration_seconds: 60,
+                last_activity: listed.last_activity,
+                merge_status: 'open',
+              },
+              {
+                name: 'other',
+                workspace: '/worktrees/costly',
+                sessions: 1,
+                token_buckets: { ...EMPTY, fresh_input: 100_000 },
+                token_buckets_by_model: { 'costly-model': { ...EMPTY, fresh_input: 100_000 } },
+                duration_seconds: 60,
+                last_activity: listed.last_activity,
+                merge_status: 'open',
+              },
+              {
+                name: 'main',
+                workspace: '/worktrees/costly',
+                sessions: 1,
+                token_buckets: { ...EMPTY, fresh_input: 50_000 },
+                token_buckets_by_model: { 'costly-model': { ...EMPTY, fresh_input: 50_000 } },
+                duration_seconds: 60,
+                last_activity: listed.last_activity,
+                merge_status: 'default',
+              },
+            ],
+          },
+        })}
+      />,
+    );
+    expect(
+      [...document.querySelectorAll('[data-merge-status-row]')].map((row) => row.getAttribute('data-merge-status-row')),
+    ).toEqual(['open', 'default']);
+    expect(document.querySelector('[data-merge-status-row="open"]')?.textContent).toContain('open');
+    expect(document.querySelector('[data-testid="token-mix"]')).toBeNull();
   });
 
   it('discloses current and previous range coverage', () => {

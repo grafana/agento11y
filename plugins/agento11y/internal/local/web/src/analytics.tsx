@@ -30,15 +30,7 @@ import {
   useModelPrices,
 } from './formatters';
 import { ACTIVE_PILL_BG, Notice, PANEL_BG, SurfaceCard } from './notices';
-import {
-  type AnalyticsTab,
-  analyticsPath,
-  conversationPath,
-  conversationsPath,
-  isPlainLeftClick,
-  type ToolSessionFilters,
-  toolSessionsPath,
-} from './routing';
+import { conversationPath, conversationsPath, isPlainLeftClick } from './routing';
 import { agentHosts, Icon, iconBtn, ModelPill } from './shell';
 import type {
   BranchMetricsAggregate,
@@ -48,8 +40,6 @@ import type {
   TokenBucketKey,
   TokenBuckets,
   TokenUsagePoint,
-  ToolAnalytics,
-  ToolAnalyticsRow,
   WorkspaceMetricsAggregate,
 } from './types';
 
@@ -94,11 +84,6 @@ export interface AnalyticsViewProps {
   onOpenConversation: (c: { id: string }) => void;
   onOpenWorkspace: (path: string) => void;
   onOpenBucket: (span: TimeSpan) => void;
-  onOpenSessions?: (filters: ToolSessionFilters) => void;
-  onSelectTab?: (tab: AnalyticsTab) => void;
-  toolAnalytics?: ToolAnalytics | null;
-  toolsLoading?: boolean;
-  toolsError?: string | null;
   now?: number;
   prices?: ModelPrices | null;
 }
@@ -126,6 +111,7 @@ interface BranchRow {
   tokens: number;
   dur: number;
   last: number;
+  mergeStatus?: BranchMetricsAggregate['merge_status'];
 }
 
 interface SparkValue {
@@ -148,6 +134,7 @@ interface KpiCardProps {
 
 interface PanelHeaderProps {
   title: string;
+  infoTooltip?: string;
   meta?: React.ReactNode;
 }
 
@@ -159,7 +146,11 @@ const EMPTY_BUCKETS: TokenBuckets = {
   reasoning: 0,
 };
 const WORKSPACE_GRID = 'minmax(96px, 1fr) minmax(56px, 110px) 52px 52px 56px';
-const MCP_GRID = 'minmax(96px, 1fr) minmax(56px, 110px) 52px 56px 56px';
+const BRANCH_GRID = 'minmax(80px, 1fr) 54px minmax(48px, 100px) 48px 48px 52px';
+const MERGE_STATUS_GRID = 'minmax(72px, 1fr) minmax(56px, 110px) 52px 52px 56px';
+const SHARE_FILL = 'var(--brand-orange)';
+const MERGE_STATUS_TOOLTIP =
+  "Compared with each workspace's current git default branch using local refs from the last fetch. Run git fetch in the workspace to refresh.";
 const MODEL_GRID = 'minmax(72px, 1fr) 70px 68px 56px';
 const SHAPE_GRID = '82px minmax(0, 1fr) 26px';
 const SESSION_GRID = '26px minmax(0, 1fr) 130px 84px 88px 128px 88px';
@@ -311,6 +302,7 @@ function branchAggregateRows(branches: readonly BranchMetricsAggregate[], prices
       tokens: tokenTotal(branch.token_buckets),
       dur: branch.duration_seconds,
       last: Number.isFinite(last) ? last : 0,
+      mergeStatus: branch.merge_status,
     };
   });
 }
@@ -348,29 +340,6 @@ function aggregateBranches(conversations: readonly ConversationSummary[], prices
   return [...rows.values()];
 }
 
-const MCP_NAME = /^mcp__/i;
-
-export function isMcpToolName(name: string) {
-  return MCP_NAME.test(name);
-}
-
-export function parseMcpToolName(name: string): { server: string; tool: string } {
-  if (!isMcpToolName(name)) return { server: '', tool: name };
-  const rest = name.slice(5);
-  const separator = rest.indexOf('__');
-  if (separator <= 0 || separator >= rest.length - 2) return { server: '', tool: name };
-  const server = rest.slice(0, separator);
-  const tool = rest.slice(separator + 2);
-  if (!server || !tool) return { server: '', tool: name };
-  return { server, tool };
-}
-
-function mcpToolRows(data: ToolAnalytics | null | undefined): ToolAnalyticsRow[] {
-  return (data?.rows || [])
-    .filter((row) => isMcpToolName(row.name))
-    .sort((a, b) => b.calls - a.calls || a.name.localeCompare(b.name));
-}
-
 function aggregateModels(conversations: readonly ModelUsageSource[], prices: ModelPrices | null): ModelAggregate[] {
   const rows = new Map<string, { buckets: TokenBuckets }>();
   for (const conversation of conversations) {
@@ -405,6 +374,50 @@ function aggregateModels(conversations: readonly ModelUsageSource[], prices: Mod
 function sortByUnit<T extends { tokens: number; cost: number | null }>(rows: readonly T[], unit: AnalyticsUnit): T[] {
   const value = (row: T) => (unit === 'cost' ? (row.cost ?? -1) : row.tokens);
   return [...rows].sort((a, b) => value(b) - value(a));
+}
+
+function mergeStatusIcon(status: BranchRow['mergeStatus']): { color: string; label: string; icon: string } {
+  switch (status) {
+    case 'open':
+      return { color: 'var(--viz-green)', label: 'open', icon: 'gitbranch' };
+    case 'merged':
+      return { color: 'var(--viz-purple)', label: 'merged', icon: 'gitbranch' };
+    case 'closed':
+      return { color: 'var(--viz-red)', label: 'closed', icon: 'gitbranch' };
+    case 'default':
+      return { color: 'var(--fg2)', label: 'default', icon: 'gitbranch' };
+    default:
+      return { color: 'var(--fg3)', label: 'unknown', icon: 'empty' };
+  }
+}
+
+function mergeStatusLabel(status: BranchRow['mergeStatus']): string {
+  return mergeStatusIcon(status).label;
+}
+
+interface MergeStatusRow {
+  status: BranchRow['mergeStatus'];
+  count: number;
+  cost: number | null;
+  costComplete: boolean;
+  tokens: number;
+}
+
+function aggregateMergeStatus(rows: readonly BranchRow[]): MergeStatusRow[] {
+  const groups = new Map<string, MergeStatusRow>();
+  for (const row of rows) {
+    const key = row.mergeStatus || '';
+    let group = groups.get(key);
+    if (!group) {
+      group = { status: row.mergeStatus, count: 0, cost: null, costComplete: true, tokens: 0 };
+      groups.set(key, group);
+    }
+    group.count += row.count;
+    group.tokens += row.tokens;
+    if (!row.costComplete) group.costComplete = false;
+    if (row.cost != null) group.cost = (group.cost || 0) + row.cost;
+  }
+  return [...groups.values()];
 }
 
 const DELTA_BASELINE = 'vs previous period';
@@ -460,7 +473,7 @@ function CostYAxis({ top, mid, side = 'left' }: { top: string; mid: string; side
   );
 }
 
-function PanelHeader({ title, meta }: PanelHeaderProps) {
+function PanelHeader({ title, infoTooltip, meta }: PanelHeaderProps) {
   return (
     <div
       style={{
@@ -473,7 +486,23 @@ function PanelHeader({ title, meta }: PanelHeaderProps) {
         flexWrap: 'wrap',
       }}
     >
-      <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-max)' }}>{title}</span>
+      <span
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 5,
+          fontSize: 13,
+          fontWeight: 600,
+          color: 'var(--fg-max)',
+        }}
+      >
+        {title}
+        {infoTooltip ? (
+          <span title={infoTooltip} style={{ display: 'inline-flex', color: 'var(--fg3)' }}>
+            <Icon name="info" size={12} />
+          </span>
+        ) : null}
+      </span>
       {meta != null && (
         <span style={{ fontFamily: 'var(--fontFamilyMonospace)', fontSize: 11, color: 'var(--fg3)' }}>{meta}</span>
       )}
@@ -1178,7 +1207,7 @@ function WorkspacesPanel({
                         display: 'block',
                         width: `${Math.max(0, Math.min(100, (value / max) * 100))}%`,
                         height: '100%',
-                        background: unit === 'cost' ? 'var(--brand-orange)' : 'var(--viz-green)',
+                        background: SHARE_FILL,
                       }}
                     />
                   </span>
@@ -1224,6 +1253,7 @@ function BranchesPanel({
     <SurfaceCard style={{ boxShadow: 'none', minWidth: 0 }}>
       <PanelHeader
         title="Branches"
+        infoTooltip={MERGE_STATUS_TOOLTIP}
         meta={`sorted by ${unit}${unit === 'cost' && !costComplete ? ' · partial estimate' : ''}`}
       />
       {sorted.length === 0 ? (
@@ -1233,7 +1263,7 @@ function BranchesPanel({
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: WORKSPACE_GRID,
+              gridTemplateColumns: BRANCH_GRID,
               gap: 10,
               padding: '11px 0 9px',
               borderBottom: '1px solid var(--border-weak)',
@@ -1242,6 +1272,7 @@ function BranchesPanel({
             }}
           >
             <span>Branch</span>
+            <span>Status</span>
             <span>Share</span>
             <span style={{ textAlign: 'right' }}>Sessions</span>
             <span style={{ textAlign: 'right' }}>Tokens</span>
@@ -1252,6 +1283,9 @@ function BranchesPanel({
             const value = unit === 'cost' ? row.cost || 0 : row.tokens;
             const share = total > 0 ? Math.round((value / total) * 100) : 0;
             const branchLabel = row.name || '(unknown)';
+            const status = mergeStatusIcon(row.mergeStatus);
+            const showStatusIcon =
+              row.mergeStatus === 'open' || row.mergeStatus === 'merged' || row.mergeStatus === 'closed';
             return (
               <a
                 key={branchKey(row.workspace, row.name)}
@@ -1264,7 +1298,7 @@ function BranchesPanel({
                 }}
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: WORKSPACE_GRID,
+                  gridTemplateColumns: BRANCH_GRID,
                   alignItems: 'center',
                   gap: 10,
                   padding: '11px 0',
@@ -1312,6 +1346,17 @@ function BranchesPanel({
                     {workspace.leaf}
                   </span>
                 </span>
+                <span
+                  data-merge-status={row.mergeStatus || ''}
+                  title={status.label}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    color: status.color,
+                  }}
+                >
+                  {showStatusIcon ? <Icon name={status.icon} size={14} /> : null}
+                </span>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span
                     style={{
@@ -1327,7 +1372,7 @@ function BranchesPanel({
                         display: 'block',
                         width: `${Math.max(0, Math.min(100, (value / max) * 100))}%`,
                         height: '100%',
-                        background: unit === 'cost' ? 'var(--brand-orange)' : 'var(--viz-green)',
+                        background: SHARE_FILL,
                       }}
                     />
                   </span>
@@ -1354,48 +1399,26 @@ function BranchesPanel({
   );
 }
 
-function McpToolsPanel({
-  rows,
-  empty,
-  workspace,
-  onOpenSessions,
-  onSelectTab,
-}: {
-  rows: ToolAnalyticsRow[];
-  empty: React.ReactNode;
-  workspace: string | null;
-  onOpenSessions?: (filters: ToolSessionFilters) => void;
-  onSelectTab?: (tab: AnalyticsTab) => void;
-}) {
-  const sorted = rows.slice(0, 6);
-  const total = rows.reduce((sum, row) => sum + (row.calls || 0), 0);
-  const max = Math.max(1, ...sorted.map((row) => row.calls || 0));
+function MergeStatusPanel({ rows, unit, empty }: { rows: BranchRow[]; unit: AnalyticsUnit; empty: React.ReactNode }) {
+  const grouped = sortByUnit(aggregateMergeStatus(rows), unit);
+  const costComplete = grouped.every((row) => row.costComplete);
+  const total = grouped.reduce((sum, row) => sum + (unit === 'cost' ? row.cost || 0 : row.tokens), 0);
+  const max = Math.max(1, ...grouped.map((row) => (unit === 'cost' ? row.cost || 0 : row.tokens)));
   return (
-    <SurfaceCard style={{ boxShadow: 'none', minWidth: 0 }}>
+    <SurfaceCard style={{ boxShadow: 'none', minWidth: 0 }} data-testid="merge-status">
       <PanelHeader
-        title="MCP tools"
-        meta={
-          <a
-            href={analyticsPath('skills')}
-            onClick={(event) => {
-              if (!onSelectTab || !isPlainLeftClick(event)) return;
-              event.preventDefault();
-              onSelectTab('skills');
-            }}
-            style={{ color: 'inherit', textDecoration: 'none' }}
-          >
-            all tools
-          </a>
-        }
+        title="Merge status"
+        infoTooltip={MERGE_STATUS_TOOLTIP}
+        meta={`sorted by ${unit}${unit === 'cost' && !costComplete ? ' · partial estimate' : ''}`}
       />
-      {sorted.length === 0 ? (
+      {grouped.length === 0 ? (
         <EmptyPanel>{empty}</EmptyPanel>
       ) : (
         <div style={{ padding: '0 18px 14px' }}>
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: MCP_GRID,
+              gridTemplateColumns: MERGE_STATUS_GRID,
               gap: 10,
               padding: '11px 0 9px',
               borderBottom: '1px solid var(--border-weak)',
@@ -1403,77 +1426,56 @@ function McpToolsPanel({
               fontSize: 11,
             }}
           >
-            <span>Tool</span>
+            <span>Status</span>
             <span>Share</span>
-            <span style={{ textAlign: 'right' }}>Calls</span>
-            <span style={{ textAlign: 'right' }}>Failures</span>
             <span style={{ textAlign: 'right' }}>Sessions</span>
+            <span style={{ textAlign: 'right' }}>Tokens</span>
+            <span style={{ textAlign: 'right' }}>Cost</span>
           </div>
-          {sorted.map((row) => {
-            const parsed = parseMcpToolName(row.name);
-            const share = total > 0 ? Math.round((row.calls / total) * 100) : 0;
-            const filters = { tool: row.name, workspace };
+          {grouped.map((row) => {
+            const value = unit === 'cost' ? row.cost || 0 : row.tokens;
+            const share = total > 0 ? Math.round((value / total) * 100) : 0;
+            const icon = mergeStatusIcon(row.status);
+            const label = mergeStatusLabel(row.status);
             return (
-              <a
-                key={row.name}
-                data-mcp-row={row.name}
-                href={toolSessionsPath(filters)}
-                onClick={(event) => {
-                  if (!onOpenSessions || !isPlainLeftClick(event)) return;
-                  event.preventDefault();
-                  onOpenSessions(filters);
-                }}
+              <div
+                key={row.status || 'unknown'}
+                data-merge-status-row={row.status || 'unknown'}
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: MCP_GRID,
+                  gridTemplateColumns: MERGE_STATUS_GRID,
                   alignItems: 'center',
                   gap: 10,
                   padding: '11px 0',
                   borderBottom: '1px solid var(--border-weak)',
-                  color: 'inherit',
                   fontFamily: 'var(--fontFamilyMonospace)',
                   fontSize: 12,
-                  textDecoration: 'none',
                 }}
-                onMouseEnter={(event) => (event.currentTarget.style.background = 'var(--row-hover)')}
-                onMouseLeave={(event) => (event.currentTarget.style.background = 'transparent')}
               >
                 <span
-                  title={row.name}
                   style={{
                     minWidth: 0,
                     display: 'flex',
-                    alignItems: 'baseline',
-                    gap: 5,
+                    alignItems: 'center',
+                    gap: 8,
                     overflow: 'hidden',
-                    whiteSpace: 'nowrap',
+                    color: icon.color,
                   }}
                 >
+                  <Icon name={icon.icon} size={14} />
                   <span
                     style={{
-                      flex: '0 0 auto',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
                       color: 'var(--fg-max)',
                       fontFamily: 'var(--fontFamily)',
                       fontSize: 12.5,
                       fontWeight: 600,
                     }}
                   >
-                    {parsed.tool}
+                    {label}
                   </span>
-                  {parsed.server ? (
-                    <span
-                      style={{
-                        flex: '0 1 auto',
-                        minWidth: 0,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        color: 'var(--fg3)',
-                        fontSize: 11,
-                      }}
-                    >
-                      {parsed.server}
-                    </span>
-                  ) : null}
                 </span>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span
@@ -1488,25 +1490,27 @@ function McpToolsPanel({
                     <span
                       style={{
                         display: 'block',
-                        width: `${Math.max(0, Math.min(100, (row.calls / max) * 100))}%`,
+                        width: `${Math.max(0, Math.min(100, (value / max) * 100))}%`,
                         height: '100%',
-                        background: 'var(--viz-blue)',
+                        background: SHARE_FILL,
                       }}
                     />
                   </span>
-                  <span style={{ width: 26, textAlign: 'right', color: 'var(--fg3)', fontSize: 10.5 }}>{share}%</span>
+                  <span style={{ width: 26, textAlign: 'right', color: 'var(--fg3)', fontSize: 10.5 }}>
+                    {unit === 'cost' && !costComplete ? '—' : `${share}%`}
+                  </span>
                 </span>
-                <span style={{ textAlign: 'right', color: 'var(--fg-max)' }}>{formatInteger(row.calls)}</span>
+                <span style={{ textAlign: 'right', color: 'var(--fg2)' }}>{formatInteger(row.count)}</span>
+                <span style={{ textAlign: 'right', color: unit === 'tokens' ? 'var(--fg-max)' : 'var(--fg1)' }}>
+                  {formatTokens(row.tokens)}
+                </span>
                 <span
-                  style={{
-                    textAlign: 'right',
-                    color: (row.failures || 0) > 0 ? 'var(--error-text)' : 'var(--fg1)',
-                  }}
+                  title={costEstimateTitle({ value: row.cost, complete: row.costComplete })}
+                  style={{ textAlign: 'right', color: unit === 'cost' ? 'var(--fg-max)' : 'var(--fg1)' }}
                 >
-                  {formatInteger(row.failures || 0)}
+                  {formatCostEstimate({ value: row.cost, complete: row.costComplete })}
                 </span>
-                <span style={{ textAlign: 'right', color: 'var(--fg2)' }}>{formatInteger(row.sessions || 0)}</span>
-              </a>
+              </div>
             );
           })}
         </div>
@@ -2124,7 +2128,6 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
         : aggregateBranches(selectedCurrent, prices),
     [props.aggregate, selectedCurrent, prices],
   );
-  const mcpRows = useMemo(() => mcpToolRows(props.toolAnalytics), [props.toolAnalytics]);
   const modelRows = useMemo(
     () => aggregateModels(props.aggregate ? [props.aggregate] : selectedCurrent, prices),
     [props.aggregate, selectedCurrent, prices],
@@ -2205,13 +2208,6 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
   const currentSessionCount =
     props.aggregate && props.totalConversations != null ? props.totalConversations : selectedCurrent.length;
   const empty = props.loading && selectedCurrent.length === 0 ? 'Loading analytics…' : emptyRangeMessage(range.label);
-  const mcpEmpty = props.toolsError
-    ? `Failed to load MCP tools: ${props.toolsError}`
-    : props.toolsLoading && mcpRows.length === 0
-      ? 'Loading MCP tools…'
-      : selectedCurrent.length === 0
-        ? empty
-        : 'No MCP tool calls in this range.';
   const chartEmpty = props.tokenError
     ? `Failed to load token usage: ${props.tokenError}`
     : props.tokenLoading
@@ -2448,13 +2444,7 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
         }}
       >
         <BranchesPanel rows={branchRows} unit={props.unit} onOpen={props.onOpenWorkspace} empty={empty} />
-        <McpToolsPanel
-          rows={mcpRows}
-          empty={mcpEmpty}
-          workspace={props.workspace}
-          onOpenSessions={props.onOpenSessions}
-          onSelectTab={props.onSelectTab}
-        />
+        <MergeStatusPanel rows={branchRows} unit={props.unit} empty={empty} />
       </div>
 
       <div
