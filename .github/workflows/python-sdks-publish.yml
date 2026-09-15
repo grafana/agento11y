@@ -118,6 +118,7 @@ jobs:
             python-frameworks/pydantic-ai
             python-frameworks/strands
             python-frameworks/claude-agent-sdk
+            python-frameworks/open-webui
           )
 
           for dir in "${PACKAGE_DIRS[@]}"; do
@@ -146,6 +147,7 @@ jobs:
             python-frameworks/pydantic-ai
             python-frameworks/strands
             python-frameworks/claude-agent-sdk
+            python-frameworks/open-webui
           )
 
           for dir in "${PACKAGE_DIRS[@]}"; do
@@ -250,6 +252,7 @@ jobs:
           - agento11y-pydantic-ai
           - agento11y-strands
           - agento11y-claude-agent-sdk
+          - agento11y-open-webui
 
     steps:
       - name: Download distributions

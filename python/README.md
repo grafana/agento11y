@@ -38,7 +38,7 @@ pip install agento11y-anthropic
 pip install agento11y-gemini
 ```
 
-Optional framework modules:
+Optional framework modules and integrations:
 
 ```bash
 pip install agento11y-langchain
@@ -49,6 +49,7 @@ pip install agento11y-google-adk
 pip install agento11y-strands
 pip install agento11y-claude-agent-sdk
 pip install agento11y-litellm
+pip install agento11y-open-webui
 pip install agento11y-pydantic-ai
 ```
 
@@ -135,6 +136,7 @@ Full framework examples:
 - Strands Agents: `../python-frameworks/strands/README.md`
 - Claude Agent SDK: `../python-frameworks/claude-agent-sdk/README.md`
 - LiteLLM: `../python-frameworks/litellm/README.md`
+- Open WebUI: `../python-frameworks/open-webui/README.md`
 - Pydantic AI: `../python-frameworks/pydantic-ai/README.md`
 
 ## Quick Start (Sync Generation)
