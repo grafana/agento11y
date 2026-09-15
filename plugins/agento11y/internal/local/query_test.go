@@ -1717,6 +1717,44 @@ func TestTokenUsagePointsBeforeAndWorkspace(t *testing.T) {
 	assert.Equal(t, int64(7), points[0].FreshInput, "present blank selects unknown workspace")
 }
 
+// TestTokenUsagePointsAgentUsesPeriodClippedSummary pins the agent facet to
+// the rule ConversationMetrics applies: a conversation that used the selected
+// agent only outside the range contributes none of its in-range tokens to the
+// chart, so the chart and the cost KPIs beside it count the same sessions.
+func TestTokenUsagePointsAgentUsesPeriodClippedSummary(t *testing.T) {
+	s := newStorage(t)
+	// One conversation, two agents: codex before the window, claude-code inside it.
+	writeGen(t, s, "conv", "g-codex", agento11y.Generation{
+		AgentName: "codex",
+		StartedAt: mustParse(t, "2026-05-21T09:00:00Z"),
+		Usage:     agento11y.TokenUsage{InputTokens: 100},
+	}, "2026-05-21T09:00:00Z")
+	writeGen(t, s, "conv", "g-claude", agento11y.Generation{
+		AgentName: "claude-code",
+		StartedAt: mustParse(t, "2026-05-21T10:30:00Z"),
+		Usage:     agento11y.TokenUsage{InputTokens: 10},
+	}, "2026-05-21T10:30:00Z")
+	since := mustParse(t, "2026-05-21T10:00:00Z")
+	before := mustParse(t, "2026-05-21T11:00:00Z")
+
+	points, _, err := s.TokenUsagePoints(TokenUsageOptions{Since: since, Before: before, Agent: "codex", Interval: time.Hour})
+	require.NoError(t, err)
+	assert.Empty(t, points, "codex ran only before the window, so the facet excludes the conversation")
+
+	points, _, err = s.TokenUsagePoints(TokenUsageOptions{Since: since, Before: before, Agent: "claude-code", Interval: time.Hour})
+	require.NoError(t, err)
+	require.Len(t, points, 1)
+	assert.Equal(t, int64(10), points[0].FreshInput)
+
+	points, _, err = s.TokenUsagePoints(TokenUsageOptions{Agent: "codex", Interval: time.Hour})
+	require.NoError(t, err)
+	var total int64
+	for _, p := range points {
+		total += p.FreshInput
+	}
+	assert.Equal(t, int64(110), total, "without a period the lifetime summary decides, as the list does")
+}
+
 // TestTokenUsagePoints_InvertedTimestampsStayInRange covers a generation
 // whose completed_at precedes its started_at, which a clock adjustment on
 // the exporting machine produces. Activity takes the later of the two, so a

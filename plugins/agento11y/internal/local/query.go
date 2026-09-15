@@ -819,9 +819,31 @@ type TokenUsageOptions struct {
 	// Workspace filters by the conversation's lifetime cwd when non-nil. The
 	// empty string selects conversations with no known cwd.
 	Workspace *string
+	// Agent keeps conversations whose agent hosts include this value when
+	// non-empty. It is tested the way the conversation list and metrics test
+	// their agent facet: against the period-clipped summary when Since or
+	// Before is set, and against the lifetime summary otherwise, so the token
+	// chart counts the same conversations as the cost KPIs beside it.
+	Agent string
 	// Interval is the bucket width. Zero asks for a derived interval that
 	// keeps the response under maxTokenUsageBuckets buckets.
 	Interval time.Duration
+}
+
+// agentMatches applies the Agent facet with the rule
+// ConversationListOptions.facetsMatch uses: the period-clipped summary when
+// the request names a period, the lifetime summary otherwise. A conversation
+// that used the agent only outside the range has no in-range generation under
+// it, so it contributes nothing to the chart, matching the cost totals.
+func (opts TokenUsageOptions) agentMatches(entry *fileSummary) bool {
+	if opts.Agent == "" {
+		return true
+	}
+	if opts.Since.IsZero() && opts.Before.IsZero() {
+		return agentHostListed(entry.summary.Agents, opts.Agent)
+	}
+	clipped, ok := clippedConversationSummary(entry, opts.Since, opts.Before)
+	return ok && agentHostListed(clipped.Agents, opts.Agent)
 }
 
 // maxTokenUsageBuckets caps how many buckets a derived interval produces.
@@ -888,6 +910,9 @@ func (s *Storage) TokenUsagePoints(opts TokenUsageOptions) ([]TokenUsagePoint, t
 		// or restore that rewrote modification times orders the files by
 		// something other than their activity.
 		if !workspaceMatches(entry.summary.Workspace, opts.Workspace) {
+			continue
+		}
+		if !opts.agentMatches(entry) {
 			continue
 		}
 		entryFirst, entryLast, ok := entry.bounds(opts.Since, opts.Before)

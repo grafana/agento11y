@@ -127,6 +127,8 @@ function viewProps(overrides: Partial<AnalyticsViewProps> = {}): AnalyticsViewPr
     onTimeRangeChange: vi.fn(),
     workspace: null,
     onWorkspaceChange: vi.fn(),
+    agent: 'all',
+    onAgentChange: vi.fn(),
     hiddenSeries: new Set(),
     onToggleSeries: vi.fn(),
     onRefresh: vi.fn(),
