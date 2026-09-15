@@ -99,6 +99,37 @@ func TestStatusDetachedHeadStaysUnknown(t *testing.T) {
 	}
 }
 
+func TestStatusLocalAheadOfStaleRemoteMerged(t *testing.T) {
+	dir := initRepo(t)
+
+	gitRun(t, dir, "checkout", "-b", "feat")
+	if err := os.WriteFile(filepath.Join(dir, "file"), []byte("feat\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, dir, "commit", "-am", "feat")
+	gitRun(t, dir, "checkout", "main")
+	gitRun(t, dir, "merge", "--no-ff", "-m", "merge feat", "feat")
+	gitRun(t, dir, "update-ref", "refs/remotes/origin/feat", "feat")
+
+	gitRun(t, dir, "checkout", "feat")
+	if err := os.WriteFile(filepath.Join(dir, "file"), []byte("feat-again\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, dir, "commit", "-am", "more work")
+
+	got := InspectMerges(dir)
+	if s := got.Status("feat"); s != MergeOpen {
+		t.Fatalf("local-ahead status = %q, want %q", s, MergeOpen)
+	}
+
+	gitRun(t, dir, "checkout", "main")
+	gitRun(t, dir, "branch", "-D", "feat")
+	got = InspectMerges(dir)
+	if s := got.Status("feat"); s != MergeMerged {
+		t.Fatalf("stale-remote-only status = %q, want %q", s, MergeMerged)
+	}
+}
+
 func TestStatusOverBudgetStaysUnknown(t *testing.T) {
 	r := &RepoMerges{
 		Default:    "main",

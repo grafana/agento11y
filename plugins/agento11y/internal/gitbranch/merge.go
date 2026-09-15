@@ -86,7 +86,7 @@ func (r *RepoMerges) Status(branch string) string {
 	if branch == r.Default {
 		return MergeDefault
 	}
-	if hasRef(r.merged, branch) {
+	if r.mergedIntoDefault(branch) {
 		return MergeMerged
 	}
 	if hasRef(r.refs, branch) {
@@ -224,6 +224,20 @@ func (r *RepoMerges) loadMainPatchIDs(since, until time.Time) bool {
 
 func (r *RepoMerges) overBudget() bool {
 	return !r.workUntil.IsZero() && time.Now().After(r.workUntil)
+}
+
+// mergedIntoDefault prefers the local branch. After a PR lands, origin/feat
+// often stays an ancestor of default while local feat keeps new commits;
+// those sessions are open, not merged.
+func (r *RepoMerges) mergedIntoDefault(branch string) bool {
+	if _, ok := r.merged[branch]; ok {
+		return true
+	}
+	if _, local := r.refs[branch]; local {
+		return false
+	}
+	_, ok := r.merged["origin/"+branch]
+	return ok
 }
 
 func hasRef(set map[string]struct{}, branch string) bool {
