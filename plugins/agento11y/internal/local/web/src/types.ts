@@ -66,6 +66,10 @@ export interface BranchMetricsAggregate {
   merge_status?: 'default' | 'merged' | 'open' | 'closed';
 }
 
+export interface BranchMergeResponse {
+  branches: Array<Pick<BranchMetricsAggregate, 'name' | 'workspace' | 'merge_status'>>;
+}
+
 export interface ConversationMetricsAggregate {
   calls: number;
   errored: number;

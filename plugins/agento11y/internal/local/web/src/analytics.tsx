@@ -71,6 +71,8 @@ export interface AnalyticsViewProps {
   facetError: string | null;
   tokenError: string | null;
   heatmapError: string | null;
+  mergeLoading?: boolean;
+  mergeError?: string | null;
   unit: AnalyticsUnit;
   onUnitChange: (v: AnalyticsUnit) => void;
   timeRange: string;
@@ -146,7 +148,7 @@ const EMPTY_BUCKETS: TokenBuckets = {
   reasoning: 0,
 };
 const WORKSPACE_GRID = 'minmax(96px, 1fr) minmax(56px, 110px) 52px 52px 56px';
-const BRANCH_GRID = 'minmax(80px, 1fr) 54px minmax(48px, 100px) 48px 48px 52px';
+const BRANCH_GRID = 'minmax(80px, 1fr) 64px minmax(48px, 100px) 48px 48px 52px';
 const MERGE_STATUS_GRID = 'minmax(72px, 1fr) minmax(56px, 110px) 52px 52px 56px';
 const SHARE_FILL = 'var(--brand-orange)';
 const MERGE_STATUS_TOOLTIP =
@@ -393,6 +395,25 @@ function mergeStatusIcon(status: BranchRow['mergeStatus']): { color: string; lab
 
 function mergeStatusLabel(status: BranchRow['mergeStatus']): string {
   return mergeStatusIcon(status).label;
+}
+
+function MergeStatusSpinner() {
+  return (
+    <span
+      className="sigil-spin"
+      title="Checking git"
+      role="status"
+      aria-label="Checking git"
+      style={{
+        width: 12,
+        height: 12,
+        borderRadius: '50%',
+        border: '2px solid var(--border-strong)',
+        borderTopColor: 'var(--fg2)',
+        display: 'inline-block',
+      }}
+    />
+  );
 }
 
 interface MergeStatusRow {
@@ -1239,22 +1260,24 @@ function BranchesPanel({
   unit,
   onOpen,
   empty,
+  loading,
 }: {
   rows: BranchRow[];
   unit: AnalyticsUnit;
   onOpen: (path: string) => void;
   empty: React.ReactNode;
+  loading?: boolean;
 }) {
   const sorted = sortByUnit(rows, unit).slice(0, 6);
   const costComplete = rows.every((row) => row.costComplete);
   const total = rows.reduce((sum, row) => sum + (unit === 'cost' ? row.cost || 0 : row.tokens), 0);
   const max = Math.max(1, ...sorted.map((row) => (unit === 'cost' ? row.cost || 0 : row.tokens)));
   return (
-    <SurfaceCard style={{ boxShadow: 'none', minWidth: 0 }}>
+    <SurfaceCard style={{ boxShadow: 'none', minWidth: 0 }} data-testid="branches">
       <PanelHeader
         title="Branches"
         infoTooltip={MERGE_STATUS_TOOLTIP}
-        meta={`sorted by ${unit}${unit === 'cost' && !costComplete ? ' · partial estimate' : ''}`}
+        meta={`${loading ? 'checking git · ' : ''}sorted by ${unit}${unit === 'cost' && !costComplete ? ' · partial estimate' : ''}`}
       />
       {sorted.length === 0 ? (
         <EmptyPanel>{empty}</EmptyPanel>
@@ -1272,7 +1295,7 @@ function BranchesPanel({
             }}
           >
             <span>Branch</span>
-            <span>Status</span>
+            <span style={{ textAlign: 'center' }}>Status</span>
             <span>Share</span>
             <span style={{ textAlign: 'right' }}>Sessions</span>
             <span style={{ textAlign: 'right' }}>Tokens</span>
@@ -1284,8 +1307,7 @@ function BranchesPanel({
             const share = total > 0 ? Math.round((value / total) * 100) : 0;
             const branchLabel = row.name || '(unknown)';
             const status = mergeStatusIcon(row.mergeStatus);
-            const showStatusIcon =
-              row.mergeStatus === 'open' || row.mergeStatus === 'merged' || row.mergeStatus === 'closed';
+            const statusKey = loading ? 'loading' : row.mergeStatus || 'unknown';
             return (
               <a
                 key={branchKey(row.workspace, row.name)}
@@ -1347,15 +1369,16 @@ function BranchesPanel({
                   </span>
                 </span>
                 <span
-                  data-merge-status={row.mergeStatus || ''}
-                  title={status.label}
+                  data-merge-status={statusKey}
+                  title={loading ? 'Checking git' : status.label}
                   style={{
                     display: 'flex',
                     alignItems: 'center',
-                    color: status.color,
+                    justifyContent: 'center',
+                    color: loading ? 'var(--fg3)' : status.color,
                   }}
                 >
-                  {showStatusIcon ? <Icon name={status.icon} size={14} /> : null}
+                  {loading ? <MergeStatusSpinner /> : <Icon name={status.icon} size={14} />}
                 </span>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span
@@ -1399,7 +1422,19 @@ function BranchesPanel({
   );
 }
 
-function MergeStatusPanel({ rows, unit, empty }: { rows: BranchRow[]; unit: AnalyticsUnit; empty: React.ReactNode }) {
+function MergeStatusPanel({
+  rows,
+  unit,
+  empty,
+  loading,
+  error,
+}: {
+  rows: BranchRow[];
+  unit: AnalyticsUnit;
+  empty: React.ReactNode;
+  loading?: boolean;
+  error?: string | null;
+}) {
   const grouped = sortByUnit(aggregateMergeStatus(rows), unit);
   const costComplete = grouped.every((row) => row.costComplete);
   const total = grouped.reduce((sum, row) => sum + (unit === 'cost' ? row.cost || 0 : row.tokens), 0);
@@ -1411,7 +1446,11 @@ function MergeStatusPanel({ rows, unit, empty }: { rows: BranchRow[]; unit: Anal
         infoTooltip={MERGE_STATUS_TOOLTIP}
         meta={`sorted by ${unit}${unit === 'cost' && !costComplete ? ' · partial estimate' : ''}`}
       />
-      {grouped.length === 0 ? (
+      {error ? (
+        <EmptyPanel>Failed to load merge status: {error}</EmptyPanel>
+      ) : loading ? (
+        <EmptyPanel>Checking git merge status…</EmptyPanel>
+      ) : grouped.length === 0 ? (
         <EmptyPanel>{empty}</EmptyPanel>
       ) : (
         <div style={{ padding: '0 18px 14px' }}>
@@ -2438,18 +2477,6 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'minmax(0, 1.35fr) minmax(0, 1fr)',
-          gap: 12,
-          marginBottom: 12,
-        }}
-      >
-        <BranchesPanel rows={branchRows} unit={props.unit} onOpen={props.onOpenWorkspace} empty={empty} />
-        <MergeStatusPanel rows={branchRows} unit={props.unit} empty={empty} />
-      </div>
-
-      <div
-        style={{
-          display: 'grid',
           gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
           gap: 12,
           marginBottom: 12,
@@ -2481,6 +2508,30 @@ function AnalyticsContent(props: ResolvedAnalyticsViewProps) {
         onOpen={props.onOpenConversation}
         empty={empty}
       />
+
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'minmax(0, 1.35fr) minmax(0, 1fr)',
+          gap: 12,
+          marginTop: 12,
+        }}
+      >
+        <BranchesPanel
+          rows={branchRows}
+          unit={props.unit}
+          onOpen={props.onOpenWorkspace}
+          empty={empty}
+          loading={props.mergeLoading}
+        />
+        <MergeStatusPanel
+          rows={branchRows}
+          unit={props.unit}
+          empty={empty}
+          loading={props.mergeLoading}
+          error={props.mergeError}
+        />
+      </div>
     </>
   );
 }

@@ -26,9 +26,11 @@ import (
 // runaway agents filling the local disk; they are generous enough for
 // realistic LLM transcripts.
 const (
-	maxGenerationBodyBytes = 64 * 1024 * 1024 // 64 MiB
-	maxOTLPBodyBytes       = 16 * 1024 * 1024 // 16 MiB
-	maxHookBodyBytes       = 4 * 1024 * 1024  // 4 MiB
+	maxGenerationBodyBytes  = 64 * 1024 * 1024 // 64 MiB
+	maxOTLPBodyBytes        = 16 * 1024 * 1024 // 16 MiB
+	maxHookBodyBytes        = 4 * 1024 * 1024  // 4 MiB
+	maxBranchMergeBodyBytes = 256 * 1024
+	maxBranchMergeRows      = 500
 
 	otlpTracesPath   = "/otlp/v1/traces"
 	otlpMetricsPath  = "/otlp/v1/metrics"
@@ -144,6 +146,7 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/v1/search/capabilities", s.handleSearchCapabilities)
 	mux.HandleFunc("GET /api/v1/events", s.handleEvents)
 	mux.HandleFunc("GET /api/v1/metrics/conversations", s.handleConversationMetrics)
+	mux.HandleFunc("POST /api/v1/metrics/branch-merges", s.handleBranchMerges)
 	mux.HandleFunc("GET /api/v1/metrics/tokens", s.handleTokenMetrics)
 	mux.HandleFunc("GET /api/v1/metrics/tools", s.handleToolMetrics)
 	mux.HandleFunc("GET /api/v1/metrics/skills-tools", s.handleSkillsToolsMetrics)
@@ -1001,14 +1004,8 @@ func (s *Server) handleConversationMetrics(w http.ResponseWriter, r *http.Reques
 		http.Error(w, `order must be "tokens"`, http.StatusBadRequest)
 		return
 	}
-	mergeStatus := r.URL.Query().Get("merge_status")
-	if mergeStatus != "" && mergeStatus != "1" {
-		http.Error(w, `merge_status must be "1"`, http.StatusBadRequest)
-		return
-	}
 	facets.Limit, facets.Since, facets.Before = limit, since, before
 	facets.Workspace, facets.Tool, facets.Order = workspace, toolParam(r), order
-	facets.MergeStatus = mergeStatus == "1"
 	rows, matched, aggregate, err := s.storage.ConversationMetrics(facets)
 	if err != nil {
 		s.logger.Printf("local: conversation metrics: %v", err)
@@ -1024,6 +1021,49 @@ func (s *Server) handleConversationMetrics(w http.ResponseWriter, r *http.Reques
 		"matched_conversations": matched,
 	})
 	s.warmSummariesInBackground()
+}
+
+type branchMergeRow struct {
+	Name        string `json:"name"`
+	Workspace   string `json:"workspace,omitempty"`
+	MergeStatus string `json:"merge_status,omitempty"`
+}
+
+// handleBranchMerges fills git merge status for branch rows the overview
+// already has, so the rest of analytics does not wait on git.
+func (s *Server) handleBranchMerges(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxBranchMergeBodyBytes+1))
+	if err != nil {
+		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if len(body) > maxBranchMergeBodyBytes {
+		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	var req struct {
+		Branches []branchMergeRow `json:"branches"`
+	}
+	if len(body) > 0 {
+		if err := json.Unmarshal(body, &req); err != nil {
+			http.Error(w, "invalid json", http.StatusBadRequest)
+			return
+		}
+	}
+	if len(req.Branches) > maxBranchMergeRows {
+		http.Error(w, "too many branches", http.StatusBadRequest)
+		return
+	}
+	rows := make([]BranchAggregate, len(req.Branches))
+	for i, branch := range req.Branches {
+		rows[i] = BranchAggregate{Name: branch.Name, Workspace: branch.Workspace}
+	}
+	annotateBranchMergeStatus(rows)
+	out := make([]branchMergeRow, len(rows))
+	for i, row := range rows {
+		out[i] = branchMergeRow{Name: row.Name, Workspace: row.Workspace, MergeStatus: row.MergeStatus}
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"branches": out})
 }
 
 // handleToolMetrics returns period-clipped tool counts and failures per

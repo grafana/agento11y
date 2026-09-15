@@ -227,7 +227,7 @@ describe('App analytics loading', () => {
     const metricRequests = fetchMock.mock.calls
       .map(([url]) => new URL(String(url), 'http://local'))
       .filter((url) => url.pathname === '/api/v1/metrics/conversations');
-    expect(metricRequests.some((url) => url.searchParams.get('merge_status') === '1')).toBe(true);
+    expect(metricRequests.every((url) => url.searchParams.get('merge_status') == null)).toBe(true);
     expect(
       metricRequests
         .filter((url) => url.searchParams.get('order') === 'tokens')
@@ -246,6 +246,85 @@ describe('App analytics loading', () => {
     expect(window.location.pathname).toBe('/analytics');
     expect(screen.getByRole('heading', { name: 'Analytics' })).toBeTruthy();
   });
+
+  it('renders overview before git merge status returns', async () => {
+    window.history.replaceState({}, '', '/analytics');
+    const stored = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => stored.get(key) ?? null,
+      setItem: (key: string, value: string) => stored.set(key, value),
+      removeItem: (key: string) => stored.delete(key),
+    });
+    const response = (body: unknown): Response =>
+      ({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(body),
+        text: () => Promise.resolve(''),
+      }) as Response;
+    let finishMerges: (body: unknown) => void = () => {};
+    const merges = new Promise<unknown>((resolve) => {
+      finishMerges = resolve;
+    });
+    const listed = conversation({ branch: 'feat' });
+    const branchRow = {
+      name: 'feat',
+      workspace: '/worktrees/costly',
+      sessions: 1,
+      token_buckets: listed.token_buckets,
+      token_buckets_by_model: listed.token_buckets_by_model || {},
+      duration_seconds: 60,
+      last_activity: listed.last_activity,
+    };
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/v1/metrics/branch-merges') {
+        return merges.then((body) => response(body));
+      }
+      if (url.startsWith('/api/v1/metrics/conversations')) {
+        return Promise.resolve(
+          response({
+            conversations: [listed],
+            matched_conversations: 1,
+            aggregate: {
+              calls: listed.calls,
+              errored: 0,
+              agents: 1,
+              agent_hosts: ['pi'],
+              workspaces: 1,
+              token_buckets: listed.token_buckets,
+              token_buckets_by_model: listed.token_buckets_by_model || {},
+              models: listed.models,
+              branch_rows: [branchRow],
+            },
+          }),
+        );
+      }
+      if (url.startsWith('/api/v1/metrics/tokens')) {
+        return Promise.resolve(response({ points: [point()], interval_seconds: 3600 }));
+      }
+      if (url.startsWith('/api/v1/conversations')) {
+        return Promise.resolve(response({ conversations: [], total_conversations: 0 }));
+      }
+      if (url === '/api/v1/config') return Promise.resolve(response({}));
+      return Promise.resolve(response({}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByTestId('branches').textContent).toContain('feat'));
+    expect(screen.getByText('Estimated spend')).toBeTruthy();
+    expect(screen.getByTestId('merge-status').textContent).toContain('Checking git merge status');
+    expect(document.querySelector('[data-merge-status="open"]')).toBeNull();
+    expect(fetchMock.mock.calls.some(([url]) => String(url) === '/api/v1/metrics/branch-merges')).toBe(true);
+
+    finishMerges({
+      branches: [{ name: 'feat', workspace: '/worktrees/costly', merge_status: 'open' }],
+    });
+    await waitFor(() => expect(firstAttribute('[data-merge-status="open"]', 'data-merge-status')).toBe('open'));
+  });
+
   it('grows the token-ordered page until the cost ranking is proven', async () => {
     window.history.replaceState({}, '', '/analytics');
     const stored = new Map<string, string>();
@@ -679,6 +758,15 @@ describe('AnalyticsView', () => {
                 last_activity: listed.last_activity,
                 merge_status: 'default',
               },
+              {
+                name: 'lost',
+                workspace: '/worktrees/costly',
+                sessions: 1,
+                token_buckets: { ...EMPTY, fresh_input: 500 },
+                token_buckets_by_model: { 'costly-model': { ...EMPTY, fresh_input: 500 } },
+                duration_seconds: 60,
+                last_activity: listed.last_activity,
+              },
             ],
           },
         })}
@@ -691,13 +779,14 @@ describe('AnalyticsView', () => {
     expect(document.querySelector('[data-merge-status="open"] svg')).toBeTruthy();
     expect(document.querySelector('[data-merge-status="merged"] svg')).toBeTruthy();
     expect(document.querySelector('[data-merge-status="closed"] svg')).toBeTruthy();
-    expect(document.querySelector('[data-merge-status="default"] svg')).toBeNull();
+    expect(document.querySelector('[data-merge-status="default"] svg')).toBeTruthy();
+    expect(document.querySelector('[data-merge-status="unknown"] svg')).toBeTruthy();
     expect(document.querySelector('[data-merge-status-row="default"] svg')).toBeTruthy();
     expect(document.querySelector('[data-merge-status-row="open"] svg')).toBeTruthy();
     expect(screen.getAllByTitle(/last fetch/).length).toBe(2);
     expect(
       [...document.querySelectorAll('[data-merge-status-row]')].map((row) => row.getAttribute('data-merge-status-row')),
-    ).toEqual(['open', 'merged', 'default', 'closed']);
+    ).toEqual(['open', 'merged', 'default', 'closed', 'unknown']);
   });
 
   it('rolls branch spend up by git merge status', () => {
@@ -756,6 +845,44 @@ describe('AnalyticsView', () => {
     ).toEqual(['open', 'default']);
     expect(document.querySelector('[data-merge-status-row="open"]')?.textContent).toContain('open');
     expect(document.querySelector('[data-testid="token-mix"]')).toBeNull();
+  });
+
+  it('keeps branch tables visible while git merge status is still loading', () => {
+    const listed = conversation({ branch: 'feat' });
+    render(
+      <AnalyticsView
+        {...viewProps({
+          conversations: [listed],
+          mergeLoading: true,
+          aggregate: {
+            calls: 1,
+            errored: 0,
+            agents: 1,
+            agent_hosts: ['pi'],
+            workspaces: 1,
+            token_buckets: listed.token_buckets,
+            token_buckets_by_model: listed.token_buckets_by_model || {},
+            models: listed.models,
+            branch_rows: [
+              {
+                name: 'feat',
+                workspace: '/worktrees/costly',
+                sessions: 1,
+                token_buckets: listed.token_buckets,
+                token_buckets_by_model: listed.token_buckets_by_model || {},
+                duration_seconds: 60,
+                last_activity: listed.last_activity,
+              },
+            ],
+          },
+        })}
+      />,
+    );
+    expect(screen.getByTestId('branches').textContent).toContain('feat');
+    expect(screen.getByTestId('branches').textContent).toContain('checking git');
+    expect(firstAttribute('[data-merge-status="loading"]', 'title')).toBe('Checking git');
+    expect(screen.getByTestId('merge-status').textContent).toContain('Checking git merge status');
+    expect(document.querySelector('[data-merge-status-row]')).toBeNull();
   });
 
   it('discloses current and previous range coverage', () => {

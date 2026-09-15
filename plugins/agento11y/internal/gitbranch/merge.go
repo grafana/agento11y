@@ -20,7 +20,7 @@ const (
 )
 
 const gitTimeout = 2 * time.Second
-const mergeWorkBudget = 1500 * time.Millisecond
+const mergeWorkBudget = 4 * time.Second
 const squashLogLimit = "120"
 
 const (

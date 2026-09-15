@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -388,12 +389,75 @@ func TestServer_ConversationMetrics(t *testing.T) {
 			"/api/v1/metrics/conversations?since=",
 			"/api/v1/metrics/conversations?before=tomorrow",
 			"/api/v1/metrics/conversations?order=cost",
-			"/api/v1/metrics/conversations?merge_status=yes",
 		} {
 			rr := httptest.NewRecorder()
 			srv.ServeHTTP(rr, newLocalRequest(http.MethodGet, path, nil))
 			assert.Equal(t, http.StatusBadRequest, rr.Code, path)
 		}
+	})
+}
+
+func TestServer_BranchMerges(t *testing.T) {
+	srv, _, _ := newTestServerStorage(t)
+
+	t.Run("invalid json is rejected", func(t *testing.T) {
+		resp := post(t, srv, "/api/v1/metrics/branch-merges", "application/json", "{")
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	})
+
+	t.Run("too many branches are rejected", func(t *testing.T) {
+		branches := make([]string, maxBranchMergeRows+1)
+		for i := range branches {
+			branches[i] = `{"name":"b` + strconv.Itoa(i) + `"}`
+		}
+		resp := post(t, srv, "/api/v1/metrics/branch-merges", "application/json", `{"branches":[`+strings.Join(branches, ",")+`]}`)
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	})
+
+	t.Run("inspects a workspace without blocking conversation metrics", func(t *testing.T) {
+		if _, err := exec.LookPath("git"); err != nil {
+			t.Skip("git is required for merge-status tests")
+		}
+		dir := t.TempDir()
+		run := func(args ...string) {
+			t.Helper()
+			cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+			cmd.Env = append(os.Environ(),
+				"GIT_TERMINAL_PROMPT=0",
+				"GIT_AUTHOR_NAME=test",
+				"GIT_AUTHOR_EMAIL=test@example.com",
+				"GIT_COMMITTER_NAME=test",
+				"GIT_COMMITTER_EMAIL=test@example.com",
+			)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("git %v: %v\n%s", args, err, out)
+			}
+		}
+		run("init", "--initial-branch=main")
+		run("config", "user.email", "test@example.com")
+		run("config", "user.name", "test")
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "file"), []byte("base\n"), 0o644))
+		run("add", "file")
+		run("commit", "-m", "init")
+
+		resp := post(t, srv, "/api/v1/metrics/branch-merges", "application/json",
+			`{"branches":[{"name":"main","workspace":`+strconv.Quote(dir)+`}]}`)
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		var got struct {
+			Branches []struct {
+				Name        string `json:"name"`
+				Workspace   string `json:"workspace"`
+				MergeStatus string `json:"merge_status"`
+			} `json:"branches"`
+		}
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
+		require.Len(t, got.Branches, 1)
+		assert.Equal(t, "main", got.Branches[0].Name)
+		assert.Equal(t, "default", got.Branches[0].MergeStatus)
 	})
 }
 
@@ -622,6 +686,7 @@ func TestServer_Routing(t *testing.T) {
 		{name: "app bundle asset", method: http.MethodGet, path: "/assets/app.js", want: http.StatusOK, wantContentType: "application/javascript", wantBodyHas: "function App()"},
 		{name: "healthz serves JSON", method: http.MethodGet, path: "/healthz", want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"status":"ok"`},
 		{name: "empty conversation metrics serves an array", method: http.MethodGet, path: "/api/v1/metrics/conversations", want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"conversations":[]`},
+		{name: "empty branch merges serves an array", method: http.MethodPost, path: "/api/v1/metrics/branch-merges", contentType: wire.ContentTypeJSON, body: "{}", want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"branches":[]`},
 		{name: "empty tool metrics serves an array", method: http.MethodGet, path: "/api/v1/metrics/tools", want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"conversations":[]`},
 		{name: "empty skills-tools metrics serves tools only", method: http.MethodGet, path: "/api/v1/metrics/skills-tools", want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"tools":{"totals":{"calls":0`},
 		{name: "unknown route", method: http.MethodPost, path: "/api/v1/unknown", contentType: wire.ContentTypeJSON, body: "{}", want: http.StatusNotFound},

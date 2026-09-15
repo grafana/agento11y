@@ -177,10 +177,6 @@ type ConversationListOptions struct {
 	// Order selects the metrics row order. "tokens" uses tokens in the
 	// requested time range, counted once. Empty keeps newest activity first.
 	Order string
-	// MergeStatus inspects each workspace's git checkout to fill
-	// branch_rows.merge_status. Sessions KPIs and the heaviest-session
-	// ranking skip this; the analytics overview opts in.
-	MergeStatus bool
 	// Exact applies the workspace, tool, and half-open generation-time filters
 	// before Limit. The plain list leaves this false to retain its bounded
 	// file-order fast path.
@@ -470,9 +466,6 @@ func (s *Storage) ConversationMetrics(opts ConversationListOptions) ([]Conversat
 	})
 	matched := len(out)
 	aggregate := aggregateConversationMetrics(out)
-	if opts.MergeStatus {
-		annotateBranchMergeStatus(aggregate.BranchRows)
-	}
 	if opts.Limit > 0 && len(out) > opts.Limit {
 		out = out[:opts.Limit]
 	}
@@ -579,7 +572,7 @@ func aggregateConversationMetrics(rows []ConversationSummary) ConversationMetric
 }
 
 func annotateBranchMergeStatus(rows []BranchAggregate) {
-	stop := time.Now().Add(2 * time.Second)
+	stop := time.Now().Add(12 * time.Second)
 	byWorkspace := map[string]*gitbranch.RepoMerges{}
 	for i := range rows {
 		workspace := rows[i].Workspace

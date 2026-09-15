@@ -60,6 +60,8 @@ import {
 import { TopBar } from './shell';
 import { filterToolAnalytics, SkillsToolsContent, skillsToolsHeroStats } from './skills-tools';
 import type {
+  BranchMergeResponse,
+  BranchMetricsAggregate,
   ConfigResponse,
   ConversationDetail,
   ConversationListResponse,
@@ -93,6 +95,7 @@ interface DetailReturnState {
 const ANALYTICS_LIST_SIZE = 2000;
 const HEAVIEST_INITIAL_LIMIT = 64;
 const HEAVIEST_MAX_RETRIES = 3;
+const MAX_BRANCH_MERGES = 500;
 const ALL_WORKSPACES = 'all';
 const WORKSPACE_PREFIX = 'workspace:';
 
@@ -103,6 +106,39 @@ function decodeAnalyticsWorkspace(value: string): string | null {
 
 function encodeAnalyticsWorkspace(value: string | null): string {
   return value == null ? ALL_WORKSPACES : `${WORKSPACE_PREFIX}${value}`;
+}
+
+function branchMergeKey(workspace: string | undefined, name: string) {
+  return `${workspace || ''}::${name}`;
+}
+
+function branchMergeRefs(rows: BranchMetricsAggregate[] | undefined) {
+  const seen = new Set<string>();
+  const refs: Array<Pick<BranchMetricsAggregate, 'name' | 'workspace'>> = [];
+  for (const row of rows || []) {
+    const key = branchMergeKey(row.workspace, row.name);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    refs.push(row.workspace ? { name: row.name, workspace: row.workspace } : { name: row.name });
+    if (refs.length >= MAX_BRANCH_MERGES) break;
+  }
+  return refs;
+}
+
+function applyBranchMergeStatuses(
+  aggregate: ConversationMetricsAggregate | null,
+  statuses: BranchMergeResponse['branches'],
+): ConversationMetricsAggregate | null {
+  if (!aggregate?.branch_rows) return aggregate;
+  const byKey = new Map(statuses.map((row) => [branchMergeKey(row.workspace, row.name), row.merge_status]));
+  return {
+    ...aggregate,
+    branch_rows: aggregate.branch_rows.map((row) => {
+      const key = branchMergeKey(row.workspace, row.name);
+      if (!byKey.has(key)) return row;
+      return { ...row, merge_status: byKey.get(key) };
+    }),
+  };
 }
 
 function errorMessage(error: unknown): string {
@@ -295,11 +331,13 @@ export function App() {
   const [loadingAnalytics, setLoadingAnalytics] = useState(false);
   const [loadingAnalyticsTokens, setLoadingAnalyticsTokens] = useState(false);
   const [loadingAnalyticsHeatmap, setLoadingAnalyticsHeatmap] = useState(false);
+  const [loadingAnalyticsMerge, setLoadingAnalyticsMerge] = useState(false);
   const [errAnalytics, setErrAnalytics] = useState<string | null>(null);
   const [errAnalyticsPrevious, setErrAnalyticsPrevious] = useState<string | null>(null);
   const [errAnalyticsFacets, setErrAnalyticsFacets] = useState<string | null>(null);
   const [errAnalyticsTokens, setErrAnalyticsTokens] = useState<string | null>(null);
   const [errAnalyticsHeatmap, setErrAnalyticsHeatmap] = useState<string | null>(null);
+  const [errAnalyticsMerge, setErrAnalyticsMerge] = useState<string | null>(null);
   const analyticsModelPrices = useModelPrices(showAnalytics && analyticsTab === 'overview');
 
   const [detail, setDetail] = useState<ConversationDetail | null>(null);
@@ -660,15 +698,49 @@ export function App() {
     [analyticsModelPrices, analyticsRange, analyticsWorkspace, readJSON],
   );
 
+  const analyticsMergeSeqRef = useRef(0);
+  const fetchAnalyticsMerge = useCallback(
+    (rows: BranchMetricsAggregate[] | undefined, seq: number) => {
+      if (analyticsMergeSeqRef.current !== seq) return;
+      const refs = branchMergeRefs(rows);
+      if (refs.length === 0) {
+        setLoadingAnalyticsMerge(false);
+        return;
+      }
+      fetch('/api/v1/metrics/branch-merges', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ branches: refs }),
+      })
+        .then((response) => readJSON<BranchMergeResponse>(response))
+        .then((body) => {
+          if (analyticsMergeSeqRef.current !== seq) return;
+          setAnalyticsAggregate((current) => applyBranchMergeStatuses(current, body.branches || []));
+        })
+        .catch((error) => {
+          if (analyticsMergeSeqRef.current !== seq) return;
+          setErrAnalyticsMerge(errorMessage(error));
+        })
+        .finally(() => {
+          if (analyticsMergeSeqRef.current !== seq) return;
+          setLoadingAnalyticsMerge(false);
+        });
+    },
+    [readJSON],
+  );
+
   const fetchAnalytics = useCallback(
     (reset = false, now = Date.now()) => {
       const seq = ++analyticsSeqRef.current;
+      const mergeSeq = ++analyticsMergeSeqRef.current;
       setLoadingAnalytics(true);
       setLoadingAnalyticsTokens(true);
+      setLoadingAnalyticsMerge(true);
       setErrAnalytics(null);
       setErrAnalyticsPrevious(null);
       setErrAnalyticsFacets(null);
       setErrAnalyticsTokens(null);
+      setErrAnalyticsMerge(null);
       if (reset) {
         setAnalyticsConversations([]);
         setAnalyticsPreviousConversations([]);
@@ -688,7 +760,6 @@ export function App() {
       const currentParams = new URLSearchParams({
         limit: String(ANALYTICS_LIST_SIZE),
         before,
-        merge_status: '1',
       });
       const previousParams = new URLSearchParams({ limit: String(ANALYTICS_LIST_SIZE) });
       const tokenParams = new URLSearchParams({ before });
@@ -744,6 +815,7 @@ export function App() {
             setAnalyticsTotalConversations(
               Number.isFinite(value.matched_conversations) ? value.matched_conversations : null,
             );
+            fetchAnalyticsMerge(value.aggregate?.branch_rows, mergeSeq);
             if (analyticsWorkspace == null) {
               setAnalyticsFacetConversations(value.conversations || []);
               setAnalyticsFacetAggregate(value.aggregate || null);
@@ -752,7 +824,10 @@ export function App() {
               );
             }
           },
-          (reason) => setErrAnalytics(errorMessage(reason)),
+          (reason) => {
+            setErrAnalytics(errorMessage(reason));
+            if (analyticsMergeSeqRef.current === mergeSeq) setLoadingAnalyticsMerge(false);
+          },
         ),
         settle(
           previousRequest,
@@ -796,7 +871,7 @@ export function App() {
         setLoadingAnalytics(false);
       });
     },
-    [analyticsRange, analyticsWorkspace, readJSON],
+    [analyticsRange, analyticsWorkspace, fetchAnalyticsMerge, readJSON],
   );
 
   const skillsToolsSeqRef = useRef(0);
@@ -1387,6 +1462,8 @@ export function App() {
                 facetError={errAnalyticsFacets}
                 tokenError={errAnalyticsTokens}
                 heatmapError={errAnalyticsHeatmap}
+                mergeLoading={loadingAnalyticsMerge}
+                mergeError={errAnalyticsMerge}
                 unit={analyticsUnit}
                 prices={analyticsModelPrices}
                 onUnitChange={setAnalyticsUnit}
