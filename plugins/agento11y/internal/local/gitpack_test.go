@@ -35,15 +35,35 @@ func TestGitPackForcePush(t *testing.T) {
 		}).Action
 	}
 
-	assert.Equal(t, agento11y.HookActionDeny, actionFor("git push --force"))
-	assert.Equal(t, agento11y.HookActionDeny, actionFor("git push -f"))
-	assert.Equal(t, agento11y.HookActionDeny, actionFor("git push origin main --force"))
-	assert.Equal(t, agento11y.HookActionDeny, actionFor("git push --force && echo ok"))
-	assert.Equal(t, agento11y.HookActionDeny, actionFor("git push --force&&true"))
-	assert.Equal(t, agento11y.HookActionDeny, actionFor("git push -f; echo ok"))
-	assert.Equal(t, agento11y.HookActionAllow, actionFor("git push --force-with-lease"))
-	assert.Equal(t, agento11y.HookActionAllow, actionFor("git push --force-if-includes"))
-	assert.Equal(t, agento11y.HookActionAllow, actionFor("git push origin main"))
+	for _, tt := range []struct {
+		command string
+		deny    bool
+	}{
+		{"git push --force", true},
+		{"git push -f", true},
+		{"git push -fu origin main", true},
+		{"git push -uf origin main", true},
+		{"git push origin main --force", true},
+		{"git push --force && echo ok", true},
+		{"git push --force&&true", true},
+		{"git push -f; echo ok", true},
+		{"git push -uf; echo ok", true},
+		{"git push --force-with-lease", false},
+		{"git push --force-with-lease=main:abc123", false},
+		{"git push --force-if-includes", false},
+		{"git push -u origin main", false},
+		{"git push origin main", false},
+		{"git push; echo -f", false},
+		{"git push && echo -uf", false},
+	} {
+		t.Run(tt.command, func(t *testing.T) {
+			want := agento11y.HookActionAllow
+			if tt.deny {
+				want = agento11y.HookActionDeny
+			}
+			assert.Equal(t, want, actionFor(tt.command))
+		})
+	}
 }
 
 func TestGitPackBranchDelete(t *testing.T) {

@@ -123,12 +123,25 @@ var gitPreview = []string{
 
 var gitPatterns = []string{
 	`(?i)\bgit[[:space:]]+reset[[:space:]]+--hard\b`,
-	`(?i)\bgit[[:space:]]+push\b.*[[:space:]](?:--force|-f)(?:[[:space:]]|$|[^[:alnum:]_-])`,
+	`(?i)\bgit[ \t]+push` + shellArgumentGap + `(?:--force|-[a-z]*f[a-z]*)(?:[[:space:]]|$|[^[:alnum:]_-])`,
 	`(?i)\bgit[[:space:]]+clean\b.*-[a-zA-Z]*f`,
 	`(?i)\bgit[[:space:]]+checkout[[:space:]]+--[[:space:]]`,
 	`(?i)\bgit[[:space:]]+stash[[:space:]]+drop\b`,
 	`(?i)\bgit[[:space:]]+stash[[:space:]]+clear\b`,
 	`(?i)\bgit[[:space:]]+branch[[:space:]]+(?-i)-D\b`,
+}
+
+const (
+	shellArgumentGap = `[ \t]+(?:[^\s;&|()\x60#]+[ \t]+)*`
+	shellArgumentEnd = `(?:[[:space:];&|()"']|$)`
+	rmRecursiveFlag  = `(?:--recursive|-[a-z]*r[a-z]*)`
+	rmForceFlag      = `(?:--force|-[a-z]*f[a-z]*)`
+)
+
+var destructivePatterns = []string{
+	`(?i)\brm` + shellArgumentGap + `-[a-z]*(?:r[a-z]*f|f[a-z]*r)[a-z]*` + shellArgumentEnd,
+	`(?i)\brm` + shellArgumentGap + rmRecursiveFlag + shellArgumentGap + rmForceFlag + shellArgumentEnd,
+	`(?i)\brm` + shellArgumentGap + rmForceFlag + shellArgumentGap + rmRecursiveFlag + shellArgumentEnd,
 }
 
 var permissionsPreview = []string{
@@ -214,10 +227,7 @@ func packRule(id string) (guardeval.Rule, error) {
 	case packGit:
 		return denyShellRule(packGit, 20, gitPatterns), nil
 	case packDestructive:
-		return denyShellRule(packDestructive, 30, []string{
-			`(?i)\brm[[:space:]]+-[a-zA-Z]*r[a-zA-Z]*f`,
-			`(?i)\brm[[:space:]]+-[a-zA-Z]*f[a-zA-Z]*r`,
-		}), nil
+		return denyShellRule(packDestructive, 30, destructivePatterns), nil
 	case packPermissions:
 		return denyShellRule(packPermissions, 40, permissionsPatterns), nil
 	case packDisk:

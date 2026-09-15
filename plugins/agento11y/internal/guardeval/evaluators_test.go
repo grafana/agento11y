@@ -61,6 +61,11 @@ func TestFlatten_SerializesPartsAndToolCalls(t *testing.T) {
 			want: `[tool_call] Bash {"command":"git reset --hard"}`,
 		},
 		{
+			name: "text and tool call in the same part",
+			msgs: []agento11y.Message{{Parts: []agento11y.Part{{Kind: agento11y.PartKindToolCall, Text: "  running command  ", ToolCall: &agento11y.ToolCall{Name: "Bash", InputJSON: json.RawMessage(`{"command":"git reset --hard"}`)}}}}},
+			want: "running command\n[tool_call] Bash {\"command\":\"git reset --hard\"}",
+		},
+		{
 			name: "parts joined with newline",
 			msgs: []agento11y.Message{{Parts: []agento11y.Part{
 				{Kind: agento11y.PartKindText, Text: "ok"},
@@ -100,6 +105,18 @@ func TestRegexEvaluator_RejectAndTarget(t *testing.T) {
 			name:       "matches the flattened tool call text",
 			config:     map[string]any{"pattern": `(?i)rm\s+-rf`, "reject": true},
 			input:      agento11y.HookInput{Output: []agento11y.Message{{Parts: []agento11y.Part{{Kind: agento11y.PartKindToolCall, ToolCall: &agento11y.ToolCall{Name: "Bash", InputJSON: json.RawMessage(`{"command":"rm -rf /tmp"}`)}}}}}},
+			wantPassed: false,
+		},
+		{
+			name:       "response tool call is not hidden by text",
+			config:     map[string]any{"pattern": `\[tool_call\] Bash .*rm -rf`, "reject": true, "target": "response"},
+			input:      agento11y.HookInput{Output: []agento11y.Message{{Parts: []agento11y.Part{{Kind: agento11y.PartKindToolCall, Text: "running command", ToolCall: &agento11y.ToolCall{Name: "Bash", InputJSON: json.RawMessage(`{"command":"rm -rf /tmp"}`)}}}}}},
+			wantPassed: false,
+		},
+		{
+			name:       "input tool call is not hidden by text",
+			config:     map[string]any{"pattern": `\[tool_call\] Bash .*rm -rf`, "reject": true, "target": "input"},
+			input:      agento11y.HookInput{Messages: []agento11y.Message{{Parts: []agento11y.Part{{Kind: agento11y.PartKindToolCall, Text: "running command", ToolCall: &agento11y.ToolCall{Name: "Bash", InputJSON: json.RawMessage(`{"command":"rm -rf /tmp"}`)}}}}}},
 			wantPassed: false,
 		},
 		{

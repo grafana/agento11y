@@ -169,24 +169,23 @@ func flatten(messages []agento11y.Message) string {
 }
 
 func flattenPart(p agento11y.Part) string {
+	parts := make([]string, 0, 2)
 	if text := strings.TrimSpace(p.Text); text != "" {
-		return text
+		parts = append(parts, text)
 	}
 	if p.ToolCall != nil {
 		name := strings.TrimSpace(p.ToolCall.Name)
 		input := strings.TrimSpace(string(p.ToolCall.InputJSON))
-		switch {
-		case name != "" && input != "":
-			return "[tool_call] " + name + " " + input
-		case name != "":
-			return "[tool_call] " + name
-		case input != "":
-			return "[tool_call] " + input
-		default:
-			return "[tool_call]"
+		tool := "[tool_call]"
+		if name != "" {
+			tool += " " + name
 		}
+		if input != "" {
+			tool += " " + input
+		}
+		parts = append(parts, tool)
 	}
-	return ""
+	return strings.Join(parts, "\n")
 }
 
 // parseEvalTarget validates the target; empty defaults to "response". The
