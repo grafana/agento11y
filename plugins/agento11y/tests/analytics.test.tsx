@@ -224,6 +224,15 @@ describe('App analytics loading', () => {
         return parsed.pathname === '/api/v1/metrics/conversations' && parsed.searchParams.get('order') === 'tokens';
       }),
     ).toBe(true);
+    const metricRequests = fetchMock.mock.calls
+      .map(([url]) => new URL(String(url), 'http://local'))
+      .filter((url) => url.pathname === '/api/v1/metrics/conversations');
+    expect(metricRequests.some((url) => url.searchParams.get('merge_status') === '1')).toBe(true);
+    expect(
+      metricRequests
+        .filter((url) => url.searchParams.get('order') === 'tokens')
+        .every((url) => url.searchParams.get('merge_status') == null),
+    ).toBe(true);
     expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/v1/metrics/tools?'))).toBe(false);
     expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/v1/metrics/skills-tools?'))).toBe(false);
 

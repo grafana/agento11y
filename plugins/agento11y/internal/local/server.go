@@ -1001,8 +1001,14 @@ func (s *Server) handleConversationMetrics(w http.ResponseWriter, r *http.Reques
 		http.Error(w, `order must be "tokens"`, http.StatusBadRequest)
 		return
 	}
+	mergeStatus := r.URL.Query().Get("merge_status")
+	if mergeStatus != "" && mergeStatus != "1" {
+		http.Error(w, `merge_status must be "1"`, http.StatusBadRequest)
+		return
+	}
 	facets.Limit, facets.Since, facets.Before = limit, since, before
 	facets.Workspace, facets.Tool, facets.Order = workspace, toolParam(r), order
+	facets.MergeStatus = mergeStatus == "1"
 	rows, matched, aggregate, err := s.storage.ConversationMetrics(facets)
 	if err != nil {
 		s.logger.Printf("local: conversation metrics: %v", err)

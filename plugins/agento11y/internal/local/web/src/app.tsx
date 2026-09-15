@@ -685,7 +685,11 @@ export function App() {
 
       const range = timeRangeOption(analyticsRange);
       const before = new Date(now).toISOString();
-      const currentParams = new URLSearchParams({ limit: String(ANALYTICS_LIST_SIZE), before });
+      const currentParams = new URLSearchParams({
+        limit: String(ANALYTICS_LIST_SIZE),
+        before,
+        merge_status: '1',
+      });
       const previousParams = new URLSearchParams({ limit: String(ANALYTICS_LIST_SIZE) });
       const tokenParams = new URLSearchParams({ before });
       if (range.ms != null) {

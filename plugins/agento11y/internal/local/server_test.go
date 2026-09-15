@@ -388,6 +388,7 @@ func TestServer_ConversationMetrics(t *testing.T) {
 			"/api/v1/metrics/conversations?since=",
 			"/api/v1/metrics/conversations?before=tomorrow",
 			"/api/v1/metrics/conversations?order=cost",
+			"/api/v1/metrics/conversations?merge_status=yes",
 		} {
 			rr := httptest.NewRecorder()
 			srv.ServeHTTP(rr, newLocalRequest(http.MethodGet, path, nil))
