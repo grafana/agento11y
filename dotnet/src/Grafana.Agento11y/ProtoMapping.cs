@@ -36,6 +36,7 @@ internal static class ProtoMapping
                 TotalTokens = model.Usage.TotalTokens,
                 CacheReadInputTokens = model.Usage.CacheReadInputTokens,
                 CacheWriteInputTokens = model.Usage.CacheWriteInputTokens,
+                CacheWrite1HInputTokens = model.Usage.CacheWrite1hInputTokens,
                 ReasoningTokens = model.Usage.ReasoningTokens,
                 InputSemantics = (Proto.TokenInputSemantics)model.Usage.InputSemantics,
             },

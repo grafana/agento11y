@@ -293,11 +293,12 @@ func applyGenerationToInvocation(
 	// counts any non-zero count as reported. Setting Reported here would export
 	// input and output tokens of 0 for a call that never reached a provider.
 	invocation.Usage = otelgenai.Usage{
-		InputTokens:           generation.Usage.InputTokens,
-		OutputTokens:          generation.Usage.OutputTokens,
-		CacheReadInputTokens:  generation.Usage.CacheReadInputTokens,
-		CacheWriteInputTokens: generation.Usage.CacheWriteInputTokens,
-		ReasoningTokens:       generation.Usage.ReasoningTokens,
+		InputTokens:             generation.Usage.InputTokens,
+		OutputTokens:            generation.Usage.OutputTokens,
+		CacheReadInputTokens:    generation.Usage.CacheReadInputTokens,
+		CacheWriteInputTokens:   generation.Usage.CacheWriteInputTokens,
+		CacheWrite1hInputTokens: generation.Usage.CacheWrite1hInputTokens,
+		ReasoningTokens:         generation.Usage.ReasoningTokens,
 	}
 	invocation.MaxTokens = cloneInt64Ptr(generation.MaxTokens)
 	invocation.Temperature = cloneFloat64Ptr(generation.Temperature)
