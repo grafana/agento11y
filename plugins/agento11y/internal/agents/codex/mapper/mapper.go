@@ -266,7 +266,7 @@ func buildMessages(frag *fragment.Fragment, mode agento11y.ContentCaptureMode, r
 		}
 		call := agento11y.ToolCall{ID: t.ToolUseID, Name: t.ToolName}
 		if mode == agento11y.ContentCaptureModeFull && len(t.ToolInput) > 0 {
-			call.InputJSON = cleanJSON(t.ToolInput)
+			call.InputJSON = mapperutil.BoundJSON(cleanJSON(t.ToolInput), mapperutil.MaxToolInputBytes)
 		}
 		output = append(output, agento11y.Message{Role: agento11y.RoleAssistant, Parts: []agento11y.Part{agento11y.ToolCallPart(call)}})
 		if mode == agento11y.ContentCaptureModeMetadataOnly {
@@ -274,7 +274,7 @@ func buildMessages(frag *fragment.Fragment, mode agento11y.ContentCaptureMode, r
 		}
 		result := agento11y.ToolResult{ToolCallID: t.ToolUseID, Name: t.ToolName, IsError: t.Status == "error"}
 		if mode == agento11y.ContentCaptureModeFull && len(t.ToolResponse) > 0 {
-			result.ContentJSON = cleanJSON(t.ToolResponse)
+			result.ContentJSON = mapperutil.BoundJSON(cleanJSON(t.ToolResponse), mapperutil.MaxToolResultBytes)
 		}
 		input = append(input, agento11y.Message{Role: agento11y.RoleTool, Parts: []agento11y.Part{agento11y.ToolResultPart(result)}})
 	}

@@ -19,7 +19,7 @@ import (
 
 const (
 	agentName       = "claude-code"
-	maxToolInputLen = 4096
+	maxToolInputLen = mapperutil.MaxToolInputBytes
 	// maxTitleLen caps the conversation title derived from the first user prompt.
 	maxTitleLen = 100
 )
@@ -505,6 +505,10 @@ func processUserLine(line transcript.Line, uctx *userContext, st *state.Session,
 			if r != nil {
 				content = r.ToolPayload(content)
 			}
+			// A tool result has no cap in the transcript; on export it shares
+			// the bound every mapper applies, so one large result cannot push
+			// the generation past the SDK's payload limit.
+			content = mapperutil.BoundText(content, mapperutil.MaxToolResultBytes)
 			toolParts = append(toolParts, agento11y.Part{
 				Kind: agento11y.PartKindToolResult,
 				ToolResult: &agento11y.ToolResult{
@@ -734,23 +738,10 @@ func truncateJSON(raw json.RawMessage, maxLen int, r *redact.Redactor) json.RawM
 		return raw
 	}
 
-	s := string(raw)
 	if r != nil {
-		s = string(r.ToolPayloadJSON(raw))
+		raw = r.ToolPayloadJSON(raw)
 	}
-
-	if len(s) <= maxLen {
-		return json.RawMessage(s)
-	}
-
-	// Truncate to valid UTF-8 boundary
-	truncated := s[:maxLen]
-	for !utf8.ValidString(truncated) {
-		truncated = truncated[:len(truncated)-1]
-	}
-
-	quoted, _ := json.Marshal(truncated + " [truncated]")
-	return json.RawMessage(quoted)
+	return mapperutil.BoundJSON(raw, maxLen)
 }
 
 // generationID produces a deterministic UUID v5 from transcript data.

@@ -422,7 +422,7 @@ func buildMessages(frag *fragment.Fragment, mode agento11y.ContentCaptureMode, r
 					Name: t.ToolName,
 					InputJSON: func() []byte {
 						if mode == agento11y.ContentCaptureModeFull {
-							return red.ToolPayloadJSON(t.ToolInput)
+							return mapperutil.BoundJSON(red.ToolPayloadJSON(t.ToolInput), mapperutil.MaxToolInputBytes)
 						}
 						return nil
 					}(),
@@ -447,7 +447,7 @@ func buildMessages(frag *fragment.Fragment, mode agento11y.ContentCaptureMode, r
 						ToolResult: &agento11y.ToolResult{
 							ToolCallID:  t.ToolUseID,
 							Name:        t.ToolName,
-							ContentJSON: red.ToolPayloadJSON(t.ToolOutput),
+							ContentJSON: mapperutil.BoundJSON(red.ToolPayloadJSON(t.ToolOutput), mapperutil.MaxToolResultBytes),
 							IsError:     t.Status == "error",
 						},
 					},

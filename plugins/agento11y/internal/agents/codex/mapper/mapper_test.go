@@ -12,6 +12,7 @@ import (
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/codexlog"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/fragment"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/mapperutil"
 )
 
 func TestMapMetadataOnlyStripsTextButKeepsToolStructure(t *testing.T) {
@@ -550,5 +551,52 @@ func TestMapAgentNameOverride(t *testing.T) {
 				t.Fatalf("Model.Provider = %q, want %q", got.Generation.Model.Provider, tt.wantProvider)
 			}
 		})
+	}
+}
+
+// TestMapBoundsToolPayloads pins the export bound on tool arguments and
+// results. The SDK refuses a generation past PayloadMaxBytes, so an unbounded
+// tool result would fail the turn's export and the stop hook's retry alike.
+func TestMapBoundsToolPayloads(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		rawContent bool
+	}{{"redacted", false}, {"raw content", true}} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := &fragment.Fragment{
+				SessionID:            "sess",
+				TurnID:               "turn",
+				Model:                "gpt-5.5",
+				Prompt:               "read the file",
+				LastAssistantMessage: "done",
+				Tools: []fragment.ToolRecord{{
+					ToolName:     "Bash",
+					ToolUseID:    "tool-1",
+					ToolInput:    json.RawMessage(`"` + strings.Repeat("a", mapperutil.MaxToolInputBytes+100) + `"`),
+					ToolResponse: json.RawMessage(`"` + strings.Repeat("b", mapperutil.MaxToolResultBytes+100) + `"`),
+				}},
+			}
+			got := Map(Inputs{
+				Fragment:       f,
+				ContentCapture: agento11y.ContentCaptureModeFull,
+				RawContent:     tt.rawContent,
+				Now:            time.Unix(1, 0),
+			})
+			requireBounded(t, "tool input", got.Generation.Output[0].Parts[0].ToolCall.InputJSON, mapperutil.MaxToolInputBytes)
+			requireBounded(t, "tool result", got.Generation.Input[1].Parts[0].ToolResult.ContentJSON, mapperutil.MaxToolResultBytes)
+		})
+	}
+}
+
+func requireBounded(t *testing.T, what string, raw []byte, limit int) {
+	t.Helper()
+	if !json.Valid(raw) {
+		t.Fatalf("%s is not valid JSON after bounding: %.60s", what, raw)
+	}
+	if !strings.Contains(string(raw), "[truncated]") {
+		t.Fatalf("%s was not truncated: %d bytes", what, len(raw))
+	}
+	if len(raw) > limit+32 {
+		t.Fatalf("%s is %d bytes after bounding, want at most %d plus the marker", what, len(raw), limit)
 	}
 }

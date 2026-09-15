@@ -9,6 +9,7 @@ import (
 	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/state"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/transcript"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/mapperutil"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/redact"
 )
 
@@ -1673,5 +1674,46 @@ func TestProcessHonorsAgentVersionOverride(t *testing.T) {
 	gens, _ = Process(lines, &state.Session{}, Options{SessionID: "sess-1"}, nil)
 	if gens[0].AgentVersion != "1.0.0" || gens[0].EffectiveVersion != "1.0.0" {
 		t.Fatalf("AgentVersion = %q, EffectiveVersion = %q; want the transcript version without an override", gens[0].AgentVersion, gens[0].EffectiveVersion)
+	}
+}
+
+// TestProcessBoundsToolResultContent pins the export bound on tool results.
+// Tool inputs have been capped at maxToolInputLen since the first release;
+// results were not, and a single large one, a file read or a subagent's
+// retrieval, could push the generation past the SDK's payload limit.
+func TestProcessBoundsToolResultContent(t *testing.T) {
+	huge := strings.Repeat("x", mapperutil.MaxToolResultBytes+100)
+	blocks := []transcript.UserContentBlock{{
+		Type:       "tool_result",
+		ToolUseID:  "tu_1",
+		RawContent: json.RawMessage(`"` + huge + `"`),
+	}}
+	blocksJSON, _ := json.Marshal(blocks)
+	msg := transcript.UserMessage{Role: "user", Content: blocksJSON}
+	raw, _ := json.Marshal(msg)
+	toolResultLine := transcript.Line{Type: "user", SessionID: "sess-1", Message: raw}
+
+	lines := []transcript.Line{
+		makeUserLine("read the file"),
+		makeAssistantLine("claude-sonnet-4-20250514", 30, []transcript.ContentBlock{
+			{Type: "tool_use", ID: "tu_1", Name: "Read", Input: json.RawMessage(`{}`)},
+		}, "tool_use"),
+		toolResultLine,
+		makeAssistantLine("claude-sonnet-4-20250514", 40, []transcript.ContentBlock{
+			{Type: "text", Text: "Done."},
+		}, "end_turn"),
+	}
+
+	st := &state.Session{}
+	gens, _ := Process(lines, st, Options{SessionID: "sess-1"}, redact.New())
+	if len(gens) != 2 {
+		t.Fatalf("got %d gens, want 2", len(gens))
+	}
+	content := gens[1].Input[0].Parts[0].ToolResult.Content
+	if !strings.HasSuffix(content, " [truncated]") {
+		t.Fatalf("tool result content was not bounded: %d bytes", len(content))
+	}
+	if len(content) > mapperutil.MaxToolResultBytes+len(" [truncated]") {
+		t.Fatalf("tool result content is %d bytes, want at most %d plus the marker", len(content), mapperutil.MaxToolResultBytes)
 	}
 }

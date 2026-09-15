@@ -10,6 +10,7 @@ import (
 	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/fragment"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/mapperutil"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/redact"
 )
 
@@ -915,5 +916,53 @@ func TestMapFragment_AgentVersionOverride(t *testing.T) {
 	})
 	if got.Generation.AgentVersion != "0.45.2" {
 		t.Fatalf("AgentVersion = %q; want the session version without an override", got.Generation.AgentVersion)
+	}
+}
+
+// TestMapFragmentBoundsToolPayloads pins the export bound on tool arguments
+// and results, the same cap the Claude Code and Codex mappers apply.
+func TestMapFragmentBoundsToolPayloads(t *testing.T) {
+	frag := basicFragment(t)
+	frag.Tools[0].ToolInput = json.RawMessage(`"` + strings.Repeat("a", mapperutil.MaxToolInputBytes+100) + `"`)
+	frag.Tools[0].ToolOutput = json.RawMessage(`"` + strings.Repeat("b", mapperutil.MaxToolResultBytes+100) + `"`)
+
+	got := MapFragment(Inputs{
+		Fragment:       frag,
+		ContentCapture: agento11y.ContentCaptureModeFull,
+		Now:            fixedTime,
+	})
+
+	var input, result []byte
+	for _, msg := range got.Generation.Output {
+		for _, p := range msg.Parts {
+			if p.ToolCall != nil {
+				input = p.ToolCall.InputJSON
+			}
+		}
+	}
+	for _, msg := range got.Generation.Input {
+		for _, p := range msg.Parts {
+			if p.ToolResult != nil {
+				result = p.ToolResult.ContentJSON
+			}
+		}
+	}
+	if input == nil || result == nil {
+		t.Fatal("full mode should export both the tool call and the tool result")
+	}
+	for _, tt := range []struct {
+		what  string
+		raw   []byte
+		limit int
+	}{{"tool input", input, mapperutil.MaxToolInputBytes}, {"tool result", result, mapperutil.MaxToolResultBytes}} {
+		if !json.Valid(tt.raw) {
+			t.Fatalf("%s is not valid JSON after bounding: %.60s", tt.what, tt.raw)
+		}
+		if !strings.Contains(string(tt.raw), "[truncated]") {
+			t.Fatalf("%s was not truncated: %d bytes", tt.what, len(tt.raw))
+		}
+		if len(tt.raw) > tt.limit+32 {
+			t.Fatalf("%s is %d bytes after bounding, want at most %d plus the marker", tt.what, len(tt.raw), tt.limit)
+		}
 	}
 }
