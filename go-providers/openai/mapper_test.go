@@ -1,6 +1,8 @@
 package openai
 
 import (
+	"encoding/json"
+	"slices"
 	"testing"
 
 	osdk "github.com/openai/openai-go/v3"
@@ -108,8 +110,8 @@ func TestFromRequestResponse(t *testing.T) {
 	if generation.ResponseModel != "gpt-4o-mini" {
 		t.Fatalf("expected response model gpt-4o-mini, got %q", generation.ResponseModel)
 	}
-	if generation.SystemPrompt != "You are concise." {
-		t.Fatalf("unexpected system prompt: %q", generation.SystemPrompt)
+	if generation.SystemPrompt != "" {
+		t.Fatalf("chat history was duplicated into system prompt: %q", generation.SystemPrompt)
 	}
 	if generation.StopReason != "tool_calls" {
 		t.Fatalf("expected stop reason tool_calls, got %q", generation.StopReason)
@@ -493,8 +495,11 @@ func TestResponsesFromRequestResponse(t *testing.T) {
 	if generation.Usage.ReasoningTokens != 3 {
 		t.Fatalf("expected reasoning tokens 3, got %d", generation.Usage.ReasoningTokens)
 	}
-	if len(generation.Output) != 2 {
-		t.Fatalf("expected two output messages, got %d", len(generation.Output))
+	if len(generation.Output) != 1 || len(generation.Output[0].Parts) != 2 {
+		t.Fatalf("expected one output candidate with two ordered parts, got %#v", generation.Output)
+	}
+	if generation.Output[0].FinishReason != generation.StopReason {
+		t.Fatalf("output finish reason = %q, want stop reason %q", generation.Output[0].FinishReason, generation.StopReason)
 	}
 }
 
@@ -561,23 +566,26 @@ func TestResponsesFromStream(t *testing.T) {
 	if generation.MaxTokens == nil || *generation.MaxTokens != 128 {
 		t.Fatalf("expected max tokens 128, got %v", generation.MaxTokens)
 	}
-	if len(generation.Output) != 2 {
-		t.Fatalf("expected text and tool-call output messages, got %d", len(generation.Output))
+	if len(generation.Output) != 1 || len(generation.Output[0].Parts) != 2 {
+		t.Fatalf("expected one candidate with text and tool-call parts, got %#v", generation.Output)
+	}
+	if generation.Output[0].FinishReason != generation.StopReason {
+		t.Fatalf("output finish reason = %q, want stop reason %q", generation.Output[0].FinishReason, generation.StopReason)
 	}
 	if generation.Output[0].Parts[0].Text != "hello world" {
 		t.Fatalf("expected merged stream output, got %q", generation.Output[0].Parts[0].Text)
 	}
-	if generation.Output[1].Parts[0].Kind != agento11y.PartKindToolCall {
-		t.Fatalf("expected tool call output, got %#v", generation.Output[1].Parts[0])
+	if generation.Output[0].Parts[1].Kind != agento11y.PartKindToolCall {
+		t.Fatalf("expected tool call output, got %#v", generation.Output[0].Parts[1])
 	}
-	if generation.Output[1].Parts[0].ToolCall.ID != "call_weather" {
-		t.Fatalf("expected tool call id call_weather, got %q", generation.Output[1].Parts[0].ToolCall.ID)
+	if generation.Output[0].Parts[1].ToolCall.ID != "call_weather" {
+		t.Fatalf("expected tool call id call_weather, got %q", generation.Output[0].Parts[1].ToolCall.ID)
 	}
-	if generation.Output[1].Parts[0].ToolCall.Name != "weather" {
-		t.Fatalf("expected tool call name weather, got %q", generation.Output[1].Parts[0].ToolCall.Name)
+	if generation.Output[0].Parts[1].ToolCall.Name != "weather" {
+		t.Fatalf("expected tool call name weather, got %q", generation.Output[0].Parts[1].ToolCall.Name)
 	}
-	if string(generation.Output[1].Parts[0].ToolCall.InputJSON) != `{"city":"Paris"}` {
-		t.Fatalf("expected tool call input JSON, got %q", string(generation.Output[1].Parts[0].ToolCall.InputJSON))
+	if string(generation.Output[0].Parts[1].ToolCall.InputJSON) != `{"city":"Paris"}` {
+		t.Fatalf("expected tool call input JSON, got %q", string(generation.Output[0].Parts[1].ToolCall.InputJSON))
 	}
 	if len(generation.Artifacts) != 2 {
 		t.Fatalf("expected request and provider_event artifacts, got %d", len(generation.Artifacts))
@@ -672,14 +680,17 @@ func TestChatCompletionsFromRequestResponsePreservesWhitespace(t *testing.T) {
 		t.Fatalf("from request/response: %v", err)
 	}
 
-	if generation.SystemPrompt != "  system prompt  " {
-		t.Fatalf("unexpected system prompt %q", generation.SystemPrompt)
+	if generation.SystemPrompt != "" {
+		t.Fatalf("chat history was duplicated into system prompt: %q", generation.SystemPrompt)
 	}
-	if len(generation.Input) != 1 || len(generation.Input[0].Parts) != 1 {
-		t.Fatalf("expected single input text part, got %#v", generation.Input)
+	if len(generation.Input) != 2 || len(generation.Input[0].Parts) != 1 || len(generation.Input[1].Parts) != 1 {
+		t.Fatalf("expected system and user input messages, got %#v", generation.Input)
 	}
-	if generation.Input[0].Parts[0].Text != "  user literal \\\\n\\\\n  " {
-		t.Fatalf("unexpected input text %q", generation.Input[0].Parts[0].Text)
+	if generation.Input[0].Role != agento11y.RoleSystem || generation.Input[0].Parts[0].Text != "  system prompt  " {
+		t.Fatalf("unexpected system input %#v", generation.Input[0])
+	}
+	if generation.Input[1].Role != agento11y.RoleUser || generation.Input[1].Parts[0].Text != "  user literal \\\\n\\\\n  " {
+		t.Fatalf("unexpected user input %#v", generation.Input[1])
 	}
 	if len(generation.Output) != 1 || len(generation.Output[0].Parts) != 1 {
 		t.Fatalf("expected single output text part, got %#v", generation.Output)
@@ -797,7 +808,7 @@ func TestResponsesFromStreamPreservesWhitespaceOnlyOutput(t *testing.T) {
 	}
 }
 
-func TestMapRequestMessagesPreservesEmptySystemEntries(t *testing.T) {
+func TestMapRequestMessagesKeepsInstructionsOnlyInHistory(t *testing.T) {
 	system := osdk.ChatCompletionSystemMessageParam{
 		Content: osdk.ChatCompletionSystemMessageParamContentUnion{
 			OfString: param.NewOpt(""),
@@ -814,11 +825,11 @@ func TestMapRequestMessagesPreservesEmptySystemEntries(t *testing.T) {
 		{OfDeveloper: &developer},
 	})
 
-	if len(input) != 0 {
-		t.Fatalf("expected no mapped user/assistant/tool input messages, got %#v", input)
+	if len(input) != 1 || input[0].Role != agento11y.RoleDeveloper || input[0].Parts[0].Text != "developer instruction" {
+		t.Fatalf("unexpected mapped instruction messages: %#v", input)
 	}
-	if systemPrompt != "\n\ndeveloper instruction" {
-		t.Fatalf("expected preserved empty system entry before developer prompt, got %q", systemPrompt)
+	if systemPrompt != "" {
+		t.Fatalf("chat history was duplicated into system prompt: %q", systemPrompt)
 	}
 }
 
@@ -853,5 +864,357 @@ func TestParseJSONOrStringPreservesWhitespace(t *testing.T) {
 	}
 	if got := parseJSONOrString(""); got != nil {
 		t.Fatalf("expected nil for empty string, got %q", string(got))
+	}
+}
+
+func TestChatCompletionsMapsEveryChoiceAndRequestControls(t *testing.T) {
+	req := osdk.ChatCompletionNewParams{
+		Model: shared.ChatModel("gpt-4o-mini"),
+		N:     param.NewOpt(int64(2)),
+		Seed:  param.NewOpt(int64(17)),
+		ResponseFormat: osdk.ChatCompletionNewParamsResponseFormatUnion{
+			OfJSONObject: &shared.ResponseFormatJSONObjectParam{},
+		},
+	}
+	resp := &osdk.ChatCompletion{
+		Model: "gpt-4o-mini",
+		Choices: []osdk.ChatCompletionChoice{
+			{Index: 0, FinishReason: "stop", Message: osdk.ChatCompletionMessage{Content: "first"}},
+			{Index: 1, FinishReason: "length", Message: osdk.ChatCompletionMessage{Content: "second"}},
+		},
+	}
+
+	generation, err := ChatCompletionsFromRequestResponse(req, resp)
+	if err != nil {
+		t.Fatalf("map chat completion: %v", err)
+	}
+	if len(generation.Output) != 2 {
+		t.Fatalf("output candidates = %#v, want two", generation.Output)
+	}
+	if got := []string{generation.Output[0].Parts[0].Text, generation.Output[1].Parts[0].Text}; !slices.Equal(got, []string{"first", "second"}) {
+		t.Fatalf("output text = %v, want [first second]", got)
+	}
+	if got := []string{generation.Output[0].FinishReason, generation.Output[1].FinishReason}; !slices.Equal(got, []string{"stop", "length"}) {
+		t.Fatalf("finish reasons = %v, want [stop length]", got)
+	}
+	if generation.ChoiceCount == nil || *generation.ChoiceCount != 2 {
+		t.Fatalf("choice count = %v, want 2", generation.ChoiceCount)
+	}
+	if generation.Seed == nil || *generation.Seed != 17 {
+		t.Fatalf("seed = %v, want 17", generation.Seed)
+	}
+	if generation.OutputType == nil || *generation.OutputType != "json" {
+		t.Fatalf("output type = %v, want json", generation.OutputType)
+	}
+}
+
+func TestRequestControlsPreserveDisabledReasoning(t *testing.T) {
+	chat := mapRequestControls(osdk.ChatCompletionNewParams{
+		Model:           shared.ChatModel("gpt-5"),
+		ReasoningEffort: shared.ReasoningEffortNone,
+	})
+	if chat.thinkingEnabled == nil || *chat.thinkingEnabled {
+		t.Fatalf("chat thinking enabled = %v, want false", chat.thinkingEnabled)
+	}
+
+	response := mapResponsesRequestControls(marshalAny(oresponses.ResponseNewParams{
+		Model:     shared.ResponsesModel("gpt-5"),
+		Reasoning: shared.ReasoningParam{Effort: shared.ReasoningEffortNone},
+	}))
+	if response.thinkingEnabled == nil || *response.thinkingEnabled {
+		t.Fatalf("response thinking enabled = %v, want false", response.thinkingEnabled)
+	}
+}
+
+func TestChatCompletionsPreservesInstructionMessagePositions(t *testing.T) {
+	req := osdk.ChatCompletionNewParams{
+		Model: shared.ChatModel("gpt-4o-mini"),
+		Messages: []osdk.ChatCompletionMessageParamUnion{
+			osdk.SystemMessage("system"),
+			osdk.UserMessage("question"),
+			osdk.DeveloperMessage("developer"),
+			osdk.AssistantMessage("prior answer"),
+		},
+	}
+	resp := &osdk.ChatCompletion{
+		Model: "gpt-4o-mini",
+		Choices: []osdk.ChatCompletionChoice{{
+			FinishReason: "stop",
+			Message:      osdk.ChatCompletionMessage{Content: "answer"},
+		}},
+	}
+
+	generation, err := ChatCompletionsFromRequestResponse(req, resp)
+	if err != nil {
+		t.Fatalf("map chat completion: %v", err)
+	}
+	roles := make([]agento11y.Role, len(generation.Input))
+	for i := range generation.Input {
+		roles[i] = generation.Input[i].Role
+	}
+	want := []agento11y.Role{agento11y.RoleSystem, agento11y.RoleUser, agento11y.RoleDeveloper, agento11y.RoleAssistant}
+	if !slices.Equal(roles, want) {
+		t.Fatalf("input roles = %v, want %v", roles, want)
+	}
+	if generation.SystemPrompt != "" {
+		t.Fatalf("chat history was duplicated into system prompt: %q", generation.SystemPrompt)
+	}
+}
+
+func TestChatCompletionsStreamAccumulatesByChoiceAndToolIndex(t *testing.T) {
+	req := osdk.ChatCompletionNewParams{Model: shared.ChatModel("gpt-4o-mini")}
+	summary := ChatCompletionsStreamSummary{Chunks: []osdk.ChatCompletionChunk{
+		{Choices: []osdk.ChatCompletionChunkChoice{
+			{Index: 1, Delta: osdk.ChatCompletionChunkChoiceDelta{Content: "sec", ToolCalls: []osdk.ChatCompletionChunkChoiceDeltaToolCall{{Index: 0, ID: "call_second", Function: osdk.ChatCompletionChunkChoiceDeltaToolCallFunction{Name: "second_tool", Arguments: `{"value":"se`}}}}},
+			{Index: 0, Delta: osdk.ChatCompletionChunkChoiceDelta{Content: "fir", ToolCalls: []osdk.ChatCompletionChunkChoiceDeltaToolCall{{Index: 0, ID: "call_first", Function: osdk.ChatCompletionChunkChoiceDeltaToolCallFunction{Name: "first_tool", Arguments: `{"value":"fi`}}}}},
+		}},
+		{Choices: []osdk.ChatCompletionChunkChoice{
+			{Index: 0, FinishReason: "tool_calls", Delta: osdk.ChatCompletionChunkChoiceDelta{Content: "st", ToolCalls: []osdk.ChatCompletionChunkChoiceDeltaToolCall{{Index: 0, Function: osdk.ChatCompletionChunkChoiceDeltaToolCallFunction{Arguments: `rst"}`}}}}},
+			{Index: 1, FinishReason: "length", Delta: osdk.ChatCompletionChunkChoiceDelta{Content: "ond", ToolCalls: []osdk.ChatCompletionChunkChoiceDeltaToolCall{{Index: 0, Function: osdk.ChatCompletionChunkChoiceDeltaToolCallFunction{Arguments: `cond"}`}}}}},
+		}},
+	}}
+
+	generation, err := ChatCompletionsFromStream(req, summary)
+	if err != nil {
+		t.Fatalf("map chat stream: %v", err)
+	}
+	if len(generation.Output) != 2 {
+		t.Fatalf("output candidates = %#v, want two", generation.Output)
+	}
+	for i, want := range []struct {
+		text, finish, id, name, arguments string
+	}{
+		{text: "first", finish: "tool_calls", id: "call_first", name: "first_tool", arguments: `{"value":"first"}`},
+		{text: "second", finish: "length", id: "call_second", name: "second_tool", arguments: `{"value":"second"}`},
+	} {
+		candidate := generation.Output[i]
+		if len(candidate.Parts) != 2 || candidate.Parts[0].Text != want.text || candidate.FinishReason != want.finish {
+			t.Fatalf("candidate %d = %#v", i, candidate)
+		}
+		call := candidate.Parts[1].ToolCall
+		if call == nil || call.ID != want.id || call.Name != want.name || string(call.InputJSON) != want.arguments {
+			t.Fatalf("candidate %d tool call = %#v", i, call)
+		}
+	}
+}
+
+func TestChatCompletionsPreservesFinishOnlyCandidates(t *testing.T) {
+	req := osdk.ChatCompletionNewParams{Model: shared.ChatModel("gpt-4o-mini")}
+
+	t.Run("sync", func(t *testing.T) {
+		response := &osdk.ChatCompletion{Choices: []osdk.ChatCompletionChoice{
+			{Index: 0, FinishReason: "stop", Message: osdk.ChatCompletionMessage{Content: "answer"}},
+			{
+				Index:        1,
+				FinishReason: "content_filter",
+				Message: osdk.ChatCompletionMessage{ToolCalls: []osdk.ChatCompletionMessageToolCallUnion{{
+					Function: osdk.ChatCompletionMessageFunctionToolCallFunction{},
+				}}},
+			},
+		}}
+		generation, err := ChatCompletionsFromRequestResponse(req, response)
+		if err != nil {
+			t.Fatalf("map chat completion: %v", err)
+		}
+		assertFinishOnlyCandidate(t, generation)
+	})
+
+	t.Run("stream", func(t *testing.T) {
+		summary := ChatCompletionsStreamSummary{Chunks: []osdk.ChatCompletionChunk{{Choices: []osdk.ChatCompletionChunkChoice{
+			{Index: 0, FinishReason: "stop", Delta: osdk.ChatCompletionChunkChoiceDelta{Content: "answer"}},
+			{Index: 1, FinishReason: "content_filter"},
+		}}}}
+		generation, err := ChatCompletionsFromStream(req, summary)
+		if err != nil {
+			t.Fatalf("map chat stream: %v", err)
+		}
+		assertFinishOnlyCandidate(t, generation)
+	})
+}
+
+func assertFinishOnlyCandidate(t *testing.T, generation agento11y.Generation) {
+	t.Helper()
+	if len(generation.Output) != 2 || len(generation.Output[0].Parts) != 1 || len(generation.Output[1].Parts) != 0 {
+		t.Fatalf("output candidates = %#v, want populated and finish-only candidates", generation.Output)
+	}
+	if generation.Output[0].FinishReason != "stop" || generation.Output[1].FinishReason != "content_filter" {
+		t.Fatalf("finish reasons = %q, %q", generation.Output[0].FinishReason, generation.Output[1].FinishReason)
+	}
+}
+
+func TestOpenAIAbsentUsageRemainsUnknown(t *testing.T) {
+	chat, err := ChatCompletionsFromRequestResponse(
+		osdk.ChatCompletionNewParams{Model: shared.ChatModel("gpt-4o-mini")},
+		&osdk.ChatCompletion{Choices: []osdk.ChatCompletionChoice{{FinishReason: "stop", Message: osdk.ChatCompletionMessage{Content: "answer"}}}},
+	)
+	if err != nil {
+		t.Fatalf("map chat completion: %v", err)
+	}
+	if chat.Usage.InputTokensReported || chat.Usage.OutputTokensReported {
+		t.Fatalf("chat usage = %+v, want unknown counters", chat.Usage)
+	}
+
+	response, err := ResponsesFromRequestResponse(
+		oresponses.ResponseNewParams{Model: shared.ResponsesModel("gpt-5")},
+		&oresponses.Response{Status: oresponses.ResponseStatusFailed},
+	)
+	if err != nil {
+		t.Fatalf("map response: %v", err)
+	}
+	if response.Usage.InputTokensReported || response.Usage.OutputTokensReported {
+		t.Fatalf("responses usage = %+v, want unknown counters", response.Usage)
+	}
+}
+
+func TestOpenAIUsagePresenceIsPerCounter(t *testing.T) {
+	var chatUsage osdk.CompletionUsage
+	if err := json.Unmarshal([]byte(`{"prompt_tokens":0}`), &chatUsage); err != nil {
+		t.Fatalf("decode chat usage: %v", err)
+	}
+	mappedChat := mapUsage(chatUsage)
+	if !mappedChat.InputTokensReported || mappedChat.OutputTokensReported {
+		t.Fatalf("chat usage presence = input %v output %v, want true false", mappedChat.InputTokensReported, mappedChat.OutputTokensReported)
+	}
+
+	var responseUsage oresponses.ResponseUsage
+	if err := json.Unmarshal([]byte(`{"output_tokens":0}`), &responseUsage); err != nil {
+		t.Fatalf("decode response usage: %v", err)
+	}
+	mappedResponse := mapResponsesUsage(responseUsage)
+	if mappedResponse.InputTokensReported || !mappedResponse.OutputTokensReported {
+		t.Fatalf("response usage presence = input %v output %v, want false true", mappedResponse.InputTokensReported, mappedResponse.OutputTokensReported)
+	}
+}
+
+func TestChatCompletionsStreamPreservesReportedZeroUsage(t *testing.T) {
+	var chunk osdk.ChatCompletionChunk
+	if err := json.Unmarshal([]byte(`{"id":"chat_zero","model":"gpt-4o-mini","choices":[{"index":0,"delta":{"content":"done"},"finish_reason":"stop"}],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}`), &chunk); err != nil {
+		t.Fatalf("decode chunk: %v", err)
+	}
+
+	generation, err := ChatCompletionsFromStream(
+		osdk.ChatCompletionNewParams{Model: shared.ChatModel("gpt-4o-mini")},
+		ChatCompletionsStreamSummary{Chunks: []osdk.ChatCompletionChunk{chunk}},
+	)
+	if err != nil {
+		t.Fatalf("map chat stream: %v", err)
+	}
+	if !generation.Usage.InputTokensReported || !generation.Usage.OutputTokensReported {
+		t.Fatalf("reported zero usage was lost: %+v", generation.Usage)
+	}
+}
+
+func TestResponsesStreamGroupsPartsByOutputIndex(t *testing.T) {
+	req := oresponses.ResponseNewParams{Model: shared.ResponsesModel("gpt-5")}
+	summary := ResponsesStreamSummary{Events: []oresponses.ResponseStreamEventUnion{
+		{Type: "response.output_text.delta", ItemID: "message_1", OutputIndex: 1, ContentIndex: 0, Delta: "after tool"},
+		{Type: "response.output_item.added", OutputIndex: 0, Item: oresponses.ResponseOutputItemUnion{ID: "fc_1", Type: "function_call", CallID: "call_first", Name: "first"}},
+		{Type: "response.function_call_arguments.done", ItemID: "fc_1", OutputIndex: 0, Name: "first", Arguments: `{}`},
+		{Type: "response.completed"},
+	}}
+
+	generation, err := ResponsesFromStream(req, summary)
+	if err != nil {
+		t.Fatalf("map response stream: %v", err)
+	}
+	if len(generation.Output) != 1 || len(generation.Output[0].Parts) != 2 {
+		t.Fatalf("output = %#v, want one candidate with two parts", generation.Output)
+	}
+	if generation.Output[0].Parts[0].ToolCall == nil || generation.Output[0].Parts[0].ToolCall.ID != "call_first" {
+		t.Fatalf("first output part = %#v, want tool call", generation.Output[0].Parts[0])
+	}
+	if generation.Output[0].Parts[1].Text != "after tool" {
+		t.Fatalf("second output part = %#v, want text", generation.Output[0].Parts[1])
+	}
+	if generation.ResponseStatus == nil || *generation.ResponseStatus != "completed" {
+		t.Fatalf("response status = %v, want completed", generation.ResponseStatus)
+	}
+}
+
+func TestResponsesInputContentPreservesPartOrderAndMedia(t *testing.T) {
+	input, _ := mapResponsesRequestInput(map[string]any{
+		"input": []any{map[string]any{
+			"type": "message",
+			"role": "user",
+			"content": []any{
+				map[string]any{"type": "input_text", "text": "before"},
+				map[string]any{"type": "input_image", "image_url": "https://example.test/image.png"},
+				map[string]any{"type": "input_text", "text": "after"},
+				map[string]any{"type": "input_file", "file_id": "file_123", "filename": "facts.pdf"},
+				map[string]any{"type": "input_file", "file_data": "cGRm", "filename": "inline.pdf"},
+			},
+		}},
+	})
+	if len(input) != 1 || len(input[0].Parts) != 5 {
+		t.Fatalf("input = %#v, want one five-part message", input)
+	}
+	if input[0].Parts[0].Text != "before" || input[0].Parts[2].Text != "after" {
+		t.Fatalf("text part order = %#v", input[0].Parts)
+	}
+	if image := input[0].Parts[1].Media; image == nil || image.Kind != "image" || image.URL != "https://example.test/image.png" {
+		t.Fatalf("image part = %#v", input[0].Parts[1])
+	}
+	if file := input[0].Parts[3].Media; file == nil || file.Kind != "file" || file.URL != "file_123" || file.Name != "facts.pdf" {
+		t.Fatalf("file part = %#v", input[0].Parts[3])
+	}
+	if file := input[0].Parts[4].Media; file == nil || file.URL != "data:application/octet-stream;base64,cGRm" || file.Name != "inline.pdf" {
+		t.Fatalf("inline file part = %#v", input[0].Parts[4])
+	}
+}
+
+func TestResponsesMapsHistoryAndOneOrderedOutputCandidate(t *testing.T) {
+	req := oresponses.ResponseNewParams{
+		Model:        shared.ResponsesModel("gpt-5"),
+		Instructions: param.NewOpt("root instruction"),
+		Input: oresponses.ResponseNewParamsInputUnion{OfInputItemList: oresponses.ResponseInputParam{
+			{OfMessage: &oresponses.EasyInputMessageParam{Role: oresponses.EasyInputMessageRoleSystem, Content: oresponses.EasyInputMessageContentUnionParam{OfString: param.NewOpt("system in place")}}},
+			{OfMessage: &oresponses.EasyInputMessageParam{Role: oresponses.EasyInputMessageRoleUser, Content: oresponses.EasyInputMessageContentUnionParam{OfString: param.NewOpt("question")}}},
+			{OfMessage: &oresponses.EasyInputMessageParam{Role: oresponses.EasyInputMessageRoleDeveloper, Content: oresponses.EasyInputMessageContentUnionParam{OfString: param.NewOpt("developer in place")}}},
+			{OfFunctionCall: &oresponses.ResponseFunctionToolCallParam{CallID: "call_weather", Name: "weather", Arguments: `{"city":"Paris"}`}},
+			{OfFunctionCallOutput: &oresponses.ResponseInputItemFunctionCallOutputParam{CallID: "call_weather", Output: oresponses.ResponseInputItemFunctionCallOutputOutputUnionParam{OfString: param.NewOpt(`{"temp":18}`)}}},
+		}},
+		Text: oresponses.ResponseTextConfigParam{Format: oresponses.ResponseFormatTextConfigParamOfJSONSchema("answer", map[string]any{"type": "object"})},
+	}
+	resp := &oresponses.Response{
+		Model:  shared.ResponsesModel("gpt-5"),
+		Status: oresponses.ResponseStatusCompleted,
+		Output: []oresponses.ResponseOutputItemUnion{
+			{Type: "message", Content: []oresponses.ResponseOutputMessageContentUnion{{Type: "output_text", Text: "first part"}, {Type: "output_text", Text: "second part"}}},
+			{Type: "function_call", CallID: "call_next", Name: "next", Arguments: oresponses.ResponseOutputItemUnionArguments{OfString: `{}`}},
+		},
+	}
+
+	generation, err := ResponsesFromRequestResponse(req, resp)
+	if err != nil {
+		t.Fatalf("map response: %v", err)
+	}
+	if generation.SystemPrompt != "root instruction" {
+		t.Fatalf("system prompt = %q, want root instruction", generation.SystemPrompt)
+	}
+	roles := make([]agento11y.Role, len(generation.Input))
+	for i := range generation.Input {
+		roles[i] = generation.Input[i].Role
+	}
+	wantRoles := []agento11y.Role{agento11y.RoleSystem, agento11y.RoleUser, agento11y.RoleDeveloper, agento11y.RoleAssistant, agento11y.RoleTool}
+	if !slices.Equal(roles, wantRoles) {
+		t.Fatalf("input roles = %v, want %v", roles, wantRoles)
+	}
+	if generation.Input[3].Parts[0].ToolCall == nil || generation.Input[3].Parts[0].ToolCall.ID != "call_weather" {
+		t.Fatalf("replayed function call = %#v", generation.Input[3])
+	}
+	if generation.Input[4].Parts[0].ToolResult == nil || generation.Input[4].Parts[0].ToolResult.ToolCallID != "call_weather" {
+		t.Fatalf("function result = %#v", generation.Input[4])
+	}
+	if len(generation.Output) != 1 || len(generation.Output[0].Parts) != 3 {
+		t.Fatalf("output = %#v, want one candidate with three parts", generation.Output)
+	}
+	if generation.Output[0].Parts[0].Text != "first part" || generation.Output[0].Parts[1].Text != "second part" || generation.Output[0].Parts[2].ToolCall == nil {
+		t.Fatalf("ordered output parts = %#v", generation.Output[0].Parts)
+	}
+	if generation.OutputType == nil || *generation.OutputType != "json" {
+		t.Fatalf("output type = %v, want json", generation.OutputType)
+	}
+	if generation.ResponseStatus == nil || *generation.ResponseStatus != "completed" {
+		t.Fatalf("response status = %v, want completed", generation.ResponseStatus)
 	}
 }

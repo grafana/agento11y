@@ -84,6 +84,12 @@ func TestFromRequestResponse(t *testing.T) {
 	if generation.Usage.CacheWriteInputTokens != 10 {
 		t.Fatalf("expected cache write tokens 10, got %d", generation.Usage.CacheWriteInputTokens)
 	}
+	if generation.TopK == nil || *generation.TopK != 40 {
+		t.Fatalf("expected top_k 40, got %v", generation.TopK)
+	}
+	if generation.OutputType == nil || *generation.OutputType != "json" {
+		t.Fatalf("expected output type json, got %v", generation.OutputType)
+	}
 	if generation.Usage.InputSemantics != agento11y.TokenInputSemanticsInclusive {
 		t.Fatalf("expected inclusive input semantics, got %v", generation.Usage.InputSemantics)
 	}
@@ -316,6 +322,12 @@ func TestFromStream(t *testing.T) {
 	if generation.Usage.TotalTokens != 117 {
 		t.Fatalf("expected total tokens 117, got %d", generation.Usage.TotalTokens)
 	}
+	if generation.TopK == nil || *generation.TopK != 40 {
+		t.Fatalf("expected top_k 40, got %v", generation.TopK)
+	}
+	if generation.OutputType == nil || *generation.OutputType != "json" {
+		t.Fatalf("expected output type json, got %v", generation.OutputType)
+	}
 	if generation.Usage.InputSemantics != agento11y.TokenInputSemanticsInclusive {
 		t.Fatalf("expected inclusive input semantics, got %v", generation.Usage.InputSemantics)
 	}
@@ -462,6 +474,9 @@ func TestFromStream_DeltaAccumulation(t *testing.T) {
 	}
 
 	output := generation.Output[0]
+	if output.FinishReason != "tool_use" {
+		t.Fatalf("output finish reason = %q, want tool_use", output.FinishReason)
+	}
 	if output.Role != agento11y.RoleAssistant {
 		t.Fatalf("expected assistant role, got %q", output.Role)
 	}
@@ -834,10 +849,10 @@ func TestFromRequestResponsePreservesToolSearchVariantToolResultTypes(t *testing
 	}
 
 	if len(generation.Output) != 1 {
-		t.Fatalf("expected 1 output message (tool), got %d", len(generation.Output))
+		t.Fatalf("expected 1 output candidate, got %d", len(generation.Output))
 	}
-	if generation.Output[0].Role != agento11y.RoleTool {
-		t.Fatalf("expected tool role, got %q", generation.Output[0].Role)
+	if generation.Output[0].Role != agento11y.RoleAssistant {
+		t.Fatalf("expected assistant role, got %q", generation.Output[0].Role)
 	}
 	if len(generation.Output[0].Parts) != 2 {
 		t.Fatalf("expected 2 tool result parts, got %d", len(generation.Output[0].Parts))
@@ -904,10 +919,10 @@ func TestFromStreamPreservesToolSearchVariantToolResultTypes(t *testing.T) {
 	}
 
 	if len(generation.Output) != 1 {
-		t.Fatalf("expected 1 output message (tool), got %d", len(generation.Output))
+		t.Fatalf("expected 1 output candidate, got %d", len(generation.Output))
 	}
-	if generation.Output[0].Role != agento11y.RoleTool {
-		t.Fatalf("expected tool role, got %q", generation.Output[0].Role)
+	if generation.Output[0].Role != agento11y.RoleAssistant {
+		t.Fatalf("expected assistant role, got %q", generation.Output[0].Role)
 	}
 	if len(generation.Output[0].Parts) != 2 {
 		t.Fatalf("expected 2 tool result parts, got %d", len(generation.Output[0].Parts))
@@ -1044,6 +1059,322 @@ func TestFromStreamPreservesToolSearchVariantToolUseTypes(t *testing.T) {
 	}
 }
 
+func TestMapRequestMessagesPreservesMixedToolResultOrder(t *testing.T) {
+	req := testRequest()
+	toolResult := req.Messages[2].Content[0]
+	messages := mapRequestMessages([]asdk.BetaMessageParam{{
+		Role: asdk.BetaMessageParamRoleUser,
+		Content: []asdk.BetaContentBlockParamUnion{
+			asdk.NewBetaTextBlock("before"),
+			toolResult,
+			asdk.NewBetaTextBlock("after"),
+		},
+	}})
+	if len(messages) != 3 {
+		t.Fatalf("messages = %#v, want three ordered role segments", messages)
+	}
+	wantRoles := []agento11y.Role{agento11y.RoleUser, agento11y.RoleTool, agento11y.RoleUser}
+	for i, wantRole := range wantRoles {
+		if messages[i].Role != wantRole || len(messages[i].Parts) != 1 {
+			t.Fatalf("message %d = %#v, want role %s with one part", i, messages[i], wantRole)
+		}
+	}
+	if messages[0].Parts[0].Text != "before" || messages[1].Parts[0].ToolResult == nil || messages[2].Parts[0].Text != "after" {
+		t.Fatalf("message part order was not preserved: %#v", messages)
+	}
+}
+
+func TestFromRequestResponsePreservesHostedToolCandidateOrder(t *testing.T) {
+	response := &asdk.BetaMessage{
+		Model:      asdk.Model("claude-sonnet-4-5"),
+		StopReason: asdk.BetaStopReasonEndTurn,
+		Content: []asdk.BetaContentBlockUnion{
+			mustUnmarshalBetaContentBlockUnion(t, `{"type":"server_tool_use","id":"srvtoolu_1","name":"web_search","input":{"query":"Paris weather"}}`),
+			mustUnmarshalBetaContentBlockUnion(t, `{"type":"web_search_tool_result","tool_use_id":"srvtoolu_1","content":{"type":"web_search_tool_request_error","error_code":"unavailable"}}`),
+			mustUnmarshalBetaContentBlockUnion(t, `{"type":"text","text":"It is sunny."}`),
+		},
+	}
+
+	generation, err := FromRequestResponse(testRequest(), response)
+	if err != nil {
+		t.Fatalf("from request response: %v", err)
+	}
+	if len(generation.Output) != 1 || len(generation.Output[0].Parts) != 3 {
+		t.Fatalf("expected one candidate with three ordered parts, got %+v", generation.Output)
+	}
+	parts := generation.Output[0].Parts
+	if parts[0].Kind != agento11y.PartKindToolCall || parts[1].Kind != agento11y.PartKindToolResult ||
+		parts[2].Kind != agento11y.PartKindText || parts[2].Text != "It is sunny." {
+		t.Fatalf("unexpected hosted-tool order: %+v", parts)
+	}
+	if generation.Output[0].FinishReason != "end_turn" {
+		t.Fatalf("candidate finish reason = %q, want end_turn", generation.Output[0].FinishReason)
+	}
+	if err := agento11y.ValidateGeneration(generation); err != nil {
+		t.Fatalf("validate generation: %v", err)
+	}
+}
+
+func TestEmptyAnthropicOutput(t *testing.T) {
+	t.Run("synchronous", func(t *testing.T) {
+		generation, err := FromRequestResponse(testRequest(), &asdk.BetaMessage{
+			Model:      "claude-sonnet-4-5",
+			StopReason: asdk.BetaStopReasonEndTurn,
+			Content:    []asdk.BetaContentBlockUnion{{Type: "text"}},
+		})
+		if err != nil {
+			t.Fatalf("from request response: %v", err)
+		}
+		assertEmptyAnthropicCandidate(t, generation, "end_turn")
+	})
+
+	t.Run("stream", func(t *testing.T) {
+		var event asdk.BetaRawMessageStreamEventUnion
+		if err := json.Unmarshal([]byte(`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}}`), &event); err != nil {
+			t.Fatalf("decode event: %v", err)
+		}
+		generation, err := FromStream(testRequest(), StreamSummary{Events: []asdk.BetaRawMessageStreamEventUnion{event}})
+		if err != nil {
+			t.Fatalf("from stream: %v", err)
+		}
+		assertEmptyAnthropicCandidate(t, generation, "end_turn")
+	})
+
+	t.Run("synchronous usage without candidate", func(t *testing.T) {
+		generation, err := FromRequestResponse(testRequest(), &asdk.BetaMessage{
+			Model: "claude-sonnet-4-5",
+			Usage: asdk.BetaUsage{OutputTokens: 7},
+		})
+		if err != nil {
+			t.Fatalf("from request response: %v", err)
+		}
+		if len(generation.Output) != 0 {
+			t.Fatalf("output = %+v, want no candidate", generation.Output)
+		}
+		if generation.Usage.OutputTokens != 7 || !generation.Usage.OutputTokensReported {
+			t.Fatalf("output usage = %+v, want reported 7", generation.Usage)
+		}
+	})
+
+	t.Run("stream usage without candidate", func(t *testing.T) {
+		var event asdk.BetaRawMessageStreamEventUnion
+		if err := json.Unmarshal([]byte(`{"type":"message_delta","delta":{},"usage":{"output_tokens":7}}`), &event); err != nil {
+			t.Fatalf("decode event: %v", err)
+		}
+		generation, err := FromStream(testRequest(), StreamSummary{Events: []asdk.BetaRawMessageStreamEventUnion{event}})
+		if err != nil {
+			t.Fatalf("from stream: %v", err)
+		}
+		if len(generation.Output) != 0 {
+			t.Fatalf("output = %+v, want no candidate", generation.Output)
+		}
+		if generation.Usage.OutputTokens != 7 || !generation.Usage.OutputTokensReported {
+			t.Fatalf("output usage = %+v, want reported 7", generation.Usage)
+		}
+	})
+}
+
+func assertEmptyAnthropicCandidate(t testing.TB, generation agento11y.Generation, wantFinishReason string) {
+	t.Helper()
+	if len(generation.Output) != 1 {
+		t.Fatalf("output = %+v, want one candidate", generation.Output)
+	}
+	if generation.Output[0].Role != agento11y.RoleAssistant || len(generation.Output[0].Parts) != 0 {
+		t.Fatalf("candidate = %+v, want empty assistant candidate", generation.Output[0])
+	}
+	if generation.Output[0].FinishReason != wantFinishReason {
+		t.Fatalf("finish reason = %q, want %q", generation.Output[0].FinishReason, wantFinishReason)
+	}
+}
+
+func TestMapRequestControlsOutputFormatPrecedence(t *testing.T) {
+	current := param.Override[asdk.BetaJSONOutputFormatParam](json.RawMessage(`{"type":"current"}`))
+	deprecated := param.Override[asdk.BetaJSONOutputFormatParam](json.RawMessage(`{"type":"deprecated"}`))
+	jsonSchema := asdk.BetaJSONOutputFormatParam{Schema: map[string]any{"type": "object"}}
+
+	cases := []struct {
+		name string
+		req  asdk.BetaMessageNewParams
+		want string
+	}{
+		{name: "none", req: asdk.BetaMessageNewParams{}},
+		{name: "output config format", req: asdk.BetaMessageNewParams{OutputConfig: asdk.BetaOutputConfigParam{Format: jsonSchema}}, want: "json"},
+		{name: "deprecated output format", req: asdk.BetaMessageNewParams{OutputFormat: jsonSchema}, want: "json"},
+		{
+			name: "output config takes precedence",
+			req: asdk.BetaMessageNewParams{
+				OutputConfig: asdk.BetaOutputConfigParam{Format: current},
+				OutputFormat: deprecated,
+			},
+			want: "current",
+		},
+		{
+			name: "deprecated format remains fallback when config has no format",
+			req: asdk.BetaMessageNewParams{
+				OutputConfig: asdk.BetaOutputConfigParam{Effort: asdk.BetaOutputConfigEffortLow},
+				OutputFormat: deprecated,
+			},
+			want: "deprecated",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := mapRequestControls(tc.req).outputType
+			if tc.want == "" {
+				if got != nil {
+					t.Fatalf("output type = %q, want nil", *got)
+				}
+				return
+			}
+			if got == nil || *got != tc.want {
+				t.Fatalf("output type = %v, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFromRequestResponsePreservesUsagePresence(t *testing.T) {
+	decodeUsage := func(payload string) asdk.BetaUsage {
+		t.Helper()
+		var usage asdk.BetaUsage
+		if err := json.Unmarshal([]byte(payload), &usage); err != nil {
+			t.Fatalf("decode usage: %v", err)
+		}
+		return usage
+	}
+	cases := []struct {
+		name       string
+		usage      asdk.BetaUsage
+		stopReason asdk.BetaStopReason
+		wantInput  bool
+		wantOutput bool
+		wantTotal  int64
+	}{
+		{name: "absent usage"},
+		{name: "reported zeros", usage: decodeUsage(`{"input_tokens":0,"output_tokens":0}`), wantInput: true, wantOutput: true},
+		{name: "input only has no total", usage: decodeUsage(`{"input_tokens":7}`), wantInput: true},
+		{name: "output only has no total", usage: decodeUsage(`{"output_tokens":3}`), stopReason: asdk.BetaStopReasonEndTurn, wantOutput: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			generation, err := FromRequestResponse(testRequest(), &asdk.BetaMessage{
+				Model:      "claude-sonnet-4-5",
+				StopReason: tc.stopReason,
+				Usage:      tc.usage,
+			})
+			if err != nil {
+				t.Fatalf("from request response: %v", err)
+			}
+			if generation.Usage.InputTokensReported != tc.wantInput || generation.Usage.OutputTokensReported != tc.wantOutput {
+				t.Fatalf("usage presence = (%v, %v), want (%v, %v)", generation.Usage.InputTokensReported, generation.Usage.OutputTokensReported, tc.wantInput, tc.wantOutput)
+			}
+			if generation.Usage.TotalTokens != tc.wantTotal {
+				t.Fatalf("total tokens = %d, want %d", generation.Usage.TotalTokens, tc.wantTotal)
+			}
+		})
+	}
+}
+
+func TestFromStreamCombinesSplitUsageAndPreservesHostedToolOrder(t *testing.T) {
+	generation, err := FromStream(testRequest(), StreamSummary{Events: hostedToolStreamEvents(t)})
+	if err != nil {
+		t.Fatalf("from stream: %v", err)
+	}
+
+	if got := generation.Usage; got.InputTokens != 1220 || got.OutputTokens != 40 || got.TotalTokens != 1260 {
+		t.Fatalf("unexpected split usage: %+v", got)
+	}
+	if got := generation.Usage; got.CacheReadInputTokens != 1000 || got.CacheWriteInputTokens != 200 {
+		t.Fatalf("unexpected cache usage: %+v", got)
+	}
+	if !generation.Usage.InputTokensReported || !generation.Usage.OutputTokensReported {
+		t.Fatalf("expected both usage sides reported: %+v", generation.Usage)
+	}
+
+	if len(generation.Output) != 1 || len(generation.Output[0].Parts) != 3 {
+		t.Fatalf("expected one candidate with three ordered parts, got %+v", generation.Output)
+	}
+	call := generation.Output[0].Parts[0]
+	result := generation.Output[0].Parts[1]
+	answer := generation.Output[0].Parts[2]
+	if call.Kind != agento11y.PartKindToolCall || call.Metadata.ProviderType != "server_tool_use" {
+		t.Fatalf("unexpected hosted-tool call: %+v", call)
+	}
+	if result.Kind != agento11y.PartKindToolResult || result.Metadata.ProviderType != "web_search_tool_result" {
+		t.Fatalf("unexpected hosted-tool result: %+v", result)
+	}
+	if answer.Kind != agento11y.PartKindText || answer.Text != "It is sunny." {
+		t.Fatalf("unexpected answer: %+v", answer)
+	}
+	if generation.Output[0].FinishReason != "end_turn" {
+		t.Fatalf("candidate finish reason = %q, want end_turn", generation.Output[0].FinishReason)
+	}
+}
+
+func TestFromStreamPreservesUsagePresenceAndCumulativeInput(t *testing.T) {
+	var absentUsage asdk.BetaRawMessageStreamEventUnion
+	if err := json.Unmarshal([]byte(`{"type":"message_delta","delta":{"stop_reason":"end_turn"}}`), &absentUsage); err != nil {
+		t.Fatalf("decode usage-less delta: %v", err)
+	}
+	withoutUsage, err := FromStream(testRequest(), StreamSummary{Events: []asdk.BetaRawMessageStreamEventUnion{absentUsage}})
+	if err != nil {
+		t.Fatalf("map usage-less stream: %v", err)
+	}
+	if withoutUsage.Usage.InputTokensReported || withoutUsage.Usage.OutputTokensReported {
+		t.Fatalf("usage-less delta reported token counters: %+v", withoutUsage.Usage)
+	}
+
+	payloads := []string{
+		`{"type":"message_start","message":{"id":"msg_usage","model":"claude-sonnet-4-5","role":"assistant","type":"message","content":[],"usage":{"input_tokens":20,"cache_read_input_tokens":100,"cache_creation_input_tokens":10,"output_tokens":0}}}`,
+		`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":30,"cache_read_input_tokens":200,"cache_creation_input_tokens":20,"output_tokens":0}}`,
+	}
+	events := make([]asdk.BetaRawMessageStreamEventUnion, 0, len(payloads))
+	for _, payload := range payloads {
+		var event asdk.BetaRawMessageStreamEventUnion
+		if err := json.Unmarshal([]byte(payload), &event); err != nil {
+			t.Fatalf("decode event: %v", err)
+		}
+		events = append(events, event)
+	}
+
+	generation, err := FromStream(testRequest(), StreamSummary{Events: events})
+	if err != nil {
+		t.Fatalf("from stream: %v", err)
+	}
+	if generation.Usage.InputTokens != 250 || generation.Usage.CacheReadInputTokens != 200 || generation.Usage.CacheWriteInputTokens != 20 {
+		t.Fatalf("cumulative input usage = %+v", generation.Usage)
+	}
+	if generation.Usage.OutputTokens != 0 || !generation.Usage.OutputTokensReported || generation.Usage.TotalTokens != 250 {
+		t.Fatalf("known-zero output usage = %+v", generation.Usage)
+	}
+}
+
+func hostedToolStreamEvents(t testing.TB) []asdk.BetaRawMessageStreamEventUnion {
+	t.Helper()
+	payloads := []string{
+		`{"type":"message_start","message":{"id":"msg_ticket_stream","model":"claude-sonnet-4-5","role":"assistant","type":"message","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":20,"cache_read_input_tokens":1000,"cache_creation_input_tokens":200,"output_tokens":0}}}`,
+		`{"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"srvtoolu_1","name":"web_search","input":{}}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"query\":\"Paris weather\"}"}}`,
+		`{"type":"content_block_stop","index":0}`,
+		`{"type":"content_block_start","index":1,"content_block":{"type":"web_search_tool_result","tool_use_id":"srvtoolu_1","content":{"type":"web_search_tool_request_error","error_code":"unavailable"}}}`,
+		`{"type":"content_block_stop","index":1}`,
+		`{"type":"content_block_start","index":2,"content_block":{"type":"text","text":""}}`,
+		`{"type":"content_block_delta","index":2,"delta":{"type":"text_delta","text":"It is sunny."}}`,
+		`{"type":"content_block_stop","index":2}`,
+		`{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":40}}`,
+		`{"type":"message_stop"}`,
+	}
+	events := make([]asdk.BetaRawMessageStreamEventUnion, 0, len(payloads))
+	for _, payload := range payloads {
+		var event asdk.BetaRawMessageStreamEventUnion
+		if err := json.Unmarshal([]byte(payload), &event); err != nil {
+			t.Fatalf("unmarshal hosted-tool stream event: %v", err)
+		}
+		events = append(events, event)
+	}
+	return events
+}
+
 func mustUnmarshalBetaContentBlockUnion(t *testing.T, payload string) asdk.BetaContentBlockUnion {
 	t.Helper()
 	var block asdk.BetaContentBlockUnion
@@ -1089,8 +1420,12 @@ func testRequest() asdk.BetaMessageNewParams {
 		Model:       asdk.Model("claude-sonnet-4-5"),
 		Temperature: param.NewOpt(0.3),
 		TopP:        param.NewOpt(0.8),
-		ToolChoice:  asdk.BetaToolChoiceParamOfTool("weather"),
-		Thinking:    asdk.BetaThinkingConfigParamOfEnabled(1024),
+		TopK:        param.NewOpt[int64](40),
+		OutputConfig: asdk.BetaOutputConfigParam{
+			Format: asdk.BetaJSONOutputFormatParam{Schema: map[string]any{"type": "object"}},
+		},
+		ToolChoice: asdk.BetaToolChoiceParamOfTool("weather"),
+		Thinking:   asdk.BetaThinkingConfigParamOfEnabled(1024),
 		System: []asdk.BetaTextBlockParam{
 			{
 				Text: "Be precise.",

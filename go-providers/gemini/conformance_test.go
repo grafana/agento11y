@@ -137,7 +137,7 @@ func TestConformance_GeminiStreamMapping(t *testing.T) {
 				UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
 					PromptTokenCount:        20,
 					CandidatesTokenCount:    6,
-					TotalTokenCount:         26,
+					TotalTokenCount:         35,
 					ThoughtsTokenCount:      4,
 					ToolUsePromptTokenCount: 5,
 				},
@@ -180,11 +180,14 @@ func TestConformance_GeminiStreamMapping(t *testing.T) {
 	if got := testkit.StringValue(t, exported, "output", 0, "parts", 1, "tool_call", "name"); got != "weather" {
 		t.Fatalf("unexpected streamed tool_call.name: got %q want %q", got, "weather")
 	}
-	if got := testkit.StringValue(t, exported, "output", 1, "parts", 0, "text"); got != "It is 18C and sunny." {
+	if got := testkit.StringValue(t, exported, "output", 0, "parts", 2, "text"); got != "It is 18C and sunny." {
 		t.Fatalf("unexpected streamed output text: got %q want %q", got, "It is 18C and sunny.")
 	}
-	if got := testkit.StringValue(t, exported, "usage", "total_tokens"); got != "26" {
-		t.Fatalf("unexpected usage.total_tokens: got %q want %q", got, "26")
+	if got := testkit.StringValue(t, exported, "usage", "output_tokens"); got != "10" {
+		t.Fatalf("unexpected usage.output_tokens: got %q want %q", got, "10")
+	}
+	if got := testkit.StringValue(t, exported, "usage", "total_tokens"); got != "35" {
+		t.Fatalf("unexpected usage.total_tokens: got %q want %q", got, "35")
 	}
 }
 
@@ -512,7 +515,7 @@ func TestConformance_GenerateContentStreamNormalization(t *testing.T) {
 				UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
 					PromptTokenCount:        20,
 					CandidatesTokenCount:    6,
-					TotalTokenCount:         26,
+					TotalTokenCount:         35,
 					ThoughtsTokenCount:      4,
 					ToolUsePromptTokenCount: 5,
 				},
@@ -539,11 +542,11 @@ func TestConformance_GenerateContentStreamNormalization(t *testing.T) {
 	if generation.StopReason != "STOP" {
 		t.Fatalf("unexpected stop reason: %q", generation.StopReason)
 	}
-	if generation.Usage.TotalTokens != 26 || generation.Usage.ReasoningTokens != 4 {
+	if generation.Usage.OutputTokens != 10 || generation.Usage.TotalTokens != 35 || generation.Usage.ReasoningTokens != 4 {
 		t.Fatalf("unexpected usage mapping: %#v", generation.Usage)
 	}
-	if len(generation.Output) != 2 {
-		t.Fatalf("expected streamed thinking/tool output plus final text, got %#v", generation.Output)
+	if len(generation.Output) != 1 {
+		t.Fatalf("expected one accumulated candidate, got %#v", generation.Output)
 	}
 	if generation.Output[0].Parts[0].Kind != agento11y.PartKindThinking || generation.Output[0].Parts[0].Thinking != "reasoning trace" {
 		t.Fatalf("unexpected streamed thinking output: %#v", generation.Output[0].Parts[0])
@@ -551,8 +554,8 @@ func TestConformance_GenerateContentStreamNormalization(t *testing.T) {
 	if generation.Output[0].Parts[1].Kind != agento11y.PartKindToolCall {
 		t.Fatalf("expected streamed tool call output, got %#v", generation.Output[0].Parts[1])
 	}
-	if generation.Output[1].Parts[0].Kind != agento11y.PartKindText || generation.Output[1].Parts[0].Text != "It is 18C and sunny." {
-		t.Fatalf("unexpected streamed text output: %#v", generation.Output[1].Parts[0])
+	if generation.Output[0].Parts[2].Kind != agento11y.PartKindText || generation.Output[0].Parts[2].Text != "It is 18C and sunny." {
+		t.Fatalf("unexpected streamed text output: %#v", generation.Output[0].Parts[2])
 	}
 	requireGeminiArtifactKinds(t, generation.Artifacts,
 		agento11y.ArtifactKindRequest,

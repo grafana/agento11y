@@ -8,6 +8,8 @@ const (
 	RoleUser      Role = "user"
 	RoleAssistant Role = "assistant"
 	RoleTool      Role = "tool"
+	RoleSystem    Role = "system"
+	RoleDeveloper Role = "developer"
 )
 
 type PartKind string
@@ -24,6 +26,9 @@ type Message struct {
 	Role  Role   `json:"role"`
 	Name  string `json:"name,omitempty"`
 	Parts []Part `json:"parts"`
+	// FinishReason is the per-output completion reason. The first non-empty
+	// value is the source of truth for Generation.StopReason.
+	FinishReason string `json:"finish_reason,omitempty"`
 }
 
 type Part struct {

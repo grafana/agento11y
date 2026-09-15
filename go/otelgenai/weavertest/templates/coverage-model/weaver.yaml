@@ -1,0 +1,54 @@
+# Copyright The OpenTelemetry Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Keep only refinements whose id is the signal type or name. Provider
+# refinements inherit a general signal and add provider-specific attributes;
+# including them would make those additions appear required for every provider.
+templates:
+  - template: "coverage-model.json.j2"
+    application_mode: single
+    filter: |
+      def level: if type == "object" then (keys[0] + "_conditional") else . end;
+
+      def attributes:
+        [.attributes[]? | {key: .key, value: (.requirement_level | level)}]
+        | from_entries;
+
+      def enums:
+        [
+          .registry.attributes[]? | select(.type | type == "object" and .members) | {
+             key: .key,
+             value: [.type.members[]?.value]
+          }
+        ] | from_entries;
+
+      def entity_identity:
+        [.identity[]? | {key: .key, value: (.requirement_level | level)}]
+        | from_entries;
+
+      def entity_description:
+        [.description[]? | {key: .key, value: (.requirement_level | level)}]
+        | from_entries;
+
+      {
+        spans: ([.refinements.spans[]? | select(.id == .type)] | map({
+          key: .type,
+          value: {kind: .kind, attributes: attributes},
+        }) | from_entries),
+        events: ([.refinements.events[]? | select(.id == .name)] | map({
+          key: .name,
+          value: {attributes: attributes},
+        }) | from_entries),
+        metrics: ([.refinements.metrics[]? | select(.id == .name)] | map({
+          key: .name,
+          value: {attributes: attributes},
+        }) | from_entries),
+        enums: enums,
+        entities: ([.refinements.entities[]? | select(.id == .type)] | map({
+          key: .type,
+          value: {
+            identity: entity_identity,
+            description: entity_description,
+          },
+        }) | from_entries),
+      }

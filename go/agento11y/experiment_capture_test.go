@@ -10,6 +10,7 @@ import (
 	"time"
 
 	agento11yv1 "github.com/grafana/agento11y/go/proto/agento11y/v1"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/trace/noop"
 )
 
@@ -187,72 +188,125 @@ func TestBindGenerationWithRecordIOExportsBoundGeneration(t *testing.T) {
 }
 
 func TestTrialFlushFlushesBoundGenerationBeforeScores(t *testing.T) {
-	exporter := &capturingExperimentExporter{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if req.URL.Path != "/api/v1/scores:export" {
-			http.NotFound(w, req)
-			return
-		}
-		if !exporter.hasGeneration("gen-bound") {
-			http.Error(w, "generation was not flushed before score export", http.StatusBadRequest)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusAccepted)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"results": []map[string]any{{"score_id": "score-1", "accepted": true}},
-		})
-	}))
-	defer server.Close()
-
-	client := NewClient(Config{
-		Tracer: noop.NewTracerProvider().Tracer("agento11y-go-trial-flush-order-test"),
-		GenerationExport: GenerationExportConfig{
-			Protocol:        GenerationExportProtocolHTTP,
-			Endpoint:        server.URL + "/api/v1/generations:export",
-			Auth:            AuthConfig{Mode: ExportAuthModeTenant, TenantID: "tenant-a"},
-			Insecure:        BoolPtr(true),
-			BatchSize:       10,
-			FlushInterval:   time.Hour,
-			QueueSize:       100,
-			MaxRetries:      0,
-			PayloadMaxBytes: 1 << 20,
+	system := Message{Role: RoleSystem, Parts: []Part{TextPart("system instruction")}}
+	developer := Message{Role: RoleDeveloper, Parts: []Part{TextPart("developer instruction")}}
+	cases := []struct {
+		name      string
+		input     []Message
+		inputText string
+	}{
+		{name: "user only", input: []Message{UserTextMessage("question")}, inputText: "question"},
+		{name: "system history", input: []Message{system, UserTextMessage("question")}, inputText: "question"},
+		{name: "developer history", input: []Message{developer, UserTextMessage("question")}, inputText: "question"},
+		{name: "system and developer history", input: []Message{system, developer, UserTextMessage("question")}, inputText: "question"},
+		{
+			name: "assistant before user",
+			input: []Message{
+				system,
+				{Role: RoleAssistant, Parts: []Part{ThinkingPart("reasoning"), TextPart("question"), TextPart("later text")}},
+				UserTextMessage("later question"),
+			},
+			inputText: "question",
 		},
-		API:                    APIConfig{Endpoint: server.URL},
-		testGenerationExporter: exporter,
-	})
-	t.Cleanup(func() { _ = client.Shutdown(context.Background()) })
+		{
+			name: "tool before user",
+			input: []Message{
+				developer,
+				ToolResultMessage("call-1", "tool result"),
+				{Role: RoleTool, Parts: []Part{TextPart("question")}},
+				UserTextMessage("later question"),
+			},
+			inputText: "question",
+		},
+		{name: "instructions only", input: []Message{system, developer}},
+		{name: "no input"},
+	}
 
-	ctx, recorder := client.StartGeneration(context.Background(), GenerationStart{
-		ID:             "gen-bound",
-		ConversationID: "conv-bound",
-		Model:          ModelRef{Provider: "example", Name: "agent"},
-	})
-	recorder.SetResult(Generation{
-		ID:             "gen-bound",
-		ConversationID: "conv-bound",
-		Model:          ModelRef{Provider: "example", Name: "agent"},
-		Input:          []Message{UserTextMessage("question")},
-		Output:         []Message{AssistantTextMessage("answer")},
-	}, nil)
-	recorder.End()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			exporter := &capturingExperimentExporter{}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				if req.URL.Path != "/api/v1/scores:export" {
+					http.NotFound(w, req)
+					return
+				}
+				if !exporter.hasGeneration("gen-bound") {
+					http.Error(w, "generation was not flushed before score export", http.StatusBadRequest)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusAccepted)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"results": []map[string]any{{"score_id": "score-1", "accepted": true}},
+				})
+			}))
+			defer server.Close()
 
-	trial := NewTrial(client, TrialRef{RunID: "run-bound", TestCaseID: "case-bound"})
-	trial.BindGeneration("gen-bound", "conv-bound")
-	trial.RecordIO(RecordIOOptions{Input: "question", Output: "answer", ModelProvider: "example", ModelName: "agent"})
-	trial.FinalScore(BoolScoreValue(true), ScoreOptions{Evaluator: &Evaluator{EvaluatorID: "exact", Version: "1", Kind: EvaluatorKindDeterministic}})
-	accepted, err := trial.Flush(ctx)
-	if err != nil {
-		t.Fatalf("flush trial: %v", err)
-	}
-	if accepted != 1 {
-		t.Fatalf("expected one accepted score, got %d", accepted)
-	}
-	if !exporter.hasGeneration("gen-bound") {
-		t.Fatal("expected bound generation to be flushed")
-	}
-	if got := exporter.generationCount("gen-bound"); got != 1 {
-		t.Fatalf("expected bound generation to be exported once, got %d", got)
+			metricReader := sdkmetric.NewManualReader()
+			meterProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(metricReader))
+			t.Cleanup(func() { _ = meterProvider.Shutdown(context.Background()) })
+			client, spans, _ := newTestClient(t, Config{
+				Meter: meterProvider.Meter("agento11y-go-trial-flush-order-test"),
+				GenerationExport: GenerationExportConfig{
+					Protocol:        GenerationExportProtocolHTTP,
+					Endpoint:        server.URL + "/api/v1/generations:export",
+					Auth:            AuthConfig{Mode: ExportAuthModeTenant, TenantID: "tenant-a"},
+					Insecure:        BoolPtr(true),
+					BatchSize:       10,
+					FlushInterval:   time.Hour,
+					QueueSize:       100,
+					MaxRetries:      0,
+					PayloadMaxBytes: 1 << 20,
+				},
+				API:                    APIConfig{Endpoint: server.URL},
+				testGenerationExporter: exporter,
+			})
+
+			ctx, recorder := client.StartGeneration(context.Background(), GenerationStart{
+				ID:             "gen-bound",
+				ConversationID: "conv-bound",
+				Model:          ModelRef{Provider: "example", Name: "agent"},
+			})
+			recorder.SetResult(Generation{
+				ID:             "gen-bound",
+				ConversationID: "conv-bound",
+				Model:          ModelRef{Provider: "example", Name: "agent"},
+				Input:          tc.input,
+				Output:         []Message{AssistantTextMessage("answer")},
+			}, nil)
+			recorder.End()
+			if err := recorder.Err(); err != nil {
+				t.Fatalf("record generation: %v", err)
+			}
+
+			trial := NewTrial(client, TrialRef{RunID: "run-bound", TestCaseID: "case-bound"})
+			trial.BindGeneration("gen-bound", "conv-bound")
+			trial.RecordIO(RecordIOOptions{Input: tc.inputText, Output: "answer", ModelProvider: "example", ModelName: "agent"})
+			trial.FinalScore(BoolScoreValue(true), ScoreOptions{Evaluator: &Evaluator{EvaluatorID: "exact", Version: "1", Kind: EvaluatorKindDeterministic}})
+			for _, wantAccepted := range []int{1, 0} {
+				accepted, err := trial.Flush(ctx)
+				if err != nil {
+					t.Fatalf("flush trial: %v", err)
+				}
+				if accepted != wantAccepted {
+					t.Fatalf("expected %d accepted scores, got %d", wantAccepted, accepted)
+				}
+				if got := exporter.generationCount("gen-bound"); got != 1 {
+					t.Errorf("expected bound generation to be exported once, got %d", got)
+				}
+				if got := len(spans.Ended()); got != 1 {
+					t.Errorf("expected one generation span, got %d", got)
+				}
+				duration := findHistogram(t, collectMetrics(t, metricReader), metricOperationDuration)
+				var count uint64
+				for _, point := range duration.DataPoints {
+					count += point.Count
+				}
+				if count != 1 {
+					t.Errorf("expected one generation duration observation, got %d", count)
+				}
+			}
+		})
 	}
 }
 

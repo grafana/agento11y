@@ -1230,6 +1230,54 @@ func TestToolExecutionRecorderContentCapture(t *testing.T) {
 	})
 }
 
+type panickingJSONMarshaler struct{}
+
+func (panickingJSONMarshaler) MarshalJSON() ([]byte, error) {
+	panic("serializer exploded")
+}
+
+func TestToolExecutionRecorderContentShapes(t *testing.T) {
+	cases := []struct {
+		name        string
+		value       any
+		wantContent bool
+	}{
+		{name: "object value", value: map[string]any{"temperature": 18}, wantContent: true},
+		{name: "object JSON", value: `{"temperature":18}`, wantContent: true},
+		{name: "plain string", value: "sunny"},
+		{name: "JSON scalar", value: `"sunny"`},
+		{name: "array", value: []any{"sunny"}},
+		{name: "null", value: "null"},
+		{name: "panicking marshaler", value: panickingJSONMarshaler{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client, recorder, _ := newTestClient(t, Config{ContentCapture: ContentCaptureModeFull})
+			_, rec := client.StartToolExecution(context.Background(), ToolExecutionStart{
+				ToolName:       "weather",
+				IncludeContent: true,
+			})
+			rec.SetResult(ToolExecutionEnd{Arguments: tc.value, Result: tc.value})
+			rec.End()
+
+			if err := rec.Err(); err != nil {
+				t.Fatalf("tool execution error = %v, want nil", err)
+			}
+			span := onlyToolSpan(t, recorder.Ended())
+			if got := span.Status().Code; got != codes.Ok {
+				t.Errorf("status = %v, want ok", got)
+			}
+			attrs := spanAttributeMap(span)
+			for _, key := range []string{spanAttrToolCallArguments, spanAttrToolCallResult} {
+				_, present := attrs[key]
+				if present != tc.wantContent {
+					t.Errorf("%s present = %v, want %v", key, present, tc.wantContent)
+				}
+			}
+		})
+	}
+}
+
 func TestToolExecutionRecorderErrorSetsStatusAndType(t *testing.T) {
 	client, recorder, _ := newTestClient(t, Config{})
 	_, toolRecorder := client.StartToolExecution(context.Background(), ToolExecutionStart{
