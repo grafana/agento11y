@@ -132,10 +132,11 @@ var gitPatterns = []string{
 }
 
 const (
-	shellArgumentGap = `[ \t]+(?:[^\s;&|()\x60#]+[ \t]+)*`
-	shellArgumentEnd = `(?:[[:space:];&|()"']|$)`
-	rmRecursiveFlag  = `(?:--recursive|-[a-z]*r[a-z]*)`
-	rmForceFlag      = `(?:--force|-[a-z]*f[a-z]*)`
+	shellSubstitution = `(?:\$\([^()]*\)|\x60(?:\\.|[^\\\x60])*\x60)`
+	shellArgumentGap  = `[ \t]+(?:(?:[^\s;&|()\x60#]|` + shellSubstitution + `)+[ \t]+)*`
+	shellArgumentEnd  = `(?:[[:space:];&|()"']|$)`
+	rmRecursiveFlag   = `(?:--recursive|-[a-z]*r[a-z]*)`
+	rmForceFlag       = `(?:--force|-[a-z]*f[a-z]*)`
 )
 
 var destructivePatterns = []string{
