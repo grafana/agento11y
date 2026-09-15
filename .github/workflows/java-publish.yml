@@ -17,6 +17,10 @@ on:
         required: false
         type: boolean
         default: true
+      existing-version:
+        description: 'Publish this already-tagged version instead of bumping (e.g. 0.7.0). Skips the changelog PR. Use to retry a Maven upload that never released.'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -30,6 +34,7 @@ jobs:
     outputs:
       new-version: ${{ steps.bump.outputs.new-version }}
       changelog-section: ${{ steps.bump.outputs.section }}
+      skip-release-pr: ${{ steps.bump.outputs.skip-release-pr }}
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -43,9 +48,33 @@ jobs:
         env:
           BUMP: ${{ inputs.version }}
           DRY_RUN: ${{ inputs.dry-run }}
+          EXISTING_VERSION: ${{ inputs.existing-version }}
         run: |
           CURRENT=$(git tag -l 'sdk-java/v*' | sed 's|sdk-java/v||' | sort -V | tail -1)
           CURRENT=${CURRENT:-0.0.0}
+
+          if [[ -n "$EXISTING_VERSION" ]]; then
+            if [[ -z "$(git tag -l "sdk-java/v${EXISTING_VERSION}")" ]]; then
+              echo "::error::existing-version ${EXISTING_VERSION} has no sdk-java/v${EXISTING_VERSION} tag."
+              exit 1
+            fi
+            NEW="$EXISTING_VERSION"
+            echo "new-version=${NEW}" >> "$GITHUB_OUTPUT"
+            echo "skip-release-pr=true" >> "$GITHUB_OUTPUT"
+            echo "section=" >> "$GITHUB_OUTPUT"
+
+            {
+              echo "## Java SDK Maven republish"
+              echo ""
+              echo "- existing version: \`${NEW}\`"
+              echo "- tag: \`sdk-java/v${NEW}\`"
+              echo "- changelog PR: skipped (version already tagged)"
+              echo "- dry-run: \`${DRY_RUN}\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "skip-release-pr=false" >> "$GITHUB_OUTPUT"
 
           # A tag appears only when the release PR merges, so a changelog top
           # version ahead of the newest tag means the last release merged
@@ -135,11 +164,14 @@ jobs:
           ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ fromJSON(steps.get-secrets.outputs.secrets).GPG_PASSPHRASE }}
           PKG_VERSION: ${{ needs.build.outputs.new-version }}
         run: |
+          # automaticRelease=true in java/build.gradle.kts makes this upload
+          # with Central Portal publishingType=AUTOMATIC so the deployment is
+          # released, not left sitting unpublished in USER_MANAGED.
           ./gradlew --no-daemon publishAllPublicationsToMavenCentralRepository \
             -Pversion="${PKG_VERSION}"
 
   release-pr:
-    if: ${{ !inputs.dry-run }}
+    if: ${{ !inputs.dry-run && needs.build.outputs.skip-release-pr != 'true' }}
     needs: [build, publish]
     runs-on: ubuntu-latest
     permissions:

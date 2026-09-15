@@ -45,7 +45,11 @@ subprojects {
 
     plugins.withId("com.vanniktech.maven.publish") {
         extensions.configure<com.vanniktech.maven.publish.MavenPublishBaseExtension> {
-            publishToMavenCentral(com.vanniktech.maven.publish.SonatypeHost.CENTRAL_PORTAL)
+            // Default is USER_MANAGED: upload validates but never reaches Maven Central.
+            publishToMavenCentral(
+                com.vanniktech.maven.publish.SonatypeHost.CENTRAL_PORTAL,
+                automaticRelease = true,
+            )
             signAllPublications()
 
             pom {
