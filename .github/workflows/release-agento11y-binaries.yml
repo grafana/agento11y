@@ -83,6 +83,16 @@ jobs:
             echo "${delim}"
           } >> "$GITHUB_ENV"
 
+      - name: Point GoReleaser at a local v* tag
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          # GORELEASER_CURRENT_TAG is the prefix-stripped name (v0.44.0).
+          # The real git tag is plugins/agento11y/v0.44.0. GoReleaser 2.18+
+          # reads tag contents and fails if that fake name is missing.
+          git tag -f "$VERSION"
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@1a80836c5c9d9e5755a25cb59ec6f45a3b5f41a8 # v7.2.1
         with:
