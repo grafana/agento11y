@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.45.0] - 2026-09-15
+
+### Features
+
+- **plugins/agento11y**: evaluate local guard rules in the daemon (#643)
+- **plugins/agento11y**: honor AGENTO11Y_AGENT_VERSION in Claude Code and Cursor (#751)
+
+### Bug Fixes
+
+- **plugins/agento11y**: let local stop outlast the daemon's drain (#754)
+
 ## [0.44.0] - 2026-09-14
 
 ### Features
