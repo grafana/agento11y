@@ -735,6 +735,26 @@ func TestMapFragment_BuiltinTags(t *testing.T) {
 	}
 }
 
+// Auto turns all report the same auto-smart slug, so the routing mode has to
+// reach the export as a tag or the turns are indistinguishable.
+func TestMapFragment_ModelParamTags(t *testing.T) {
+	frag := basicFragment(t)
+	frag.Model = "auto-smart"
+	frag.ModelParams = map[string]string{"optimize_for": "balanced"}
+
+	got := MapFragment(Inputs{Fragment: frag, Now: fixedTime})
+
+	if got.Generation.Tags["model_param.optimize_for"] != "balanced" {
+		t.Fatalf("tags = %v; want model_param.optimize_for=balanced", got.Generation.Tags)
+	}
+	if got.Start.Tags["model_param.optimize_for"] != "balanced" {
+		t.Errorf("start tags = %v; want the same model_param tag", got.Start.Tags)
+	}
+	if got.Generation.ResponseModel != "auto-smart" {
+		t.Errorf("ResponseModel = %q; model params must not rewrite the slug", got.Generation.ResponseModel)
+	}
+}
+
 func TestMapFragment_TokenUsage(t *testing.T) {
 	in, out := int64(100), int64(50)
 	frag := basicFragment(t)
