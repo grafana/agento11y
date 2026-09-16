@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.47.0] - 2026-09-16
+
+### Features
+
+- **plugins/agento11y**: add local guards test command (#760)
+- **plugins/agento11y**: improve CLI help views (#761)
+
+### Bug Fixes
+
+- **security/unknown/plugins/agento11y**: update module google.golang.org/grpc to v1.83.2 [security] (#733)
+- **security/medium/plugins/agento11y**: update dependency vitest to v4.1.11 [security] (#734)
+- **guards**: preserve local enforcement and saved rule state (#759)
+
 ## [0.46.0] - 2026-09-15
 
 ### Features
