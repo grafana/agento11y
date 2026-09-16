@@ -1,0 +1,68 @@
+# Local guard rules. Saving from Settings → Local rewrites this file.
+
+[[rules]]
+rule_id = "pack.secrets"
+phase = "postflight"
+priority = 10
+transform.patterns = [{ id = "grafana-cloud-token", regex = '\bglc_[A-Za-z0-9_-]{20,}' }, { id = "grafana-service-account-token", regex = '\bglsa_[A-Za-z0-9_-]{20,}' }, { id = "aws-access-token", regex = '\b(?:A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA)[A-Z2-7]{16}\b' }, { id = "github-pat", regex = '\bghp_[A-Za-z0-9_]{36,}' }, { id = "github-oauth", regex = '\bgho_[A-Za-z0-9_]{36,}' }, { id = "github-app-token", regex = '\bghs_[A-Za-z0-9_]{36,}' }, { id = "github-fine-grained-pat", regex = '\bgithub_pat_[A-Za-z0-9_]{82}' }, { id = "anthropic-api-key", regex = '\bsk-ant-api03-[a-zA-Z0-9_-]{93}AA' }, { id = "anthropic-admin-key", regex = '\bsk-ant-admin01-[a-zA-Z0-9_-]{93}AA' }, { id = "openai-api-key", regex = '\bsk-[a-zA-Z0-9]{20}T3BlbkFJ[a-zA-Z0-9]{20}' }, { id = "openai-project-key", regex = '\bsk-proj-[a-zA-Z0-9_-]{40,}' }, { id = "openai-svcacct-key", regex = '\bsk-svcacct-[a-zA-Z0-9_-]{40,}' }, { id = "gcp-api-key", regex = '\bAIza[A-Za-z0-9_-]{35}' }, { id = "private-key", regex = '-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----' }, { id = "connection-string", regex = "(?:postgres|mysql|mongodb|redis|amqp)://[^ \\t\\n\\f\\r\\xa0'\"]+@[^ \\t\\n\\f\\r\\xa0'\"]+" }, { id = "bearer-token", regex = '[Bb]earer[ \t\n\f\r\xa0]+[A-Za-z0-9_.\-~+/]{20,}={0,3}' }, { id = "slack-token", regex = '\bxox[bporas]-[A-Za-z0-9-]{10,}' }, { id = "stripe-key", regex = '\b[sr]k_(?:live|test)_[A-Za-z0-9]{20,}' }, { id = "sendgrid-api-key", regex = '\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}' }, { id = "twilio-api-key", regex = '\bSK[a-f0-9]{32}' }, { id = "npm-token", regex = '\bnpm_[A-Za-z0-9]{36}' }, { id = "pypi-token", regex = '\bpypi-[A-Za-z0-9_-]{50,}' }]
+
+[[rules]]
+rule_id = "pack.files"
+phase = "postflight"
+priority = 15
+action_on_fail = "deny"
+tool_filter.blocked_names = ["Bash(*/.env*)", "Bash(*\".env*)", "Bash(* .env*)", "shell(*/.env*)", "shell(*\".env*)", "shell(* .env*)", "run_terminal_cmd(*/.env*)", "run_terminal_cmd(*\".env*)", "run_terminal_cmd(* .env*)", "execute_command(*/.env*)", "execute_command(*\".env*)", "execute_command(* .env*)", "run_command(*/.env*)", "run_command(*\".env*)", "run_command(* .env*)", "Write(*/.env*)", "Write(*\".env*)", "Write(* .env*)", "Edit(*/.env*)", "Edit(*\".env*)", "Edit(* .env*)", "MultiEdit(*/.env*)", "MultiEdit(*\".env*)", "MultiEdit(* .env*)", "str_replace_editor(*/.env*)", "str_replace_editor(*\".env*)", "str_replace_editor(* .env*)", "apply_patch(*/.env*)", "apply_patch(*\".env*)", "apply_patch(* .env*)", "create_file(*/.env*)", "create_file(*\".env*)", "create_file(* .env*)", "Read(*/.env*)", "Read(*\".env*)", "Read(* .env*)", "read_file(*/.env*)", "read_file(*\".env*)", "read_file(* .env*)", "view_file(*/.env*)", "view_file(*\".env*)", "view_file(* .env*)"]
+
+[[rules.evaluators]]
+kind = "regex"
+config.patterns = ["(?i)(^|[/'\\\"[:space:]])\\.env($|[/'\\\"[:space:].])"]
+config.reject = true
+config.target = "shell_command"
+
+[[rules]]
+rule_id = "pack.git"
+phase = "postflight"
+priority = 20
+action_on_fail = "deny"
+
+[[rules.evaluators]]
+kind = "regex"
+config.patterns = ['(?i)\bgit[[:space:]]+reset[[:space:]]+--hard\b', '(?i)\bgit[ \t]+push[ \t]+(?:(?:[^\s;&|()\x60#]|(?:\$\([^()]*\)|\x60(?:\\.|[^\\\x60])*\x60))+[ \t]+)*(?:--force|-[a-z]*f[a-z]*)(?:[[:space:]]|$|[^[:alnum:]_-])', '(?i)\bgit[[:space:]]+clean\b.*-[a-zA-Z]*f', '(?i)\bgit[[:space:]]+checkout[[:space:]]+--[[:space:]]', '(?i)\bgit[[:space:]]+stash[[:space:]]+drop\b', '(?i)\bgit[[:space:]]+stash[[:space:]]+clear\b', '(?i)\bgit[[:space:]]+branch[[:space:]]+(?-i)-D\b']
+config.reject = true
+config.target = "shell_command"
+
+[[rules]]
+rule_id = "pack.destructive"
+phase = "postflight"
+priority = 30
+action_on_fail = "deny"
+
+[[rules.evaluators]]
+kind = "regex"
+config.patterns = ["(?i)\\brm[ \\t]+(?:(?:[^\\s;&|()\\x60#]|(?:\\$\\([^()]*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60))+[ \\t]+)*-[a-z]*(?:r[a-z]*f|f[a-z]*r)[a-z]*(?:[[:space:];&|()\"']|$)", "(?i)\\brm[ \\t]+(?:(?:[^\\s;&|()\\x60#]|(?:\\$\\([^()]*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60))+[ \\t]+)*(?:--recursive|-[a-z]*r[a-z]*)[ \\t]+(?:(?:[^\\s;&|()\\x60#]|(?:\\$\\([^()]*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60))+[ \\t]+)*(?:--force|-[a-z]*f[a-z]*)(?:[[:space:];&|()\"']|$)", "(?i)\\brm[ \\t]+(?:(?:[^\\s;&|()\\x60#]|(?:\\$\\([^()]*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60))+[ \\t]+)*(?:--force|-[a-z]*f[a-z]*)[ \\t]+(?:(?:[^\\s;&|()\\x60#]|(?:\\$\\([^()]*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60))+[ \\t]+)*(?:--recursive|-[a-z]*r[a-z]*)(?:[[:space:];&|()\"']|$)"]
+config.reject = true
+config.target = "shell_command"
+
+[[rules]]
+rule_id = "pack.permissions"
+phase = "postflight"
+priority = 40
+action_on_fail = "deny"
+
+[[rules.evaluators]]
+kind = "regex"
+config.patterns = ['(?i)\bchmod[[:space:]]+-[a-zA-Z]*R[a-zA-Z]*(?:[[:space:]]+\S+)*[[:space:]]+(/|~|\$HOME)(?:/\*)?(?:[[:space:]]|$)', '(?i)\bchown[[:space:]]+-[a-zA-Z]*R[a-zA-Z]*(?:[[:space:]]+\S+)*[[:space:]]+(/|~|\$HOME)(?:/\*)?(?:[[:space:]]|$)', '(?i)\bchmod[[:space:]]+(?:-[a-zA-Z]+[[:space:]]+)*777[[:space:]]+(/|~|\$HOME)(?:/\*)?(?:[[:space:]]|$)']
+config.reject = true
+config.target = "shell_command"
+
+[[rules]]
+rule_id = "pack.disk"
+phase = "postflight"
+priority = 50
+action_on_fail = "deny"
+
+[[rules.evaluators]]
+kind = "regex"
+config.patterns = ['(?i)\bdd\b.*\bof=/dev/', '(?i)\bmkfs(\.[A-Za-z0-9]+)?\b', '(?i)\bwipefs\b', '(?i)\bfdisk\b', '(?i)\bparted\b']
+config.reject = true
+config.target = "shell_command"

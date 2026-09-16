@@ -245,7 +245,7 @@ func EvaluateToolCall(ctx context.Context, cfg envconfig.GuardsConfig, in ToolCa
 	// usable transform, so only the allow path looks for one.
 	var updatedInput json.RawMessage
 	if deniedErr == nil {
-		updatedInput = extractToolCallTransform(resp, strings.TrimSpace(in.ToolCallID), in.ToolName, logger)
+		updatedInput = ExtractToolCallTransform(resp, in.ToolCallID, in.ToolName, logger)
 	}
 
 	if resp != nil && logger != nil {
@@ -292,17 +292,14 @@ func EvaluateToolCall(ctx context.Context, cfg envconfig.GuardsConfig, in ToolCa
 	}
 }
 
-// extractToolCallTransform walks the server-returned transformed_input for
+// ExtractToolCallTransform walks the server-returned transformed_input for
 // the tool_call part matching toolCallID and returns its arguments as raw
-// JSON. When the id does not match, it falls back to the only rewritten
-// tool call if that call has no id (or the client sent none), or to the
-// only rewritten call with the same tool name among several. A single
-// call with a different populated id is ignored so a transform aimed at
-// another toolCallId cannot land here. Returns nil on any mismatch or
-// parse failure so the caller falls through to the original tool input
-// unchanged. Mirrors pi guard.ts extractToolCallTransform; keep the two
-// in sync.
-func extractToolCallTransform(resp *agento11y.HookEvaluateResponse, toolCallID, toolName string, logger *log.Logger) json.RawMessage {
+// JSON. A unique exact ID takes precedence over names. Fallback requires
+// one compatible call: populated IDs and populated names must not conflict.
+// Returns nil on any mismatch, ambiguity, or parse failure so the caller
+// falls through to the original tool input unchanged. Mirrors pi guard.ts
+// extractToolCallTransform; keep the two in sync.
+func ExtractToolCallTransform(resp *agento11y.HookEvaluateResponse, toolCallID, toolName string, logger *log.Logger) json.RawMessage {
 	if resp == nil || resp.TransformedInput == nil || len(resp.TransformedInput.Output) == 0 {
 		return nil
 	}
@@ -320,7 +317,7 @@ func extractToolCallTransform(resp *agento11y.HookEvaluateResponse, toolCallID, 
 			if len(raw) > 0 {
 				raw = unwrapProtoJSONBytes(raw)
 			}
-			all = append(all, candidate{id: part.ToolCall.ID, name: part.ToolCall.Name, raw: raw})
+			all = append(all, candidate{id: strings.TrimSpace(part.ToolCall.ID), name: strings.TrimSpace(part.ToolCall.Name), raw: raw})
 		}
 	}
 	if len(all) == 0 {
@@ -328,36 +325,33 @@ func extractToolCallTransform(resp *agento11y.HookEvaluateResponse, toolCallID, 
 	}
 
 	id := strings.TrimSpace(toolCallID)
+	name := strings.TrimSpace(toolName)
+	var matched []candidate
 	if id != "" {
 		for _, c := range all {
 			if c.id == id {
-				return parseTransformArgs(c.raw, id, logger)
+				matched = append(matched, c)
 			}
+		}
+	}
+	if len(matched) == 0 {
+		for _, c := range all {
+			if id != "" && c.id != "" && c.id != id {
+				continue
+			}
+			if name != "" && c.name != "" && !strings.EqualFold(c.name, name) {
+				continue
+			}
+			matched = append(matched, c)
 		}
 	}
 
 	label := id
 	if label == "" {
-		label = strings.TrimSpace(toolName)
+		label = name
 	}
-	if len(all) == 1 {
-		onlyID := strings.TrimSpace(all[0].id)
-		if id == "" || onlyID == "" || onlyID == id {
-			return parseTransformArgs(all[0].raw, label, logger)
-		}
-	}
-
-	name := strings.TrimSpace(toolName)
-	if len(all) > 1 && name != "" {
-		var named []candidate
-		for _, c := range all {
-			if strings.EqualFold(strings.TrimSpace(c.name), name) {
-				named = append(named, c)
-			}
-		}
-		if len(named) == 1 {
-			return parseTransformArgs(named[0].raw, label, logger)
-		}
+	if len(matched) == 1 {
+		return parseTransformArgs(matched[0].raw, label, logger)
 	}
 
 	if logger != nil {

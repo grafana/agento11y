@@ -126,7 +126,15 @@ To re-enter credentials later, run `agento11y login`. It asks where sessions go 
 
 The daemon always stores full generation content locally. It forwards full generation content only when `AGENTO11Y_CONTENT_CAPTURE_MODE=full`. Every other selected mode is reduced to `metadata_only` for the forwarded Cloud copy.
 
-With `AGENTO11Y_GUARDS_ENABLED=true`, the daemon evaluates `guards.toml` next to `config.env` before it relays a check to Cloud. Set `reject = true` on a regex evaluator to block on match. Use `config.target = "shell_command"` for shell policies. Cloud-only evaluator kinds load and never fire locally. `AGENTO11Y_GUARDS_FAIL_OPEN` applies only to Cloud relay failures: a local deny always denies, and a broken or empty rules file allows every call.
+With `AGENTO11Y_GUARDS_ENABLED=true`, the daemon evaluates `guards.toml` next to `config.env` before it relays a check to Cloud. Set `reject = true` on a regex evaluator to block on match. Use `config.target = "shell_command"` for shell policies. Cloud-only evaluator kinds load and never fire locally.
+
+`AGENTO11Y_GUARDS_FAIL_OPEN` applies to guard endpoint errors, including local daemon errors, and Cloud relay failures. It never overrides an explicit local deny.
+
+An unreadable, unparsable, or empty file adds no local rules. The daemon skips invalid rules without disabling valid local rules. Cloud can still deny when no local rules apply.
+
+Shell checks use regexes without a shell interpreter or process isolation. Aliases, runtime expansion, and generated commands can bypass them.
+
+Custom transforms match serialized JSON by default. The built-in Secret redaction pack uses `json_mode = "strings"` to match decoded JSON string values, including escaped token characters.
 
 ## Content capture
 

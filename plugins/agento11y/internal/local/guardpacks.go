@@ -122,27 +122,18 @@ var gitPreview = []string{
 }
 
 var gitPatterns = []string{
-	`(?i)\bgit[[:space:]]+reset[[:space:]]+--hard\b`,
-	`(?i)\bgit[ \t]+push` + shellArgumentGap + `(?:--force|-[a-z]*f[a-z]*)(?:[[:space:]]|$|[^[:alnum:]_-])`,
-	`(?i)\bgit[[:space:]]+clean\b.*-[a-zA-Z]*f`,
-	`(?i)\bgit[[:space:]]+checkout[[:space:]]+--[[:space:]]`,
-	`(?i)\bgit[[:space:]]+stash[[:space:]]+drop\b`,
-	`(?i)\bgit[[:space:]]+stash[[:space:]]+clear\b`,
-	`(?i)\bgit[[:space:]]+branch[[:space:]]+(?-i)-D\b`,
+	gitCommandPrefix + `reset` + shellOptionGap + shellQuoted(`--hard`) + shellArgumentEnd,
+	gitCommandPrefix + `push` + shellOptionGap + shellQuoted(`(?:--force|-[a-z]*f[a-z]*)`) + shellArgumentEnd,
+	gitCommandPrefix + `clean` + shellOptionGap + shellQuoted(`(?:--force|-[a-z]*f[a-z]*)`) + shellArgumentEnd,
+	gitCommandPrefix + `checkout` + shellOptionGap + shellQuoted(`--`) + shellArgumentEnd,
+	gitCommandPrefix + `stash[ \t]+(?:drop|clear)` + shellArgumentEnd,
+	gitCommandPrefix + `branch` + shellOptionGap + shellQuoted(`(?-i:-[a-zA-Z]*D[a-zA-Z]*)`) + shellArgumentEnd,
 }
 
-const (
-	shellSubstitution = `(?:\$\([^()]*\)|\x60(?:\\.|[^\\\x60])*\x60)`
-	shellArgumentGap  = `[ \t]+(?:(?:[^\s;&|()\x60#]|` + shellSubstitution + `)+[ \t]+)*`
-	shellArgumentEnd  = `(?:[[:space:];&|()"']|$)`
-	rmRecursiveFlag   = `(?:--recursive|-[a-z]*r[a-z]*)`
-	rmForceFlag       = `(?:--force|-[a-z]*f[a-z]*)`
-)
-
 var destructivePatterns = []string{
-	`(?i)\brm` + shellArgumentGap + `-[a-z]*(?:r[a-z]*f|f[a-z]*r)[a-z]*` + shellArgumentEnd,
-	`(?i)\brm` + shellArgumentGap + rmRecursiveFlag + shellArgumentGap + rmForceFlag + shellArgumentEnd,
-	`(?i)\brm` + shellArgumentGap + rmForceFlag + shellArgumentGap + rmRecursiveFlag + shellArgumentEnd,
+	`(?i)\brm` + shellOptionGap + shellQuoted(`-[a-z]*(?:r[a-z]*f|f[a-z]*r)[a-z]*`) + shellArgumentEnd,
+	`(?i)\brm` + shellOptionGap + shellQuoted(rmRecursiveFlag) + shellOptionGap + shellQuoted(rmForceFlag) + shellArgumentEnd,
+	`(?i)\brm` + shellOptionGap + shellQuoted(rmForceFlag) + shellOptionGap + shellQuoted(rmRecursiveFlag) + shellArgumentEnd,
 }
 
 var permissionsPreview = []string{
@@ -157,14 +148,15 @@ var permissionsPreview = []string{
 	"chmod 777 $HOME",
 }
 
-// pathRootOrHome matches a final argument that is /, ~, or $HOME, including
-// optional trailing /*. It does not match /tmp or a project under $HOME.
-const pathRootOrHome = `(/|~|\$HOME)(?:/\*)?(?:[[:space:]]|$)`
+// pathRootOrHome matches /, ~, or $HOME, including home paths ending in / or /*
+// and the root glob /*. It does not match /tmp or a project under $HOME.
+// Quoted tildes and single-quoted variables do not expand to the home directory.
+const pathRootOrHome = `(?:/\*?|(?:~|\$HOME|\$\{HOME\})(?:/\*?)?|'/'|"(?:/|\$(?:HOME|\{HOME\})/?)")` + shellArgumentEnd
 
 var permissionsPatterns = []string{
-	`(?i)\bchmod[[:space:]]+-[a-zA-Z]*R[a-zA-Z]*(?:[[:space:]]+\S+)*[[:space:]]+` + pathRootOrHome,
-	`(?i)\bchown[[:space:]]+-[a-zA-Z]*R[a-zA-Z]*(?:[[:space:]]+\S+)*[[:space:]]+` + pathRootOrHome,
-	`(?i)\bchmod[[:space:]]+(?:-[a-zA-Z]+[[:space:]]+)*777[[:space:]]+` + pathRootOrHome,
+	`\bchmod` + shellOptionGap + shellQuoted(`(?:--recursive|-[a-zA-Z]*R[a-zA-Z]*)`) + shellArgumentGap + pathRootOrHome,
+	`\bchown` + shellOptionGap + shellQuoted(`(?:--recursive|-[a-zA-Z]*R[a-zA-Z]*)`) + shellArgumentGap + pathRootOrHome,
+	`\bchmod` + shellOptionGap + shellQuoted(`777`) + shellArgumentGap + pathRootOrHome,
 }
 
 var diskPreview = []string{
@@ -177,7 +169,7 @@ var diskPreview = []string{
 }
 
 var diskPatterns = []string{
-	`(?i)\bdd\b.*\bof=/dev/`,
+	`(?i)(?:\bdd|'dd'|"dd")` + shellArgumentGap + `(?:of=["']?/dev/|["']of=/dev/)`,
 	`(?i)\bmkfs(\.[A-Za-z0-9]+)?\b`,
 	`(?i)\bwipefs\b`,
 	`(?i)\bfdisk\b`,
@@ -200,13 +192,9 @@ var envFileToolNames = []string{
 }
 
 func envFileBlockedNames() []string {
-	out := make([]string, 0, len(envFileToolNames)*3)
+	out := make([]string, 0, len(envFileToolNames))
 	for _, name := range envFileToolNames {
-		out = append(out,
-			name+`(*/.env*)`,
-			name+`(*".env*)`,
-			name+`(* .env*)`,
-		)
+		out = append(out, name+`(*[/"' <>|;&()].env[./"' <>|;&()]*)`)
 	}
 	return out
 }
@@ -250,6 +238,7 @@ func secretsPackRule() guardeval.Rule {
 		Priority: 10,
 		Transform: &guardeval.TransformConfig{
 			Patterns: patterns,
+			JSONMode: "strings",
 		},
 	}
 }
@@ -269,7 +258,7 @@ func filesPackRule() guardeval.Rule {
 				"target": "shell_command",
 				"reject": true,
 				"patterns": []any{
-					`(?i)(^|[/'\"[:space:]])\.env($|[/'\"[:space:].])`,
+					`(?i)(^|[/'"[:space:]<>;|&()])\.env($|[/'"[:space:].<>;|&()])`,
 				},
 			},
 		}},
@@ -301,7 +290,7 @@ func packsFromRules(rules []guardeval.Rule) []guardPack {
 	on := map[string]bool{}
 	for _, r := range rules {
 		if id, ok := packIDFromRule(r.RuleID); ok {
-			on[id] = true
+			on[id] = r.Enabled == nil || *r.Enabled
 		}
 	}
 	out := catalogPacks()
@@ -312,10 +301,10 @@ func packsFromRules(rules []guardeval.Rule) []guardPack {
 }
 
 // applyPackUpdates turns packs on or off against an existing ruleset. Keys
-// not in updates keep their current on/off state, but every still-on catalog
-// pack is rewritten from the current catalog so a binary upgrade refreshes
-// patterns. Custom rules are never removed, including pack.* ids this binary
-// does not know (a newer pack, or a hand-named rule).
+// not in updates keep their current on/off state, including enabled=false.
+// Only unchanged shipped packs are refreshed from the current catalog after a
+// binary upgrade. Custom rules are never removed, including pack.* ids this
+// binary does not know (a newer pack, or a hand-named rule).
 func applyPackUpdates(existing []guardeval.Rule, updates map[string]bool) ([]guardeval.Rule, error) {
 	known := packByID()
 	for id := range updates {
@@ -324,6 +313,7 @@ func applyPackUpdates(existing []guardeval.Rule, updates map[string]bool) ([]gua
 		}
 	}
 	enabled := map[string]bool{}
+	stored := map[string]guardeval.Rule{}
 	custom := make([]guardeval.Rule, 0, len(existing))
 	for _, rule := range existing {
 		id, isPack := packIDFromRule(rule.RuleID)
@@ -336,6 +326,7 @@ func applyPackUpdates(existing []guardeval.Rule, updates map[string]bool) ([]gua
 			continue
 		}
 		enabled[id] = true
+		stored[id] = rule
 	}
 	maps.Copy(enabled, updates)
 	out := custom
@@ -343,9 +334,18 @@ func applyPackUpdates(existing []guardeval.Rule, updates map[string]bool) ([]gua
 		if !enabled[pack.ID] {
 			continue
 		}
-		rule, err := packRule(pack.ID)
+		rule, exists := stored[pack.ID]
+		var err error
+		if exists {
+			rule, err = refreshStoredPackRule(rule)
+		} else {
+			rule, err = packRule(pack.ID)
+		}
 		if err != nil {
 			return nil, err
+		}
+		if _, toggled := updates[pack.ID]; toggled {
+			rule.Enabled = nil
 		}
 		out = append(out, rule)
 	}

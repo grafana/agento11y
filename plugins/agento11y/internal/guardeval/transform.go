@@ -1,10 +1,12 @@
 package guardeval
 
 import (
+	"bytes"
 	"encoding/json"
 	"log"
 	"regexp"
 	"strconv"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/grafana/agento11y/go/agento11y"
@@ -12,6 +14,8 @@ import (
 
 type Transform struct {
 	patterns []compiledPattern
+	jsonMode string
+	steps    []*Transform
 }
 
 type compiledPattern struct {
@@ -41,6 +45,18 @@ func ApplyRelayTransform(in agento11y.HookInput, ct *Transform, logger *log.Logg
 }
 
 func applyTransform(in agento11y.HookInput, ct *Transform, logger *log.Logger, relay bool) (agento11y.HookInput, bool, []string) {
+	if ct != nil && len(ct.steps) > 0 {
+		out := in
+		changed := false
+		var dropped []string
+		for _, step := range ct.steps {
+			next, ch, drops := applyTransform(out, step, logger, relay)
+			out = next
+			changed = changed || ch
+			dropped = append(dropped, drops...)
+		}
+		return out, changed, dropped
+	}
 	out := cloneHookInput(in)
 	if ct == nil || len(ct.patterns) == 0 {
 		return out, false, nil
@@ -198,6 +214,10 @@ func applyRawJSON(raw json.RawMessage, ct *Transform, logger *log.Logger, what s
 	if len(raw) == 0 || !utf8.Valid(raw) {
 		return raw, false, false
 	}
+	if ct != nil && ct.jsonMode == "strings" {
+		next, changed := applyJSONStrings(raw, ct)
+		return next, changed, false
+	}
 	ns, changed := applyString(string(raw), ct)
 	if !changed {
 		return raw, false, false
@@ -209,6 +229,50 @@ func applyRawJSON(raw json.RawMessage, ct *Transform, logger *log.Logger, what s
 		return raw, false, true
 	}
 	return json.RawMessage(ns), true, false
+}
+
+// Decoding the whole document would collapse duplicate keys and change numbers,
+// whitespace, and unrelated escapes.
+func applyJSONStrings(raw json.RawMessage, ct *Transform) (json.RawMessage, bool) {
+	if !json.Valid(raw) {
+		return raw, false
+	}
+	var out strings.Builder
+	copied := 0
+	for i := 0; i < len(raw); i++ {
+		if raw[i] != '"' {
+			continue
+		}
+		start := i
+		for i++; i < len(raw); i++ {
+			if raw[i] == '\\' {
+				i++
+			} else if raw[i] == '"' {
+				break
+			}
+		}
+		rest := bytes.TrimLeft(raw[i+1:], " \t\r\n")
+		if len(rest) > 0 && rest[0] == ':' {
+			continue
+		}
+		var value string
+		if err := json.Unmarshal(raw[start:i+1], &value); err != nil {
+			return raw, false
+		}
+		next, _ := applyString(value, ct)
+		if next == value {
+			continue
+		}
+		encoded, _ := json.Marshal(next)
+		out.Write(raw[copied:start])
+		out.Write(encoded)
+		copied = i + 1
+	}
+	if copied == 0 {
+		return raw, false
+	}
+	out.Write(raw[copied:])
+	return json.RawMessage(out.String()), true
 }
 
 func applyString(s string, ct *Transform) (string, bool) {

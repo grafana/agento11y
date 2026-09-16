@@ -356,10 +356,11 @@ func describeRedactInput(p palette, c ConfigSection) string {
 }
 
 // describeGuards renders the resolved guard feature flags. Guards default off,
-// so a plain "disabled" is the common line; when on, the timeout and Cloud
-// fail mode matter. GUARDS_FAIL_OPEN is Cloud-only: a local deny always
-// denies, and a broken rules file allows everything. The trailer names the
-// GUARDS_ENABLED spelling alone. GUARDS_TIMEOUT_MS and GUARDS_FAIL_OPEN are
+// so a plain "disabled" is the common line; when on, the timeout and failure
+// policy for endpoint and Cloud errors matter. GUARDS_FAIL_OPEN covers endpoint transport and Cloud relay
+// failures, never an explicit local deny. An unreadable, unparsable, or empty file
+// adds no local rules; invalid individual rules are skipped. The trailer
+// names the GUARDS_ENABLED spelling alone. GUARDS_TIMEOUT_MS and GUARDS_FAIL_OPEN are
 // separate families, and this row does not attribute them; an invalid value in
 // either is named by a section message.
 func describeGuards(p palette, c ConfigSection) string {
@@ -367,9 +368,9 @@ func describeGuards(p palette, c ConfigSection) string {
 	if !c.GuardsEnabled {
 		return withTrailer(p.faint("disabled"), trailer)
 	}
-	failMode := "Cloud fail-open"
+	failMode := "fail-open on endpoint or Cloud errors"
 	if !c.GuardsFailOpen {
-		failMode = "Cloud fail-closed"
+		failMode = "fail-closed on endpoint or Cloud errors"
 	}
 	return withTrailer(fmt.Sprintf("enabled, timeout %dms, %s", c.GuardsTimeoutMs, failMode), trailer)
 }

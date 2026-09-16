@@ -3,9 +3,12 @@ package local
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/grafana/agento11y/go/agento11y"
+	agento11yv1 "github.com/grafana/agento11y/go/proto/agento11y/v1"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/guardeval"
 )
 
@@ -27,7 +30,7 @@ func decodeHookEvaluateRequest(body []byte) (agento11y.HookEvaluateRequest, erro
 	return agento11y.HookEvaluateRequest{
 		Phase:   agento11y.HookPhase(strings.TrimSpace(raw.Phase)),
 		Context: raw.Context.decode(),
-		Input:   raw.Input.decode(unwrapWireJSON),
+		Input:   raw.Input.decode(rawWireJSON),
 	}, nil
 }
 
@@ -139,13 +142,14 @@ func (in wireInput) decode(decodeJSON wireJSONDecoder) agento11y.HookInput {
 }
 
 type wireToolDefinition struct {
-	Name            string          `json:"name"`
-	Description     string          `json:"description"`
-	Type            string          `json:"type"`
-	InputSchema     json.RawMessage `json:"input_schema"`
-	InputSchemaJSON json.RawMessage `json:"input_schema_json"`
-	InputSchemaCaml json.RawMessage `json:"inputSchemaJSON"`
-	Deferred        bool            `json:"deferred"`
+	Name             string          `json:"name"`
+	Description      string          `json:"description"`
+	Type             string          `json:"type"`
+	InputSchema      json.RawMessage `json:"input_schema"`
+	InputSchemaJSON  json.RawMessage `json:"input_schema_json"`
+	InputSchemaCaml  json.RawMessage `json:"inputSchemaJSON"`
+	InputSchemaProto json.RawMessage `json:"inputSchemaJson"`
+	Deferred         bool            `json:"deferred"`
 }
 
 func (t wireToolDefinition) decode(decodeJSON wireJSONDecoder) agento11y.ToolDefinition {
@@ -154,18 +158,52 @@ func (t wireToolDefinition) decode(decodeJSON wireJSONDecoder) agento11y.ToolDef
 	case len(t.InputSchema) > 0:
 		out.InputSchema = decodeJSON(t.InputSchema)
 	case len(t.InputSchemaJSON) > 0:
-		out.InputSchema = decodeJSON(t.InputSchemaJSON)
+		out.InputSchema = decodeResponseWireJSON(t.InputSchemaJSON)
 	case len(t.InputSchemaCaml) > 0:
-		out.InputSchema = decodeJSON(t.InputSchemaCaml)
+		out.InputSchema = decodeEmbeddedWireJSON(t.InputSchemaCaml)
+	case len(t.InputSchemaProto) > 0:
+		out.InputSchema = unwrapWireJSON(t.InputSchemaProto)
 	}
 	return out
 }
 
 type wireMessage struct {
-	Role    string     `json:"role"`
+	Role    wireRole   `json:"role"`
 	Name    string     `json:"name"`
 	Content string     `json:"content"`
 	Parts   []wirePart `json:"parts"`
+}
+
+type wireRole struct {
+	value agento11y.Role
+	proto bool
+}
+
+func (r *wireRole) UnmarshalJSON(data []byte) error {
+	*r = wireRole{}
+	var text *string
+	if err := json.Unmarshal(data, &text); err == nil {
+		if text == nil {
+			return nil
+		}
+		r.value = agento11y.Role(*text)
+		if _, ok := agento11yv1.MessageRole_value[*text]; ok {
+			r.value = agento11y.Role(strings.ToLower(strings.TrimPrefix(*text, "MESSAGE_ROLE_")))
+			r.proto = true
+		}
+		return nil
+	}
+	var number *int32
+	if err := json.Unmarshal(data, &number); err != nil || number == nil {
+		return fmt.Errorf("invalid message role: %s", data)
+	}
+	r.proto = true
+	if name, ok := agento11yv1.MessageRole_name[*number]; ok {
+		r.value = agento11y.Role(strings.ToLower(strings.TrimPrefix(name, "MESSAGE_ROLE_")))
+	} else {
+		r.value = agento11y.Role(strconv.FormatInt(int64(*number), 10))
+	}
+	return nil
 }
 
 type wirePart struct {
@@ -225,9 +263,13 @@ func decodeWireMessages(msgs []wireMessage, decodeJSON wireJSONDecoder) []agento
 	}
 	out := make([]agento11y.Message, 0, len(msgs))
 	for _, m := range msgs {
-		msg := agento11y.Message{Role: agento11y.Role(m.Role), Name: m.Name}
+		msg := agento11y.Message{Role: m.Role.value, Name: m.Name}
+		payloadDecoder := decodeJSON
+		if m.Role.proto {
+			payloadDecoder = decodeResponseWireJSON
+		}
 		for _, p := range m.Parts {
-			msg.Parts = append(msg.Parts, p.decode(decodeJSON))
+			msg.Parts = append(msg.Parts, p.decode(payloadDecoder))
 		}
 		// The `content` shorthand carries the text when no typed parts were
 		// sent, so a rule matching message text still sees it.
@@ -264,9 +306,9 @@ func (p wirePart) decode(decodeJSON wireJSONDecoder) agento11y.Part {
 		case len(tc.InputJSON) > 0:
 			call.InputJSON = decodeJSON(tc.InputJSON)
 		case len(tc.InputJSONCamel) > 0:
-			call.InputJSON = decodeJSON(tc.InputJSONCamel)
+			call.InputJSON = decodeEmbeddedWireJSON(tc.InputJSONCamel)
 		case len(tc.InputJSONCaml2) > 0:
-			call.InputJSON = decodeJSON(tc.InputJSONCaml2)
+			call.InputJSON = unwrapWireJSON(tc.InputJSONCaml2)
 		}
 		out.ToolCall = &call
 		if out.Kind == "" {
@@ -291,9 +333,9 @@ func (p wirePart) decode(decodeJSON wireJSONDecoder) agento11y.Part {
 		case len(tr.ContentJSON) > 0:
 			result.ContentJSON = decodeJSON(tr.ContentJSON)
 		case len(tr.ContentJSONCamel) > 0:
-			result.ContentJSON = decodeJSON(tr.ContentJSONCamel)
+			result.ContentJSON = decodeEmbeddedWireJSON(tr.ContentJSONCamel)
 		case len(tr.ContentJSONCaml2) > 0:
-			result.ContentJSON = decodeJSON(tr.ContentJSONCaml2)
+			result.ContentJSON = unwrapWireJSON(tr.ContentJSONCaml2)
 		}
 		out.ToolResult = &result
 		if out.Kind == "" {
@@ -319,6 +361,18 @@ func (p wirePart) decode(decodeJSON wireJSONDecoder) agento11y.Part {
 		}
 	}
 	return out
+}
+
+// SDK tool payloads use raw JSON unless a protobuf role selects byte decoding.
+// A string that resembles JSON or base64 must stay a string.
+func rawWireJSON(raw json.RawMessage) json.RawMessage { return raw }
+
+func decodeEmbeddedWireJSON(raw json.RawMessage) json.RawMessage {
+	var text string
+	if json.Unmarshal(raw, &text) == nil && json.Valid([]byte(text)) {
+		return json.RawMessage(text)
+	}
+	return raw
 }
 
 // unwrapWireJSON accepts raw JSON, a JSON string containing JSON, or a

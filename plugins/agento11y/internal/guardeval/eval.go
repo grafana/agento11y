@@ -52,7 +52,7 @@ func evaluateWithTransform(ctx context.Context, rules []CompiledRule, logger *lo
 	out := []Evaluation{}
 	anyTransform := false
 	transformRuleID := ""
-	var appliedPatterns []compiledPattern
+	var appliedTransforms []*Transform
 
 	// snapshot returns transformed_input only after a rewrite. ApplyTransform
 	// already made working private, so no second copy is needed.
@@ -77,7 +77,7 @@ func evaluateWithTransform(ctx context.Context, rules []CompiledRule, logger *lo
 				Reason:           reason,
 				TransformedInput: snapshot(),
 				Evaluations:      out,
-			}, transformOf(appliedPatterns), true
+			}, transformOf(appliedTransforms), true
 		default:
 			return Response{
 				Action:      agento11y.HookActionDeny,
@@ -111,7 +111,7 @@ func evaluateWithTransform(ctx context.Context, rules []CompiledRule, logger *lo
 		if rule.transform != nil {
 			next, changed, dropped := ApplyTransform(working, rule.transform, logger)
 			working = next
-			appliedPatterns = append(appliedPatterns, rule.transform.patterns...)
+			appliedTransforms = append(appliedTransforms, rule.transform)
 			if changed {
 				anyTransform = true
 				if transformRuleID == "" {
@@ -171,7 +171,7 @@ func evaluateWithTransform(ctx context.Context, rules []CompiledRule, logger *lo
 		RuleID:           transformRuleID,
 		TransformedInput: snapshot(),
 		Evaluations:      out,
-	}, transformOf(appliedPatterns), nil
+	}, transformOf(appliedTransforms), nil
 }
 
 // tripReason names the rule and describes the tripped check using its actual
@@ -187,14 +187,14 @@ func (r CompiledRule) tripReason(what string) string {
 	}
 }
 
-// transformOf wraps the patterns the matching rules applied, or nil when none
+// transformOf wraps the transforms the matching rules applied, or nil when none
 // ran. The caller re-runs them over an input another stage rewrote from the
-// un-redacted relay.
-func transformOf(patterns []compiledPattern) *Transform {
-	if len(patterns) == 0 {
+// un-redacted relay. Rule boundaries preserve JSON modes and invalid-rewrite handling.
+func transformOf(steps []*Transform) *Transform {
+	if len(steps) == 0 {
 		return nil
 	}
-	return &Transform{patterns: patterns}
+	return &Transform{steps: steps}
 }
 
 // ruleEnforceable reports whether a rule has anything that can act locally: a

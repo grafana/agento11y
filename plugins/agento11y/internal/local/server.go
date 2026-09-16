@@ -20,6 +20,7 @@ import (
 
 	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/go/proto/agento11y/wire"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/guard"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/guardeval"
@@ -704,7 +705,8 @@ func (s *Server) chainHookEvaluate(ctx context.Context, cfg forwardConfig, origi
 //   - Cloud sends one: the local patterns run over it again with the relay
 //     transform, including thinking, because Cloud does not state whether its
 //     transformed input came from the redacted relay. If that would produce
-//     invalid JSON, the local rewrite stands instead.
+//     invalid JSON, the local rewrite stands instead. Unusable tool-call
+//     replacements keep the locally rewritten output.
 //   - Cloud denies: the call does not run, so the local rewrite is not
 //     re-attached. Only what Cloud sent survives.
 func mergeCloudVerdict(resp *guardeval.Response, cloud agento11y.HookEvaluateResponse, localTransform *guardeval.Transform, logger *log.Logger) {
@@ -726,11 +728,46 @@ func mergeCloudVerdict(resp *guardeval.Response, cloud agento11y.HookEvaluateRes
 			resp.TransformedInput = localTransformed
 		} else {
 			resp.TransformedInput = &redacted
+			preserveLocalToolCallTransforms(localTransformed, resp.TransformedInput, logger)
 		}
 	}
 	merged := append([]guardeval.Evaluation{}, localEvaluations...)
 	merged = append(merged, droppedRedactionEvaluations(localRuleID, dropped)...)
 	resp.Evaluations = append(merged, cloudResponse.Evaluations...)
+}
+
+func preserveLocalToolCallTransforms(local, cloud *agento11y.HookInput, logger *log.Logger) {
+	if local == nil || cloud == nil {
+		return
+	}
+	localResponse := &agento11y.HookEvaluateResponse{TransformedInput: local}
+	cloudResponse := &agento11y.HookEvaluateResponse{TransformedInput: cloud}
+	// SDK response decoders drop nameless calls, hiding candidates from identity checks.
+	cloudHasNamelessCalls := false
+	for _, message := range cloud.Output {
+		for _, part := range message.Parts {
+			if part.Kind == agento11y.PartKindToolCall && part.ToolCall != nil && part.ToolCall.Name == "" {
+				cloudHasNamelessCalls = true
+			}
+		}
+	}
+	for _, message := range local.Output {
+		for _, part := range message.Parts {
+			if part.Kind != agento11y.PartKindToolCall || part.ToolCall == nil {
+				continue
+			}
+			call := part.ToolCall
+			if guard.ExtractToolCallTransform(localResponse, call.ID, call.Name, nil) == nil {
+				continue
+			}
+			if cloudHasNamelessCalls || guard.ExtractToolCallTransform(cloudResponse, call.ID, call.Name, logger) == nil {
+				// An unusable replacement makes hosts use the original arguments.
+				// Keep Cloud's other fields, but do not combine uncertain call identities.
+				cloud.Output = local.Output
+				return
+			}
+		}
+	}
 }
 
 // droppedRedactionEvaluations reports local transforms that could not be

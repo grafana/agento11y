@@ -236,7 +236,7 @@ func TestRenderHuman_FaultsStayOnTheMessageLine(t *testing.T) {
 				c.GuardsFellBack = true
 			},
 			message:   "the AGENTO11Y_GUARDS_TIMEOUT_MS value is invalid; guards use the default",
-			wantRow:   "guards:           enabled, timeout 1500ms, Cloud fail-open (AGENTO11Y_GUARDS_ENABLED, env)",
+			wantRow:   "guards:           enabled, timeout 1500ms, fail-open on endpoint or Cloud errors (AGENTO11Y_GUARDS_ENABLED, env)",
 			wantNoRow: "invalid value, fell back",
 		},
 		{
@@ -449,12 +449,12 @@ func TestDescribeGuards(t *testing.T) {
 		// No GUARDS_* variable is set, so the row says the value is the built-in one.
 		{name: "disabled by default", config: ConfigSection{GuardsEnabled: false}, want: "disabled (default)"},
 		{name: "disabled explicitly", config: ConfigSection{GuardsEnabled: false, GuardsKey: "AGENTO11Y_GUARDS_ENABLED", GuardsSource: sourceConfig}, want: "disabled (AGENTO11Y_GUARDS_ENABLED, config.env)"},
-		{name: "enabled fail-open", config: ConfigSection{GuardsEnabled: true, GuardsTimeoutMs: 1500, GuardsFailOpen: true, GuardsKey: "AGENTO11Y_GUARDS_ENABLED", GuardsSource: sourceEnv}, want: "enabled, timeout 1500ms, Cloud fail-open (AGENTO11Y_GUARDS_ENABLED, env)"},
-		{name: "enabled fail-closed", config: ConfigSection{GuardsEnabled: true, GuardsTimeoutMs: 500, GuardsFailOpen: false, GuardsKey: "SIGIL_GUARDS_ENABLED", GuardsSource: sourceEnv}, want: "enabled, timeout 500ms, Cloud fail-closed (SIGIL_GUARDS_ENABLED, env)"},
+		{name: "enabled fail-open", config: ConfigSection{GuardsEnabled: true, GuardsTimeoutMs: 1500, GuardsFailOpen: true, GuardsKey: "AGENTO11Y_GUARDS_ENABLED", GuardsSource: sourceEnv}, want: "enabled, timeout 1500ms, fail-open on endpoint or Cloud errors (AGENTO11Y_GUARDS_ENABLED, env)"},
+		{name: "enabled fail-closed", config: ConfigSection{GuardsEnabled: true, GuardsTimeoutMs: 500, GuardsFailOpen: false, GuardsKey: "SIGIL_GUARDS_ENABLED", GuardsSource: sourceEnv}, want: "enabled, timeout 500ms, fail-closed on endpoint or Cloud errors (SIGIL_GUARDS_ENABLED, env)"},
 		// A rejected GUARDS_TIMEOUT_MS leaves GUARDS_ENABLED as the key the row
 		// names. The fallback itself is reported once, on the section message line,
 		// so it adds no second group to the row.
-		{name: "timeout fell back", config: ConfigSection{GuardsEnabled: true, GuardsTimeoutMs: 1500, GuardsFailOpen: true, GuardsFellBack: true, GuardsKey: "AGENTO11Y_GUARDS_ENABLED", GuardsSource: sourceEnv}, want: "enabled, timeout 1500ms, Cloud fail-open (AGENTO11Y_GUARDS_ENABLED, env)"},
+		{name: "timeout fell back", config: ConfigSection{GuardsEnabled: true, GuardsTimeoutMs: 1500, GuardsFailOpen: true, GuardsFellBack: true, GuardsKey: "AGENTO11Y_GUARDS_ENABLED", GuardsSource: sourceEnv}, want: "enabled, timeout 1500ms, fail-open on endpoint or Cloud errors (AGENTO11Y_GUARDS_ENABLED, env)"},
 		// A rejected GUARDS_ENABLED value decided nothing, so the row reports the
 		// built-in default and names no variable.
 		{name: "enabled value rejected", config: ConfigSection{GuardsEnabled: false, GuardsFellBack: true}, want: "disabled (default)"},
@@ -496,8 +496,8 @@ func TestRenderHuman_GuardsLine(t *testing.T) {
 		wantLine string
 	}{
 		{name: "disabled", config: ConfigSection{GuardsEnabled: false}, wantLine: "disabled (default)"},
-		{name: "enabled fail-open", config: ConfigSection{GuardsEnabled: true, GuardsTimeoutMs: 1500, GuardsFailOpen: true, GuardsKey: "AGENTO11Y_GUARDS_ENABLED", GuardsSource: sourceEnv}, wantLine: "enabled, timeout 1500ms, Cloud fail-open (AGENTO11Y_GUARDS_ENABLED, env)"},
-		{name: "enabled fail-closed", config: ConfigSection{GuardsEnabled: true, GuardsTimeoutMs: 500, GuardsFailOpen: false, GuardsKey: "AGENTO11Y_GUARDS_ENABLED", GuardsSource: sourceEnv}, wantLine: "enabled, timeout 500ms, Cloud fail-closed (AGENTO11Y_GUARDS_ENABLED, env)"},
+		{name: "enabled fail-open", config: ConfigSection{GuardsEnabled: true, GuardsTimeoutMs: 1500, GuardsFailOpen: true, GuardsKey: "AGENTO11Y_GUARDS_ENABLED", GuardsSource: sourceEnv}, wantLine: "enabled, timeout 1500ms, fail-open on endpoint or Cloud errors (AGENTO11Y_GUARDS_ENABLED, env)"},
+		{name: "enabled fail-closed", config: ConfigSection{GuardsEnabled: true, GuardsTimeoutMs: 500, GuardsFailOpen: false, GuardsKey: "AGENTO11Y_GUARDS_ENABLED", GuardsSource: sourceEnv}, wantLine: "enabled, timeout 500ms, fail-closed on endpoint or Cloud errors (AGENTO11Y_GUARDS_ENABLED, env)"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

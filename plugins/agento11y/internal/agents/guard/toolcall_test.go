@@ -340,6 +340,129 @@ func TestEvaluateToolCall(t *testing.T) {
 	}
 }
 
+func TestExtractToolCallTransform(t *testing.T) {
+	const redacted = `{"command":"echo [REDACTED]"}`
+	const other = `{"command":"other call"}`
+	call := func(id, name, raw string) agento11y.ToolCall {
+		return agento11y.ToolCall{ID: id, Name: name, InputJSON: json.RawMessage(raw)}
+	}
+	tests := []struct {
+		name       string
+		id         string
+		tool       string
+		calls      []agento11y.ToolCall
+		want       string
+		wantLogSub string
+	}{
+		{"no calls", "c1", "bash", nil, "", ""},
+		{"conflicting ID with unrelated call", "c1", "bash", []agento11y.ToolCall{call("c2", "bash", redacted), call("c3", "read", other)}, "", "no part matched"},
+		{"wrong name with unrelated call", "c1", "bash", []agento11y.ToolCall{call("", "write", redacted), call("c3", "read", other)}, "", "no part matched"},
+		{"ID-less match with unrelated call", "c1", "bash", []agento11y.ToolCall{call("", "bash", redacted), call("c3", "read", other)}, redacted, ""},
+		{"name-less match with unrelated call", "c1", "bash", []agento11y.ToolCall{call("", "", redacted), call("c3", "read", other)}, redacted, ""},
+		{"caller ID absent with unrelated call", "", "bash", []agento11y.ToolCall{call("c2", "bash", redacted), call("c3", "read", other)}, redacted, ""},
+		{"caller name absent with unrelated ID", "c1", "", []agento11y.ToolCall{call("", "write", redacted), call("c3", "read", other)}, redacted, ""},
+		{"whitespace name cannot override conflicting ID", "c1", "bash", []agento11y.ToolCall{call("c2", " Bash ", redacted), call("c3", "read", other)}, "", "no part matched"},
+		{"whitespace name matches without conflicting ID", "c1", "bash", []agento11y.ToolCall{call("", " Bash ", redacted), call("c3", "read", other)}, redacted, ""},
+		{"duplicate fallback", "c1", "bash", []agento11y.ToolCall{call("", "bash", redacted), call("", "bash", redacted)}, "", "no part matched"},
+		{"missing name makes fallback ambiguous", "c1", "bash", []agento11y.ToolCall{call("", "bash", redacted), call("", "", other)}, "", "no part matched"},
+		{"missing caller ID makes same names ambiguous", "", "bash", []agento11y.ToolCall{call("c2", "bash", redacted), call("c3", "bash", other)}, "", "no part matched"},
+		{"missing caller identity is ambiguous", "", "", []agento11y.ToolCall{call("c2", "bash", redacted), call("c3", "read", other)}, "", "no part matched"},
+		{"conflicting ID does not compete with fallback", "c1", "bash", []agento11y.ToolCall{call("c2", "bash", other), call("", "bash", redacted)}, redacted, ""},
+		{"exact ID precedes fallback and name", "c1", "bash", []agento11y.ToolCall{call("", "bash", other), call("c1", "write", redacted)}, redacted, ""},
+		{"trimmed exact ID precedes fallback", " c1 ", "bash", []agento11y.ToolCall{call("", "bash", other), call(" c1 ", "", redacted)}, redacted, ""},
+		{"duplicate exact ID", "c1", "bash", []agento11y.ToolCall{call("c1", "bash", redacted), call("c1", "bash", redacted)}, "", "no part matched"},
+		{"duplicate trimmed ID with different names", "c1", "bash", []agento11y.ToolCall{call(" c1 ", "read", other), call("c1", "bash", redacted), call("", "bash", other)}, "", "no part matched"},
+		{"invalid exact arguments cannot use fallback", "c1", "bash", []agento11y.ToolCall{call("c1", "bash", "not json"), call("", "bash", redacted)}, "", "invalid JSON arguments"},
+		{"invalid duplicate exact arguments remain ambiguous", "c1", "bash", []agento11y.ToolCall{call("c1", "bash", "not json"), call("c1", "bash", redacted)}, "", "no part matched"},
+		{"invalid fallback arguments remain ambiguous", "c1", "bash", []agento11y.ToolCall{call("", "bash", "not json"), call("", "bash", redacted)}, "", "no part matched"},
+		{"invalid unrelated arguments are ignored", "c1", "bash", []agento11y.ToolCall{call("c2", "bash", "not json"), call("", "bash", redacted)}, redacted, ""},
+		{"malformed JSON", "c1", "bash", []agento11y.ToolCall{call("c1", "bash", "not json")}, "", "invalid JSON arguments"},
+		{"empty arguments", "c1", "bash", []agento11y.ToolCall{call("c1", "bash", "")}, "", "empty arguments"},
+		{"array arguments", "c1", "bash", []agento11y.ToolCall{call("c1", "bash", "[]")}, "", "not a JSON object"},
+		{"null arguments", "c1", "bash", []agento11y.ToolCall{call("c1", "bash", "null")}, "", "empty arguments"},
+		{"number arguments", "c1", "bash", []agento11y.ToolCall{call("c1", "bash", "42")}, "", "not a JSON object"},
+		{"boolean arguments", "c1", "bash", []agento11y.ToolCall{call("c1", "bash", "true")}, "", "not a JSON object"},
+		{"empty object arguments", "c1", "bash", []agento11y.ToolCall{call("c1", "bash", "{}")}, "{}", ""},
+	}
+	ids := []struct {
+		name, caller, response string
+		exact, compatible      bool
+	}{
+		{"exact ID", "c1", "c1", true, true},
+		{"trimmed exact ID", " c1 ", "\tc1 ", true, true},
+		{"conflicting ID", "c1", "c2", false, false},
+		{"trimmed conflicting ID", " c1 ", " c2 ", false, false},
+		{"case-sensitive ID", "c1", "C1", false, false},
+		{"response ID absent", "c1", "", false, true},
+		{"response ID whitespace", "c1", " \t", false, true},
+		{"caller ID absent", "", "c2", false, true},
+		{"caller ID whitespace", " \t", "c2", false, true},
+		{"both IDs absent", "", "", false, true},
+		{"both IDs whitespace", " \t", " \t", false, true},
+	}
+	names := []struct {
+		name, caller, response string
+		compatible             bool
+	}{
+		{"same name", "bash", "bash", true},
+		{"trimmed case-insensitive name", " bash ", "\tBash ", true},
+		{"different name", "bash", "write", false},
+		{"response name absent", "bash", "", true},
+		{"response name whitespace", "bash", " \t", true},
+		{"caller name absent", "", "write", true},
+		{"caller name whitespace", " \t", "write", true},
+		{"both names absent", "", "", true},
+		{"both names whitespace", " \t", " \t", true},
+	}
+	for _, id := range ids {
+		for _, name := range names {
+			t.Run(id.name+"/"+name.name, func(t *testing.T) {
+				resp := &agento11y.HookEvaluateResponse{TransformedInput: &agento11y.HookInput{Output: []agento11y.Message{{
+					Role: agento11y.RoleAssistant,
+					Parts: []agento11y.Part{{Kind: agento11y.PartKindToolCall, ToolCall: &agento11y.ToolCall{
+						ID: id.response, Name: name.response, InputJSON: json.RawMessage(redacted),
+					}}},
+				}}}}
+				want := ""
+				if id.exact || (id.compatible && name.compatible) {
+					want = redacted
+				}
+				if got := ExtractToolCallTransform(resp, id.caller, name.caller, nil); string(got) != want {
+					t.Errorf("transform = %s, want %s", got, want)
+				}
+			})
+		}
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, reverse := range []bool{false, true} {
+				var output []agento11y.Message
+				for i := range tt.calls {
+					if reverse {
+						i = len(tt.calls) - 1 - i
+					}
+					output = append(output, agento11y.Message{Role: agento11y.RoleAssistant, Parts: []agento11y.Part{
+						{Kind: agento11y.PartKindText, Text: "unrelated text"},
+						{Kind: agento11y.PartKindToolCall, ToolCall: &tt.calls[i]},
+					}})
+				}
+				resp := &agento11y.HookEvaluateResponse{TransformedInput: &agento11y.HookInput{Output: output}}
+				var logs bytes.Buffer
+				got := ExtractToolCallTransform(resp, tt.id, tt.tool, log.New(&logs, "", 0))
+				if string(got) != tt.want {
+					t.Errorf("reverse=%t: transform = %s, want %s", reverse, got, tt.want)
+				}
+				if tt.wantLogSub != "" && !strings.Contains(logs.String(), tt.wantLogSub) {
+					t.Errorf("logs missing %q: %s", tt.wantLogSub, logs.String())
+				}
+				if tt.want == "" && strings.Contains(logs.String(), "applied") {
+					t.Errorf("rejected transform logged as applied: %s", logs.String())
+				}
+			}
+		})
+	}
+}
+
 func TestWriteHookSpecificOutputDeny(t *testing.T) {
 	tests := []struct {
 		name    string

@@ -77,12 +77,16 @@ func compileEvaluator(spec EvaluatorSpec) (*compiledEvaluator, error) {
 			}
 			res = append(res, re)
 		}
+		reject, err := cfgBool(spec.Config, "reject", false)
+		if err != nil {
+			return nil, err
+		}
 		return &compiledEvaluator{
 			kind:    kind,
 			target:  target,
 			shell:   shell,
 			regexes: res,
-			reject:  cfgBool(spec.Config, "reject", false),
+			reject:  reject,
 		}, nil
 	case evaluatorKindHeuristic, evaluatorKindLLMJudge, evaluatorKindPromptGuard, evaluatorKindJSONSchema:
 		// Kept so a Cloud ruleset round-trips, never run.
@@ -247,14 +251,15 @@ func cfgString(config map[string]any, key, def string) string {
 	return def
 }
 
-func cfgBool(config map[string]any, key string, def bool) bool {
-	if config == nil {
-		return def
+func cfgBool(config map[string]any, key string, def bool) (bool, error) {
+	raw, present := config[key]
+	if !present {
+		return def, nil
 	}
-	if v, ok := config[key].(bool); ok {
-		return v
+	if v, ok := raw.(bool); ok {
+		return v, nil
 	}
-	return def
+	return false, fmt.Errorf("%s must be a boolean", key)
 }
 
 // extractRegexPatterns reads a single "pattern" string or a "patterns" array of

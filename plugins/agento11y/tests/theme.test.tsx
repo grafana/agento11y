@@ -1,6 +1,6 @@
 import appCSS from 'virtual:theme-css-source';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import analyticsSource from '../internal/local/web/src/analytics.tsx?raw';
 import conversationsSource from '../internal/local/web/src/conversations.tsx?raw';
 import detailSource from '../internal/local/web/src/detail.tsx?raw';
@@ -456,6 +456,23 @@ describe('SettingsAppearanceCard', () => {
 });
 
 describe('SettingsView theme preview', () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify(
+              String(input) === '/api/v1/guards'
+                ? { exists: false, enabled: false, enforcing: 0, packs: [], rules: [] }
+                : { preview: '' },
+            ),
+          ),
+        ),
+      ),
+    );
+  });
+
   it('adopts clean polls but holds the form theme across dirty polls', () => {
     const onThemePreview = vi.fn();
     const dark = config('dark');

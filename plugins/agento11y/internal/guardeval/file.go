@@ -156,11 +156,18 @@ func writeCompactRule(b *strings.Builder, rule Rule) error {
 		}
 		sort.Strings(keys)
 		for _, key := range keys {
-			writeTomlKey(b, "match."+key, rule.Match[key])
+			b.WriteString("match.")
+			b.WriteString(encodeTomlKeyPart(key))
+			b.WriteString(" = ")
+			b.WriteString(encodeTomlValue(rule.Match[key]))
+			b.WriteByte('\n')
 		}
 	}
 	if rule.ToolFilter != nil && len(rule.ToolFilter.BlockedNames) > 0 {
 		writeTomlKey(b, "tool_filter.blocked_names", rule.ToolFilter.BlockedNames)
+	}
+	if rule.Transform != nil && rule.Transform.JSONMode != "" {
+		writeTomlKey(b, "transform.json_mode", rule.Transform.JSONMode)
 	}
 	if rule.Transform != nil && len(rule.Transform.Patterns) > 0 {
 		b.WriteString("transform.patterns = [")

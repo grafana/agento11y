@@ -1162,7 +1162,7 @@ func TestCollectConfig_Guards(t *testing.T) {
 			name: "enabled fail-open", osEnv: map[string]string{"AGENTO11Y_GUARDS_ENABLED": "true"},
 			wantEnabled: true, wantTimeoutMs: 1500, wantFailOpen: true,
 			wantKey: "AGENTO11Y_GUARDS_ENABLED", wantSource: sourceEnv,
-			wantRendered: "guards:           enabled, timeout 1500ms, Cloud fail-open (AGENTO11Y_GUARDS_ENABLED, env)",
+			wantRendered: "guards:           enabled, timeout 1500ms, fail-open on endpoint or Cloud errors (AGENTO11Y_GUARDS_ENABLED, env)",
 		},
 		{
 			name: "enabled fail-closed with timeout from config.env",
@@ -1173,13 +1173,13 @@ func TestCollectConfig_Guards(t *testing.T) {
 			},
 			wantEnabled: true, wantTimeoutMs: 500, wantFailOpen: false,
 			wantKey: "AGENTO11Y_GUARDS_ENABLED", wantSource: sourceConfig,
-			wantRendered: "guards:           enabled, timeout 500ms, Cloud fail-closed (AGENTO11Y_GUARDS_ENABLED, config.env)",
+			wantRendered: "guards:           enabled, timeout 500ms, fail-closed on endpoint or Cloud errors (AGENTO11Y_GUARDS_ENABLED, config.env)",
 		},
 		{
 			name: "legacy spelling", osEnv: map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
 			wantEnabled: true, wantTimeoutMs: 1500, wantFailOpen: true,
 			wantKey: "SIGIL_GUARDS_ENABLED", wantSource: sourceEnv,
-			wantRendered: "guards:           enabled, timeout 1500ms, Cloud fail-open (SIGIL_GUARDS_ENABLED, env)",
+			wantRendered: "guards:           enabled, timeout 1500ms, fail-open on endpoint or Cloud errors (SIGIL_GUARDS_ENABLED, env)",
 		},
 		{
 			// The rejected value did not decide whether guards run, so the row credits
@@ -1201,7 +1201,7 @@ func TestCollectConfig_Guards(t *testing.T) {
 			wantEnabled: true, wantTimeoutMs: 1500, wantFailOpen: true, wantFellBack: true,
 			wantKey: "AGENTO11Y_GUARDS_ENABLED", wantSource: sourceEnv, wantHealth: HealthWarn,
 			wantMsg:      "the AGENTO11Y_GUARDS_TIMEOUT_MS value is invalid; guards use the default",
-			wantRendered: "guards:           enabled, timeout 1500ms, Cloud fail-open (AGENTO11Y_GUARDS_ENABLED, env)",
+			wantRendered: "guards:           enabled, timeout 1500ms, fail-open on endpoint or Cloud errors (AGENTO11Y_GUARDS_ENABLED, env)",
 		},
 		{
 			// The fail mode is the third family, and it is the one the row never names.
@@ -1213,7 +1213,7 @@ func TestCollectConfig_Guards(t *testing.T) {
 			wantEnabled: true, wantTimeoutMs: 1500, wantFailOpen: true, wantFellBack: true,
 			wantKey: "AGENTO11Y_GUARDS_ENABLED", wantSource: sourceConfig, wantHealth: HealthWarn,
 			wantMsg:      "the AGENTO11Y_GUARDS_FAIL_OPEN value is invalid; guards use the default",
-			wantRendered: "guards:           enabled, timeout 1500ms, Cloud fail-open (AGENTO11Y_GUARDS_ENABLED, config.env)",
+			wantRendered: "guards:           enabled, timeout 1500ms, fail-open on endpoint or Cloud errors (AGENTO11Y_GUARDS_ENABLED, config.env)",
 		},
 		{
 			// Only GUARDS_ENABLED names the row, and it is unset, so the row

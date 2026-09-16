@@ -1,64 +1,25 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Notice, SURFACE_BG, SurfaceCard } from './notices';
 import { Mono } from './settings-model';
 import { Icon } from './shell';
 import type { GuardPack, GuardsFile } from './types';
 
-function emptyGuards(): GuardsFile {
-  return { exists: false, enabled: false, enforcing: 0, packs: [], rules: [] };
+export interface LocalGuardsUpdate {
+  enabled?: boolean;
+  packs?: Record<string, boolean>;
 }
 
-export function SettingsLocalGuardsCard({ onEnabledChange }: { onEnabledChange?: (enabled: boolean) => void }) {
-  const [data, setData] = useState<GuardsFile | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState<string | null>(null);
+export interface SettingsLocalGuardsProps {
+  data: GuardsFile | null;
+  enabled: boolean;
+  busy: boolean;
+  error: string | null;
+  onChange: (body: LocalGuardsUpdate) => void;
+}
 
-  const load = useCallback(() => {
-    return fetch('/api/v1/guards')
-      .then((r) =>
-        r.ok
-          ? (r.json() as Promise<GuardsFile>)
-          : r.text().then((t) => Promise.reject(new Error(t.trim() || `HTTP ${r.status}`))),
-      )
-      .then((body) => {
-        setData(body);
-        setError(null);
-      })
-      .catch((err) => {
-        setError(String(err.message || err));
-        setData((prev) => prev ?? emptyGuards());
-      });
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  const putGuards = (body: { enabled?: boolean; packs?: Record<string, boolean> }, pendingKey: string) => {
-    setPending(pendingKey);
-    setError(null);
-    fetch('/api/v1/guards', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-      .then((r) =>
-        r.ok
-          ? (r.json() as Promise<GuardsFile>)
-          : r.text().then((t) => Promise.reject(new Error(t.trim() || `HTTP ${r.status}`))),
-      )
-      .then((next) => {
-        setData(next);
-        if (body.enabled !== undefined) onEnabledChange?.(next.enabled);
-      })
-      .catch((err) => setError(String(err.message || err)))
-      .finally(() => setPending(null));
-  };
-
+export function SettingsLocalGuardsCard({ data, enabled, busy, error, onChange }: SettingsLocalGuardsProps) {
   const packs = data?.packs || [];
   const compileErrors = (data?.errors || []).filter(Boolean);
-  const enabled = !!data?.enabled;
-  const busy = pending !== null;
 
   return (
     <SurfaceCard style={{ padding: '4px 20px 12px', marginBottom: 16, background: SURFACE_BG }}>
@@ -109,14 +70,14 @@ export function SettingsLocalGuardsCard({ onEnabledChange }: { onEnabledChange?:
         <Switch
           label="Enable guards"
           checked={enabled}
-          disabled={busy}
+          disabled={busy || !data}
           onToggle={() => {
             if (enabled) {
               const packsOff = Object.fromEntries(packs.map((pack) => [pack.id, false]));
-              putGuards({ enabled: false, packs: packsOff }, '__enabled');
+              onChange({ enabled: false, packs: packsOff });
               return;
             }
-            putGuards({ enabled: true }, '__enabled');
+            onChange({ enabled: true });
           }}
         />
       </div>
@@ -140,7 +101,7 @@ export function SettingsLocalGuardsCard({ onEnabledChange }: { onEnabledChange?:
             key={pack.id}
             pack={pack}
             disabled={busy}
-            onToggle={(on) => putGuards({ packs: { [pack.id]: on } }, pack.id)}
+            onToggle={(on) => onChange({ packs: { [pack.id]: on } })}
           />
         ))}
     </SurfaceCard>

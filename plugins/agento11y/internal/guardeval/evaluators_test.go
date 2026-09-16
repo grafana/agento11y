@@ -145,6 +145,12 @@ func TestRegexEvaluator_RejectAndTarget(t *testing.T) {
 			wantExplanation: "did not match a required pattern",
 		},
 		{
+			name:       "explicit false reject + match passes",
+			config:     map[string]any{"pattern": "secret", "reject": false},
+			input:      textOutput("secret"),
+			wantPassed: true,
+		},
+		{
 			name:       "no reject + match passes",
 			config:     map[string]any{"patterns": []any{`(?i)git\s+push`}},
 			input:      textOutput("git push origin main"),

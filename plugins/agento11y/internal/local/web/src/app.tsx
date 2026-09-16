@@ -362,6 +362,18 @@ export function App() {
   const [config, setConfig] = useState<ConfigResponse | null>(null);
   const [configErr, setConfigErr] = useState<string | null>(null);
   const configSeqRef = useRef(0);
+  const configWriteSeqRef = useRef(0);
+  const settingsWritingRef = useRef(false);
+  const beginConfigWrite = useCallback(() => {
+    configSeqRef.current++;
+    configWriteSeqRef.current++;
+    settingsWritingRef.current = true;
+    setShortcutTheme(null);
+    return () => {
+      configSeqRef.current++;
+      settingsWritingRef.current = false;
+    };
+  }, []);
   const themeSaveQueueRef = useRef<Promise<ConfigResponse | null>>(Promise.resolve(null));
   const themeSaveSeqRef = useRef(0);
   const applyConfig = useCallback((body: ConfigResponse) => {
@@ -386,7 +398,11 @@ export function App() {
   useEffect(() => {
     loadConfig();
     const id = setInterval(loadConfig, 30_000);
-    return () => clearInterval(id);
+    return () => {
+      clearInterval(id);
+      configSeqRef.current++;
+      configWriteSeqRef.current++;
+    };
   }, [loadConfig]);
 
   const view: 'settings' | 'analytics' | 'conversation' | 'conversations' = showSettings
@@ -409,25 +425,33 @@ export function App() {
     applyDocumentTheme(effectiveTheme);
   }, [effectiveTheme]);
   const toggleTheme = useCallback(() => {
+    if (!config || settingsWritingRef.current) return;
     const next = toggledThemePreference(
       documentThemePreference(),
       document.documentElement.getAttribute('data-system-theme'),
     );
     setShortcutTheme(next);
     const seq = ++themeSaveSeqRef.current;
+    const writeSeq = configWriteSeqRef.current;
     themeSaveQueueRef.current = themeSaveQueueRef.current
       .catch(() => null)
-      .then(() => patchThemePreference(next))
-      .then((body) => {
-        applyConfig(body);
-        if (themeSaveSeqRef.current === seq) setShortcutTheme(null);
-        return body;
-      })
-      .catch(() => {
-        if (themeSaveSeqRef.current === seq) setShortcutTheme(null);
-        return null;
+      .then(async () => {
+        // Theme PATCH returns the full config. A later guard or config write makes
+        // that response and queued theme writes stale.
+        if (configWriteSeqRef.current !== writeSeq) return null;
+        const configSeq = ++configSeqRef.current;
+        try {
+          const body = await patchThemePreference(next);
+          if (configWriteSeqRef.current !== writeSeq) return null;
+          if (configSeqRef.current === configSeq) applyConfig(body);
+          return body;
+        } catch {
+          return null;
+        } finally {
+          if (configWriteSeqRef.current === writeSeq && themeSaveSeqRef.current === seq) setShortcutTheme(null);
+        }
       });
-  }, [applyConfig]);
+  }, [applyConfig, config]);
 
   // Changing the time range invalidates a bucket drill-down: the
   // bucket boundaries belong to the old window.
@@ -1418,6 +1442,7 @@ export function App() {
             activeSettingsTab={settingsTab}
             onSelectTab={selectSettingsTab}
             onConfig={applyConfig}
+            onConfigWriteStart={beginConfigWrite}
             onThemePreview={setSettingsThemePreview}
           />
         )}

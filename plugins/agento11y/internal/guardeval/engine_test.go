@@ -200,6 +200,28 @@ func TestNewRulesEngine_Compile(t *testing.T) {
 			wantErrors:    []string{"rule[1]", "rule[2]"},
 		},
 		{
+			name: "invalid reject types skip only their rules",
+			rules: []json.RawMessage{
+				json.RawMessage(`{"rule_id":"string","evaluators":[{"kind":"regex","config":{"pattern":"secret","reject":"true"}}]}`),
+				json.RawMessage(`{"rule_id":"number","evaluators":[{"kind":"regex","config":{"pattern":"secret","reject":1}}]}`),
+				json.RawMessage(`{"rule_id":"null","evaluators":[{"kind":"regex","config":{"pattern":"secret","reject":null}}]}`),
+				json.RawMessage(`{"rule_id":"list","evaluators":[{"kind":"regex","config":{"pattern":"secret","reject":[]}}]}`),
+				json.RawMessage(`{"rule_id":"object","evaluators":[{"kind":"regex","config":{"pattern":"secret","reject":{}}}]}`),
+				json.RawMessage(`{"rule_id":"good","tool_filter":{"blocked_names":["Bash"]}}`),
+			},
+			wantIDs: []string{"good"}, wantRules: 1, wantEnforcing: 1,
+			wantErrors: []string{`rule "string" evaluator[0]: reject must be a boolean`, `rule "number" evaluator[0]: reject must be a boolean`, `rule "null" evaluator[0]: reject must be a boolean`, `rule "list" evaluator[0]: reject must be a boolean`, `rule "object" evaluator[0]: reject must be a boolean`},
+		},
+		{
+			name: "invalid JSON mode skips only that rule",
+			rules: []json.RawMessage{
+				json.RawMessage(`{"rule_id":"mode","transform":{"json_mode":"decode","patterns":[{"regex":"secret"}]}}`),
+				json.RawMessage(`{"rule_id":"good","tool_filter":{"blocked_names":["Bash"]}}`),
+			},
+			wantIDs: []string{"good"}, wantRules: 1, wantEnforcing: 1,
+			wantErrors: []string{`transform.json_mode "decode" is not raw or strings`},
+		},
+		{
 			name:      "no rules compile to an empty ruleset",
 			rules:     nil,
 			wantIDs:   []string{},

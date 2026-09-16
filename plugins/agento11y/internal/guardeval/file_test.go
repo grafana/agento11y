@@ -204,6 +204,7 @@ func TestEncodeRulesRoundTrip(t *testing.T) {
 		{
 			RuleID:       "block.rm",
 			Phase:        "postflight",
+			Match:        map[string]any{"tags.service": "api", "tags.service.name": "backend", `tags.a"b`: "quoted", "model.name": "claude-*"},
 			ActionOnFail: "deny",
 			ToolFilter:   &ToolFilterConfig{BlockedNames: []string{"Bash(*rm -rf*)"}},
 		},
@@ -211,6 +212,7 @@ func TestEncodeRulesRoundTrip(t *testing.T) {
 			RuleID: "redact.key",
 			Phase:  "postflight",
 			Transform: &TransformConfig{
+				JSONMode: "strings",
 				Patterns: []TransformPattern{{ID: "api_key", Regex: `sk-[A-Za-z0-9]+`}},
 			},
 		},
@@ -223,10 +225,13 @@ func TestEncodeRulesRoundTrip(t *testing.T) {
 	require.Empty(t, errs)
 	require.Len(t, out, 2)
 	assert.Equal(t, "block.rm", out[0].RuleID)
+	assert.Equal(t, in[0].Match, out[0].Match)
+	require.Empty(t, NewEngineFromContents("guards.toml", data, nil).Status().Errors)
 	require.NotNil(t, out[0].ToolFilter)
 	assert.Equal(t, []string{"Bash(*rm -rf*)"}, out[0].ToolFilter.BlockedNames)
 	assert.Equal(t, "redact.key", out[1].RuleID)
 	require.NotNil(t, out[1].Transform)
+	assert.Equal(t, "strings", out[1].Transform.JSONMode)
 	require.Len(t, out[1].Transform.Patterns, 1)
 	assert.Equal(t, "sk-[A-Za-z0-9]+", out[1].Transform.Patterns[0].Regex)
 

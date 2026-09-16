@@ -322,7 +322,7 @@ both signals when an endpoint is set.
 - **content capture**: the effective mode and where it came from. An invalid
   value falls back to `metadata_only` and the section message names the variable
   to fix.
-- **guards**: `disabled`, or `enabled` with timeout and Cloud fail-open/closed.
+- **guards**: `disabled`, or `enabled` with timeout and fail-open/closed on endpoint or Cloud errors.
   **local rules** names `guards.toml`; **local guard checks** reports Cloud relay.
 - **Coding agents**: one row per agent. `not found on PATH` means doctor cannot
   find that CLI. `on PATH, plugin not installed` describes current state; the
@@ -382,7 +382,7 @@ All hosts read the resolved config path. The default is `~/.config/agento11y/con
 | `AGENTO11Y_AUTO_CODING_AGENT_TAGS` | Opt-in automatic user, repo, and branch tags |
 | `AGENTO11Y_GUARDS_ENABLED` | Send supported preflight and tool calls for guard evaluation |
 | `AGENTO11Y_GUARDS_TIMEOUT_MS` | Guard evaluation timeout in milliseconds |
-| `AGENTO11Y_GUARDS_FAIL_OPEN` | Allow the operation when Cloud guard evaluation fails |
+| `AGENTO11Y_GUARDS_FAIL_OPEN` | Allow on guard endpoint errors (including the local daemon) or Cloud relay failures. Never overrides an explicit local deny. |
 | `AGENTO11Y_LOCAL` | A true value routes `agento11y <agent>` launches, agento11y hooks, and history imports to the local daemon |
 | `AGENTO11Y_LOCAL_FORWARD` | Forward local-mode captures to Grafana Cloud |
 | `AGENTO11Y_THEME` | Local viewer theme: `dark`, `light`, or `system`; defaults to `dark` |
@@ -451,17 +451,17 @@ chooses which fields ship, not whether the shipped fields are clean. Treat
 
 ### Local mode
 
-`agento11y <agent> --local`, **Local only**, or **Local web UI = Yes** routes
-launcher runs and agento11y hooks through the local daemon. The daemon stores
-full generation content in its JSONL store. It forwards full content only when
+`agento11y <agent> --local`, **Local only**, or **Local web UI = Yes** routes launcher runs and agento11y hooks through the local daemon. The daemon stores full generation content in its JSONL store. It forwards full content only when
 `AGENTO11Y_CONTENT_CAPTURE_MODE=full`; every other selected mode is reduced to
 `metadata_only` for Cloud. **Local only** does not forward. **Local web UI = No**
 sends directly to Cloud without a local copy. `--no-local` uses Cloud once without
-changing either saved alias family. The launcher prints the viewer URL. Manage
-the daemon with `agento11y local start|open|status|stop|restart`. Local mode runs
-on macOS and Linux only. A launcher starts the receiver in the same invocation; a saved choice from Cursor install applies to the next hook.
-With `AGENTO11Y_GUARDS_ENABLED=true`, evaluate `guards.toml` next to `config.env`.
-`reject = true` blocks on match; `shell_command` is for shell policies. Fail-open is Cloud-only.
+changing either saved alias family. The launcher prints the viewer URL. Manage the daemon with `agento11y local start|open|status|stop|restart`. Local mode runs on macOS and Linux only. A launcher starts the receiver in the same invocation; a saved choice from Cursor install applies to the next hook.
+
+With `AGENTO11Y_GUARDS_ENABLED=true`, evaluate `guards.toml` next to `config.env`. `reject = true` blocks on match; `shell_command` is for shell policies.
+
+`AGENTO11Y_GUARDS_FAIL_OPEN` applies to guard endpoint errors, including local daemon errors, and Cloud relay failures. It never overrides an explicit local deny. An unreadable, unparsable, or empty file adds no local rules. The daemon skips invalid rules without disabling valid local rules. Cloud can still deny when no local rules apply.
+
+Shell checks use regexes without a shell interpreter or process isolation. Aliases, runtime expansion, and generated commands can bypass them. Custom transforms match serialized JSON by default. The built-in Secret redaction pack uses `json_mode = "strings"` to match decoded JSON string values, including escaped token characters.
 
 ### History import
 

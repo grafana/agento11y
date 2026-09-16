@@ -219,11 +219,9 @@ export async function runToolCallGuard(args: GuardArgs): Promise<GuardResult> {
 /**
  * Walks the server-returned `transformed_input.output` for the tool_call
  * part matching `toolCallId` and parses its `inputJSON` into an object.
- * When the id does not match, falls back to the only rewritten tool call
- * if that call has no id (or the client sent none), or to the only rewritten
- * call with the same tool name among several. A single call with a different
- * populated id is ignored so a transform aimed at another toolCallId cannot
- * land here. Returns `undefined` on any mismatch or parse failure so the
+ * A unique exact ID takes precedence over names. Fallback requires one
+ * compatible call: populated IDs and populated names must not conflict.
+ * Returns `undefined` on any mismatch, ambiguity, or parse failure so the
  * caller can fall through to the original tool input.
  */
 function extractToolCallTransform(
@@ -241,34 +239,25 @@ function extractToolCallTransform(
       if (part.type !== "tool_call") continue;
       const tc = part.toolCall;
       if (!tc) continue;
-      all.push({ id: tc.id, name: tc.name, raw: tc.inputJSON });
+      all.push({ id: tc.id?.trim(), name: tc.name?.trim(), raw: tc.inputJSON });
     }
   }
   if (all.length === 0) return undefined;
 
   const id = toolCallId?.trim() ?? "";
-  if (id) {
-    const matched = all.find((c) => c.id === id);
-    if (matched) return parseTransformArgs(matched.raw, id, logger);
+  const name = toolName?.trim() ?? "";
+  let matched = id ? all.filter((c) => c.id === id) : [];
+  if (matched.length === 0) {
+    matched = all.filter(
+      (c) =>
+        (!id || !c.id || c.id === id) &&
+        (!name || !c.name || toolNamesEqual(c.name, name)),
+    );
   }
 
-  const label = id || toolName?.trim() || "tool";
-  const only = all.length === 1 ? all[0] : undefined;
-  if (only) {
-    const onlyId = only.id?.trim() ?? "";
-    if (!id || !onlyId || onlyId === id) {
-      return parseTransformArgs(only.raw, label, logger);
-    }
-  }
-
-  if (all.length > 1) {
-    const name = toolName?.trim() ?? "";
-    const named = name ? all.filter((c) => toolNamesEqual(c.name, name)) : [];
-    const namedOnly = named.length === 1 ? named[0] : undefined;
-    if (namedOnly) {
-      return parseTransformArgs(namedOnly.raw, label, logger);
-    }
-  }
+  const label = id || name || "tool";
+  const only = matched.length === 1 ? matched[0] : undefined;
+  if (only) return parseTransformArgs(only.raw, label, logger);
 
   logger?.warn(`tool-call transform present but no part matched ${label}`);
   return undefined;

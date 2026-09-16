@@ -44,7 +44,7 @@ func (s *Server) localEngine() *guardeval.Engine {
 	if s.guardsEngine != nil && s.guardsDigest == sum {
 		return s.guardsEngine
 	}
-	engine := guardeval.NewEngineFromContents(path, data, s.guards.Logger)
+	engine := newLocalGuardsEngine(path, data, s.guards.Logger)
 	s.guardsEngine = engine
 	s.guardsDigest = sum
 	return engine
@@ -115,21 +115,26 @@ func (s *Server) handlePutGuards(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "guards persistence disabled", http.StatusServiceUnavailable)
 		return
 	}
+	// Config handlers acquire configMu before reading the guards cache.
+	// Use the same order and keep each PUT's files and response together.
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+	s.guardsMu.Lock()
+	defer s.guardsMu.Unlock()
+
 	// Write packs before the enabled flag. If both are in the request and the
 	// toml write fails, leaving GUARDS_ENABLED already flipped would disable
 	// (or enable) hooks against a file that still has the old packs.
 	var next []guardeval.Rule
+	var nextData []byte
 	wrotePacks := false
 	if len(req.Packs) > 0 {
-		s.guardsMu.Lock()
-		rules, _, errs, err := readGuardRules(s.guards.RulesPath)
+		rules, _, _, errs, err := readGuardRules(s.guards.RulesPath)
 		if err != nil {
-			s.guardsMu.Unlock()
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		if len(errs) > 0 {
-			s.guardsMu.Unlock()
 			// Disable is the escape hatch from a broken file. Skip the pack
 			// rewrite so GUARDS_ENABLED can still flip off.
 			if !disableGuards {
@@ -139,12 +144,15 @@ func (s *Server) handlePutGuards(w http.ResponseWriter, r *http.Request) {
 		} else {
 			next, err = applyPackUpdates(rules, req.Packs)
 			if err != nil {
-				s.guardsMu.Unlock()
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
+			nextData, err = guardeval.EncodeRules(next)
+			if err != nil {
+				http.Error(w, "encode guards: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
 			if err := guardeval.WriteRules(s.guards.RulesPath, next); err != nil {
-				s.guardsMu.Unlock()
 				s.logger.Printf("local: write guards: %v", err)
 				http.Error(w, "write guards: "+err.Error(), http.StatusInternalServerError)
 				return
@@ -152,7 +160,6 @@ func (s *Server) handlePutGuards(w http.ResponseWriter, r *http.Request) {
 			s.guardsEngine = nil
 			s.guardsDigest = [sha256.Size]byte{}
 			wrotePacks = true
-			s.guardsMu.Unlock()
 		}
 	}
 	if req.Enabled != nil {
@@ -160,13 +167,11 @@ func (s *Server) handlePutGuards(w http.ResponseWriter, r *http.Request) {
 		if *req.Enabled {
 			value = "true"
 		}
-		s.configMu.Lock()
 		err := dotenv.UpdateDotenv(s.configPath, func(stored map[string]string) map[string]string {
 			return envconfig.UpdateExistingLegacyAliases(stored, map[string]string{
 				"AGENTO11Y_GUARDS_ENABLED": value,
 			})
 		}, s.logger)
-		s.configMu.Unlock()
 		if err != nil {
 			s.logger.Printf("local: write guards enabled: %v", err)
 			http.Error(w, "write config: "+err.Error(), http.StatusInternalServerError)
@@ -174,17 +179,17 @@ func (s *Server) handlePutGuards(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if wrotePacks {
-		s.guardsMu.Lock()
-		s.writeGuardsPutOKLocked(w, next)
-		s.guardsMu.Unlock()
+		s.writeGuardsPutOKLocked(w, next, nextData)
 		return
 	}
 	// After GUARDS_ENABLED has been written, never fail the response on a
 	// broken guards.toml: the UI treats a non-OK PUT as "switch unchanged".
-	s.writeGuardsResponse(w)
+	s.writeGuardsResponseLocked(w)
 }
 
 func (s *Server) writeGuardsResponse(w http.ResponseWriter) {
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
 	s.guardsMu.Lock()
 	defer s.guardsMu.Unlock()
 	s.writeGuardsResponseLocked(w)
@@ -192,12 +197,12 @@ func (s *Server) writeGuardsResponse(w http.ResponseWriter) {
 
 func (s *Server) writeGuardsResponseLocked(w http.ResponseWriter) {
 	path := s.guards.RulesPath
-	rules, exists, decodeErrs, err := readGuardRules(path)
+	rules, data, exists, decodeErrs, err := readGuardRules(path)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	engine := guardeval.NewEngineFromContents(path, mustReadGuards(path), s.guards.Logger)
+	engine := newLocalGuardsEngine(path, data, s.guards.Logger)
 	if rules == nil {
 		rules = []guardeval.Rule{}
 	}
@@ -219,12 +224,12 @@ func (s *Server) writeGuardsResponseLocked(w http.ResponseWriter) {
 // writeGuardsPutOKLocked answers a successful pack write from the ruleset that
 // just landed, so a follow-up read error cannot turn a completed mutation into
 // HTTP 500.
-func (s *Server) writeGuardsPutOKLocked(w http.ResponseWriter, rules []guardeval.Rule) {
+func (s *Server) writeGuardsPutOKLocked(w http.ResponseWriter, rules []guardeval.Rule, data []byte) {
 	path := s.guards.RulesPath
 	if rules == nil {
 		rules = []guardeval.Rule{}
 	}
-	engine := guardeval.NewEngineFromContents(path, mustReadGuards(path), s.guards.Logger)
+	engine := newLocalGuardsEngine(path, data, s.guards.Logger)
 	s.writeJSON(w, http.StatusOK, guardsFileResponse{
 		Path:      displayConfigPath(path),
 		Exists:    true,
@@ -236,39 +241,28 @@ func (s *Server) writeGuardsPutOKLocked(w http.ResponseWriter, rules []guardeval
 	})
 }
 
-func mustReadGuards(path string) []byte {
-	if path == "" {
-		return nil
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	return data
-}
-
 // readGuardRules loads the on-disk ruleset. A missing file is empty, not an
 // error. A parse or decode fault is reported in errs with a nil error so GET
 // can still render the page; PUT must refuse to write when errs is non-empty,
 // or it would rebuild the file from the rules that decoded and drop the rest.
-func readGuardRules(path string) (rules []guardeval.Rule, exists bool, errs []string, err error) {
+func readGuardRules(path string) (rules []guardeval.Rule, data []byte, exists bool, errs []string, err error) {
 	if path == "" {
-		return nil, false, nil, nil
+		return nil, nil, false, nil, nil
 	}
-	data, err := os.ReadFile(path)
+	data, err = os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, false, nil, nil
+			return nil, nil, false, nil, nil
 		}
-		return nil, false, nil, err
+		return nil, nil, false, nil, err
 	}
 	raw, err := guardeval.ParseRules(data)
 	if err != nil {
-		return nil, true, []string{err.Error()}, nil
+		return nil, data, true, []string{err.Error()}, nil
 	}
 	decoded, decodeErrs := guardeval.DecodeRules(raw)
 	for _, e := range decodeErrs {
 		errs = append(errs, e.Error())
 	}
-	return decoded, true, errs, nil
+	return decoded, data, true, errs, nil
 }

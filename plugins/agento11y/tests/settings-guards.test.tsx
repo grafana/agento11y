@@ -85,6 +85,10 @@ describe('SettingsGuardsCard', () => {
     expect(failClosed.hasAttribute('disabled')).toBe(false);
     expect(failClosed.getAttribute('aria-pressed')).toBe('true');
     expect(screen.getByDisplayValue('2200')).toBeTruthy();
+    expect(
+      screen.getByText(/Fail open allows calls on guard endpoint transport failures or Cloud relay failures/),
+    ).toBeTruthy();
+    expect(screen.getByText(/Neither overrides an explicit local deny/)).toBeTruthy();
     expect(screen.getByText('Restart a running agent if it does not use the new guard settings.')).toBeTruthy();
   });
 });

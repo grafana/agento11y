@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../internal/local/web/src/app';
 import type { ConfigResponse, Settings, ThemePreference } from '../internal/local/web/src/types';
@@ -106,8 +106,9 @@ describe('App theme shortcut', () => {
     const patch = deferred<Response>();
     installFetch([patch.promise]);
     document.documentElement.setAttribute('data-theme', 'dark');
-    render(<App />);
-    await waitFor(() => expect(screen.getAllByText('Sessions').length).toBeGreaterThan(0));
+    await act(async () => {
+      render(<App />);
+    });
 
     pressThemeShortcut();
     await waitFor(() => expect(document.documentElement.getAttribute('data-theme')).toBe('light'));
@@ -120,8 +121,9 @@ describe('App theme shortcut', () => {
     const patches = [deferred<Response>(), deferred<Response>(), deferred<Response>()];
     const fetchMock = installFetch(patches.map((patch) => patch.promise));
     document.documentElement.setAttribute('data-theme', 'dark');
-    render(<App />);
-    await waitFor(() => expect(screen.getAllByText('Sessions').length).toBeGreaterThan(0));
+    await act(async () => {
+      render(<App />);
+    });
 
     pressThemeShortcut();
     await waitFor(() => expect(document.documentElement.getAttribute('data-theme')).toBe('light'));

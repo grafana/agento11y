@@ -9,7 +9,7 @@ import (
 )
 
 func TestApplyPackUpdates_PreservesCustomRules(t *testing.T) {
-	custom := guardeval.Rule{RuleID: "block.rm", Phase: "postflight"}
+	custom := guardeval.Rule{RuleID: "block.rm", Phase: "postflight", Match: map[string]any{"tags.service": "api", "tags.service.name": "backend"}}
 	out, err := applyPackUpdates([]guardeval.Rule{custom}, map[string]bool{packSecrets: true, packGit: true})
 	require.NoError(t, err)
 	require.Len(t, out, 3)
@@ -22,6 +22,15 @@ func TestApplyPackUpdates_PreservesCustomRules(t *testing.T) {
 	require.Len(t, out, 2)
 	assert.Equal(t, "block.rm", out[0].RuleID)
 	assert.Equal(t, packRuleID(packGit), out[1].RuleID)
+	assert.Equal(t, custom, out[0])
+	data, err := guardeval.EncodeRules(out)
+	require.NoError(t, err)
+	require.Empty(t, newLocalGuardsEngine("guards.toml", data, nil).Status().Errors)
+	raw, err := guardeval.ParseRules(data)
+	require.NoError(t, err)
+	roundTrip, errs := guardeval.DecodeRules(raw)
+	require.Empty(t, errs)
+	assert.Equal(t, custom, roundTrip[0])
 }
 
 func TestApplyPackUpdates_PreservesUnknownPackPrefix(t *testing.T) {
@@ -57,20 +66,21 @@ func TestPackRulesCompile(t *testing.T) {
 }
 
 func TestPacksFromRules(t *testing.T) {
-	packs := packsFromRules([]guardeval.Rule{{RuleID: packRuleID(packSecrets)}})
-	require.Len(t, packs, len(catalogPacks()))
-	assert.True(t, packs[0].Enabled)
-	for _, p := range packs[1:] {
-		assert.False(t, p.Enabled, p.ID)
+	on, off := true, false
+	for _, enabled := range []*bool{nil, &on, &off} {
+		packs := packsFromRules([]guardeval.Rule{{RuleID: packRuleID(packSecrets), Enabled: enabled}})
+		require.Len(t, packs, len(catalogPacks()))
+		assert.Equal(t, enabled == nil || *enabled, packs[0].Enabled)
+		for _, p := range packs[1:] {
+			assert.False(t, p.Enabled, p.ID)
+		}
 	}
 }
 
 func TestEnvFileBlockedNamesCoverHostTools(t *testing.T) {
 	names := envFileBlockedNames()
-	require.Len(t, names, len(envFileToolNames)*3)
+	require.Len(t, names, len(envFileToolNames))
 	for i, tool := range envFileToolNames {
-		assert.Equal(t, tool+`(*/.env*)`, names[i*3])
-		assert.Equal(t, tool+`(*".env*)`, names[i*3+1])
-		assert.Equal(t, tool+`(* .env*)`, names[i*3+2])
+		assert.Equal(t, tool+`(*[/"' <>|;&()].env[./"' <>|;&()]*)`, names[i])
 	}
 }

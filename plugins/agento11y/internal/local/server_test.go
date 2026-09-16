@@ -2328,6 +2328,20 @@ func TestServer_HookEvaluate_HostDialects(t *testing.T) {
 			wantRuleID: "block.rm",
 		},
 		{
+			name:       "proto-json numeric role deny",
+			rules:      blockRmRules,
+			body:       `{"phase":"postflight","input":{"output":[{"role":2,"parts":[{"toolCall":{"id":"c1","name":"Bash","inputJson":"` + base64.StdEncoding.EncodeToString([]byte(rmJSON)) + `"}}]}]}}`,
+			wantAction: agento11y.HookActionDeny,
+			wantRuleID: "block.rm",
+		},
+		{
+			name:       "proto-json numeric role redact",
+			rules:      redactSecretRules,
+			body:       `{"phase":"postflight","input":{"output":[{"role":2,"parts":[{"tool_call":{"id":"c1","name":"Bash","input_json":"` + base64.StdEncoding.EncodeToString([]byte(secretJSON)) + `"}}]}]}}`,
+			wantAction: agento11y.HookActionAllow,
+			wantRedact: true,
+		},
+		{
 			name:       "go snake_case redact",
 			rules:      redactSecretRules,
 			body:       hookSecretToolCallBody,
@@ -2367,6 +2381,7 @@ func TestServer_HookEvaluate_HostDialects(t *testing.T) {
 			require.NoError(t, err)
 			assert.Contains(t, string(encoded), "[REDACTED:api_key]")
 			assert.NotContains(t, string(encoded), "sk-abc123")
+			assert.Equal(t, agento11y.RoleAssistant, out.TransformedInput.Output[0].Role)
 		})
 	}
 }
@@ -2458,7 +2473,7 @@ const hookSecretToolCallBody = `{"phase":"postflight","context":{"agent_name":"c
 // leaves it, and a local transform must survive a Cloud response that carries
 // none of its own.
 func TestServer_HookEvaluate_LocalRules(t *testing.T) {
-	cases := []struct {
+	type testCase struct {
 		name          string
 		rules         string
 		body          string
@@ -2467,7 +2482,8 @@ func TestServer_HookEvaluate_LocalRules(t *testing.T) {
 		wantAction    agento11y.HookAction
 		wantRuleID    string
 		assertMore    func(t *testing.T, out agento11y.HookEvaluateResponse)
-	}{
+	}
+	cases := []testCase{
 		{
 			name:          "local_deny_skips_cloud",
 			rules:         blockRmRules,
@@ -2525,6 +2541,38 @@ func TestServer_HookEvaluate_LocalRules(t *testing.T) {
 			},
 		},
 		{
+			name:  "valid_empty_cloud_arguments",
+			rules: redactSecretRules, body: hookSecretToolCallBody,
+			cloudRespond:  `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"c1","name":"Bash","input_json":{}}}]}]}}`,
+			wantCloudCall: true, wantAction: agento11y.HookActionAllow,
+			assertMore: func(t *testing.T, out agento11y.HookEvaluateResponse) {
+				assert.JSONEq(t, `{}`, string(guard.ExtractToolCallTransform(&out, "c1", "Bash", nil)))
+			},
+		},
+		{
+			name:  "idless_cloud_arguments_with_matching_name",
+			rules: redactSecretRules, body: hookSecretToolCallBody,
+			cloudRespond:  `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"name":"Bash","input_json":{"command":"Cloud sk-abc123"}}}]}]}}`,
+			wantCloudCall: true, wantAction: agento11y.HookActionAllow,
+			assertMore: func(t *testing.T, out agento11y.HookEvaluateResponse) {
+				assert.JSONEq(t, `{"command":"Cloud [REDACTED:api_key]"}`, string(guard.ExtractToolCallTransform(&out, "c1", "Bash", nil)))
+			},
+		},
+		{
+			name: "non_idempotent_cloud_reapply_is_preserved",
+			rules: `[[rules]]
+rule_id = "substitute"
+phase = "postflight"
+transform.patterns = [{ regex = "foo", replacement = "foo-safe" }]
+`,
+			body:          hookToolJSON("Bash", `{"command":"echo foo"}`),
+			cloudRespond:  `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"c1","name":"Bash","input_json":{"command":"echo foo-safe"}}}]}]}}`,
+			wantCloudCall: true, wantAction: agento11y.HookActionAllow,
+			assertMore: func(t *testing.T, out agento11y.HookEvaluateResponse) {
+				assert.JSONEq(t, `{"command":"echo foo-safe-safe"}`, string(guard.ExtractToolCallTransform(&out, "c1", "Bash", nil)))
+			},
+		},
+		{
 			// A Cloud rewrite that local patterns cannot safely re-redact must
 			// not replace the already-redacted local input.
 			name:          "invalid_cloud_re_redaction_keeps_local_transform",
@@ -2578,13 +2626,69 @@ func TestServer_HookEvaluate_LocalRules(t *testing.T) {
 			},
 		},
 	}
+	toolOutput := func(id, name, args string) string {
+		return `[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":` + strconv.Quote(id) + `,"name":` + strconv.Quote(name) + `,"input_json":` + args + `}}]}]`
+	}
+	for _, tc := range []struct{ name, output string }{
+		{"empty", `[]`},
+		{"text_only", `[{"role":"assistant","parts":[{"kind":"text","text":"Cloud text"}]}]`},
+		{"wrong_call", toolOutput("c2", "Bash", `{"command":"echo safe"}`)},
+		{"idless_wrong_name", toolOutput("", "Write", `{"command":"echo safe"}`)},
+		{"nameless_exact_id", toolOutput("c1", "", `{"command":"echo safe"}`)},
+		{"missing_name_exact_id", `[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"c1","input_json":{"command":"echo safe"}}}]}]`},
+		{"nameless_duplicate_id", `[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"c1","name":"Bash","input_json":{"command":"echo safe"}}},{"kind":"tool_call","tool_call":{"id":"c1","input_json":{"command":"echo other"}}}]}]`},
+		{"nameless_exact_id_with_named_fallback", `[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"c1","input_json":{"command":"echo safe"}}},{"kind":"tool_call","tool_call":{"name":"Bash","input_json":{"command":"echo other"}}}]}]`},
+		{"wrong_call_among_others", `[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"c2","name":"Bash","input_json":{}}},{"kind":"tool_call","tool_call":{"id":"c3","name":"Read","input_json":{}}}]}]`},
+		{"null_args", toolOutput("c1", "Bash", `null`)},
+		{"array_args", toolOutput("c1", "Bash", `[]`)},
+		{"number_args", toolOutput("c1", "Bash", `42`)},
+		{"bool_args", toolOutput("c1", "Bash", `true`)},
+		{"string_args", toolOutput("c1", "Bash", `"plain text"`)},
+		{"invalid_encoded_args", toolOutput("c1", "Bash", `"bm90LWpzb24="`)},
+	} {
+		cases = append(cases, testCase{
+			name:  "unusable_cloud_transform_" + tc.name,
+			rules: redactSecretRules + passingRegexRules, body: hookSecretToolCallBody,
+			cloudRespond:  `{"action":"allow","rule_id":"cloud.rewrite","reason":"Cloud reason","evaluations":[{"rule_id":"cloud.check","passed":true}],"transformed_input":{"system_prompt":"Cloud prompt sk-abc123","messages":[{"role":"user","parts":[{"kind":"text","text":"Cloud message"}]}],"tools":[{"name":"Bash","description":"Cloud description"}],"output":` + tc.output + `}}`,
+			wantCloudCall: true, wantAction: agento11y.HookActionAllow, wantRuleID: "cloud.rewrite",
+			assertMore: func(t *testing.T, out agento11y.HookEvaluateResponse) {
+				require.NotNil(t, out.TransformedInput)
+				assert.JSONEq(t, `{"command":"curl -H [REDACTED:api_key]"}`, string(guard.ExtractToolCallTransform(&out, "c1", "Bash", nil)))
+				assert.Equal(t, "Cloud prompt [REDACTED:api_key]", out.TransformedInput.SystemPrompt)
+				require.Len(t, out.TransformedInput.Messages, 1)
+				assert.Equal(t, "Cloud message", out.TransformedInput.Messages[0].Parts[0].Text)
+				require.Len(t, out.TransformedInput.Tools, 1)
+				assert.Equal(t, "Cloud description", out.TransformedInput.Tools[0].Description)
+				assert.Equal(t, "Cloud reason", out.Reason)
+				require.Len(t, out.Evaluations, 2)
+				assert.Equal(t, "check.reset", out.Evaluations[0].RuleID)
+				assert.Equal(t, "cloud.check", out.Evaluations[1].RuleID)
+			},
+		})
+	}
+	cases = append(cases, testCase{
+		name: "exact_call_id_precedes_cloud_name", rules: redactSecretRules, body: hookSecretToolCallBody,
+		cloudRespond:  `{"action":"allow","transformed_input":{"output":` + toolOutput("c1", "Write", `{"command":"echo sk-abc123"}`) + `}}`,
+		wantCloudCall: true, wantAction: agento11y.HookActionAllow,
+		assertMore: func(t *testing.T, out agento11y.HookEvaluateResponse) {
+			assert.JSONEq(t, `{"command":"echo [REDACTED:api_key]"}`, string(guard.ExtractToolCallTransform(&out, "c1", "Bash", nil)))
+		},
+	})
+	cases = append(cases, testCase{
+		name: "empty_cloud_input", rules: redactSecretRules, body: hookSecretToolCallBody,
+		cloudRespond:  `{"action":"allow","transformed_input":{}}`,
+		wantCloudCall: true, wantAction: agento11y.HookActionAllow,
+		assertMore: func(t *testing.T, out agento11y.HookEvaluateResponse) {
+			assert.JSONEq(t, `{"command":"curl -H [REDACTED:api_key]"}`, string(guard.ExtractToolCallTransform(&out, "c1", "Bash", nil)))
+		},
+	})
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			cloud := newHookCloud(t)
 			if tc.cloudRespond != "" {
 				cloud.respond = tc.cloudRespond
 			}
-			s, _ := newForwardingTestServer(t, cloud.srv, hookEnv(cloud.srv.URL, nil))
+			s, _ := newForwardingTestServer(t, cloud.srv, hookEnv(cloud.srv.URL, map[string]string{"AGENTO11Y_GUARDS_FAIL_OPEN": "false"}))
 			writeGuardsFileFor(t, s, tc.rules)
 
 			status, out := postHook(t, s, tc.body, nil)
@@ -2598,6 +2702,40 @@ func TestServer_HookEvaluate_LocalRules(t *testing.T) {
 			}
 			if tc.assertMore != nil {
 				tc.assertMore(t, out)
+			}
+
+			localHTTP := httptest.NewServer(s)
+			defer localHTTP.Close()
+			t.Setenv("AGENTO11Y_ENDPOINT", localHTTP.URL)
+			req, err := decodeHookEvaluateRequest([]byte(tc.body))
+			require.NoError(t, err)
+			call := req.Input.Output[0].Parts[0].ToolCall
+			for _, failOpen := range []bool{false, true} {
+				result := guard.EvaluateToolCall(t.Context(), envconfig.GuardsConfig{
+					Enabled: true, FailOpen: failOpen, TimeoutMs: 1500,
+				}, guard.ToolCallInput{
+					AgentName: "claude-code", ToolCallID: call.ID, ToolName: call.Name, ToolInputJSON: call.InputJSON,
+				}, nil)
+				assert.Equal(t, tc.wantAction, result.Action)
+				if result.Blocked() {
+					assert.Empty(t, result.UpdatedInputJSON)
+					continue
+				}
+				want := guard.ExtractToolCallTransform(&out, call.ID, call.Name, nil)
+				if len(want) == 0 {
+					assert.Empty(t, result.UpdatedInputJSON)
+				} else {
+					assert.JSONEq(t, string(want), string(result.UpdatedInputJSON))
+				}
+			}
+			if tc.wantCloudCall {
+				assert.Equal(t, 3, cloud.count())
+				if tc.body == hookSecretToolCallBody {
+					_, relayed, _ := cloud.lastCall()
+					assert.NotContains(t, relayed, "sk-abc123")
+				}
+			} else {
+				assert.Zero(t, cloud.count())
 			}
 		})
 	}
@@ -2902,6 +3040,29 @@ func TestServer_HookEvaluate_RelayIsRedacted(t *testing.T) {
 	assert.Equal(t, "sk-abc123.png", hostParts[2].Media.Name)
 }
 
+func TestServer_HookEvaluate_RawJSONValuesSurviveRedaction(t *testing.T) {
+	for _, raw := range []string{`"42"`, `"{\"ok\":true}"`, `"true"`, `"null"`, `"eyJvayI6dHJ1ZX0="`, `42`, `true`, `false`, `null`, `{}`, `[]`} {
+		t.Run(raw, func(t *testing.T) {
+			cloud := newHookCloud(t)
+			s, _ := newForwardingTestServer(t, cloud.srv, hookEnv(cloud.srv.URL, nil))
+			writeGuardsFileFor(t, s, strings.ReplaceAll(redactSecretRules, "postflight", "preflight"))
+			body := `{"phase":"preflight","input":{"system_prompt":"sk-abc123","messages":[{"role":"tool","parts":[{"kind":"tool_result","tool_result":{"tool_call_id":"c1","content_json":` + raw + `}}]}]}}`
+			status, out := postHook(t, s, body, nil)
+			require.Equal(t, http.StatusOK, status)
+			require.NotNil(t, out.TransformedInput)
+			assert.Equal(t, "[REDACTED:api_key]", out.TransformedInput.SystemPrompt)
+			assert.JSONEq(t, raw, string(out.TransformedInput.Messages[0].Parts[0].ToolResult.ContentJSON))
+			_, sent, _ := cloud.lastCall()
+			var relay struct {
+				Input agento11y.HookInput `json:"input"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(sent), &relay))
+			assert.Equal(t, "[REDACTED:api_key]", relay.Input.SystemPrompt)
+			assert.JSONEq(t, raw, string(relay.Input.Messages[0].Parts[0].ToolResult.ContentJSON))
+		})
+	}
+}
+
 func TestServer_HookEvaluate_RelayPreparationFailureUsesFailMode(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -3023,6 +3184,8 @@ func TestServer_HookEvaluate_RejectsBadRequestsBeforeChaining(t *testing.T) {
 		wantStatus int
 	}{
 		{name: "invalid_json", body: `{"phase":`, wantStatus: http.StatusBadRequest},
+		{name: "object_role", body: `{"input":{"output":[{"role":{}}]}}`, wantStatus: http.StatusBadRequest},
+		{name: "fractional_role", body: `{"input":{"output":[{"role":2.5}]}}`, wantStatus: http.StatusBadRequest},
 		{name: "oversized_body", body: `{"phase":"postflight","pad":"` + strings.Repeat("x", maxHookBodyBytes) + `"}`, wantStatus: http.StatusRequestEntityTooLarge},
 	}
 	for _, tc := range cases {

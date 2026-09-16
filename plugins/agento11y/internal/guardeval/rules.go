@@ -52,6 +52,7 @@ type ToolFilterConfig struct {
 // TransformConfig is the redaction config.
 type TransformConfig struct {
 	Patterns []TransformPattern `json:"patterns" toml:"patterns"`
+	JSONMode string             `json:"json_mode,omitempty" toml:"json_mode,omitempty"`
 }
 
 // TransformPattern is one redaction pattern.
@@ -318,7 +319,15 @@ func filterRuleIDs(rules []Rule) ([]Rule, []error) {
 // Returns (nil, nil) when there is nothing to transform. An empty replacement
 // defaults to "[REDACTED:{id}]" (or "[REDACTED]" when no id).
 func compileTransform(cfg *TransformConfig) (*Transform, error) {
-	if cfg == nil || len(cfg.Patterns) == 0 {
+	if cfg == nil {
+		return nil, nil
+	}
+	switch cfg.JSONMode {
+	case "", "raw", "strings":
+	default:
+		return nil, fmt.Errorf("transform.json_mode %q is not raw or strings", cfg.JSONMode)
+	}
+	if len(cfg.Patterns) == 0 {
 		return nil, nil
 	}
 	patterns := make([]compiledPattern, 0, len(cfg.Patterns))
@@ -342,5 +351,5 @@ func compileTransform(cfg *TransformConfig) (*Transform, error) {
 		}
 		patterns = append(patterns, compiledPattern{re: re, repl: repl})
 	}
-	return &Transform{patterns: patterns}, nil
+	return &Transform{patterns: patterns, jsonMode: cfg.JSONMode}, nil
 }

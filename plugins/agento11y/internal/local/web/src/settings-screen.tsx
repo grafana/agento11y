@@ -16,6 +16,7 @@ import {
   SurfaceCard,
 } from './notices';
 import { fieldInput } from './routing';
+import type { LocalGuardsUpdate, SettingsLocalGuardsProps } from './settings-local-guards';
 import { SettingsLocalGuardsCard } from './settings-local-guards';
 import {
   cloneSettings,
@@ -31,6 +32,7 @@ import { Icon } from './shell';
 import type {
   ConfigResponse,
   ForwardStatus,
+  GuardsFile,
   HistoryAgent,
   HistoryOffer,
   HistoryPlan,
@@ -785,9 +787,10 @@ function PreviewBody({ text }: PreviewBodyProps) {
 interface UnsavedBarProps {
   onReset: () => void;
   onSave: () => void;
+  disabled: boolean;
 }
 
-function UnsavedBar({ onReset, onSave }: UnsavedBarProps) {
+function UnsavedBar({ onReset, onSave, disabled }: UnsavedBarProps) {
   return (
     <div
       style={{
@@ -824,8 +827,12 @@ function UnsavedBar({ onReset, onSave }: UnsavedBarProps) {
           }}
         />
         <span style={{ fontSize: 13, color: 'var(--fg2)' }}>Unsaved changes</span>
-        <GhostButton onClick={onReset}>Reset</GhostButton>
-        <PrimaryButton onClick={onSave}>Save to config.env</PrimaryButton>
+        <GhostButton onClick={onReset} disabled={disabled}>
+          Reset
+        </GhostButton>
+        <PrimaryButton onClick={onSave} disabled={disabled}>
+          Save to config.env
+        </PrimaryButton>
       </div>
     </div>
   );
@@ -1827,11 +1834,11 @@ export function SettingsGuardsCard({ form, savedGuards, set, status, localOnly }
           maxWidth: 620,
         }}
       >
-        A guard check runs before a tool call and is evaluated by your Cloud rules.
+        Guard checks run before supported tool calls. Local rules run first when the local daemon handles the check.
       </div>
       <SettingRow
         label="Fail mode"
-        help="Fail open allows the call when Cloud cannot answer. Fail closed blocks it. Off skips guard checks."
+        help="Fail open allows calls on guard endpoint transport failures or Cloud relay failures. Fail closed blocks them. Neither overrides an explicit local deny. Off skips guard checks."
       >
         <PillToggle
           size="md"
@@ -2410,13 +2417,13 @@ interface SettingsLocalTabProps {
   setTag: (index: number, patch: Partial<Tag>) => void;
   addTag: () => void;
   removeTag: (index: number) => void;
-  onGuardsEnabled?: (enabled: boolean) => void;
+  localGuards: SettingsLocalGuardsProps;
 }
 
-function SettingsLocalTab({ form, set, setTag, addTag, removeTag, onGuardsEnabled }: SettingsLocalTabProps) {
+function SettingsLocalTab({ form, set, setTag, addTag, removeTag, localGuards }: SettingsLocalTabProps) {
   return (
     <>
-      <SettingsLocalGuardsCard onEnabledChange={onGuardsEnabled} />
+      <SettingsLocalGuardsCard {...localGuards} />
       <SettingsTagsEditor tags={form.tags} setTag={setTag} addTag={addTag} removeTag={removeTag} />
       <SettingsAppearanceCard theme={form.theme} onChange={(theme) => set({ theme })} />
       <SettingsCard>
@@ -2693,7 +2700,7 @@ interface SettingsTabPanelsProps {
   onConnect: (parsed: ConnectBlock, mode: string) => void;
   onDisconnect: () => void;
   onMode: (mode: string, forceLocalOff?: boolean) => void;
-  onGuardsEnabled?: (enabled: boolean) => void;
+  localGuards: SettingsLocalGuardsProps;
   history: HistoryImport;
 }
 
@@ -2713,7 +2720,7 @@ function SettingsTabPanels({
   onConnect,
   onDisconnect,
   onMode,
-  onGuardsEnabled,
+  localGuards,
   history,
 }: SettingsTabPanelsProps) {
   return (
@@ -2740,7 +2747,7 @@ function SettingsTabPanels({
           setTag={setTag}
           addTag={addTag}
           removeTag={removeTag}
-          onGuardsEnabled={onGuardsEnabled}
+          localGuards={localGuards}
         />
       )}
       {activeSettingsTab === 'history' && <SettingsHistoryTab history={history} />}
@@ -2755,10 +2762,11 @@ interface SettingsViewProps {
   activeSettingsTab: string;
   onSelectTab: (tab: string) => void;
   onConfig: (config: ConfigResponse) => void;
+  onConfigWriteStart?: () => () => void;
   onThemePreview?: (theme: ThemePreference | null) => void;
 }
 
-// SettingsView edits config.env. It does not fetch it: App() polls
+// SettingsView edits config.env. App() polls
 // /api/v1/config for the header chip, and this view hydrates from the same
 // response so one poll serves both.
 export function SettingsView({
@@ -2768,6 +2776,7 @@ export function SettingsView({
   activeSettingsTab,
   onSelectTab,
   onConfig,
+  onConfigWriteStart,
   onThemePreview,
 }: SettingsViewProps) {
   const [form, setForm] = useState<Settings | null>(null);
@@ -2777,6 +2786,71 @@ export function SettingsView({
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [guardsData, setGuardsData] = useState<GuardsFile | null>(null);
+  const [guardsError, setGuardsError] = useState<string | null>(null);
+  const [writing, setWriting] = useState(false);
+  const writingRef = useRef(false);
+  const [guardsEnabledPending, setGuardsEnabledPending] = useState<boolean | null>(null);
+  const seenConfig = useRef<ConfigResponse | null>(null);
+  const latestConfig = useRef(config);
+  latestConfig.current = config;
+  const mounted = useRef(false);
+  const writeController = useRef<AbortController | null>(null);
+  const finishConfigWrite = useRef<(() => void) | null>(null);
+  const guardsRefresh = useRef<{ before: ConfigResponse | null; ownsGuards: boolean } | null>(null);
+  const finishWrite = useCallback((controller: AbortController) => {
+    if (writeController.current !== controller) return;
+    writeController.current = null;
+    writingRef.current = false;
+    finishConfigWrite.current?.();
+    finishConfigWrite.current = null;
+    if (mounted.current) setWriting(false);
+  }, []);
+  const adoptGuardConfig = useCallback(
+    (body: ConfigResponse, ownsGuards: boolean) => {
+      seenConfig.current = body;
+      guardsRefresh.current = null;
+      setForm((f) => ({
+        ...cloneSettings(body.settings),
+        ...pendingEdits(f, saved, ownsGuards ? { guards: body.settings.guards } : {}),
+      }));
+      setSaved(cloneSettings(body.settings));
+      setGuardsEnabledPending(null);
+      setGuardsError(null);
+    },
+    [saved],
+  );
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      writeController.current?.abort();
+      finishConfigWrite.current?.();
+      finishConfigWrite.current = null;
+    };
+  }, []);
+
+  // Guard GETs supply pack data only. The config poll owns the enabled state.
+  useEffect(() => {
+    if (!config || activeSettingsTab !== 'local' || writing || guardsEnabledPending !== null) return;
+    const controller = new AbortController();
+    fetch('/api/v1/guards', { signal: controller.signal })
+      .then((r) =>
+        r.ok
+          ? (r.json() as Promise<GuardsFile>)
+          : r.text().then((t) => Promise.reject(new Error(t.trim() || `HTTP ${r.status}`))),
+      )
+      .then((body) => {
+        if (controller.signal.aborted || writingRef.current) return;
+        setGuardsData(body);
+        setGuardsError(null);
+      })
+      .catch((err) => {
+        if (!controller.signal.aborted && !writingRef.current) setGuardsError(String(err.message || err));
+      });
+    return () => controller.abort();
+  }, [config, activeSettingsTab, writing, guardsEnabledPending]);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -2794,16 +2868,38 @@ export function SettingsView({
   // `agento11y login`, a second tab or a hand edit can add a connection under
   // an open panel, and this view chooses between the connect flow and the
   // connected panel from `saved`. An unsaved edit wins over the poll, so
-  // typed input is never discarded.
+  // typed input is never discarded. Untouched guards still track polls when
+  // other fields have pending edits.
   useEffect(() => {
-    if (!config) return;
-    if (form && !sameSettings(form, saved)) return;
-    if (form && sameSettings(config.settings, saved)) return;
-    setForm(cloneSettings(config.settings));
-    setSaved(cloneSettings(config.settings));
-    setPreview(config.preview || '');
-    if (config.path) setPath(config.path);
-  }, [config, form, saved]);
+    if (!config || seenConfig.current === config) return;
+    const refresh = guardsRefresh.current;
+    if (refresh) {
+      if (config === refresh.before) return;
+      // A late refresh reply must not end a later write.
+      const controller = writeController.current;
+      if (controller) {
+        controller.abort();
+        finishWrite(controller);
+      }
+      adoptGuardConfig(config, refresh.ownsGuards);
+      return;
+    }
+    if (writing) return;
+    seenConfig.current = config;
+    if (form && !sameSettings(form, saved)) {
+      if (form.guards === saved?.guards) {
+        setForm({ ...form, guards: config.settings.guards });
+      }
+      setSaved((s) => (s ? { ...s, guards: config.settings.guards } : s));
+    } else {
+      setForm(cloneSettings(config.settings));
+      setSaved(cloneSettings(config.settings));
+      setPreview(config.preview || '');
+      if (config.path) setPath(config.path);
+    }
+    setGuardsEnabledPending(null);
+    setGuardsError(null);
+  }, [config, form, saved, writing, adoptGuardConfig, finishWrite]);
 
   // Live preview: the daemon renders exactly what it would write, so the
   // panel never drifts from the file. Debounced to coalesce keystrokes.
@@ -2863,23 +2959,56 @@ export function SettingsView({
   // Past the early return above `form` is set, and `saved` is set with it:
   // the two are only ever assigned together.
   const set = (patch: Partial<Settings>) => setForm((f) => (f ? { ...f, ...patch } : f));
+  const writesBlocked = writing || guardsEnabledPending !== null;
   // The Local Guards switch writes AGENTO11Y_GUARDS_ENABLED immediately. Keep
   // the Cloud fail-mode field in step so a later Save does not overwrite it,
   // and so the form does not look dirty from this toggle alone.
-  const adoptGuardsEnabled = (enabled: boolean) => {
-    const nextGuards = (current: string) => (enabled ? (current === 'off' ? 'failopen' : current) : 'off');
-    fetch('/api/v1/config')
-      .then((r) => (r.ok ? (r.json() as Promise<ConfigResponse>) : Promise.reject(new Error('load config'))))
-      .then((body) => {
-        onConfig(body);
-        if (typeof body.preview === 'string') setPreview(body.preview);
-        setForm((f) => (f ? { ...f, guards: body.settings.guards } : f));
-        setSaved((s) => (s ? { ...s, guards: body.settings.guards } : s));
-      })
-      .catch(() => {
-        setForm((f) => (f ? { ...f, guards: nextGuards(f.guards) } : f));
-        setSaved((s) => (s ? { ...s, guards: nextGuards(s.guards) } : s));
+  const putGuards = async (update: LocalGuardsUpdate) => {
+    if (writingRef.current || guardsEnabledPending !== null || !guardsData) return;
+    writingRef.current = true;
+    setWriting(true);
+    setGuardsError(null);
+    const controller = new AbortController();
+    writeController.current = controller;
+    finishConfigWrite.current = onConfigWriteStart?.() || null;
+    let needsConfig = false;
+    try {
+      const response = await fetch('/api/v1/guards', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(update),
+        signal: controller.signal,
       });
+      if (!response.ok) throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
+      const next = (await response.json()) as GuardsFile;
+      if (!mounted.current || controller.signal.aborted) return;
+      setGuardsData(next);
+      setGuardsEnabledPending(next.enabled);
+      needsConfig = true;
+      // Discard polls started before the PUT completed. Fetch the saved failure
+      // mode because config's "off" value does not reveal it.
+      const beforeRefresh = latestConfig.current;
+      seenConfig.current = beforeRefresh;
+      guardsRefresh.current = { before: beforeRefresh, ownsGuards: update.enabled !== undefined };
+      if (beforeRefresh) onConfig(beforeRefresh);
+      const refresh = await fetch('/api/v1/config', { signal: controller.signal });
+      if (!refresh.ok) throw new Error((await refresh.text()).trim() || `HTTP ${refresh.status}`);
+      const body = (await refresh.json()) as ConfigResponse;
+      if (!mounted.current || controller.signal.aborted) return;
+      adoptGuardConfig(body, update.enabled !== undefined);
+      onConfig(body);
+    } catch (err) {
+      if (mounted.current && !controller.signal.aborted) {
+        const detail = err instanceof Error ? err.message : String(err);
+        setGuardsError(
+          needsConfig
+            ? `Guards saved, but settings refresh failed. Save stays disabled until an automatic refresh succeeds. ${detail}`
+            : detail,
+        );
+      }
+    } finally {
+      finishWrite(controller);
+    }
   };
   // A failed poll drops the hero stat and the Cloud status line to Unknown,
   // the way it drops the header chip. The form keeps hydrating from the
@@ -2897,6 +3026,7 @@ export function SettingsView({
   const addTag = () => setForm((f) => (f ? { ...f, tags: [...f.tags, { key: '', value: '' }] } : f));
   const removeTag = (i: number) => setForm((f) => (f ? { ...f, tags: f.tags.filter((_, j) => j !== i) } : f));
   const reset = () => {
+    if (writingRef.current || guardsEnabledPending !== null) return;
     // A dirty form deliberately ignores hydration from config polls, but
     // Reset means "adopt what is saved now", not the snapshot from when the
     // edit began.
@@ -2912,11 +3042,18 @@ export function SettingsView({
   // Connect, Disconnect and the forwarding mode switch each write through it
   // instead of raising that bar for a choice the user already made.
   const persist = (next: Settings, msg: string) => {
+    if (writingRef.current || guardsEnabledPending !== null) return Promise.resolve();
+    writingRef.current = true;
+    setWriting(true);
     setError(null);
+    const controller = new AbortController();
+    writeController.current = controller;
+    finishConfigWrite.current = onConfigWriteStart?.() || null;
     return fetch('/api/v1/config', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ settings: next }),
+      signal: controller.signal,
     })
       .then((r) =>
         r.ok
@@ -2924,13 +3061,18 @@ export function SettingsView({
           : r.text().then((t) => Promise.reject(new Error(t || `HTTP ${r.status}`))),
       )
       .then((body) => {
+        if (!mounted.current || controller.signal.aborted) return;
+        seenConfig.current = body;
         setForm(cloneSettings(body.settings));
         setSaved(cloneSettings(body.settings));
         if (typeof body.preview === 'string') setPreview(body.preview);
         onConfig(body);
         showToast(msg);
       })
-      .catch((e) => setError(String(e.message || e)));
+      .catch((e) => {
+        if (mounted.current && !controller.signal.aborted) setError(String(e.message || e));
+      })
+      .finally(() => finishWrite(controller));
   };
   const save = () => persist(form, 'Settings saved to config.env.');
 
@@ -2943,9 +3085,10 @@ export function SettingsView({
   // Whatever was being edited, minus the fields the patch owns, is put back
   // on top of the response, so it stays pending in the unsaved-changes bar.
   const oneClickWrite = (patch: Partial<Settings>, msg: string) => {
+    if (writingRef.current || guardsEnabledPending !== null) return Promise.resolve();
     const pending = pendingEdits(form, saved, patch);
     return persist({ ...(saved as Settings), ...patch }, msg).then(() => {
-      if (pending) setForm((f) => (f ? { ...f, ...pending } : f));
+      if (mounted.current && pending) setForm((f) => (f ? { ...f, ...pending } : f));
     });
   };
 
@@ -3052,7 +3195,13 @@ export function SettingsView({
             onConnect={connect}
             onDisconnect={disconnect}
             onMode={commitMode}
-            onGuardsEnabled={adoptGuardsEnabled}
+            localGuards={{
+              data: guardsData,
+              enabled: guardsEnabledPending ?? saved?.guards !== 'off',
+              busy: writesBlocked,
+              error: guardsError,
+              onChange: putGuards,
+            }}
             history={history}
           />
         </div>
@@ -3060,7 +3209,7 @@ export function SettingsView({
         <SettingsPreviewPanel path={path} preview={preview} onCopy={copy} />
       </div>
 
-      {dirty && <UnsavedBar onReset={reset} onSave={save} />}
+      {dirty && <UnsavedBar onReset={reset} onSave={save} disabled={writesBlocked} />}
       {toast && <Toast message={toast} />}
     </PageShell>
   );

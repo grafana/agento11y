@@ -3,6 +3,7 @@ package local
 import (
 	"encoding/base64"
 	"encoding/json"
+	"strconv"
 	"testing"
 
 	"github.com/grafana/agento11y/go/agento11y"
@@ -169,6 +170,59 @@ func TestEncodeRelayBodyUsesRequestPartsAndWireTools(t *testing.T) {
 	assert.True(t, out.Input.Tools[0].Deferred)
 	assertBase64JSONEq(t, schema, out.Input.Tools[0].InputSchemaJSON)
 	assert.NotContains(t, string(raw), `"input_schema":`)
+}
+
+func TestDecodeHookEvaluateRequestJSONDialects(t *testing.T) {
+	for _, raw := range []string{`"42"`, `"{\"ok\":true}"`, `"true"`, `"null"`, `"eyJvayI6dHJ1ZX0="`, `42`, `true`, `false`, `null`, `{}`, `[]`} {
+		for _, dialect := range []struct {
+			name, role, callKey, resultKey, inputKey, contentKey, schemaKey string
+			encode                                                          func(string) string
+		}{
+			{"SDK", `"assistant"`, "tool_call", "tool_result", "input_json", "content_json", "input_schema", func(s string) string { return s }},
+			{"legacy", `"assistant"`, "toolCall", "toolResult", "inputJSON", "contentJSON", "inputSchemaJSON", strconv.Quote},
+			{"proto_snake", `"MESSAGE_ROLE_ASSISTANT"`, "tool_call", "tool_result", "input_json", "content_json", "input_schema_json", func(s string) string { return strconv.Quote(base64.StdEncoding.EncodeToString([]byte(s))) }},
+			{"proto_camel", `2`, "toolCall", "toolResult", "inputJson", "contentJson", "inputSchemaJson", func(s string) string { return strconv.Quote(base64.StdEncoding.EncodeToString([]byte(s))) }},
+			{"proto_camel_host_role", `"assistant"`, "toolCall", "toolResult", "inputJson", "contentJson", "inputSchemaJson", func(s string) string { return strconv.Quote(base64.StdEncoding.EncodeToString([]byte(s))) }},
+		} {
+			t.Run(dialect.name+"/"+raw, func(t *testing.T) {
+				payload := dialect.encode(raw)
+				body := `{"phase":"postflight","input":{"output":[{"role":` + dialect.role + `,"parts":[{"` + dialect.callKey + `":{"name":"Bash","` + dialect.inputKey + `":` + payload + `}},{"` + dialect.resultKey + `":{"` + dialect.contentKey + `":` + payload + `}}]}],"tools":[{"name":"Bash","` + dialect.schemaKey + `":` + payload + `}]}}`
+				req, err := decodeHookEvaluateRequest([]byte(body))
+				require.NoError(t, err)
+				assert.Equal(t, agento11y.RoleAssistant, req.Input.Output[0].Role)
+				assert.JSONEq(t, raw, string(req.Input.Output[0].Parts[0].ToolCall.InputJSON))
+				assert.JSONEq(t, raw, string(req.Input.Output[0].Parts[1].ToolResult.ContentJSON))
+				assert.JSONEq(t, raw, string(req.Input.Tools[0].InputSchema))
+			})
+		}
+	}
+}
+
+func TestDecodeHookMessageRoles(t *testing.T) {
+	for _, tc := range []struct {
+		wire string
+		want agento11y.Role
+	}{
+		{`"user"`, agento11y.RoleUser}, {`"assistant"`, agento11y.RoleAssistant}, {`"tool"`, agento11y.RoleTool},
+		{`"system"`, "system"}, {`"developer"`, "developer"}, {`null`, ""}, {`""`, ""},
+		{`0`, "unspecified"}, {`1`, agento11y.RoleUser}, {`2`, agento11y.RoleAssistant}, {`3`, agento11y.RoleTool},
+		{`"MESSAGE_ROLE_UNSPECIFIED"`, "unspecified"}, {`"MESSAGE_ROLE_USER"`, agento11y.RoleUser},
+		{`"MESSAGE_ROLE_ASSISTANT"`, agento11y.RoleAssistant}, {`"MESSAGE_ROLE_TOOL"`, agento11y.RoleTool},
+	} {
+		t.Run(tc.wire, func(t *testing.T) {
+			input := `{"messages":[{"role":` + tc.wire + `}],"output":[{"role":` + tc.wire + `}]}`
+			req, err := decodeHookEvaluateRequest([]byte(`{"input":` + input + `}`))
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, req.Input.Messages[0].Role)
+			assert.Equal(t, tc.want, req.Input.Output[0].Role)
+			resp, err := decodeHookEvaluateResponse([]byte(`{"action":"deny","rule_id":"keep","transformed_input":` + input + `}`))
+			require.NoError(t, err)
+			assert.Equal(t, agento11y.HookActionDeny, resp.Action)
+			assert.Equal(t, "keep", resp.RuleID)
+			assert.Equal(t, tc.want, resp.TransformedInput.Messages[0].Role)
+			assert.Equal(t, tc.want, resp.TransformedInput.Output[0].Role)
+		})
+	}
 }
 
 func assertBase64JSONEq(t *testing.T, want, encoded string) {
