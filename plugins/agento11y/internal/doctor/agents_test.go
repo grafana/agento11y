@@ -87,16 +87,42 @@ func TestDefaultCollectAgents(t *testing.T) {
 	}
 }
 
-func TestCursorProbeUsesHookConfigurationWording(t *testing.T) {
-	for _, probe := range agentProbes {
-		if probe.name == "cursor" {
-			if probe.notInstalledLabel != "not configured" {
-				t.Fatalf("cursor notInstalledLabel = %q, want not configured", probe.notInstalledLabel)
-			}
-			return
-		}
+// Generic probe tests replace agentProbes, so they cannot verify the
+// production table.
+func TestAgentProbeTableRows(t *testing.T) {
+	cases := []struct {
+		name                  string
+		wantNotInstalledLabel string
+		wantConfigBased       bool
+	}{
+		{name: "cursor", wantNotInstalledLabel: "not configured", wantConfigBased: true},
+		// dsh install state remains observable when dsh is absent from PATH.
+		{name: "dsh", wantConfigBased: true},
 	}
-	t.Fatal("cursor probe missing")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var probe agentProbe
+			found := false
+			for _, p := range agentProbes {
+				if p.name == tc.name {
+					probe, found = p, true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("%s probe missing from agentProbes", tc.name)
+			}
+			if probe.notInstalledLabel != tc.wantNotInstalledLabel {
+				t.Errorf("notInstalledLabel = %q, want %q", probe.notInstalledLabel, tc.wantNotInstalledLabel)
+			}
+			if probe.configBased != tc.wantConfigBased {
+				t.Errorf("configBased = %v, want %v", probe.configBased, tc.wantConfigBased)
+			}
+			if probe.status == nil && tc.wantConfigBased {
+				t.Error("configBased row has no status probe, so doctor falls back to the PATH check")
+			}
+		})
+	}
 }
 
 // An AgentStatus built without an install state must not read as a definite

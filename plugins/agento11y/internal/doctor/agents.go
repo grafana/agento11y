@@ -8,6 +8,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/copilot"
 	cursorinstall "github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/install"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/dsh"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/opencode"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/pi"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe"
@@ -27,9 +28,8 @@ type agentProbe struct {
 	// status is the package's read-only install probe.
 	status statusFn
 	// configBased is true when status reads install state from files and needs
-	// no binary on PATH (claude, opencode, pi, copilot, vibe). For these, doctor
-	// reports install state even when the CLI is absent. CLI-dependent probes
-	// (codex) shell out to the binary, so they're skipped when it's missing.
+	// no binary on PATH. File-based probes can run when the CLI is absent;
+	// codex shells out to its binary and is skipped when the binary is missing.
 	configBased bool
 	// fallbackVersion is used by integrations whose hooks invoke the shared
 	// agento11y binary instead of shipping their own independently versioned
@@ -51,6 +51,7 @@ var agentProbes = []agentProbe{
 	{name: "claude", bin: "claude", status: claudecode.Status, configBased: true},
 	{name: "codex", bin: "codex", status: codex.Status},
 	{name: "copilot", bin: "copilot", status: copilot.Status, configBased: true, notInstalledLabel: "not configured", note: "hook-based"},
+	{name: "dsh", bin: "dsh", status: dsh.Status, configBased: true},
 	{name: "opencode", bin: "opencode", status: opencode.Status, configBased: true},
 	{name: "pi", bin: "pi", status: pi.Status, configBased: true},
 	{name: "vibe", bin: "vibe", status: vibe.Status, configBased: true, notInstalledLabel: "not configured", note: "hook-based"},
@@ -90,9 +91,6 @@ func probeAgent(ctx context.Context, probe agentProbe, binaryVersion string) Age
 		return a
 	}
 
-	// A CLI-dependent probe (codex, copilot) shells out to the binary to read
-	// install state, so skip it when the binary is absent. Config-based probes
-	// (claude, opencode, pi) read state from files and run regardless of PATH.
 	if !a.OnPath && !probe.configBased {
 		a.Health = HealthSkipped
 		return a

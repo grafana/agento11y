@@ -8,7 +8,7 @@
 
 ## Coding agent observability
 
-Capture sessions from the coding agents you already use — Cursor, Claude Code, Codex, Copilot CLI, OpenCode, Pi, Vibe, and others — so you can observe usage, cost, tokens, and tools across all of them in one place. Install `agento11y`, then start most agents with a single command (`agento11y claude`, `agento11y codex`, …). See the [Coding Agent Observability documentation](plugins/agento11y/README.md) for more information.
+Capture sessions from the coding agents you already use — Cursor, Claude Code, Codex, Copilot CLI, DeepSeek Harness (`dsh`), OpenCode, Pi, Vibe, and others — so you can observe usage, cost, tokens, and tools across all of them in one place. Install `agento11y`, then start most agents with a single command (`agento11y claude`, `agento11y codex`, …). See the [Coding Agent Observability documentation](plugins/agento11y/README.md) for more information.
 
 ## Observability for agents you build
 

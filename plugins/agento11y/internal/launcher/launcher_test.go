@@ -9,6 +9,7 @@ import (
 	"log"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -460,6 +461,29 @@ func TestBootstrap(t *testing.T) {
 				}
 				if strings.Contains(h.stderr.String(), "registering sigil-toy with toy") {
 					t.Errorf("stderr = %q; default register message should not appear", h.stderr.String())
+				}
+			},
+		},
+		{
+			name: "ArgsFn builds the exec args after install",
+			setup: func(t *testing.T, h *bootstrapHarness) {
+				installed := false
+				h.spec.Probe = func(context.Context, string) (bool, error) { return false, nil }
+				h.spec.Install = func(context.Context, string, io.Writer) error {
+					installed = true
+					return nil
+				}
+				h.spec.ArgsFn = func() []string {
+					if !installed {
+						return []string{"--plain"}
+					}
+					return []string{"--with-plugin"}
+				}
+			},
+			assert: func(t *testing.T, h *bootstrapHarness) {
+				want := []string{"/bin/toy", "--with-plugin"}
+				if !slices.Equal(h.execArgs, want) {
+					t.Fatalf("exec args = %v; want %v", h.execArgs, want)
 				}
 			},
 		},

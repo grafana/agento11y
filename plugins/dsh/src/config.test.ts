@@ -1,0 +1,673 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearAgento11yEnv as clearEnv } from "./testEnv.js";
+
+const { loggerMock, resolveLocalReceiverMock } = vi.hoisted(() => ({
+  loggerMock: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  resolveLocalReceiverMock: vi.fn(),
+}));
+
+vi.mock("./logger.js", () => ({ logger: loggerMock }));
+
+// Keep LocalReceiverError real so the host-facing error type is exercised.
+vi.mock("./local.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./local.js")>();
+  return { ...actual, resolveLocalReceiver: resolveLocalReceiverMock };
+});
+
+import { loadConfig, resolveConfig } from "./config.js";
+import { LocalReceiverError } from "./local.js";
+
+describe("resolveConfig", () => {
+  beforeEach(clearEnv);
+  afterEach(clearEnv);
+
+  it("returns null when endpoint is missing", () => {
+    expect(resolveConfig()).toBeNull();
+  });
+
+  it("returns null when endpoint is whitespace", () => {
+    process.env.SIGIL_ENDPOINT = "   ";
+    expect(resolveConfig()).toBeNull();
+  });
+
+  it("stores the bare base URL when given a clean endpoint", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    const cfg = resolveConfig();
+    expect(cfg?.endpoint).toBe("http://localhost:8080");
+  });
+
+  it("strips a trailing slash", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080/";
+    const cfg = resolveConfig();
+    expect(cfg?.endpoint).toBe("http://localhost:8080");
+  });
+
+  it("strips an accidentally-pasted export-path suffix", () => {
+    process.env.SIGIL_ENDPOINT =
+      "http://localhost:8080/api/v1/generations:export";
+    const cfg = resolveConfig();
+    expect(cfg?.endpoint).toBe("http://localhost:8080");
+  });
+
+  it("preserves a prefix path", () => {
+    process.env.SIGIL_ENDPOINT = "https://sigil.example.com/sigil";
+    const cfg = resolveConfig();
+    expect(cfg?.endpoint).toBe("https://sigil.example.com/sigil");
+  });
+
+  it("strips the export-path suffix from a prefix-mounted URL", () => {
+    process.env.SIGIL_ENDPOINT =
+      "https://sigil.example.com/sigil/api/v1/generations:export";
+    const cfg = resolveConfig();
+    expect(cfg?.endpoint).toBe("https://sigil.example.com/sigil");
+  });
+
+  it("does not falsely match a similar-looking suffix", () => {
+    process.env.SIGIL_ENDPOINT =
+      "http://localhost:8080/api/v1/generations:export-debug";
+    const cfg = resolveConfig();
+    expect(cfg?.endpoint).toBe(
+      "http://localhost:8080/api/v1/generations:export-debug",
+    );
+  });
+
+  it("defaults contentCapture to metadata_only", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    const cfg = resolveConfig();
+    expect(cfg?.contentCapture).toBe("metadata_only");
+  });
+
+  it("defaults input message redaction to on", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    const cfg = resolveConfig();
+    expect(cfg?.redactInputMessages).toBe(true);
+  });
+
+  it("SIGIL_REDACT_INPUT_MESSAGES controls input message redaction", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_REDACT_INPUT_MESSAGES = "false";
+    const cfg = resolveConfig();
+    expect(cfg?.redactInputMessages).toBe(false);
+  });
+
+  it("accepts mode string no_tool_content", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_CONTENT_CAPTURE_MODE = "no_tool_content";
+    const cfg = resolveConfig();
+    expect(cfg?.contentCapture).toBe("no_tool_content");
+  });
+
+  it("accepts SIGIL_CONTENT_CAPTURE_MODE=full_with_metadata_spans", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_CONTENT_CAPTURE_MODE = "full_with_metadata_spans";
+    const cfg = resolveConfig();
+    expect(cfg?.contentCapture).toBe("full_with_metadata_spans");
+  });
+
+  it("maps SIGIL_CONTENT_CAPTURE_MODE=default to metadata_only without warning", () => {
+    const warn = loggerMock.warn;
+    warn.mockClear();
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_CONTENT_CAPTURE_MODE = "default";
+    const cfg = resolveConfig();
+    expect(cfg?.contentCapture).toBe("metadata_only");
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("warns and falls back on unknown mode string", () => {
+    const warn = loggerMock.warn;
+    warn.mockClear();
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_CONTENT_CAPTURE_MODE = "yolo";
+    const cfg = resolveConfig();
+    expect(cfg?.contentCapture).toBe("metadata_only");
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("unsupported content capture mode"),
+    );
+    warn.mockRestore();
+  });
+
+  it("defaults agentName to 'dsh'", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_AGENT_NAME = "   ";
+    const cfg = resolveConfig();
+    expect(cfg?.agentName).toBe("dsh");
+  });
+
+  it("env bool parsing is case-insensitive", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_CONTENT_CAPTURE_MODE = "On";
+    const cfg = resolveConfig();
+    expect(cfg?.contentCapture).toBe("full");
+  });
+
+  it("derives basic auth from SIGIL_AUTH_TENANT_ID + SIGIL_AUTH_TOKEN", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_AUTH_TENANT_ID = "tenant-1";
+    process.env.SIGIL_AUTH_TOKEN = "glc_token";
+    const cfg = resolveConfig();
+    expect(cfg?.auth).toEqual({
+      mode: "basic",
+      basicUser: "tenant-1",
+      basicPassword: "glc_token",
+      tenantId: "tenant-1",
+    });
+  });
+
+  it("falls back to none when only the tenant id is set", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_AUTH_TENANT_ID = "tenant-1";
+    const cfg = resolveConfig();
+    expect(cfg?.auth).toEqual({ mode: "none" });
+  });
+
+  it("falls back to none when only the auth token is set", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_AUTH_TOKEN = "glc_token";
+    const cfg = resolveConfig();
+    expect(cfg?.auth).toEqual({ mode: "none" });
+  });
+
+  it("defaults auth to none when no creds are set", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    const cfg = resolveConfig();
+    expect(cfg?.auth).toEqual({ mode: "none" });
+  });
+});
+
+describe("resolveConfig AGENTO11Y_* aliases", () => {
+  beforeEach(clearEnv);
+  afterEach(clearEnv);
+
+  function setBranded(prefix: string): void {
+    process.env[`${prefix}ENDPOINT`] = "http://localhost:8080";
+    process.env[`${prefix}AUTH_TENANT_ID`] = "tenant-1";
+    process.env[`${prefix}AUTH_TOKEN`] = "glc_token";
+    process.env[`${prefix}AGENT_NAME`] = "dsh-alias";
+    process.env[`${prefix}AGENT_VERSION`] = "1.2.3";
+    process.env[`${prefix}CONTENT_CAPTURE_MODE`] = "full";
+    process.env[`${prefix}REDACT_INPUT_MESSAGES`] = "false";
+  }
+
+  it("preferred-only env produces the same config as legacy-only env", () => {
+    setBranded("AGENTO11Y_");
+    const preferred = resolveConfig();
+    clearEnv();
+    setBranded("SIGIL_");
+    const legacy = resolveConfig();
+    expect(preferred).not.toBeNull();
+    expect(preferred).toEqual(legacy);
+    expect(preferred?.redactInputMessages).toBe(false);
+  });
+
+  it("AGENTO11Y_ENDPOINT beats SIGIL_ENDPOINT", () => {
+    process.env.AGENTO11Y_ENDPOINT = "http://preferred:8080";
+    process.env.SIGIL_ENDPOINT = "http://legacy:8080";
+    expect(resolveConfig()?.endpoint).toBe("http://preferred:8080");
+  });
+
+  it("blank AGENTO11Y_ENDPOINT falls back to SIGIL_ENDPOINT", () => {
+    process.env.AGENTO11Y_ENDPOINT = "   ";
+    process.env.SIGIL_ENDPOINT = "http://legacy:8080";
+    expect(resolveConfig()?.endpoint).toBe("http://legacy:8080");
+  });
+
+  it("invalid AGENTO11Y_REDACT_INPUT_MESSAGES keeps the default over a valid SIGIL_ one", () => {
+    const warn = loggerMock.warn;
+    warn.mockClear();
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.AGENTO11Y_REDACT_INPUT_MESSAGES = "maybe";
+    process.env.SIGIL_REDACT_INPUT_MESSAGES = "false";
+    const cfg = resolveConfig();
+    expect(cfg?.redactInputMessages).toBe(true);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "invalid boolean value for AGENTO11Y_REDACT_INPUT_MESSAGES",
+      ),
+    );
+    warn.mockRestore();
+  });
+
+  it("invalid AGENTO11Y_CONTENT_CAPTURE_MODE ignores a valid SIGIL_CONTENT_CAPTURE_MODE", () => {
+    const warn = loggerMock.warn;
+    warn.mockClear();
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.AGENTO11Y_CONTENT_CAPTURE_MODE = "yolo";
+    process.env.SIGIL_CONTENT_CAPTURE_MODE = "full";
+    const cfg = resolveConfig();
+    expect(cfg?.contentCapture).toBe("metadata_only");
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("AGENTO11Y_CONTENT_CAPTURE_MODE"),
+    );
+    warn.mockRestore();
+  });
+
+  it("clearAgento11yEnv strips ambient AGENTO11Y_* vars", () => {
+    process.env.AGENTO11Y_ENDPOINT = "http://ambient:8080";
+    clearEnv();
+    expect(process.env.AGENTO11Y_ENDPOINT).toBeUndefined();
+    expect(resolveConfig()).toBeNull();
+  });
+});
+
+describe("resolveConfig canonical SIGIL_* env vars", () => {
+  beforeEach(clearEnv);
+  afterEach(clearEnv);
+
+  it("reads SIGIL_ENDPOINT as the endpoint", () => {
+    process.env.SIGIL_ENDPOINT = "http://canonical:8080";
+    const cfg = resolveConfig();
+    expect(cfg?.endpoint).toBe("http://canonical:8080");
+  });
+
+  it("SIGIL_CONTENT_CAPTURE_MODE sets content capture", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_CONTENT_CAPTURE_MODE = "full";
+    const cfg = resolveConfig();
+    expect(cfg?.contentCapture).toBe("full");
+  });
+
+  it("SIGIL_AGENT_NAME and SIGIL_AGENT_VERSION are read from env", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_AGENT_NAME = "dsh-canonical";
+    process.env.SIGIL_AGENT_VERSION = "9.9.9";
+    const cfg = resolveConfig();
+    expect(cfg?.agentName).toBe("dsh-canonical");
+    expect(cfg?.agentVersion).toBe("9.9.9");
+  });
+});
+
+describe("resolveConfig canonical OTLP env vars", () => {
+  beforeEach(clearEnv);
+  afterEach(clearEnv);
+
+  it("reads SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT =
+      "https://otlp.example.com/otlp";
+    const cfg = resolveConfig();
+    expect(cfg?.otlp?.endpoint).toBe("https://otlp.example.com/otlp");
+  });
+
+  it("falls back to OTEL_EXPORTER_OTLP_ENDPOINT", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = "https://otlp.example.com/otlp";
+    const cfg = resolveConfig();
+    expect(cfg?.otlp?.endpoint).toBe("https://otlp.example.com/otlp");
+  });
+
+  it("reads AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT =
+      "https://otlp.example.com/otlp";
+    const cfg = resolveConfig();
+    expect(cfg?.otlp?.endpoint).toBe("https://otlp.example.com/otlp");
+  });
+
+  it("whitespace SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT falls through to OTEL_EXPORTER_OTLP_ENDPOINT", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT = "   ";
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = "https://std.example.com/otlp";
+    const cfg = resolveConfig();
+    expect(cfg?.otlp?.endpoint).toBe("https://std.example.com/otlp");
+  });
+
+  it("whitespace AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT falls through to OTEL_EXPORTER_OTLP_ENDPOINT", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT = "   ";
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = "https://std.example.com/otlp";
+    const cfg = resolveConfig();
+    expect(cfg?.otlp?.endpoint).toBe("https://std.example.com/otlp");
+  });
+
+  it("returns no otlp when not configured", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    const cfg = resolveConfig();
+    expect(cfg?.otlp).toBeUndefined();
+  });
+
+  it("synthesises OTLP Basic auth from canonical SIGIL_* creds", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_AUTH_TENANT_ID = "tenant-1";
+    process.env.SIGIL_AUTH_TOKEN = "glc_token";
+    process.env.SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT =
+      "https://otlp.example.com/otlp";
+    const cfg = resolveConfig();
+    expect(cfg?.otlp?.headers.Authorization).toMatch(/^Basic /);
+    const decoded = Buffer.from(
+      cfg!.otlp!.headers.Authorization!.replace("Basic ", ""),
+      "base64",
+    ).toString();
+    expect(decoded).toBe("tenant-1:glc_token");
+  });
+
+  it("SIGIL_OTEL_AUTH_TOKEN overrides SIGIL_AUTH_TOKEN for OTel only", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_AUTH_TENANT_ID = "tenant-1";
+    process.env.SIGIL_AUTH_TOKEN = "sigil-only-token";
+    process.env.SIGIL_OTEL_AUTH_TOKEN = "otel-only-token";
+    process.env.SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT =
+      "https://otlp.example.com/otlp";
+    const cfg = resolveConfig();
+    const decoded = Buffer.from(
+      cfg!.otlp!.headers.Authorization!.replace("Basic ", ""),
+      "base64",
+    ).toString();
+    expect(decoded).toBe("tenant-1:otel-only-token");
+    expect(cfg?.auth).toEqual({
+      mode: "basic",
+      basicUser: "tenant-1",
+      basicPassword: "sigil-only-token",
+      tenantId: "tenant-1",
+    });
+  });
+
+  it("keeps explicit OTEL_EXPORTER_OTLP_HEADERS Authorization", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_AUTH_TENANT_ID = "tenant-1";
+    process.env.SIGIL_AUTH_TOKEN = "sigil-token";
+    process.env.SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT =
+      "https://otlp.example.com/otlp";
+    process.env.OTEL_EXPORTER_OTLP_HEADERS =
+      "Authorization=Basic explicit-otlp,X-Test=ok";
+    const cfg = resolveConfig();
+    expect(cfg?.otlp?.headers.Authorization).toBe("Basic explicit-otlp");
+    expect(cfg?.otlp?.headers["X-Test"]).toBe("ok");
+  });
+
+  it("env var overrides OTLP endpoint", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT =
+      "https://env-otlp.example.com";
+    const cfg = resolveConfig();
+    expect(cfg?.otlp?.endpoint).toBe("https://env-otlp.example.com");
+  });
+});
+
+describe("resolveConfig auto-tags", () => {
+  beforeEach(clearEnv);
+  afterEach(clearEnv);
+
+  it("leaves auto-tags unset when the switch is off", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    expect(resolveConfig()?.autoTags).toBeUndefined();
+  });
+
+  it("leaves auto-tags unset when the switch is blank", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS = "   ";
+    expect(resolveConfig()?.autoTags).toBeUndefined();
+  });
+
+  it("leaves auto-tags unset when the switch is false", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS = "false";
+    process.env.AGENTO11Y_USER_ID = "alice@example.com";
+    expect(resolveConfig()?.autoTags).toBeUndefined();
+  });
+
+  it("resolves every name when the switch alone is on", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS = "true";
+    process.env.AGENTO11Y_USER_ID = "alice@example.com";
+
+    const tags = resolveConfig()?.autoTags ?? {};
+    expect(tags.user).toBe("alice@example.com");
+    expect(Object.keys(tags).sort()).toEqual(
+      Object.keys(tags)
+        .filter((key) => ["user", "repo", "git.branch"].includes(key))
+        .sort(),
+    );
+  });
+
+  it("narrows the switch to the names in the allowlist", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS = "true";
+    process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES = "user";
+    process.env.AGENTO11Y_USER_ID = "alice@example.com";
+    expect(resolveConfig()?.autoTags).toEqual({ user: "alice@example.com" });
+  });
+
+  it("reads both variables under the legacy spelling too", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_AUTO_CODING_AGENT_TAGS = "true";
+    process.env.SIGIL_AUTO_CODING_AGENT_TAGS_NAMES = "user";
+    process.env.SIGIL_USER_ID = "alice@example.com";
+    expect(resolveConfig()?.autoTags).toEqual({ user: "alice@example.com" });
+  });
+
+  it("lets an explicit tag win over the resolved value", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS = "true";
+    process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES = "user";
+    process.env.AGENTO11Y_USER_ID = "alice@example.com";
+    process.env.AGENTO11Y_TAGS = "user=team-account";
+    expect(resolveConfig()?.autoTags).toBeUndefined();
+  });
+
+  it("warns about an unsupported name and keeps the recognized ones", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS = "true";
+    process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES = "user,team";
+    process.env.AGENTO11Y_USER_ID = "alice@example.com";
+
+    expect(resolveConfig()?.autoTags).toEqual({ user: "alice@example.com" });
+    expect(loggerMock.warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES has unsupported names team",
+      ),
+    );
+  });
+
+  it("warns when the allowlist is set but the switch is off", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES = "user";
+    process.env.AGENTO11Y_USER_ID = "alice@example.com";
+
+    expect(resolveConfig()?.autoTags).toBeUndefined();
+    expect(loggerMock.warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES is set but AGENTO11Y_AUTO_CODING_AGENT_TAGS is off",
+      ),
+    );
+  });
+});
+
+describe("loadConfig reads ~/.config/agento11y/config.env", () => {
+  let dir: string;
+  let homeBackup: string | undefined;
+
+  beforeEach(() => {
+    clearEnv();
+    dir = mkdtempSync(join(tmpdir(), "agento11y-dsh-loadconfig-"));
+    // Redirect both config roots so the dotenv file is the only credential source.
+    process.env.XDG_CONFIG_HOME = dir;
+    homeBackup = process.env.HOME;
+    process.env.HOME = dir;
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+    if (homeBackup === undefined) delete process.env.HOME;
+    else process.env.HOME = homeBackup;
+    clearEnv();
+  });
+
+  it("picks up SIGIL_* credentials from config.env when no shell env is set", async () => {
+    const cfgDir = join(dir, "agento11y");
+    mkdirSync(cfgDir, { recursive: true });
+    writeFileSync(
+      join(cfgDir, "config.env"),
+      [
+        "SIGIL_ENDPOINT=https://sigil.example.com",
+        "SIGIL_AUTH_TENANT_ID=tenant-1",
+        "SIGIL_AUTH_TOKEN=glc_token",
+        "",
+      ].join("\n"),
+    );
+
+    const cfg = await loadConfig();
+    expect(cfg).not.toBeNull();
+    expect(cfg?.endpoint).toBe("https://sigil.example.com");
+    expect(cfg?.auth).toEqual({
+      mode: "basic",
+      basicUser: "tenant-1",
+      basicPassword: "glc_token",
+      tenantId: "tenant-1",
+    });
+  });
+
+  it("ignores a stray ~/.config/agento11y-dsh/config.json on disk", async () => {
+    const legacyDir = join(dir, "agento11y-dsh");
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(
+      join(legacyDir, "config.json"),
+      JSON.stringify({ endpoint: "http://legacy:9090" }),
+    );
+
+    const cfg = await loadConfig();
+    expect(cfg).toBeNull();
+  });
+});
+
+describe("loadConfig in local mode", () => {
+  let dir: string;
+  let homeBackup: string | undefined;
+
+  const receiver = {
+    endpoint: "http://127.0.0.1:8768",
+    otlpEndpoint: "http://127.0.0.1:8768/otlp",
+  };
+
+  beforeEach(() => {
+    clearEnv();
+    vi.clearAllMocks();
+    resolveLocalReceiverMock.mockResolvedValue(receiver);
+    dir = mkdtempSync(join(tmpdir(), "agento11y-dsh-localconfig-"));
+    process.env.XDG_CONFIG_HOME = dir;
+    homeBackup = process.env.HOME;
+    process.env.HOME = dir;
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+    if (homeBackup === undefined) delete process.env.HOME;
+    else process.env.HOME = homeBackup;
+    clearEnv();
+  });
+
+  function writeConfigEnv(...lines: string[]): void {
+    const cfgDir = join(dir, "agento11y");
+    mkdirSync(cfgDir, { recursive: true });
+    writeFileSync(join(cfgDir, "config.env"), `${lines.join("\n")}\n`);
+  }
+
+  const cloudLines = [
+    "AGENTO11Y_ENDPOINT=https://cloud.example.com",
+    "AGENTO11Y_AUTH_TENANT_ID=tenant-1",
+    "AGENTO11Y_AUTH_TOKEN=glc_token",
+  ];
+
+  it("routes conversations and OTLP at the receiver over saved Cloud settings", async () => {
+    writeConfigEnv(
+      ...cloudLines,
+      "AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.example.com/otlp",
+      "AGENTO11Y_CONTENT_CAPTURE_MODE=metadata_only",
+      "AGENTO11Y_LOCAL=true",
+    );
+
+    const cfg = await loadConfig();
+
+    expect(cfg?.endpoint).toBe("http://127.0.0.1:8768");
+    expect(cfg?.otlp?.endpoint).toBe("http://127.0.0.1:8768/otlp");
+    expect(cfg?.contentCapture).toBe("full");
+    expect(cfg?.local).toBe(true);
+    expect(cfg?.auth).toEqual({
+      mode: "basic",
+      basicUser: "tenant-1",
+      basicPassword: "glc_token",
+      tenantId: "tenant-1",
+    });
+  });
+
+  it("fills a missing tenant and token independently", async () => {
+    writeConfigEnv("AGENTO11Y_AUTH_TENANT_ID=tenant-1", "AGENTO11Y_LOCAL=true");
+
+    const cfg = await loadConfig();
+
+    expect(cfg?.auth).toEqual({
+      mode: "basic",
+      basicUser: "tenant-1",
+      basicPassword: "local",
+      tenantId: "tenant-1",
+    });
+  });
+
+  it("captures locally with no endpoint configured at all", async () => {
+    writeConfigEnv("SIGIL_LOCAL=true");
+
+    const cfg = await loadConfig();
+
+    expect(cfg?.endpoint).toBe("http://127.0.0.1:8768");
+    expect(cfg?.auth).toEqual({
+      mode: "basic",
+      basicUser: "local",
+      basicPassword: "local",
+      tenantId: "local",
+    });
+  });
+
+  it("does not write the local overrides into process.env", async () => {
+    // Local overrides must not leak into later sessions in the same process.
+    writeConfigEnv(
+      ...cloudLines,
+      "AGENTO11Y_CONTENT_CAPTURE_MODE=metadata_only",
+      "AGENTO11Y_LOCAL=true",
+    );
+
+    const cfg = await loadConfig();
+
+    expect(cfg?.contentCapture).toBe("full");
+    expect(process.env.AGENTO11Y_ENDPOINT).toBe("https://cloud.example.com");
+    expect(process.env.SIGIL_ENDPOINT).toBe("https://cloud.example.com");
+    expect(process.env.AGENTO11Y_CONTENT_CAPTURE_MODE).toBe("metadata_only");
+    expect(process.env.AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT).toBeUndefined();
+  });
+
+  it("keeps the Cloud path when the shell disables a saved local choice", async () => {
+    writeConfigEnv(...cloudLines, "AGENTO11Y_LOCAL=true");
+    process.env.AGENTO11Y_LOCAL = "false";
+
+    const cfg = await loadConfig();
+
+    expect(cfg?.endpoint).toBe("https://cloud.example.com");
+    expect(cfg?.contentCapture).toBe("metadata_only");
+    expect(cfg?.local).toBeUndefined();
+    expect(resolveLocalReceiverMock).not.toHaveBeenCalled();
+  });
+
+  it("treats an invalid local value as off and warns", async () => {
+    writeConfigEnv(...cloudLines, "AGENTO11Y_LOCAL=maybe");
+
+    const cfg = await loadConfig();
+
+    expect(cfg?.endpoint).toBe("https://cloud.example.com");
+    expect(resolveLocalReceiverMock).not.toHaveBeenCalled();
+    expect(loggerMock.warn).toHaveBeenCalledWith(
+      expect.stringContaining("AGENTO11Y_LOCAL"),
+    );
+  });
+
+  it("fails instead of falling back to Cloud when no receiver is available", async () => {
+    writeConfigEnv(...cloudLines, "AGENTO11Y_LOCAL=true");
+    resolveLocalReceiverMock.mockRejectedValue(
+      new LocalReceiverError("no local receiver is running"),
+    );
+
+    await expect(loadConfig()).rejects.toBeInstanceOf(LocalReceiverError);
+  });
+});

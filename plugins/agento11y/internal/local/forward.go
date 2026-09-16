@@ -760,7 +760,7 @@ func buildGenerationPayload(raw []json.RawMessage, strip bool) ([]byte, error) {
 		return envelope, nil
 	}
 	// DiscardUnknown, unlike wire.UnmarshalExportGenerationsJSON: an exporter
-	// newer than this daemon (the pi and opencode plugins ship on their own
+	// newer than this daemon (the dsh, pi, and opencode plugins ship on their own
 	// npm cadence) would otherwise cost the whole batch, and discarding a
 	// field the daemon cannot strip is the safe direction for a reduced copy.
 	var req agento11yv1.ExportGenerationsRequest

@@ -1,0 +1,49 @@
+{
+  "name": "@grafana/agento11y-dsh",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness plugin for Grafana Agent Observability",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/grafana/agento11y.git",
+    "directory": "plugins/dsh"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "dsh-plugin"
+  ],
+  "scripts": {
+    "prebuild": "mise run build:ts:sdk-js",
+    "build": "node scripts/build.mjs",
+    "lint": "biome check .",
+    "lint:fix": "biome check --fix .",
+    "pretypecheck": "mise run build:ts:sdk-js",
+    "typecheck": "tsc --noEmit",
+    "pretest": "mise run build:ts:sdk-js",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "^1.14.4",
+    "@grpc/proto-loader": "^0.8.0"
+  },
+  "devDependencies": {
+    "@grafana/agento11y": "workspace:*",
+    "@opentelemetry/api": "1.9.1",
+    "@opentelemetry/exporter-metrics-otlp-http": "0.214.0",
+    "@opentelemetry/exporter-trace-otlp-http": "0.214.0",
+    "@opentelemetry/resources": "2.6.1",
+    "@opentelemetry/sdk-metrics": "2.6.1",
+    "@opentelemetry/sdk-trace-base": "2.6.1",
+    "@types/node": "25.6.0",
+    "esbuild": "0.28.1",
+    "typescript": "6.0.3",
+    "vitest": "4.1.10"
+  }
+}

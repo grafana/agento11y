@@ -253,6 +253,18 @@ jobs:
       - name: Build opencode plugin
         run: pnpm --filter @grafana/agento11y-opencode run build
 
+      - name: Lint dsh plugin
+        run: mise run lint:ts:plugin-dsh
+
+      - name: Typecheck dsh plugin
+        run: pnpm --filter @grafana/agento11y-dsh run typecheck
+
+      - name: Test dsh plugin
+        run: pnpm --filter @grafana/agento11y-dsh run test
+
+      - name: Build dsh plugin
+        run: pnpm --filter @grafana/agento11y-dsh run build
+
   python-lint:
     name: Python Lint
     runs-on: ubuntu-latest
