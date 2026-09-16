@@ -22,6 +22,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/skills"
+	"github.com/muesli/termenv"
 )
 
 // nonTTYStdin returns a file that is guaranteed not to be a terminal.
@@ -1760,7 +1761,7 @@ func TestSetupPageLink(t *testing.T) {
 				return c.openErr
 			}
 
-			got := setupPageLink(c.origin)
+			got := setupPageLink(io.Discard, c.origin)
 			if !strings.Contains(got, c.wantURL) {
 				t.Errorf("output missing %q:\n%s", c.wantURL, got)
 			}
@@ -1795,9 +1796,8 @@ func TestRows(t *testing.T) {
 		{name: "two rows over wraps twice", in: strings.Repeat("x", 161), width: 80, want: 3},
 		{name: "an unknown width assumes no wrapping", in: strings.Repeat("x", 200), want: 1},
 		{
-			// lipgloss styles the box, and ANSI escapes take no columns.
 			name:  "styling does not count as width",
-			in:    bannerURL.Render(strings.Repeat("x", 70)),
+			in:    "\x1b[4m" + strings.Repeat("x", 70) + "\x1b[0m",
 			width: 80,
 			want:  1,
 		},
@@ -1819,20 +1819,132 @@ func TestSetupPageLinkWrapsOnANarrowTerminal(t *testing.T) {
 	t.Cleanup(func() { openURL = prev })
 	openURL = func(string) error { return nil }
 
-	link := setupPageLink("https://grafanaassistantdev.grafana.net")
+	link := setupPageLink(io.Discard, "https://grafanaassistantdev.grafana.net")
 	if got, plain := rows(link, 80), rows(link, 0); got <= plain {
 		t.Errorf("link of %d lines reported %d rows at 80 columns; a wrapped row is uncounted", plain, got)
 	}
 }
 
+func TestStaticOutput_Destination(t *testing.T) {
+	previous := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(previous) })
+	previousOpen := openURL
+	openURL = func(string) error { return nil }
+	t.Cleanup(func() { openURL = previousOpen })
+
+	const origin = "https://mystack.grafana.net"
+	const nextPrefix = "Now you can try agento11y claude or agento11y pi to launch a coding agent.\n"
+	nextSuffix := "Setting up a coding agent? Run " + skills.SetupCodingAgentCommand + ".\n" +
+		"View observability data at " + observabilityPageURL(origin) + "\n" +
+		"Read documentation at " + docsURL + "\n"
+	outputs := []struct {
+		name   string
+		render func(io.Writer)
+		want   string
+	}{
+		{
+			name:   "welcome Cloud",
+			render: func(w io.Writer) { fmt.Fprint(w, welcomeBanner(w, false, false)) },
+			want:   "Welcome to Grafana Agent Observability\nLet's connect your Grafana stack.\n",
+		},
+		{
+			name:   "welcome local choice",
+			render: func(w io.Writer) { fmt.Fprint(w, welcomeBanner(w, true, false)) },
+			want:   "Welcome to Grafana Agent Observability\nChoose where to keep your sessions.\n",
+		},
+		{
+			name:   "welcome configured",
+			render: func(w io.Writer) { fmt.Fprint(w, welcomeBanner(w, false, true)) },
+			want:   "Welcome to Grafana Agent Observability\nUpdate your Agent Observability settings.\n",
+		},
+		{
+			name:   "setup link",
+			render: func(w io.Writer) { fmt.Fprint(w, setupPageLink(w, origin)) },
+			want:   "Get your credentials at:\n" + setupPageURL(origin) + "\n",
+		},
+		{
+			name:   "verified next steps",
+			render: func(w io.Writer) { printNextStep(w, verifyPassed, origin) },
+			want:   nextPrefix + "Run agento11y doctor if the data does not appear.\n" + nextSuffix,
+		},
+		{
+			name:   "skipped next steps",
+			render: func(w io.Writer) { printNextStep(w, verifySkipped, origin) },
+			want:   nextPrefix + "Verification was skipped. Run agento11y doctor if the configuration does not work.\n" + nextSuffix,
+		},
+		{
+			name:   "overridden next steps",
+			render: func(w io.Writer) { printNextStep(w, verifyOverridden, origin) },
+			want:   nextPrefix + "The endpoint did not accept these credentials. Run agento11y doctor to check them again.\n" + nextSuffix,
+		},
+		{
+			name: "accepted credentials",
+			render: func(w io.Writer) {
+				outcome, err := verifyCredentials(context.Background(), RunOpts{
+					Stderr: w,
+					Probe: func(context.Context, string, string, string, bool) *doctor.ProbeResult {
+						return &doctor.ProbeResult{OK: true, StatusCode: 200}
+					},
+				}, formValues{}, false, false)
+				if err != nil || outcome != verifyPassed {
+					t.Fatalf("verifyCredentials = %v, %v", outcome, err)
+				}
+			},
+			want: "The endpoint accepted these credentials.\n",
+		},
+		{
+			name: "failed credentials",
+			render: func(w io.Writer) {
+				fmt.Fprint(w, describeProbeFailure(w, &doctor.ProbeResult{StatusCode: 401}, "https://api.example.invalid", "123"))
+			},
+			want: "The endpoint rejected these credentials (HTTP 401).\n" +
+				"Tenant ID \"123\" and the auth token are checked as one pair, so either can cause this.\n" +
+				"The likeliest cause is a token without the sigil:write scope.",
+		},
+	}
+	for _, mode := range []struct{ name, term, noColor string }{
+		{name: "redirected", term: "xterm-256color"},
+		{name: "NO_COLOR", term: "xterm-256color", noColor: "1"},
+		{name: "dumb", term: "dumb"},
+	} {
+		t.Run(mode.name, func(t *testing.T) {
+			t.Setenv("TERM", mode.term)
+			t.Setenv("NO_COLOR", mode.noColor)
+			for _, output := range outputs {
+				t.Run(output.name, func(t *testing.T) {
+					var buf bytes.Buffer
+					output.render(&buf)
+					if got := buf.String(); got != output.want {
+						t.Fatalf("buffer output = %q, want %q", got, output.want)
+					}
+					f, err := os.CreateTemp(t.TempDir(), "login-output")
+					if err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() { _ = f.Close() })
+					output.render(f)
+					got, err := os.ReadFile(f.Name())
+					if err != nil {
+						t.Fatal(err)
+					}
+					if string(got) != output.want {
+						t.Fatalf("file output = %q, want %q", got, output.want)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestWelcomeBanner(t *testing.T) {
-	if banner := welcomeBanner(false, false); strings.Contains(banner, "<your-stack>") {
+	if banner := welcomeBanner(io.Discard, false, false); strings.Contains(banner, "<your-stack>") {
 		t.Error("the welcome banner should leave the setup link to setupPageLink")
 	}
-	if banner := welcomeBanner(true, false); !strings.Contains(banner, "Choose where to keep your sessions.") {
+	if banner := welcomeBanner(io.Discard, true, false); !strings.Contains(banner, "Choose where to keep your sessions.") {
 		t.Errorf("destination banner has the Cloud-only subtitle:\n%s", banner)
 	}
-	if banner := welcomeBanner(false, true); !strings.Contains(banner, "Update your Agent Observability settings.") {
+	if banner := welcomeBanner(io.Discard, false, true); !strings.Contains(banner, "Update your Agent Observability settings.") {
 		t.Errorf("configured banner has the first-run subtitle:\n%s", banner)
 	}
 }

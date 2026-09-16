@@ -60,6 +60,7 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/browser"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/clihelp"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/doctor"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
@@ -179,21 +180,6 @@ var openURL = browser.Open
 // agent adapter we ship (claude-code, codex, cursor, pi, …). Linked as a
 // supplemental “read more” after the next-step hint.
 const docsURL = "https://github.com/grafana/agento11y/tree/main/plugins"
-
-var (
-	bannerBox = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(grafanaOrange).
-			Padding(0, 1).
-			MarginBottom(1)
-	// bannerPlain carries the same trailing gap as bannerBox with no frame,
-	// so the setup link does not compete with the welcome box above it.
-	bannerPlain    = lipgloss.NewStyle().MarginBottom(1)
-	bannerTitle    = lipgloss.NewStyle().Bold(true)
-	bannerSubtitle = lipgloss.NewStyle().Faint(true)
-	bannerLabel    = lipgloss.NewStyle().Faint(true)
-	bannerURL      = lipgloss.NewStyle().Underline(true)
-)
 
 // grafanaTheme returns a huh theme tinted with Grafana orange for the
 // active field only. Inactive (blurred) fields drop ThemeCharm's blue
@@ -439,7 +425,7 @@ func Run(ctx context.Context, opts RunOpts) (Result, error) {
 	// so the exporter builds Basic auth from the tenant ID and the new token.
 	if !v.otlpHeadersPasted && v.otlpHeaders != "" && v.token != existingToken {
 		v.otlpHeaders = ""
-		fmt.Fprintln(opts.Stderr, lipgloss.NewStyle().Faint(true).Render(
+		fmt.Fprintln(opts.Stderr, clihelp.New(opts.Stderr).Detail(
 			"Removed the saved OTEL_EXPORTER_OTLP_HEADERS: it carried the previous token. "+
 				"Paste the block from the setup page if OTLP needs a credential of its own."))
 	}
@@ -493,7 +479,7 @@ func enableLocalMode(configPath string, opts RunOpts) (Result, error) {
 	envconfig.SetBothEnv("LOCAL", "true")
 	envconfig.SetBothEnv("LOCAL_FORWARD", "false")
 	envconfig.SetBothEnv(envconfig.AutoTagsSuffix, "true")
-	fmt.Fprintln(opts.Stderr, "Sessions will be captured on this machine.")
+	fmt.Fprintln(opts.Stderr, clihelp.New(opts.Stderr).Success("Sessions will be captured on this machine."))
 	return Result{LocalMode: true, UsesLocalDaemon: true}, nil
 }
 
@@ -560,7 +546,7 @@ func promptValues(ctx context.Context, v *formValues, fixed fixedValues, existin
 	defer func() { fmt.Fprintf(stderr, "\033[%dA\033[J", printed) }()
 
 	keepCloudConnection := canKeepCloudConnection(*v, fixed, existingToken)
-	say(welcomeBanner(offerLocal, keepCloudConnection))
+	say(welcomeBanner(stderr, offerLocal, keepCloudConnection))
 
 	if offerLocal {
 		chooseLocal, err := promptDestination()
@@ -594,7 +580,7 @@ func promptValues(ctx context.Context, v *formValues, fixed fixedValues, existin
 		return err
 	}
 	v.stackURL = stack
-	say(setupPageLink(v.stackURL))
+	say(setupPageLink(stderr, v.stackURL))
 
 	// One masked input rather than a text area: the block is a credential, and
 	// a terminal paste into a single-line input turns its newlines into spaces,
@@ -1095,16 +1081,13 @@ func stackOptions(stacks []string) []huh.Option[string] {
 // setupPageLink renders the link naming the coding-agent setup page for origin,
 // and opens that page in a browser on the way. Opening is best effort and
 // unreported: a machine with no browser still gets a URL to open by hand.
-func setupPageLink(origin string) string {
+func setupPageLink(w io.Writer, origin string) string {
 	target := setupPageURL(origin)
 	// The placeholder host resolves to nothing, so only a real origin is opened.
 	if origin != "" {
 		_ = openURL(target)
 	}
-	return bannerPlain.Render(strings.Join([]string{
-		bannerLabel.Render("Get your credentials at:"),
-		bannerURL.Render(target),
-	}, "\n"))
+	return clihelp.New(w).Heading("Get your credentials at:") + "\n" + target + "\n"
 }
 
 // pasteFilled records which values a pasted block supplied, so the form skips
@@ -1403,11 +1386,11 @@ func verifyCredentials(ctx context.Context, opts RunOpts, v formValues, insecure
 	res := opts.Probe(ctx, v.endpoint, v.tenantID, v.token, insecure)
 	logVerdict(opts.Logger, v.endpoint, v.tenantID, res)
 	if res != nil && res.OK {
-		fmt.Fprintln(opts.Stderr, lipgloss.NewStyle().Faint(true).Render("The endpoint accepted these credentials."))
+		fmt.Fprintln(opts.Stderr, clihelp.New(opts.Stderr).Success("The endpoint accepted these credentials."))
 		return verifyPassed, nil
 	}
 
-	fmt.Fprintln(opts.Stderr, describeProbeFailure(res, v.endpoint, v.tenantID))
+	fmt.Fprintln(opts.Stderr, describeProbeFailure(opts.Stderr, res, v.endpoint, v.tenantID))
 	if opts.AssumeYes {
 		return verifyOverridden, nil
 	}
@@ -1459,35 +1442,36 @@ func logVerdict(logger *log.Logger, endpoint, tenantID string, res *doctor.Probe
 // sigil:write scope — is called out. The classification uses doctor's own
 // predicates so login's wording cannot drift from what `agento11y doctor`
 // calls the same result.
-func describeProbeFailure(res *doctor.ProbeResult, endpoint, tenantID string) string {
-	warn := lipgloss.NewStyle().Bold(true).Foreground(grafanaOrange)
-	faint := lipgloss.NewStyle().Faint(true)
+func describeProbeFailure(w io.Writer, res *doctor.ProbeResult, endpoint, tenantID string) string {
+	r := clihelp.New(w)
+	warn := r.Warning
+	faint := r.Detail
 
 	var lines []string
 	switch {
 	case res == nil:
 		lines = []string{
-			warn.Render("Could not check the credentials: the check returned no result."),
+			warn("Could not check the credentials: the check returned no result."),
 		}
 	case res.AuthFailure():
 		lines = []string{
-			warn.Render(fmt.Sprintf("The endpoint rejected these credentials (HTTP %d).", res.StatusCode)),
-			faint.Render(fmt.Sprintf("Tenant ID %q and the auth token are checked as one pair, so either can cause this.", tenantID)),
-			faint.Render("The likeliest cause is a token without the sigil:write scope."),
+			warn(fmt.Sprintf("The endpoint rejected these credentials (HTTP %d).", res.StatusCode)),
+			faint(fmt.Sprintf("Tenant ID %q and the auth token are checked as one pair, so either can cause this.", tenantID)),
+			faint("The likeliest cause is a token without the sigil:write scope."),
 		}
 	case res.NoResponse():
-		lines = []string{warn.Render("Could not reach " + endpoint + ".")}
+		lines = []string{warn("Could not reach " + endpoint + ".")}
 		if msg := strings.TrimSpace(res.Message); msg != "" {
-			lines = append(lines, faint.Render(msg))
+			lines = append(lines, faint(msg))
 		}
-		lines = append(lines, faint.Render("Check the endpoint URL and this machine's network access."))
+		lines = append(lines, faint("Check the endpoint URL and this machine's network access."))
 	default:
 		lines = []string{
-			warn.Render(fmt.Sprintf("The endpoint answered HTTP %d.", res.StatusCode)),
-			faint.Render("Request URL: " + res.URL),
+			warn(fmt.Sprintf("The endpoint answered HTTP %d.", res.StatusCode)),
+			faint("Request URL: " + res.URL),
 		}
 		if strings.TrimSpace(res.Message) != "" {
-			lines = append(lines, faint.Render(strings.TrimSpace(res.Message)))
+			lines = append(lines, faint(strings.TrimSpace(res.Message)))
 		}
 	}
 	return strings.Join(lines, "\n")
@@ -1495,7 +1479,7 @@ func describeProbeFailure(res *doctor.ProbeResult, endpoint, tenantID string) st
 
 // printNextStep emits the post-login hint: what to run, how to diagnose the
 // configuration that was just written, where the data shows up, and where to
-// read more. Commands are bold orange so the eye lands on what to type;
+// read more. Commands are bold so the eye lands on what to type;
 // surrounding copy and URLs are faint so the lines read as secondary
 // suggestions rather than another banner.
 //
@@ -1504,32 +1488,33 @@ func describeProbeFailure(res *doctor.ProbeResult, endpoint, tenantID string) st
 // written, but a save that skipped or overrode verification says why to run
 // it now rather than only if the data does not appear.
 func printNextStep(w io.Writer, outcome verifyOutcome, origin string) {
-	faint := lipgloss.NewStyle().Faint(true)
-	cmd := lipgloss.NewStyle().Bold(true).Foreground(grafanaOrange)
-	link := lipgloss.NewStyle().Faint(true).Underline(true)
+	r := clihelp.New(w)
+	faint := r.Detail
+	cmd := r.Name
+	link := r.Detail
 	fmt.Fprintln(w,
-		faint.Render("Now you can try ")+
-			cmd.Render("agento11y claude")+
-			faint.Render(" or ")+
-			cmd.Render("agento11y pi")+
-			faint.Render(" to launch a coding agent."),
+		faint("Now you can try ")+
+			cmd("agento11y claude")+
+			faint(" or ")+
+			cmd("agento11y pi")+
+			faint(" to launch a coding agent."),
 	)
 	switch outcome {
 	case verifyPassed:
-		fmt.Fprintln(w, faint.Render("Run ")+cmd.Render("agento11y doctor")+faint.Render(" if the data does not appear."))
+		fmt.Fprintln(w, faint("Run ")+cmd("agento11y doctor")+faint(" if the data does not appear."))
 	case verifySkipped:
-		fmt.Fprintln(w, faint.Render("Verification was skipped. Run ")+cmd.Render("agento11y doctor")+faint.Render(" if the configuration does not work."))
+		fmt.Fprintln(w, faint("Verification was skipped. Run ")+cmd("agento11y doctor")+faint(" if the configuration does not work."))
 	case verifyOverridden:
-		fmt.Fprintln(w, faint.Render("The endpoint did not accept these credentials. Run ")+cmd.Render("agento11y doctor")+faint.Render(" to check them again."))
+		fmt.Fprintln(w, faint("The endpoint did not accept these credentials. Run ")+cmd("agento11y doctor")+faint(" to check them again."))
 	case verifyFailed:
 		// Unreachable: a failed check that was not overridden writes
 		// nothing, so there is no saved configuration to hint about.
 	}
 	// Credentials are saved, but a coding agent still has to be wired up. The
 	// skill walks that part. Doctor prints the same command.
-	fmt.Fprintln(w, faint.Render("Setting up a coding agent? Run ")+cmd.Render(skills.SetupCodingAgentCommand)+faint.Render("."))
-	fmt.Fprintln(w, faint.Render("View observability data at ")+link.Render(observabilityPageURL(origin)))
-	fmt.Fprintln(w, faint.Render("Read documentation at ")+link.Render(docsURL))
+	fmt.Fprintln(w, faint("Setting up a coding agent? Run ")+cmd(skills.SetupCodingAgentCommand)+faint("."))
+	fmt.Fprintln(w, faint("View observability data at ")+link(observabilityPageURL(origin)))
+	fmt.Fprintln(w, faint("Read documentation at ")+link(docsURL))
 }
 
 // seededSuffixes are the alias families loadSeeds resolves from the dotenv
@@ -1876,8 +1861,8 @@ func requireNonEmpty(field string) func(string) error {
 	}
 }
 
-// welcomeBanner returns the rendered banner box promptValues prints first.
-func welcomeBanner(offerLocal, configured bool) string {
+// welcomeBanner returns the rendered banner promptValues prints first.
+func welcomeBanner(w io.Writer, offerLocal, configured bool) string {
 	subtitle := "Let's connect your Grafana stack."
 	if configured {
 		subtitle = "Update your Agent Observability settings."
@@ -1885,11 +1870,8 @@ func welcomeBanner(offerLocal, configured bool) string {
 	if offerLocal {
 		subtitle = "Choose where to keep your sessions."
 	}
-	lines := []string{
-		bannerTitle.Render("Welcome to Grafana Agent Observability"),
-		bannerSubtitle.Render(subtitle),
-	}
-	return bannerBox.Render(strings.Join(lines, "\n"))
+	r := clihelp.New(w)
+	return r.Heading("Welcome to Grafana Agent Observability") + "\n" + r.Detail(subtitle) + "\n"
 }
 
 // rows reports how far Fprintln(w, s) advances the cursor, which is what

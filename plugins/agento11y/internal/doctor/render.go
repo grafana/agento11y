@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/clihelp"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/skills"
 )
 
@@ -20,55 +20,53 @@ func renderJSON(w io.Writer, r *Report) error {
 	return enc.Encode(r)
 }
 
-// palette renders styled text when color is on, plain text otherwise. When
-// color is on it uses lipgloss, which itself drops color codes on a non-TTY
-// writer, so captured/redirected output is plain regardless.
+// palette renders styled text through the destination's renderer, or plain
+// text when no renderer is set.
 type palette struct {
-	color bool
+	renderer *clihelp.Renderer
 }
 
-var (
-	orangeStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FF671D"))
-	okStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#73BF69"))
-	warnStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF9830"))
-	errStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#F2495C"))
-	faintStyle  = lipgloss.NewStyle().Faint(true)
-)
+func (p palette) heading(s string) string {
+	if p.renderer == nil {
+		return s
+	}
+	return p.renderer.Heading(s)
+}
 
-func (p palette) heading(s string) string { return p.apply(orangeStyle, s) }
-func (p palette) faint(s string) string   { return p.apply(faintStyle, s) }
+func (p palette) faint(s string) string {
+	if p.renderer == nil {
+		return s
+	}
+	return p.renderer.Detail(s)
+}
 
 // sectionTitle colors a section header by its health: green when passing, red
 // when failing, orange for warnings.
 func (p palette) sectionTitle(s string, h Health) string {
+	if p.renderer == nil {
+		return s
+	}
 	switch h {
 	case HealthOK:
-		return p.apply(okStyle, s)
+		return p.renderer.Success(s)
 	case HealthWarn:
-		return p.apply(warnStyle, s)
+		return p.renderer.Warning(s)
 	case HealthError:
-		return p.apply(errStyle, s)
+		return p.renderer.Error(s)
 	default:
 		return p.heading(s)
 	}
-}
-
-func (p palette) apply(style lipgloss.Style, s string) string {
-	if !p.color {
-		return s
-	}
-	return style.Render(s)
 }
 
 // glyph returns the status marker for a health level.
 func (p palette) glyph(h Health) string {
 	switch h {
 	case HealthOK:
-		return p.apply(okStyle, "✓")
+		return p.sectionTitle("✓", h)
 	case HealthWarn:
-		return p.apply(warnStyle, "!")
+		return p.sectionTitle("!", h)
 	case HealthError:
-		return p.apply(errStyle, "✗")
+		return p.sectionTitle("✗", h)
 	default:
 		return p.faint("·")
 	}
@@ -117,7 +115,10 @@ func (b *reportBody) flush(p palette) string {
 
 // renderHuman writes the colored (or plain) report.
 func renderHuman(w io.Writer, r *Report, color bool) {
-	p := palette{color: color}
+	p := palette{renderer: clihelp.New(w)}
+	if !color {
+		p.renderer.Plain()
+	}
 	var b reportBody
 
 	// Print the version as stamped, the way `agento11y --version` does. The

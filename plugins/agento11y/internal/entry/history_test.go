@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"io"
 	"log"
 	"net/http"
@@ -87,21 +88,11 @@ func runHistory(t *testing.T, args ...string) (stdout, stderr string, code *int)
 func TestHistoryUsageComesFromTheRegistry(t *testing.T) {
 	// Every registered agent must appear in usage, so a new importer needs no
 	// edit in this package.
+	var out bytes.Buffer
+	printHelp("history import", &out)
 	for _, spec := range history.Specs() {
-		if !strings.Contains(usageLine(), string(spec.ID)) {
-			t.Errorf("usage line does not mention %q: %s", spec.ID, usageLine())
-		}
-		if !strings.Contains(historyUsageLine(), string(spec.ID)) {
-			t.Errorf("history usage line does not mention %q: %s", spec.ID, historyUsageLine())
-		}
-		found := false
-		for _, line := range historyAgentTable() {
-			if strings.Contains(line, string(spec.ID)) && strings.Contains(line, spec.DisplayName) {
-				found = true
-			}
-		}
-		if !found {
-			t.Errorf("agent table has no row for %q: %v", spec.ID, historyAgentTable())
+		if !strings.Contains(out.String(), string(spec.ID)) || !strings.Contains(out.String(), spec.DisplayName) {
+			t.Errorf("help has no row for %q: %s", spec.ID, out.String())
 		}
 	}
 	if len(history.Specs()) == 0 {
@@ -116,12 +107,6 @@ func TestHistoryArgumentValidation(t *testing.T) {
 		wantExit   int
 		wantStderr string
 	}{
-		{
-			name:       "no verb",
-			args:       []string{"history"},
-			wantExit:   2,
-			wantStderr: "usage: agento11y history import",
-		},
 		{
 			name:       "unknown verb",
 			args:       []string{"history", "export"},
@@ -184,14 +169,126 @@ func TestHistoryArgumentValidation(t *testing.T) {
 			isolateDotenvHome(t)
 			t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 
-			_, stderr, code := runHistory(t, tt.args...)
+			var out, errOut bytes.Buffer
+			code := withExit(t, func() {
+				runHistoryCommand(tt.args[1:], strings.NewReader(""), &out, &errOut)
+			})
+			stderr := errOut.String()
 			if code == nil || *code != tt.wantExit {
 				t.Fatalf("exit = %v, want %d (stderr=%q)", code, tt.wantExit, stderr)
 			}
 			if !strings.Contains(stderr, tt.wantStderr) {
 				t.Fatalf("stderr = %q, want it to contain %q", stderr, tt.wantStderr)
 			}
+			if out.Len() != 0 || !strings.Contains(stderr, "usage: agento11y history") ||
+				!strings.Contains(stderr, "--help` for help.") || strings.Count(stderr, "\n") != 3 {
+				t.Fatalf("want compact usage error only: stdout=%q stderr=%q", out.String(), stderr)
+			}
 		})
+	}
+}
+
+func TestHistoryHelp(t *testing.T) {
+	for _, args := range [][]string{
+		nil, {"--help"}, {"-h"},
+		{"import", "--help"}, {"import", "-h"},
+		{"import", "claude-code", "--help"}, {"import", "claude", "-h"},
+		{"import", "claude-code", "--since", "invalid", "--help"},
+	} {
+		for _, direct := range []bool{false, true} {
+			name := strings.Join(args, "_")
+			if direct {
+				name += "/direct"
+			}
+			t.Run(name, func(t *testing.T) {
+				isolateDotenvHome(t)
+				writeHistoryConfig(t, "AGENTO11Y_AUTH_TOKEN=must-not-load\n")
+				prev := historyNow
+				t.Cleanup(func() { historyNow = prev })
+				historyNow = func() time.Time { panic("help reached history execution") }
+				var out, errOut bytes.Buffer
+				code := withExit(t, func() {
+					if direct {
+						runHistoryCommand(args, historyUnreadableInput{}, &out, &errOut)
+					} else {
+						run(append([]string{"history"}, args...), historyUnreadableInput{}, &out, &errOut)
+					}
+				})
+				if code != nil && *code != 0 || errOut.Len() != 0 || !strings.Contains(out.String(), "Usage:") {
+					t.Fatalf("exit=%v stdout=%q stderr=%q", code, out.String(), errOut.String())
+				}
+				if os.Getenv("AGENTO11Y_AUTH_TOKEN") != "" {
+					t.Fatal("help loaded configuration")
+				}
+				if len(args) > 0 && args[0] == "import" && !strings.Contains(out.String(), "--source") {
+					t.Fatal("import help is missing owning flags")
+				}
+			})
+		}
+	}
+}
+
+type historyUnreadableInput struct{}
+
+func (historyUnreadableInput) Read([]byte) (int, error) { panic("help read stdin") }
+
+func TestHistoryHelpRespectsParserBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		code int
+	}{
+		{[]string{"claude-code", "--workspace", "--help", "--dry-run"}, 0},
+		{[]string{"claude-code", "--source", "-h", "--dry-run"}, 0},
+		{[]string{"claude-code", "--", "--help"}, 2},
+		{[]string{"claude-code", "extra", "--help"}, 2},
+		{[]string{"claude-code", "--unknown", "--help"}, 2},
+		{[]string{"--dry-run", "claude-code", "--help"}, 2},
+	} {
+		t.Run(strings.Join(tc.args, "_"), func(t *testing.T) {
+			isolateDotenvHome(t)
+			t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+			var out, errOut bytes.Buffer
+			code := withExit(t, func() {
+				runHistoryImport(tc.args, strings.NewReader(""), &out, &errOut)
+			})
+			got := 0
+			if code != nil {
+				got = *code
+			}
+			if got != tc.code || strings.Contains(out.String(), "Usage:") {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", got, out.String(), errOut.String())
+			}
+			if tc.code == 0 && !strings.Contains(out.String(), "Dry run:") {
+				t.Fatal("flag value was treated as help")
+			}
+		})
+	}
+}
+
+func TestHistoryHelpFlagsAreFreshAndSilent(t *testing.T) {
+	isolateDotenvHome(t)
+	fs, opts := newHistoryImportFlags()
+	if err := fs.Parse([]string{"--source", "first", "--source", "second", "--since", "30d", "--dry-run"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(opts.sources) != 2 || opts.since != "30d" || !opts.dryRun {
+		t.Fatalf("owning options = %+v", opts)
+	}
+	fresh := historyHelpFlags()
+	if fresh == fs || fresh.Output() != io.Discard || fresh.Lookup("source").Value.String() != "" || fresh.Lookup("dry-run").Value.String() != "false" {
+		t.Fatal("help flags reused state or output")
+	}
+	fs.VisitAll(func(f *flag.Flag) {
+		other := fresh.Lookup(f.Name)
+		if other == nil || other.DefValue != f.DefValue || other.Usage != f.Usage {
+			t.Errorf("help flag differs from execution: %s", f.Name)
+		}
+	})
+	var out bytes.Buffer
+	fresh.SetOutput(&out)
+	fresh.Usage()
+	if err := fresh.Parse([]string{"--help"}); !errors.Is(err, flag.ErrHelp) || out.Len() != 0 {
+		t.Fatalf("help parse: err=%v output=%q", err, out.String())
 	}
 }
 

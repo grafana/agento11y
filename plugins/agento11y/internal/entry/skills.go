@@ -4,129 +4,40 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/grafana/agento11y/plugins/agento11y/internal/clihelp"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/skills"
 )
-
-// skillsUsage is the misuse form for `agento11y skills`. It names only `show`,
-// though `get` also works, because a usage line is there to get the command
-// run.
-const skillsUsage = "usage: agento11y " + skills.Command + " " + skills.ListVerb +
-	" | agento11y " + skills.Command + " " + skills.ShowVerb + " <name>"
-
-// listHint is the second stderr line on a failed lookup. It names the command
-// that lists the bundled skills.
-const listHint = "agento11y: run `agento11y " + skills.Command + " " + skills.ListVerb + "` to see the bundled skills"
 
 // runSkillsCommand dispatches `agento11y skills <verb>`. The skills ship
 // inside the binary, so no verb here reads the filesystem or the network. The
 // verbs come from internal/skills, which also owns the hints that print them.
 func runSkillsCommand(args []string, stdout, stderr io.Writer) {
-	if len(args) == 0 {
-		_, _ = fmt.Fprintln(stderr, skillsUsage)
-		exit(2)
+	if routeHelp(append([]string{"skills"}, args...), stdout, stderr) {
 		return
 	}
 	switch args[0] {
 	case skills.ListVerb:
 		all := skills.All()
-		width := 0
+		rows := make([]clihelp.Row, 0, len(all))
 		for _, skill := range all {
-			if len(skill.Name) > width {
-				width = len(skill.Name)
-			}
+			rows = append(rows, clihelp.Row{Name: skill.Name, Description: skill.Description})
 		}
-		for _, skill := range all {
-			_, _ = fmt.Fprintf(stdout, "%-*s  %s\n", width, skill.Name, skill.Description)
-		}
+		clihelp.New(stdout).Rows(rows)
 	case skills.ShowVerb, skills.GetVerb:
 		if len(args) != 2 {
-			_, _ = fmt.Fprintln(stderr, skillsUsage)
+			usageError(stderr, "skills "+args[0], "expected one skill name")
 			exit(2)
 			return
 		}
 		skill, err := skills.Get(args[1])
 		if err != nil {
-			_, _ = fmt.Fprintf(stderr, "agento11y: %v\n", err)
-			_, _ = fmt.Fprintln(stderr, listHint)
+			usageError(stderr, "skills "+args[0], fmt.Sprintf("%v; run `agento11y skills list` to see bundled skills", err))
 			exit(2)
 			return
 		}
 		_, _ = io.WriteString(stdout, skill.Body)
 	default:
-		_, _ = fmt.Fprintf(stderr, "agento11y: unknown skills verb %q\n", args[0])
-		_, _ = fmt.Fprintln(stderr, skillsUsage)
+		usageError(stderr, "skills", fmt.Sprintf("unknown skills verb %q", args[0]))
 		exit(2)
 	}
 }
-
-const localUsage = "usage: agento11y local start | open | status [--json] | stop | restart"
-
-// runLocalHelpCommand prints the user-facing local daemon commands. The serve
-// verb is internal and stays out of help and usage output.
-func runLocalHelpCommand(stdout io.Writer) {
-	_, _ = io.WriteString(stdout, localHelpBody)
-}
-
-const localHelpBody = `Manage the local capture daemon and viewer.
-
-Usage:
-  agento11y local <command>
-
-Commands:
-  start     Start the receiver if needed and print its address.
-  open      Start the receiver if needed, print its address, and try to open the viewer.
-  status    Report whether the receiver is running; pass --json for machine-readable output.
-  stop      Stop the receiver.
-  restart   Stop and start the receiver.
-`
-
-// runHelpCommand prints the expanded command list, which the one-line
-// usageLine cannot carry.
-func runHelpCommand(stdout io.Writer) {
-	_, _ = io.WriteString(stdout, helpBody)
-	_, _ = fmt.Fprintf(stdout, "  %s\n\n", skills.SetupCodingAgentCommand)
-	_, _ = fmt.Fprintln(stdout, skills.SetupCodingAgentHintIntro)
-	_, _ = fmt.Fprintln(stdout, skills.SetupCodingAgentPasteLine)
-}
-
-// helpBody is every part of the help block that does not interpolate.
-//
-// The rows are hand-written, because run dispatches with a flat if-chain over
-// args[0] rather than a table a test can read. A new subcommand needs four
-// edits: run, this block, usageLine, and the list in
-// TestRun_HelpIsARealCommand. Only the launcher names are checked
-// automatically.
-const helpBody = `agento11y sends coding-agent sessions to Grafana Agent observability.
-
-Usage:
-  agento11y <command> [flags]
-
-Launch a coding agent (wires the plugin, then runs it):
-  claude, codex, copilot, opencode, pi, vibe
-      agento11y <name> [--local|--no-local] [--tag key=value]... [-- args...]
-  cursor install|uninstall
-      Wire (or remove) the Cursor hook. Cursor is a GUI app and has no launcher.
-  claude install [--json]
-      Register the Claude Code plugin without launching it or prompting.
-  claude eval import <results.json> [flags]
-      Export Claude plugin eval results to Experiments. Use --dry-run to preview.
-
-Commands:
-  login       Save endpoint, tenant, token, and OTLP endpoint to config.env.
-  doctor      Check both export pipelines, the config, and installed plugins.
-  skills      List or print the agent skills bundled into this binary.
-  local       Manage the local capture daemon: start, open, status, stop, restart.
-              agento11y local open starts it if needed and tries to open the viewer.
-  history     Backfill sessions an agent wrote before agento11y was installed.
-  help        Print this text.
-
-  <agent> hook
-      Internal. Host agents call this with a JSON payload on stdin.
-
-Flags:
-  --version   Print the build version.
-  --help, -h  Print this text. agento11y local also accepts help, --help, and -h.
-
-Skills:
-  agento11y skills list
-`

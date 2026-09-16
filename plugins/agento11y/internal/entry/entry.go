@@ -50,7 +50,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agentinstall"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex"
@@ -63,6 +62,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/browser"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/buildversion"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/cli"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/clihelp"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/doctor"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
@@ -72,38 +72,23 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/useragent"
 )
 
-// Banner used by `agento11y <agent> --local` to call out that local capture
-// is on and tell the user where to view the data. Styled to match the
-// login banner (Grafana orange, rounded border) so the two surfaces feel
-// like one product.
-var (
-	localBannerOrange = lipgloss.Color("#FF671D")
-	localBannerBox    = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(localBannerOrange).
-				Padding(0, 1).
-				MarginBottom(2)
-	localBannerTitle = lipgloss.NewStyle().Bold(true).Foreground(localBannerOrange)
-	localBannerLabel = lipgloss.NewStyle().Faint(true)
-	localBannerURL   = lipgloss.NewStyle().Underline(true)
-)
-
 // renderLocalBanner draws the local-mode banner. envKey names the variable that
 // turned local mode on (AGENTO11Y_LOCAL or the legacy SIGIL_LOCAL), and is
 // empty when a flag on this command line did.
-func renderLocalBanner(uiURL string, posture local.ForwardPosture, postureErr error, envKey string, guardsEnabled bool) string {
+func renderLocalBanner(w io.Writer, uiURL string, posture local.ForwardPosture, postureErr error, envKey string, guardsEnabled bool) string {
 	privacy := localPrivacyLines(posture, postureErr == nil, guardsEnabled)
 	lines := make([]string, 0, len(privacy)+3)
-	title := localBannerTitle.Render("agento11y local mode")
+	renderer := clihelp.New(w)
+	title := renderer.Heading("agento11y local mode")
 	if envKey != "" {
-		title += "  " + localBannerLabel.Render("(enabled by "+envKey+")")
+		title += "  " + renderer.Detail("(enabled by "+envKey+")")
 	}
 	lines = append(lines, title)
 	for _, line := range privacy {
-		lines = append(lines, localBannerLabel.Render(line))
+		lines = append(lines, renderer.Detail(line))
 	}
-	lines = append(lines, "", localBannerLabel.Render("View ")+localBannerURL.Render(uiURL))
-	return localBannerBox.Render(strings.Join(lines, "\n"))
+	lines = append(lines, "", renderer.Detail("View ")+uiURL)
+	return strings.Join(lines, "\n") + "\n\n"
 }
 
 // localPrivacyLines describes what leaves the machine in this session. The
@@ -145,19 +130,6 @@ func localPrivacyLines(posture local.ForwardPosture, known, guardsEnabled bool) 
 		lines = append(lines, fmt.Sprintf("%d %s %s", posture.LocalRules, noun, claim))
 	}
 	return lines
-}
-
-// usageLine is a function rather than a constant because the history agents
-// come from the importer registry: adding an importer must not need an edit
-// here.
-func usageLine() string {
-	return "usage: agento11y login [--endpoint url] [--tenant id] [--token value|--token-stdin] " +
-		"[--otlp-endpoint url] [--no-verify] [--yes] | agento11y doctor [--json] | " +
-		"agento11y <claude|copilot|opencode|pi> install [--json] | agento11y agents reconcile --agents all|name[,name...] --json | " +
-		"agento11y claude eval import <results.json> [flags] | " +
-		"agento11y skills list|show <name> | agento11y local start|open|status [--json]|stop|restart | " +
-		"agento11y history import <" + historyAgentNames() + "> | agento11y cursor install|uninstall | agento11y <agent> hook | " +
-		"agento11y <claude|codex|copilot|opencode|pi|vibe> [--local|--no-local] [--tag key=value]... [-- args...]"
 }
 
 // version is the build version received from the calling main package via
@@ -234,21 +206,11 @@ func Main(buildVersion string) {
 }
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
+	if routeHelp(args, stdout, stderr) {
+		return
+	}
 	if len(args) == 1 && (args[0] == "--version" || args[0] == "-version") {
 		_, _ = fmt.Fprintln(stdout, version)
-		return
-	}
-
-	if len(args) == 0 {
-		_, _ = fmt.Fprintln(stderr, usageLine())
-		exit(2)
-		return
-	}
-
-	// `agento11y help` answers on stdout and exits 0, unlike the arity guard
-	// below, which is misuse and writes the one-line usage form to stderr.
-	if args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
-		runHelpCommand(stdout)
 		return
 	}
 
@@ -407,7 +369,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 	}
 
 	if len(args) < 2 {
-		_, _ = fmt.Fprintln(stderr, usageLine())
+		usageError(stderr, "", "a command is required")
 		exit(2)
 		return
 	}
@@ -566,65 +528,45 @@ func resetLocalHookStartFailureForTest() {
 	localHookStartMu.Unlock()
 }
 
+type loginFlags struct {
+	endpoint, tenant, token, otlpEndpoint string
+	tokenStdin, noVerify, assumeYes       bool
+}
+
+func newLoginFlags() (*flag.FlagSet, *loginFlags) {
+	fs := newCommandFlags("login")
+	opts := &loginFlags{}
+	fs.StringVar(&opts.endpoint, "endpoint", "", "conversations API URL")
+	fs.StringVar(&opts.tenant, "tenant", "", "instance ID")
+	fs.StringVar(&opts.token, "token", "", "access-policy token with the sigil:write scope")
+	fs.BoolVar(&opts.tokenStdin, "token-stdin", false, "read the token from stdin; requires --endpoint and --tenant. Cannot be combined with --token.")
+	fs.StringVar(&opts.otlpEndpoint, "otlp-endpoint", "", "OTLP endpoint")
+	fs.BoolVar(&opts.noVerify, "no-verify", false, "skip the credential check")
+	fs.BoolVar(&opts.assumeYes, "yes", false, "save even when the check fails")
+	return fs, opts
+}
+
 // runLoginCommand handles `agento11y login`. Values can arrive as flags, on
 // stdin (--token-stdin), or from the prompt; whatever is still missing after
 // the flags is asked for, and a run that supplies --endpoint, --tenant, and a
 // token needs no terminal at all. Misuse of the flags exits 2, a refused or
 // failed save exits 1.
 func runLoginCommand(args []string, stdin io.Reader, stderr io.Writer) {
-	fs := flag.NewFlagSet("login", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	fs.Usage = func() {
-		_, _ = fmt.Fprintln(stderr, "usage: agento11y login [--endpoint url] [--tenant id] [--token value|--token-stdin] [--otlp-endpoint url] [--no-verify] [--yes]")
-		_, _ = fmt.Fprintln(stderr)
-		_, _ = fmt.Fprintln(stderr, "Save agento11y capture settings to $XDG_CONFIG_HOME/agento11y/config.env")
-		_, _ = fmt.Fprintln(stderr, "(or the old $XDG_CONFIG_HOME/sigil/config.env if only that file exists).")
-		_, _ = fmt.Fprintln(stderr, "Values not given as flags are prompted for. With no destination and no")
-		_, _ = fmt.Fprintln(stderr, "credentials saved, login first asks where sessions go: this machine, on macOS")
-		_, _ = fmt.Fprintln(stderr, "and Linux only, or Grafana Cloud. The Grafana Cloud answer asks for your stack,")
-		_, _ = fmt.Fprintln(stderr, "prints that stack's coding-agent setup page, and tries to open it. Paste the")
-		_, _ = fmt.Fprintln(stderr, "environment block from that page to fill every credential. Before writing the")
-		_, _ = fmt.Fprintln(stderr, "file, login sends one request to the endpoint to check the credentials,")
-		_, _ = fmt.Fprintln(stderr, "unless --no-verify is passed.")
-		_, _ = fmt.Fprintln(stderr)
-		_, _ = fmt.Fprintln(stderr, "  --endpoint url        conversations API URL")
-		_, _ = fmt.Fprintln(stderr, "  --tenant id           instance ID")
-		_, _ = fmt.Fprintln(stderr, "  --token value         access-policy token with the sigil:write scope")
-		_, _ = fmt.Fprintln(stderr, "  --token-stdin         read the token from stdin; needs --endpoint and --tenant")
-		_, _ = fmt.Fprintln(stderr, "  --otlp-endpoint url   OTLP endpoint for SDK traces and metrics")
-		_, _ = fmt.Fprintln(stderr, "  --no-verify           write the file without checking the credentials")
-		_, _ = fmt.Fprintln(stderr, "  --yes                 save even when the check fails")
-	}
-	var (
-		endpoint     string
-		tenant       string
-		token        string
-		otlpEndpoint string
-		tokenStdin   bool
-		noVerify     bool
-		assumeYes    bool
-	)
-	fs.StringVar(&endpoint, "endpoint", "", "conversations API URL")
-	fs.StringVar(&tenant, "tenant", "", "instance ID")
-	fs.StringVar(&token, "token", "", "access-policy token")
-	fs.BoolVar(&tokenStdin, "token-stdin", false, "read the token from stdin")
-	fs.StringVar(&otlpEndpoint, "otlp-endpoint", "", "OTLP endpoint")
-	fs.BoolVar(&noVerify, "no-verify", false, "skip the credential check")
-	fs.BoolVar(&assumeYes, "yes", false, "save even when the check fails")
+	fs, opts := newLoginFlags()
 	if err := fs.Parse(args); err != nil {
+		usageError(stderr, "login", err.Error())
 		exit(2)
 		return
 	}
 	if fs.NArg() > 0 {
-		_, _ = fmt.Fprintf(stderr, "agento11y login: unexpected arguments: %v\n", fs.Args())
-		fs.Usage()
+		usageError(stderr, "login", fmt.Sprintf("unexpected arguments: %v", fs.Args()))
 		exit(2)
 		return
 	}
 
-	if tokenStdin {
+	if opts.tokenStdin {
 		var ok bool
-		token, ok = readTokenStdin(fs, endpoint, tenant, stdin, stderr)
+		opts.token, ok = readTokenStdin(fs, opts.endpoint, opts.tenant, stdin, stderr)
 		if !ok {
 			exit(2)
 			return
@@ -644,12 +586,12 @@ func runLoginCommand(args []string, stdin io.Reader, stderr io.Writer) {
 		OfferLocalDaemon: true,
 		Stderr:           stderr,
 		Logger:           logger,
-		Endpoint:         endpoint,
-		TenantID:         tenant,
-		Token:            token,
-		OTLPEndpoint:     otlpEndpoint,
-		SkipVerify:       noVerify,
-		AssumeYes:        assumeYes,
+		Endpoint:         opts.endpoint,
+		TenantID:         opts.tenant,
+		Token:            opts.token,
+		OTLPEndpoint:     opts.otlpEndpoint,
+		SkipVerify:       opts.noVerify,
+		AssumeYes:        opts.assumeYes,
 	})
 	switch {
 	case err == nil && result.LocalMode:
@@ -687,7 +629,7 @@ func readTokenStdin(fs *flag.FlagSet, endpoint, tenant string, stdin io.Reader, 
 	passed := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { passed[f.Name] = true })
 	if passed["token"] {
-		_, _ = fmt.Fprintln(stderr, "agento11y login: --token and --token-stdin are mutually exclusive; pass the token one way only")
+		usageError(stderr, "login", "--token and --token-stdin are mutually exclusive; pass the token one way only")
 		return "", false
 	}
 
@@ -699,13 +641,13 @@ func readTokenStdin(fs *flag.FlagSet, endpoint, tenant string, stdin io.Reader, 
 		missing = append(missing, "--tenant")
 	}
 	if len(missing) > 0 {
-		_, _ = fmt.Fprintf(stderr, "agento11y login: --token-stdin also requires %s\n", strings.Join(missing, " and "))
+		usageError(stderr, "login", fmt.Sprintf("--token-stdin also requires %s", strings.Join(missing, " and ")))
 		return "", false
 	}
 
 	data, err := io.ReadAll(stdin)
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "agento11y login: could not read the token from stdin: %v\n", err)
+		usageError(stderr, "login", fmt.Sprintf("could not read the token from stdin: %v", err))
 		return "", false
 	}
 	// A token is one line. Surrounding whitespace is dropped, which is what
@@ -714,11 +656,11 @@ func readTokenStdin(fs *flag.FlagSet, endpoint, tenant string, stdin io.Reader, 
 	// writing such a token would split the line and corrupt the file.
 	token := strings.TrimSpace(string(data))
 	if token == "" {
-		_, _ = fmt.Fprintln(stderr, "agento11y login: --token-stdin was passed but stdin carried no token")
+		usageError(stderr, "login", "--token-stdin was passed but stdin contained no token")
 		return "", false
 	}
 	if strings.ContainsAny(token, "\r\n") {
-		_, _ = fmt.Fprintln(stderr, "agento11y login: the token read from stdin spans more than one line")
+		usageError(stderr, "login", "the token read from stdin spans more than one line")
 		return "", false
 	}
 	return token, true
@@ -783,6 +725,16 @@ func runCursorInstall(verb string, stdout, stderr io.Writer) {
 	}
 }
 
+func newJSONFlags(name string) (*flag.FlagSet, *bool) {
+	fs := newCommandFlags(name)
+	return fs, fs.Bool("json", false, "print a machine-readable result")
+}
+
+func newReconcileFlags() (*flag.FlagSet, *string, *bool) {
+	fs := newCommandFlags("agents reconcile")
+	return fs, fs.String("agents", "", "comma-separated registered agent installers"), fs.Bool("json", false, "print a machine-readable reconciliation receipt")
+}
+
 type agentInstallResult struct {
 	Agent  string `json:"agent"`
 	Status string `json:"status"`
@@ -793,16 +745,17 @@ type agentInstallResult struct {
 // interactive setup flow or starting the host. It is suitable for scripts
 // after the current user's config.env has been created.
 func runAgentInstall(agent string, args []string, stdout, stderr io.Writer) {
-	fs := flag.NewFlagSet(agent+" install", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	var asJSON bool
-	fs.BoolVar(&asJSON, "json", false, "print a machine-readable result")
+	if routeHelp(append([]string{agent, "install"}, args...), stdout, stderr) {
+		return
+	}
+	fs, jsonFlag := newJSONFlags(agent + " install")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		_, _ = fmt.Fprintf(stderr, "usage: agento11y %s install [--json]\n", agent)
 		exit(2)
 		return
 	}
 
+	asJSON := *jsonFlag
 	writer := stdout
 	if asJSON {
 		writer = io.Discard
@@ -841,6 +794,18 @@ func runAgentInstall(agent string, args []string, stdout, stderr io.Writer) {
 			_, _ = fmt.Fprintln(stdout, string(data))
 		}
 	}
+	if !asJSON {
+		renderer := clihelp.New(stdout)
+		status := strings.ReplaceAll(result.Status, "_", " ")
+		if result.Status == "error" {
+			status = renderer.Error(result.Error)
+		} else if result.Status == "missing_host" {
+			status = renderer.Warning(status)
+		} else {
+			status = renderer.Success(status)
+		}
+		renderer.Rows([]clihelp.Row{{Name: agent, Description: status}})
+	}
 	if result.Status == "error" {
 		exit(1)
 	}
@@ -865,18 +830,16 @@ type reconcileBinary struct {
 // a noninteractive adapter registration automatically makes it available here;
 // this command deliberately has no MDM-, credential-, or policy-specific code.
 func runAgentsReconcile(args []string, stdout, stderr io.Writer) {
+	if routeHelp(append([]string{"agents"}, args...), stdout, stderr) {
+		return
+	}
 	if len(args) == 0 || args[0] != "reconcile" {
 		_, _ = fmt.Fprintln(stderr, "usage: agento11y agents reconcile --agents all|name[,name...] --json")
 		exit(2)
 		return
 	}
 
-	fs := flag.NewFlagSet("agents reconcile", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	var rawAgents string
-	var asJSON bool
-	fs.StringVar(&rawAgents, "agents", "", "comma-separated registered agent installers")
-	fs.BoolVar(&asJSON, "json", false, "print a machine-readable reconciliation receipt")
+	fs, agentsFlag, jsonFlag := newReconcileFlags()
 	if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 {
 		_, _ = fmt.Fprintln(stderr, "usage: agento11y agents reconcile --agents all|name[,name...] --json")
 		if err != nil {
@@ -888,6 +851,7 @@ func runAgentsReconcile(args []string, stdout, stderr io.Writer) {
 		return
 	}
 
+	rawAgents, asJSON := *agentsFlag, *jsonFlag
 	specs := registeredInstallers()
 	available := make(map[string]agentinstall.Spec, len(specs))
 	availableNames := make([]string, 0, len(specs))
@@ -901,14 +865,12 @@ func runAgentsReconcile(args []string, stdout, stderr io.Writer) {
 		return
 	}
 	if strings.TrimSpace(rawAgents) == "" {
-		_, _ = fmt.Fprintln(stderr, "usage: agento11y agents reconcile --agents all|name[,name...] --json")
-		_, _ = fmt.Fprintf(stderr, "agento11y agents reconcile: --agents is required; available installers: %s\n", strings.Join(availableNames, ", "))
+		usageError(stderr, "agents reconcile", fmt.Sprintf("--agents is required; available installers: %s", strings.Join(availableNames, ", ")))
 		exit(2)
 		return
 	}
 	if !asJSON {
-		_, _ = fmt.Fprintln(stderr, "usage: agento11y agents reconcile --agents all|name[,name...] --json")
-		_, _ = fmt.Fprintln(stderr, "agento11y agents reconcile: --json is required so management tooling can parse the reconciliation receipt")
+		usageError(stderr, "agents reconcile", "--json is required so management tooling can parse the reconciliation receipt")
 		exit(2)
 		return
 	}
@@ -978,23 +940,23 @@ func parseReconcileAgents(raw string, available map[string]agentinstall.Spec, av
 	for name := range strings.SplitSeq(raw, ",") {
 		name = strings.TrimSpace(name)
 		if name == "" {
-			_, _ = fmt.Fprintln(stderr, "agento11y agents reconcile: --agents contains an empty name; use a comma-separated list such as claude,cursor")
+			usageError(stderr, "agents reconcile", "--agents contains an empty name; use a comma-separated list such as claude,cursor")
 			exit(2)
 			return nil, false
 		}
 		if name == "all" {
-			_, _ = fmt.Fprintln(stderr, "agento11y agents reconcile: --agents=all must be used by itself; do not combine it with named agents")
+			usageError(stderr, "agents reconcile", "--agents=all must be used by itself; do not combine it with named agents")
 			exit(2)
 			return nil, false
 		}
 		if seen[name] {
-			_, _ = fmt.Fprintf(stderr, "agento11y agents reconcile: --agents repeats %q; name each agent once\n", name)
+			usageError(stderr, "agents reconcile", fmt.Sprintf("--agents repeats %q; name each agent once", name))
 			exit(2)
 			return nil, false
 		}
 		spec, found := available[name]
 		if !found {
-			_, _ = fmt.Fprintf(stderr, "agento11y agents reconcile: %q has no noninteractive installer in this binary (available: %s)\n", name, strings.Join(availableNames, ", "))
+			usageError(stderr, "agents reconcile", fmt.Sprintf("%q has no noninteractive installer in this binary (available: %s)", name, strings.Join(availableNames, ", ")))
 			exit(2)
 			return nil, false
 		}
@@ -1038,6 +1000,60 @@ type localEnvRequest struct {
 	key string
 }
 
+type launcherOptions struct {
+	local, noLocal bool
+	tags           repeatedFlag
+	forwarded      []string
+}
+
+func newLauncherFlags(name string) (*flag.FlagSet, *launcherOptions) {
+	fs := newCommandFlags(name)
+	opts := &launcherOptions{}
+	fs.BoolVar(&opts.local, "local", false, "capture with the local receiver")
+	fs.BoolVar(&opts.noLocal, "no-local", false, "use Cloud even when local mode is enabled")
+	fs.Var(&opts.tags, "tag", "add a session tag as `key=value` (repeatable)")
+	return fs, opts
+}
+
+func parseLauncherOptions(name string, rest []string) (*launcherOptions, error) {
+	fs, opts := newLauncherFlags(name)
+	side := rest
+	separated := false
+	for i, arg := range rest {
+		if arg == "--" {
+			side, opts.forwarded, separated = rest[:i], rest[i+1:], true
+			break
+		}
+	}
+	if err := fs.Parse(side); err != nil {
+		if strings.HasPrefix(err.Error(), "flag provided but not defined:") {
+			if !separated {
+				return nil, fmt.Errorf("%w; use `agento11y %s -- <args>` to forward args to %[2]s", err, name)
+			}
+			unknown := "--" + strings.TrimSpace(strings.TrimPrefix(err.Error(), "flag provided but not defined: -"))
+			return nil, fmt.Errorf("unknown options before `--`: [%s]", unknown)
+		}
+		if err.Error() == "flag needs an argument: -tag" {
+			return nil, errors.New("--tag requires a key=value argument")
+		}
+		return nil, err
+	}
+	if fs.NArg() > 0 {
+		if !separated {
+			return nil, fmt.Errorf("use `agento11y %s -- <args>` to forward args to %[1]s", name)
+		}
+		return nil, fmt.Errorf("unknown options before `--`: %v", fs.Args())
+	}
+	for i, raw := range opts.tags {
+		normalized, ok := normalizeTag(raw)
+		if !ok {
+			return nil, fmt.Errorf("invalid --tag %q (want key=value)", raw)
+		}
+		opts.tags[i] = normalized
+	}
+	return opts, nil
+}
+
 // parseLauncherArgs splits sigil-side tokens from forwarded args at the
 // first `--`. Recognised sigil-side flags are:
 //   - `--local`, which redirects the launched agent at the local receiver.
@@ -1065,71 +1081,13 @@ type localEnvRequest struct {
 //   - `--` is present but unrecognised tokens precede it: those are
 //     genuinely unknown sigil-side options, so we name them explicitly.
 func parseLauncherArgs(name string, rest []string, stderr io.Writer, envLocal localEnvRequest) ([]string, *local.LaunchEnv, bool, bool) {
-	sep := -1
-	for i, a := range rest {
-		if a == "--" {
-			sep = i
-			break
-		}
-	}
-
-	var launcherSide []string
-	var forwarded []string
-	if sep < 0 {
-		launcherSide = rest
-	} else {
-		launcherSide = rest[:sep]
-		forwarded = rest[sep+1:]
-	}
-
-	localFlag := false
-	noLocalFlag := false
-	var flagTags []string
-	var unknown []string
-	for i := 0; i < len(launcherSide); i++ {
-		tok := launcherSide[i]
-		switch {
-		case tok == "--local":
-			localFlag = true
-		case tok == "--no-local":
-			noLocalFlag = true
-		case tok == "--tag":
-			if i+1 >= len(launcherSide) {
-				_, _ = fmt.Fprintln(stderr, "agento11y: --tag requires a key=value argument")
-				exit(2)
-				return nil, nil, false, false
-			}
-			i++
-			kv, ok := normalizeTag(launcherSide[i])
-			if !ok {
-				_, _ = fmt.Fprintf(stderr, "agento11y: invalid --tag %q (want key=value)\n", launcherSide[i])
-				exit(2)
-				return nil, nil, false, false
-			}
-			flagTags = append(flagTags, kv)
-		case strings.HasPrefix(tok, "--tag="):
-			raw := strings.TrimPrefix(tok, "--tag=")
-			kv, ok := normalizeTag(raw)
-			if !ok {
-				_, _ = fmt.Fprintf(stderr, "agento11y: invalid --tag %q (want key=value)\n", raw)
-				exit(2)
-				return nil, nil, false, false
-			}
-			flagTags = append(flagTags, kv)
-		default:
-			unknown = append(unknown, tok)
-		}
-	}
-
-	if len(unknown) > 0 {
-		if sep < 0 {
-			_, _ = fmt.Fprintf(stderr, "agento11y: use `agento11y %s -- <args>` to forward args to %[1]s\n", name)
-		} else {
-			_, _ = fmt.Fprintf(stderr, "agento11y: unknown options before `--`: %v\n", unknown)
-		}
+	opts, err := parseLauncherOptions(name, rest)
+	if err != nil {
+		usageError(stderr, name, err.Error())
 		exit(2)
 		return nil, nil, false, false
 	}
+	forwarded, localFlag, noLocalFlag, flagTags := opts.forwarded, opts.local, opts.noLocal, opts.tags
 
 	if len(flagTags) > 0 {
 		// Merge onto the effective selected tags and write the result under
@@ -1253,7 +1211,7 @@ func setupLocalLaunch(stderr io.Writer, envKey string) (endpoint, otlp string, e
 	// agent child inherits it, so this resolution is the one that decides whether
 	// a guard check is made at all.
 	guardsEnabled := envconfig.ResolveGuards(nil).Enabled
-	_, _ = fmt.Fprintln(stderr, renderLocalBanner(status.Endpoint, posture, postureErr, envKey, guardsEnabled))
+	_, _ = fmt.Fprintln(stderr, renderLocalBanner(stderr, status.Endpoint, posture, postureErr, envKey, guardsEnabled))
 	return endpoint, otlp, nil
 }
 
@@ -1291,13 +1249,7 @@ func writeLocalStatusJSON(stdout io.Writer, status *local.Status) error {
 
 // runLocalCommand dispatches `agento11y local <verb>` subcommands.
 func runLocalCommand(args []string, stdout, stderr io.Writer) {
-	if len(args) == 0 {
-		_, _ = fmt.Fprintln(stderr, localUsage)
-		exit(2)
-		return
-	}
-	if args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
-		runLocalHelpCommand(stdout)
+	if routeHelp(append([]string{"local"}, args...), stdout, stderr) {
 		return
 	}
 	// Apply dotenv before resolving the state dir so XDG_STATE_HOME set
@@ -1315,7 +1267,7 @@ func runLocalCommand(args []string, stdout, stderr io.Writer) {
 			exit(1)
 			return
 		}
-		_, _ = fmt.Fprintf(stdout, "agento11y local receiver running at %s (pid %d)\n", status.Endpoint, status.PID)
+		_, _ = fmt.Fprintln(stdout, clihelp.New(stdout).Success(fmt.Sprintf("agento11y local receiver running at %s (pid %d)", status.Endpoint, status.PID)))
 	case "open":
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -1330,10 +1282,7 @@ func runLocalCommand(args []string, stdout, stderr io.Writer) {
 			_, _ = fmt.Fprintf(stderr, "agento11y: could not open browser: %v\n", err)
 		}
 	case "status":
-		fs := flag.NewFlagSet("local status", flag.ContinueOnError)
-		fs.SetOutput(stderr)
-		var asJSON bool
-		fs.BoolVar(&asJSON, "json", false, "print a machine-readable result")
+		fs, asJSON := newJSONFlags("local status")
 		if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 {
 			_, _ = fmt.Fprintln(stderr, "usage: agento11y local status [--json]")
 			exit(2)
@@ -1345,7 +1294,7 @@ func runLocalCommand(args []string, stdout, stderr io.Writer) {
 			exit(1)
 			return
 		}
-		if asJSON {
+		if *asJSON {
 			if err := writeLocalStatusJSON(stdout, status); err != nil {
 				_, _ = fmt.Fprintf(stderr, "agento11y: encode status: %v\n", err)
 				exit(1)
@@ -1353,10 +1302,10 @@ func runLocalCommand(args []string, stdout, stderr io.Writer) {
 			return
 		}
 		if status == nil {
-			_, _ = fmt.Fprintln(stdout, "agento11y local receiver: not running")
+			_, _ = fmt.Fprintln(stdout, clihelp.New(stdout).Detail("agento11y local receiver: not running"))
 			return
 		}
-		_, _ = fmt.Fprintf(stdout, "agento11y local receiver: running at %s (pid %d, started %s)\n", status.Endpoint, status.PID, status.StartedAt)
+		_, _ = fmt.Fprintln(stdout, clihelp.New(stdout).Success(fmt.Sprintf("agento11y local receiver: running at %s (pid %d, started %s)", status.Endpoint, status.PID, status.StartedAt)))
 	case "stop":
 		stopped, err := local.Stop(dir)
 		if err != nil {
@@ -1365,10 +1314,10 @@ func runLocalCommand(args []string, stdout, stderr io.Writer) {
 			return
 		}
 		if !stopped {
-			_, _ = fmt.Fprintln(stdout, "agento11y local receiver: not running")
+			_, _ = fmt.Fprintln(stdout, clihelp.New(stdout).Detail("agento11y local receiver: not running"))
 			return
 		}
-		_, _ = fmt.Fprintln(stdout, "agento11y local receiver stopped")
+		_, _ = fmt.Fprintln(stdout, clihelp.New(stdout).Success("agento11y local receiver stopped"))
 	case "restart":
 		// `stop` errors only when the daemon is running but unkillable;
 		// treat "not running" as already-stopped and proceed to start.
@@ -1385,7 +1334,7 @@ func runLocalCommand(args []string, stdout, stderr io.Writer) {
 			exit(1)
 			return
 		}
-		_, _ = fmt.Fprintf(stdout, "agento11y local receiver running at %s (pid %d)\n", status.Endpoint, status.PID)
+		_, _ = fmt.Fprintln(stdout, clihelp.New(stdout).Success(fmt.Sprintf("agento11y local receiver running at %s (pid %d)", status.Endpoint, status.PID)))
 	case "serve":
 		// Internal: invoked by the daemon child. Blocks until SIGTERM.
 		logger := cli.InitLogger("local")

@@ -14,6 +14,7 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/cli"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/clihelp"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/history"
@@ -68,40 +69,28 @@ func historyAgentNames() string {
 	return strings.Join(names, "|")
 }
 
-func historyUsageLine() string {
-	return "usage: agento11y history import <" + historyAgentNames() + "> [flags]"
-}
-
-// historyAgentTable lists each agent with its display name and aliases, for
-// the flag help and for an unknown-agent error.
-func historyAgentTable() []string {
-	specs := history.Specs()
-	out := make([]string, 0, len(specs))
-	for _, spec := range specs {
-		line := "  " + string(spec.ID) + "  " + spec.DisplayName
-		if len(spec.Aliases) > 0 {
-			aliases := append([]string(nil), spec.Aliases...)
-			sort.Strings(aliases)
-			line += " (also: " + strings.Join(aliases, ", ") + ")"
-		}
-		out = append(out, line)
-	}
-	return out
-}
-
 // runHistoryCommand dispatches `agento11y history <verb>`.
 func runHistoryCommand(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 	if len(args) == 0 {
-		_, _ = fmt.Fprintln(stderr, historyUsageLine())
-		exit(2)
+		printHelp("history", stdout)
 		return
 	}
-	if args[0] != "import" {
-		_, _ = fmt.Fprintf(stderr, "agento11y: unknown history verb %q (only \"import\" supported)\n", args[0])
-		exit(2)
+	if args[0] == "import" {
+		runHistoryImport(args[1:], stdin, stdout, stderr)
 		return
 	}
-	runHistoryImport(args[1:], stdin, stdout, stderr)
+	fs := flag.NewFlagSet("history", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.Usage = func() {}
+	if err := fs.Parse(args); errors.Is(err, flag.ErrHelp) {
+		printHelp("history", stdout)
+	} else if err != nil {
+		usageError(stderr, "history", err.Error())
+		exit(2)
+	} else {
+		usageError(stderr, "history", fmt.Sprintf("unknown history verb %q", args[0]))
+		exit(2)
+	}
 }
 
 // historyNow is a package var so tests can pin the 90-day default boundary.
@@ -124,35 +113,40 @@ var (
 	historyConfirm = historyConfirmImport
 )
 
-func runHistoryImport(args []string, stdin io.Reader, stdout, stderr io.Writer) {
+type historyImportFlags struct {
+	sources                                    repeatedFlag
+	since, until, workspace                    string
+	maxSessions, maxTurns                      int
+	all, yes, dryRun, force, useLocal, noLocal bool
+}
+
+func newHistoryImportFlags() (*flag.FlagSet, *historyImportFlags) {
 	fs := flag.NewFlagSet("history import", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	var (
-		sources     repeatedFlag
-		since       = fs.String("since", "", "only sessions active at or after this time (RFC3339 or a duration such as 30d); default 90d")
-		until       = fs.String("until", "", "only sessions started at or before this time (RFC3339 or a duration such as 7d)")
-		workspace   = fs.String("workspace", "", "only sessions whose workspace path contains this text")
-		maxSessions = fs.Int("max-sessions", 0, "import at most this many sessions, most recent first")
-		maxTurns    = fs.Int("max-turns", 0, "import at most this many turns from each session")
-		all         = fs.Bool("all", false, "import every matching session without showing the picker")
-		yes         = fs.Bool("yes", false, "skip the confirmation prompt")
-		dryRun      = fs.Bool("dry-run", false, "show what would be imported and exit")
-		force       = fs.Bool("force", false, "re-export turns already recorded in the import ledger")
-		useLocal    = fs.Bool("local", false, "import into the local daemon instead of Grafana Cloud")
-		noLocal     = fs.Bool("no-local", false, "import into Grafana Cloud even when local mode is on")
-	)
-	fs.Var(&sources, "source", "restrict to this discovered path (repeatable); a path outside the agent's roots matches nothing")
-	fs.Usage = func() {
-		_, _ = fmt.Fprintln(stderr, historyUsageLine())
-		_, _ = fmt.Fprintln(stderr)
-		_, _ = fmt.Fprintln(stderr, "Agents:")
-		for _, line := range historyAgentTable() {
-			_, _ = fmt.Fprintln(stderr, line)
-		}
-		_, _ = fmt.Fprintln(stderr)
-		_, _ = fmt.Fprintln(stderr, "Flags:")
-		fs.PrintDefaults()
-	}
+	fs.SetOutput(io.Discard)
+	fs.Usage = func() {}
+	f := new(historyImportFlags)
+	fs.StringVar(&f.since, "since", "", "only sessions active at or after this time (RFC3339 or a duration such as 30d); default 90d")
+	fs.StringVar(&f.until, "until", "", "only sessions started at or before this time (RFC3339 or a duration such as 7d)")
+	fs.StringVar(&f.workspace, "workspace", "", "only sessions whose workspace path contains this text")
+	fs.IntVar(&f.maxSessions, "max-sessions", 0, "import at most this many sessions, most recent first")
+	fs.IntVar(&f.maxTurns, "max-turns", 0, "import at most this many turns from each session")
+	fs.BoolVar(&f.all, "all", false, "import every matching session without showing the picker")
+	fs.BoolVar(&f.yes, "yes", false, "skip the confirmation prompt")
+	fs.BoolVar(&f.dryRun, "dry-run", false, "show what would be imported and exit")
+	fs.BoolVar(&f.force, "force", false, "re-export turns already recorded in the import ledger")
+	fs.BoolVar(&f.useLocal, "local", false, "import into the local daemon instead of Grafana Cloud")
+	fs.BoolVar(&f.noLocal, "no-local", false, "import into Grafana Cloud even when local mode is on")
+	fs.Var(&f.sources, "source", "restrict to this discovered path (repeatable); a path outside the agent's roots matches nothing")
+	return fs, f
+}
+
+func historyHelpFlags() *flag.FlagSet {
+	fs, _ := newHistoryImportFlags()
+	return fs
+}
+
+func runHistoryImport(args []string, stdin io.Reader, stdout, stderr io.Writer) {
+	fs, f := newHistoryImportFlags()
 	// The agent comes first, before the flags: Go's flag package stops parsing
 	// at the first non-flag argument, so `import --dry-run claude-code` would
 	// otherwise leave the flags unparsed.
@@ -162,26 +156,27 @@ func runHistoryImport(args []string, stdin io.Reader, stdout, stderr io.Writer) 
 		agentArg, flagArgs = flagArgs[0], flagArgs[1:]
 	}
 	if err := fs.Parse(flagArgs); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			printHelp("history import", stdout)
+			return
+		}
+		usageError(stderr, "history import", err.Error())
 		exit(2)
 		return
 	}
 	if extra := fs.Args(); len(extra) > 0 {
-		_, _ = fmt.Fprintf(stderr, "agento11y: unexpected argument %q\n", extra[0])
+		usageError(stderr, "history import", fmt.Sprintf("unexpected argument %q", extra[0]))
 		exit(2)
 		return
 	}
 	if agentArg == "" {
-		_, _ = fmt.Fprintln(stderr, historyUsageLine())
+		usageError(stderr, "history import", "an agent is required")
 		exit(2)
 		return
 	}
 	agent, ok := history.Resolve(agentArg)
 	if !ok {
-		_, _ = fmt.Fprintf(stderr, "agento11y: unknown history agent %q\n", agentArg)
-		_, _ = fmt.Fprintln(stderr, "known agents:")
-		for _, line := range historyAgentTable() {
-			_, _ = fmt.Fprintln(stderr, line)
-		}
+		usageError(stderr, "history import", fmt.Sprintf("unknown history agent %q (known agents: %s)", agentArg, historyAgentNames()))
 		exit(2)
 		return
 	}
@@ -189,40 +184,40 @@ func runHistoryImport(args []string, stdin io.Reader, stdout, stderr io.Writer) 
 	now := historyNow()
 	opts := historyImportOptions{
 		Agent:       agent,
-		SourcePaths: sources,
-		Workspace:   strings.TrimSpace(*workspace),
-		MaxSessions: *maxSessions,
-		MaxTurns:    *maxTurns,
-		All:         *all,
-		Yes:         *yes,
-		DryRun:      *dryRun,
-		Force:       *force,
-		Local:       *useLocal && !*noLocal,
-		NoLocal:     *noLocal,
+		SourcePaths: f.sources,
+		Workspace:   strings.TrimSpace(f.workspace),
+		MaxSessions: f.maxSessions,
+		MaxTurns:    f.maxTurns,
+		All:         f.all,
+		Yes:         f.yes,
+		DryRun:      f.dryRun,
+		Force:       f.force,
+		Local:       f.useLocal && !f.noLocal,
+		NoLocal:     f.noLocal,
 	}
 
 	var err error
 	// An unset --since defaults to 90 days. The local store is a linear-scan
 	// JSONL store, and an unbounded first import would make the viewer slow
 	// before the user ever sees it.
-	if opts.Since, err = parseHistoryBound(*since, now, now.Add(-history.DefaultSinceWindow)); err != nil {
-		_, _ = fmt.Fprintf(stderr, "agento11y: invalid --since %q: %v\n", *since, err)
+	if opts.Since, err = parseHistoryBound(f.since, now, now.Add(-history.DefaultSinceWindow)); err != nil {
+		usageError(stderr, "history import", fmt.Sprintf("invalid --since %q: %v", f.since, err))
 		exit(2)
 		return
 	}
-	if opts.Until, err = parseHistoryBound(*until, now, time.Time{}); err != nil {
-		_, _ = fmt.Fprintf(stderr, "agento11y: invalid --until %q: %v\n", *until, err)
+	if opts.Until, err = parseHistoryBound(f.until, now, time.Time{}); err != nil {
+		usageError(stderr, "history import", fmt.Sprintf("invalid --until %q: %v", f.until, err))
 		exit(2)
 		return
 	}
 	if !opts.Until.IsZero() && opts.Until.Before(opts.Since) {
-		_, _ = fmt.Fprintf(stderr, "agento11y: --until %s is before --since %s\n",
-			opts.Until.Format(time.RFC3339), opts.Since.Format(time.RFC3339))
+		usageError(stderr, "history import", fmt.Sprintf("--until %s is before --since %s",
+			opts.Until.Format(time.RFC3339), opts.Since.Format(time.RFC3339)))
 		exit(2)
 		return
 	}
 	if opts.MaxSessions < 0 || opts.MaxTurns < 0 {
-		_, _ = fmt.Fprintln(stderr, "agento11y: --max-sessions and --max-turns cannot be negative")
+		usageError(stderr, "history import", "--max-sessions and --max-turns cannot be negative")
 		exit(2)
 		return
 	}
@@ -358,7 +353,7 @@ func historyImport(opts historyImportOptions, interactive bool, stdout, stderr i
 		_, _ = fmt.Fprintln(stderr, "agento11y: no discovered session matched --source. The flag filters the paths under the agent's roots; it cannot add a new root.")
 	}
 	if opts.DryRun {
-		_, _ = fmt.Fprintln(stdout, "Dry run: nothing was decoded, exported, or stored.")
+		_, _ = fmt.Fprintln(stdout, clihelp.New(stdout).Detail("Dry run: nothing was decoded, exported, or stored."))
 		return nil
 	}
 	if len(plan.Sessions) == 0 {
@@ -378,7 +373,7 @@ func historyImport(opts historyImportOptions, interactive bool, stdout, stderr i
 		sessions = selected
 	}
 	if len(sessions) == 0 {
-		_, _ = fmt.Fprintln(stdout, "No sessions selected.")
+		_, _ = fmt.Fprintln(stdout, clihelp.New(stdout).Detail("No sessions selected."))
 		return nil
 	}
 	if interactive && !opts.Yes {
@@ -387,7 +382,7 @@ func historyImport(opts historyImportOptions, interactive bool, stdout, stderr i
 			return err
 		}
 		if !confirmed {
-			_, _ = fmt.Fprintln(stdout, "Import cancelled.")
+			_, _ = fmt.Fprintln(stdout, clihelp.New(stdout).Detail("Import cancelled."))
 			return nil
 		}
 	}
@@ -436,8 +431,14 @@ func historyImport(opts historyImportOptions, interactive bool, stdout, stderr i
 	if err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(stdout, "Imported %d turns from %d sessions (%d already imported, %d failed).\n",
-		result.Imported, result.Sessions, result.Skipped, result.Failed)
+	renderer := clihelp.New(stdout)
+	summary := fmt.Sprintf("Imported %d turns from %d sessions (%d already imported, %d failed).", result.Imported, result.Sessions, result.Skipped, result.Failed)
+	if result.Failed > 0 {
+		summary = renderer.Warning(summary)
+	} else {
+		summary = renderer.Success(summary)
+	}
+	_, _ = fmt.Fprintln(stdout, summary)
 	for _, warning := range result.Warnings {
 		_, _ = fmt.Fprintf(stderr, "agento11y: warning: %s\n", warning)
 	}
@@ -486,11 +487,12 @@ func printHistoryPlan(stdout io.Writer, opts historyImportOptions, plan history.
 	if name == "" {
 		name = string(plan.Agent)
 	}
-	_, _ = fmt.Fprintf(stdout, "%s history since %s", name, opts.Since.Format(time.RFC3339))
+	renderer := clihelp.New(stdout)
+	heading := fmt.Sprintf("%s history since %s", name, opts.Since.Format(time.RFC3339))
 	if !opts.Until.IsZero() {
-		_, _ = fmt.Fprintf(stdout, " until %s", opts.Until.Format(time.RFC3339))
+		heading += " until " + opts.Until.Format(time.RFC3339)
 	}
-	_, _ = fmt.Fprintln(stdout)
+	_, _ = fmt.Fprintln(stdout, renderer.Heading(heading))
 
 	turns, approx := historyTurnTotals(plan.Sessions)
 	_, _ = fmt.Fprintf(stdout, "  planned: %d sessions, %s turns\n", len(plan.Sessions), historyTurnCount(turns, approx))

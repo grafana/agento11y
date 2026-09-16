@@ -98,19 +98,13 @@ func TestRun_VersionFlag(t *testing.T) {
 	}
 }
 
-func TestRun_UsageOnZeroArgs(t *testing.T) {
+func TestRun_HelpOnZeroArgs(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	gotExit := withExit(t, func() {
 		run(nil, strings.NewReader(""), &stdout, &stderr)
 	})
-	if gotExit == nil || *gotExit != 2 {
-		t.Fatalf("exit = %v, want 2", gotExit)
-	}
-	if !strings.Contains(stderr.String(), "usage:") {
-		t.Fatalf("stderr missing usage message: %q", stderr.String())
-	}
-	if !strings.Contains(stderr.String(), "[--local|--no-local]") {
-		t.Fatalf("usage does not offer --no-local: %q", stderr.String())
+	if gotExit != nil || stderr.Len() != 0 || !strings.Contains(stdout.String(), "Usage:") {
+		t.Fatalf("exit = %v, stdout=%q stderr=%q", gotExit, stdout.String(), stderr.String())
 	}
 }
 
@@ -463,6 +457,8 @@ func TestRun_LauncherDispatch(t *testing.T) {
 		wantStderrPrefix   string
 	}{
 		{name: "pi bare", agent: "pi", wantCalled: 1},
+		{name: "pi wrapper help", agent: "pi", argv: []string{"--help"}},
+		{name: "pi forwards host help", agent: "pi", argv: []string{"--", "--help", "-h", "--tag", "literal"}, wantCalled: 1, wantArgs: []string{"--help", "-h", "--tag", "literal"}},
 		{name: "pi separator only", agent: "pi", argv: []string{"--"}, wantCalled: 1},
 		{name: "pi forwards args after separator", agent: "pi", argv: []string{"--", "--print", "hi"}, wantCalled: 1, wantArgs: []string{"--print", "hi"}},
 		{name: "pi missing separator exits 2", agent: "pi", argv: []string{"--print", "hi"}, wantExit: exitPtr(2), wantStderrContains: "use `agento11y pi -- <args>`"},
@@ -657,7 +653,7 @@ func TestRun_CursorInstallDispatch(t *testing.T) {
 		{name: "install dispatches to seam", verb: "install", wantInstall: 1},
 		{name: "uninstall dispatches to seam", verb: "uninstall", wantUninstall: 1},
 		{name: "hook verb still dispatches to handler", verb: "hook", wantHook: 1},
-		{name: "unknown cursor verb exits 2", verb: "bogus", wantExit: exitPtr(2), wantStderrContains: `unknown verb "bogus"`},
+		{name: "unknown cursor verb exits 2", verb: "bogus", wantExit: exitPtr(2), wantStderrContains: `unknown cursor verb "bogus"`},
 		{name: "install error exits 1", verb: "install", installErr: errors.New("boom"), wantInstall: 1, wantExit: exitPtr(1), wantStderrContains: "agento11y: boom"},
 	}
 
@@ -897,12 +893,16 @@ func TestRun_ClaudeInstallReportsMissingHost(t *testing.T) {
 	assert.Equal(t, agentInstallResult{Agent: "claude", Status: "missing_host"}, result)
 }
 
-func TestRun_AgentInstallsJSON(t *testing.T) {
-	cases := []struct {
-		agent string
-		stub  func(t *testing.T)
-		want  agentInstallResult
-	}{
+func TestRun_AgentInstallsOutput(t *testing.T) {
+	exitPtr := func(code int) *int { return &code }
+	type testCase struct {
+		agent      string
+		stub       func(t *testing.T)
+		want       agentInstallResult
+		hostOutput string
+		wantExit   *int
+	}
+	cases := []testCase{
 		{
 			agent: "copilot",
 			stub: func(t *testing.T) {
@@ -913,9 +913,13 @@ func TestRun_AgentInstallsJSON(t *testing.T) {
 		{
 			agent: "opencode",
 			stub: func(t *testing.T) {
-				withStubOpenCodeInstall(t, func(context.Context, io.Writer, *log.Logger) (bool, error) { return false, nil })
+				withStubOpenCodeInstall(t, func(_ context.Context, w io.Writer, _ *log.Logger) (bool, error) {
+					_, _ = io.WriteString(w, "host installation complete\n")
+					return false, nil
+				})
 			},
-			want: agentInstallResult{Agent: "opencode", Status: "already_installed"},
+			want:       agentInstallResult{Agent: "opencode", Status: "already_installed"},
+			hostOutput: "host installation complete\n",
 		},
 		{
 			agent: "pi",
@@ -925,19 +929,58 @@ func TestRun_AgentInstallsJSON(t *testing.T) {
 			want: agentInstallResult{Agent: "pi", Status: "missing_host"},
 		},
 	}
+	for _, agent := range []string{"claude", "opencode", "pi"} {
+		cases = append(cases, testCase{
+			agent: agent,
+			stub: func(t *testing.T) {
+				install := func(_ context.Context, w io.Writer) (bool, error) {
+					_, _ = io.WriteString(w, "access denied: authenticate with host login\n")
+					return false, errors.New("exit status 7")
+				}
+				switch agent {
+				case "claude":
+					withStubClaudeInstall(t, install)
+				case "opencode":
+					withStubOpenCodeInstall(t, func(ctx context.Context, w io.Writer, _ *log.Logger) (bool, error) { return install(ctx, w) })
+				case "pi":
+					withStubPiInstall(t, func(ctx context.Context, w io.Writer, _ *log.Logger) (bool, error) { return install(ctx, w) })
+				}
+			},
+			want:       agentInstallResult{Agent: agent, Status: "error", Error: "exit status 7"},
+			hostOutput: "access denied: authenticate with host login\n",
+			wantExit:   exitPtr(1),
+		})
+	}
 	for _, tc := range cases {
-		t.Run(tc.agent, func(t *testing.T) {
+		t.Run(tc.agent+"/"+tc.want.Status, func(t *testing.T) {
 			tc.stub(t)
 			var stdout, stderr bytes.Buffer
 			gotExit := withExit(t, func() {
 				run([]string{tc.agent, "install", "--json"}, strings.NewReader(""), &stdout, &stderr)
 			})
-			require.Nil(t, gotExit, "stderr=%q", stderr.String())
+			require.Equal(t, tc.wantExit, gotExit, "stderr=%q", stderr.String())
 			require.Empty(t, stderr.String())
 
 			var result agentInstallResult
 			require.NoError(t, json.Unmarshal(stdout.Bytes(), &result), "stdout=%q", stdout.String())
 			assert.Equal(t, tc.want, result)
+
+			stdout.Reset()
+			gotExit = withExit(t, func() {
+				run([]string{tc.agent, "install"}, strings.NewReader(""), &stdout, &stderr)
+			})
+			require.Equal(t, tc.wantExit, gotExit)
+			require.Empty(t, stderr.String())
+			assert.Contains(t, stdout.String(), tc.agent)
+			if tc.want.Error != "" {
+				assert.Contains(t, stdout.String(), tc.want.Error)
+			} else {
+				assert.Contains(t, stdout.String(), strings.ReplaceAll(tc.want.Status, "_", " "))
+			}
+			if tc.hostOutput != "" {
+				assert.Equal(t, 1, strings.Count(stdout.String(), tc.hostOutput), "stdout=%q", stdout.String())
+			}
+			assert.NotContains(t, stdout.String(), "\x1b")
 		})
 	}
 }
@@ -1379,11 +1422,11 @@ func TestRun_LauncherContinuesWhenLoginAborted(t *testing.T) {
 // is running, and misuse errors.
 func TestRun_LocalSubcommand(t *testing.T) {
 	localHelpRows := []string{
-		"\n  start     ",
-		"\n  open      ",
-		"\n  status    ",
-		"\n  stop      ",
-		"\n  restart   ",
+		"\n  start ",
+		"\n  open ",
+		"\n  status ",
+		"\n  stop ",
+		"\n  restart ",
 	}
 	cases := []struct {
 		name            string
@@ -1404,8 +1447,7 @@ func TestRun_LocalSubcommand(t *testing.T) {
 		{name: "long help flag", argv: []string{"local", "--help"}, wantStdoutHas: localHelpRows, wantStdoutLacks: "serve", wantStderrEmpty: true, checkNoDotenv: true},
 		{name: "short help flag", argv: []string{"local", "-h"}, wantStdoutHas: localHelpRows, wantStdoutLacks: "serve", wantStderrEmpty: true, checkNoDotenv: true},
 		{name: "unknown verb exits 2", argv: []string{"local", "bogus"}, wantExit: intPtr(2), wantStderrHas: `unknown local verb "bogus"`},
-		{name: "no verb exits 2 with usage hint", argv: []string{"local"}, wantExit: intPtr(2), wantStderrHas: "usage: agento11y local"},
-		{name: "usage hint lists open and restart", argv: []string{"local"}, wantExit: intPtr(2), wantStderrHas: "open | status [--json] | stop | restart"},
+		{name: "no verb shows help", argv: []string{"local"}, wantStdoutHas: localHelpRows, wantStderrEmpty: true, checkNoDotenv: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1740,7 +1782,10 @@ func TestRenderLocalBanner_PrivacyClaimTracksPosture(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := renderLocalBanner("http://127.0.0.1:8765", tc.posture, tc.postureErr, "", tc.guardsEnabled)
+			t.Setenv("TERM", "xterm-256color")
+			t.Setenv("FORCE_COLOR", "1")
+			got := renderLocalBanner(io.Discard, "http://127.0.0.1:8765", tc.posture, tc.postureErr, "", tc.guardsEnabled)
+			assert.NotContains(t, got, "\x1b")
 			for _, want := range tc.want {
 				assert.Contains(t, got, want)
 			}

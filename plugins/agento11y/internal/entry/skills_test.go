@@ -30,6 +30,7 @@ func TestRun_SkillsList(t *testing.T) {
 	for _, skill := range skills.All() {
 		var found bool
 		for line := range strings.SplitSeq(out, "\n") {
+			line = strings.TrimSpace(line)
 			if strings.HasPrefix(line, skill.Name+" ") || line == skill.Name {
 				found = true
 				if !strings.Contains(line, firstWords(skill.Description)) {
@@ -129,7 +130,6 @@ func TestRun_SkillsMisuseExits2(t *testing.T) {
 		args     []string
 		wantErrs []string
 	}{
-		{name: "no verb", args: []string{"skills"}, wantErrs: []string{"usage:"}},
 		{name: "unknown verb", args: []string{"skills", "install"}, wantErrs: []string{`unknown skills verb "install"`}},
 		{name: "show without name", args: []string{"skills", "show"}, wantErrs: []string{"usage:"}},
 		{name: "get without name", args: []string{"skills", "get"}, wantErrs: []string{"usage:"}},
@@ -189,7 +189,7 @@ func TestRun_HelpIsARealCommand(t *testing.T) {
 			if !strings.Contains(out, "agento11y skills list") {
 				t.Errorf("help does not name `agento11y skills list`:\n%s", out)
 			}
-			for _, want := range []string{"agento11y local open", "restart"} {
+			for _, want := range []string{"agento11y local open", "agento11y help history import"} {
 				if !strings.Contains(out, want) {
 					t.Errorf("help does not name %q:\n%s", want, out)
 				}
@@ -202,31 +202,30 @@ func TestRun_HelpIsARealCommand(t *testing.T) {
 }
 
 // helpRows is the row each top-level word must appear as in the help block.
-// The subcommand list is hand-written for the reason given at helpBody, so
-// adding a subcommand to run and forgetting this list is not caught.
+// Non-launcher rows are hand-written, so adding a subcommand to run and
+// forgetting this list is not caught.
 func helpRows() []string {
-	rows := []string{"\n  <agent> hook", "\n  cursor install|uninstall", "\n  claude install [--json]", "\n  claude eval import <results.json>"}
+	rows := []string{"\n  cursor "}
 	for _, name := range []string{"login", "doctor", "skills", "local", "history", "help"} {
 		rows = append(rows, "\n  "+name+" ")
 	}
-	// The launchers share one comma-separated row, built from the launchers
-	// map so a new launcher fails this test until the row lists it too.
+	// Launcher rows come from the launchers map, so a new launcher fails this
+	// test until help lists it too.
 	names := make([]string, 0, len(launchers))
 	for name := range launchers {
 		names = append(names, name)
 	}
 	slices.Sort(names)
-	return append(rows, "\n  "+strings.Join(names, ", ")+"\n")
+	for _, name := range names {
+		rows = append(rows, "\n  "+name+" ")
+	}
+	return rows
 }
 
-// TestUsageLineNamesSkills pins that the one-line stderr form learned the new
-// subcommand. It stays one line: it is what misuse prints, not a help page.
-func TestUsageLineNamesSkills(t *testing.T) {
-	got := usageLine()
-	if !strings.Contains(got, "agento11y skills list|show <name>") {
-		t.Errorf("usageLine does not offer skills: %q", got)
-	}
-	if strings.Contains(got, "\n") {
-		t.Errorf("usageLine spans lines: %q", got)
+func TestRootUsageIsCompact(t *testing.T) {
+	var out bytes.Buffer
+	usageError(&out, "", "unknown command")
+	if strings.Count(out.String(), "\n") != 3 || !strings.Contains(out.String(), "agento11y --help") {
+		t.Fatalf("unexpected root diagnostic: %q", out.String())
 	}
 }

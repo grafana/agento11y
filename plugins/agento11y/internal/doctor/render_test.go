@@ -3,8 +3,13 @@ package doctor
 import (
 	"bytes"
 	"encoding/json"
+	"io"
+	"os"
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 )
 
 func sampleReport() *Report {
@@ -45,6 +50,95 @@ func TestRenderJSON_ValidAndNoToken(t *testing.T) {
 	// the non-secret prefix.
 	if !strings.Contains(buf.String(), `"prefix": "glc_"`) {
 		t.Fatalf("expected redacted token prefix in output:\n%s", buf.String())
+	}
+}
+
+func TestRenderHuman_Destination(t *testing.T) {
+	previous := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(previous) })
+
+	for _, tc := range []struct {
+		name, term, noColor string
+		color               bool
+	}{
+		{name: "redirected", term: "xterm-256color", color: true},
+		{name: "no color flag", term: "xterm-256color"},
+		{name: "NO_COLOR", term: "xterm-256color", noColor: "1", color: true},
+		{name: "dumb", term: "dumb", color: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("TERM", tc.term)
+			t.Setenv("NO_COLOR", tc.noColor)
+			for _, destination := range []string{"buffer", "file", "pipe"} {
+				t.Run(destination, func(t *testing.T) {
+					r := sampleReport()
+					r.Config.Health = HealthWarn
+					var plain, out bytes.Buffer
+					renderHuman(&plain, r, false)
+					var w io.Writer = &out
+					readOutput := func() string { return out.String() }
+					switch destination {
+					case "file":
+						f, err := os.CreateTemp(t.TempDir(), "report")
+						if err != nil {
+							t.Fatal(err)
+						}
+						t.Cleanup(func() { _ = f.Close() })
+						w = f
+						readOutput = func() string {
+							data, err := os.ReadFile(f.Name())
+							if err != nil {
+								t.Fatal(err)
+							}
+							return string(data)
+						}
+					case "pipe":
+						reader, writer, err := os.Pipe()
+						if err != nil {
+							t.Fatal(err)
+						}
+						t.Cleanup(func() { _ = reader.Close(); _ = writer.Close() })
+						w = writer
+						readOutput = func() string {
+							_ = writer.Close()
+							data, err := io.ReadAll(reader)
+							if err != nil {
+								t.Fatal(err)
+							}
+							return string(data)
+						}
+					}
+					renderHuman(w, r, tc.color)
+					got := readOutput()
+					if strings.Contains(got, "\x1b") || got != plain.String() {
+						t.Fatalf("destination changed report: got %q, want %q", got, plain.String())
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestRenderJSON_BytesIgnorePresentation(t *testing.T) {
+	r := sampleReport()
+	want, err := json.MarshalIndent(r, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = append(want, '\n')
+	for _, term := range []string{"xterm-256color", "dumb"} {
+		for _, noColor := range []string{"", "1"} {
+			t.Setenv("TERM", term)
+			t.Setenv("NO_COLOR", noColor)
+			var out bytes.Buffer
+			if err := renderJSON(&out, r); err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(out.Bytes(), want) {
+				t.Fatalf("JSON bytes changed: %q", out.String())
+			}
+		}
 	}
 }
 
@@ -130,7 +224,7 @@ func TestReportBody_EmptyKeyStillRenders(t *testing.T) {
 }
 
 func TestDescribeProbeRow(t *testing.T) {
-	p := palette{color: false}
+	p := palette{}
 	tests := []struct {
 		name   string
 		result *ProbeResult
@@ -276,7 +370,7 @@ func TestRenderHuman_FaultsStayOnTheMessageLine(t *testing.T) {
 }
 
 func TestDescribeAgent(t *testing.T) {
-	p := palette{color: false}
+	p := palette{}
 	tests := []struct {
 		name  string
 		agent AgentStatus
@@ -420,7 +514,7 @@ func TestRenderHuman_TagsLine(t *testing.T) {
 }
 
 func TestDescribeRedactInput(t *testing.T) {
-	p := palette{color: false}
+	p := palette{}
 	tests := []struct {
 		name   string
 		config ConfigSection
@@ -440,7 +534,7 @@ func TestDescribeRedactInput(t *testing.T) {
 }
 
 func TestDescribeGuards(t *testing.T) {
-	p := palette{color: false}
+	p := palette{}
 	tests := []struct {
 		name   string
 		config ConfigSection
@@ -469,7 +563,7 @@ func TestDescribeGuards(t *testing.T) {
 }
 
 func TestDescribeLocalRules(t *testing.T) {
-	p := palette{color: false}
+	p := palette{}
 	path := "/home/u/.config/agento11y/guards.toml"
 	tests := []struct {
 		name   string
@@ -518,7 +612,7 @@ func TestRenderHuman_GuardsLine(t *testing.T) {
 }
 
 func TestDescribeToken(t *testing.T) {
-	p := palette{color: false}
+	p := palette{}
 	tests := []struct {
 		name  string
 		token tokenValue
@@ -542,7 +636,7 @@ func TestDescribeToken(t *testing.T) {
 }
 
 func TestDescribeSource(t *testing.T) {
-	p := palette{color: false}
+	p := palette{}
 	tests := []struct {
 		name  string
 		parts []string
@@ -569,7 +663,7 @@ func TestDescribeSource(t *testing.T) {
 // the launcher acts on the boolean whitelist, so a value outside it leaves local
 // mode off and the row has to say so.
 func TestDescribeLocal(t *testing.T) {
-	p := palette{color: false}
+	p := palette{}
 	tests := []struct {
 		name    string
 		value   envValue
@@ -591,7 +685,7 @@ func TestDescribeLocal(t *testing.T) {
 }
 
 func TestDescribeEnv(t *testing.T) {
-	p := palette{color: false}
+	p := palette{}
 	tests := []struct {
 		name  string
 		value envValue

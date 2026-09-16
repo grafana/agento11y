@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"flag"
 	"fmt"
 	"log"
 	"maps"
@@ -13,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/grafana/agento11y/plugins/agento11y/internal/clihelp"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
 
@@ -94,13 +97,14 @@ func writeGuards(t *testing.T, content string) {
 	}
 }
 
-func TestParseFlags(t *testing.T) {
+func TestParseOptions(t *testing.T) {
 	tests := []struct {
 		name      string
 		args      []string
 		wantJSON  bool
 		wantColor bool // NoColor
 		wantErr   bool
+		wantHelp  bool
 	}{
 		{name: "no flags"},
 		{name: "json", args: []string{"--json"}, wantJSON: true},
@@ -110,12 +114,29 @@ func TestParseFlags(t *testing.T) {
 		{name: "probe is accepted and ignored", args: []string{"--probe"}},
 		{name: "online alias is accepted and ignored", args: []string{"--online"}},
 		{name: "combined", args: []string{"--json", "--probe", "--no-color"}, wantJSON: true, wantColor: true},
+		{name: "explicit false", args: []string{"--json=false", "--no-color=false", "--probe=false", "--online=false"}},
+		{name: "last value wins", args: []string{"--json", "--json=false", "--no-color=false", "--no-color"}, wantColor: true},
+		{name: "single dash", args: []string{"-json", "-no-color"}, wantJSON: true, wantColor: true},
+		{name: "terminator", args: []string{"--json", "--"}, wantJSON: true},
+		{name: "help", args: []string{"--help"}, wantHelp: true},
+		{name: "short help", args: []string{"-h"}, wantHelp: true},
+		{name: "help after flags", args: []string{"--json", "--help"}, wantHelp: true},
 		{name: "unknown flag", args: []string{"--nope"}, wantErr: true},
+		{name: "invalid boolean", args: []string{"--json=maybe"}, wantErr: true},
+		{name: "invalid compatibility boolean", args: []string{"--online=maybe"}, wantErr: true},
 		{name: "positional arg", args: []string{"extra"}, wantErr: true},
+		{name: "tail after flags", args: []string{"--json", "extra"}, wantErr: true},
+		{name: "tail after terminator", args: []string{"--", "--help"}, wantErr: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			opts, err := parseFlags(tc.args, &bytes.Buffer{})
+			opts, err := ParseOptions(tc.args)
+			if tc.wantHelp {
+				if !errors.Is(err, flag.ErrHelp) {
+					t.Fatalf("error = %v, want flag.ErrHelp", err)
+				}
+				return
+			}
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("expected error for %v", tc.args)
@@ -129,6 +150,97 @@ func TestParseFlags(t *testing.T) {
 				t.Fatalf("opts = %+v", opts)
 			}
 		})
+	}
+}
+
+func TestRunHelpAndUsageNoEffects(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		args    []string
+		message string
+	}{
+		{name: "long help", args: []string{"--help"}},
+		{name: "short help", args: []string{"-h"}},
+		{name: "single dash help", args: []string{"-help"}},
+		{name: "help after flags", args: []string{"--json", "--no-color", "--probe", "--online", "--help"}},
+		{name: "help stops parsing", args: []string{"--help", "--unknown"}},
+		{name: "unknown flag", args: []string{"--unknown"}, message: "flag provided but not defined: -unknown"},
+		{name: "invalid boolean", args: []string{"--json=maybe"}, message: "invalid boolean value \"maybe\" for -json: parse error"},
+		{name: "positional tail", args: []string{"--json", "extra"}, message: "unexpected arguments: [extra]"},
+		{name: "terminator tail", args: []string{"--", "--help"}, message: "unexpected arguments: [--help]"},
+		{name: "positional before help", args: []string{"extra", "--help"}, message: "unexpected arguments: [extra --help]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := isolateEnv(t)
+			stubSeams(t)
+			collectAgents = func(context.Context, string) []AgentStatus {
+				t.Fatal("collected agents")
+				return nil
+			}
+			receiverSupported = func() bool {
+				t.Fatal("collected report")
+				return false
+			}
+			probeConversationsFn = func(context.Context, string, envValue, string, bool) *ProbeResult {
+				t.Fatal("probed conversations")
+				return nil
+			}
+			probeOTLPFn = func(context.Context, envValue) *AnalyticsProbe {
+				t.Fatal("probed analytics")
+				return nil
+			}
+			before := os.Environ()
+			var stdout, stderr, want bytes.Buffer
+			code := Run(context.Background(), tc.args, Params{
+				Stdout: &stdout, Stderr: &stderr,
+				OSEnv: map[string]string{
+					"AGENTO11Y_ENDPOINT":                    "https://conversations.example.invalid",
+					"AGENTO11Y_AUTH_TENANT_ID":              "test",
+					"AGENTO11Y_AUTH_TOKEN":                  "test",
+					"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": "https://analytics.example.invalid",
+				},
+			})
+			if tc.message == "" {
+				clihelp.New(&want).Render(HelpPage())
+				if code != 0 || stdout.String() != want.String() || stderr.Len() != 0 {
+					t.Fatalf("code=%d stdout=%q stderr=%q, want shared help on stdout only", code, &stdout, &stderr)
+				}
+			} else {
+				clihelp.UsageError(&want, HelpPage(), tc.message)
+				if code != 2 || stdout.Len() != 0 || stderr.String() != want.String() {
+					t.Fatalf("code=%d stdout=%q stderr=%q, want usage error %q", code, &stdout, &stderr, &want)
+				}
+			}
+			if !slices.Equal(before, os.Environ()) {
+				t.Fatal("environment changed")
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil || len(entries) != 0 {
+				t.Fatalf("isolated home changed: entries=%v error=%v", entries, err)
+			}
+		})
+	}
+}
+
+func TestHelpPageFlags(t *testing.T) {
+	page := HelpPage()
+	var names []string
+	for _, section := range page.Sections {
+		if section.Title == "Flags" {
+			for _, row := range section.Rows {
+				names = append(names, row.Name)
+			}
+		}
+	}
+	if want := []string{"--json", "--no-color", "--help, -h"}; !slices.Equal(names, want) {
+		t.Fatalf("help flags = %v, want %v", names, want)
+	}
+	var out bytes.Buffer
+	clihelp.New(&out).Render(page)
+	for _, hidden := range []string{"--probe", "--online", "\x1b["} {
+		if strings.Contains(out.String(), hidden) {
+			t.Errorf("help contains %q: %s", hidden, &out)
+		}
 	}
 }
 

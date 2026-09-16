@@ -29,6 +29,7 @@ import (
 	"strings"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agentinstall"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/clihelp"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/execpath"
 )
 
@@ -119,9 +120,9 @@ func Reconcile(stdout, _ io.Writer, logger *log.Logger) (bool, error) {
 		return false, err
 	}
 	if wrote {
-		_, _ = fmt.Fprintf(stdout, "agento11y: wired Cursor hooks at %s\n", path)
+		_, _ = fmt.Fprintln(stdout, clihelp.New(stdout).Success(fmt.Sprintf("agento11y: wired Cursor hooks at %s", path)))
 	} else {
-		_, _ = fmt.Fprintf(stdout, "agento11y: Cursor hooks already up to date at %s\n", path)
+		_, _ = fmt.Fprintln(stdout, clihelp.New(stdout).Success(fmt.Sprintf("agento11y: Cursor hooks already up to date at %s", path)))
 	}
 	return wrote, nil
 }
@@ -138,7 +139,7 @@ func Uninstall(stdout, _ io.Writer, logger *log.Logger) error {
 	logger.Printf("cursor uninstall: hooks=%s", path)
 
 	if _, statErr := os.Stat(path); errors.Is(statErr, os.ErrNotExist) {
-		_, _ = fmt.Fprintf(stdout, "agento11y: no Cursor hooks to remove at %s\n", path)
+		_, _ = fmt.Fprintln(stdout, clihelp.New(stdout).Detail(fmt.Sprintf("agento11y: no Cursor hooks to remove at %s", path)))
 		return nil
 	}
 
@@ -160,9 +161,9 @@ func Uninstall(stdout, _ io.Writer, logger *log.Logger) error {
 		return err
 	}
 	if wrote {
-		_, _ = fmt.Fprintf(stdout, "agento11y: removed Cursor hooks from %s\n", path)
+		_, _ = fmt.Fprintln(stdout, clihelp.New(stdout).Success(fmt.Sprintf("agento11y: removed Cursor hooks from %s", path)))
 	} else {
-		_, _ = fmt.Fprintf(stdout, "agento11y: no Cursor hooks to remove at %s\n", path)
+		_, _ = fmt.Fprintln(stdout, clihelp.New(stdout).Detail(fmt.Sprintf("agento11y: no Cursor hooks to remove at %s", path)))
 	}
 	return nil
 }

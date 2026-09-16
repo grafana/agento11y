@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -30,6 +31,7 @@ import (
 
 	"github.com/grafana/agento11y/go/proto/agento11y/wire"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/autotag"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/clihelp"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/guardeval"
@@ -446,8 +448,17 @@ func SnapshotEnv() map[string]string {
 // Run parses flags, collects the report, renders it, and returns the exit
 // code: 0 healthy, 1 when any section is broken, 2 on a flag error.
 func Run(ctx context.Context, args []string, p Params) int {
-	opts, err := parseFlags(args, p.Stderr)
+	opts, err := ParseOptions(args)
+	if errors.Is(err, flag.ErrHelp) {
+		renderer := clihelp.New(p.Stdout)
+		if opts.NoColor {
+			renderer.Plain()
+		}
+		renderer.Render(HelpPage())
+		return 0
+	}
 	if err != nil {
+		clihelp.UsageError(p.Stderr, HelpPage(), err.Error())
 		return 2
 	}
 	report := Collect(ctx, opts, p)
@@ -462,20 +473,12 @@ func Run(ctx context.Context, args []string, p Params) int {
 	return report.exitCode()
 }
 
-func parseFlags(args []string, stderr io.Writer) (Options, error) {
+func doctorFlags(opts *Options) *flag.FlagSet {
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	fs.Usage = func() {
-		_, _ = fmt.Fprintln(stderr, "usage: agento11y doctor [--json] [--no-color]")
-		_, _ = fmt.Fprintln(stderr)
-		_, _ = fmt.Fprintln(stderr, "Report the health of the conversations and analytics export pipelines,")
-		_, _ = fmt.Fprintln(stderr, "config validity, and installed host-agent plugins.")
-		_, _ = fmt.Fprintln(stderr)
-		_, _ = fmt.Fprintln(stderr, "  --json       emit a stable JSON report (for support tooling)")
-		_, _ = fmt.Fprintln(stderr, "  --no-color   disable ANSI colors")
-	}
-	var opts Options
-	fs.BoolVar(&opts.JSON, "json", false, "emit a JSON report")
+	// Entry parses before dotenv, so parsing must not print or collect anything.
+	fs.SetOutput(io.Discard)
+	fs.Usage = func() {}
+	fs.BoolVar(&opts.JSON, "json", false, "emit a stable JSON report (for support tooling)")
 	fs.BoolVar(&opts.NoColor, "no-color", false, "disable ANSI colors")
 	// Probing is unconditional, so --probe and its --online alias do nothing.
 	// They stay accepted, and out of the usage text, so the scripts and runbooks
@@ -483,11 +486,29 @@ func parseFlags(args []string, stderr io.Writer) (Options, error) {
 	var ignored bool
 	fs.BoolVar(&ignored, "probe", false, "accepted for backwards compatibility; probes always run")
 	fs.BoolVar(&ignored, "online", false, "accepted for backwards compatibility; probes always run")
+	return fs
+}
+
+func HelpPage() clihelp.Page {
+	var opts Options
+	return clihelp.Page{
+		Command: "agento11y doctor",
+		Summary: "Report the health of the conversations and analytics export pipelines, config validity, and installed host-agent plugins.",
+		Usage:   []string{"agento11y doctor [--json] [--no-color]"},
+		Sections: []clihelp.Section{{
+			Title: "Flags",
+			Rows:  clihelp.Flags(doctorFlags(&opts), map[string]bool{"probe": true, "online": true}, nil),
+		}},
+	}
+}
+
+func ParseOptions(args []string) (Options, error) {
+	var opts Options
+	fs := doctorFlags(&opts)
 	if err := fs.Parse(args); err != nil {
-		return Options{}, err
+		return opts, err
 	}
 	if fs.NArg() > 0 {
-		fs.Usage()
 		return Options{}, fmt.Errorf("unexpected arguments: %v", fs.Args())
 	}
 	return opts, nil

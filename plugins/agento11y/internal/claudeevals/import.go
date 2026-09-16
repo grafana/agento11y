@@ -16,6 +16,7 @@ import (
 
 	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/go/agento11y/experiments"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/clihelp"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/redact"
 )
 
@@ -416,7 +417,7 @@ func (p *Plan) Export(ctx context.Context, client *experiments.Client, telemetry
 			if remote.Status != string(run.Status) {
 				return fmt.Errorf("experiment %s has conflicting terminal status %s", run.Create.RunID, remote.Status)
 			}
-			fmt.Fprintf(output, "Already imported: %s\n", client.ExperimentURL(run.Create.RunID))
+			fmt.Fprintln(output, clihelp.New(output).Success(fmt.Sprintf("Already imported: %s", client.ExperimentURL(run.Create.RunID))))
 			continue
 		}
 		count := 0
@@ -448,7 +449,7 @@ func (p *Plan) Export(ctx context.Context, client *experiments.Client, telemetry
 		if _, err := client.Finalize(ctx, run.Create.RunID, run.Status, &count, errorText); err != nil {
 			return err
 		}
-		fmt.Fprintf(output, "Imported %s: %d trials, %d scores — %s\n", run.Arm, len(run.Trials), count, client.ExperimentURL(run.Create.RunID))
+		fmt.Fprintln(output, clihelp.New(output).Success(fmt.Sprintf("Imported %s: %d trials, %d scores: %s", run.Arm, len(run.Trials), count, client.ExperimentURL(run.Create.RunID))))
 	}
 	return nil
 }
