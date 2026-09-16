@@ -11,8 +11,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// TestNamesAreSortedAndComplete pins the listing order and the one skill the
-// doctor, login and help hints promise. An unsorted list makes `skills list`
+// TestNamesAreSortedAndComplete pins the listing order and the skills the
+// doctor, login, help and local app hints promise. An unsorted list makes `skills list`
 // output depend on the embed walk order rather than on the names.
 func TestNamesAreSortedAndComplete(t *testing.T) {
 	names := Names()
@@ -22,13 +22,15 @@ func TestNamesAreSortedAndComplete(t *testing.T) {
 	if !slices.IsSorted(names) {
 		t.Errorf("Names() = %v, want lexicographically sorted", names)
 	}
-	if !slices.Contains(names, SetupCodingAgentSkill) {
-		t.Errorf("Names() = %v, want it to contain %q", names, SetupCodingAgentSkill)
+	for _, name := range []string{SetupCodingAgentSkill, "setup-local-guards"} {
+		if !slices.Contains(names, name) {
+			t.Errorf("Names() = %v, want it to contain %q", names, name)
+		}
 	}
 }
 
 // TestNamesFrom drives the listing off a fake tree, because the bundled tree
-// has one skill and so exercises neither the sort nor the filter. A directory
+// does not include directories without skill files. A directory
 // without a SKILL.md is not a skill: listing one would print a name that Get
 // then fails on.
 func TestNamesFrom(t *testing.T) {
@@ -207,7 +209,7 @@ func TestGetRejectsUnsafeAndUnknownNames(t *testing.T) {
 }
 
 // TestParseDescription covers the malformed frontmatter the bundled tree
-// cannot show, because the one skill in it is valid.
+// cannot show, because the bundled skills are valid.
 func TestParseDescription(t *testing.T) {
 	cases := []struct {
 		name string

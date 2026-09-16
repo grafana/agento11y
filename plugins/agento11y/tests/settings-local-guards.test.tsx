@@ -200,6 +200,9 @@ describe('SettingsLocalGuardsCard in SettingsView', () => {
     render(<Host />);
     await ready();
     expect(screen.queryByRole('switch', { name: 'Secret redaction' })).toBeNull();
+    expect(screen.getByText('agento11y skills show setup-local-guards')).toBeTruthy();
+    expect(screen.getByText(/and follow it to help me choose, configure, and test local guard packs/)).toBeTruthy();
+    expect(calls('/api/v1/guards', 'PUT')).toHaveLength(0);
     fireEvent.click(master());
     await screen.findByRole('switch', { name: 'Secret redaction' });
     await ready();
@@ -213,6 +216,7 @@ describe('SettingsLocalGuardsCard in SettingsView', () => {
     render(<Host />);
     await ready();
     expect(checked('Git safety')).toBe('false');
+    expect(screen.getByText('agento11y skills show setup-local-guards')).toBeTruthy();
     fireEvent.click(screen.getByRole('switch', { name: 'Secret redaction' }));
     await waitFor(() => expect(checked('Secret redaction')).toBe('true'));
     await ready();

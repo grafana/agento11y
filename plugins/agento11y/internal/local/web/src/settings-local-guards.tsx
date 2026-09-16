@@ -63,8 +63,15 @@ export function SettingsLocalGuardsCard({ data, enabled, busy, error, onChange }
               maxWidth: 520,
             }}
           >
-            Safety packs that block dangerous tool calls on this machine. Turn this on, then select which packs to
-            enforce. They are saved in <Mono>{data?.path || 'guards.toml'}</Mono>.
+            Local packs can block tool calls or redact their arguments. They apply only to calls checked by agento11y.
+            Turn this on, then select your packs. Rules are saved in <Mono>{data?.path || 'guards.toml'}</Mono>.
+          </div>
+          <div style={{ fontSize: 12, lineHeight: 1.5, color: 'var(--fg3)', marginTop: 12, maxWidth: 520 }}>
+            For help, paste this into your coding agent:
+            <blockquote style={{ margin: '6px 0 0', color: 'var(--fg2)', userSelect: 'text' }}>
+              Run <Mono>agento11y skills show setup-local-guards</Mono> and follow it to help me choose, configure, and
+              test local guard packs.
+            </blockquote>
           </div>
         </div>
         <Switch

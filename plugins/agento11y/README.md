@@ -112,6 +112,12 @@ Run `agento11y skills show setup-coding-agent` and follow it to set up Grafana A
 
 `agento11y doctor` and `agento11y login` both name that command when they finish.
 
+For help choosing and testing local guard packs, paste this into your coding agent:
+
+```text
+Run `agento11y skills show setup-local-guards` and follow it to help me choose, configure, and test local guard packs.
+```
+
 The skills for instrumenting your own application code are separate and ship with [`gcx`](https://github.com/grafana/gcx) instead: `gcx agent skills install agento11y-instrument`.
 
 ## Local mode
@@ -125,6 +131,9 @@ The daemon always stores full session content locally. It forwards full generati
 Manage the app with `agento11y local start|open|status|stop|restart`. `agento11y local open` starts the receiver if needed, prints its address, and tries to open the app.
 
 ### Local guards
+
+For the six bundled packs, setup steps, blocked and allowed examples, and enforcement limits, refer to [Local guard packs](../../docs/local-guards.md).
+You can select packs in **Settings** > **Local** > **Guards**, or ask your coding agent to follow `agento11y skills show setup-local-guards`.
 
 With `AGENTO11Y_GUARDS_ENABLED=true`, each host POSTs preflight and tool-call checks to the daemon. Put `guards.toml` next to `config.env` (`~/.config/agento11y/guards.toml`). A local deny always denies. `AGENTO11Y_GUARDS_FAIL_OPEN` only applies to Cloud relay failures. The daemon skips rules that cannot compile and still evaluates valid rules. An unknown `action_on_fail` is reported and treated as `deny`. An unreadable, unparsable, or empty file allows every call locally.
 

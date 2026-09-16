@@ -126,6 +126,8 @@ To re-enter credentials later, run `agento11y login`. It asks where sessions go 
 
 The daemon always stores full generation content locally. It forwards full generation content only when `AGENTO11Y_CONTENT_CAPTURE_MODE=full`. Every other selected mode is reduced to `metadata_only` for the forwarded Cloud copy.
 
+For local safety packs, run `agento11y skills show setup-local-guards` and follow its inspect, approve, configure, and test workflow. Ask before changing packs or destinations. The [local guard pack guide](docs/local-guards.md) documents pack coverage and limits. These checks do not replace a sandbox, and an offline dry run does not prove host enforcement.
+
 With `AGENTO11Y_GUARDS_ENABLED=true`, the daemon evaluates `guards.toml` next to `config.env` before it relays a check to Cloud. Set `reject = true` on a regex evaluator to block on match. Use `config.target = "shell_command"` for shell policies. Cloud-only evaluator kinds load and never fire locally. `AGENTO11Y_GUARDS_FAIL_OPEN` applies only to Cloud relay failures. A local deny always denies. The daemon skips rules that cannot compile and still evaluates valid rules. An unknown `action_on_fail` is reported and treated as `deny`. An unreadable, unparsable, or empty file allows every call locally.
 
 ### Test local guards offline
