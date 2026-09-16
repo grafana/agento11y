@@ -128,10 +128,13 @@ rec.SetResult(agento11y.Generation{
 
 | Language | Frameworks | Where |
 |----------|------------|-------|
-| Python | LangChain, LangGraph, OpenAI Agents, LlamaIndex, Google ADK, Strands Agents, Claude Agent SDK, LiteLLM, Pydantic AI | [`python-frameworks/`](python-frameworks/) |
+| Python | LangChain, LangGraph, OpenAI Agents, LlamaIndex, Google ADK, Strands Agents, Claude Agent SDK, LiteLLM, Open WebUI, Pydantic AI | [`python-frameworks/`](python-frameworks/) |
 | TypeScript/JavaScript | LangChain, LangGraph, OpenAI Agents, LlamaIndex, Google ADK, Strands, Vercel AI SDK | Subpath exports of `@grafana/agento11y`. See [`js/README.md`](js/README.md). |
 | Go | Google ADK | [`go-frameworks/`](go-frameworks/) |
 | Java | Google ADK | [`java/frameworks/`](java/frameworks/) |
+
+The [Open WebUI Filter](python-frameworks/open-webui/README.md) records completed response snapshots
+rather than individual provider calls.
 
 ### Runnable examples
 
