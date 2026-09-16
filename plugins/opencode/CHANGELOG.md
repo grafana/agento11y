@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.23.0] - 2026-09-16
+
+### Features
+
+- **plugins/agento11y**: evaluate local guard rules in the daemon (#643)
+- **plugins**: send conversation IDs in guard requests (#694)
+
+### Bug Fixes
+
+- **guards**: preserve local enforcement and saved rule state (#759)
+
 ## [0.22.0] - 2026-08-26
 
 ### Features

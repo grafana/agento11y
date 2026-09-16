@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.25.0] - 2026-09-16
+
+### Features
+
+- **plugins/agento11y**: evaluate local guard rules in the daemon (#643)
+- **plugins**: send conversation IDs in guard requests (#694)
+
+### Bug Fixes
+
+- **security/medium/plugins/pi**: update dependency vitest to v4.1.11 [security] (#736)
+- **guards**: preserve local enforcement and saved rule state (#759)
+
 ## [0.24.0] - 2026-08-20
 
 ### Features
