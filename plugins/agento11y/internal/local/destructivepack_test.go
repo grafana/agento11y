@@ -11,6 +11,8 @@ import (
 )
 
 func TestDestructivePackRecursiveForce(t *testing.T) {
+	legacyEngine := NewGuardsEngineFromContents("legacy.toml", legacyGuardPacks, nil)
+	require.Empty(t, legacyEngine.Status().Errors)
 	rule, err := packRule(packDestructive)
 	require.NoError(t, err)
 	data, err := guardeval.EncodeRules([]guardeval.Rule{rule})
@@ -35,12 +37,18 @@ func TestDestructivePackRecursiveForce(t *testing.T) {
 			want = agento11y.HookActionDeny
 		}
 		assert.Equal(t, want, result.Action)
+		assert.Equal(t, want, legacyEngine.Evaluate(packRequest("Bash", string(input))).Action, "legacy upgrade")
 	}
 
 	for _, tt := range []struct {
 		command string
 		deny    bool
 	}{
+		{`sh -c 'rm /tmp/x -rf' >/dev/null`, true},
+		{`sh -c "rm /tmp/x -rf" >/dev/null`, true},
+		{`sh -c 'rm /tmp/x -rf'; echo done`, true},
+		{`sh -c "rm /tmp/x -rf"; echo done`, true},
+		{"echo `rm /tmp/x -rf`", true},
 		{"rm -rf /tmp/x", true},
 		{`rm -rf"" /tmp/x`, true},
 		{`rm -rf'' /tmp/x`, true},

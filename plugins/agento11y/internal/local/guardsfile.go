@@ -44,7 +44,7 @@ func (s *Server) localEngine() *guardeval.Engine {
 	if s.guardsEngine != nil && s.guardsDigest == sum {
 		return s.guardsEngine
 	}
-	engine := newLocalGuardsEngine(path, data, s.guards.Logger)
+	engine := NewGuardsEngineFromContents(path, data, s.guards.Logger)
 	s.guardsEngine = engine
 	s.guardsDigest = sum
 	return engine
@@ -202,7 +202,7 @@ func (s *Server) writeGuardsResponseLocked(w http.ResponseWriter) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	engine := newLocalGuardsEngine(path, data, s.guards.Logger)
+	engine := NewGuardsEngineFromContents(path, data, s.guards.Logger)
 	if rules == nil {
 		rules = []guardeval.Rule{}
 	}
@@ -229,7 +229,7 @@ func (s *Server) writeGuardsPutOKLocked(w http.ResponseWriter, rules []guardeval
 	if rules == nil {
 		rules = []guardeval.Rule{}
 	}
-	engine := newLocalGuardsEngine(path, data, s.guards.Logger)
+	engine := NewGuardsEngineFromContents(path, data, s.guards.Logger)
 	s.writeJSON(w, http.StatusOK, guardsFileResponse{
 		Path:      displayConfigPath(path),
 		Exists:    true,

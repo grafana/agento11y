@@ -124,7 +124,7 @@ var gitPreview = []string{
 var gitPatterns = []string{
 	gitCommandPrefix + `reset` + shellOptionGap + shellQuoted(`--hard`) + shellArgumentEnd,
 	gitCommandPrefix + `push` + shellOptionGap + shellQuoted(`(?:--force|-[a-z]*f[a-z]*)`) + shellArgumentEnd,
-	gitCommandPrefix + `clean` + shellOptionGap + shellQuoted(`(?:--force|-[a-z]*f[a-z]*)`) + shellArgumentEnd,
+	gitCommandPrefix + `clean` + gitCleanOptionGap + shellQuoted(`(?:--force|-[diqnxX]*f[a-z]*)`) + shellArgumentEnd,
 	gitCommandPrefix + `checkout` + shellOptionGap + shellQuoted(`--`) + shellArgumentEnd,
 	gitCommandPrefix + `stash[ \t]+(?:drop|clear)` + shellArgumentEnd,
 	gitCommandPrefix + `branch` + shellOptionGap + shellQuoted(`(?-i:-[a-zA-Z]*D[a-zA-Z]*)`) + shellArgumentEnd,
@@ -154,9 +154,9 @@ var permissionsPreview = []string{
 const pathRootOrHome = `(?:/\*?|(?:~|\$HOME|\$\{HOME\})(?:/\*?)?|'/'|"(?:/|\$(?:HOME|\{HOME\})/?)")` + shellArgumentEnd
 
 var permissionsPatterns = []string{
-	`\bchmod` + shellOptionGap + shellQuoted(`(?:--recursive|-[a-zA-Z]*R[a-zA-Z]*)`) + shellArgumentGap + pathRootOrHome,
-	`\bchown` + shellOptionGap + shellQuoted(`(?:--recursive|-[a-zA-Z]*R[a-zA-Z]*)`) + shellArgumentGap + pathRootOrHome,
-	`\bchmod` + shellOptionGap + shellQuoted(`777`) + shellArgumentGap + pathRootOrHome,
+	`(?i:\bchmod)` + shellOptionGap + shellQuoted(`(?:--recursive|-[a-zA-Z]*R[a-zA-Z]*)`) + shellArgumentGap + pathRootOrHome,
+	`(?i:\bchown)` + shellOptionGap + shellQuoted(`(?:--recursive|-[a-zA-Z]*R[a-zA-Z]*)`) + shellArgumentGap + pathRootOrHome,
+	`(?i:\bchmod)` + shellOptionGap + shellQuoted(`777`) + shellArgumentGap + pathRootOrHome,
 }
 
 var diskPreview = []string{
@@ -192,9 +192,13 @@ var envFileToolNames = []string{
 }
 
 func envFileBlockedNames() []string {
-	out := make([]string, 0, len(envFileToolNames))
+	out := make([]string, 0, len(envFileToolNames)+1)
 	for _, name := range envFileToolNames {
-		out = append(out, name+`(*[/"' <>|;&()].env[./"' <>|;&()]*)`)
+		out = append(out, name+`(*[/"' <>|;&()].env[."' <>|;&()]*)`)
+		if name == "apply_patch" {
+			// Patch header delimiters are JSON-escaped; file tools can use them inside basenames.
+			out = append(out, name+`(*[/"' <>|;&()].env\\[nrt]*)`)
+		}
 	}
 	return out
 }
@@ -258,7 +262,7 @@ func filesPackRule() guardeval.Rule {
 				"target": "shell_command",
 				"reject": true,
 				"patterns": []any{
-					`(?i)(^|[/'"[:space:]<>;|&()])\.env($|[/'"[:space:].<>;|&()])`,
+					`(?i)(^|[/'"[:space:]<>;|&()])\.env($|['"[:space:].<>;|&()])`,
 				},
 			},
 		}},
@@ -268,7 +272,9 @@ func filesPackRule() guardeval.Rule {
 func denyShellRule(id string, priority int, patterns []string) guardeval.Rule {
 	list := make([]any, 0, len(patterns))
 	for _, p := range patterns {
-		list = append(list, p)
+		for _, pattern := range shellWrappedPatterns(p) {
+			list = append(list, pattern)
+		}
 	}
 	return guardeval.Rule{
 		RuleID:       packRuleID(id),
@@ -290,7 +296,7 @@ func packsFromRules(rules []guardeval.Rule) []guardPack {
 	on := map[string]bool{}
 	for _, r := range rules {
 		if id, ok := packIDFromRule(r.RuleID); ok {
-			on[id] = r.Enabled == nil || *r.Enabled
+			on[id] = on[id] || r.Enabled == nil || *r.Enabled
 		}
 	}
 	out := catalogPacks()
@@ -326,7 +332,11 @@ func applyPackUpdates(existing []guardeval.Rule, updates map[string]bool) ([]gua
 			continue
 		}
 		enabled[id] = true
-		stored[id] = rule
+		previous, exists := stored[id]
+		// Disabled duplicates do not replace the definition the engine enforces.
+		if !exists || rule.Enabled == nil || *rule.Enabled || (previous.Enabled != nil && !*previous.Enabled) {
+			stored[id] = rule
+		}
 	}
 	maps.Copy(enabled, updates)
 	out := custom

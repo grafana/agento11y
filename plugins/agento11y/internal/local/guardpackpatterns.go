@@ -1,5 +1,7 @@
 package local
 
+import "strings"
+
 // These fragments match literal arguments, not shell evaluation. Substitutions
 // allow one nested $() without treating its flags as outer-command options.
 const (
@@ -16,8 +18,8 @@ const (
 	shellWordGap     = `(?:(?:[ \t]+[0-9]*)?` + shellRedirection + `)*[ \t]+`
 	shellArgumentGap = shellWordGap + `(?:` + shellWord + shellWordGap + `)*`
 
-	// A final quote can close an enclosing shell command, but an adjoining quoted
-	// suffix belongs to the argument. For example, --force"-with-lease" is not --force.
+	// An adjoining quoted suffix belongs to the argument: --force"-with-lease" is not --force.
+	// Closing quotes and backticks require an opening delimiter in shellWrappedPatterns.
 	shellArgumentEnd = `(?:''|"")*(?:[[:space:];&|()<>]|["']?$)`
 
 	// A standalone -- ends option recognition, including its quoted spellings.
@@ -31,5 +33,28 @@ const (
 func shellQuoted(pattern string) string {
 	return `(?:` + pattern + `|'` + pattern + `'|"` + pattern + `")`
 }
+
+func shellWrappedPatterns(pattern string) []string {
+	out := []string{pattern}
+	if !strings.Contains(pattern, shellArgumentEnd) {
+		return out
+	}
+	for _, quote := range []string{`'`, `"`, "`"} {
+		end := `(?:''|"")*` + quote
+		out = append(out, quote+`[^`+quote+`]*`+strings.ReplaceAll(pattern, shellArgumentEnd, end))
+	}
+	return out
+}
+
+// Git clean consumes the argument after -e/--exclude even when it is --.
+// In short clusters, e consumes the remaining letters as its value.
+// Value-taking options cannot also match the single-argument alternatives.
+var (
+	gitCleanExclude   = shellQuoted(`(?:-[diqnxX]*e|--exclude)`) + `(?:''|"")*`
+	gitCleanFlag      = shellQuoted(`(?:-[diqnxX]+|--(?:no-)?(?:quiet|dry-run|interactive))`) + `(?:''|"")*`
+	gitCleanValue     = shellQuoted(`(?:` + shellQuoted(`-[diqnxX]*e`) + shellWord + `|` + shellQuoted(`--exclude=`) + shellWordPart + `*)`)
+	gitCleanPath      = `(?:` + shellSubstitution + `|[^\s;&|()<>\x60#"'\\-]|\\[^\r\n-]|'[^-'\r\n][^'\r\n]*'|"(?:\\[^\r\n-]|[^-"\\\r\n])(?:\\[^\r\n]|[^"\\\r\n])*")` + shellWordPart + `*|(?:''|"")+`
+	gitCleanOptionGap = shellWordGap + `(?:(?:` + gitCleanExclude + shellWordGap + shellWord + `|` + gitCleanFlag + `|` + gitCleanValue + `|` + gitCleanPath + `)` + shellWordGap + `)*`
+)
 
 var gitCommandPrefix = `(?i)\bgit[ \t]+(?:(?:-[Cc][ \t]+` + shellWord + `|--(?:git-dir|work-tree|namespace|config-env)(?:=|[ \t]+)` + shellWord + `|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|no-optional-locks))[ \t]+)*`

@@ -14,7 +14,7 @@ import (
 )
 
 func TestPublicHelpPages(t *testing.T) {
-	paths := []string{"", "help", "login", "doctor", "agents", "agents reconcile", "cursor", "cursor install", "cursor uninstall", "local", "local start", "local open", "local status", "local stop", "local restart", "history", "history import", "skills", "skills list", "skills show", "skills get", "claude eval", "claude eval import", "claude install", "copilot install", "opencode install", "pi install"}
+	paths := []string{"", "help", "login", "doctor", "guards", "guards test", "agents", "agents reconcile", "cursor", "cursor install", "cursor uninstall", "local", "local start", "local open", "local status", "local stop", "local restart", "history", "history import", "skills", "skills list", "skills show", "skills get", "claude eval", "claude eval import", "claude install", "copilot install", "opencode install", "pi install"}
 	for name := range launchers {
 		paths = append(paths, name)
 	}
@@ -84,7 +84,10 @@ func TestHelpRouting(t *testing.T) {
 				}
 				var out, errOut bytes.Buffer
 				code := withExit(t, func() { run(args, unreadableHelpInput{}, &out, &errOut) })
-				if code != nil || errOut.Len() != 0 || !strings.Contains(out.String(), "Usage:") {
+				// guards owns its parser and exits with the command result, including
+				// for help. Other command parsers return after routeHelp handles help.
+				wantExit := form != "topic" && (path == "guards" || path == "guards test")
+				if (code != nil) != wantExit || code != nil && *code != 0 || errOut.Len() != 0 || !strings.Contains(out.String(), "Usage:") {
 					t.Fatalf("exit=%v stdout=%q stderr=%q", code, out.String(), errOut.String())
 				}
 			})

@@ -3,6 +3,7 @@ package local
 import (
 	"encoding/json"
 	"maps"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -43,7 +44,7 @@ func TestLegacyPackDefinitions(t *testing.T) {
 				require.Empty(t, errs)
 				data, err := guardeval.EncodeRules(rules)
 				require.NoError(t, err)
-				engine := newLocalGuardsEngine("guards.toml", data, nil)
+				engine := NewGuardsEngineFromContents("guards.toml", data, nil)
 				require.Empty(t, engine.Status().Errors)
 				wantCount := 1
 				if state == "false" {
@@ -77,7 +78,7 @@ transform.patterns = [{ regex = '"raw":42', replacement = '"raw":43' }]
 	before, err := os.Stat(path)
 	require.NoError(t, err)
 	for range 2 {
-		engine := newLocalGuardsEngine(path, data, nil)
+		engine := NewGuardsEngineFromContents(path, data, nil)
 		require.Empty(t, engine.Status().Errors)
 		assert.Equal(t, 7, engine.Status().Enforcing)
 		for _, tc := range []struct {
@@ -168,8 +169,118 @@ func TestLocalPackEnginePreservesDiagnostics(t *testing.T) {
 		append(append([]byte(nil), legacyGuardPacks...), []byte("\n[[rules]]\nrule_id = 'bad'\npriority = 'twenty'\n\n[[rules]]\nrule_id = 'regex'\ntransform.patterns = [{regex = '['}]\n")...),
 	} {
 		want := guardeval.NewEngineFromContents("custom/path.toml", data, nil).Status()
-		got := newLocalGuardsEngine("custom/path.toml", data, nil).Status()
+		got := NewGuardsEngineFromContents("custom/path.toml", data, nil).Status()
 		assert.Equal(t, want, got)
+	}
+}
+
+func TestPackUpdatesPreserveActiveDuplicate(t *testing.T) {
+	raw, err := guardeval.ParseRules(legacyGuardPacks)
+	require.NoError(t, err)
+	legacy, errs := guardeval.DecodeRules(raw)
+	require.Empty(t, errs)
+	stock, err := packRule(packGit)
+	require.NoError(t, err)
+	custom := stock
+	custom.Priority = 123
+	custom.Match = map[string]any{"tags.team": "platform"}
+	customLegacy := legacy[2]
+	customLegacy.Priority = custom.Priority
+	customLegacy.Match = custom.Match
+	on, off := true, false
+	for _, source := range []struct {
+		name       string
+		rule, want guardeval.Rule
+		refreshed  bool
+	}{
+		{"current", stock, stock, true},
+		{"legacy", legacy[2], stock, true},
+		{"custom_current", custom, custom, true},
+		{"custom_legacy", customLegacy, customLegacy, false},
+	} {
+		for _, tc := range []struct {
+			name   string
+			states []*bool
+			active int
+		}{
+			{"omitted_then_disabled", []*bool{nil, &off}, 0},
+			{"enabled_then_disabled", []*bool{&on, &off}, 0},
+			{"disabled_then_omitted", []*bool{&off, nil}, 1},
+			{"disabled_then_enabled", []*bool{&off, &on}, 1},
+			{"disabled_only", []*bool{&off, &off}, -1},
+		} {
+			for _, secrets := range []bool{false, true} {
+				update, err := json.Marshal(guardsFileRequest{Packs: map[string]bool{packSecrets: secrets}})
+				require.NoError(t, err)
+				t.Run(source.name+"/"+tc.name+"/"+string(update), func(t *testing.T) {
+					var rules []guardeval.Rule
+					for i, enabled := range tc.states {
+						rule := source.rule
+						rule.Enabled = enabled
+						if enabled != nil && !*enabled {
+							rule.Priority = 456 + i
+						}
+						rules = append(rules, rule)
+					}
+					wantRule := rules[len(rules)-1]
+					if tc.active >= 0 {
+						wantRule = source.want
+						wantRule.Enabled = tc.states[tc.active]
+					}
+					s, path, _ := newGuardsServer(t)
+					require.NoError(t, guardeval.WriteRules(path, rules))
+					for step, method := range []string{http.MethodGet, http.MethodPut, http.MethodGet} {
+						body := ""
+						if method == http.MethodPut {
+							body = string(update)
+						}
+						resp := doReq(t, s, method, "/api/v1/guards", body)
+						require.Equal(t, http.StatusOK, resp.StatusCode)
+						var got guardsFileResponse
+						decodeJSON(t, resp.Body, &got)
+						require.NoError(t, resp.Body.Close())
+						require.Empty(t, got.Errors)
+						wantEnforcing := 0
+						if tc.active >= 0 {
+							wantEnforcing++
+						}
+						if step > 0 && secrets {
+							wantEnforcing++
+						}
+						assert.Equal(t, wantEnforcing, got.Enforcing, method)
+						for _, pack := range got.Packs {
+							if pack.ID == packGit {
+								assert.Equal(t, tc.active >= 0, pack.Enabled, method)
+							}
+						}
+						if method == http.MethodPut {
+							wantRules := []guardeval.Rule{wantRule}
+							if secrets {
+								wantRules = append([]guardeval.Rule{secretsPackRule()}, wantRules...)
+							}
+							assert.Equal(t, wantRules, got.Rules)
+							saved, _, exists, errs, err := readGuardRules(path)
+							require.NoError(t, err)
+							require.True(t, exists)
+							require.Empty(t, errs)
+							assert.Equal(t, wantRules, saved)
+						}
+					}
+					data, err := os.ReadFile(path)
+					require.NoError(t, err)
+					engine := NewGuardsEngineFromContents(path, data, nil)
+					require.Empty(t, engine.Status().Errors)
+					for _, command := range []string{"git reset --hard", "git reset HEAD --hard"} {
+						input, err := json.Marshal(map[string]string{"command": command})
+						require.NoError(t, err)
+						request := packRequest("Bash", string(input))
+						request.Context.Tags = map[string]string{"team": "platform"}
+						wantDeny := tc.active >= 0 && (command == "git reset --hard" || source.refreshed)
+						assert.Equal(t, wantDeny, engine.Evaluate(request).Action == agento11y.HookActionDeny, command)
+					}
+				})
+			}
+		}
 	}
 }
 
@@ -260,7 +371,7 @@ func TestPackUpdatesPreserveEnabledState(t *testing.T) {
 						for i := range out {
 							assert.Equal(t, out[i], saved[i])
 						}
-						engine := newLocalGuardsEngine(path, data, nil)
+						engine := NewGuardsEngineFromContents(path, data, nil)
 						require.Empty(t, engine.Status().Errors)
 						want := state.enabled == nil || *state.enabled
 						if next, toggled := update.packs[packGit]; toggled {

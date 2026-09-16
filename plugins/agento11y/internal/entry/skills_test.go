@@ -206,7 +206,7 @@ func TestRun_HelpIsARealCommand(t *testing.T) {
 // forgetting this list is not caught.
 func helpRows() []string {
 	rows := []string{"\n  cursor "}
-	for _, name := range []string{"login", "doctor", "skills", "local", "history", "help"} {
+	for _, name := range []string{"login", "doctor", "skills", "guards", "local", "history", "help"} {
 		rows = append(rows, "\n  "+name+" ")
 	}
 	// Launcher rows come from the launchers map, so a new launcher fails this

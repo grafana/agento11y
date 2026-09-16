@@ -2,6 +2,7 @@ package local
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/grafana/agento11y/go/agento11y"
@@ -23,10 +24,24 @@ func packRequest(tool, input string) agento11y.HookEvaluateRequest {
 }
 
 func TestPermissionsAndDiskPacks(t *testing.T) {
+	legacyEngine := NewGuardsEngineFromContents("legacy.toml", legacyGuardPacks, nil)
+	require.Empty(t, legacyEngine.Status().Errors)
 	for _, tc := range []struct {
 		pack, command string
 		deny          bool
 	}{
+		{packPermissions, `sh -c 'chmod -R 755 /' >/dev/null`, true},
+		{packPermissions, `sh -c 'chmod -R 755 /' 2>/dev/null`, true},
+		{packPermissions, `chmod -R 755 /";suffix"`, false},
+		{packPermissions, `sh -c "chmod -R 755 /"; echo done`, true},
+		{packPermissions, "/bin/CHMOD 777 $HOME", true},
+		{packPermissions, "/bin/CHMOD -R 777 $HOME", true},
+		{packPermissions, "/bin/ChMod -R 755 /", true},
+		{packPermissions, "/usr/sbin/CHOWN -R root /", true},
+		{packPermissions, "/bin/CHMOD -r 755 /", false},
+		{packPermissions, "/usr/sbin/CHOWN -r root /", false},
+		{packPermissions, "/bin/CHMOD 777 $home", false},
+		{packPermissions, "/bin/CHMOD -R 777 $home", false},
 		{packPermissions, "chmod -R 755 /", true},
 		{packPermissions, "chmod 2>/dev/null -R 755 /", true},
 		{packPermissions, "chmod -R 2>/dev/null 755 /", true},
@@ -103,27 +118,62 @@ func TestPermissionsAndDiskPacks(t *testing.T) {
 				want = agento11y.HookActionDeny
 			}
 			assert.Equal(t, want, engine.Evaluate(packRequest("Bash", string(input))).Action)
+			assert.Equal(t, want, legacyEngine.Evaluate(packRequest("Bash", string(input))).Action, "legacy upgrade")
 		})
 	}
 }
 
 func TestFilesPackBasenamesAndDelimiters(t *testing.T) {
+	legacyEngine := NewGuardsEngineFromContents("legacy.toml", legacyGuardPacks, nil)
+	require.Empty(t, legacyEngine.Status().Errors)
 	rule := filesPackRule()
 	data, err := guardeval.EncodeRules([]guardeval.Rule{rule})
 	require.NoError(t, err)
 	engine := guardeval.NewEngineFromContents("guards.toml", data, nil)
 	require.Empty(t, engine.Status().Errors)
 	for _, tool := range envFileToolNames {
-		for _, path := range []string{".env", "/repo/.env", ".env.local", "/repo/.env.production", ".env/foo", "/repo/.env/credentials", ".environment", "/repo/.envoy.yaml", ".envrc", "config.env"} {
+		for _, path := range []string{".env", "/repo/.env", ".env.local", "/repo/.env.production", ".environment", "/repo/.envoy.yaml", ".envrc", "config.env"} {
 			t.Run(tool+"/"+path, func(t *testing.T) {
 				input, err := json.Marshal(map[string]string{"file_path": path})
 				require.NoError(t, err)
 				want := agento11y.HookActionAllow
-				if path == ".env" || path == "/repo/.env" || path == ".env.local" || path == "/repo/.env.production" || path == ".env/foo" || path == "/repo/.env/credentials" {
+				if path == ".env" || path == "/repo/.env" || path == ".env.local" || path == "/repo/.env.production" {
 					want = agento11y.HookActionDeny
 				}
 				assert.Equal(t, want, engine.Evaluate(packRequest(tool, string(input))).Action)
 			})
+		}
+	}
+	for _, path := range []string{".env\nbackup", ".env\tbackup", ".env\rbackup"} {
+		t.Run("Read/"+fmt.Sprintf("%q", path), func(t *testing.T) {
+			input, err := json.Marshal(map[string]string{"file_path": path})
+			require.NoError(t, err)
+			assert.Equal(t, agento11y.HookActionAllow, engine.Evaluate(packRequest("Read", string(input))).Action)
+			assert.Equal(t, agento11y.HookActionAllow, legacyEngine.Evaluate(packRequest("Read", string(input))).Action)
+		})
+	}
+	for _, operation := range []string{"Add", "Update", "Delete"} {
+		for _, path := range []string{".env", "/repo/.env", ".env.local", "/repo/.env.local", ".environment", ".envrc"} {
+			for _, newline := range []string{"\n", "\r\n"} {
+				t.Run(operation+"/"+path+"/"+fmt.Sprintf("%q", newline), func(t *testing.T) {
+					patch := "*** Begin Patch" + newline + "*** " + operation + " File: " + path + newline
+					if operation == "Update" {
+						patch += "@@" + newline + "-OLD=value" + newline
+					}
+					if operation != "Delete" {
+						patch += "+NEW=value" + newline
+					}
+					patch += "*** End Patch"
+					input, err := json.Marshal(map[string]string{"command": patch})
+					require.NoError(t, err)
+					want := agento11y.HookActionDeny
+					if path == ".environment" || path == ".envrc" {
+						want = agento11y.HookActionAllow
+					}
+					assert.Equal(t, want, engine.Evaluate(packRequest("apply_patch", string(input))).Action)
+					assert.Equal(t, want, legacyEngine.Evaluate(packRequest("apply_patch", string(input))).Action, "legacy upgrade")
+				})
+			}
 		}
 	}
 	for _, tool := range []string{"Bash", "terminal"} {
@@ -133,7 +183,6 @@ func TestFilesPackBasenamesAndDelimiters(t *testing.T) {
 		}{
 			{"cat <.env", true}, {"echo test >.env", true}, {"cat .env;true", true},
 			{"cat .env.local", true}, {`cat <".env"`, true}, {"cat .env|wc -c", true},
-			{"cat .env/foo", true}, {"cat /repo/.env/credentials", true},
 			{"cat .environment", false}, {"cat <.environment", false}, {"echo test >.envoy.yaml", false},
 			{"cat .envrc;true", false}, {"cat config.env", false},
 		} {

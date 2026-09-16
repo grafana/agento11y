@@ -24,6 +24,8 @@ func publicHelpPages() map[string]clihelp.Page {
 	add("help", "Show help for a command.", "[command path]")
 	add("login", "Save capture settings to config.env. Prompt for missing values. Verify credentials before saving unless --no-verify is set.", "[flags]")
 	add("doctor", "Check export pipelines, configuration, and installed integrations without changing them.", "[flags]")
+	add("guards", "Test a command against saved local guard rules without executing it.", "<command>")
+	add("guards test", "Test a command against saved local guard rules without executing it.", "[--json] [--rules path] [--tool name] [--agent name] [--stdin] [--] <command>")
 	add("agents", "Configure registered agent integrations without launching them.", "<command>")
 	add("agents reconcile", "Reconcile selected integrations and print a JSON receipt.", "--agents all|name[,name...] --json")
 	add("cursor", "Manage Cursor hooks. Cursor is a GUI app and has no launcher.", "<command>")
@@ -74,7 +76,8 @@ func publicHelpPages() map[string]clihelp.Page {
 	}
 	children("", "Setup", "login", "doctor", "agents")
 	children("", "Launchers", launcherNames...)
-	children("", "Commands", "cursor", "local", "history", "skills", "help")
+	children("", "Commands", "cursor", "guards", "local", "history", "skills", "help")
+	children("guards", "Commands", "test")
 	children("agents", "Commands", "reconcile")
 	children("cursor", "Commands", "install", "uninstall")
 	children("local", "Commands", "start", "open", "status", "stop", "restart")
@@ -177,6 +180,11 @@ func routeHelp(args []string, stdout, stderr io.Writer) bool {
 		return true
 	}
 	if args[0] == "--version" || args[0] == "-version" {
+		return false
+	}
+	// guards has its own help and flag parser, which documents the dry-run
+	// contract more precisely than the generic command pages can.
+	if args[0] == "guards" {
 		return false
 	}
 	if len(args) > 1 && args[0] == "local" && args[1] == "serve" {

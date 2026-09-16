@@ -316,8 +316,8 @@ func filterRuleIDs(rules []Rule) ([]Rule, []error) {
 }
 
 // compileTransform compiles a transform config into ready-to-run patterns.
-// Returns (nil, nil) when there is nothing to transform. An empty replacement
-// defaults to "[REDACTED:{id}]" (or "[REDACTED]" when no id).
+// Returns (nil, nil) when there is nothing to transform, unless JSONMode is invalid.
+// An empty replacement defaults to "[REDACTED:{id}]" (or "[REDACTED]" when no id).
 func compileTransform(cfg *TransformConfig) (*Transform, error) {
 	if cfg == nil {
 		return nil, nil

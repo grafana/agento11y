@@ -126,7 +126,7 @@ Manage the app with `agento11y local start|open|status|stop|restart`. `agento11y
 
 ### Local guards
 
-With `AGENTO11Y_GUARDS_ENABLED=true`, each host POSTs preflight and tool-call checks to the daemon. Put `guards.toml` next to `config.env` (`~/.config/agento11y/guards.toml`). A local deny always denies. `AGENTO11Y_GUARDS_FAIL_OPEN` only applies to Cloud relay failures; a broken or empty rules file allows every call.
+With `AGENTO11Y_GUARDS_ENABLED=true`, each host POSTs preflight and tool-call checks to the daemon. Put `guards.toml` next to `config.env` (`~/.config/agento11y/guards.toml`). A local deny always denies. `AGENTO11Y_GUARDS_FAIL_OPEN` only applies to Cloud relay failures. The daemon skips rules that cannot compile and still evaluates valid rules. An unknown `action_on_fail` is reported and treated as `deny`. An unreadable, unparsable, or empty file allows every call locally.
 
 `reject = true` blocks when the pattern matches. `config.target = "shell_command"` evaluates the decoded command line of a shell tool instead of the JSON-escaped tool-call text. Cloud-only evaluator kinds (`llm_judge`, `heuristic`, `prompt_guard`, `json_schema`) load and never fire locally.
 
@@ -144,6 +144,42 @@ action_on_fail = "deny"
 ```
 
 `agento11y doctor` reports the file path, compile errors, and how many rules can enforce locally.
+
+#### Test local guards offline
+
+`agento11y guards test` evaluates saved local policy even when host guard requests are disabled. It does not execute the submitted command, contact endpoints, start a daemon, or write files. A local dry run does not predict host enforcement or Cloud decisions.
+
+```sh
+agento11y guards test 'rm -rf ~/.ssh'
+agento11y guards test --json --rules ./guards.toml 'git reset --hard'
+printf '%s\n' 'echo first' 'echo second' | agento11y guards test --stdin --tool shell --agent pi
+```
+
+Flags must precede one quoted command argument. Use `--` before a command starting with a dash. Alternatively, `--stdin` reads one command through EOF, preserving newlines. Blank commands and empty tool names are errors.
+
+Without `--rules`, the command reads `guards.toml` beside the resolved `config.env`, including the legacy `sigil` directory fallback. An explicit path bypasses configuration discovery. A missing default file or a valid file with no enforceable rules returns allow with a notice. A missing explicit file is an error. Disabled rules stay disabled; absent packs stay absent. Unchanged legacy packs receive the daemon's in-memory upgrade without changing the file.
+
+The synthetic request is postflight, with one assistant tool call, ID `guards-test`. `--tool` defaults to `Bash`; another name still receives `{"command": ...}` arguments. Conditional rules see only `--agent`, which defaults to empty. There is no model, tags, agent version, preflight history, or system prompt. This command does not replay arbitrary host payloads.
+
+Plain output starts with `allow (local dry run)`, `deny (local dry run)`, or `error (local dry run)`. It reports the rules path, enforceable count, rule-level results, diagnostics, and any transformed input. Failed evaluations can be warnings or dropped redactions, not just denials. A response rule ID does not identify every transform that ran.
+
+`--json` writes one deterministic document to stdout:
+
+- `schema_version: 1` and `scope: "local"` identify the contract.
+- `rules` contains `path`, `exists`, `compiled` (rule count), and `enforcing` (locally enforceable rule count).
+- `request` contains `command`, `tool_name`, and `agent_name`.
+- `response` is the engine response, or null when no evaluation completed. Its `evaluations` array preserves engine order. `transformed_input` uses SDK JSON with raw JSON tool arguments, not the HTTP protobuf encoding.
+- `errors` and `notices` are arrays, including when empty.
+
+After flags parse successfully, JSON errors also go to stdout. Stderr stays empty unless writing stdout fails. Flag-parsing errors use stderr.
+
+| Exit | Meaning |
+| --- | --- |
+| `0` | Completed allow, including warnings or transforms |
+| `1` | Completed deny |
+| `2` | Invalid input, file-read failure, compilation diagnostics, evaluation failure, or output failure |
+
+Errors take precedence over allow or deny. When some rules compile, their partial response accompanies compilation errors. Diagnostic JSON includes the submitted command and rewritten content. Do not use real secrets in shared test output. Run `agento11y guards test --help` for the full syntax.
 
 ### History import
 

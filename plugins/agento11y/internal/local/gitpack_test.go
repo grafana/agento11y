@@ -12,6 +12,8 @@ import (
 )
 
 func TestGitPackForcePush(t *testing.T) {
+	legacyEngine := NewGuardsEngineFromContents("legacy.toml", legacyGuardPacks, nil)
+	require.Empty(t, legacyEngine.Status().Errors)
 	rule, err := packRule(packGit)
 	require.NoError(t, err)
 	data, err := guardeval.EncodeRules([]guardeval.Rule{rule})
@@ -39,6 +41,18 @@ func TestGitPackForcePush(t *testing.T) {
 		command string
 		deny    bool
 	}{
+		{`sh -c 'git push --force' >/dev/null`, true},
+		{`sh -c 'git push --force' 2>/dev/null`, true},
+		{`git push --force";not-a-flag"`, false},
+		{"git push --force`printf %s -with-lease`", false},
+		{`sh -c "git push --force" >/dev/null`, true},
+		{`sh -c 'git reset --hard'; echo done`, true},
+		{`sh -c "git reset --hard"; echo done`, true},
+		{"sh -c 'git push --force'\necho done", true},
+		{`git push --force">file"`, false},
+		{`git push --force" |suffix"`, false},
+		{"echo `git push --force`", true},
+		{`git push --force"-with-lease"`, false},
 		{"git reset --hard HEAD", true},
 		{"git reset HEAD --hard", true},
 		{"git reset HEAD --soft", false},
@@ -56,6 +70,41 @@ func TestGitPackForcePush(t *testing.T) {
 		{"git clean -f; echo ok", true},
 		{`git clean '-f'`, true},
 		{"git clean -- -f", false},
+		{"git clean -e -- -fd", true},
+		{"git clean --exclude -- -fd", true},
+		{"git clean -qe -- -fd", true},
+		{"git clean -de -- -fd", true},
+		{`git clean -e"" -- -fd`, true},
+		{"git clean -e -fd", false},
+		{"git clean -ef", false},
+		{"git clean -qef", false},
+		{"git clean -dfevalue", true},
+		{"git clean -e-- -fd", true},
+		{`git clean '-e--' -fd`, true},
+		{`git clean --exclude="--" -fd`, true},
+		{`git clean '--exclude=--' -fd`, true},
+		{"git clean --exclude= -fd", true},
+		{"git clean --exclude= --force", true},
+		{`git clean '--exclude=' -fd`, true},
+		{`git clean "--exclude=" -fd`, true},
+		{`git clean --exclude="" -fd`, true},
+		{"git clean --exclude= -- -fd", false},
+		{"git clean --exclude=; echo -fd", false},
+		{"git clean --exclude=-fd", false},
+		{`git clean 'path with spaces' -fd`, true},
+		{`git clean path/"with spaces" -fd`, true},
+		{`git clean -e '-f'`, false},
+		{"git clean -e -e -- -fd", false},
+		{"git clean -e --exclude -- -fd", false},
+		{`git clean '-e' '--' -fd`, true},
+		{`git clean --exclude "--" -fd`, true},
+		{"git clean -e -- -e -- -fd", true},
+		{"git clean -e -- 2>/dev/null -fd", true},
+		{"git clean -- -fd", false},
+		{`git clean "--" -fd`, false},
+		{"git clean -e -- -- -fd", false},
+		{"git clean -- -e -- -fd", false},
+		{"git clean -e --; echo -fd", false},
 		{`git push "--force"`, true},
 		{`git push --force""`, true},
 		{`git reset --hard'' HEAD`, true},
@@ -135,6 +184,9 @@ func TestGitPackForcePush(t *testing.T) {
 				want = agento11y.HookActionDeny
 			}
 			assert.Equal(t, want, actionFor(tt.command))
+			input, err := json.Marshal(map[string]string{"command": tt.command})
+			require.NoError(t, err)
+			assert.Equal(t, want, legacyEngine.Evaluate(packRequest("Bash", string(input))).Action, "legacy upgrade")
 		})
 	}
 }

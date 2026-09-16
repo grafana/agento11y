@@ -25,7 +25,7 @@ func TestApplyPackUpdates_PreservesCustomRules(t *testing.T) {
 	assert.Equal(t, custom, out[0])
 	data, err := guardeval.EncodeRules(out)
 	require.NoError(t, err)
-	require.Empty(t, newLocalGuardsEngine("guards.toml", data, nil).Status().Errors)
+	require.Empty(t, NewGuardsEngineFromContents("guards.toml", data, nil).Status().Errors)
 	raw, err := guardeval.ParseRules(data)
 	require.NoError(t, err)
 	roundTrip, errs := guardeval.DecodeRules(raw)
@@ -67,20 +67,44 @@ func TestPackRulesCompile(t *testing.T) {
 
 func TestPacksFromRules(t *testing.T) {
 	on, off := true, false
-	for _, enabled := range []*bool{nil, &on, &off} {
-		packs := packsFromRules([]guardeval.Rule{{RuleID: packRuleID(packSecrets), Enabled: enabled}})
-		require.Len(t, packs, len(catalogPacks()))
-		assert.Equal(t, enabled == nil || *enabled, packs[0].Enabled)
-		for _, p := range packs[1:] {
-			assert.False(t, p.Enabled, p.ID)
-		}
+	for _, tc := range []struct {
+		name    string
+		states  []*bool
+		enabled bool
+	}{
+		{"omitted", []*bool{nil}, true},
+		{"true", []*bool{&on}, true},
+		{"false", []*bool{&off}, false},
+		{"omitted_then_disabled", []*bool{nil, &off}, true},
+		{"enabled_then_disabled", []*bool{&on, &off}, true},
+		{"disabled_then_omitted", []*bool{&off, nil}, true},
+		{"disabled_then_enabled", []*bool{&off, &on}, true},
+		{"disabled_only", []*bool{&off, &off}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var rules []guardeval.Rule
+			for _, enabled := range tc.states {
+				rules = append(rules, guardeval.Rule{RuleID: packRuleID(packSecrets), Enabled: enabled})
+			}
+			packs := packsFromRules(rules)
+			require.Len(t, packs, len(catalogPacks()))
+			assert.Equal(t, tc.enabled, packs[0].Enabled)
+			for _, p := range packs[1:] {
+				assert.False(t, p.Enabled, p.ID)
+			}
+		})
 	}
 }
 
 func TestEnvFileBlockedNamesCoverHostTools(t *testing.T) {
 	names := envFileBlockedNames()
-	require.Len(t, names, len(envFileToolNames))
-	for i, tool := range envFileToolNames {
-		assert.Equal(t, tool+`(*[/"' <>|;&()].env[./"' <>|;&()]*)`, names[i])
+	require.Len(t, names, len(envFileToolNames)+1)
+	for _, tool := range envFileToolNames {
+		assert.Contains(t, names, tool+`(*[/"' <>|;&()].env[."' <>|;&()]*)`)
+		if tool == "apply_patch" {
+			assert.Contains(t, names, tool+`(*[/"' <>|;&()].env\\[nrt]*)`)
+		} else {
+			assert.NotContains(t, names, tool+`(*[/"' <>|;&()].env\\[nrt]*)`)
+		}
 	}
 }

@@ -222,6 +222,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 		return
 	}
 
+	if args[0] == "guards" {
+		exit(runGuardsCommand(args[1:], stdin, stdout, stderr))
+		return
+	}
+
 	if args[0] == "local" {
 		runLocalCommand(args[1:], stdout, stderr)
 		return

@@ -126,15 +126,21 @@ To re-enter credentials later, run `agento11y login`. It asks where sessions go 
 
 The daemon always stores full generation content locally. It forwards full generation content only when `AGENTO11Y_CONTENT_CAPTURE_MODE=full`. Every other selected mode is reduced to `metadata_only` for the forwarded Cloud copy.
 
-With `AGENTO11Y_GUARDS_ENABLED=true`, the daemon evaluates `guards.toml` next to `config.env` before it relays a check to Cloud. Set `reject = true` on a regex evaluator to block on match. Use `config.target = "shell_command"` for shell policies. Cloud-only evaluator kinds load and never fire locally.
+With `AGENTO11Y_GUARDS_ENABLED=true`, the daemon evaluates `guards.toml` next to `config.env` before it relays a check to Cloud. Set `reject = true` on a regex evaluator to block on match. Use `config.target = "shell_command"` for shell policies. Cloud-only evaluator kinds load and never fire locally. `AGENTO11Y_GUARDS_FAIL_OPEN` applies only to Cloud relay failures. A local deny always denies. The daemon skips rules that cannot compile and still evaluates valid rules. An unknown `action_on_fail` is reported and treated as `deny`. An unreadable, unparsable, or empty file allows every call locally.
 
-`AGENTO11Y_GUARDS_FAIL_OPEN` applies to guard endpoint errors, including local daemon errors, and Cloud relay failures. It never overrides an explicit local deny.
+### Test local guards offline
 
-An unreadable, unparsable, or empty file adds no local rules. The daemon skips invalid rules without disabling valid local rules. Cloud can still deny when no local rules apply.
+Use `agento11y guards test 'rm -rf ~/.ssh'` to test saved local policy without executing input or checking Cloud rules. The command contacts no endpoints, starts no daemon, and writes no files. It evaluates even when host guard requests are disabled, but does not predict host enforcement. Disabled rules stay disabled; absent packs stay absent.
 
-Shell checks use regexes without a shell interpreter or process isolation. Aliases, runtime expansion, and generated commands can bypass them.
+Syntax: `agento11y guards test [--json] [--rules path] [--tool name] [--agent name] [--stdin] [--] <command>`. Flags precede one quoted command. Use `--` before a command starting with a dash. Alternatively, `printf '%s\n' 'echo first' 'echo second' | agento11y guards test --stdin` supplies one command through EOF, preserving newlines. Blank commands and empty tool names are errors.
 
-Custom transforms match serialized JSON by default. The built-in Secret redaction pack uses `json_mode = "strings"` to match decoded JSON string values, including escaped token characters.
+`--rules ./guards.toml` selects an explicit file without configuration discovery. Otherwise, the command reads `guards.toml` beside the resolved `config.env`, including the legacy `sigil` directory fallback. A missing default file or no enforceable rules returns allow with a notice; a missing explicit file is an error. Unchanged legacy packs receive the daemon's in-memory upgrade without changing the file.
+
+The synthetic postflight request contains one assistant tool call, ID `guards-test`. `--tool` defaults to `Bash` and changes only the name; arguments remain `{"command": ...}`. Conditional rules see only `--agent`, which defaults to empty. Model, tags, agent version, preflight history, and system prompt are absent. This command does not replay arbitrary host payloads.
+
+Plain output reports the local verdict, rules path, enforceable count, rule results, diagnostics, and any rewritten input. `--json` writes one deterministic document with `schema_version: 1`, `scope: "local"`, `rules: {path, exists, compiled, enforcing}`, `request: {command, tool_name, agent_name}`, `response`, `errors`, and `notices`. `compiled` and `enforcing` are rule counts. `response` is null when no evaluation completed; otherwise it preserves the engine result and ordered `evaluations` array. Transformed input uses SDK JSON with raw JSON tool arguments. `errors` and `notices` are always arrays. After flag parsing, JSON failures use stdout and leave stderr empty unless writing stdout fails; flag-parsing errors use stderr.
+
+Exits: `0` for completed allow, including warnings or transforms; `1` for completed deny; `2` for input, file, compilation, evaluation, or output errors. Compilation errors take precedence. The output retains the partial response from valid rules. Failed evaluations include warnings and dropped redactions, not just denials. A response rule ID does not identify every transform that ran. Diagnostic JSON includes the submitted command and rewritten content: do not use real secrets in shared test output. Run `agento11y guards test --help` for details.
 
 ## Content capture
 

@@ -17,7 +17,9 @@ import (
 //go:embed testdata/guardpacks/afa354d4.toml
 var legacyGuardPacks []byte
 
-func newLocalGuardsEngine(path string, data []byte, logger *log.Logger) *guardeval.Engine {
+// NewGuardsEngineFromContents upgrades unchanged legacy packs in memory before compilation.
+// It does not read or write path; path only identifies file diagnostics.
+func NewGuardsEngineFromContents(path string, data []byte, logger *log.Logger) *guardeval.Engine {
 	raw, err := guardeval.ParseRules(data)
 	if err != nil {
 		return guardeval.NewEngineFromContents(path, data, logger)
