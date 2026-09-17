@@ -140,6 +140,12 @@ The coding-agent plugins (claude-code, codex, copilot, cursor, opencode, pi, vib
 
 Launchers also set a few keys specific to one host, so this table is not the full list of what arrives on a generation.
 
+### Hermes tags
+
+The [Hermes plugin](../../plugins/hermes/README.md) does not use the shared launcher. It emits no automatic `cwd` and no unconditional `git.branch`. The launcher built-ins above do not apply. Automatic `user`, `repo`, and `git.branch` client tags require the switches below. Explicit `AGENTO11Y_TAGS` values win over automatically resolved values.
+
+Hermes resolves the user from `AGENTO11Y_USER_ID`, then the operating-system account; it has no signed-in host-account lookup. Its process-wide client freezes automatic values at initialization, unlike a launcher invocation or a per-session client. Set the switches in Hermes's environment, not the shared launcher's config. `agento11y login` and `doctor` do not configure or diagnose Hermes.
+
 ## Opt-in automatic tags (`AGENTO11Y_AUTO_CODING_AGENT_TAGS`)
 
 The built-in tags above are per-generation tags, so they reach the Agent Observability UI but never become metric labels. `AGENTO11Y_AUTO_CODING_AGENT_TAGS` resolves the same kind of session facts and attaches them as **client tags** instead, which is the one mechanism that does reach OTel metrics. That is what lets the Usage and Cost view filter and break down by user, repository, or branch. It is a coding-agent-plugin feature; the SDKs have nothing like it.
@@ -192,6 +198,8 @@ Enabling these names is a deliberate trade. Read this first:
 - `repo` and `user` are usually bounded per organization. `branch` is not. Set `AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=user,repo` first and add `branch` only if you need per-branch cost.
 - In the pi and opencode plugins the client is built once per session, so their metric labels freeze at session start. A checkout that changes mid-session keeps the label it started with. The hook-based agents (claude-code, codex, copilot, cursor, vibe) build a client per invocation and follow the checkout.
 
+For Hermes, automatic tags use the same opt-in and allowlist contract, but unsupported names and an inactive allowlist are currently ignored without logging. No per-generation branch override is added. Removing content with `metadata_only` does not remove tags; enabling user or repository labels still exposes those values.
+
 ## Built-in metadata from the agent launchers
 
 Metadata is exported but never turned into a metric label, so launchers use it for numbers and for keys with too many distinct values to be a tag.
@@ -208,6 +216,8 @@ Codex and copilot also add their own `codex.*` and `copilot.*` keys, so this tab
 | `pi.fork.parent_generation_id` | Generation id of the trunk turn the fork continues from. Ships as metadata rather than a parent edge, because the trunk only holds that generation if it ran instrumented. | pi |
 | `opencode.parent_session_id` | Session id of the run that spawned this subagent session. On every subagent generation, including one whose parent turn could not be named. | opencode |
 | `opencode.child_session_id` | Subagent's own session id. Present when its turns were reparented onto the spawning conversation, where `conversation_id` names the root session of the subagent chain instead. | opencode |
+
+Hermes exports host facts under `hermes.*` metadata, including `hermes.request_facts_reused` when it reuses cached request fields. These facts are generation metadata, not client tags or metric labels. Tool names and sampling parameters may remain visible in metadata-only mode; request text and tool schemas do not. See the [Hermes README](../../plugins/hermes/README.md) for clipping and cache limitations.
 
 ## See also
 

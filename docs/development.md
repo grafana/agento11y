@@ -2,6 +2,24 @@
 
 Notes for contributors working in this repo.
 
+## Hermes plugin
+
+[`plugins/hermes`](../plugins/hermes/README.md) is an independent Python package. There is no release-table registration or publishing workflow. Install in Hermes's Python environment, not through the shared launcher.
+
+Run these tasks from the repository root:
+
+```sh
+mise run format:py:plugin-hermes
+mise run lint:py:plugin-hermes
+mise run typecheck:py:plugin-hermes
+mise run test:py:plugin-hermes
+mise run build:py:plugin-hermes
+```
+
+The build task validates the wheel and source distribution, including package identity, version, dependencies, and entry point. Root `mise run check` includes artifact validation. CI tests Python 3.11, 3.12, 3.13, and 3.14 with branch coverage enabled and a 99% minimum. Keep the plugin's `uv.lock` synchronized with dependencies.
+
+Tests must run without inherited Cloud/provider credentials or personal configuration. Real-Hermes tests are optional and separate from the normal checks. Read the [e2e skill](../plugins/hermes/.agents/skills/e2e-test/SKILL.md) and inspect scripts before running them. Use an explicit loopback model provider. Route both telemetry channels to loopback receivers, or disable unused channels. A local OTLP sink alone does not prevent paid model calls.
+
 ## Regenerating protobuf stubs
 
 The proto lives at [`proto/agento11y/v1/generation_ingest.proto`](../proto/agento11y/v1/generation_ingest.proto). After editing it, regenerate every language's stubs from the repo root:
@@ -78,7 +96,7 @@ That writes five files:
 | Output | Consumer |
 | --- | --- |
 | `go/agento11y/redaction_patterns_gen.go` | Go SDK |
-| `python/agento11y/_redaction_patterns.py` | Python SDK |
+| `python/agento11y/_redaction_patterns.py` | Python SDK; reused by the Hermes plugin's SDK redaction |
 | `js/src/redaction-patterns.generated.ts` | JS SDK and, through `@grafana/agento11y-core`, the opencode plugin |
 | `dotnet/src/Grafana.Agento11y/RedactionPatterns.g.cs` | .NET SDK |
 | `plugins/agento11y/internal/redact/patterns_gen.go` | shared `agento11y` binary |
