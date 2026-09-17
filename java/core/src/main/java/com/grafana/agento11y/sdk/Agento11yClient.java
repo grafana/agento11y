@@ -71,6 +71,7 @@ public final class Agento11yClient implements AutoCloseable {
     static final String SPAN_ATTR_REQUEST_ENCODING_FORMATS = "gen_ai.request.encoding_formats";
     static final String SPAN_ATTR_CACHE_READ_TOKENS = "gen_ai.usage.cache_read_input_tokens";
     static final String SPAN_ATTR_CACHE_WRITE_TOKENS = "gen_ai.usage.cache_write_input_tokens";
+    static final String SPAN_ATTR_CACHE_WRITE_1H_TOKENS = "gen_ai.usage.cache_write1h_input_tokens";
     static final String SPAN_ATTR_REASONING_TOKENS = "gen_ai.usage.reasoning_tokens";
     static final String SPAN_ATTR_TOOL_NAME = "gen_ai.tool.name";
     static final String SPAN_ATTR_TOOL_CALL_ID = "gen_ai.tool.call.id";
@@ -101,6 +102,7 @@ public final class Agento11yClient implements AutoCloseable {
     static final String METRIC_TOKEN_TYPE_OUTPUT = "output";
     static final String METRIC_TOKEN_TYPE_CACHE_READ = "cache_read";
     static final String METRIC_TOKEN_TYPE_CACHE_WRITE = "cache_write";
+    static final String METRIC_TOKEN_TYPE_CACHE_WRITE_1H = "cache_write1h";
     static final String METRIC_TOKEN_TYPE_REASONING = "reasoning";
 
     static final List<Double> DURATION_BUCKETS_SECONDS = List.of(
@@ -1217,6 +1219,7 @@ public final class Agento11yClient implements AutoCloseable {
             span.setAttribute(SPAN_ATTR_OUTPUT_TOKENS, usage.getOutputTokens());
             span.setAttribute(SPAN_ATTR_CACHE_READ_TOKENS, usage.getCacheReadInputTokens());
             span.setAttribute(SPAN_ATTR_CACHE_WRITE_TOKENS, usage.getCacheWriteInputTokens());
+            span.setAttribute(SPAN_ATTR_CACHE_WRITE_1H_TOKENS, usage.getCacheWrite1hInputTokens());
             span.setAttribute(SPAN_ATTR_REASONING_TOKENS, usage.getReasoningTokens());
             if (usage.getInputSemantics() == TokenUsage.TokenInputSemantics.INCLUSIVE) {
                 span.setAttribute(ATTR_TOKEN_SEMANTICS, TOKEN_SEMANTICS_INCLUSIVE);
@@ -1325,6 +1328,7 @@ public final class Agento11yClient implements AutoCloseable {
             recordTokenUsage(generation, METRIC_TOKEN_TYPE_OUTPUT, usage.getOutputTokens());
             recordTokenUsage(generation, METRIC_TOKEN_TYPE_CACHE_READ, usage.getCacheReadInputTokens());
             recordTokenUsage(generation, METRIC_TOKEN_TYPE_CACHE_WRITE, usage.getCacheWriteInputTokens());
+            recordTokenUsage(generation, METRIC_TOKEN_TYPE_CACHE_WRITE_1H, usage.getCacheWrite1hInputTokens());
             recordTokenUsage(generation, METRIC_TOKEN_TYPE_REASONING, usage.getReasoningTokens());
         }
 

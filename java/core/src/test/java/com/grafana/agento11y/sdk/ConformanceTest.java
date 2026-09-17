@@ -70,6 +70,7 @@ class ConformanceTest {
                             .setTotalTokens(19)
                             .setCacheReadInputTokens(2)
                             .setCacheWriteInputTokens(1)
+                            .setCacheWrite1hInputTokens(1)
                             .setReasoningTokens(4))
                     .setStopReason("stop");
             result.getTags().put("region", "eu");
@@ -137,6 +138,7 @@ class ConformanceTest {
             assertThat(generation.getUsage().getTotalTokens()).isEqualTo(19L);
             assertThat(generation.getUsage().getCacheReadInputTokens()).isEqualTo(2L);
             assertThat(generation.getUsage().getCacheWriteInputTokens()).isEqualTo(1L);
+            assertThat(generation.getUsage().getCacheWrite1HInputTokens()).isEqualTo(1L);
             assertThat(generation.getUsage().getReasoningTokens()).isEqualTo(4L);
             assertThat(generation.getStopReason()).isEqualTo("stop");
             assertThat(generation.getTagsMap()).containsEntry("tenant", "dev").containsEntry("region", "eu");

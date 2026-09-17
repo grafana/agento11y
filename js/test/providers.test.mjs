@@ -732,6 +732,7 @@ test('anthropic usage sums cache buckets into inclusive input and marks semantic
           output_tokens: 20,
           cache_read_input_tokens: 30,
           cache_creation_input_tokens: 10,
+          cache_creation: { ephemeral_5m_input_tokens: 6, ephemeral_1h_input_tokens: 4 },
         },
       }),
     );
@@ -742,6 +743,7 @@ test('anthropic usage sums cache buckets into inclusive input and marks semantic
   assert.equal(generation.usage.inputTokens, 140);
   assert.equal(generation.usage.cacheReadInputTokens, 30);
   assert.equal(generation.usage.cacheWriteInputTokens, 10);
+  assert.equal(generation.usage.cacheWrite1hInputTokens, 4);
   assert.equal(generation.usage.totalTokens, 160);
   assert.equal(generation.usage.inputSemantics, 'inclusive');
 });

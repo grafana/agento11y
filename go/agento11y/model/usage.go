@@ -25,6 +25,9 @@ type TokenUsage struct {
 	TotalTokens           int64 `json:"total_tokens,omitempty"`
 	CacheReadInputTokens  int64 `json:"cache_read_input_tokens,omitempty"`
 	CacheWriteInputTokens int64 `json:"cache_write_input_tokens,omitempty"`
+	// CacheWrite1hInputTokens is the one-hour subset of CacheWriteInputTokens
+	// when the provider reports its cache-write TTL breakdown.
+	CacheWrite1hInputTokens int64 `json:"cache_write1h_input_tokens,omitempty"`
 	// ReasoningTokens is an explanatory sub-bucket of OutputTokens when the
 	// provider reports it, never an additive bucket.
 	ReasoningTokens int64 `json:"reasoning_tokens,omitempty"`

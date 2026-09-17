@@ -125,12 +125,13 @@ var generationFieldClasses = map[string]contentClass{
 	"agento11y.v1.ToolDefinition.input_schema_json": classContent,
 	"agento11y.v1.ToolDefinition.deferred":          classRetained,
 
-	"agento11y.v1.TokenUsage.input_tokens":             classRetained,
-	"agento11y.v1.TokenUsage.output_tokens":            classRetained,
-	"agento11y.v1.TokenUsage.total_tokens":             classRetained,
-	"agento11y.v1.TokenUsage.cache_read_input_tokens":  classRetained,
-	"agento11y.v1.TokenUsage.cache_write_input_tokens": classRetained,
-	"agento11y.v1.TokenUsage.reasoning_tokens":         classRetained,
+	"agento11y.v1.TokenUsage.input_tokens":               classRetained,
+	"agento11y.v1.TokenUsage.output_tokens":              classRetained,
+	"agento11y.v1.TokenUsage.total_tokens":               classRetained,
+	"agento11y.v1.TokenUsage.cache_read_input_tokens":    classRetained,
+	"agento11y.v1.TokenUsage.cache_write_input_tokens":   classRetained,
+	"agento11y.v1.TokenUsage.cache_write1h_input_tokens": classRetained,
+	"agento11y.v1.TokenUsage.reasoning_tokens":           classRetained,
 	// Semantics marker for the token counters above; carries no content.
 	"agento11y.v1.TokenUsage.input_semantics": classRetained,
 

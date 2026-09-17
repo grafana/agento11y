@@ -45,6 +45,7 @@ public sealed partial class Agento11yClient : IAsyncDisposable
     internal const string SpanAttrRequestEncodingFormats = "gen_ai.request.encoding_formats";
     internal const string SpanAttrCacheReadTokens = "gen_ai.usage.cache_read_input_tokens";
     internal const string SpanAttrCacheWriteTokens = "gen_ai.usage.cache_write_input_tokens";
+    internal const string SpanAttrCacheWrite1hTokens = "gen_ai.usage.cache_write1h_input_tokens";
     internal const string SpanAttrReasoningTokens = "gen_ai.usage.reasoning_tokens";
     internal const string SpanAttrToolName = "gen_ai.tool.name";
     internal const string SpanAttrToolCallId = "gen_ai.tool.call.id";
@@ -75,6 +76,7 @@ public sealed partial class Agento11yClient : IAsyncDisposable
     internal const string MetricTokenTypeOutput = "output";
     internal const string MetricTokenTypeCacheRead = "cache_read";
     internal const string MetricTokenTypeCacheWrite = "cache_write";
+    internal const string MetricTokenTypeCacheWrite1h = "cache_write1h";
     internal const string MetricTokenTypeReasoning = "reasoning";
 
     internal static readonly double[] DurationBucketsSeconds =
@@ -1343,6 +1345,11 @@ public sealed partial class Agento11yClient : IAsyncDisposable
             activity.SetTag(SpanAttrCacheWriteTokens, generation.Usage.CacheWriteInputTokens);
         }
 
+        if (generation.Usage.CacheWrite1hInputTokens != 0)
+        {
+            activity.SetTag(SpanAttrCacheWrite1hTokens, generation.Usage.CacheWrite1hInputTokens);
+        }
+
         if (generation.Usage.ReasoningTokens != 0)
         {
             activity.SetTag(SpanAttrReasoningTokens, generation.Usage.ReasoningTokens);
@@ -1511,6 +1518,7 @@ public sealed partial class Agento11yClient : IAsyncDisposable
         RecordTokenUsage(generation, MetricTokenTypeOutput, generation.Usage.OutputTokens);
         RecordTokenUsage(generation, MetricTokenTypeCacheRead, generation.Usage.CacheReadInputTokens);
         RecordTokenUsage(generation, MetricTokenTypeCacheWrite, generation.Usage.CacheWriteInputTokens);
+        RecordTokenUsage(generation, MetricTokenTypeCacheWrite1h, generation.Usage.CacheWrite1hInputTokens);
         RecordTokenUsage(generation, MetricTokenTypeReasoning, generation.Usage.ReasoningTokens);
 
         _toolCallsHistogram.Record(

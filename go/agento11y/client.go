@@ -275,6 +275,7 @@ const (
 	spanAttrRequestEncodingFormats = "gen_ai.request.encoding_formats"
 	spanAttrCacheReadTokens        = "gen_ai.usage.cache_read_input_tokens"
 	spanAttrCacheWriteTokens       = "gen_ai.usage.cache_write_input_tokens"
+	spanAttrCacheWrite1hTokens     = "gen_ai.usage.cache_write1h_input_tokens"
 	spanAttrReasoningTokens        = "gen_ai.usage.reasoning_tokens"
 	spanAttrToolName               = "gen_ai.tool.name"
 	spanAttrToolCallID             = "gen_ai.tool.call.id"
@@ -294,13 +295,14 @@ const (
 	// input_tokens includes both cache buckets. Absence means provider-raw
 	// or legacy telemetry that consumers may resolve with provider-name
 	// heuristics.
-	attrTokenSemantics        = "gen_ai.token.semantics"
-	tokenSemanticsInclusive   = "inclusive"
-	metricTokenTypeInput      = "input"
-	metricTokenTypeOutput     = "output"
-	metricTokenTypeCacheRead  = "cache_read"
-	metricTokenTypeCacheWrite = "cache_write"
-	metricTokenTypeReasoning  = "reasoning"
+	attrTokenSemantics          = "gen_ai.token.semantics"
+	tokenSemanticsInclusive     = "inclusive"
+	metricTokenTypeInput        = "input"
+	metricTokenTypeOutput       = "output"
+	metricTokenTypeCacheRead    = "cache_read"
+	metricTokenTypeCacheWrite   = "cache_write"
+	metricTokenTypeCacheWrite1h = "cache_write1h"
+	metricTokenTypeReasoning    = "reasoning"
 )
 
 // durationBucketsSeconds is the OTel GenAI semantic-convention bucket advice
@@ -1954,6 +1956,9 @@ func generationSpanAttributes(g Generation) []attribute.KeyValue {
 	if g.Usage.CacheWriteInputTokens != 0 {
 		attrs = append(attrs, attribute.Int64(spanAttrCacheWriteTokens, g.Usage.CacheWriteInputTokens))
 	}
+	if g.Usage.CacheWrite1hInputTokens != 0 {
+		attrs = append(attrs, attribute.Int64(spanAttrCacheWrite1hTokens, g.Usage.CacheWrite1hInputTokens))
+	}
 	if g.Usage.ReasoningTokens != 0 {
 		attrs = append(attrs, attribute.Int64(spanAttrReasoningTokens, g.Usage.ReasoningTokens))
 	}
@@ -2277,6 +2282,7 @@ func (c *Client) recordGenerationMetrics(ctx context.Context, generation Generat
 	recordToken(metricTokenTypeOutput, generation.Usage.OutputTokens)
 	recordToken(metricTokenTypeCacheRead, generation.Usage.CacheReadInputTokens)
 	recordToken(metricTokenTypeCacheWrite, generation.Usage.CacheWriteInputTokens)
+	recordToken(metricTokenTypeCacheWrite1h, generation.Usage.CacheWrite1hInputTokens)
 	recordToken(metricTokenTypeReasoning, generation.Usage.ReasoningTokens)
 
 	toolCalls := countToolCalls(generation.Output)
