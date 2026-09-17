@@ -100,7 +100,7 @@ brew install grafana/grafana/agento11y
 
 Upgrade with `brew upgrade grafana/grafana/agento11y`.
 
-**mise (Aqua backend):** `mise use -g aqua:grafana/agento11y@latest` (requires [mise shell activation](https://mise.jdx.dev/cli/activate.html) so `agento11y` is on `PATH`).
+**mise:** `mise use -g aqua:grafana/agento11y@latest` (requires [mise shell activation](https://mise.jdx.dev/cli/activate.html) so `agento11y` is on `PATH`).
 
 **Go install (any platform with Go 1.25.7+):**
 

@@ -31,7 +31,7 @@ Installs to `~/.local/bin`. Put that directory on your `PATH` if it is not alrea
 brew install grafana/grafana/agento11y
 ```
 
-**mise (Aqua backend):**
+**mise:**
 
 ```sh
 mise use -g aqua:grafana/agento11y@latest
