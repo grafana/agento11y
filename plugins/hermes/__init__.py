@@ -196,8 +196,8 @@ def on_pre_tool_call(**kwargs: Any) -> dict[str, Any] | None:
         if response.is_deny:
             return {"action": "block", "message": response.reason or "Denied by Grafana Agent Observability policy"}
         transformed = response.transformed_input
-        if transformed and transformed.messages:
-            for part in transformed.messages[0].parts:
+        if transformed and transformed.output:
+            for part in transformed.output[0].parts:
                 if part.tool_call and part.tool_call.input_json:
                     replacement = json.loads(part.tool_call.input_json)
                     if isinstance(replacement, dict):
@@ -220,7 +220,7 @@ def on_post_tool_call(**kwargs: Any) -> None:
                 agent_name="hermes",
                 request_model=_text(kwargs.get("model")),
                 request_provider=_text(kwargs.get("provider")),
-                include_content=_capture_mode() in {ContentCaptureMode.FULL, ContentCaptureMode.NO_TOOL_CONTENT},
+                include_content=_capture_mode() == ContentCaptureMode.FULL,
             )
         )
         recorder.set_result(arguments=args, result=kwargs.get("result"))
