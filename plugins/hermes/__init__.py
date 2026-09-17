@@ -180,7 +180,12 @@ def on_pre_tool_call(**kwargs: Any) -> dict[str, Any] | None:
                     agent_name="hermes",
                     conversation_id=_conversation_id(kwargs),
                 ),
-                input=HookInput(messages=[Message(role=MessageRole.ASSISTANT, parts=[tool_call_part(call)])]),
+                # A postflight guard evaluates the proposed tool call, which is
+                # represented as model output rather than conversation history.
+                # Local safety packs intentionally project `input.output` for
+                # this phase, so placing the call in `messages` would silently
+                # bypass command rules.
+                input=HookInput(output=[Message(role=MessageRole.ASSISTANT, parts=[tool_call_part(call)])]),
             ),
             hooks=HooksConfig(
                 enabled=True,
