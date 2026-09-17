@@ -12,6 +12,7 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 
 	"github.com/grafana/agento11y/go/agento11y"
+	"github.com/grafana/agento11y/go/agento11y/testkit"
 )
 
 func TestEmbeddingsNewReturnsRecorderValidationErrorAfterEnd(t *testing.T) {
@@ -88,14 +89,16 @@ func TestConformance_ChatCompletionsNewErrorMapping(t *testing.T) {
 	t.Run("provider errors are preserved", func(t *testing.T) {
 		providerErr := errors.New("provider failed")
 
+		env := testkit.NewOTelEnv(t)
 		response, err := chatCompletionsNew(
 			context.Background(),
-			client,
+			env.Client,
 			req,
 			func(context.Context, osdk.ChatCompletionNewParams) (*osdk.ChatCompletion, error) {
 				return nil, providerErr
 			},
 		)
+		requireOTelException(t, testkit.FindSpan(t, env.Spans.Ended(), "chat gpt-4o-mini"), providerErr.Error())
 		if !errors.Is(err, providerErr) {
 			t.Fatalf("expected provider error, got %v", err)
 		}
@@ -145,14 +148,16 @@ func TestConformance_ResponsesNewErrorMapping(t *testing.T) {
 	t.Run("provider errors are preserved", func(t *testing.T) {
 		providerErr := errors.New("provider failed")
 
+		env := testkit.NewOTelEnv(t)
 		response, err := responsesNew(
 			context.Background(),
-			client,
+			env.Client,
 			req,
 			func(context.Context, oresponses.ResponseNewParams) (*oresponses.Response, error) {
 				return nil, providerErr
 			},
 		)
+		requireOTelException(t, testkit.FindSpan(t, env.Spans.Ended(), "chat gpt-5"), providerErr.Error())
 		if !errors.Is(err, providerErr) {
 			t.Fatalf("expected provider error, got %v", err)
 		}

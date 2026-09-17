@@ -23,6 +23,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -33,12 +34,12 @@ import (
 // embedded rather than read from the repository so that a consumer outside
 // this repository gets the same rules as the SDK's own conformance suite.
 //
-//go:embed policies/*.rego weaver.toml
+//go:embed policies/*.rego templates/coverage-model/* weaver.toml
 var inputs embed.FS
 
 const (
 	fetchTimeout          = 60 * time.Second
-	registryStampContents = "v1\n"
+	registryStampContents = "v2\n"
 )
 
 // maxEntryBytes limits the size of each extracted file. The registry's largest
@@ -64,13 +65,14 @@ type Assets struct {
 	Policies string
 	// Config is the Weaver configuration file.
 	Config string
-	// AdviceData is a glob of the registry's JSON schema advice data.
+	// AdviceData is a glob containing the registry's JSON schemas and the
+	// generated coverage model.
 	AdviceData string
 	// RegistryRef is the semantic-conventions-genai commit the registry
 	// was built from.
 	RegistryRef string
 	// UpstreamVersion is the semantic-conventions release that commit
-	// depends on, read from the registry's versions.env.
+	// depends on, read from versions.env or model/manifest.yaml.
 	UpstreamVersion string
 }
 
@@ -97,12 +99,16 @@ func Setup(ctx context.Context, registryRef string) (Assets, error) {
 	if err != nil {
 		return Assets{}, err
 	}
+	adviceData, err := prepareAdviceData(ctx, registryRoot, config)
+	if err != nil {
+		return Assets{}, err
+	}
 
 	return Assets{
 		Registry:        filepath.Join(registryRoot, "model"),
 		Policies:        policies,
 		Config:          config,
-		AdviceData:      adviceDataGlob(registryRoot),
+		AdviceData:      adviceData,
 		RegistryRef:     registryRef,
 		UpstreamVersion: upstream,
 	}, nil
@@ -155,15 +161,18 @@ func writeInputs(registryRoot string) (policies string, config string, err error
 }
 
 func loadEmbeddedInputs() ([]embeddedInput, string, error) {
-	entries, err := fs.ReadDir(inputs, "policies")
-	if err != nil {
+	var names []string
+	if err := fs.WalkDir(inputs, ".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() {
+			names = append(names, path)
+		}
+		return nil
+	}); err != nil {
 		return nil, "", err
 	}
-	names := make([]string, 0, len(entries)+1)
-	for _, entry := range entries {
-		names = append(names, "policies/"+entry.Name())
-	}
-	names = append(names, "weaver.toml")
 
 	files := make([]embeddedInput, 0, len(names))
 	var digestInput []byte
@@ -182,18 +191,47 @@ func loadEmbeddedInputs() ([]embeddedInput, string, error) {
 	return files, digest, nil
 }
 
-// upstreamVersion reads the semantic-conventions release the GenAI registry
-// depends on.
+// upstreamVersion reads SEMCONV_VERSION from versions.env, falling back to
+// the Git dependency in model/manifest.yaml.
 func upstreamVersion(registryRoot string) (string, error) {
 	pins, err := loadPins(filepath.Join(registryRoot, "versions.env"))
-	if err != nil {
+	if err == nil {
+		if version := pins["SEMCONV_VERSION"]; version != "" {
+			return version, nil
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", err
 	}
-	version := pins["SEMCONV_VERSION"]
-	if version == "" {
-		return "", errors.New("GenAI registry versions.env has no SEMCONV_VERSION")
+
+	manifest := filepath.Join(registryRoot, "model", "manifest.yaml")
+	contents, err := os.ReadFile(manifest)
+	if err != nil {
+		return "", fmt.Errorf("read GenAI manifest dependency: %w", err)
 	}
-	return version, nil
+	matches := manifestDependencyPattern().FindSubmatch(contents)
+	if len(matches) == 2 {
+		return normalizeSemconvVersion(string(matches[1])), nil
+	}
+	matches = manifestSchemaDependencyPattern().FindSubmatch(contents)
+	if len(matches) == 2 {
+		return normalizeSemconvVersion(string(matches[1])), nil
+	}
+	return "", fmt.Errorf("GenAI registry has no supported semantic-conventions dependency in versions.env or %s", manifest)
+}
+
+func normalizeSemconvVersion(version string) string {
+	if strings.HasPrefix(version, "v") {
+		return version
+	}
+	return "v" + version
+}
+
+func manifestDependencyPattern() *regexp.Regexp {
+	return regexp.MustCompile(`(?m)^\s*registry_path:\s*https://github\.com/open-telemetry/semantic-conventions(?:\.git)?@([^\[\s]+)\[model\]\s*$`)
+}
+
+func manifestSchemaDependencyPattern() *regexp.Regexp {
+	return regexp.MustCompile(`(?m)^\s*-\s*schema_url:\s*https://opentelemetry\.io/schemas/(v?[0-9][^\s]*)\s*\n\s*registry_path:`)
 }
 
 func isDir(path string) bool {
@@ -507,10 +545,10 @@ func rewriteManifestDependency(genAIRoot, filtered string) error {
 	if err != nil {
 		return fmt.Errorf("read GenAI manifest: %w", err)
 	}
-	pattern := regexp.MustCompile(`(?m)^(\s*registry_path:\s*)\./\.build/sc-upstream-filtered\s*$`)
+	pattern := regexp.MustCompile(`(?m)^(\s*registry_path:\s*)(?:\./\.build/sc-upstream-filtered|https://github\.com/open-telemetry/semantic-conventions(?:\.git)?@[^\[\s]+\[model\])\s*$`)
 	matches := pattern.FindAllIndex(contents, -1)
 	if len(matches) != 1 {
-		return fmt.Errorf("expected one filtered registry path in %s, found %d", manifest, len(matches))
+		return fmt.Errorf("expected one supported semantic-conventions dependency in %s, found %d", manifest, len(matches))
 	}
 	absolute, err := filepath.Abs(filtered)
 	if err != nil {
@@ -524,8 +562,77 @@ func rewriteManifestDependency(genAIRoot, filtered string) error {
 	return nil
 }
 
-func adviceDataGlob(genAIRoot string) string {
-	return filepath.ToSlash(filepath.Join(genAIRoot, "model", "gen-ai", "*.json"))
+func prepareAdviceData(ctx context.Context, registryRoot, config string) (string, error) {
+	inputRoot := filepath.Dir(config)
+	adviceRoot := inputRoot + "-advice"
+	coverageModel := filepath.Join(adviceRoot, "coverage-model.json")
+	if info, err := os.Stat(coverageModel); err == nil && info.Mode().IsRegular() {
+		return filepath.ToSlash(filepath.Join(adviceRoot, "*.json")), nil
+	}
+
+	parent := filepath.Dir(adviceRoot)
+	staging, err := os.MkdirTemp(parent, ".weavertest-advice-staging-")
+	if err != nil {
+		return "", fmt.Errorf("create Weaver advice-data staging directory: %w", err)
+	}
+	defer os.RemoveAll(staging)
+
+	schemas, err := filepath.Glob(filepath.Join(registryRoot, "model", "gen-ai", "*.json"))
+	if err != nil {
+		return "", fmt.Errorf("list GenAI advice schemas: %w", err)
+	}
+	for _, source := range schemas {
+		contents, err := os.ReadFile(source)
+		if err != nil {
+			return "", fmt.Errorf("read advice schema %s: %w", source, err)
+		}
+		if err := os.WriteFile(filepath.Join(staging, filepath.Base(source)), contents, 0o644); err != nil {
+			return "", fmt.Errorf("write advice schema %s: %w", source, err)
+		}
+	}
+
+	if err := generateCoverageModel(
+		ctx,
+		filepath.Join(registryRoot, "model"),
+		filepath.Join(inputRoot, "templates"),
+		staging,
+	); err != nil {
+		return "", err
+	}
+	if err := os.Rename(staging, adviceRoot); err != nil && !isDir(adviceRoot) {
+		return "", fmt.Errorf("install Weaver advice data: %w", err)
+	}
+	return filepath.ToSlash(filepath.Join(adviceRoot, "*.json")), nil
+}
+
+func generateCoverageModel(ctx context.Context, registry, templates, output string) error {
+	binary, err := exec.LookPath("weaver")
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrNotInstalled, err)
+	}
+	command := exec.CommandContext(ctx, binary,
+		"registry", "generate",
+		"--quiet",
+		"--v2",
+		"--registry", registry,
+		"--templates", templates,
+		"coverage-model", output,
+	)
+	var diagnostics strings.Builder
+	command.Stdout = &diagnostics
+	command.Stderr = &diagnostics
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("generate Weaver coverage model: %w\n%s", err, diagnostics.String())
+	}
+	coverageModel := filepath.Join(output, "coverage-model.json")
+	info, err := os.Stat(coverageModel)
+	if err != nil {
+		return fmt.Errorf("stat Weaver coverage model: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("Weaver coverage model %s is not a regular file", coverageModel)
+	}
+	return nil
 }
 
 func patchAdviceData(genAIRoot string) (string, error) {
@@ -548,5 +655,5 @@ func patchAdviceData(genAIRoot string) (string, error) {
 			return "", fmt.Errorf("patch tool-definition schema: %w", err)
 		}
 	}
-	return adviceDataGlob(genAIRoot), nil
+	return filepath.ToSlash(filepath.Join(dir, "*.json")), nil
 }

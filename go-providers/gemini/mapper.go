@@ -1,9 +1,12 @@
 package gemini
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"maps"
+	"math"
+	"slices"
 	"strings"
 
 	"google.golang.org/genai"
@@ -33,7 +36,7 @@ func FromRequestResponse(
 	options := applyOptions(opts)
 	input := mapContents(contents)
 	output, stopReason := mapCandidates(resp.Candidates)
-	maxTokens, temperature, topP, toolChoice, thinkingEnabled, thinkingBudget := mapRequestControls(config)
+	controls := mapRequestControls(config)
 	thinkingLevel := extractThinkingLevel(config)
 
 	artifacts := make([]agento11y.Artifact, 0, 3)
@@ -71,7 +74,7 @@ func FromRequestResponse(
 		}
 		metadata["model_version"] = resp.ModelVersion
 	}
-	metadata = mergeThinkingBudgetMetadata(metadata, thinkingBudget)
+	metadata = mergeThinkingBudgetMetadata(metadata, controls.thinkingBudget)
 	metadata = mergeThinkingLevelMetadata(metadata, thinkingLevel)
 	metadata = mergeGeminiUsageMetadata(metadata, resp.UsageMetadata)
 
@@ -80,6 +83,7 @@ func FromRequestResponse(
 		ConversationTitle: options.conversationTitle,
 		AgentName:         options.agentName,
 		AgentVersion:      options.agentVersion,
+		OperationName:     generationOperation(contents, config, resp.Candidates),
 		Model:             agento11y.ModelRef{Provider: options.providerName, Name: model},
 		ResponseID:        resp.ResponseID,
 		ResponseModel:     resp.ModelVersion,
@@ -87,11 +91,15 @@ func FromRequestResponse(
 		Input:             input,
 		Output:            output,
 		Tools:             mapTools(config),
-		MaxTokens:         maxTokens,
-		Temperature:       temperature,
-		TopP:              topP,
-		ToolChoice:        toolChoice,
-		ThinkingEnabled:   thinkingEnabled,
+		MaxTokens:         controls.maxTokens,
+		Temperature:       controls.temperature,
+		TopP:              controls.topP,
+		TopK:              controls.topK,
+		ChoiceCount:       controls.choiceCount,
+		Seed:              controls.seed,
+		OutputType:        controls.outputType,
+		ToolChoice:        controls.toolChoice,
+		ThinkingEnabled:   controls.thinkingEnabled,
 		Usage:             mapUsage(resp.UsageMetadata),
 		StopReason:        stopReason,
 		Tags:              cloneStringMap(options.tags),
@@ -157,43 +165,53 @@ func mapContents(contents []*genai.Content) []agento11y.Message {
 	}
 
 	out := make([]agento11y.Message, 0, len(contents)+1)
+	messageStart := 0
+	appendParts := func(role agento11y.Role, parts ...agento11y.Part) {
+		if len(parts) == 0 {
+			return
+		}
+		if len(out) > messageStart && out[len(out)-1].Role == role {
+			out[len(out)-1].Parts = append(out[len(out)-1].Parts, parts...)
+			return
+		}
+		out = append(out, agento11y.Message{Role: role, Parts: parts})
+	}
+
 	for _, content := range contents {
 		if content == nil {
 			continue
 		}
 
+		messageStart = len(out)
 		role := mapRole(content.Role)
-		roleParts := make([]agento11y.Part, 0, len(content.Parts))
-		assistantParts := make([]agento11y.Part, 0, 1)
-		toolParts := make([]agento11y.Part, 0, 1)
-
 		for _, part := range content.Parts {
 			if part == nil {
 				continue
 			}
 
+			if media, ok := mapMediaPart(part); ok {
+				appendParts(role, media)
+			}
 			if text := part.Text; text != "" {
 				if part.Thought && role == agento11y.RoleAssistant {
-					roleParts = append(roleParts, agento11y.ThinkingPart(text))
+					appendParts(role, agento11y.ThinkingPart(text))
 				} else {
-					roleParts = append(roleParts, agento11y.TextPart(text))
+					appendParts(role, agento11y.TextPart(text))
 				}
 			}
-
-			if part.FunctionCall != nil {
+			if part.FunctionCall != nil && strings.TrimSpace(part.FunctionCall.Name) != "" {
 				call := agento11y.ToolCallPart(agento11y.ToolCall{
 					ID:        part.FunctionCall.ID,
 					Name:      part.FunctionCall.Name,
 					InputJSON: marshalAny(part.FunctionCall.Args),
 				})
 				call.Metadata.ProviderType = "function_call"
-				if role == agento11y.RoleAssistant {
-					roleParts = append(roleParts, call)
-				} else {
-					assistantParts = append(assistantParts, call)
+				callRole := role
+				if callRole != agento11y.RoleAssistant {
+					callRole = agento11y.RoleAssistant
 				}
+				appendParts(callRole, call)
 			}
-
 			if part.FunctionResponse != nil {
 				result := agento11y.ToolResultPart(agento11y.ToolResult{
 					ToolCallID:  part.FunctionResponse.ID,
@@ -201,22 +219,82 @@ func mapContents(contents []*genai.Content) []agento11y.Message {
 					ContentJSON: marshalAny(part.FunctionResponse.Response),
 				})
 				result.Metadata.ProviderType = "function_response"
-				toolParts = append(toolParts, result)
+				toolParts := []agento11y.Part{result}
+				for _, responsePart := range part.FunctionResponse.Parts {
+					if media, ok := mapFunctionResponseMediaPart(responsePart); ok {
+						toolParts = append(toolParts, media)
+					}
+				}
+				appendParts(agento11y.RoleTool, toolParts...)
 			}
-		}
-
-		if len(roleParts) > 0 {
-			out = append(out, agento11y.Message{Role: role, Parts: roleParts})
-		}
-		if len(assistantParts) > 0 {
-			out = append(out, agento11y.Message{Role: agento11y.RoleAssistant, Parts: assistantParts})
-		}
-		if len(toolParts) > 0 {
-			out = append(out, agento11y.Message{Role: agento11y.RoleTool, Parts: toolParts})
 		}
 	}
 
 	return out
+}
+
+func mapMediaPart(part *genai.Part) (agento11y.Part, bool) {
+	if part == nil {
+		return agento11y.Part{}, false
+	}
+	if part.InlineData != nil && len(part.InlineData.Data) > 0 {
+		mimeType := strings.TrimSpace(part.InlineData.MIMEType)
+		if mimeType == "" {
+			mimeType = "application/octet-stream"
+		}
+		return agento11y.MediaPart(agento11y.Media{
+			Kind:     mediaKind(mimeType),
+			URL:      "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(part.InlineData.Data),
+			MIMEType: mimeType,
+			Name:     part.InlineData.DisplayName,
+		}), true
+	}
+	if part.FileData != nil && strings.TrimSpace(part.FileData.FileURI) != "" {
+		return agento11y.MediaPart(agento11y.Media{
+			Kind:     mediaKind(part.FileData.MIMEType),
+			URL:      part.FileData.FileURI,
+			MIMEType: part.FileData.MIMEType,
+			Name:     part.FileData.DisplayName,
+		}), true
+	}
+	return agento11y.Part{}, false
+}
+
+func mapFunctionResponseMediaPart(part *genai.FunctionResponsePart) (agento11y.Part, bool) {
+	if part == nil {
+		return agento11y.Part{}, false
+	}
+	if part.InlineData != nil && len(part.InlineData.Data) > 0 {
+		mimeType := strings.TrimSpace(part.InlineData.MIMEType)
+		if mimeType == "" {
+			mimeType = "application/octet-stream"
+		}
+		return agento11y.MediaPart(agento11y.Media{
+			Kind:     mediaKind(mimeType),
+			URL:      "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(part.InlineData.Data),
+			MIMEType: mimeType,
+			Name:     part.InlineData.DisplayName,
+		}), true
+	}
+	if part.FileData != nil && strings.TrimSpace(part.FileData.FileURI) != "" {
+		return agento11y.MediaPart(agento11y.Media{
+			Kind:     mediaKind(part.FileData.MIMEType),
+			URL:      part.FileData.FileURI,
+			MIMEType: part.FileData.MIMEType,
+			Name:     part.FileData.DisplayName,
+		}), true
+	}
+	return agento11y.Part{}, false
+}
+
+func mediaKind(mimeType string) string {
+	prefix, _, _ := strings.Cut(strings.ToLower(strings.TrimSpace(mimeType)), "/")
+	switch prefix {
+	case "image", "audio", "video":
+		return prefix
+	default:
+		return "file"
+	}
 }
 
 func embeddingInputCount(contents []*genai.Content) int {
@@ -273,15 +351,31 @@ func mapCandidates(candidates []*genai.Candidate) ([]agento11y.Message, string) 
 		if candidate == nil {
 			continue
 		}
-		if stopReason == "" && candidate.FinishReason != "" {
-			stopReason = string(candidate.FinishReason)
+		finishReason := string(candidate.FinishReason)
+		if stopReason == "" && finishReason != "" {
+			stopReason = finishReason
 		}
-
-		contentMessages := mapContents([]*genai.Content{candidate.Content})
-		out = append(out, contentMessages...)
+		parts := mapCandidateParts(candidate.Content)
+		if len(parts) == 0 && finishReason == "" {
+			continue
+		}
+		out = append(out, agento11y.Message{
+			Role:         agento11y.RoleAssistant,
+			Parts:        parts,
+			FinishReason: finishReason,
+		})
 	}
 
 	return out, stopReason
+}
+
+func mapCandidateParts(content *genai.Content) []agento11y.Part {
+	messages := mapContents([]*genai.Content{content})
+	var parts []agento11y.Part
+	for _, message := range messages {
+		parts = append(parts, message.Parts...)
+	}
+	return parts
 }
 
 func mapTools(config *genai.GenerateContentConfig) []agento11y.ToolDefinition {
@@ -327,14 +421,16 @@ func mapUsage(usage *genai.GenerateContentResponseUsageMetadata) agento11y.Token
 		totalTokens = int64(usage.PromptTokenCount) + int64(usage.CandidatesTokenCount) + toolUsePromptTokens + reasoningTokens
 	}
 
-	// Gemini's promptTokenCount already includes cachedContentTokenCount,
-	// which is the inclusive contract as-is. tool_use_prompt tokens stay out
-	// of input pending the open contract decision (see the rollout plan).
+	// PromptTokenCount includes CachedContentTokenCount. CandidatesTokenCount
+	// excludes ThoughtsTokenCount, which remains an output-token sub-bucket.
+	// ToolUsePromptTokenCount is excluded from input tokens.
 	return agento11y.TokenUsage{
 		InputTokens:          int64(usage.PromptTokenCount),
-		OutputTokens:         int64(usage.CandidatesTokenCount),
+		OutputTokens:         int64(usage.CandidatesTokenCount) + reasoningTokens,
 		TotalTokens:          totalTokens,
 		CacheReadInputTokens: int64(usage.CachedContentTokenCount),
+		InputTokensReported:  true,
+		OutputTokensReported: true,
 		ReasoningTokens:      reasoningTokens,
 		InputSemantics:       agento11y.TokenInputSemanticsInclusive,
 	}
@@ -377,49 +473,144 @@ func hasFunctionTools(config *genai.GenerateContentConfig) bool {
 	return false
 }
 
-func mapRequestControls(config *genai.GenerateContentConfig) (*int64, *float64, *float64, *string, *bool, *int64) {
+type requestControls struct {
+	maxTokens       *int64
+	temperature     *float64
+	topP            *float64
+	topK            *int64
+	choiceCount     *int64
+	seed            *int64
+	outputType      *string
+	toolChoice      *string
+	thinkingEnabled *bool
+	thinkingBudget  *int64
+}
+
+func mapRequestControls(config *genai.GenerateContentConfig) requestControls {
 	if config == nil {
-		return nil, nil, nil, nil, nil, nil
+		return requestControls{}
 	}
 
-	var maxTokens *int64
+	controls := requestControls{}
 	if config.MaxOutputTokens > 0 {
 		value := int64(config.MaxOutputTokens)
-		maxTokens = &value
+		controls.maxTokens = &value
 	}
 
-	var temperature *float64
 	if config.Temperature != nil {
 		value := float64(*config.Temperature)
-		temperature = &value
+		controls.temperature = &value
 	}
 
-	var topP *float64
 	if config.TopP != nil {
 		value := float64(*config.TopP)
-		topP = &value
+		controls.topP = &value
 	}
 
-	var toolChoice *string
+	if config.TopK != nil {
+		value := float64(*config.TopK)
+		if !math.IsNaN(value) && !math.IsInf(value, 0) && value == math.Trunc(value) &&
+			value >= math.MinInt64 && value <= math.MaxInt64 {
+			integral := int64(value)
+			controls.topK = &integral
+		}
+	}
+
+	if config.CandidateCount > 0 {
+		value := int64(config.CandidateCount)
+		controls.choiceCount = &value
+	}
+	if config.Seed != nil {
+		value := int64(*config.Seed)
+		controls.seed = &value
+	}
+	controls.outputType = mapResponseMIMEType(config.ResponseMIMEType)
+
 	if config.ToolConfig != nil && config.ToolConfig.FunctionCallingConfig != nil {
 		mode := strings.ToLower(strings.TrimSpace(string(config.ToolConfig.FunctionCallingConfig.Mode)))
 		if mode != "" && mode != "mode_unspecified" {
-			toolChoice = &mode
+			controls.toolChoice = &mode
 		}
 	}
 
-	var thinkingEnabled *bool
-	var thinkingBudget *int64
 	if config.ThinkingConfig != nil {
-		value := config.ThinkingConfig.IncludeThoughts
-		thinkingEnabled = &value
 		if config.ThinkingConfig.ThinkingBudget != nil {
 			budget := int64(*config.ThinkingConfig.ThinkingBudget)
-			thinkingBudget = &budget
+			controls.thinkingBudget = &budget
+			enabled := budget != 0
+			controls.thinkingEnabled = &enabled
+		}
+		// IncludeThoughts only controls whether thought parts are returned. A
+		// thinking level requests model thinking even when those parts are hidden.
+		if extractThinkingLevel(config) != nil {
+			enabled := true
+			controls.thinkingEnabled = &enabled
 		}
 	}
 
-	return maxTokens, temperature, topP, toolChoice, thinkingEnabled, thinkingBudget
+	return controls
+}
+
+func mapResponseMIMEType(mimeType string) *string {
+	normalized := strings.ToLower(strings.TrimSpace(mimeType))
+	switch normalized {
+	case "":
+		return nil
+	case "application/json":
+		normalized = "json"
+	case "text/plain":
+		normalized = "text"
+	}
+	return &normalized
+}
+
+func generationOperation(contents []*genai.Content, config *genai.GenerateContentConfig, candidates []*genai.Candidate) string {
+	if contentsHaveNonTextModality(contents) ||
+		(config != nil && (contentHasNonTextModality(config.SystemInstruction) || responseHasNonTextModality(config.ResponseModalities))) {
+		return "generate_content"
+	}
+	for _, candidate := range candidates {
+		if candidate != nil && contentHasNonTextModality(candidate.Content) {
+			return "generate_content"
+		}
+	}
+	return "chat"
+}
+
+func contentsHaveNonTextModality(contents []*genai.Content) bool {
+	return slices.ContainsFunc(contents, contentHasNonTextModality)
+}
+
+func contentHasNonTextModality(content *genai.Content) bool {
+	if content == nil {
+		return false
+	}
+	for _, part := range content.Parts {
+		if part == nil {
+			continue
+		}
+		if part.InlineData != nil || part.FileData != nil {
+			return true
+		}
+		if part.FunctionResponse != nil {
+			for _, responsePart := range part.FunctionResponse.Parts {
+				if responsePart != nil && (responsePart.InlineData != nil || responsePart.FileData != nil) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func responseHasNonTextModality(modalities []string) bool {
+	for _, modality := range modalities {
+		normalized := strings.ToLower(strings.TrimSpace(modality))
+		if normalized != "" && normalized != "text" {
+			return true
+		}
+	}
+	return false
 }
 
 func marshalAny(value any) []byte {

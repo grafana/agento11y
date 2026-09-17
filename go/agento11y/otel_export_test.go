@@ -275,6 +275,81 @@ func TestOTelProtocolSpan(t *testing.T) {
 			},
 		},
 		{
+			name: "expanded fields reach the OTel projection",
+			content: func() Generation {
+				topK := int64(40)
+				choiceCount := int64(3)
+				seed := int64(7)
+				outputType := "json"
+				responseStatus := "completed"
+				return Generation{
+					Input: []Message{
+						{Role: RoleSystem, Parts: []Part{TextPart("system")}},
+						{Role: RoleDeveloper, Parts: []Part{TextPart("developer")}},
+					},
+					Output: []Message{
+						{Role: RoleAssistant, FinishReason: "stop", Parts: []Part{TextPart("first")}},
+						{Role: RoleAssistant, Parts: []Part{TextPart("second")}},
+						{Role: RoleAssistant, FinishReason: "length", Parts: []Part{TextPart("third")}},
+					},
+					StopReason:     "stop",
+					TopK:           &topK,
+					ChoiceCount:    &choiceCount,
+					Seed:           &seed,
+					OutputType:     &outputType,
+					ResponseStatus: &responseStatus,
+					Usage: TokenUsage{
+						InputTokensReported:  true,
+						OutputTokensReported: true,
+						OutputTokens:         5,
+					},
+				}
+			}(),
+			check: func(t *testing.T, span sdktrace.ReadOnlySpan) {
+				attrs := spanAttributeMapOf(span)
+				for key, want := range map[string]int64{
+					spanAttrRequestTopK:        40,
+					spanAttrRequestChoiceCount: 3,
+					spanAttrRequestSeed:        7,
+					spanAttrInputTokens:        0,
+					spanAttrOutputTokens:       5,
+				} {
+					if got := attrs[key].AsInt64(); got != want {
+						t.Errorf("%s = %d, want %d", key, got, want)
+					}
+				}
+				for key, want := range map[string]string{
+					spanAttrOutputType:     "json",
+					spanAttrResponseStatus: "completed",
+				} {
+					if got := attrs[key].AsString(); got != want {
+						t.Errorf("%s = %q, want %q", key, got, want)
+					}
+				}
+				if got := attrs[spanAttrFinishReasons].AsStringSlice(); !slices.Equal(got, []string{"stop", "length"}) {
+					t.Errorf("%s = %v, want [stop length]", spanAttrFinishReasons, got)
+				}
+				var output []struct {
+					FinishReason string `json:"finish_reason"`
+				}
+				if err := json.Unmarshal([]byte(attrs["gen_ai.output.messages"].AsString()), &output); err != nil {
+					t.Fatalf("unmarshal output messages: %v", err)
+				}
+				if got := []string{output[0].FinishReason, output[1].FinishReason, output[2].FinishReason}; !slices.Equal(got, []string{"stop", "", "length"}) {
+					t.Errorf("output finish reasons = %v, want [stop empty length]", got)
+				}
+				var input []struct {
+					Role string `json:"role"`
+				}
+				if err := json.Unmarshal([]byte(attrs["gen_ai.input.messages"].AsString()), &input); err != nil {
+					t.Fatalf("unmarshal input messages: %v", err)
+				}
+				if got := []string{input[0].Role, input[1].Role}; !slices.Equal(got, []string{"system", "developer"}) {
+					t.Errorf("input roles = %v, want [system developer]", got)
+				}
+			},
+		},
+		{
 			name: "a call error the mapper set as a field is not a span error",
 			content: Generation{
 				Output:    []Message{AssistantTextMessage("Hi!")},
@@ -355,6 +430,68 @@ func TestOTelProtocolSpan(t *testing.T) {
 			client, recorder, _ := newOTelTestClient(t, tc.mutate)
 			recordOTelGeneration(t, client, tc.content)
 			tc.check(t, onlySpan(t, recorder))
+		})
+	}
+}
+
+func TestOTelMessagesFinishReasons(t *testing.T) {
+	fallback := "stop"
+	tests := []struct {
+		name     string
+		messages []Message
+		fallback *string
+		want     []*string
+	}{
+		{
+			name:     "explicit reason is copied without an output fallback",
+			messages: []Message{{Role: RoleUser, FinishReason: "length"}},
+			want:     []*string{stringPtr("length")},
+		},
+		{
+			name: "legacy fallback applies only to first output",
+			messages: []Message{
+				{Role: RoleAssistant},
+				{Role: RoleAssistant},
+			},
+			fallback: &fallback,
+			want:     []*string{stringPtr("stop"), stringPtr("")},
+		},
+		{
+			name: "per-message reasons override fallback",
+			messages: []Message{
+				{Role: RoleAssistant, FinishReason: "tool_calls"},
+				{Role: RoleAssistant, FinishReason: "length"},
+			},
+			fallback: &fallback,
+			want:     []*string{stringPtr("tool_calls"), stringPtr("length")},
+		},
+		{
+			name: "later message reason does not fill the first message",
+			messages: []Message{
+				{Role: RoleAssistant},
+				{Role: RoleAssistant, FinishReason: "length"},
+			},
+			fallback: &fallback,
+			want:     []*string{stringPtr(""), stringPtr("length")},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := otelMessages(tt.messages, tt.fallback)
+			if len(got) != len(tt.want) {
+				t.Fatalf("message count = %d, want %d", len(got), len(tt.want))
+			}
+			for i := range got {
+				switch {
+				case got[i].FinishReason == nil && tt.want[i] != nil:
+					t.Errorf("message %d FinishReason is nil, want %q", i, *tt.want[i])
+				case got[i].FinishReason != nil && tt.want[i] == nil:
+					t.Errorf("message %d FinishReason = %q, want nil", i, *got[i].FinishReason)
+				case got[i].FinishReason != nil && *got[i].FinishReason != *tt.want[i]:
+					t.Errorf("message %d FinishReason = %q, want %q", i, *got[i].FinishReason, *tt.want[i])
+				}
+			}
 		})
 	}
 }
@@ -544,6 +681,44 @@ func TestOTelProtocolCallErrorSetsStatus(t *testing.T) {
 			}
 			if got := spanAttributeMapOf(span)["error.type"].AsString(); got == "" {
 				t.Error("error span carries no error.type")
+			}
+		})
+	}
+}
+
+func TestOTelMappingErrorCapturePolicy(t *testing.T) {
+	const private = "customer@example.com"
+	for _, mode := range []ContentCaptureMode{
+		ContentCaptureModeMetadataOnly,
+		ContentCaptureModeFullWithMetadataSpans,
+	} {
+		t.Run(mode.String(), func(t *testing.T) {
+			client, recorder, _ := newOTelTestClient(t, func(cfg *Config) {
+				cfg.ContentCapture = mode
+			})
+			_, rec := client.StartGeneration(context.Background(), GenerationStart{
+				Model: ModelRef{Provider: "openai", Name: "gpt-5"},
+			})
+			rec.SetResult(Generation{}, errors.New("mapping failed for "+private))
+			rec.End()
+
+			span := onlySpan(t, recorder)
+			if got := span.Status().Description; got != "sdk_error" {
+				t.Errorf("status description = %q, want sdk_error", got)
+			}
+			attrs := spanAttributeMapOf(span)
+			if got := attrs["error.type"].AsString(); got != "mapping_error" {
+				t.Errorf("error.type = %q, want mapping_error", got)
+			}
+			if strings.Contains(span.Status().Description, private) {
+				t.Errorf("status description exposes private text: %q", span.Status().Description)
+			}
+			for _, event := range span.Events() {
+				for _, attr := range event.Attributes {
+					if strings.Contains(attr.Value.Emit(), private) {
+						t.Errorf("event %q attribute %s exposes private text", event.Name, attr.Key)
+					}
+				}
 			}
 		})
 	}
@@ -1060,42 +1235,78 @@ func (s *recordingSampler) ShouldSample(p sdktrace.SamplingParameters) sdktrace.
 
 func (s *recordingSampler) Description() string { return "recordingSampler" }
 
-func TestOTelStartCarriesRequestAttributes(t *testing.T) {
-	// A head sampler decides at Start, so the request fields the caller already
-	// declared have to be on the span from that instant. Writing them at End is
-	// too late for the decision.
-	sampler := &recordingSampler{}
-	client, _, _ := newOTelTestClient(t, func(cfg *Config) {
-		provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sampler))
-		t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
-		cfg.TracerProvider = provider
-	})
-
-	maxTokens := int64(512)
-	temperature := 0.25
-	topP := 0.75
-	_, rec := client.StartGeneration(context.Background(), GenerationStart{
-		Model:       ModelRef{Provider: "openai", Name: "gpt-5"},
-		MaxTokens:   &maxTokens,
-		Temperature: &temperature,
-		TopP:        &topP,
-	})
-	rec.SetResult(Generation{Output: []Message{AssistantTextMessage("Hi!")}}, nil)
-	rec.End()
-
-	got := make(map[string]attribute.Value, len(sampler.attributes))
-	for _, kv := range sampler.attributes {
-		got[string(kv.Key)] = kv.Value
+func TestSamplerReceivesOperationIdentity(t *testing.T) {
+	cases := []struct {
+		name  string
+		drive func(*Client)
+		want  map[string]attribute.Value
+	}{
+		{
+			name: "generation",
+			drive: func(client *Client) {
+				_, rec := client.StartGeneration(context.Background(), GenerationStart{
+					Model: ModelRef{Provider: "gemini", Name: "gemini-2.5-pro"},
+				})
+				rec.SetResult(Generation{Output: []Message{AssistantTextMessage("Hi!")}}, nil)
+				rec.End()
+			},
+			want: map[string]attribute.Value{
+				spanAttrOperationName: attribute.StringValue("chat"),
+				spanAttrProviderName:  attribute.StringValue("gcp.gemini"),
+				spanAttrRequestModel:  attribute.StringValue("gemini-2.5-pro"),
+			},
+		},
+		{
+			name: "embedding",
+			drive: func(client *Client) {
+				_, rec := client.StartEmbedding(context.Background(), EmbeddingStart{
+					Model: ModelRef{Provider: "gemini", Name: "text-embedding-004"},
+				})
+				rec.SetResult(EmbeddingResult{InputCount: 1})
+				rec.End()
+			},
+			want: map[string]attribute.Value{
+				spanAttrOperationName: attribute.StringValue("embeddings"),
+				spanAttrProviderName:  attribute.StringValue("gcp.gemini"),
+				spanAttrRequestModel:  attribute.StringValue("text-embedding-004"),
+			},
+		},
+		{
+			name: "tool",
+			drive: func(client *Client) {
+				_, rec := client.StartToolExecution(context.Background(), ToolExecutionStart{
+					ToolName: "weather",
+					ToolType: "function",
+				})
+				rec.End()
+			},
+			want: map[string]attribute.Value{
+				spanAttrOperationName: attribute.StringValue("execute_tool"),
+				spanAttrToolName:      attribute.StringValue("weather"),
+				spanAttrToolType:      attribute.StringValue("function"),
+			},
+		},
 	}
-	want := map[string]attribute.Value{
-		"gen_ai.request.max_tokens":  attribute.IntValue(512),
-		"gen_ai.request.temperature": attribute.Float64Value(0.25),
-		"gen_ai.request.top_p":       attribute.Float64Value(0.75),
-	}
-	for key, wantValue := range want {
-		if got[key] != wantValue {
-			t.Errorf("sampler saw %s = %v, want %v", key, got[key], wantValue)
-		}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sampler := &recordingSampler{}
+			client, _, _ := newOTelTestClient(t, func(cfg *Config) {
+				provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sampler))
+				t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+				cfg.TracerProvider = provider
+			})
+			tc.drive(client)
+
+			got := make(map[string]attribute.Value, len(sampler.attributes))
+			for _, kv := range sampler.attributes {
+				got[string(kv.Key)] = kv.Value
+			}
+			for key, want := range tc.want {
+				if got[key] != want {
+					t.Errorf("sampler saw %s = %v, want %v", key, got[key], want)
+				}
+			}
+		})
 	}
 }
 
@@ -1507,11 +1718,90 @@ func TestOTelMediaPartModality(t *testing.T) {
 	}
 }
 
+func TestGeminiProviderSpellingAcrossOTelSignals(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	client, recorder, _ := newOTelTestClient(t, func(cfg *Config) {
+		provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+		t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+		cfg.MeterProvider = provider
+	})
+
+	_, generation := client.StartGeneration(context.Background(), GenerationStart{
+		Model: ModelRef{Provider: "gemini", Name: "gemini-2.5-pro"},
+	})
+	generation.SetResult(Generation{
+		Output: []Message{AssistantTextMessage("answer")},
+		Usage:  TokenUsage{InputTokens: 2, OutputTokens: 1},
+	}, nil)
+	generation.End()
+	if got := generation.lastGeneration.Model.Provider; got != "gemini" {
+		t.Errorf("stored generation provider = %q, want gemini", got)
+	}
+
+	_, embedding := client.StartEmbedding(context.Background(), EmbeddingStart{
+		Model: ModelRef{Provider: "gemini", Name: "text-embedding-004"},
+	})
+	embedding.SetResult(EmbeddingResult{InputCount: 1, InputTokens: 2})
+	embedding.End()
+
+	_, tool := client.StartToolExecution(context.Background(), ToolExecutionStart{
+		ToolName:        "weather",
+		RequestProvider: "gemini",
+		RequestModel:    "gemini-2.5-pro",
+	})
+	tool.End()
+
+	spans := recorder.Ended()
+	if len(spans) != 3 {
+		t.Fatalf("recorded %d spans, want 3", len(spans))
+	}
+	for _, span := range spans {
+		attrs := spanAttributeMapOf(span)
+		if got := attrs[spanAttrProviderName].AsString(); got != "gcp.gemini" {
+			t.Errorf("span %q provider = %q, want gcp.gemini", span.Name(), got)
+		}
+	}
+
+	var collected metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &collected); err != nil {
+		t.Fatalf("collect metrics: %v", err)
+	}
+	pointCount := 0
+	checkSet := func(metricName string, set attribute.Set) {
+		t.Helper()
+		pointCount++
+		provider, ok := set.Value(spanAttrProviderName)
+		if !ok || provider.AsString() != "gcp.gemini" {
+			t.Errorf("%s provider = %q, present = %v; want gcp.gemini", metricName, provider.AsString(), ok)
+		}
+	}
+	for _, scope := range collected.ScopeMetrics {
+		for _, metric := range scope.Metrics {
+			switch data := metric.Data.(type) {
+			case metricdata.Histogram[float64]:
+				for _, point := range data.DataPoints {
+					checkSet(metric.Name, point.Attributes)
+				}
+			case metricdata.Histogram[int64]:
+				for _, point := range data.DataPoints {
+					checkSet(metric.Name, point.Attributes)
+				}
+			}
+		}
+	}
+	if pointCount == 0 {
+		t.Fatal("no metric points recorded")
+	}
+}
+
 func TestOTelProviderRegistrySpellings(t *testing.T) {
 	cases := []struct{ stored, wire string }{
 		{stored: "gemini", wire: "gcp.gemini"},
+		{stored: "GCP.Gemini", wire: "gcp.gemini"},
 		{stored: "mistral", wire: "mistral_ai"},
-		{stored: "openai", wire: "openai"},
+		{stored: "OpenAI", wire: "openai"},
+		{stored: "AWS.Bedrock", wire: "aws.bedrock"},
+		{stored: "custom.Provider", wire: "custom.Provider"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.stored, func(t *testing.T) {

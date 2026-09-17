@@ -49,20 +49,77 @@ func TestResolveConversationIDPrecedence(t *testing.T) {
 	}
 }
 
-func TestResolveProviderUsesInferenceAndExplicitOverrides(t *testing.T) {
-	event := RunStartEvent{ModelName: "gpt-5"}
-	if got := resolveProvider("", "", event.ModelName, nil, event); got != "openai" {
-		t.Fatalf("expected openai inference, got %q", got)
+func TestResolveProviderUsesIdentityBeforeInference(t *testing.T) {
+	tests := []struct {
+		name             string
+		explicitProvider string
+		eventProvider    string
+		modelName        string
+		resolverProvider string
+		want             string
+	}{
+		{
+			name:      "infers provider from model",
+			modelName: "gpt-5",
+			want:      "openai",
+		},
+		{
+			name:             "explicit canonical provider overrides model inference",
+			explicitProvider: "gemini",
+			modelName:        "gpt-5",
+			want:             "gemini",
+		},
+		{
+			name:             "explicit custom provider identity is preserved",
+			explicitProvider: "  AWS.Bedrock  ",
+			modelName:        "gpt-5",
+			want:             "aws.bedrock",
+		},
+		{
+			name:             "explicit provider wins every source",
+			explicitProvider: "aws.bedrock",
+			eventProvider:    "anthropic",
+			modelName:        "gpt-5",
+			resolverProvider: "azure.ai.inference",
+			want:             "aws.bedrock",
+		},
+		{
+			name:             "event provider wins resolver and inference",
+			eventProvider:    "anthropic",
+			modelName:        "gpt-5",
+			resolverProvider: "azure.ai.inference",
+			want:             "anthropic",
+		},
+		{
+			name:          "event provider identity is preserved",
+			eventProvider: "gcp.vertex_ai",
+			modelName:     "gemini-2.5-pro",
+			want:          "gcp.vertex_ai",
+		},
+		{
+			name:             "resolver provider identity is preserved",
+			modelName:        "private-model",
+			resolverProvider: "azure.ai.inference",
+			want:             "azure.ai.inference",
+		},
+		{
+			name:      "custom is used only when provider cannot be inferred",
+			modelName: "private-model",
+			want:      "custom",
+		},
 	}
-	if got := resolveProvider("gemini", "", "gpt-5", nil, event); got != "gemini" {
-		t.Fatalf("expected explicit provider override, got %q", got)
-	}
-	if got := resolveProvider("", "anthropic", "gpt-5", nil, event); got != "anthropic" {
-		t.Fatalf("expected event provider, got %q", got)
-	}
-	resolver := func(_ string, _ RunStartEvent) string { return "gemini" }
-	if got := resolveProvider("", "", "custom-model", resolver, event); got != "gemini" {
-		t.Fatalf("expected resolver provider, got %q", got)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var resolver ProviderResolver
+			if tt.resolverProvider != "" {
+				resolver = func(_ string, _ RunStartEvent) string { return tt.resolverProvider }
+			}
+			event := RunStartEvent{ModelName: tt.modelName, Provider: tt.eventProvider}
+			if got := resolveProvider(tt.explicitProvider, tt.eventProvider, tt.modelName, resolver, event); got != tt.want {
+				t.Fatalf("expected provider %q, got %q", tt.want, got)
+			}
+		})
 	}
 }
 
@@ -440,6 +497,7 @@ func TestOnToolStartResolvesModelAndProvider(t *testing.T) {
 		adapterProvider string
 		eventModelName  string
 		eventProvider   string
+		resolver        ProviderResolver
 		wantModel       string
 		wantProvider    string
 	}{
@@ -456,6 +514,29 @@ func TestOnToolStartResolvesModelAndProvider(t *testing.T) {
 			eventModelName:  "gpt-5",
 			wantModel:       "gpt-5",
 			wantProvider:    "openai",
+		},
+		{
+			name:            "adapter-level custom provider is preserved",
+			adapterProvider: "aws.bedrock",
+			eventModelName:  "private-model",
+			wantModel:       "private-model",
+			wantProvider:    "aws.bedrock",
+		},
+		{
+			name:           "event custom provider is preserved",
+			eventModelName: "private-model",
+			eventProvider:  "gcp.vertex_ai",
+			wantModel:      "private-model",
+			wantProvider:   "gcp.vertex_ai",
+		},
+		{
+			name:           "resolver-provided custom provider is preserved",
+			eventModelName: "private-model",
+			resolver: func(_ string, _ RunStartEvent) string {
+				return "azure.ai.inference"
+			},
+			wantModel:    "private-model",
+			wantProvider: "azure.ai.inference",
 		},
 		{
 			name:           "inferred provider from model name",
@@ -479,7 +560,10 @@ func TestOnToolStartResolvesModelAndProvider(t *testing.T) {
 				_ = client.Shutdown(context.Background())
 			})
 
-			adapter := NewAgento11yAdapter(client, Options{Provider: tt.adapterProvider})
+			adapter := NewAgento11yAdapter(client, Options{
+				Provider:         tt.adapterProvider,
+				ProviderResolver: tt.resolver,
+			})
 
 			var captured agento11y.ToolExecutionStart
 			adapter.startTool = func(ctx context.Context, start agento11y.ToolExecutionStart) *agento11y.ToolExecutionRecorder {

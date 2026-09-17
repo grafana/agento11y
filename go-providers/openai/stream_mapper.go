@@ -2,6 +2,7 @@ package openai
 
 import (
 	"errors"
+	"sort"
 	"strings"
 	"time"
 
@@ -23,6 +24,15 @@ type streamToolCall struct {
 	arguments strings.Builder
 }
 
+type streamChoice struct {
+	index        int64
+	text         strings.Builder
+	refusal      strings.Builder
+	finishReason string
+	toolCalls    map[int64]*streamToolCall
+	toolOrder    []int64
+}
+
 // ChatCompletionsFromStream maps OpenAI chat-completions streaming output to agento11y.Generation.
 func ChatCompletionsFromStream(req osdk.ChatCompletionNewParams, summary ChatCompletionsStreamSummary, opts ...Option) (agento11y.Generation, error) {
 	if summary.FinalResponse != nil {
@@ -39,17 +49,13 @@ func ChatCompletionsFromStream(req osdk.ChatCompletionNewParams, summary ChatCom
 
 	options := applyOptions(opts)
 	input, systemPrompt := mapRequestMessages(req.Messages)
-	output := make([]agento11y.Message, 0, 1)
-	maxTokens, temperature, topP, toolChoice, thinkingEnabled, thinkingBudget := mapRequestControls(req)
+	controls := mapRequestControls(req)
 
 	modelName := req.Model
 	responseID := ""
 	usage := agento11y.TokenUsage{}
-	stopReason := ""
-	var text strings.Builder
-
-	toolCalls := map[int64]*streamToolCall{}
-	order := make([]int64, 0, 2)
+	choices := map[int64]*streamChoice{}
+	choiceOrder := make([]int64, 0, 2)
 
 	for i := range summary.Chunks {
 		chunk := summary.Chunks[i]
@@ -59,26 +65,34 @@ func ChatCompletionsFromStream(req osdk.ChatCompletionNewParams, summary ChatCom
 		if chunk.Model != "" {
 			modelName = chunk.Model
 		}
-		if chunk.Usage.TotalTokens > 0 || chunk.Usage.PromptTokens > 0 || chunk.Usage.CompletionTokens > 0 {
+		if completionUsagePresent(chunk.Usage) {
 			usage = mapUsage(chunk.Usage)
 		}
 
 		for _, choice := range chunk.Choices {
+			accumulated, ok := choices[choice.Index]
+			if !ok {
+				accumulated = &streamChoice{
+					index:     choice.Index,
+					toolCalls: map[int64]*streamToolCall{},
+				}
+				choices[choice.Index] = accumulated
+				choiceOrder = append(choiceOrder, choice.Index)
+			}
 			if choice.FinishReason != "" {
-				stopReason = choice.FinishReason
+				accumulated.finishReason = choice.FinishReason
 			}
 
 			delta := choice.Delta
-			if delta.Content != "" {
-				text.WriteString(delta.Content)
-			}
+			accumulated.text.WriteString(delta.Content)
+			accumulated.refusal.WriteString(delta.Refusal)
 
 			for _, toolCall := range delta.ToolCalls {
-				call, ok := toolCalls[toolCall.Index]
+				call, ok := accumulated.toolCalls[toolCall.Index]
 				if !ok {
 					call = &streamToolCall{}
-					toolCalls[toolCall.Index] = call
-					order = append(order, toolCall.Index)
+					accumulated.toolCalls[toolCall.Index] = call
+					accumulated.toolOrder = append(accumulated.toolOrder, toolCall.Index)
 				}
 				if toolCall.ID != "" {
 					call.id = toolCall.ID
@@ -86,35 +100,53 @@ func ChatCompletionsFromStream(req osdk.ChatCompletionNewParams, summary ChatCom
 				if toolCall.Function.Name != "" {
 					call.name = toolCall.Function.Name
 				}
-				if toolCall.Function.Arguments != "" {
-					call.arguments.WriteString(toolCall.Function.Arguments)
-				}
+				call.arguments.WriteString(toolCall.Function.Arguments)
 			}
 		}
 	}
 
-	assistantParts := make([]agento11y.Part, 0, 1+len(order))
-	if generated := text.String(); generated != "" {
-		assistantParts = append(assistantParts, agento11y.TextPart(generated))
+	orderedChoices := make([]*streamChoice, 0, len(choiceOrder))
+	for _, index := range choiceOrder {
+		orderedChoices = append(orderedChoices, choices[index])
 	}
-	for _, index := range order {
-		call := toolCalls[index]
-		if call == nil || strings.TrimSpace(call.name) == "" {
-			continue
+	sort.SliceStable(orderedChoices, func(i, j int) bool {
+		return orderedChoices[i].index < orderedChoices[j].index
+	})
+
+	output := make([]agento11y.Message, 0, len(orderedChoices))
+	stopReason := ""
+	for _, choice := range orderedChoices {
+		if stopReason == "" && choice.finishReason != "" {
+			stopReason = choice.finishReason
 		}
-		part := agento11y.ToolCallPart(agento11y.ToolCall{
-			ID:        call.id,
-			Name:      call.name,
-			InputJSON: parseJSONOrString(call.arguments.String()),
-		})
-		part.Metadata.ProviderType = "tool_call"
-		assistantParts = append(assistantParts, part)
-	}
-	if len(assistantParts) > 0 {
-		output = append(output, agento11y.Message{
-			Role:  agento11y.RoleAssistant,
-			Parts: assistantParts,
-		})
+		parts := make([]agento11y.Part, 0, 2+len(choice.toolOrder))
+		if generated := choice.text.String(); generated != "" {
+			parts = append(parts, agento11y.TextPart(generated))
+		}
+		if refusal := choice.refusal.String(); refusal != "" {
+			parts = append(parts, agento11y.TextPart(refusal))
+		}
+		sort.SliceStable(choice.toolOrder, func(i, j int) bool { return choice.toolOrder[i] < choice.toolOrder[j] })
+		for _, index := range choice.toolOrder {
+			call := choice.toolCalls[index]
+			if call == nil || strings.TrimSpace(call.name) == "" {
+				continue
+			}
+			part := agento11y.ToolCallPart(agento11y.ToolCall{
+				ID:        call.id,
+				Name:      call.name,
+				InputJSON: parseJSONOrString(call.arguments.String()),
+			})
+			part.Metadata.ProviderType = "tool_call"
+			parts = append(parts, part)
+		}
+		if len(parts) > 0 || choice.finishReason != "" {
+			output = append(output, agento11y.Message{
+				Role:         agento11y.RoleAssistant,
+				Parts:        parts,
+				FinishReason: choice.finishReason,
+			})
+		}
 	}
 
 	artifacts := make([]agento11y.Artifact, 0, 3)
@@ -152,15 +184,18 @@ func ChatCompletionsFromStream(req osdk.ChatCompletionNewParams, summary ChatCom
 		Input:             input,
 		Output:            output,
 		Tools:             mapTools(req.Tools),
-		MaxTokens:         maxTokens,
-		Temperature:       temperature,
-		TopP:              topP,
-		ToolChoice:        toolChoice,
-		ThinkingEnabled:   thinkingEnabled,
+		MaxTokens:         controls.maxTokens,
+		Temperature:       controls.temperature,
+		TopP:              controls.topP,
+		ChoiceCount:       controls.choiceCount,
+		Seed:              controls.seed,
+		OutputType:        controls.outputType,
+		ToolChoice:        controls.toolChoice,
+		ThinkingEnabled:   controls.thinkingEnabled,
 		Usage:             usage,
 		StopReason:        stopReason,
 		Tags:              cloneStringMap(options.tags),
-		Metadata:          mergeThinkingBudgetMetadata(options.metadata, thinkingBudget),
+		Metadata:          mergeThinkingBudgetMetadata(options.metadata, controls.thinkingBudget),
 		Artifacts:         artifacts,
 	}
 

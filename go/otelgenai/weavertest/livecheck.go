@@ -29,8 +29,8 @@ type Finding struct {
 	ID string `json:"id"`
 	// Level is violation, improvement, or information.
 	Level string `json:"level"`
-	// Target is the attribute the finding is about, and empty for a
-	// span-level finding, which is about Span itself.
+	// Target identifies the nested event, link, or attribute. It is empty for
+	// span-level findings.
 	Target string `json:"target,omitempty"`
 	// Detail is Weaver's context for the finding, rendered as sorted
 	// key=value pairs. It carries what the id and the target leave out:
@@ -98,23 +98,28 @@ func LiveCheck(ctx context.Context, assets Assets, samples []Sample) ([]Finding,
 	return violations(report)
 }
 
-// liveCheckReport is the part of Weaver's report the verdicts are built
-// from. Findings hang off the span and off each of its attributes.
 type liveCheckReport struct {
 	Samples []struct {
-		Span struct {
-			Name       string `json:"name"`
-			Attributes []struct {
-				Name   string `json:"name"`
-				Result *struct {
-					Advice []advice `json:"all_advice"`
-				} `json:"live_check_result"`
-			} `json:"attributes"`
-			Result *struct {
-				Advice []advice `json:"all_advice"`
-			} `json:"live_check_result"`
-		} `json:"span"`
+		Span liveCheckSpan `json:"span"`
 	} `json:"samples"`
+}
+
+type liveCheckResult struct {
+	Advice []advice `json:"all_advice"`
+}
+
+type liveCheckObject struct {
+	Name       string            `json:"name"`
+	Attributes []liveCheckObject `json:"attributes"`
+	Result     *liveCheckResult  `json:"live_check_result"`
+}
+
+type liveCheckSpan struct {
+	liveCheckObject
+	SpanEvents []liveCheckObject `json:"span_events"`
+	Events     []liveCheckObject `json:"events"`
+	SpanLinks  []liveCheckObject `json:"span_links"`
+	Links      []liveCheckObject `json:"links"`
 }
 
 type advice struct {
@@ -132,14 +137,16 @@ func violations(report []byte) ([]Finding, error) {
 	findings := []Finding{}
 	for _, sample := range parsed.Samples {
 		span := sample.Span
-		if span.Result != nil {
-			findings = append(findings, collect(span.Result.Advice, span.Name, "")...)
+		findings = append(findings, collectObject(span.liveCheckObject, span.Name, "")...)
+		events := append(append([]liveCheckObject(nil), span.SpanEvents...), span.Events...)
+		for index, event := range events {
+			target := fmt.Sprintf("event[%d]:%s", index, event.Name)
+			findings = append(findings, collectObject(event, span.Name, target)...)
 		}
-		for _, attribute := range span.Attributes {
-			if attribute.Result == nil {
-				continue
-			}
-			findings = append(findings, collect(attribute.Result.Advice, span.Name, attribute.Name)...)
+		links := append(append([]liveCheckObject(nil), span.SpanLinks...), span.Links...)
+		for index, link := range links {
+			target := fmt.Sprintf("link[%d]", index)
+			findings = append(findings, collectObject(link, span.Name, target)...)
 		}
 	}
 
@@ -157,6 +164,21 @@ func violations(report []byte) ([]Finding, error) {
 		return left.Detail < right.Detail
 	})
 	return findings, nil
+}
+
+func collectObject(object liveCheckObject, span, target string) []Finding {
+	var out []Finding
+	if object.Result != nil {
+		out = append(out, collect(object.Result.Advice, span, target)...)
+	}
+	for _, attribute := range object.Attributes {
+		attributeTarget := attribute.Name
+		if target != "" {
+			attributeTarget = target + "/" + attribute.Name
+		}
+		out = append(out, collectObject(attribute, span, attributeTarget)...)
+	}
+	return out
 }
 
 func collect(entries []advice, span, target string) []Finding {

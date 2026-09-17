@@ -2,6 +2,7 @@ package gemini
 
 import (
 	"context"
+	"iter"
 	"time"
 
 	"google.golang.org/genai"
@@ -42,23 +43,42 @@ func generateContent(
 ) (*genai.GenerateContentResponse, error) {
 	options := applyOptions(opts)
 
-	ctx, rec := client.StartGeneration(ctx, agento11y.GenerationStart{
+	ctx, rec := client.StartGeneration(ctx, geminiGenerationStart(options, model, contents, config))
+	defer rec.End()
+
+	resp, err := invoke(ctx, model, contents, config)
+	if resp != nil {
+		rec.SetResult(FromRequestResponse(model, contents, config, resp, opts...))
+	}
+	if err != nil {
+		rec.SetCallError(err)
+		return resp, err
+	}
+
+	return resp, rec.Err()
+}
+
+func geminiGenerationStart(options mapperOptions, model string, contents []*genai.Content, config *genai.GenerateContentConfig) agento11y.GenerationStart {
+	controls := mapRequestControls(config)
+	return agento11y.GenerationStart{
 		ConversationID:    options.conversationID,
 		ConversationTitle: options.conversationTitle,
 		AgentName:         options.agentName,
 		AgentVersion:      options.agentVersion,
+		OperationName:     generationOperation(contents, config, nil),
 		Model:             agento11y.ModelRef{Provider: options.providerName, Name: model},
-	})
-	defer rec.End()
-
-	resp, err := invoke(ctx, model, contents, config)
-	if err != nil {
-		rec.SetCallError(err)
-		return nil, err
+		MaxTokens:         controls.maxTokens,
+		Temperature:       controls.temperature,
+		TopP:              controls.topP,
+		TopK:              controls.topK,
+		ChoiceCount:       controls.choiceCount,
+		Seed:              controls.seed,
+		OutputType:        controls.outputType,
+		ToolChoice:        controls.toolChoice,
+		ThinkingEnabled:   controls.thinkingEnabled,
+		Tags:              options.tags,
+		Metadata:          mergeThinkingBudgetMetadata(options.metadata, controls.thinkingBudget),
 	}
-
-	rec.SetResult(FromRequestResponse(model, contents, config, resp, opts...))
-	return resp, rec.Err()
 }
 
 // EmbedContent calls the Gemini embed-content API and records an embeddings span.
@@ -132,20 +152,36 @@ func GenerateContentStream(
 	config *genai.GenerateContentConfig,
 	opts ...Option,
 ) (StreamSummary, error) {
+	return generateContentStream(ctx, client, model, contents, config, func(
+		ctx context.Context,
+		model string,
+		contents []*genai.Content,
+		config *genai.GenerateContentConfig,
+	) iter.Seq2[*genai.GenerateContentResponse, error] {
+		return provider.Models.GenerateContentStream(ctx, model, contents, config)
+	}, opts...)
+}
+
+func generateContentStream(
+	ctx context.Context,
+	client *agento11y.Client,
+	model string,
+	contents []*genai.Content,
+	config *genai.GenerateContentConfig,
+	invoke func(context.Context, string, []*genai.Content, *genai.GenerateContentConfig) iter.Seq2[*genai.GenerateContentResponse, error],
+	opts ...Option,
+) (StreamSummary, error) {
 	options := applyOptions(opts)
 
-	ctx, rec := client.StartStreamingGeneration(ctx, agento11y.GenerationStart{
-		ConversationID:    options.conversationID,
-		ConversationTitle: options.conversationTitle,
-		AgentName:         options.agentName,
-		AgentVersion:      options.agentVersion,
-		Model:             agento11y.ModelRef{Provider: options.providerName, Name: model},
-	})
+	ctx, rec := client.StartStreamingGeneration(ctx, geminiGenerationStart(options, model, contents, config))
 	defer rec.End()
 
 	summary := StreamSummary{}
-	for response, err := range provider.Models.GenerateContentStream(ctx, model, contents, config) {
+	for response, err := range invoke(ctx, model, contents, config) {
 		if err != nil {
+			if len(summary.Responses) > 0 {
+				rec.SetResult(FromStream(model, contents, config, summary, opts...))
+			}
 			rec.SetCallError(err)
 			return summary, err
 		}

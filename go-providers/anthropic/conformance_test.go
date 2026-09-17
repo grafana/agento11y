@@ -103,6 +103,11 @@ func TestConformance_AnthropicStreamMapping(t *testing.T) {
 				Message: asdk.BetaMessage{
 					ID:    "msg_conformance_stream",
 					Model: asdk.Model("claude-sonnet-4-5"),
+					Usage: asdk.BetaUsage{
+						InputTokens:              20,
+						CacheReadInputTokens:     1000,
+						CacheCreationInputTokens: 200,
+					},
 				},
 			},
 			{
@@ -146,8 +151,7 @@ func TestConformance_AnthropicStreamMapping(t *testing.T) {
 					StopReason: asdk.BetaStopReasonToolUse,
 				},
 				Usage: asdk.BetaMessageDeltaUsage{
-					InputTokens:  80,
-					OutputTokens: 25,
+					OutputTokens: 40,
 				},
 			},
 		},
@@ -189,8 +193,20 @@ func TestConformance_AnthropicStreamMapping(t *testing.T) {
 	if got := testkit.StringValue(t, exported, "output", 0, "parts", 2, "tool_call", "name"); got != "weather" {
 		t.Fatalf("unexpected streamed tool_call.name: got %q want %q", got, "weather")
 	}
-	if got := testkit.StringValue(t, exported, "usage", "total_tokens"); got != "105" {
-		t.Fatalf("unexpected streamed usage.total_tokens: got %q want %q", got, "105")
+	if got := testkit.StringValue(t, exported, "usage", "input_tokens"); got != "1220" {
+		t.Fatalf("unexpected streamed usage.input_tokens: got %q want %q", got, "1220")
+	}
+	if got := testkit.StringValue(t, exported, "usage", "output_tokens"); got != "40" {
+		t.Fatalf("unexpected streamed usage.output_tokens: got %q want %q", got, "40")
+	}
+	if got := testkit.StringValue(t, exported, "usage", "total_tokens"); got != "1260" {
+		t.Fatalf("unexpected streamed usage.total_tokens: got %q want %q", got, "1260")
+	}
+	if got := testkit.StringValue(t, exported, "usage", "cache_read_input_tokens"); got != "1000" {
+		t.Fatalf("unexpected streamed usage.cache_read_input_tokens: got %q want %q", got, "1000")
+	}
+	if got := testkit.StringValue(t, exported, "usage", "cache_write_input_tokens"); got != "200" {
+		t.Fatalf("unexpected streamed usage.cache_write_input_tokens: got %q want %q", got, "200")
 	}
 }
 
@@ -437,8 +453,29 @@ func TestConformance_AnthropicMapperValidationErrors(t *testing.T) {
 	if _, err := FromRequestResponse(testRequest(), nil); err == nil || err.Error() != "response is required" {
 		t.Fatalf("expected explicit response error, got %v", err)
 	}
-	if _, err := FromStream(testRequest(), StreamSummary{}); err == nil || err.Error() != "stream summary has no events and no final message" {
-		t.Fatalf("expected explicit stream error, got %v", err)
+	streamCases := []struct {
+		name    string
+		summary StreamSummary
+		wantErr string
+	}{
+		{
+			name:    "empty",
+			wantErr: "stream summary has no events and no final message",
+		},
+		{
+			name: "ping only",
+			summary: StreamSummary{Events: []asdk.BetaRawMessageStreamEventUnion{
+				{Type: "ping"},
+			}},
+			wantErr: "stream summary has no message events and no final message",
+		},
+	}
+	for _, tc := range streamCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := FromStream(testRequest(), tc.summary); err == nil || err.Error() != tc.wantErr {
+				t.Fatalf("expected explicit stream error %q, got %v", tc.wantErr, err)
+			}
+		})
 	}
 
 	_, err := FromRequestResponse(
