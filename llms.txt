@@ -91,6 +91,7 @@ Install the `agento11y` binary (renamed from `sigil`; the old name still works b
 
 - **Quick install (Linux/macOS):** `curl -fsSL https://raw.githubusercontent.com/grafana/agento11y/main/plugins/agento11y/scripts/install.sh | sh` (downloads the latest release, verifies the checksum, installs to `~/.local/bin`)
 - **Homebrew (macOS):** `brew install grafana/grafana/agento11y`
+- **mise (Aqua backend):** `mise use -g aqua:grafana/agento11y@latest` (requires [mise shell activation](https://mise.jdx.dev/cli/activate.html) so `agento11y` is on your `PATH`)
 - **Go install (Windows, or any platform with Go 1.25+):** `go install github.com/grafana/agento11y/plugins/agento11y/cmd/agento11y@latest`
 
 The script installs to `~/.local/bin`; `go install` puts the binary in `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`.

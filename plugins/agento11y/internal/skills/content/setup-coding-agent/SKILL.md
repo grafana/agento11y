@@ -89,10 +89,8 @@ Pick one method that matches the platform and how the user installs other tools.
 curl -fsSL https://raw.githubusercontent.com/grafana/agento11y/main/plugins/agento11y/scripts/install.sh | sh
 ```
 
-The script downloads the latest release for the OS and architecture and installs
-to `~/.local/bin`. It verifies the SHA-256 when `sha256sum` or `shasum` is
-available; otherwise it warns and continues. Re-run it to upgrade. `INSTALL_DIR`
-changes the directory and `VERSION` pins a release.
+The script downloads the latest release for the OS and architecture to `~/.local/bin`. It verifies the SHA-256 when `sha256sum` or `shasum` is available; otherwise it warns and continues.
+Re-run it to upgrade. `INSTALL_DIR` changes the directory and `VERSION` pins a release.
 
 **Homebrew (macOS):**
 
@@ -101,6 +99,8 @@ brew install grafana/grafana/agento11y
 ```
 
 Upgrade with `brew upgrade grafana/grafana/agento11y`.
+
+**mise (Aqua backend):** `mise use -g aqua:grafana/agento11y@latest` (requires [mise shell activation](https://mise.jdx.dev/cli/activate.html) so `agento11y` is on `PATH`).
 
 **Go install (any platform with Go 1.25.7+):**
 
