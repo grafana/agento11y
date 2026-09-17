@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.48.0] - 2026-09-17
+
+### Bug Fixes
+
+- **plugins/agento11y**: bound tool payloads on export in the Codex, Cursor, and Claude Code mappers (#750)
+- **plugins/agento11y**: on Stop, wait for Claude Code's closing turn to land (#769)
+- **plugins/agento11y**: don't wait out the settle window on Claude Code metadata lines (#770)
+
+### Documentation
+
+- document mise Aqua installation for agento11y (#772)
+- add local guard setup guide and skill (#767)
+
 ## [0.47.0] - 2026-09-16
 
 ### Features
