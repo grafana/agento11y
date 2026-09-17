@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"slices"
 	"testing"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
@@ -100,10 +101,5 @@ func equalStrings(got, want []string) bool {
 }
 
 func contains(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(values, want)
 }
