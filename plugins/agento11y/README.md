@@ -4,7 +4,7 @@
   <img src="../../.github/img/agento11y.gif" alt="agento11y capturing a coding agent session" width="80%" />
 </p>
 
-Monitor the coding agents you already use — Cursor, Claude Code, Codex, Copilot CLI, OpenCode, Pi, Vibe, and others. Observe usage, cost, tokens, and tools across all of them in one place. Keep sessions on your machine with the local Agent Observability app, or send them to [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/).
+Monitor the coding agents you already use — Cursor, Claude Code, Codex, Copilot CLI, Hermes Agent, OpenCode, Pi, Vibe, and others. Observe usage, cost, tokens, and tools across all of them in one place. Keep sessions on your machine with the local Agent Observability app, or send them to [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/).
 
 ## Quick start
 
@@ -76,12 +76,15 @@ agento11y claude
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `agento11y claude` |
 | [Codex](https://developers.openai.com/codex) | `agento11y codex` |
 | [Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli/using-github-copilot-in-the-cli) | `agento11y copilot` |
+| [Hermes Agent](https://github.com/NousResearch/hermes-agent) | `agento11y hermes install` once, then `agento11y hermes` |
 | [Cursor](https://cursor.com) | `agento11y cursor install`, then start Cursor |
 | [OpenCode](https://opencode.ai) | `agento11y opencode` |
 | [Pi](https://github.com/earendil-works/pi) | `agento11y pi` |
 | [Vibe](https://github.com/mistralai/vibe) | `agento11y vibe` |
 
 Cursor has no launcher. Run `agento11y cursor install` once, then start Cursor normally. Remove its hooks with `agento11y cursor uninstall`. See also [`cursor/README.md`](../cursor/README.md). Per-agent notes and glue live under [`plugins/`](../).
+
+Hermes uses its native plugin system. `agento11y hermes install` installs and enables the `agento11y-hermes` plugin through Hermes; it may install the plugin's Python dependency. It is intentionally a separate command so launching Hermes never changes its plugin environment. See [`hermes/README.md`](../hermes/README.md) for the guard boundary and local-checkout testing.
 
 ## Claude plugin evals
 

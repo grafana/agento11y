@@ -2,9 +2,8 @@
 name: setup-coding-agent
 description: >-
   Set up Grafana Agent observability for a coding agent (Claude Code, Codex,
-  Copilot CLI, Cursor, OpenCode, pi, or Vibe) with the agento11y binary:
-  install it, save credentials, wire the agent, verify a session reaches
-  Grafana Cloud, and diagnose a broken pipeline. Use when the user says "set
+  Copilot CLI, Cursor, Hermes Agent, OpenCode, pi, or Vibe) with the agento11y binary:
+  install it, save credentials, wire the agent, verify a session reaches Grafana Cloud, and diagnose a broken pipeline. Use when the user says "set
   up agento11y", "monitor my coding agent", "agento11y doctor says something
   is wrong", "my sessions do not show up in Grafana", or asks why
   conversations arrive but analytics stay empty.
@@ -239,6 +238,7 @@ rules in the Reference.
 | Claude Code | `agento11y claude` | shared Go binary, plugin `agento11y-claude-code` |
 | Codex | `agento11y codex` | shared Go binary, plugin `agento11y-codex` |
 | Copilot CLI | `agento11y copilot` | hooks shared with Copilot Chat in VS Code |
+| Hermes Agent | `agento11y hermes install`, then `agento11y hermes` | native Hermes plugin; install is explicit because Hermes may install its Python dependency |
 | OpenCode | `agento11y opencode` | installs `@grafana/agento11y-opencode` |
 | pi | `agento11y pi` | installs `@grafana/agento11y-pi` |
 | Vibe | `agento11y vibe` | shared Go binary via `hooks.toml` |

@@ -1,12 +1,13 @@
 // Package entry implements the shared CLI entrypoint behind the
 // cmd/agento11y and cmd/agento11y binaries. Both commands are the same single
-// binary used by the Claude Code, Codex, Copilot, Cursor, OpenCode, pi, and
-// Vibe agent plugins. It accepts:
+// binary used by the Claude Code, Codex, Copilot, Cursor, Hermes, OpenCode,
+// pi, and Vibe agent plugins. It accepts:
 //
 //	agento11y <agent> hook                                            — dispatch a JSON hook payload on stdin to <agent>
 //	agento11y claude   [--local|--no-local] [--tag k=v] [-- args...]  — exec claude after bootstrapping the agento11y-claude-code plugin
 //	agento11y codex    [--local|--no-local] [--tag k=v] [-- args...]  — exec codex after bootstrapping the agento11y-codex plugin
 //	agento11y copilot  [--local|--no-local] [--tag k=v] [-- args...]  — exec copilot after bootstrapping the sigil-copilot plugin
+//	agento11y hermes   [--local|--no-local] [--tag k=v] [-- args...]  — exec Hermes after installing the agento11y-hermes native plugin
 //	agento11y opencode [--local|--no-local] [--tag k=v] [-- args...]  — exec opencode after bootstrapping the @grafana/agento11y-opencode plugin
 //	agento11y pi       [--local|--no-local] [--tag k=v] [-- args...]  — exec pi after bootstrapping the @grafana/agento11y-pi extension
 //	agento11y vibe     [--local|--no-local] [--tag k=v] [-- args...]  — exec vibe after installing the sigil hook in vibe's hooks.toml
@@ -56,6 +57,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/copilot"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor"
 	cursorinstall "github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/install"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/hermes"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/opencode"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/pi"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe"
@@ -167,6 +169,7 @@ var launchers = map[string]agentLauncher{
 	"claude":   claudecode.Launch,
 	"codex":    codex.Launch,
 	"copilot":  copilot.Launch,
+	"hermes":   hermes.Launch,
 	"opencode": opencode.Launch,
 	"pi":       pi.Launch,
 	"vibe":     vibe.Launch,
@@ -193,6 +196,7 @@ var (
 	cursorUninstall = cursorinstall.Uninstall
 	claudeInstall   = claudecode.Install
 	copilotInstall  = copilot.Install
+	hermesInstall   = hermes.Install
 	opencodeInstall = opencode.Install
 	piInstall       = pi.Install
 )
@@ -256,7 +260,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 	// Agent Observability credentials. They are safe to invoke from unattended
 	// setup after the current user's config.env is in place.
 	if len(args) >= 2 && args[1] == "install" &&
-		(args[0] == "claude" || args[0] == "copilot" || args[0] == "opencode" || args[0] == "pi") {
+		(args[0] == "claude" || args[0] == "copilot" || args[0] == "hermes" || args[0] == "opencode" || args[0] == "pi") {
 		runAgentInstall(args[0], args[2:], stdout, stderr)
 		return
 	}
@@ -773,13 +777,15 @@ func runAgentInstall(agent string, args []string, stdout, stderr io.Writer) {
 		changed, err = claudeInstall(context.Background(), writer)
 	case "copilot":
 		changed, err = copilotInstall()
+	case "hermes":
+		changed, err = hermesInstall(context.Background(), writer, cli.InitLogger("hermes"))
 	case "opencode":
 		changed, err = opencodeInstall(context.Background(), writer, cli.InitLogger("opencode"))
 	case "pi":
 		changed, err = piInstall(context.Background(), writer, cli.InitLogger("pi"))
 	}
 	switch {
-	case errors.Is(err, claudecode.ErrCLINotFound), errors.Is(err, opencode.ErrCLINotFound), errors.Is(err, pi.ErrCLINotFound):
+	case errors.Is(err, claudecode.ErrCLINotFound), errors.Is(err, hermes.ErrCLINotFound), errors.Is(err, opencode.ErrCLINotFound), errors.Is(err, pi.ErrCLINotFound):
 		result.Status = "missing_host"
 	case err != nil:
 		result.Status, result.Error = "error", err.Error()

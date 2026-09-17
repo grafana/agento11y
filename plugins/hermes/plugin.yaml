@@ -1,0 +1,12 @@
+name: agento11y-hermes
+version: "0.1.0"
+description: "Grafana Agent Observability telemetry and optional tool-call guards for Hermes Agent."
+author: Grafana Labs
+python_dependencies:
+  - "agento11y>=0.17,<0.18"
+provides_hooks:
+  - pre_api_request
+  - post_api_request
+  - api_request_error
+  - pre_tool_call
+  - post_tool_call

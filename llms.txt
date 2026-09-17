@@ -4,7 +4,7 @@ You are a coding agent. The user wants help with [Grafana Agent observability](h
 
 There are two distinct things this file covers. Pick the path that matches the request before doing anything else.
 
-- Path A, [Monitor a coding agent](#path-a-monitor-a-coding-agent): the user wants telemetry from Claude Code, Codex, Copilot CLI, Cursor, OpenCode, Pi, or Vibe sent to Grafana Agent observability. They are not changing application code.
+- Path A, [Monitor a coding agent](#path-a-monitor-a-coding-agent): the user wants telemetry from Claude Code, Codex, Copilot CLI, Cursor, Hermes Agent, OpenCode, Pi, or Vibe sent to Grafana Agent observability. They are not changing application code.
 - Path B, [Instrument an LLM app or agent](#path-b-instrument-an-llm-app-or-agent): the user wants their own code (an app, agent, framework pipeline) to send generations to Grafana Agent observability.
 
 If you cannot tell, ask one clarifying question and stop.
@@ -80,6 +80,7 @@ A binary older than that command prints `agento11y: unknown agent "skills"` and 
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | [`plugins/claude-code/`](https://github.com/grafana/agento11y/tree/main/plugins/claude-code) | Shared `agento11y` Go binary, plugin name `agento11y-claude-code` |
 | [Codex](https://developers.openai.com/codex) | [`plugins/codex/`](https://github.com/grafana/agento11y/tree/main/plugins/codex) | Shared `agento11y` Go binary via hooks |
 | [Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) | [`plugins/copilot/`](https://github.com/grafana/agento11y/tree/main/plugins/copilot) | Shared `agento11y` Go binary via hooks |
+| [Hermes Agent](https://github.com/NousResearch/hermes-agent) | [`plugins/hermes/`](https://github.com/grafana/agento11y/tree/main/plugins/hermes) | Native Hermes plugin, installed once with `agento11y hermes install` |
 | [Cursor](https://cursor.com) | [`plugins/cursor/`](https://github.com/grafana/agento11y/tree/main/plugins/cursor) | Shared `agento11y` Go binary via hooks |
 | [OpenCode](https://opencode.ai) | [`plugins/opencode/`](https://github.com/grafana/agento11y/tree/main/plugins/opencode) | Shared `agento11y` Go binary, installs `@grafana/agento11y-opencode` |
 | [Pi](https://github.com/earendil-works/pi) | [`plugins/pi/`](https://github.com/grafana/agento11y/tree/main/plugins/pi) | Independent npm package `@grafana/agento11y-pi` |
@@ -96,7 +97,7 @@ Install the `agento11y` binary (renamed from `sigil`; the old name still works b
 
 The script installs to `~/.local/bin`; `go install` puts the binary in `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`.
 
-Launch your agent with `agento11y <agent>`, where `<agent>` is `claude`, `codex`, `copilot`, `opencode`, `pi`, or `vibe`. A first launch asks where sessions go, with two options: **Local only**, and **Grafana Cloud**. **Local only** needs no Cloud credentials, starts the local receiver, and does not forward sessions. **Grafana Cloud** continues to the credential questions. Its interactive preferences on macOS and Linux include **Local web UI**. The question starts on **Yes** by default and remembers an earlier answer. **Yes** keeps a full local copy and forwards a Cloud copy. **No** sends directly to Cloud without a local copy. The launcher asks nothing when local mode is already on (`--local` or `AGENTO11Y_LOCAL=true`) or when stdin is not a terminal. Windows has no local receiver, so it shows neither local choice.
+Launch your agent with `agento11y <agent>`, where `<agent>` is `claude`, `codex`, `copilot`, `hermes`, `opencode`, `pi`, or `vibe`. Hermes is the exception: first run `agento11y hermes install` to install and enable its native plugin, then launch with `agento11y hermes`. A first launch asks where sessions go, with two options: **Local only**, and **Grafana Cloud**. **Local only** needs no Cloud credentials, starts the local receiver, and does not forward sessions. **Grafana Cloud** continues to the credential questions. Its interactive preferences on macOS and Linux include **Local web UI**. The question starts on **Yes** by default and remembers an earlier answer. **Yes** keeps a full local copy and forwards a Cloud copy. **No** sends directly to Cloud without a local copy. The launcher asks nothing when local mode is already on (`--local` or `AGENTO11Y_LOCAL=true`) or when stdin is not a terminal. Windows has no local receiver, so it shows neither local choice.
 
 Cursor has no launcher because it is a GUI app. After installing the binary, wire its hooks once with `agento11y cursor install`. The command merges into `~/.cursor/hooks.json`, and asks the same first-run destination question under the same conditions. **Local only** there takes effect on the next Cursor hook, because the install does not start the receiver itself. `agento11y cursor uninstall` removes the hooks. See [`plugins/cursor/`](https://github.com/grafana/agento11y/tree/main/plugins/cursor) for details.
 
