@@ -8,7 +8,20 @@
 
 ## Coding agent observability
 
-Capture sessions from the coding agents you already use — Cursor, Claude Code, Codex, Copilot CLI, OpenCode, Pi, Vibe, and others — so you can observe usage, cost, tokens, and tools across all of them in one place. Install `agento11y`, then start most agents with a single command (`agento11y claude`, `agento11y codex`, …). See the [Coding Agent Observability documentation](plugins/agento11y/README.md) for more information.
+Capture sessions from the coding agents you already use — Cursor, Claude Code, Codex, Copilot CLI, OpenCode, Pi, Vibe, and others — so you can observe usage, cost, tokens, and tools across all of them in one place.
+
+Install `agento11y`:
+
+```sh
+# Linux or macOS
+curl -fsSL https://raw.githubusercontent.com/grafana/agento11y/main/plugins/agento11y/scripts/install.sh | sh
+# macOS with Homebrew
+brew install grafana/grafana/agento11y
+# Windows, or any platform with Go 1.25+
+go install github.com/grafana/agento11y/plugins/agento11y/cmd/agento11y@latest
+```
+
+Then run `agento11y login` and launch your agent, for example `agento11y codex`. The [Coding Agent Observability guide](plugins/agento11y/README.md#install) covers all install options, configuration, and supported agents.
 
 ## Observability for agents you build
 
