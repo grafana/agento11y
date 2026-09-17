@@ -24,6 +24,29 @@ run = "pnpm install --frozen-lockfile"
 description = "Update JS/TS dependencies and pnpm lockfile"
 run = "pnpm install --no-frozen-lockfile"
 
+# --- Hermes plugin ---
+
+[tasks."format:py:plugin-hermes"]
+description = "Format Hermes plugin code with its locked Ruff"
+run = "bash plugins/hermes/scripts/run-check.sh format"
+
+[tasks."lint:py:plugin-hermes"]
+description = "Lint and format-check Hermes plugin code"
+run = "bash plugins/hermes/scripts/run-check.sh lint"
+
+[tasks."typecheck:py:plugin-hermes"]
+description = "Type-check Hermes plugin code"
+run = "bash plugins/hermes/scripts/run-check.sh typecheck"
+
+[tasks."test:py:plugin-hermes"]
+description = "Test Hermes with isolated credentials and 99% branch coverage"
+usage = 'arg "[python]" default="3.11"'
+run = 'bash plugins/hermes/scripts/run-check.sh test "${usage_python?}"'
+
+[tasks."build:py:plugin-hermes"]
+description = "Verify Hermes wheel and rebuilt sdist outside the checkout"
+run = "bash plugins/hermes/scripts/run-check.sh build"
+
 # --- Formatting ---
 
 [tasks."format:go"]
@@ -67,7 +90,7 @@ run = "pnpm --filter @grafana/agento11y-local-viewer run lint:fix"
 
 [tasks.format]
 description = "Format all code"
-depends = ["format:go", "format:py", "format:cs", "format:ts:sdk-js", "format:ts:plugin-pi", "format:ts:plugin-opencode", "format:ts:local-viewer"]
+depends = ["format:go", "format:py", "format:py:plugin-hermes", "format:cs", "format:ts:sdk-js", "format:ts:plugin-pi", "format:ts:plugin-opencode", "format:ts:local-viewer"]
 
 # --- Linting ---
 
@@ -146,7 +169,7 @@ run = "pnpm run check:js-dependency-pinning"
 
 [tasks.lint]
 description = "Run all linting"
-depends = ["lint:go", "lint:py", "lint:cs", "lint:ts:sdk-js", "lint:ts:plugin-pi", "lint:ts:plugin-opencode", "lint:ts:local-viewer", "lint:ts:redaction-generator", "lint:js-dependency-pinning"]
+depends = ["lint:go", "lint:py", "lint:py:plugin-hermes", "lint:cs", "lint:ts:sdk-js", "lint:ts:plugin-pi", "lint:ts:plugin-opencode", "lint:ts:local-viewer", "lint:ts:redaction-generator", "lint:js-dependency-pinning"]
 
 # --- Type checking ---
 
@@ -173,6 +196,7 @@ run = "pnpm --filter @grafana/agento11y-local-viewer run typecheck"
 [tasks.typecheck]
 description = "Run all type checks"
 depends = [
+  "typecheck:py:plugin-hermes",
   "typecheck:ts:sdk-js",
   "typecheck:ts:plugin-pi",
   "typecheck:ts:plugin-opencode",
@@ -673,6 +697,7 @@ mise run test:ts:sdk-js
 mise run test:ts:plugin-pi
 mise run test:ts:plugin-opencode
 mise run test:ts:local-viewer
+mise run test:py:plugin-hermes
 mise run test:py:sdk-core
 mise run test:py:sdk-provider-conformance
 mise run test:py:sdk-framework-conformance
@@ -950,6 +975,6 @@ ls -la "$web/vendor" "$web/fonts"
 """
 
 [tasks.check]
-description = "Run lint + typecheck + tests"
-depends = ["lint", "typecheck", "check:proto", "check:redaction"]
+description = "Run lint + typecheck + tests + Hermes artifact verification"
+depends = ["lint", "typecheck", "check:proto", "check:redaction", "build:py:plugin-hermes"]
 run = "mise run test:sdk:all"

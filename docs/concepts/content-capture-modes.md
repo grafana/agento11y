@@ -42,9 +42,11 @@ The default differs between SDK clients and coding-agent plugins.
 | Surface | Default mode |
 | --- | --- |
 | Core SDK client (Go, Python, JS/TS, Java, .NET) | `no_tool_content`. Generation content is captured; tool-execution arguments and results stay out of spans. |
-| Coding-agent plugins (shared `agento11y` binary, `@grafana/agento11y-pi`, `@grafana/agento11y-opencode`) | `metadata_only`. Coding-agent sessions usually run on shared machines, so the plugins ship metadata-only by default. |
+| Coding-agent plugins (shared `agento11y` binary, `@grafana/agento11y-pi`, `@grafana/agento11y-opencode`, Hermes monorepo migration) | `metadata_only`. Coding-agent sessions usually run on shared machines, so the plugins ship metadata-only by default. |
 
 `default` at the client level resolves to `no_tool_content`. To get full content on a core SDK client, set `contentCapture: 'full'` (or the language equivalent) explicitly.
+
+Hermes is an [inactive snapshot import](../../plugins/hermes/README.md). Its unreleased migration uses SDK 0.17.x and adopts metadata-only defaults and shared secret redaction. The original PyPI `grafana-agento11y-hermes` `0.10.0` defaulted to full content and only bounded payloads; do not apply the migration's privacy claims to that release.
 
 ## Resolution precedence
 
@@ -76,9 +78,9 @@ Per-language READMEs include code examples:
 - Java: [`java/README.md`](../../java/README.md)
 - .NET: [`dotnet/README.md`](../../dotnet/README.md)
 
-For coding-agent plugins, the relevant env var is `AGENTO11Y_CONTENT_CAPTURE_MODE`. All plugins (the shared `agento11y` binary used by Claude Code, Codex, Copilot, Cursor, and Vibe; Pi via `@grafana/agento11y-pi`; OpenCode via `@grafana/agento11y-opencode`) accept `full`, `no_tool_content`, `metadata_only`, and `full_with_metadata_spans`. `default` is accepted as an alias for `metadata_only` so plugins match the Go envconfig resolver rather than the JS SDK's client-level default of `no_tool_content`.
+For coding-agent plugins, the relevant env var is `AGENTO11Y_CONTENT_CAPTURE_MODE`. All plugins (the shared `agento11y` binary used by Claude Code, Codex, Copilot, Cursor, and Vibe; Pi via `@grafana/agento11y-pi`; OpenCode via `@grafana/agento11y-opencode`; Hermes via the unreleased `grafana-agento11y-hermes` migration) accept `full`, `no_tool_content`, `metadata_only`, and `full_with_metadata_spans`. `default` is accepted as an alias for `metadata_only` so plugins match the Go envconfig resolver rather than the JS SDK's client-level default of `no_tool_content`.
 
-Unknown values fall back to `metadata_only` with a warning in the plugin log. A plugin can still export less than the SDK allows. For example, an adapter may drop a field if the host agent does not pass it through.
+Unknown values fall back to `metadata_only`. The launchers, Pi, and OpenCode log a warning; Hermes's current migration falls back silently. A plugin can still export less than the SDK allows. For example, an adapter may drop a field if the host agent does not pass it through.
 
 ## Secret redaction in the plugins
 
@@ -88,11 +90,13 @@ A plugin redacts known secret formats out of every content field it exports: use
 
 Set `AGENTO11Y_REDACT_INPUT_MESSAGES=false` in `~/.config/agento11y/config.env` or the environment to export prompt text without redaction. The flag covers the prompt only: every other field stays redacted, and message structure, roles, token counts, tags, and IDs do not change. An unrecognised value keeps redaction on, so a typo cannot disable it.
 
+For Hermes, set variables in Hermes's environment or its `.env`, which overrides shell exports. The plugin does not read the shared launcher's config file. Prompt redaction defaults to on; the same opt-out applies. Hermes also sanitizes tool-execution spans, which do not pass through the generation sanitizer. Payload limits and upstream request clipping can reduce content further. Hermes also redacts secret-pattern matches in hook-derived IDs and metadata. Custom `AGENTO11Y_TAGS` values are not sanitized.
+
 ### Strength per field
 
 There are two pattern tiers. Tier 1 is high-confidence secret formats (`glc_…`, `AKIA…`, a PEM block, a connection string). Tier 2 is the key/value heuristics (`PASSWORD=…`, `"token": "…"`), which catch a secret with no recognisable format but also fire on ordinary text.
 
-Every plugin applies the same tier per field, and it is the tier the SDKs' generation sanitizer applies:
+Every plugin, including the Hermes migration, applies the same tier per content field as the SDKs' generation sanitizer:
 
 | Field | Tier | Why |
 | --- | --- | --- |
@@ -105,7 +109,7 @@ Every plugin applies the same tier per field, and it is the tier the SDKs' gener
 
 Tier 2 on a prompt has a real cost: `sort key: name` is exported as `sort key: [REDACTED:env-secret-value]`, because the heuristic cannot tell that `key:` is part of a sentence. Turn prompt redaction off with `AGENTO11Y_REDACT_INPUT_MESSAGES=false` if the prompt text matters more than the coverage. Tier 2 is kept off prose for that reason, and a secret a model repeats in prose is still caught by tier 1 as long as it has a known format.
 
-On a tool payload that decodes as JSON, the shared `agento11y` binary also redacts a value under a secret-looking key (`authorization`, `cookie`, `client_secret`), which the tier 2 key list does not cover. The OpenCode and Pi plugins do not: they redact the encoded JSON as text, so they catch only the key names in the tier 2 patterns.
+On a tool payload that decodes as JSON, the shared `agento11y` binary also redacts a value under a secret-looking key (`authorization`, `cookie`, `client_secret`), which the tier 2 key list does not cover. The SDK-based OpenCode, Pi, and Hermes migration sanitizers do not: they redact the encoded JSON as text, so they catch only the key names in the tier 2 patterns.
 
 ## Related
 

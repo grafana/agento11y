@@ -39,6 +39,12 @@ assert_eq 'first of several sections wins' '1.2.3' "$("$TOP_VERSION" "$FILE")"
 printf '# Changelog\n\n## [Unreleased]\n\n## [0.9.0] - 2026-01-01\n\n- c\n' > "$FILE"
 assert_eq 'non-semver heading skipped' '0.9.0' "$("$TOP_VERSION" "$FILE")"
 
+printf '# Changelog\n\n## [Unreleased]\n\n## [0.10.0](https://example.com/releases/0.10.0) - 2026-09-17\n' > "$FILE"
+assert_eq 'imported Hermes linked heading' '0.10.0' "$("$TOP_VERSION" "$FILE")"
+
+printf '# Changelog\n\n## [0.10.1] - 2026-09-18\n\n## [0.10.0](https://example.com/releases/0.10.0) - 2026-09-17\n' > "$FILE"
+assert_eq 'new Hermes release precedes imported heading' '0.10.1' "$("$TOP_VERSION" "$FILE")"
+
 assert_eq 'missing file prints nothing' '' "$("$TOP_VERSION" "${TMP}/absent.md" 2>/dev/null)"
 assert_eq 'missing file still exits 0' 0 "$("$TOP_VERSION" "${TMP}/absent.md" >/dev/null 2>&1; echo $?)"
 

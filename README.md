@@ -10,7 +10,9 @@
 
 Capture sessions from the coding agents you already use — Cursor, Claude Code, Codex, Copilot CLI, OpenCode, Pi, Vibe, and others — so you can observe usage, cost, tokens, and tools across all of them in one place.
 
-Install `agento11y`:
+For Hermes, use its separate [Python plugin guide](plugins/hermes/README.md). The shared launcher does not support Hermes. The imported plugin's SDK and privacy changes are unreleased; published PyPI `0.10.0` does not include them.
+
+For the other coding agents, install `agento11y`:
 
 ```sh
 # Linux or macOS

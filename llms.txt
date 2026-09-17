@@ -69,6 +69,8 @@ printf '%s' '<otlp-instance-id>:<glc_token>' | base64 | tr -d '\n'
 
 The user wants Grafana Agent observability to capture sessions from their coding agent. They do not write app code for this; they install a plugin and configure credentials.
 
+For Hermes, stop here and follow https://github.com/grafana/agento11y/tree/main/plugins/hermes/llms.txt. Hermes is an inactive Python snapshot import, not a shared-launcher agent. Install in Hermes's Python environment and enable its `agento11y` entry point through Hermes YAML. Shared login, `config.env`, local mode, and the launcher steps below do not apply. Its unreleased migration adopts SDK 0.17.x, metadata-only capture, shared secret redaction, opt-in user/repo/branch tags, and no automatic `cwd`; published PyPI `0.10.0` does not contain those changes.
+
 If the `agento11y` binary is already installed on this machine, run `agento11y skills show setup-coding-agent`. It prints a fuller version of everything below: doctor-based triage, troubleshooting, and the config reference.
 
 A binary older than that command prints `agento11y: unknown agent "skills"` and exits 2. If that happens, or the binary is not installed yet, continue here.
@@ -84,6 +86,7 @@ A binary older than that command prints `agento11y: unknown agent "skills"` and 
 | [OpenCode](https://opencode.ai) | [`plugins/opencode/`](https://github.com/grafana/agento11y/tree/main/plugins/opencode) | Shared `agento11y` Go binary, installs `@grafana/agento11y-opencode` |
 | [Pi](https://github.com/earendil-works/pi) | [`plugins/pi/`](https://github.com/grafana/agento11y/tree/main/plugins/pi) | Independent npm package `@grafana/agento11y-pi` |
 | [Vibe](https://github.com/mistralai/mistral-vibe) | [`plugins/vibe/`](https://github.com/grafana/agento11y/tree/main/plugins/vibe) | Shared `agento11y` Go binary via `hooks.toml` |
+| [Hermes](https://github.com/NousResearch/hermes-agent) | [`plugins/hermes/`](https://github.com/grafana/agento11y/tree/main/plugins/hermes) | Inactive Python snapshot; use its separate setup guide |
 
 ## Fast path
 
