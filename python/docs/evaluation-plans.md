@@ -92,8 +92,8 @@ of its generation.
 The remote prompt contains `{{test_case.input.prompt}}`,
 `{{test_case.expected.assistant_response}}`, or `{{test_case.expected.rubric}}`.
 These are evaluator configuration, not extra `trial.evaluate()` arguments.
-Sigil resolves them from the trial snapshot. Local helpers use the same nested
-case syntax and validate missing paths before invoking a judge. Whole objects
+Agent Observability resolves them from the trial snapshot. Local helpers use the
+same nested case syntax and validate missing paths before invoking a judge. Whole objects
 are rendered as JSON. Substitution is single-pass: data containing template
 syntax cannot introduce another substitution.
 

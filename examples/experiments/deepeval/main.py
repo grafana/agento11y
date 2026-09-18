@@ -1,6 +1,4 @@
-import argparse
-
-from agento11y.experiments import Client, TestSuitesClient
+from agento11y.experiments import TestSuitesClient
 from agento11y_deepeval import evaluate_with_agento11y
 from deepeval.metrics import ExactMatchMetric
 from deepeval.test_case import LLMTestCase
@@ -28,29 +26,14 @@ test_cases = [
     for test_case_id, question, expected in questions
 ]
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--local", action="store_true", help="Publish the suite and run to auth-disabled Docker Sigil only")
-args = parser.parse_args()
-client = (
-    Client("http://localhost:8080", ingest_token="local-development", grafana_url="http://localhost:3000")
-    if args.local
-    else None
-)
-suites = (
-    TestSuitesClient(control_endpoint="http://localhost:8080/api/v1/eval", service_account_token="local-development")
-    if args.local
-    else None
-)
+suites = TestSuitesClient()
 
 run = evaluate_with_agento11y(
     test_cases,
     [ExactMatchMetric()],
     experiment_name="DeepEval deterministic example",
     suite_id="deepeval-example",
-    client=client,
     test_suites_client=suites,
-    suite_publication_policy="subset" if suites else None,
+    suite_publication_policy="subset",
 )
 print(run.published.url or run.published.experiment_id)
-if client:
-    client.shutdown()

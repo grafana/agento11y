@@ -7,13 +7,6 @@ This example evaluates two canned answers with DeepEval's deterministic exact
 match metric and publishes them to Agent Observability. One answer is deliberately
 wrong, so the expected pass rate is 50%. It needs no LLM API key.
 
-## Local Docker run
-
-Run `uv run python main.py --local` against Sigil on localhost:8080. This mode
-uses explicit local clients, publishes browsable test cases and an immutable suite
-version, and prints a localhost:3000 report link. It records input/output anchors,
-not real LLM traces. Disable framework telemetry with `DEEPEVAL_TELEMETRY_OPT_OUT=YES`.
-
 To publish stored cases from your own integration, pass
 `test_suites_client=TestSuitesClient()` to `evaluate_with_agento11y` or
 `publish_deepeval_results`, together with `suite_publication_policy="subset"`
@@ -22,7 +15,7 @@ Grafana service account in Cloud. The adapter tags the suite `framework:deepeval
 publishes a checkpoint, and pins the experiment to the returned version. Omit it
 when you only need run snapshots/provenance, not a stored browsable suite.
 
-## Cloud configuration
+## Run it
 
 ```bash
 cd examples/experiments/deepeval
@@ -31,6 +24,11 @@ cp .env.example .env
 set -a && source .env && set +a
 uv run python main.py
 ```
+
+The example publishes browsable test cases and an immutable suite version to
+Grafana Cloud, then prints the report link. It records input/output anchors, not
+real LLM traces. Disable framework telemetry with
+`DEEPEVAL_TELEMETRY_OPT_OUT=YES`.
 
 With one metric, the adapter selects it automatically as the
 `primary_verdict`. When using multiple metrics, pass the exact DeepEval metric

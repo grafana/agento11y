@@ -6,7 +6,9 @@ import copy
 import hashlib
 import json
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any
 
 from ..errors import ConflictError, NotFoundError
@@ -17,8 +19,8 @@ from .suites import TestSuitesClient, _quote
 class StoredEvaluator:
     evaluator_id: str
     version: str
-    config: dict[str, Any]
-    output_keys: list[dict[str, Any]]
+    config: Mapping[str, Any]
+    output_keys: Sequence[Mapping[str, Any]]
     kind: str = "llm_judge"
 
     def __post_init__(self) -> None:
@@ -26,20 +28,20 @@ class StoredEvaluator:
             raise ValueError("stored evaluators require an explicit id and version")
         if len(self.output_keys) != 1 or not self.output_keys[0].get("key"):
             raise ValueError("stored evaluators require exactly one output key")
-        # Own definitions so later caller mutation cannot silently change a plan.
-        object.__setattr__(self, "config", copy.deepcopy(self.config))
-        object.__setattr__(self, "output_keys", copy.deepcopy(self.output_keys))
-        json.dumps(self.payload(), allow_nan=False)
+        payload = {"config": self.config, "output_keys": self.output_keys}
+        json.dumps(_thaw(payload), allow_nan=False)
+        object.__setattr__(self, "config", _freeze(self.config))
+        object.__setattr__(self, "output_keys", _freeze(self.output_keys))
 
     def payload(self) -> dict[str, Any]:
-        return copy.deepcopy(
-            dict(
-                evaluator_id=self.evaluator_id,
-                version=self.version,
-                kind=self.kind,
-                config=self.config,
-                output_keys=self.output_keys,
-            )
+        return _thaw(
+            {
+                "evaluator_id": self.evaluator_id,
+                "version": self.version,
+                "kind": self.kind,
+                "config": self.config,
+                "output_keys": self.output_keys,
+            }
         )
 
     @classmethod
@@ -84,6 +86,22 @@ class StoredEvaluator:
         )
         digest = hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
         return cls(f"{name}.{digest[:16]}", digest, config, [{"key": "quality", "type": "bool", "pass_value": True}])
+
+
+def _freeze(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _freeze(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze(item) for item in value)
+    return value
+
+
+def _thaw(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _thaw(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw(item) for item in value]
+    return value
 
 
 class EvaluatorsClient:

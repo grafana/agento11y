@@ -157,6 +157,39 @@ def test_provisioning_reuses_identical_definitions_and_never_overwrites():
     assert control.posts == 2
 
 
+def test_stored_evaluator_definition_is_deeply_immutable():
+    config = {"model": "original", "nested": {"temperatures": [0]}}
+    output_keys = [{"key": "quality", "options": {"pass": True}}]
+    definition = StoredEvaluator("quality", "v1", config, output_keys)
+
+    config["model"] = "changed"
+    config["nested"]["temperatures"][0] = 1
+    output_keys[0]["key"] = "changed"
+    output_keys[0]["options"]["pass"] = False
+    assert definition.payload()["config"]["model"] == "original"
+    assert definition.payload()["config"]["nested"]["temperatures"] == [0]
+    assert definition.payload()["output_keys"][0]["key"] == "quality"
+    assert definition.payload()["output_keys"][0]["options"]["pass"] is True
+    with pytest.raises(TypeError):
+        definition.config["model"] = "changed"
+    with pytest.raises(TypeError):
+        definition.config["nested"]["temperatures"][0] = 1
+    with pytest.raises(TypeError):
+        definition.output_keys[0]["key"] = "changed"
+
+
+def test_exact_match_can_select_case_metadata():
+    client = FakeClient()
+    case = text_case("metadata-reference", "question", metadata={"reference": "answer"})
+    run_evals(
+        TestSuite("suite", test_cases=[case]),
+        lambda _: "answer",
+        client=client,
+        plan=EvaluationPlan([Check("exact", ExactMatch("metadata.reference"))]),
+    )
+    assert [score.passed for score in client.scores if score.report_role == "primary_verdict"] == [True]
+
+
 def test_remote_diagnostic_is_aggregated_after_agent_flush_and_local_check():
     definition = StoredEvaluator("quality", "v1", {}, [{"key": "ok", "type": "bool"}])
     client = FakeClient()

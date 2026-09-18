@@ -12,22 +12,21 @@ deterministic checks. See the [case and evaluation-plan guide](../../../python/d
 and [real-provider mixed-judge example](judged.py). Manual trial APIs and native
 DeepEval metrics remain available for advanced workflows.
 
-## Local Docker demonstration
+## Cloud demonstration
 
-Start the Sigil Docker stack, including its result worker. No provider credentials
+Configure the standard Grafana Cloud ingest and control-plane credentials described
+in the [repository example](../python/README.md#run-it). No model-provider credentials
 or paid model calls are needed. From the SDK root, with the Python package installed:
 
 ```sh
 PYTHONPATH=python python examples/experiments/grafana/main.py
 ```
 
-The script uses **only localhost:8080 and localhost:3000**, not environment
-endpoints. `local-development` is a dummy credential for the auth-disabled local
-server, not a Cloud credential. It publishes a two-case suite and pulls its exact
-version, then runs a deliberately broken v1 (50% passing) and corrected v2 (100%)
-on that same checkpoint. It records synthetic input/output anchor generations,
-not traces of a real LLM. No token/cost values are fabricated. Open the printed
-links, then compare the runs in Grafana.
+The script publishes a two-case suite and pulls its exact version, then runs a
+deliberately broken v1 (50% passing) and corrected v2 (100%) on that same
+checkpoint. It records synthetic input/output anchor generations, not traces of
+a real LLM. No token/cost values are fabricated. Open the printed Cloud links,
+then compare the runs in Grafana.
 
 ## Your instrumented agent
 

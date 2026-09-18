@@ -20,8 +20,13 @@ class ExactMatch:
         default_factory=lambda: Evaluator("grafana.exact_match", version="1", kind="deterministic")
     )
 
-    def evaluate_output(self, *, input: Any, output: Any, expected: Any = None) -> EvaluationResult:
-        reference = case_value(TestCase("exact_match", input=input, expected=expected), self.expected_selector)
+    def evaluate_output(
+        self, *, input: Any, output: Any, expected: Any = None, case_metadata: dict[str, Any] | None = None
+    ) -> EvaluationResult:
+        reference = case_value(
+            TestCase("exact_match", input=input, expected=expected, metadata=case_metadata or {}),
+            self.expected_selector,
+        )
         passed = output == reference
         return EvaluationResult(self.evaluator, passed, passed, score_key="exact_match")
 
@@ -101,7 +106,7 @@ class EvaluationPlan:
                     trial.evaluate(judge.evaluator_id, judge.version, report_role=ReportRole.DIAGNOSTIC)
                     passed = self._remote_passed(client, trial, judge)
                 else:
-                    kwargs = {"case_metadata": case.metadata} if isinstance(check.judge, LLMJudge) else {}
+                    kwargs = {"case_metadata": case.metadata} if isinstance(check.judge, (LLMJudge, ExactMatch)) else {}
                     result = check.judge.evaluate_output(
                         input=case.input, output=output, expected=case.expected, **kwargs
                     )
