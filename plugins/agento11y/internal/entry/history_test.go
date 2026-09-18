@@ -1081,6 +1081,32 @@ func TestHistoryImportFailureExitsNonZero(t *testing.T) {
 	}
 }
 
+func TestHistoryAutoFailureLeavesImportOffer(t *testing.T) {
+	withHistoryNow(t)
+	isolateDotenvHome(t)
+	writeClaudeHistory(t, "sess-recent", 24*time.Hour)
+
+	broken := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "no", http.StatusInternalServerError)
+	}))
+	t.Cleanup(broken.Close)
+	prev := historyEnsureLocal
+	t.Cleanup(func() { historyEnsureLocal = prev })
+	historyEnsureLocal = func(context.Context) (string, error) { return broken.URL, nil }
+
+	_, stderr, code := runHistory(t, "history", "import", "auto", "--local", "--all", "--yes")
+	if code == nil || *code == 0 {
+		t.Fatalf("exit = %v, want non-zero (stderr=%q)", code, stderr)
+	}
+	offer, err := history.ShouldOfferPrompt(history.AgentClaudeCode)
+	if err != nil {
+		t.Fatalf("ShouldOfferPrompt: %v", err)
+	}
+	if !offer {
+		t.Fatal("auto import failure dismissed the retry offer")
+	}
+}
+
 func TestParseHistoryBound(t *testing.T) {
 	now := historyFixedNow
 	fallback := now.Add(-history.DefaultSinceWindow)

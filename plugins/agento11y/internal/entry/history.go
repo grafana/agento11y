@@ -561,8 +561,12 @@ func historyImportAuto(opts historyImportOptions, interactive bool, stdout, stde
 		for _, warning := range result.Warnings {
 			_, _ = fmt.Fprintf(stderr, "agento11y: warning: %s\n", warning)
 		}
-		if err := history.MarkPrompt(plan.Agent, history.PromptImported); err != nil {
-			logger.Printf("record import prompt state: %v", err)
+		// Match the single-agent path: a partial import leaves the viewer's
+		// one-time offer available so the user can retry the failed turns.
+		if result.Failed == 0 {
+			if err := history.MarkPrompt(plan.Agent, history.PromptImported); err != nil {
+				logger.Printf("record import prompt state: %v", err)
+			}
 		}
 	}
 	renderer := clihelp.New(stdout)
