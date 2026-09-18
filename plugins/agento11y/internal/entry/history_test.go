@@ -355,6 +355,45 @@ func TestHistoryDryRunReportsThePlan(t *testing.T) {
 	}
 }
 
+func TestHistoryAutoDryRunDiscoversEveryRegisteredAgent(t *testing.T) {
+	withHistoryNow(t)
+	writeClaudeHistory(t, "sess-recent", 24*time.Hour)
+
+	stdout, stderr, code := runHistory(t, "history", "import", "auto", "--dry-run")
+	if code != nil {
+		t.Fatalf("exit = %d, stderr=%s", *code, stderr)
+	}
+	if !strings.Contains(stdout, "Claude Code history") || !strings.Contains(stdout, "planned: 1 sessions") {
+		t.Fatalf("auto plan did not include discovered Claude history:\n%s", stdout)
+	}
+	for _, spec := range history.Specs() {
+		if !strings.Contains(stdout, spec.DisplayName+" history") {
+			t.Errorf("auto plan did not include %s:\n%s", spec.DisplayName, stdout)
+		}
+	}
+	if !strings.Contains(stdout, "Dry run: nothing was decoded, exported, or stored.") {
+		t.Fatalf("auto dry run did not state its safety guarantee:\n%s", stdout)
+	}
+}
+
+func TestHistoryAutoImportsSelectedAgentPlans(t *testing.T) {
+	withHistoryNow(t)
+	writeClaudeHistory(t, "sess-recent", 24*time.Hour)
+	var exported int
+	withStubHistoryExporter(t, &exported)
+
+	stdout, stderr, code := runHistory(t, "history", "import", "auto", "--local", "--all", "--yes")
+	if code != nil {
+		t.Fatalf("exit = %d, stderr=%s", *code, stderr)
+	}
+	if exported != 1 {
+		t.Fatalf("exported = %d, want 1", exported)
+	}
+	if !strings.Contains(stdout, "Imported 1 turns from 1 sessions") {
+		t.Fatalf("auto import summary missing:\n%s", stdout)
+	}
+}
+
 func TestHistoryEmptyPlanSkipsSetup(t *testing.T) {
 	withHistoryNow(t)
 	isolateDotenvHome(t)
