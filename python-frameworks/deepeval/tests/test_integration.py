@@ -36,6 +36,7 @@ class Result:
     retrieval_context: list[str] | None = None
     conversational: bool = False
     turns: list[Any] | None = None
+    error: str | None = None
 
 
 @dataclass
@@ -568,6 +569,50 @@ def test_metric_errors_are_unrated_and_siblings_are_retained() -> None:
     assert client.trial_updates[0]["error"] == "Exact Match: judge failed"
     assert client.trial_updates[0]["duration_ms"] is None
     assert client.trial_updates[1]["duration_ms"] == 12345
+
+
+def test_result_error_without_metrics_does_not_block_successful_sibling() -> None:
+    client = FakeClient()
+    evaluation = Evaluation(
+        test_results=[
+            Result("errored", "q1", "", "a1", [], error="case setup failed"),
+            Result("passed", "q2", "a2", "a2", [Metric("Exact Match", 1, True)]),
+        ]
+    )
+
+    published = publish_deepeval_results(evaluation, experiment_name="partial", client=client)
+
+    assert published.trial_count == 2
+    assert published.score_count == 1
+    assert len(client.trials) == 2
+    assert client.trial_updates[0]["status"] == "failed"
+    assert client.trial_updates[0]["error"] == "case setup failed"
+    assert client.scores[0].passed is True
+
+
+def test_additional_metadata_fallback_preserves_identity_and_binding() -> None:
+    from types import SimpleNamespace
+
+    client = FakeClient()
+    result = SimpleNamespace(
+        name="legacy-native-case",
+        input="question",
+        actual_output="answer",
+        expected_output="answer",
+        metrics_data=[Metric("Exact Match", 1, True)],
+        success=True,
+        additional_metadata={
+            "agento11y.test_case_id": "metadata-case",
+            "agento11y.conversation_id": "metadata-conversation",
+            "agento11y.generation_id": "metadata-generation",
+        },
+    )
+
+    publish_deepeval_results(Evaluation([result]), experiment_name="metadata", client=client)
+
+    assert client.trials[0]["test_case_id"] == "metadata-case"
+    assert client.scores[0].conversation_id == "metadata-conversation"
+    assert client.scores[0].generation_id == "metadata-generation"
 
 
 def test_server_returned_case_is_the_private_canonical_snapshot() -> None:

@@ -216,9 +216,9 @@ def publish_deepeval_results(
     bindings = [
         (
             _nonblank(resolve_conversation_id(result) if resolve_conversation_id is not None else None)
-            or _metadata_string(_mapping(getattr(result, "metadata", None)), "agento11y.conversation_id"),
+            or _metadata_string(_deepeval_metadata(result), "agento11y.conversation_id"),
             _nonblank(resolve_generation_id(result) if resolve_generation_id is not None else None)
-            or _metadata_string(_mapping(getattr(result, "metadata", None)), "agento11y.generation_id"),
+            or _metadata_string(_deepeval_metadata(result), "agento11y.generation_id"),
         )
         for result in results
     ]
@@ -278,7 +278,7 @@ def publish_deepeval_results(
                 attempt=attempts[case.test_case_id],
                 metadata=_case_provenance(executed_case, case),
             ) as trial:
-                result_metadata = _mapping(getattr(result, "metadata", None))
+                result_metadata = _deepeval_metadata(result)
                 if _is_conversational(result):
                     turns = _conversation_turns(result, require_assistant=True)
                     if conversation_id or record_io:
@@ -379,12 +379,12 @@ def _validate_primary_metric(results: Iterable[Any], primary_metric: str) -> Non
         names = [name for name in names if name]
         if len(names) != len(set(names)):
             raise ValueError(f"DeepEval test result {index} contains duplicate metric names")
-        if primary_metric not in names:
+        if primary_metric not in names and not _nonblank(str(getattr(result, "error", "") or "")):
             raise ValueError(f"DeepEval test result {index} does not contain primary metric {primary_metric!r}")
 
 
 def _test_case(result: Any, index: int, suite_id: str) -> TestCase:
-    result_metadata = _mapping(getattr(result, "metadata", None))
+    result_metadata = _deepeval_metadata(result)
     explicit_id = _metadata_string(result_metadata, "agento11y.test_case_id")
     if _is_conversational(result):
         turns = _conversation_turns(result, index=index)
@@ -713,6 +713,12 @@ def _score_key(name: str) -> str:
 
 def _mapping(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _deepeval_metadata(value: Any) -> dict[str, Any]:
+    if hasattr(value, "metadata"):
+        return _mapping(value.metadata)
+    return _mapping(getattr(value, "additional_metadata", None))
 
 
 def _metadata_string(metadata: Mapping[str, Any], key: str) -> str:
