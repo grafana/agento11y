@@ -108,8 +108,9 @@ var trackedKeys = func() []string {
 
 // Options are the parsed doctor flags.
 type Options struct {
-	JSON    bool
-	NoColor bool
+	JSON         bool
+	NoColor      bool
+	RequireCloud bool
 }
 
 // Params carry the per-invocation inputs Run needs. OSEnv is the OS
@@ -470,7 +471,16 @@ func Run(ctx context.Context, args []string, p Params) int {
 	} else {
 		renderHuman(p.Stdout, report, !opts.NoColor)
 	}
-	return report.exitCode()
+	code := report.exitCodeFor(opts)
+	if code != 0 && opts.RequireCloud && !report.cloudReady() {
+		const requirementMessage = "Cloud requirement failed: --require-cloud needs healthy conversations and analytics pipelines"
+		if opts.JSON {
+			_, _ = fmt.Fprintln(p.Stderr, "agento11y: doctor:", requirementMessage)
+		} else {
+			_, _ = fmt.Fprintln(p.Stdout, "\n! "+requirementMessage)
+		}
+	}
+	return code
 }
 
 func doctorFlags(opts *Options) *flag.FlagSet {
@@ -480,6 +490,7 @@ func doctorFlags(opts *Options) *flag.FlagSet {
 	fs.Usage = func() {}
 	fs.BoolVar(&opts.JSON, "json", false, "emit a stable JSON report (for support tooling)")
 	fs.BoolVar(&opts.NoColor, "no-color", false, "disable ANSI colors")
+	fs.BoolVar(&opts.RequireCloud, "require-cloud", false, "exit non-zero unless both Grafana Cloud export pipelines are configured and healthy")
 	// Probing is unconditional, so --probe and its --online alias do nothing.
 	// They stay accepted, and out of the usage text, so the scripts and runbooks
 	// that pass them keep working.
@@ -494,7 +505,7 @@ func HelpPage() clihelp.Page {
 	return clihelp.Page{
 		Command: "agento11y doctor",
 		Summary: "Report the health of the conversations and analytics export pipelines, config validity, and installed host-agent plugins.",
-		Usage:   []string{"agento11y doctor [--json] [--no-color]"},
+		Usage:   []string{"agento11y doctor [--json] [--no-color] [--require-cloud]"},
 		Sections: []clihelp.Section{{
 			Title: "Flags",
 			Rows:  clihelp.Flags(doctorFlags(&opts), map[string]bool{"probe": true, "online": true}, nil),
@@ -559,6 +570,24 @@ func (r *Report) exitCode() int {
 		return 1
 	}
 	return 0
+}
+
+// exitCodeFor preserves doctor's default diagnostic behavior: a fresh machine
+// has setup to do but is not a broken installation. --require-cloud is the
+// opt-in contract for onboarding and automation that need Cloud export ready
+// now rather than a best-effort report.
+func (r *Report) exitCodeFor(opts Options) int {
+	if r.exitCode() != 0 {
+		return 1
+	}
+	if opts.RequireCloud && !r.cloudReady() {
+		return 1
+	}
+	return 0
+}
+
+func (r *Report) cloudReady() bool {
+	return r.Conversations.configured() && r.Conversations.Health == HealthOK && r.Analytics.Endpoint.Set && r.Analytics.Health == HealthOK
 }
 
 // apiURLHint is the one correction every wrong-endpoint message ends with, so
