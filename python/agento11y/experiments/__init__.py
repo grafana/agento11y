@@ -50,7 +50,7 @@ Cross-process (e.g. a verifier container) opens a trial from a serialized ref::
 from __future__ import annotations
 
 from ..errors import EvaluationExecutionError, EvaluationTimeoutError, ExperimentalFeatureDisabledError
-from ..models import TrialEvaluation, TrialEvaluationStatus
+from ..models import ReportRole, TrialEvaluation, TrialEvaluationStatus
 from . import otel, score
 from .client import Client
 from .evaluators import (
@@ -93,6 +93,7 @@ __all__ = [
     "OutputEvaluator",
     "LLMJudge",
     "RegexJudge",
+    "ReportRole",
     "ExperimentStatus",
     "TrialStatus",
     "TrialEvaluation",

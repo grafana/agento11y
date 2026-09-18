@@ -14,16 +14,24 @@ from typing import Any
 
 from .. import _experiments_transport as _transport
 from ..errors import ScoreExportError
-from ..experimental import FEATURE_CLOUD_TRIAL_EVALUATION, require_experimental
 from ..models import (
     CreateExperimentRequest,
     Experiment,
     ExperimentReport,
+    Generation,
+    GenerationMode,
+    Message,
+    ModelRef,
+    ReportRole,
     ScoreItem,
     TokenUsage,
     TrialEvaluation,
+    assistant_text_message,
+    user_text_message,
 )
+from ..proto_mapping import generation_to_proto_json
 from ..redaction import redact_secret_text, redact_secret_value
+from ..validation import validate_generation
 from .types import _env_value
 
 TENANT_HEADER = "X-Scope-OrgID"
@@ -209,17 +217,10 @@ class Client:
         trial_id: str,
         evaluator_id: str,
         evaluator_version: str = "",
+        *,
+        report_role: ReportRole | None = None,
     ) -> TrialEvaluation:
-        """Queues a stored evaluator for a trial's bound conversation.
-
-        .. warning::
-
-           Experimental. Requires ``AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true``,
-           otherwise this raises
-           :class:`~agento11y.errors.ExperimentalFeatureDisabledError`.
-        """
-
-        require_experimental(FEATURE_CLOUD_TRIAL_EVALUATION)
+        """Queues a stored evaluator for a trial's bound conversation."""
 
         return _transport.trigger_trial_evaluation(
             **self._args(),
@@ -227,6 +228,7 @@ class Client:
             trial_id=trial_id,
             evaluator_id=evaluator_id,
             evaluator_version=evaluator_version,
+            report_role=report_role,
             retry=self._retry,
         )
 
@@ -236,16 +238,7 @@ class Client:
         trial_id: str,
         evaluation_id: str,
     ) -> TrialEvaluation:
-        """Reads durable status for a triggered trial evaluation.
-
-        .. warning::
-
-           Experimental. Requires ``AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true``,
-           otherwise this raises
-           :class:`~agento11y.errors.ExperimentalFeatureDisabledError`.
-        """
-
-        require_experimental(FEATURE_CLOUD_TRIAL_EVALUATION)
+        """Reads durable status for a triggered trial evaluation."""
 
         return _transport.get_trial_evaluation(
             **self._args(),
@@ -284,8 +277,11 @@ class Client:
         conversation_id: str,
         input_text: str = "",
         output_text: str = "",
+        input_messages: list[Message] | None = None,
+        output_messages: list[Message] | None = None,
         model_provider: str = "eval",
         model_name: str = "experiment",
+        user_id: str = "",
         agent_name: str = "",
         agent_version: str = "",
         operation_name: str = "invoke_agent",
@@ -294,6 +290,7 @@ class Client:
         usage: TokenUsage | None = None,
         tags: dict[str, str] | None = None,
         metadata: dict[str, Any] | None = None,
+        parent_generation_ids: list[str] | None = None,
     ) -> str:
         """Ingests a single generation over HTTP using only the stdlib.
 
@@ -301,35 +298,40 @@ class Client:
         can ingest the attempt's transcript and create an openable conversation.
         """
 
-        generation: dict[str, Any] = {
-            "id": generation_id,
-            "conversation_id": conversation_id,
-            "operation_name": operation_name,
-            "mode": "GENERATION_MODE_SYNC",
-            "model": {"provider": model_provider or "eval", "name": model_name or "experiment"},
-        }
-        if agent_name:
-            generation["agent_name"] = agent_name
-        if agent_version:
-            generation["agent_version"] = agent_version
-        if input_text:
-            generation["input"] = [{"role": "MESSAGE_ROLE_USER", "parts": [{"text": input_text}]}]
-        if output_text:
-            generation["output"] = [{"role": "MESSAGE_ROLE_ASSISTANT", "parts": [{"text": output_text}]}]
-        if tags:
-            generation["tags"] = dict(tags)
-        if metadata:
-            generation["metadata"] = dict(metadata)
-        resolved_usage = usage or TokenUsage(input_tokens=int(input_tokens or 0), output_tokens=int(output_tokens or 0))
-        normalized_usage = resolved_usage.normalize()
-        if normalized_usage.total_tokens:
+        resolved_usage = (
+            usage or TokenUsage(input_tokens=int(input_tokens or 0), output_tokens=int(output_tokens or 0))
+        ).normalize()
+        normalized_input = list(input_messages or ([user_text_message(input_text)] if input_text else []))
+        normalized_output = list(output_messages or ([assistant_text_message(output_text)] if output_text else []))
+        normalized_metadata = dict(metadata or {})
+        if user_id:
+            normalized_metadata["agento11y.user.id"] = user_id
+        record = Generation(
+            id=generation_id,
+            conversation_id=conversation_id,
+            operation_name=operation_name,
+            mode=GenerationMode.SYNC,
+            model=ModelRef(provider=model_provider or "eval", name=model_name or "experiment"),
+            user_id=user_id,
+            agent_name=agent_name,
+            agent_version=agent_version,
+            input=normalized_input,
+            output=normalized_output,
+            usage=resolved_usage,
+            tags=dict(tags or {}),
+            metadata=normalized_metadata,
+            parent_generation_ids=list(parent_generation_ids or []),
+        )
+        validate_generation(record)
+        generation = generation_to_proto_json(record)
+        if resolved_usage.total_tokens:
             generation["usage"] = {
-                "input_tokens": normalized_usage.input_tokens,
-                "output_tokens": normalized_usage.output_tokens,
-                "total_tokens": normalized_usage.total_tokens,
-                "cache_read_input_tokens": normalized_usage.cache_read_input_tokens,
-                "cache_write_input_tokens": normalized_usage.cache_write_input_tokens,
-                "reasoning_tokens": normalized_usage.reasoning_tokens,
+                "input_tokens": resolved_usage.input_tokens,
+                "output_tokens": resolved_usage.output_tokens,
+                "total_tokens": resolved_usage.total_tokens,
+                "cache_read_input_tokens": resolved_usage.cache_read_input_tokens,
+                "cache_write_input_tokens": resolved_usage.cache_write_input_tokens,
+                "reasoning_tokens": resolved_usage.reasoning_tokens,
             }
         if self.redact_secrets:
             generation = redact_secret_value(generation)
@@ -385,8 +387,11 @@ class Client:
         conversation_id: str = "",
         input_text: str = "",
         output_text: str = "",
+        input_messages: list[Message] | None = None,
+        output_messages: list[Message] | None = None,
         model_provider: str = "eval",
         model_name: str = "experiment",
+        user_id: str = "",
         agent_name: str = "",
         agent_version: str = "",
         operation_name: str = "invoke_agent",
@@ -395,6 +400,7 @@ class Client:
         usage: TokenUsage | None = None,
         tags: dict[str, str] | None = None,
         metadata: dict[str, Any] | None = None,
+        parent_generation_ids: list[str] | None = None,
     ) -> str:
         """Exports a generation through the lightweight experiment transport."""
 
@@ -403,8 +409,11 @@ class Client:
             conversation_id=conversation_id,
             input_text=input_text,
             output_text=output_text,
+            input_messages=input_messages,
+            output_messages=output_messages,
             model_provider=model_provider,
             model_name=model_name,
+            user_id=user_id,
             agent_name=agent_name,
             agent_version=agent_version,
             operation_name=operation_name,
@@ -413,6 +422,7 @@ class Client:
             usage=usage,
             tags=tags,
             metadata=metadata,
+            parent_generation_ids=parent_generation_ids,
         )
 
     def _ensure_core(self) -> Any:

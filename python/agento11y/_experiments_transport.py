@@ -55,6 +55,7 @@ from .models import (
     ExperimentStatus,
     ExportScoreResult,
     ExportScoresResponse,
+    ReportRole,
     ScoreItem,
     ScoreValue,
     TrialEvaluation,
@@ -290,6 +291,7 @@ def trigger_trial_evaluation(
     trial_id: str,
     evaluator_id: str,
     evaluator_version: str = "",
+    report_role: ReportRole | None = None,
     retry: RetryPolicy | None = None,
 ) -> TrialEvaluation:
     """Queues a stored evaluator for a trial's bound conversation."""
@@ -299,6 +301,9 @@ def trigger_trial_evaluation(
     if normalized_evaluator_id == "":
         raise ValidationError("agento11y trial evaluation validation failed: evaluator_id is required")
     payload = {"evaluator_id": normalized_evaluator_id}
+    normalized_role = _normalize_report_role(report_role)
+    if normalized_role:
+        payload["report_role"] = normalized_role
     normalized_version = (evaluator_version or "").strip()
     if normalized_version:
         payload["evaluator_version"] = normalized_version
@@ -476,6 +481,9 @@ def _serialize_score(score: ScoreItem) -> dict[str, Any]:
         "score_key": score.score_key,
         "value": _serialize_score_value(score.value),
     }
+    report_role = _normalize_report_role(score.report_role)
+    if report_role:
+        out["report_role"] = report_role
     if score.generation_id:
         out["generation_id"] = score.generation_id
     if score.conversation_id:
@@ -539,8 +547,18 @@ def _validate_score(score: ScoreItem) -> None:
     # client-side for a clearer error.
     if not (score.generation_id or "").strip() and not (score.trial_id or "").strip():
         raise ValidationError("agento11y score validation failed: generation_id or trial_id is required")
+    _normalize_report_role(score.report_role)
     # Raises if no value field is set.
     _serialize_score_value(score.value)
+
+
+def _normalize_report_role(report_role: Any) -> str:
+    if report_role is None or report_role == "":
+        return ""
+    value = report_role.value if isinstance(report_role, ReportRole) else report_role
+    if value not in ("primary_verdict", "diagnostic"):
+        raise ValidationError("agento11y score validation failed: report_role must be primary_verdict or diagnostic")
+    return value
 
 
 # --------------------------------------------------------------------------- #
@@ -637,6 +655,7 @@ def _parse_trial_evaluation(payload: Any) -> TrialEvaluation:
         conversation_id=_str(payload.get("conversation_id")),
         evaluator_id=_str(payload.get("evaluator_id")),
         evaluator_version=_str(payload.get("evaluator_version")),
+        report_role=ReportRole(payload["report_role"]) if payload.get("report_role") else None,
         status=status,
         attempts=_int(payload.get("attempts")),
         scheduled_at=_parse_ts(payload.get("scheduled_at")),

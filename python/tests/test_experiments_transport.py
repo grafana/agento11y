@@ -23,10 +23,13 @@ from agento11y.models import (
     CreateExperimentRequest,
     ExperimentEvaluator,
     ExperimentStatus,
+    ReportRole,
     ScoreItem,
     ScoreSource,
     ScoreValue,
     TrialEvaluationStatus,
+    assistant_text_message,
+    user_text_message,
 )
 
 
@@ -662,6 +665,69 @@ def test_export_scores_round_trip_and_accepted_count() -> None:
         server.server_close()
 
 
+def test_export_scores_serializes_report_roles_and_omits_unset_role() -> None:
+    recorder = _Recorder()
+    recorder.push(202, {"accepted": 3, "results": []})
+    server = _serve(recorder)
+    try:
+        common = {
+            "generation_id": "gen1",
+            "evaluator_id": "judge",
+            "evaluator_version": "1",
+            "value": ScoreValue(number=0.9),
+        }
+        transport.export_scores(
+            **_args(server),
+            scores=[
+                ScoreItem(
+                    score_id="primary",
+                    score_key="answer_relevancy",
+                    report_role=ReportRole.PRIMARY_VERDICT,
+                    **common,
+                ),
+                ScoreItem(
+                    score_id="diagnostic",
+                    score_key="groundedness",
+                    report_role=ReportRole.DIAGNOSTIC,
+                    **common,
+                ),
+                ScoreItem(score_id="legacy", score_key="final", **common),
+            ],
+        )
+        scores = recorder.requests[0]["payload"]["scores"]
+        assert scores[0]["report_role"] == "primary_verdict"
+        assert scores[1]["report_role"] == "diagnostic"
+        assert "report_role" not in scores[2]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_export_scores_rejects_invalid_report_role_before_sending() -> None:
+    recorder = _Recorder()
+    server = _serve(recorder)
+    try:
+        with pytest.raises(ValidationError, match="report_role must be primary_verdict or diagnostic"):
+            transport.export_scores(
+                **_args(server),
+                scores=[
+                    ScoreItem(
+                        score_id="invalid",
+                        generation_id="gen1",
+                        evaluator_id="judge",
+                        evaluator_version="1",
+                        score_key="answer_relevancy",
+                        value=ScoreValue(number=0.9),
+                        report_role="headline",
+                    )
+                ],
+            )
+        assert recorder.requests == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_experiment_client_generation_uses_lightweight_transport_and_redacts() -> None:
     recorder = _Recorder()
     recorder.push(200, {"results": [{"generation_id": "gen-1", "accepted": True}]})
@@ -685,6 +751,39 @@ def test_experiment_client_generation_uses_lightweight_transport_and_redacts() -
         assert generation["mode"] == "GENERATION_MODE_SYNC"
         assert generation["input"][0]["parts"][0]["text"] == "token [REDACTED:grafana-cloud-token]"
         assert generation["usage"]["total_tokens"] == 6
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_experiment_client_generation_accepts_structured_messages_and_parents() -> None:
+    recorder = _Recorder()
+    recorder.push(200, {"results": [{"generation_id": "gen-2", "accepted": True}]})
+    server = _serve(recorder)
+    try:
+        client = ExperimentClient(f"http://127.0.0.1:{server.server_address[1]}", ingest_token="token")
+        client.record_generation(
+            "gen-2",
+            conversation_id="conv-1",
+            input_messages=[
+                user_text_message("first question"),
+                assistant_text_message("first answer"),
+                user_text_message("follow-up"),
+            ],
+            output_messages=[assistant_text_message("second answer")],
+            user_id="user-1",
+            parent_generation_ids=["gen-1"],
+        )
+
+        generation = recorder.requests[0]["payload"]["generations"][0]
+        assert [message["role"] for message in generation["input"]] == [
+            "MESSAGE_ROLE_USER",
+            "MESSAGE_ROLE_ASSISTANT",
+            "MESSAGE_ROLE_USER",
+        ]
+        assert generation["output"][0]["parts"][0]["text"] == "second answer"
+        assert generation["metadata"]["agento11y.user.id"] == "user-1"
+        assert generation["parent_generation_ids"] == ["gen-1"]
     finally:
         server.shutdown()
         server.server_close()

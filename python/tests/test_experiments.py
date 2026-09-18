@@ -21,6 +21,7 @@ from agento11y.experiments import (
     GraderGeneration,
     LLMJudge,
     RegexJudge,
+    ReportRole,
     TestCase,
     TestSuite,
     Trial,
@@ -177,8 +178,14 @@ def test_experiment_lifecycle_and_score_wire_fields() -> None:
         online_evaluations_enabled=False,
     ) as exp:
         with exp.trial(suite.test_cases[0]) as trial:
-            trial.final_score(1.0, passed=True, explanation="matched", evaluator=verifier)
-            trial.check_score("json_valid", passed=True)
+            trial.final_score(
+                1.0,
+                passed=True,
+                report_role=ReportRole.PRIMARY_VERDICT,
+                explanation="matched",
+                evaluator=verifier,
+            )
+            trial.check_score("json_valid", passed=True, report_role=ReportRole.DIAGNOSTIC)
             trial.rubric_score("helpfulness", 0.9, explanation="clear")
 
     # Upsert sent the canonical experiment identifier and source=external.
@@ -193,6 +200,12 @@ def test_experiment_lifecycle_and_score_wire_fields() -> None:
     assert len(client.scores) == 3
     keys = {s.score_key for s in client.scores}
     assert keys == {"final", "json_valid", "helpfulness"}
+    roles = {s.score_key: s.report_role for s in client.scores}
+    assert roles == {
+        "final": ReportRole.PRIMARY_VERDICT,
+        "json_valid": ReportRole.DIAGNOSTIC,
+        "helpfulness": None,
+    }
     # One typed trial was created (so the report rolls up) and finalized.
     assert len(client.trials) == 1
     assert client.trials[0][0] == "run-1"
@@ -207,7 +220,6 @@ def test_experiment_lifecycle_and_score_wire_fields() -> None:
         "input": {"value": "2+2"},
         "expected": {"value": "4"},
         "metadata": {},
-        "artifact_refs": [],
     }
     assert client.trial_updates and client.trial_updates[0][2] == "completed"
 
@@ -415,8 +427,12 @@ def test_trial_span_emits_otel_eval_telemetry() -> None:
             )
 
     spans = exporter.get_finished_spans()
-    assert len(spans) == 1
-    span = spans[0]
+    assert len(spans) == 2
+    span = next(item for item in spans if item.name.startswith("eval.trial"))
+    suite_span = next(item for item in spans if item.name == "test_suite_run")
+    assert span.parent.span_id == suite_span.context.span_id
+    assert suite_span.attributes["test.suite.run.id"] == "run-2"
+    assert suite_span.attributes["test.suite.run.status"] == "success"
     assert span.name == "eval.trial add"
 
     attrs = dict(span.attributes)
@@ -811,6 +827,33 @@ def test_record_io_agent_version_overrides_candidate() -> None:
     assert kwargs.get("agent_version") == "v4-local"
 
 
+@pytest.mark.parametrize("role", [None, ReportRole.PRIMARY_VERDICT, ReportRole.DIAGNOSTIC])
+def test_cloud_evaluation_report_role_round_trip(monkeypatch, role) -> None:
+    from agento11y import _experiments_transport as transport
+    from agento11y.experiments import Client
+
+    monkeypatch.setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "true")
+    requests = []
+
+    def request_json(method, url, headers, payload, *args):
+        requests.append(payload)
+        return {"evaluation_id": "eval-role", "status": "success", **payload}
+
+    monkeypatch.setattr(transport, "_request_json", request_json)
+    transport_client = Client("https://example.invalid", ingest_token="test-token")
+    client = FakeClient()
+    monkeypatch.setattr(client, "trigger_trial_evaluation", transport_client.trigger_trial_evaluation)
+    with Experiment(client, experiment_id="run-role", name="role") as exp:
+        with exp.trial("case-role") as trial:
+            trial.bind_conversation("conversation-role")
+            evaluation = trial.evaluate("judge", report_role=role)
+            assert evaluation.report_role == role
+    expected = {"evaluator_id": "judge"}
+    if role is not None:
+        expected["report_role"] = role.value
+    assert requests == [expected]
+
+
 def test_trial_without_final_score_fails() -> None:
     client = FakeClient()
     suite = _suite()
@@ -820,6 +863,88 @@ def test_trial_without_final_score_fails() -> None:
     assert trial.status == "failed"
     assert trial.error == "trial closed without a final score"
     assert client.trial_updates and client.trial_updates[0][2] == "completed"
+
+
+def test_primary_verdict_score_closes_trial_without_legacy_final() -> None:
+    client = FakeClient()
+    with Experiment(client, experiment_id="run-primary", name="primary") as exp:
+        with exp.trial("case-x") as trial:
+            trial.score(
+                "answer_relevancy",
+                0.91,
+                passed=True,
+                report_role=ReportRole.PRIMARY_VERDICT,
+            )
+
+    assert trial.status == "passed"
+    assert trial.error == ""
+    assert client.trial_updates[0][3]["error"] == ""
+
+
+@pytest.mark.parametrize("primary_first", [True, False])
+def test_primary_verdict_takes_precedence_over_unannotated_final(primary_first: bool) -> None:
+    client = FakeClient()
+    with Experiment(client, experiment_id=f"run-precedence-{primary_first}", name="precedence") as exp:
+        with exp.trial("case-x") as trial:
+            if primary_first:
+                trial.score(
+                    "answer_relevancy",
+                    0.2,
+                    passed=False,
+                    report_role=ReportRole.PRIMARY_VERDICT,
+                )
+                trial.final_score(True)
+            else:
+                trial.final_score(True)
+                trial.score(
+                    "answer_relevancy",
+                    0.2,
+                    passed=False,
+                    report_role=ReportRole.PRIMARY_VERDICT,
+                )
+
+    assert trial.status == "failed"
+    assert trial.error == ""
+
+
+def test_diagnostic_final_does_not_supply_the_trial_verdict() -> None:
+    client = FakeClient()
+    with Experiment(client, experiment_id="run-diagnostic-final", name="diagnostic") as exp:
+        with exp.trial("case-x") as trial:
+            trial.final_score(True, report_role=ReportRole.DIAGNOSTIC)
+
+    assert trial.status == "failed"
+    assert trial.error == "trial closed without a final score"
+
+
+def test_trial_rejects_multiple_primary_verdict_scores() -> None:
+    client = FakeClient()
+    trial = Trial.from_ref(client, TrialRef(experiment_id="run-primary-conflict", test_case_id="case-x"))
+    trial.score("answer_relevancy", 0.91, report_role=ReportRole.PRIMARY_VERDICT)
+
+    with pytest.raises(ValidationError, match="only one primary_verdict"):
+        trial.score("groundedness", 0.87, report_role=ReportRole.PRIMARY_VERDICT)
+
+
+def test_native_duration_and_operational_error_override_exporter_lifecycle() -> None:
+    client = FakeClient()
+    with Experiment(client, experiment_id="run-native-error", name="native error") as exp:
+        with exp.trial("case-x") as trial:
+            trial.set_duration(12345).mark_errored("provider timed out")
+
+    update = client.trial_updates[0][3]
+    assert update["duration_ms"] == 12345
+    assert update["status"] == "failed"
+    assert update["error"] == "provider timed out"
+
+
+def test_explicit_unknown_native_duration_stays_unknown() -> None:
+    client = FakeClient()
+    with Experiment(client, experiment_id="run-unknown-duration", name="unknown duration") as exp:
+        with exp.trial("case-x") as trial:
+            trial.set_duration(None).final_score(True)
+
+    assert client.trial_updates[0][3]["duration_ms"] is None
 
 
 def test_trial_cloud_evaluation_persists_binding_and_allows_exit_without_local_score() -> None:
@@ -1114,12 +1239,10 @@ def test_cloud_evaluation_surface_is_public() -> None:
         assert name in experiments_module.__all__
 
 
-def test_cloud_evaluation_is_blocked_without_the_experimental_gate(
+def test_cloud_evaluation_works_with_default_configuration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The default a caller sees: no opt-in set, so nothing is sent."""
-
-    from agento11y.errors import ExperimentalFeatureDisabledError
+    """Stored evaluation works without additional configuration toggles."""
     from agento11y.experimental import ENV_ENABLE_EXPERIMENTAL_FEATURES
 
     client = FakeClient()
@@ -1131,20 +1254,11 @@ def test_cloud_evaluation_is_blocked_without_the_experimental_gate(
             # Cleared rather than set to a falsy value so this exercises the
             # default, not a specific opt-out spelling.
             monkeypatch.delenv(ENV_ENABLE_EXPERIMENTAL_FEATURES, raising=False)
-            with pytest.raises(ExperimentalFeatureDisabledError) as blocked:
-                trial.evaluate("helpfulness")
+            trial.evaluate("helpfulness")
             trial.final_score(1.0, passed=True)
 
-    message = str(blocked.value)
-    assert "cloud trial evaluation" in message
-    assert ENV_ENABLE_EXPERIMENTAL_FEATURES in message
-    # evaluate() persists the binding and flushes the anchor generation before it
-    # triggers anything. A blocked call must reach neither step. The trial's own
-    # close still writes an update and a flush, so only the evaluation steps are
-    # asserted here.
-    assert client.triggered_evaluations == []
-    assert "trigger" not in client.evaluation_order
-    assert "status" not in client.evaluation_order
+    assert len(client.triggered_evaluations) == 1
+    assert client.evaluation_order.index("flush") < client.evaluation_order.index("trigger")
 
 
 def test_experimental_gate_reads_truthy_values(monkeypatch: pytest.MonkeyPatch) -> None:

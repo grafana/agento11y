@@ -116,6 +116,7 @@ jobs:
             python-frameworks/google-adk
             python-frameworks/litellm
             python-frameworks/pydantic-ai
+            python-frameworks/deepeval
             python-frameworks/strands
             python-frameworks/claude-agent-sdk
           )
@@ -144,6 +145,7 @@ jobs:
             python-frameworks/google-adk
             python-frameworks/litellm
             python-frameworks/pydantic-ai
+            python-frameworks/deepeval
             python-frameworks/strands
             python-frameworks/claude-agent-sdk
           )
@@ -248,6 +250,7 @@ jobs:
           - agento11y-google-adk
           - agento11y-litellm
           - agento11y-pydantic-ai
+          - agento11y-deepeval
           - agento11y-strands
           - agento11y-claude-agent-sdk
 

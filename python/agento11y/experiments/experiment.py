@@ -49,10 +49,10 @@ except Exception:  # pragma: no cover - exercised only in minimal vendored envs
     _OTEL_AVAILABLE = False
 
 from ..errors import EvaluationExecutionError, EvaluationTimeoutError, ValidationError
-from ..experimental import FEATURE_CLOUD_TRIAL_EVALUATION, require_experimental
 from ..models import (
     CreateExperimentRequest,
     ExperimentReport,
+    ReportRole,
     ScoreItem,
     ScoreSource,
     ScoreValue,
@@ -209,14 +209,18 @@ class Trial:
         self._trial_created = False
         self._usage: dict[str, Any] = {}
         self._started_monotonic: float | None = None
+        self._observed_duration_ms: int | None = None
+        self._observed_duration_set = False
 
         self._span: Any = None
         self._otel_token: Any = None
         self._buffer: list[ScoreItem] = []
         self._accepted = 0
         self._has_final = False
+        self._has_primary_verdict = False
         self._cloud_evaluated = False
         self._final_passed: bool | None = None
+        self._primary_verdict_passed: bool | None = None
         self._closed = False
         self._score_occurrences: dict[tuple[str, str], int] = {}
         self.artifacts: list[dict[str, Any]] = []
@@ -275,18 +279,20 @@ class Trial:
             self.status = TrialStatus.ERRORED.value
             self.error = str(exc) or (exc_type.__name__ if exc_type else type(exc).__name__)
         elif self.status == TrialStatus.RUNNING.value:
-            if not self._has_final:
+            has_verdict = self._has_primary_verdict or self._has_final
+            verdict_passed = self._primary_verdict_passed if self._has_primary_verdict else self._final_passed
+            if not has_verdict:
                 if self._cloud_evaluated:
-                    # A stored evaluator graded this trial; the verdict and score
-                    # count come from the backend, not from a local final score.
+                    # A stored evaluator graded this trial; score selection and
+                    # count come from the backend, not from a local verdict.
                     self.status = TrialStatus.COMPLETED.value
                 else:
                     self.status = TrialStatus.FAILED.value
                     self.error = "trial closed without a final score"
-            elif self._final_passed is None:
+            elif verdict_passed is None:
                 self.status = TrialStatus.COMPLETED.value
             else:
-                self.status = TrialStatus.PASSED.value if self._final_passed else TrialStatus.FAILED.value
+                self.status = TrialStatus.PASSED.value if verdict_passed else TrialStatus.FAILED.value
         try:
             self.flush()
         finally:
@@ -307,7 +313,7 @@ class Trial:
         if not self._trial_created:
             return
         # Trial status is the lifecycle (completed/failed); the pass/fail verdict
-        # lives in the final score's `passed`, which drives the report pass-rate.
+        # lives on the selected primary-verdict or legacy final score.
         backend_status = "failed" if self.status == TrialStatus.ERRORED.value else "completed"
         self._client.update_trial(
             self.ref.experiment_id,
@@ -324,6 +330,8 @@ class Trial:
         )
 
     def _duration_ms(self) -> int | None:
+        if self._observed_duration_set:
+            return self._observed_duration_ms
         if self._started_monotonic is None:
             return None
         return max(0, int((time.perf_counter() - self._started_monotonic) * 1000))
@@ -364,7 +372,11 @@ class Trial:
             trace_id=self.trace_id,
             span_id=self.span_id,
             test_case=self._test_case_snapshot(),
-            metadata={"test_case_name": self.ref.test_case_name} if self.ref.test_case_name else None,
+            metadata={
+                **self._metadata,
+                **({"test_case_name": self.ref.test_case_name} if self.ref.test_case_name else {}),
+            }
+            or None,
         )
         self._trial_created = True
 
@@ -385,7 +397,7 @@ class Trial:
         artifact_refs = [
             dict(ref) for ref in case.artifact_refs if ref.get("artifact_id") and ref.get("name") and ref.get("kind")
         ]
-        return {
+        snapshot: dict[str, Any] = {
             "test_case_id": case.test_case_id,
             "suite_id": self.ref.suite_id,
             "suite_version": self.ref.suite_version,
@@ -393,11 +405,15 @@ class Trial:
             "description": case.description,
             "tags": list(case.tags),
             "category": case.category,
-            "input": object_value(case.input),
-            "expected": object_value(case.expected),
             "metadata": dict(case.metadata),
-            "artifact_refs": artifact_refs,
         }
+        if case.input is not None:
+            snapshot["input"] = object_value(case.input)
+        if case.expected is not None:
+            snapshot["expected"] = object_value(case.expected)
+        if artifact_refs:
+            snapshot["artifact_refs"] = artifact_refs
+        return snapshot
 
     def _end_span(self) -> None:
         if self._span is None:
@@ -471,6 +487,8 @@ class Trial:
         evaluator_version: str = "",
         timeout: float = 300.0,
         poll_interval: float = 0.5,
+        *,
+        report_role: ReportRole | None = None,
     ) -> TrialEvaluation:
         """Runs a stored evaluator against this trial's bound conversation.
 
@@ -488,9 +506,10 @@ class Trial:
         it stores carries this trial's ``conversation_id`` and ``trial_id`` and no
         ``generation_id``. Read it back from the experiment's scores or from the
         trial's ``scores`` in :meth:`Experiment.report`; a per-generation score
-        lookup returns nothing. The report's ``pass_rate`` stays unset because
-        that verdict comes from a score stored under the ``final`` key, and a
-        stored evaluator writes under its own key.
+        lookup returns nothing. Pass ``report_role=ReportRole.PRIMARY_VERDICT``
+        to use the cloud score as the report verdict, or ``DIAGNOSTIC`` to keep
+        it out of the pass rate. Without a role, reports fall back only to an
+        unannotated legacy ``final`` score.
 
         Evaluating each trial in turn blocks the run for as long as the worker
         takes. To run them concurrently, trigger with
@@ -508,18 +527,7 @@ class Trial:
         transport error while polling propagates and abandons the wait; the
         evaluation keeps running server-side.
 
-        .. warning::
-
-           Experimental. Requires ``AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true``,
-           otherwise this raises
-           :class:`~agento11y.errors.ExperimentalFeatureDisabledError` without
-           sending a request. This method can change or be removed in any
-           release.
         """
-
-        # Checked before the trial is created and the anchor generation is
-        # flushed, so a blocked call leaves nothing behind.
-        require_experimental(FEATURE_CLOUD_TRIAL_EVALUATION)
 
         if not self.conversation_id:
             raise ValidationError("agento11y trial evaluation validation failed: bind a conversation first")
@@ -531,6 +539,9 @@ class Trial:
             raise ValidationError(
                 "agento11y trial evaluation validation failed: poll_interval must be greater than zero"
             )
+
+        if report_role is not None and report_role not in (ReportRole.PRIMARY_VERDICT, ReportRole.DIAGNOSTIC):
+            raise ValidationError("report_role must be primary_verdict or diagnostic")
 
         self._create_trial()
         self._client.update_trial(
@@ -553,6 +564,7 @@ class Trial:
             self.trial_id,
             evaluator_id,
             evaluator_version,
+            **({"report_role": report_role} if report_role is not None else {}),
         )
         interval = poll_interval
         max_interval = max(poll_interval, _MAX_EVALUATION_POLL_INTERVAL)
@@ -671,6 +683,22 @@ class Trial:
             self._span.set_attribute("gen_ai.usage.output_tokens", int(output_tokens))
         return self
 
+    def set_duration(self, duration_ms: int | None) -> Trial:
+        """Uses native execution time for a post-hoc result, or ``None`` when unknown."""
+
+        if duration_ms is not None and duration_ms < 0:
+            raise ValueError("duration_ms must be non-negative")
+        self._observed_duration_ms = int(duration_ms) if duration_ms is not None else None
+        self._observed_duration_set = True
+        return self
+
+    def mark_errored(self, error: str) -> Trial:
+        """Marks an operational failure without aborting sibling trials."""
+
+        self.status = TrialStatus.ERRORED.value
+        self.error = str(error).strip() or "error"
+        return self
+
     def running(self, metadata: dict[str, Any] | None = None) -> Trial:
         """Marks the trial as in-progress (compat shim; status is RUNNING)."""
 
@@ -687,6 +715,7 @@ class Trial:
         *,
         score_key: str = "",
         publish_grader: bool = True,
+        report_role: ReportRole | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> ScoreItem:
         """Records an evaluation produced by any runner, framework, or helper.
@@ -742,6 +771,7 @@ class Trial:
             evaluator=result.evaluator,
             passed=result.passed,
             explanation=result.explanation,
+            report_role=report_role,
             grader_conversation_id=grader_conversation_id,
             grader_generation_id=grader_generation_id,
             metadata={**result.metadata, **(metadata or {})},
@@ -757,6 +787,7 @@ class Trial:
         expected: Any = None,
         score_key: str = "",
         publish_grader: bool = True,
+        report_role: ReportRole | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> ScoreItem:
         """Grades explicit caller-supplied output and records the result.
@@ -771,6 +802,7 @@ class Trial:
             result,
             score_key=score_key,
             publish_grader=publish_grader,
+            report_role=report_role,
             metadata=metadata,
         )
 
@@ -781,6 +813,7 @@ class Trial:
         *,
         evaluator: Evaluator | None = None,
         passed: bool | None = None,
+        report_role: ReportRole | None = None,
         explanation: str = "",
         generation_id: str = "",
         grader_conversation_id: str = "",
@@ -791,12 +824,16 @@ class Trial:
     ) -> ScoreItem:
         """Records a score for this trial. The general primitive.
 
-        Prefer :meth:`final_score`, :meth:`check_score`, or :meth:`rubric_score`
-        for the common headline / deterministic-check / rubric-criterion cases.
+        Use ``report_role=ReportRole.PRIMARY_VERDICT`` when a custom score key
+        should be the headline. Prefer :meth:`final_score`, :meth:`check_score`,
+        or :meth:`rubric_score` for common legacy-headline, deterministic-check,
+        or rubric-criterion cases.
         """
 
         ev = evaluator or self._default_evaluator
         sv = _coerce_value(value)
+        if report_role == ReportRole.PRIMARY_VERDICT and self._has_primary_verdict:
+            raise ValidationError("agento11y score validation failed: trial may declare only one primary_verdict")
         if score_key == "final" and passed is None:
             passed = _infer_final_passed(sv)
         score_id = _score_id or self._next_score_id(score_key, ev.evaluator_id)
@@ -816,6 +853,7 @@ class Trial:
             evaluator_kind=ev.normalized_kind(),
             score_key=score_key,
             value=sv,
+            report_role=report_role,
             # generation_id only when one exists; trial_id is what attributes the score.
             generation_id=generation_id or (self.generation_id if self._has_generation else ""),
             trial_id=self.trial_id,
@@ -841,7 +879,10 @@ class Trial:
             explanation=explanation,
             response_id=generation_id,
         )
-        if score_key == "final":
+        if report_role == ReportRole.PRIMARY_VERDICT:
+            self._has_primary_verdict = True
+            self._primary_verdict_passed = passed
+        elif score_key == "final" and not report_role:
             self._has_final = True
             self._final_passed = passed
         return item
@@ -860,15 +901,17 @@ class Trial:
         value: ScoreValue | float | bool | str,
         *,
         passed: bool | None = None,
+        report_role: ReportRole | None = None,
         explanation: str = "",
         evaluator: Evaluator | None = None,
         generation_id: str = "",
         metadata: dict[str, Any] | None = None,
     ) -> ScoreItem:
-        """The headline score + trial verdict (``score_key="final"``).
+        """The legacy headline score + trial verdict (``score_key="final"``).
 
         ``passed`` is the trial's pass/fail verdict used by the Agent Observability report
-        rollup. When omitted and ``value`` is boolean, the boolean is the verdict.
+        rollup when this score is unannotated and no explicit primary verdict
+        exists. When omitted and ``value`` is boolean, the boolean is the verdict.
         """
 
         if passed is None:
@@ -879,6 +922,7 @@ class Trial:
             value,
             evaluator=evaluator,
             passed=passed,
+            report_role=report_role,
             explanation=explanation,
             generation_id=generation_id,
             metadata=metadata,
@@ -890,6 +934,7 @@ class Trial:
         *,
         passed: bool,
         value: ScoreValue | float | bool | str | None = None,
+        report_role: ReportRole | None = None,
         explanation: str = "",
         evaluator: Evaluator | None = None,
         metadata: dict[str, Any] | None = None,
@@ -906,6 +951,7 @@ class Trial:
             value if value is not None else passed,
             evaluator=ev,
             passed=passed,
+            report_role=report_role,
             explanation=explanation,
             metadata=metadata,
         )
@@ -917,6 +963,7 @@ class Trial:
         *,
         explanation: str = "",
         passed: bool | None = None,
+        report_role: ReportRole | None = None,
         evaluator: Evaluator | None = None,
         grader_conversation_id: str = "",
         grader_generation_id: str = "",
@@ -934,6 +981,7 @@ class Trial:
             value,
             evaluator=ev,
             passed=passed,
+            report_role=report_role,
             explanation=explanation,
             grader_conversation_id=grader_conversation_id,
             grader_generation_id=grader_generation_id,
@@ -1141,6 +1189,8 @@ class Experiment:
         self._open_trials: dict[str, Trial] = {}
         self._claimed_trial_ids: set[str] = set()
         self._owns_client = False  # set by the experiment() factory when it built the client
+        self._run_span = None
+        self._run_token = None
 
     @property
     def client(self) -> Client:
@@ -1176,6 +1226,16 @@ class Experiment:
                 metadata=metadata,
             )
         )
+        if self._use_experimental_otel and _OTEL_AVAILABLE:
+            self._run_span = otel_trace.get_tracer(otel.INSTRUMENTATION_NAME).start_span(
+                "test_suite_run",
+                attributes={
+                    otel.TEST_SUITE_RUN_ID: self.experiment_id,
+                    otel.TEST_SUITE_NAME: self.suite.name if self.suite and self.suite.name else self.name,
+                    otel.TEST_SUITE_RUN_STATUS: "in_progress",
+                },
+            )
+            self._run_token = otel_context.attach(set_span_in_context(self._run_span))
         return self
 
     def __exit__(
@@ -1198,6 +1258,14 @@ class Experiment:
             else:
                 self.finalize(ExperimentStatus.COMPLETED)
         finally:
+            if self._run_span is not None:
+                self._run_span.set_attribute(otel.TEST_SUITE_RUN_STATUS, otel.run_status_telemetry(self.status))
+                if exc is not None:
+                    self._run_span.set_status(Status(StatusCode.ERROR))
+                self._run_span.end()
+                otel_context.detach(self._run_token)
+                self._run_span = None
+                self._run_token = None
             if self._owns_client:
                 self._client.shutdown()
         return False

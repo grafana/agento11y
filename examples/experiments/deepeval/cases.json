@@ -1,0 +1,4 @@
+[
+  {"test_case_id": "capital-fr", "input": {"question": "What is the capital of France?"}, "expected": {"answer": {"text": "Paris"}}},
+  {"test_case_id": "addition-wrong", "input": {"question": "What is 2 + 2?"}, "expected": {"answer": {"text": "4"}}}
+]

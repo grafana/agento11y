@@ -1,0 +1,4 @@
+.deepeval/
+.venv/
+*.egg-info/
+uv.lock

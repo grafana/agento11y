@@ -26,7 +26,8 @@ The normal setup cost for an already instrumented agent should be small:
 3. Wrap the existing agent call in `with exp.trial(case) as trial:`.
 4. Bind the generation/conversation ids your normal instrumentation already
    produced, or call `trial.record_io(...)` when the harness owns the call.
-5. Emit one final score and any supporting scores.
+5. Emit one primary-verdict score and any supporting diagnostic scores; an
+   unannotated `final` score remains the legacy fallback.
 
 ## Setup
 
@@ -153,12 +154,23 @@ resulting version.
 
 ## Scoring
 
-Use `trial.final_score(...)` for the headline result. Add supporting scores with
-`trial.check_score(...)`, `trial.rubric_score(...)`, or `trial.score(...)`.
+Use `ReportRole.PRIMARY_VERDICT` on the one score intended to drive the headline
+and pass rate. Use `ReportRole.DIAGNOSTIC` on supporting scores that should remain
+available for analysis without determining the verdict. An unannotated
+`trial.final_score(...)` remains the backward-compatible fallback.
 
 ```python
-trial.check_score("json_valid", passed=is_valid_json(answer))
-trial.rubric_score("helpfulness", 0.82, explanation="Useful but missed one constraint")
+trial.score(
+    "answer_relevancy",
+    0.91,
+    passed=True,
+    report_role=experiments.ReportRole.PRIMARY_VERDICT,
+)
+trial.check_score(
+    "json_valid",
+    passed=is_valid_json(answer),
+    report_role=experiments.ReportRole.DIAGNOSTIC,
+)
 ```
 
 Locally configured judges do not require a platform evaluator. ``LLMJudge``

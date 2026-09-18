@@ -67,6 +67,13 @@ class ArtifactKind(str, Enum):
     PROVIDER_EVENT = "provider_event"
 
 
+class ReportRole(str, Enum):
+    """How an experiment score participates in report rollups."""
+
+    PRIMARY_VERDICT = "primary_verdict"
+    DIAGNOSTIC = "diagnostic"
+
+
 class ConversationRatingValue(str, Enum):
     """Allowed conversation rating values."""
 
@@ -578,6 +585,7 @@ class TrialEvaluation:
     created_at: datetime | None = None
     updated_at: datetime | None = None
     error: str = ""
+    report_role: ReportRole | None = None
 
 
 @dataclass(slots=True)
@@ -631,6 +639,7 @@ class ScoreItem:
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: datetime | None = None
     source: ScoreSource | None = None
+    report_role: ReportRole | str | None = None
 
 
 @dataclass(slots=True)

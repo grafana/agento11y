@@ -52,6 +52,12 @@ pip install agento11y-litellm
 pip install agento11y-pydantic-ai
 ```
 
+Optional evaluation integration:
+
+```bash
+pip install agento11y-deepeval
+```
+
 Framework handler usage:
 
 ```python
@@ -781,12 +787,6 @@ Experimental OTel eval spans/events are disabled by default; opt in with
 
 ### Grading with an evaluator stored in Grafana Cloud
 
-> **Experimental.** Set `AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true` to use
-> this. Without it, `trial.evaluate(...)`, `client.trigger_trial_evaluation(...)`,
-> and `client.get_trial_evaluation(...)` raise
-> `agento11y.ExperimentalFeatureDisabledError` without sending a request.
-> Experimental features can change or be removed in any release.
-
 When the grading prompt lives in Agent Observability instead of in the runner,
 bind the trial to the conversation id your normal instrumentation already
 produced and let that evaluator score it. `trial.evaluate(...)` persists the
@@ -914,6 +914,28 @@ format_check = experiments.RegexJudge(
 )
 trial.evaluate_output(format_check, input=prompt, output=answer, score_key="format_valid")
 ```
+
+Scores can declare their report role explicitly. Mark the score intended to
+drive the experiment headline and pass rate as `PRIMARY_VERDICT`; mark supporting
+metrics as `DIAGNOSTIC` so they remain available for analysis without determining
+the headline verdict:
+
+```python
+trial.score(
+    "answer_relevancy",
+    0.91,
+    passed=True,
+    report_role=experiments.ReportRole.PRIMARY_VERDICT,
+)
+trial.score(
+    "groundedness",
+    0.87,
+    report_role=experiments.ReportRole.DIAGNOSTIC,
+)
+```
+
+The role is optional and omitted from the ingest payload when unset. Existing
+backends and runs that use the legacy `final` score remain compatible.
 
 ``evaluate_output`` grades only the values supplied by the caller; it does not
 fetch or normalize the trial's bound conversation. Frameworks and benchmark

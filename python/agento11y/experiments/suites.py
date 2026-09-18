@@ -32,6 +32,7 @@ class PushedSuite:
     remote_suite: dict[str, Any]
     remote_version: dict[str, Any]
     pruned_case_ids: list[str]
+    transformed_case_ids: list[str]
 
 
 class TestSuitesClient:
@@ -170,8 +171,7 @@ class TestSuitesClient:
         if not version_id:
             raise ExperimentTransportError("agento11y test suite version transport failed: missing version")
 
-        for case in suite.cases:
-            self._upsert_case(suite_id, version_id, case)
+        stored_cases = [_remote_case_to_local(self._upsert_case(suite_id, version_id, case)) for case in suite.cases]
 
         pruned_case_ids: list[str] = []
         if prune:
@@ -193,7 +193,7 @@ class TestSuitesClient:
             description=suite.description or str(remote.get("description") or ""),
             tags=list(suite.tags or remote.get("tags") or []),
             changelog=changelog or suite.changelog,
-            test_cases=list(suite.cases),
+            test_cases=stored_cases,
         )
         return PushedSuite(
             suite_id=suite_id,
@@ -203,6 +203,11 @@ class TestSuitesClient:
             remote_suite=remote,
             remote_version=dict(version) if isinstance(version, dict) else {},
             pruned_case_ids=pruned_case_ids,
+            transformed_case_ids=[
+                stored.test_case_id
+                for local, stored in zip(suite.cases, stored_cases, strict=True)
+                if local.input != stored.input or local.expected != stored.expected
+            ],
         )
 
     def resolve_version(self, suite: dict[str, Any], version: str) -> str:
