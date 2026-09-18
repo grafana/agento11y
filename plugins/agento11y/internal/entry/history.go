@@ -109,8 +109,9 @@ var historyEnsureLocal = func(ctx context.Context) (string, error) {
 // historySelect and historyConfirm are package vars so tests can drive the
 // interactive path without a TTY.
 var (
-	historySelect  = historySelectSessions
-	historyConfirm = historyConfirmImport
+	historySelect     = historySelectSessions
+	historySelectAuto = historySelectAutoSessions
+	historyConfirm    = historyConfirmImport
 )
 
 type historyImportFlags struct {
@@ -174,8 +175,9 @@ func runHistoryImport(args []string, stdin io.Reader, stdout, stderr io.Writer) 
 		exit(2)
 		return
 	}
+	auto := strings.EqualFold(agentArg, "auto")
 	agent, ok := history.Resolve(agentArg)
-	if !ok {
+	if !auto && !ok {
 		usageError(stderr, "history import", fmt.Sprintf("unknown history agent %q (known agents: %s)", agentArg, historyAgentNames()))
 		exit(2)
 		return
@@ -233,7 +235,12 @@ func runHistoryImport(args []string, stdin io.Reader, stdout, stderr io.Writer) 
 		opts.DryRun = true
 	}
 
-	if err := historyImport(opts, interactive, stdout, stderr); err != nil {
+	if auto {
+		err = historyImportAuto(opts, interactive, stdout, stderr)
+	} else {
+		err = historyImport(opts, interactive, stdout, stderr)
+	}
+	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "agento11y: %v\n", err)
 		exit(1)
 	}
@@ -406,7 +413,7 @@ func historyImport(opts historyImportOptions, interactive bool, stdout, stderr i
 	// Progress is a redrawn line, so it is rate-limited rather than written per
 	// turn: a large import exports hundreds of thousands of turns, and a
 	// redirected stderr would otherwise collect one line for each.
-	lastReport := time.Time{}
+	progress, finishProgress := historyProgress(stderr)
 	result, err := history.RunImport(ctx, history.ImportOptions{
 		Agent:      opts.Agent,
 		Filter:     filter,
@@ -415,19 +422,9 @@ func historyImport(opts historyImportOptions, interactive bool, stdout, stderr i
 		Force:      opts.Force,
 		Target:     target,
 		Exporter:   exporter,
-		OnProgress: func(p history.Progress) {
-			now := time.Now()
-			if now.Sub(lastReport) < historyProgressInterval {
-				return
-			}
-			lastReport = now
-			_, _ = fmt.Fprintf(stderr, "\rimporting %s: session %d/%d  imported %d  skipped %d  failed %d",
-				p.Agent, p.Sessions, p.Total, p.Imported, p.Skipped, p.Failed)
-		},
+		OnProgress: progress,
 	})
-	if !lastReport.IsZero() {
-		_, _ = fmt.Fprintln(stderr)
-	}
+	finishProgress()
 	if err != nil {
 		return err
 	}
@@ -455,8 +452,164 @@ func historyImport(opts historyImportOptions, interactive bool, stdout, stderr i
 	return nil
 }
 
+// historyImportAuto is the interactive, multi-agent counterpart to a named
+// history import. It deliberately reuses the registered importers and the
+// normal per-agent import path: discovery stays metadata-only until the user
+// selects and confirms sessions, and each source keeps its own ledger.
+func historyImportAuto(opts historyImportOptions, interactive bool, stdout, stderr io.Writer) error {
+	ctx := context.Background()
+	localValue, localKey, inShell := envconfig.LookupEnv("LOCAL")
+	fileEnv := dotenv.ApplyEnv(nil)
+	if !inShell {
+		localValue, localKey, _ = envconfig.LookupMap(fileEnv, "LOCAL")
+	}
+	envLocal := localEnvRequest{on: envconfig.ParseBool(localValue), key: localKey}
+	logger := cli.InitLogger("history")
+
+	filter := history.NewFilter()
+	filter.Since = opts.Since
+	filter.Until = opts.Until
+	filter.Workspace = opts.Workspace
+	filter.SourcePaths = opts.SourcePaths
+	filter.MaxSessions = opts.MaxSessions
+	filter.MaxTurns = opts.MaxTurns
+
+	plans := make([]history.ImportPlan, 0, len(history.Specs()))
+	sessions := make([]history.SessionPreview, 0)
+	for _, spec := range history.Specs() {
+		plan, err := history.BuildPlan(ctx, history.PlanOptions{Agent: spec.ID, Filter: filter})
+		if err != nil {
+			return err
+		}
+		plans = append(plans, plan)
+		printHistoryPlan(stdout, opts, plan)
+		sessions = append(sessions, plan.Sessions...)
+	}
+	if len(opts.SourcePaths) > 0 && len(sessions) == 0 {
+		_, _ = fmt.Fprintln(stderr, "agento11y: no discovered session matched --source. The flag filters the paths under supported agents' roots; it cannot add a new root.")
+	}
+	if opts.DryRun {
+		_, _ = fmt.Fprintln(stdout, clihelp.New(stdout).Detail("Dry run: nothing was decoded, exported, or stored."))
+		return nil
+	}
+	if len(sessions) == 0 {
+		return nil
+	}
+	if err := historyResolveDestination(ctx, &opts, envLocal, interactive, stderr, logger); err != nil {
+		return err
+	}
+	if interactive && !opts.All {
+		selected, err := historySelectAuto(sessions)
+		if err != nil {
+			return err
+		}
+		sessions = selected
+	}
+	if len(sessions) == 0 {
+		_, _ = fmt.Fprintln(stdout, clihelp.New(stdout).Detail("No sessions selected."))
+		return nil
+	}
+	if interactive && !opts.Yes {
+		confirmed, err := historyConfirm(opts, sessions)
+		if err != nil {
+			return err
+		}
+		if !confirmed {
+			_, _ = fmt.Fprintln(stdout, clihelp.New(stdout).Detail("Import cancelled."))
+			return nil
+		}
+	}
+
+	target, err := historyTarget(ctx, opts)
+	if err != nil {
+		return err
+	}
+	exporter, cleanup, err := history.NewTargetExporter(ctx, target, logger)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := cleanup(shutdownCtx); err != nil {
+			logger.Printf("shutdown import exporter: %v", err)
+		}
+	}()
+
+	total := history.ImportResult{}
+	failed := 0
+	for _, plan := range plans {
+		selected := historySessionsForAgent(sessions, plan.Agent)
+		if len(selected) == 0 {
+			continue
+		}
+		progress, finishProgress := historyProgress(stderr)
+		result, err := history.RunImport(ctx, history.ImportOptions{
+			Agent: plan.Agent, Filter: filter, Sessions: selected, Collisions: plan.Collisions,
+			Force: opts.Force, Target: target, Exporter: exporter,
+			OnProgress: progress,
+		})
+		finishProgress()
+		if err != nil {
+			return err
+		}
+		total.Sessions += result.Sessions
+		total.Imported += result.Imported
+		total.Skipped += result.Skipped
+		total.Failed += result.Failed
+		failed += result.Failed
+		for _, warning := range result.Warnings {
+			_, _ = fmt.Fprintf(stderr, "agento11y: warning: %s\n", warning)
+		}
+		// Match the single-agent path: a partial import leaves the viewer's
+		// one-time offer available so the user can retry the failed turns.
+		if result.Failed == 0 {
+			if err := history.MarkPrompt(plan.Agent, history.PromptImported); err != nil {
+				logger.Printf("record import prompt state: %v", err)
+			}
+		}
+	}
+	renderer := clihelp.New(stdout)
+	summary := fmt.Sprintf("Imported %d turns from %d sessions (%d already imported, %d failed).", total.Imported, total.Sessions, total.Skipped, total.Failed)
+	if failed > 0 {
+		_, _ = fmt.Fprintln(stdout, renderer.Warning(summary))
+		return fmt.Errorf("%d turns failed to export; rerun to retry them", failed)
+	}
+	_, _ = fmt.Fprintln(stdout, renderer.Success(summary))
+	return nil
+}
+
+func historySessionsForAgent(sessions []history.SessionPreview, agent history.AgentID) []history.SessionPreview {
+	selected := make([]history.SessionPreview, 0)
+	for _, session := range sessions {
+		if session.Agent == agent {
+			selected = append(selected, session)
+		}
+	}
+	return selected
+}
+
 // historyProgressInterval is how often the progress line is redrawn.
 const historyProgressInterval = 200 * time.Millisecond
+
+// historyProgress renders a rate-limited progress line and adds one newline
+// once the importer has written at least one update.
+func historyProgress(stderr io.Writer) (func(history.Progress), func()) {
+	lastReport := time.Time{}
+	return func(p history.Progress) {
+			now := time.Now()
+			if now.Sub(lastReport) < historyProgressInterval {
+				return
+			}
+			lastReport = now
+			_, _ = fmt.Fprintf(stderr, "\rimporting %s: session %d/%d  imported %d  skipped %d  failed %d",
+				p.Agent, p.Sessions, p.Total, p.Imported, p.Skipped, p.Failed)
+		}, func() {
+			if !lastReport.IsZero() {
+				_, _ = fmt.Fprintln(stderr)
+			}
+		}
+}
 
 // historyTarget builds the export destination from the resolved Local value.
 // A Cloud import leaves the target empty so [history.NewTargetExporter] reads
@@ -544,6 +697,34 @@ func historySelectSessions(sessions []history.SessionPreview) ([]history.Session
 	options := make([]huh.Option[int], len(sessions))
 	for i, s := range sessions {
 		options[i] = huh.NewOption(historySessionLabel(s), i).Selected(true)
+	}
+	var chosen []int
+	form := huh.NewForm(huh.NewGroup(
+		huh.NewMultiSelect[int]().
+			Title("Sessions to import").
+			Description("Space toggles, Enter confirms.").
+			Options(options...).
+			Value(&chosen),
+	))
+	if err := form.Run(); err != nil {
+		if errors.Is(err, huh.ErrUserAborted) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	out := make([]history.SessionPreview, 0, len(chosen))
+	for _, i := range chosen {
+		out = append(out, sessions[i])
+	}
+	return out, nil
+}
+
+// historySelectAutoSessions uses the same picker as a named import, but makes
+// the source agent explicit when one selection spans multiple importers.
+func historySelectAutoSessions(sessions []history.SessionPreview) ([]history.SessionPreview, error) {
+	options := make([]huh.Option[int], len(sessions))
+	for i, s := range sessions {
+		options[i] = huh.NewOption(fmt.Sprintf("%s  %s", s.Agent, historySessionLabel(s)), i).Selected(true)
 	}
 	var chosen []int
 	form := huh.NewForm(huh.NewGroup(
