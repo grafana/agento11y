@@ -97,7 +97,7 @@ run = evaluate_with_agento11y(
     experiment_name="Checkout agent regression",
     primary_metric="Answer Relevancy",
     suite_id="checkout-regression",
-    suite_version="2026-09-09",
+    suite_version="v1",
 )
 print(run.published.url)
 ```

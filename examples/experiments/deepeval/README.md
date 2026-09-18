@@ -42,7 +42,7 @@ anchor generation. Pass `record_io=False` if the target is already instrumented,
 and provide `agento11y.conversation_id` and `agento11y.generation_id` in each
 test case's metadata to bind the existing telemetry.
 
-## Cloud ground-truth smoke test
+## Cloud stored-evaluator example
 
 `cloud.py` runs a deterministic test agent inside SDK trials, measures DeepEval
 Exact Match as a `diagnostic`, uploads a JSON artifact, and invokes a stored
@@ -54,12 +54,13 @@ This exercises DeepEval directly inside a trial, not the bulk result adapter abo
 With ingest and control-plane credentials already exported in your shell:
 
 ```bash
-gcx --context grafana-dev agento11y evaluators upsert -f cloud-evaluator.json
+# First replace YOUR_PROVIDER_ID and YOUR_MODEL_ID in cloud-evaluator.json.
+gcx --context YOUR_CONTEXT agento11y evaluators upsert -f cloud-evaluator.json
 DEEPEVAL_TELEMETRY_OPT_OUT=YES uv run python cloud.py
 # Substitute the printed experiment ID:
-gcx --context grafana-dev agento11y experiments get <experiment-id> -o json
-gcx --context grafana-dev agento11y experiments list-trials <experiment-id> -o json
-gcx --context grafana-dev agento11y experiments get-report <experiment-id> -o json
+gcx --context YOUR_CONTEXT agento11y experiments get <experiment-id> -o json
+gcx --context YOUR_CONTEXT agento11y experiments list-trials <experiment-id> -o json
+gcx --context YOUR_CONTEXT agento11y experiments get-report <experiment-id> -o json
 ```
 
 The example uses the local editable SDK. It requires
@@ -68,31 +69,3 @@ The example uses the local editable SDK. It requires
 The backend must have test-case variables enabled and the evaluator's provider
 configured. Cloud grading incurs model usage. No credential file is loaded by
 this example. Each invocation publishes a suite version and creates a new run.
-
-### Dev verification: 2026-09-11
-
-- Suite `deepeval-dev-ground-truth-smoke@v2` was published and pulled successfully.
-- Run `deepeval-cloud-d4c3f5c49238` reached the cloud evaluation worker, but failed
-  with `judge provider "anthropic" is not configured`. Live testing stopped there.
-- `gcx` verified the failed run, nested expected-answer snapshot, conversation
-  binding, DeepEval score of 1, and uploaded `test-result.json` artifact.
-- Python was missing cloud-evaluation `report_role` plumbing; added it through
-  `Trial.evaluate`, `Client`, transport, and the returned evaluation model, with
-  a regression check (166 focused tests passed).
-- Retried using available provider `anthropic-vertex`, model `claude-sonnet-4-6`,
-  and a new immutable evaluator version `2026-09-11-vertex`.
-  Run `deepeval-cloud-b9b8bbdc59fe` completed both cases against suite version `v3`:
-  the cloud judge returned true for Paris and false for the deliberately wrong 5.
-  Both DeepEval diagnostics and JSON artifacts are present.
-- Raw `gcx api` verifies cloud scores carry `primary_verdict` and local scores
-  carry `diagnostic`. The installed typed `gcx ... get-report` drops those fields
-  and renders absent summary values as zeros. Verify new fields with:
-
-  ```bash
-  gcx --context grafana-dev api /api/plugins/grafana-agento11y-app/resources/eval/experiments/deepeval-cloud-b9b8bbdc59fe/report -o json
-  ```
-
-- Backend reporting remains incorrect: the raw report returns `pass_denominator: 0`
-  and `final_score_count: 0` despite the two cloud primary verdicts, instead of
-  the expected 50% pass rate. No legacy `final` score was emitted to mask this.
-  This is observed behavior; the backend root cause has not been isolated.

@@ -9,9 +9,8 @@ Tempo and Prometheus (ports 8080, 3000 and 4318), Docker, `uv`, and an
 It uses ten reviewed ledger questions and actual provider responses, not canned
 answers. Telemetry goes to the local stack; model requests go to Anthropic.
 
-Set `HARBOR_CHECKOUT` to your Harbor checkout. The shared example environment
-was verified with Harbor commit `7464ab541773ea1d4618336f043970042f33a1b5`.
-Use a fresh batch name on every invocation; finalized runs cannot be overwritten.
+Set `HARBOR_CHECKOUT` to a compatible Harbor checkout. Use a fresh batch name
+on every invocation; finalized runs cannot be overwritten.
 
 ## Run the instrumented agent
 
@@ -42,7 +41,7 @@ the captured provider responses in the results directory. Cost is calculated
 from usage and the example's documented rate card, not a billing invoice.
 
 The [shared walkthrough](../real-agent/README.md) documents dependencies,
-measurement scope, prior verification, and the source files.
+measurement scope, and the source files.
 Start with [the live entry point](../real-agent/run.py) and [the instrumented agent](../real-agent/agent.py).
 
 ## Export completed results instead

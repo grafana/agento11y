@@ -22,7 +22,7 @@ def main() -> None:
     cases = [TestCase(**case) for case in json.loads(Path(__file__).with_name("cases.json").read_text())]
     control = TestSuitesClient()
     pushed = control.push_suite(
-        TestSuite(suite_id="deepeval-dev-ground-truth-smoke", name="DeepEval dev ground truth smoke", test_cases=cases),
+        TestSuite(suite_id="deepeval-ground-truth", name="DeepEval ground truth", test_cases=cases),
         publish=True,
     )
     suite = control.pull_suite(pushed.suite_id, pushed.suite_version)
@@ -37,14 +37,14 @@ def main() -> None:
         experiment_id=run_id,
         suite=suite,
         planned_trial_count=len(suite.cases),
-        candidate={"agent_name": "deepeval-smoke-agent", "agent_version": "1"},
-        tags=["deepeval", "ground-truth-smoke"],
+        candidate={"agent_name": "deepeval-example-agent", "agent_version": "1"},
+        tags=["deepeval", "ground-truth"],
     ) as exp:
         for case in suite.cases:
             with exp.trial(case) as trial:
                 question = case.input["question"]
                 actual = answer(question)
-                trial.record_io(input=question, output=actual, agent_name="deepeval-smoke-agent")
+                trial.record_io(input=question, output=actual, agent_name="deepeval-example-agent")
                 metric = ExactMatchMetric()
                 metric.measure(
                     LLMTestCase(input=question, actual_output=actual, expected_output=case.expected["answer"]["text"])
@@ -67,8 +67,8 @@ def main() -> None:
                 )
                 assert artifact.get("artifact_id")
                 evaluation = trial.evaluate(
-                    "deepeval.dev_ground_truth_smoke",
-                    "2026-09-11-vertex",
+                    "deepeval.ground_truth",
+                    "1",
                     timeout=120,
                     report_role=ReportRole.PRIMARY_VERDICT,
                 )
