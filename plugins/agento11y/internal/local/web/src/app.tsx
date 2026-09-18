@@ -32,6 +32,7 @@ import {
   IMPORT_ACTIVE_TTL_MS,
   IMPORT_REFRESH_DEBOUNCE_MS,
   REFRESH_DEBOUNCE_MS,
+  securityRouteActive,
   settingsRouteActive,
   summaryFromDetail,
   type ToolSessionFilters,
@@ -52,7 +53,7 @@ import {
 import {
   importRunIsActive,
   SETTINGS_TAB_IDS,
-  SettingsView,
+  SettingsSecurityView,
   settingsPath,
   settingsTabFromLocation,
   useHistoryImport,
@@ -209,6 +210,7 @@ export function App() {
   const [shortcutTheme, setShortcutTheme] = useState<ThemePreference | null>(null);
   const [selectedID, setSelectedID] = useState(conversationIDFromPath);
   const [showSettings, setShowSettings] = useState(settingsRouteActive);
+  const [showSecurity, setShowSecurity] = useState(securityRouteActive);
   const [showAnalytics, setShowAnalytics] = useState(analyticsRouteActive);
   const [analyticsTab, setAnalyticsTab] = useState<AnalyticsTab>(analyticsTabFromLocation);
   const [mcpToolsOnly, setMcpToolsOnly] = useState(false);
@@ -351,7 +353,7 @@ export function App() {
 
   // config.env moves under an open viewer: a second tab, `agento11y login`,
   // a hand edit. The header chip is a privacy disclosure, so it re-reads
-  // rather than freezing at mount. SettingsView hydrates from the same
+  // rather than freezing at mount. SettingsSecurityView hydrates from the same
   // response and writes back through applyConfig, so one poll serves both.
   //
   // Every request and every save takes the next sequence number and applies
@@ -405,13 +407,15 @@ export function App() {
     };
   }, [loadConfig]);
 
-  const view: 'settings' | 'analytics' | 'conversation' | 'conversations' = showSettings
-    ? 'settings'
-    : showAnalytics
-      ? 'analytics'
-      : selectedID
-        ? 'conversation'
-        : 'conversations';
+  const view = showSecurity
+    ? 'security'
+    : showSettings
+      ? 'settings'
+      : showAnalytics
+        ? 'analytics'
+        : selectedID
+          ? 'conversation'
+          : 'conversations';
   const selected = selectedID
     ? conversations.find((c) => c.id === selectedID) || summaryFromDetail(detail, selectedID)
     : null;
@@ -472,22 +476,24 @@ export function App() {
   }, [workspace]);
 
   const pageTitle =
-    view === 'settings'
-      ? 'Settings · agento11y local'
-      : view === 'analytics'
-        ? 'Analytics · agento11y local'
-        : view === 'conversation' && selected
-          ? `${selected.title || selected.id} · agento11y local`
-          : 'agento11y · local';
+    view === 'security'
+      ? 'Security · agento11y local'
+      : view === 'settings'
+        ? 'Settings · agento11y local'
+        : view === 'analytics'
+          ? 'Analytics · agento11y local'
+          : view === 'conversation' && selected
+            ? `${selected.title || selected.id} · agento11y local`
+            : 'agento11y · local';
   useEffect(() => {
     document.title = pageTitle;
   }, [pageTitle]);
 
-  // Opening Settings re-reads config.env: the form hydrates from the polled
+  // Opening Settings or Security re-reads config.env: the form hydrates from the polled
   // response, which is otherwise up to 30s old, and the panel it picks
   // depends on whether a connection is saved.
   useEffect(() => {
-    if (view === 'settings') loadConfig();
+    if (view === 'settings' || view === 'security') loadConfig();
   }, [view, loadConfig]);
 
   // fetchList is driven from four sources (mount, a range change, an SSE
@@ -1099,12 +1105,14 @@ export function App() {
     const onPopState = () => {
       const nextSelectedID = conversationIDFromPath();
       const nextSettings = settingsRouteActive();
+      const nextSecurity = securityRouteActive();
       const nextAnalytics = analyticsRouteActive();
-      if (!nextSelectedID && !nextSettings && !nextAnalytics && view !== 'conversations') {
+      if (!nextSelectedID && !nextSettings && !nextSecurity && !nextAnalytics && view !== 'conversations') {
         resetSessionFacets();
       }
       setSelectedID(nextSelectedID);
       setShowSettings(nextSettings);
+      setShowSecurity(nextSecurity);
       setShowAnalytics(nextAnalytics);
       setSettingsTab(settingsTabFromLocation());
       setAnalyticsTab(analyticsTabFromLocation());
@@ -1247,6 +1255,7 @@ export function App() {
   }, [view]);
 
   const openConv = (c: { id: string }) => {
+    setShowSecurity(false);
     const returnState: DetailReturnState = {
       view: view === 'analytics' ? 'analytics' : 'conversations',
       workspace: view === 'conversations' ? workspace : null,
@@ -1258,6 +1267,7 @@ export function App() {
     setSelectedID(c.id);
   };
   const goConversations = () => {
+    setShowSecurity(false);
     window.history.pushState({}, '', conversationsPath());
     resetSessionFacets();
     setShowSettings(false);
@@ -1267,6 +1277,7 @@ export function App() {
     setToolSessionFilters(null);
   };
   const backFromDetail = () => {
+    setShowSecurity(false);
     const state = window.history.state as DetailReturnState | null;
     setShowSettings(false);
     setSelectedID(null);
@@ -1286,6 +1297,7 @@ export function App() {
     setToolSessionFilters(toolSessionFiltersFromLocation());
   };
   const goAnalytics = () => {
+    setShowSecurity(false);
     window.history.pushState({}, '', analyticsPath('overview'));
     setShowSettings(false);
     setShowAnalytics(true);
@@ -1297,6 +1309,7 @@ export function App() {
     setAnalyticsTab(tab);
   };
   const openToolSessions = (filters: ToolSessionFilters) => {
+    setShowSecurity(false);
     window.history.pushState({}, '', toolSessionsPath(filters));
     resetSessionFacets();
     setTimeRange(analyticsRange);
@@ -1308,6 +1321,7 @@ export function App() {
     setBucketSel(null);
   };
   const openAnalyticsBucket = (span: TimeSpan) => {
+    setShowSecurity(false);
     window.history.pushState({}, '', conversationsPath(analyticsWorkspace));
     resetSessionFacets();
     setTimeRange(analyticsRange);
@@ -1319,6 +1333,7 @@ export function App() {
     setToolSessionFilters(null);
   };
   const openAnalyticsWorkspace = (path: string) => {
+    setShowSecurity(false);
     window.history.pushState({}, '', conversationsPath(path));
     resetSessionFacets();
     setTimeRange(analyticsRange);
@@ -1335,9 +1350,17 @@ export function App() {
     setWorkspace(path);
     setToolSessionFilters(filters);
   };
+  const goSecurity = () => {
+    window.history.pushState({}, '', '/security');
+    setSelectedID(null);
+    setShowAnalytics(false);
+    setShowSettings(false);
+    setShowSecurity(true);
+  };
   // goSettings is also the nav tab's onClick, which passes an event, so
   // anything that is not a tab id opens the Cloud tab.
   const goSettings = (tab?: string | ReactMouseEvent<HTMLAnchorElement>) => {
+    setShowSecurity(false);
     const next = typeof tab === 'string' && SETTINGS_TAB_IDS.has(tab) ? tab : 'cloud';
     window.history.pushState({}, '', settingsPath(next));
     setSelectedID(null);
@@ -1358,6 +1381,7 @@ export function App() {
       if (typeof el.select === 'function') el.select();
     };
     if (viewRef.current !== 'conversations') {
+      setShowSecurity(false);
       window.history.pushState({}, '', conversationsPath());
       resetSessionFacets();
       setSelectedID(null);
@@ -1374,7 +1398,7 @@ export function App() {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (themeShortcutToggles(e, themeShortcutRef.current)) {
-        if (view === 'settings' && settingsThemePreview !== null) return;
+        if ((view === 'settings' || view === 'security') && settingsThemePreview !== null) return;
         e.preventDefault();
         toggleTheme();
         return;
@@ -1402,13 +1426,19 @@ export function App() {
       onClick: goAnalytics,
     },
     {
+      key: 'security',
+      label: 'Security',
+      href: '/security',
+      onClick: goSecurity,
+    },
+    {
       key: 'settings',
       label: 'Settings',
       href: '/settings',
       onClick: goSettings,
     },
   ];
-  const activeTab = view === 'settings' ? 'settings' : view === 'analytics' ? 'analytics' : 'conversations';
+  const activeTab = view === 'security' || view === 'settings' || view === 'analytics' ? view : 'conversations';
   const detailReturnState = window.history.state as DetailReturnState | null;
   const detailReturnsToAnalytics = detailReturnState?.view === 'analytics';
   const detailBackHref =
@@ -1434,8 +1464,10 @@ export function App() {
           minHeight: 0,
         }}
       >
-        {view === 'settings' && (
-          <SettingsView
+        {(view === 'settings' || view === 'security') && (
+          <SettingsSecurityView
+            activeSection={view}
+            onOpenSecurity={goSecurity}
             history={history}
             config={config}
             configError={configErr}

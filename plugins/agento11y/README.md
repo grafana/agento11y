@@ -141,7 +141,7 @@ Manage the app with `agento11y local start|open|status|stop|restart`. `agento11y
 ### Local guards
 
 For the eight bundled packs, setup steps, blocked and allowed examples, and enforcement limits, refer to [Local guard packs](../../docs/local-guards.md).
-You can select packs in **Settings** > **Local** > **Guards**, or ask your coding agent to follow `agento11y skills show setup-local-guards`.
+You can select packs in **Security** > **Guards**, or ask your coding agent to follow `agento11y skills show setup-local-guards`.
 
 With `AGENTO11Y_GUARDS_ENABLED=true`, each host POSTs preflight and tool-call checks to the daemon. Put `guards.toml` next to `config.env` (`~/.config/agento11y/guards.toml`). A local deny always denies. `AGENTO11Y_GUARDS_FAIL_OPEN` only applies to Cloud relay failures. The daemon skips rules that cannot compile and still evaluates valid rules. An unknown `action_on_fail` is reported and treated as `deny`. An unreadable, unparsable, or empty file allows every call locally.
 

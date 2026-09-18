@@ -1,9 +1,9 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../internal/local/web/src/app';
 import type { LocalGuardsUpdate } from '../internal/local/web/src/settings-local-guards';
-import { type HistoryImport, SettingsView } from '../internal/local/web/src/settings-screen';
+import { type HistoryImport, SettingsSecurityView } from '../internal/local/web/src/settings-screen';
 import type { ConfigResponse, GuardPack, GuardsFile, Settings } from '../internal/local/web/src/types';
 import { metricsResponse } from './fixtures';
 
@@ -150,11 +150,12 @@ function setup(guardMode = 'failopen') {
   vi.stubGlobal('EventSource', undefined);
   let publish!: (body: ConfigResponse) => void;
   const onConfig = vi.fn();
-  function Host({ tab = 'local' }: { tab?: string }) {
+  function Host({ section, tab = 'local' }: { section: 'settings' | 'security'; tab?: string }) {
     const [body, setBody] = useState(() => config(server.settings));
     publish = setBody;
     return (
-      <SettingsView
+      <SettingsSecurityView
+        activeSection={section}
         history={history}
         config={body}
         configError={null}
@@ -194,10 +195,73 @@ async function ready() {
   await waitFor(() => expect(master().hasAttribute('disabled')).toBe(false));
 }
 
-describe('SettingsLocalGuardsCard in SettingsView', () => {
+describe('SettingsLocalGuardsCard in SettingsSecurityView', () => {
+  it('fetches packs only on Security, including polls and section re-entry', async () => {
+    const { Host, calls, poll } = setup();
+    const view = render(<Host section="settings" />);
+    await poll();
+    expect(calls('/api/v1/guards')).toHaveLength(0);
+    expect(screen.queryByRole('switch', { name: 'Enable guards' })).toBeNull();
+    expect(screen.getByRole('switch', { name: 'Debug logging' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('switch', { name: 'Debug logging' }));
+    expect(save()).toBeTruthy();
+    view.rerender(<Host section="settings" tab="cloud" />);
+    await poll();
+    view.rerender(<Host section="settings" tab="history" />);
+    await poll();
+    expect(calls('/api/v1/guards')).toHaveLength(0);
+
+    view.rerender(<Host section="security" />);
+    await ready();
+    expect(calls('/api/v1/guards')).toHaveLength(1);
+    expect(screen.queryByRole('switch', { name: 'Debug logging' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Light' })).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Settings sections' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Save to config.env' })).toBeNull();
+    expect(screen.queryByText('Unsaved changes')).toBeNull();
+    await poll();
+    expect(calls('/api/v1/guards')).toHaveLength(2);
+
+    view.rerender(<Host section="settings" />);
+    await poll();
+    expect(calls('/api/v1/guards')).toHaveLength(2);
+    expect(checked('Debug logging')).toBe('true');
+    expect(save()).toBeTruthy();
+    view.rerender(<Host section="security" />);
+    await ready();
+    expect(calls('/api/v1/guards')).toHaveLength(3);
+  });
+
+  it('requests config preview only on Settings and cancels it on Security entry', async () => {
+    const { Host, calls, poll } = setup();
+    vi.useFakeTimers();
+    const view = render(<Host section="security" />);
+    await act(async () => vi.advanceTimersByTimeAsync(200));
+    expect(calls('/api/v1/config:preview', 'POST')).toHaveLength(0);
+    expect(screen.queryByText('config.env preview')).toBeNull();
+    view.rerender(<Host section="settings" />);
+    expect(screen.getByText('config.env preview')).toBeTruthy();
+    fireEvent.click(screen.getByRole('switch', { name: 'Debug logging' }));
+    view.rerender(<Host section="security" />);
+    await act(async () => vi.advanceTimersByTimeAsync(200));
+    expect(calls('/api/v1/config:preview', 'POST')).toHaveLength(0);
+
+    view.rerender(<Host section="settings" />);
+    await act(async () => vi.advanceTimersByTimeAsync(200));
+    const previews = calls('/api/v1/config:preview', 'POST');
+    expect(previews).toHaveLength(1);
+    expect(JSON.parse(String(previews[0]?.[1]?.body)).settings.debug).toBe(true);
+    view.rerender(<Host section="security" />);
+    expect(previews[0]?.[1]?.signal?.aborted).toBe(true);
+    await poll();
+    await act(async () => vi.advanceTimersByTimeAsync(200));
+    expect(calls('/api/v1/config:preview', 'POST')).toHaveLength(1);
+    expect(screen.queryByText('config.env preview')).toBeNull();
+  });
+
   it('hides packs until guards are enabled', async () => {
     const { Host, calls } = setup('off');
-    render(<Host />);
+    render(<Host section="security" />);
     await ready();
     expect(screen.queryByRole('switch', { name: 'Secret redaction' })).toBeNull();
     expect(screen.getByText('agento11y skills show setup-local-guards')).toBeTruthy();
@@ -213,7 +277,7 @@ describe('SettingsLocalGuardsCard in SettingsView', () => {
 
   it('lists packs and toggles one on', async () => {
     const { Host, calls } = setup();
-    render(<Host />);
+    render(<Host section="security" />);
     await ready();
     expect(checked('Git safety')).toBe('false');
     expect(screen.getByText('agento11y skills show setup-local-guards')).toBeTruthy();
@@ -226,7 +290,7 @@ describe('SettingsLocalGuardsCard in SettingsView', () => {
   it('turns every pack off when guards are disabled', async () => {
     const { Host, calls, server } = setup();
     server.guards.packs = server.guards.packs.map((p) => ({ ...p, enabled: p.id === 'git' }));
-    render(<Host />);
+    render(<Host section="security" />);
     await ready();
     fireEvent.click(master());
     await waitFor(() => expect(checked('Enable guards')).toBe('false'));
@@ -240,7 +304,7 @@ describe('SettingsLocalGuardsCard in SettingsView', () => {
 
   it('expands a pack preview', async () => {
     const { Host } = setup();
-    render(<Host />);
+    render(<Host section="security" />);
     const view = await screen.findByRole('button', { name: 'View Git safety' });
     expect(screen.queryByText('git stash drop')).toBeNull();
     fireEvent.click(view);
@@ -254,7 +318,7 @@ describe('SettingsLocalGuardsCard in SettingsView', () => {
     const { Host, server, calls } = setup('off');
     const initial = deferred<Response>();
     server.guardGets.push(initial.promise);
-    render(<Host />);
+    render(<Host section="security" />);
     expect(master().hasAttribute('disabled')).toBe(true);
     fireEvent.click(master());
     expect(calls('/api/v1/guards', 'PUT')).toHaveLength(0);
@@ -272,7 +336,7 @@ describe('SettingsLocalGuardsCard in SettingsView', () => {
     const { Host, server, poll } = setup('off');
     const initial = deferred<Response>();
     server.guardGets.push(initial.promise);
-    render(<Host />);
+    render(<Host section="security" />);
     await poll();
     await ready();
     fireEvent.click(master());
@@ -294,19 +358,21 @@ describe('SettingsLocalGuardsCard in SettingsView', () => {
     server.failureMode = mode;
     const refresh = deferred<Response>();
     server.configGets.push(refresh.promise);
-    render(<Host />);
-    await ready();
+    const view = render(<Host section="settings" />);
     fireEvent.click(screen.getByRole('switch', { name: 'Debug logging' }));
     fireEvent.click(screen.getByRole('button', { name: 'Light' }));
+    view.rerender(<Host section="security" />);
+    await ready();
     fireEvent.click(master());
     await waitFor(() => expect(calls('/api/v1/config')).toHaveLength(1));
     expect(server.settings.guards).toBe(mode);
     expect(checked('Enable guards')).toBe('true');
+    view.rerender(<Host section="settings" />);
     expect(save().hasAttribute('disabled')).toBe(true);
     fireEvent.click(save());
     expect(calls('/api/v1/config', 'PUT')).toHaveLength(0);
     await act(async () => refresh.resolve(jsonResponse(config(server.settings))));
-    await ready();
+    await waitFor(() => expect(save().hasAttribute('disabled')).toBe(false));
     expect(checked('Debug logging')).toBe('true');
     expect(screen.getByRole('button', { name: 'Light' }).getAttribute('aria-pressed')).toBe('true');
     fireEvent.click(save());
@@ -321,9 +387,10 @@ describe('SettingsLocalGuardsCard in SettingsView', () => {
 
   it.each([false, true])('adopts external enable, disable, and pack changes with dirty=%s', async (dirty) => {
     const { Host, server, poll, calls } = setup('off');
-    render(<Host />);
-    await ready();
+    const view = render(<Host section="settings" />);
     if (dirty) fireEvent.click(screen.getByRole('switch', { name: 'Debug logging' }));
+    view.rerender(<Host section="security" />);
+    await ready();
     server.settings.guards = 'failclosed';
     server.guards = guards({ packs: [pack({ enabled: true })] });
     await poll();
@@ -337,6 +404,7 @@ describe('SettingsLocalGuardsCard in SettingsView', () => {
     await poll();
     expect(checked('Enable guards')).toBe('false');
     expect(screen.queryByRole('switch', { name: 'Secret redaction' })).toBeNull();
+    view.rerender(<Host section="settings" />);
     expect(checked('Debug logging')).toBe(String(dirty));
     if (dirty) {
       fireEvent.click(save());
@@ -350,12 +418,14 @@ describe('SettingsLocalGuardsCard in SettingsView', () => {
     'failclosed',
   ])('saves an unrelated dirty edit with externally enabled %s guards', async (mode) => {
     const { Host, server, poll, calls } = setup('off');
-    render(<Host />);
-    await ready();
+    const view = render(<Host section="settings" />);
     fireEvent.click(screen.getByRole('switch', { name: 'Debug logging' }));
+    view.rerender(<Host section="security" />);
+    await ready();
     server.settings.guards = mode;
     server.guards.enabled = true;
     await poll();
+    view.rerender(<Host section="settings" />);
     fireEvent.click(save());
     await waitFor(() => expect(calls('/api/v1/config', 'PUT')).toHaveLength(1));
     expect(server.settings).toMatchObject({ guards: mode, debug: true });
@@ -363,7 +433,7 @@ describe('SettingsLocalGuardsCard in SettingsView', () => {
 
   it('uses config enabled state even if the pack GET returns an older enabled value', async () => {
     const { Host, server, poll } = setup();
-    render(<Host />);
+    render(<Host section="security" />);
     await ready();
     server.settings.guards = 'off';
     server.guardGets.push(Promise.resolve(jsonResponse(guards({ enabled: true }))));
@@ -373,7 +443,7 @@ describe('SettingsLocalGuardsCard in SettingsView', () => {
 
   it('does not let a pending pack refresh undo a pack PUT', async () => {
     const { Host, server, poll, calls } = setup();
-    render(<Host />);
+    render(<Host section="security" />);
     await ready();
     const refresh = deferred<Response>();
     server.guardGets.push(refresh.promise);
@@ -389,7 +459,7 @@ describe('SettingsLocalGuardsCard in SettingsView', () => {
   it('keeps the last good state on PUT failure and allows retry', async () => {
     const { Host, server, calls } = setup('off');
     server.guardPuts.push(Promise.resolve(new Response('disk is read-only', { status: 500 })));
-    render(<Host />);
+    render(<Host section="security" />);
     await ready();
     fireEvent.click(master());
     expect(await screen.findByText('disk is read-only')).toBeTruthy();
@@ -404,12 +474,18 @@ describe('SettingsLocalGuardsCard in SettingsView', () => {
   it('keeps mutations disabled after an initial GET error until a poll recovers', async () => {
     const { Host, server, poll, calls } = setup('off');
     server.guardGets.push(Promise.resolve(new Response('cannot read packs', { status: 500 })));
-    render(<Host />);
+    const view = render(<Host section="security" />);
     expect(await screen.findByText('cannot read packs')).toBeTruthy();
     expect(master().hasAttribute('disabled')).toBe(true);
     fireEvent.click(master());
     expect(calls('/api/v1/guards', 'PUT')).toHaveLength(0);
+    view.rerender(<Host section="settings" />);
+    fireEvent.click(screen.getByRole('switch', { name: 'Debug logging' }));
+    expect(screen.queryByText('cannot read packs')).toBeNull();
+    expect(screen.queryByText("Couldn't refresh settings")).toBeNull();
+    expect(save().hasAttribute('disabled')).toBe(false);
     await poll();
+    view.rerender(<Host section="security" />);
     await ready();
     expect(screen.queryByText('cannot read packs')).toBeNull();
   });
@@ -418,17 +494,26 @@ describe('SettingsLocalGuardsCard in SettingsView', () => {
     const { Host, server, poll, calls } = setup('off');
     server.failureMode = 'failclosed';
     server.configGets.push(Promise.resolve(new Response('config unavailable', { status: 500 })));
-    render(<Host />);
-    await ready();
+    const view = render(<Host section="settings" />);
     fireEvent.click(screen.getByRole('switch', { name: 'Debug logging' }));
+    view.rerender(<Host section="security" />);
+    await ready();
     fireEvent.click(master());
     expect(await screen.findByText(/Guards saved, but settings refresh failed/)).toBeTruthy();
     expect(checked('Enable guards')).toBe('true');
-    expect(save().hasAttribute('disabled')).toBe(true);
+    view.rerender(<Host section="settings" />);
+    for (const tab of ['local', 'cloud', 'history']) {
+      view.rerender(<Host section="settings" tab={tab} />);
+      expect(screen.getByText(/Guards saved, but settings refresh failed/).textContent).toContain('config unavailable');
+      expect(save().hasAttribute('disabled')).toBe(true);
+      fireEvent.click(screen.getByRole('button', { name: 'Reset' }));
+      expect(save().hasAttribute('disabled')).toBe(true);
+    }
     fireEvent.click(save());
     expect(calls('/api/v1/config', 'PUT')).toHaveLength(0);
     await poll();
-    await ready();
+    expect(screen.queryByText(/Guards saved, but settings refresh failed/)).toBeNull();
+    expect(save().hasAttribute('disabled')).toBe(false);
     fireEvent.click(save());
     await waitFor(() => expect(calls('/api/v1/config', 'PUT')).toHaveLength(1));
     expect(server.settings).toMatchObject({ guards: 'failclosed', debug: true });
@@ -441,7 +526,7 @@ describe('SettingsLocalGuardsCard in SettingsView', () => {
     const { Host, server, poll, calls } = setup('off');
     const refresh = deferred<Response>();
     server.configGets.push(refresh.promise);
-    render(<Host />);
+    render(<Host section="security" />);
     await ready();
     fireEvent.click(master());
     await waitFor(() => expect(calls('/api/v1/config')).toHaveLength(1));
@@ -458,20 +543,22 @@ describe('SettingsLocalGuardsCard in SettingsView', () => {
     expect(screen.queryByText(/old refresh failed/)).toBeNull();
   });
 
-  it('finishes the guard write after switching tabs and does not lose dirty edits', async () => {
+  it('finishes the guard write after switching sections and tabs and does not lose dirty edits', async () => {
     const { Host, server, calls } = setup('off');
     const refresh = deferred<Response>();
     server.configGets.push(refresh.promise);
-    const view = render(<Host />);
-    await ready();
+    const view = render(<Host section="settings" />);
     fireEvent.click(screen.getByRole('switch', { name: 'Debug logging' }));
+    view.rerender(<Host section="security" />);
+    await ready();
     fireEvent.click(master());
     await waitFor(() => expect(calls('/api/v1/config')).toHaveLength(1));
-    view.rerender(<Host tab="cloud" />);
+    view.rerender(<Host section="settings" tab="cloud" />);
     await act(async () => refresh.resolve(jsonResponse(config(server.settings))));
-    view.rerender(<Host />);
+    view.rerender(<Host section="security" />);
     await ready();
     expect(checked('Enable guards')).toBe('true');
+    view.rerender(<Host section="settings" />);
     expect(checked('Debug logging')).toBe('true');
     fireEvent.click(save());
     await waitFor(() => expect(calls('/api/v1/config', 'PUT')).toHaveLength(1));
@@ -494,10 +581,11 @@ describe('SettingsLocalGuardsCard in SettingsView', () => {
     if (stage === 'PUT') server.guardPuts.push(pending.promise);
     if (stage === 'refresh') server.configGets.push(pending.promise);
     if (stage === 'Save') server.configPuts.push(pending.promise);
-    const view = render(<Host />);
+    const view = render(<Host section="security" />);
     if (stage !== 'GET') {
       await ready();
       if (stage === 'Save') {
+        view.rerender(<Host section="settings" />);
         fireEvent.click(screen.getByRole('switch', { name: 'Debug logging' }));
         fireEvent.click(save());
       } else fireEvent.click(master());
@@ -517,12 +605,17 @@ describe('SettingsLocalGuardsCard in SettingsView', () => {
     const { Host, server, calls } = setup('off');
     const pending = deferred<Response>();
     server.guardPuts.push(pending.promise);
-    render(<Host />);
+    const view = render(<Host section="security" />);
     await ready();
     fireEvent.click(master());
+    view.rerender(<Host section="settings" />);
     fireEvent.click(screen.getByRole('switch', { name: 'Debug logging' }));
     fireEvent.click(screen.getByRole('button', { name: 'Light' }));
+    view.rerender(<Host section="security" />);
+    expect(master().hasAttribute('disabled')).toBe(true);
     fireEvent.click(master());
+    view.rerender(<Host section="settings" />);
+    expect(save().hasAttribute('disabled')).toBe(true);
     fireEvent.click(save());
     expect(calls('/api/v1/guards', 'PUT')).toHaveLength(1);
     expect(calls('/api/v1/config', 'PUT')).toHaveLength(0);
@@ -530,7 +623,7 @@ describe('SettingsLocalGuardsCard in SettingsView', () => {
     server.settings.userId = 'external-user';
     server.guards.enabled = true;
     await act(async () => pending.resolve(jsonResponse(server.guards)));
-    await ready();
+    await waitFor(() => expect(save().hasAttribute('disabled')).toBe(false));
     expect(checked('Debug logging')).toBe('true');
     expect(screen.getByDisplayValue('external-user')).toBeTruthy();
     fireEvent.click(save());
@@ -545,16 +638,19 @@ describe('SettingsLocalGuardsCard in SettingsView', () => {
 
   it('keeps guards enabled and edits pending when config Save fails', async () => {
     const { Host, server } = setup('off');
-    render(<Host />);
+    const view = render(<Host section="security" />);
     await ready();
     fireEvent.click(master());
     await ready();
+    view.rerender(<Host section="settings" />);
     fireEvent.click(screen.getByRole('switch', { name: 'Debug logging' }));
     server.configPuts.push(Promise.resolve(new Response('config write failed', { status: 500 })));
     fireEvent.click(save());
     expect(await screen.findByText('config write failed')).toBeTruthy();
+    view.rerender(<Host section="security" />);
     await ready();
     expect(checked('Enable guards')).toBe('true');
+    view.rerender(<Host section="settings" />);
     expect(checked('Debug logging')).toBe('true');
     fireEvent.click(save());
     await waitFor(() => expect(screen.queryByText('Unsaved changes')).toBeNull());
@@ -572,13 +668,16 @@ describe('SettingsLocalGuardsCard in SettingsView', () => {
     const { Host, server, poll, calls } = setup(savedMode);
     server.settings.endpoint = 'https://stack.example.test';
     server.settings.localForward = true;
-    const view = render(<Host tab="cloud" />);
+    const view = render(<Host section="settings" tab="cloud" />);
     fireEvent.click(screen.getByRole('button', { name: draft }));
-    await act(async () => view.rerender(<Host />));
+    view.rerender(<Host section="settings" />);
     fireEvent.click(screen.getByRole('switch', { name: 'Debug logging' }));
+    view.rerender(<Host section="security" />);
+    await ready();
     const refresh = deferred<Response>();
     server.configGets.push(refresh.promise);
     await act(async () => fireEvent.click(screen.getByRole('switch', { name: 'Git safety' })));
+    view.rerender(<Host section="settings" />);
     expect(save().hasAttribute('disabled')).toBe(true);
     expect(JSON.parse(String(calls('/api/v1/guards', 'PUT')[0]?.[1]?.body))).toEqual({ packs: { git: true } });
     if (recovery === 'failed refresh') {
@@ -590,8 +689,10 @@ describe('SettingsLocalGuardsCard in SettingsView', () => {
     }
     expect(save().hasAttribute('disabled')).toBe(false);
     expect(checked('Debug logging')).toBe('true');
+    view.rerender(<Host section="security" />);
+    await ready();
     expect(checked('Git safety')).toBe('true');
-    view.rerender(<Host tab="cloud" />);
+    view.rerender(<Host section="settings" tab="cloud" />);
     expect(screen.getByRole('button', { name: draft }).getAttribute('aria-pressed')).toBe('true');
     await act(async () => fireEvent.click(save()));
     expect(server.settings).toMatchObject({ guards: mode, debug: true });
@@ -613,10 +714,12 @@ describe('SettingsLocalGuardsCard in SettingsView', () => {
     server.failureMode = actual;
     server.settings.endpoint = 'https://stack.example.test';
     server.settings.localForward = true;
-    const view = render(<Host tab="cloud" />);
+    const view = render(<Host section="settings" tab="cloud" />);
     fireEvent.click(screen.getByRole('button', { name: actual === 'failopen' ? 'Fail closed' : 'Fail open' }));
-    await act(async () => view.rerender(<Host />));
+    view.rerender(<Host section="settings" />);
     fireEvent.click(screen.getByRole('switch', { name: 'Debug logging' }));
+    view.rerender(<Host section="security" />);
+    await ready();
     const refresh = deferred<Response>();
     server.configGets.push(refresh.promise);
     await act(async () => fireEvent.click(master()));
@@ -627,8 +730,8 @@ describe('SettingsLocalGuardsCard in SettingsView', () => {
       await act(async () => refresh.resolve(jsonResponse(config(server.settings))));
     }
     expect(checked('Enable guards')).toBe(String(actual !== 'off'));
+    view.rerender(<Host section="settings" tab="cloud" />);
     expect(save().hasAttribute('disabled')).toBe(false);
-    view.rerender(<Host tab="cloud" />);
     expect(screen.getByRole('button', { name: label }).getAttribute('aria-pressed')).toBe('true');
     await act(async () => fireEvent.click(save()));
     expect(server.settings).toMatchObject({ guards: actual, debug: true });
@@ -638,10 +741,12 @@ describe('SettingsLocalGuardsCard in SettingsView', () => {
     const { Host, server, calls } = setup();
     const pending = deferred<Response>();
     server.configPuts.push(pending.promise);
-    render(<Host />);
+    const view = render(<Host section="security" />);
     await ready();
+    view.rerender(<Host section="settings" />);
     fireEvent.click(screen.getByRole('switch', { name: 'Debug logging' }));
     fireEvent.click(save());
+    view.rerender(<Host section="security" />);
     expect(master().hasAttribute('disabled')).toBe(true);
     fireEvent.click(master());
     expect(calls('/api/v1/guards', 'PUT')).toHaveLength(0);
@@ -655,13 +760,27 @@ function themeShortcut() {
   fireEvent.keyDown(window, { key: 't' });
 }
 
-async function renderApp() {
+async function renderApp(section: 'settings' | 'security') {
   vi.useFakeTimers();
-  window.history.replaceState({}, '', '/settings?tab=local');
+  window.history.replaceState({}, '', section === 'security' ? '/security' : '/settings?tab=local');
   await act(async () => {
     render(<App />);
   });
-  expect(master().hasAttribute('disabled')).toBe(false);
+  if (section === 'security') expect(master().hasAttribute('disabled')).toBe(false);
+  else expect(checked('Debug logging')).toBe('false');
+}
+
+async function appSection(section: 'settings' | 'security') {
+  await act(async () => {
+    fireEvent.click(
+      within(screen.getByRole('navigation')).getByRole('link', {
+        name: section === 'security' ? 'Security' : 'Settings',
+      }),
+    );
+  });
+  if (section === 'settings') {
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: /^Local / })));
+  }
 }
 
 async function appPoll() {
@@ -673,6 +792,81 @@ function lastConfigPut(calls: ReturnType<typeof setup>['calls']) {
 }
 
 describe('App config writes', () => {
+  it.each(['failed', 'pending'])('explains blocked Settings saves after a %s entry refresh', async (entry) => {
+    const { server, calls } = setup();
+    await renderApp('settings');
+    fireEvent.click(screen.getByRole('switch', { name: 'Debug logging' }));
+    await appSection('security');
+    server.configGets.push(Promise.resolve(new Response('config unavailable', { status: 500 })));
+    await act(async () => fireEvent.click(master()));
+    expect(checked('Enable guards')).toBe('false');
+    expect(screen.getByText(/Guards saved, but settings refresh failed/)).toBeTruthy();
+    server.configGets.push(
+      entry === 'failed'
+        ? Promise.resolve(new Response('entry unavailable', { status: 500 }))
+        : deferred<Response>().promise,
+    );
+    await appSection('settings');
+    expect(screen.getByText(/Guards saved, but settings refresh failed/).textContent).toContain('config unavailable');
+    expect(save().hasAttribute('disabled')).toBe(true);
+    expect(checked('Debug logging')).toBe('true');
+    fireEvent.click(save());
+    fireEvent.click(screen.getByRole('button', { name: 'Reset' }));
+    expect(calls('/api/v1/config', 'PUT')).toHaveLength(0);
+    expect(checked('Debug logging')).toBe('true');
+    await appPoll();
+    expect(screen.queryByText(/Guards saved, but settings refresh failed/)).toBeNull();
+    expect(save().hasAttribute('disabled')).toBe(false);
+    await act(async () => fireEvent.click(save()));
+    expect(lastConfigPut(calls)).toMatchObject({ guards: 'off', debug: true });
+  });
+
+  it('blocks theme shortcuts on Security while a Settings draft is retained', async () => {
+    const { calls } = setup();
+    await renderApp('settings');
+    fireEvent.click(screen.getByRole('switch', { name: 'Debug logging' }));
+    const reads = calls('/api/v1/config').length;
+    await appSection('security');
+    expect(calls('/api/v1/config')).toHaveLength(reads + 1);
+    expect(master().hasAttribute('disabled')).toBe(false);
+    expect(screen.queryByRole('button', { name: 'Save to config.env' })).toBeNull();
+    await act(async () => themeShortcut());
+    expect(calls('/api/v1/config', 'PATCH')).toHaveLength(0);
+    expect(calls('/api/v1/config', 'PUT')).toHaveLength(0);
+    expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
+    await appSection('settings');
+    expect(calls('/api/v1/config')).toHaveLength(reads + 2);
+    expect(checked('Debug logging')).toBe('true');
+    expect(screen.getByRole('button', { name: 'Dark' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByText('Unsaved changes')).toBeTruthy();
+    await act(async () => fireEvent.click(save()));
+    expect(lastConfigPut(calls)).toMatchObject({ debug: true, theme: 'dark' });
+    await appSection('security');
+    await act(async () => themeShortcut());
+    expect(calls('/api/v1/config', 'PATCH')).toHaveLength(1);
+    expect(document.documentElement.getAttribute('data-theme')).toBe('light');
+  });
+
+  it('applies the retained draft theme only on Settings, not Security', async () => {
+    const { calls } = setup();
+    await renderApp('settings');
+    fireEvent.click(screen.getByRole('button', { name: 'Light' }));
+    expect(document.documentElement.getAttribute('data-theme')).toBe('light');
+    await appSection('security');
+    expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
+    expect(screen.queryByRole('button', { name: 'Light' })).toBeNull();
+    await appPoll();
+    expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
+    await appSection('settings');
+    expect(document.documentElement.getAttribute('data-theme')).toBe('light');
+    expect(screen.getByRole('button', { name: 'Light' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByText('Unsaved changes')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Reset' }));
+    expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
+    expect(calls('/api/v1/config', 'PUT')).toHaveLength(0);
+    expect(calls('/api/v1/config', 'PATCH')).toHaveLength(0);
+  });
+
   it('blocks shortcuts before config loads and guard writes before packs load', async () => {
     const { server, calls } = setup('off');
     const firstConfig = deferred<Response>();
@@ -681,7 +875,7 @@ describe('App config writes', () => {
     server.configGets.push(firstConfig.promise, secondConfig.promise);
     server.guardGets.push(firstGuards.promise);
     vi.useFakeTimers();
-    window.history.replaceState({}, '', '/settings?tab=local');
+    window.history.replaceState({}, '', '/security');
     await act(async () => {
       render(<App />);
     });
@@ -703,7 +897,7 @@ describe('App config writes', () => {
     const { server, calls } = setup('off');
     const put = deferred<Response>();
     const refresh = deferred<Response>();
-    await renderApp();
+    await renderApp('security');
     server.guardPuts.push(put.promise);
     server.configGets.push(refresh.promise);
     await act(async () => fireEvent.click(master()));
@@ -731,33 +925,45 @@ describe('App config writes', () => {
     server.failureMode = mode;
     const patch = deferred<Response>();
     server.configPatches.push(patch.promise);
-    await renderApp();
+    await renderApp('settings');
     await act(async () => themeShortcut());
     expect(calls('/api/v1/config', 'PATCH')).toHaveLength(1);
     const oldThemeReply = config(server.settings);
     fireEvent.click(screen.getByRole('switch', { name: 'Debug logging' }));
+    // The entry GET must not consume the queued guard refresh.
+    await appSection('security');
     const refresh = deferred<Response>();
     server.configGets.push(refresh.promise);
     await act(async () => fireEvent.click(master()));
     expect(checked('Enable guards')).toBe('true');
+    // Do not let the Settings-entry GET recover the deliberately stalled refresh.
+    server.configGets.push(deferred<Response>().promise);
+    await appSection('settings');
     expect(save().hasAttribute('disabled')).toBe(true);
     await act(async () => patch.resolve(jsonResponse(oldThemeReply)));
     expect(save().hasAttribute('disabled')).toBe(true);
     await act(async () => refresh.resolve(jsonResponse(config(server.settings))));
+    expect(save().hasAttribute('disabled')).toBe(false);
+    expect(checked('Debug logging')).toBe('true');
+    server.configGets.push(deferred<Response>().promise);
+    await appSection('security');
     expect(master().hasAttribute('disabled')).toBe(false);
     expect(checked('Enable guards')).toBe('true');
-    expect(checked('Debug logging')).toBe('true');
+    server.configGets.push(deferred<Response>().promise);
+    await appSection('settings');
     await act(async () => fireEvent.click(save()));
     expect(lastConfigPut(calls)).toMatchObject({ guards: mode, debug: true });
-    expect(checked('Enable guards')).toBe('true');
     expect(screen.queryByText('Unsaved changes')).toBeNull();
+    await appSection('security');
+    expect(master().hasAttribute('disabled')).toBe(false);
+    expect(checked('Enable guards')).toBe('true');
   });
 
   it.each(['during', 'after'])('rejects old theme replies and queued shortcuts %s a config PUT', async (when) => {
     const { server, calls } = setup();
     const patch = deferred<Response>();
     server.configPatches.push(patch.promise);
-    await renderApp();
+    await renderApp('settings');
     await act(async () => themeShortcut());
     const oldThemeReply = config(server.settings);
     await act(async () => themeShortcut());
@@ -785,30 +991,39 @@ describe('App config writes', () => {
   ])('recovers a hung guard refresh on a newer poll before its late %s', async (outcome) => {
     const { server, calls } = setup('off');
     server.failureMode = 'failclosed';
-    await renderApp();
+    await renderApp('settings');
+    fireEvent.click(screen.getByRole('switch', { name: 'Debug logging' }));
+    await appSection('security');
     const oldPoll = deferred<Response>();
     const beforeEnable = config(server.settings);
     server.configGets.push(oldPoll.promise);
     await appPoll();
-    fireEvent.click(screen.getByRole('switch', { name: 'Debug logging' }));
     const refresh = deferred<Response>();
     server.configGets.push(refresh.promise);
     await act(async () => fireEvent.click(master()));
     const refreshCall = calls('/api/v1/config').at(-1);
     const oldRefresh = config(server.settings);
     await act(async () => oldPoll.resolve(jsonResponse(beforeEnable)));
-    expect(save().hasAttribute('disabled')).toBe(true);
     expect(master().hasAttribute('disabled')).toBe(true);
+    // Section-entry reads must stay pending: only the later successful poll may recover this write.
+    server.configGets.push(deferred<Response>().promise);
+    await appSection('settings');
+    expect(save().hasAttribute('disabled')).toBe(true);
     server.configGets.push(Promise.resolve(new Response('config unavailable', { status: 500 })));
     await appPoll();
     expect(save().hasAttribute('disabled')).toBe(true);
+    server.configGets.push(deferred<Response>().promise);
+    await appSection('security');
     expect(master().hasAttribute('disabled')).toBe(true);
     await appPoll();
     expect(refreshCall?.[1]?.signal?.aborted).toBe(true);
     expect(master().hasAttribute('disabled')).toBe(false);
-    expect(save().hasAttribute('disabled')).toBe(false);
     expect(checked('Enable guards')).toBe('true');
+    server.configGets.push(deferred<Response>().promise);
+    await appSection('settings');
+    expect(save().hasAttribute('disabled')).toBe(false);
     expect(checked('Debug logging')).toBe('true');
+    await appSection('security');
 
     const nextPut = deferred<Response>();
     server.guardPuts.push(nextPut.promise);
@@ -818,14 +1033,20 @@ describe('App config writes', () => {
       else refresh.reject(new Error('old refresh failed'));
     });
     expect(master().hasAttribute('disabled')).toBe(true);
-    expect(save().hasAttribute('disabled')).toBe(true);
     expect(screen.queryByText(/old refresh failed/)).toBeNull();
+    server.configGets.push(deferred<Response>().promise);
+    await appSection('settings');
+    expect(save().hasAttribute('disabled')).toBe(true);
     expect(calls('/api/v1/guards', 'PUT')).toHaveLength(2);
     server.settings.guards = 'off';
     server.guards.enabled = false;
     await act(async () => nextPut.resolve(jsonResponse(server.guards)));
+    expect(save().hasAttribute('disabled')).toBe(false);
+    server.configGets.push(deferred<Response>().promise);
+    await appSection('security');
     expect(master().hasAttribute('disabled')).toBe(false);
     expect(checked('Enable guards')).toBe('false');
+    await appSection('settings');
     await act(async () => fireEvent.click(save()));
     expect(lastConfigPut(calls)).toMatchObject({ guards: 'off', debug: true });
   });
@@ -834,12 +1055,12 @@ describe('App config writes', () => {
     const { server } = setup();
     const patch = deferred<Response>();
     server.configPatches.push(patch.promise);
-    await renderApp();
+    await renderApp('settings');
     await act(async () => themeShortcut());
     const oldThemeReply = config(server.settings);
     cleanup();
     server.settings.theme = 'system';
-    await renderApp();
+    await renderApp('settings');
     await act(async () => {
       if (outcome === 'success') patch.resolve(jsonResponse(oldThemeReply));
       else patch.reject(new Error('old theme failed'));

@@ -156,6 +156,8 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /conversations/{id}/{$}", s.handleIndex)
 	mux.HandleFunc("GET /settings", s.handleIndex)
 	mux.HandleFunc("GET /settings/{$}", s.handleIndex)
+	mux.HandleFunc("GET /security", s.handleIndex)
+	mux.HandleFunc("GET /security/{$}", s.handleIndex)
 	mux.HandleFunc("GET /analytics", s.handleIndex)
 	mux.HandleFunc("GET /analytics/{$}", s.handleIndex)
 	mux.HandleFunc("GET /assets/app.css", s.handleAppCSS)
