@@ -1,7 +1,6 @@
 package guardeval
 
 import (
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -263,15 +262,10 @@ func toolArguments(messages []agento11y.Message) []string {
 				continue
 			}
 			name := strings.TrimSpace(part.ToolCall.Name)
-			input := strings.TrimSpace(string(part.ToolCall.InputJSON))
-			if input != "" {
-				var decoded any
-				if json.Unmarshal(part.ToolCall.InputJSON, &decoded) == nil {
-					if canonical, err := json.Marshal(decoded); err == nil {
-						input = string(canonical)
-					}
-				}
-			}
+			// Use the same canonicalization as tool-qualified policy matches.
+			// Besides decoding JSON escapes, it preserves large JSON numbers and
+			// leaves <, >, and & readable instead of HTML-escaping them.
+			input := toolArgsForMatch(part.ToolCall.InputJSON)
 			subject := "[tool_call]"
 			if name != "" {
 				subject += " " + name

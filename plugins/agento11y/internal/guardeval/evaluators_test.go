@@ -92,6 +92,14 @@ func TestToolArguments_DecodesJSONWithoutJoiningCalls(t *testing.T) {
 	}, toolArguments(in.Output))
 }
 
+func TestToolArguments_PreservesReadableJSONCharactersAndLargeNumbers(t *testing.T) {
+	in := toolCalls(toolCallSpec{name: "webhook", inputJSON: "{\"patient\":\"\\u003cperson\\u003e\\u0026co\",\"record\":123456789012345678901234567890}"}).Input
+
+	assert.Equal(t, []string{
+		`[tool_call] webhook {"patient":"<person>&co","record":123456789012345678901234567890}`,
+	}, toolArguments(in.Output))
+}
+
 func TestRegexEvaluator_RejectAndTarget(t *testing.T) {
 	cases := []struct {
 		name            string
