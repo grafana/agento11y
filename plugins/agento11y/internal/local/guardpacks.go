@@ -221,11 +221,11 @@ var phiEgressPreview = []string{
 // data controller, authorization, purpose, and destination. These patterns
 // therefore only identify high-confidence identifiers or a person-plus-health
 // context in a single tool call.
-const phiStrongIdentifierPattern = `(?:\b(?:mrn|medical[ _-]?record(?:[ _-]?number)?|patient[ _-]?id)\b["']?\s*[:=]\s*["']?[A-Za-z0-9-]{4,}|\b(?:ssn|social[ _-]?security(?:[ _-]?number)?)\b["']?\s*[:=]\s*["']?\d{3}-?\d{2}-?\d{4}\b)`
+const phiStrongIdentifierPattern = `(?:\b(?:mrn|medical[ _-]?record(?:[ _-]?number)?|patient[ _-]?id)\b\\?["']?\s*[:=]\s*\\?["']?[A-Za-z0-9-]{4,}|\b(?:ssn|social[ _-]?security(?:[ _-]?number)?)\b\\?["']?\s*[:=]\s*\\?["']?\d{3}-?\d{2}-?\d{4}\b)`
 const phiHealthContextPattern = `(?:\b(?:patient|member)\b.*\b(?:diagnos(?:is|ed)|treat(?:ment|ed)?|medication|prescription|condition|symptoms?)\b|\b(?:diagnos(?:is|ed)|treat(?:ment|ed)?|medication|prescription|condition|symptoms?)\b.*\b(?:patient|member)\b)`
 const directEgressToolPattern = `(?:http(?:[_-]?request)?|webhook|fetch|send[_-]?(?:email|message)|email|slack|teams|discord|pagerduty|notion|linear|github|gitlab|upload(?:[_-]?file)?|mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_-]+)`
 const shellToolPattern = `(?:bash|shell|run[_-]?terminal[_-]?cmd|execute[_-]?command|run[_-]?command|terminal|powershell|pwsh)`
-const shellEgressCommandPattern = `(?:curl|wget|httpie|scp|sftp|rsync|nc|ncat)\b`
+const shellEgressCommandPattern = `\b(?:curl|wget|httpie|scp|sftp|rsync|nc|ncat)\b`
 const phiPattern = `(?:` + phiStrongIdentifierPattern + `|` + phiHealthContextPattern + `)`
 
 var phiEgressPatterns = []any{
