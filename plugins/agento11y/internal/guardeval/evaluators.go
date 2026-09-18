@@ -1,6 +1,7 @@
 package guardeval
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -36,6 +37,11 @@ const (
 	evalTargetResponse     = "response"
 	evalTargetInput        = "input"
 	evalTargetSystemPrompt = "system_prompt"
+	// evalTargetToolArguments evaluates one decoded JSON argument document per
+	// proposed tool call. It preserves the labelled tool-call prefix, so rules
+	// can combine a tool identity with argument content without JSON escapes
+	// hiding the value they inspect.
+	evalTargetToolArguments = "tool_arguments"
 	// evalTargetShellCommand evaluates the decoded command line of a shell tool
 	// call instead of the flattened, JSON-escaped tool call text. See shell.go.
 	evalTargetShellCommand = "shell_command"
@@ -103,19 +109,21 @@ func compileEvaluator(spec EvaluatorSpec) (*compiledEvaluator, error) {
 // at all. passed and explanation are the outcome and the text for the deny
 // reason.
 //
-// Every subject is matched on its own. The shell_command target contributes one
-// subject per shell tool call, so a pattern cannot match text formed by joining
-// two commands; every other target contributes exactly one. Several subjects
-// still give one verdict: the evaluator answers on whether any subject matched.
+// Every subject is matched on its own. The shell_command and tool_arguments
+// targets contribute one subject per tool call, so a pattern cannot match text
+// formed by joining two calls; every other target contributes exactly one.
+// Several subjects still give one verdict: the evaluator answers on whether any
+// subject matched.
 //
 // Only compileEvaluator's regex branch builds a compiledEvaluator, so this runs
 // the patterns without asking which kind it holds.
 func runEvaluator(ce *compiledEvaluator, in agento11y.HookInput) (ran, passed bool, explanation string) {
 	subjects := subjectsFor(ce.target, in, ce.shell)
 	if len(subjects) == 0 {
-		// Only shell_command projects nothing. A rule written about shell commands
-		// has no opinion on a tool that runs none, so it must not fail here: a
-		// required-pattern rule would deny every non-shell call.
+		// shell_command and tool_arguments can project nothing. A rule written
+		// about those subjects has no opinion on a request with no matching calls,
+		// so it must not fail here: a required-pattern rule would otherwise deny
+		// every unrelated request.
 		return false, true, ""
 	}
 
@@ -202,12 +210,12 @@ func parseEvalTarget(raw string) (string, error) {
 		return evalTargetResponse, nil
 	}
 	switch trimmed {
-	case evalTargetResponse, evalTargetInput, evalTargetSystemPrompt, evalTargetShellCommand:
+	case evalTargetResponse, evalTargetInput, evalTargetSystemPrompt, evalTargetToolArguments, evalTargetShellCommand:
 		return trimmed, nil
 	default:
 		// The message quotes what was written, not the lowercased form, so it
 		// names the text to go and change.
-		return "", fmt.Errorf("target %q is invalid; must be one of: response, input, system_prompt, shell_command", strings.TrimSpace(raw))
+		return "", fmt.Errorf("target %q is invalid; must be one of: response, input, system_prompt, tool_arguments, shell_command", strings.TrimSpace(raw))
 	}
 }
 
@@ -224,14 +232,17 @@ func parseTargetAndShell(config map[string]any) (string, shellConfig, error) {
 }
 
 // subjectsFor returns the subjects an evaluator judges for the given target. It
-// computes only the target it returns: the shell_command projection costs a
-// JSON decode per tool call, and flattening a long message history is not free
-// either. shell_command yields one subject per shell tool call, and none when
-// the call runs no command; every other target yields exactly one.
+// computes only the target it returns: the shell_command and tool_arguments
+// projections decode JSON per tool call, and flattening a long message history
+// is not free either. Those projections yield one subject per tool call, and
+// shell_command yields none when the call runs no command; every other target
+// yields exactly one.
 func subjectsFor(target string, in agento11y.HookInput, shell shellConfig) []string {
 	switch target {
 	case evalTargetShellCommand:
 		return shellCommands(in, shell)
+	case evalTargetToolArguments:
+		return toolArguments(in.Output)
 	case evalTargetInput:
 		return []string{flatten(in.Messages)}
 	case evalTargetSystemPrompt:
@@ -239,6 +250,39 @@ func subjectsFor(target string, in agento11y.HookInput, shell shellConfig) []str
 	default:
 		return []string{flatten(in.Output)}
 	}
+}
+
+// toolArguments renders one stable, decoded tool-call subject per output call.
+// A malformed JSON argument is kept as written so a rule can still match a
+// literal payload rather than silently losing coverage.
+func toolArguments(messages []agento11y.Message) []string {
+	subjects := make([]string, 0)
+	for _, message := range messages {
+		for _, part := range message.Parts {
+			if part.ToolCall == nil {
+				continue
+			}
+			name := strings.TrimSpace(part.ToolCall.Name)
+			input := strings.TrimSpace(string(part.ToolCall.InputJSON))
+			if input != "" {
+				var decoded any
+				if json.Unmarshal(part.ToolCall.InputJSON, &decoded) == nil {
+					if canonical, err := json.Marshal(decoded); err == nil {
+						input = string(canonical)
+					}
+				}
+			}
+			subject := "[tool_call]"
+			if name != "" {
+				subject += " " + name
+			}
+			if input != "" {
+				subject += " " + input
+			}
+			subjects = append(subjects, subject)
+		}
+	}
+	return subjects
 }
 
 func cfgString(config map[string]any, key, def string) string {

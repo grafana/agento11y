@@ -130,7 +130,7 @@ It allows general educational requests such as explaining employment fairness or
 
 ### PHI-like data egress
 
-This pack denies recognizable outbound tool calls and shell network commands when their arguments include either a labelled high-confidence identifier (such as an MRN, medical-record number, patient ID, or SSN) or a patient/member reference paired with diagnosis, treatment, medication, prescription, condition, or symptom information. It recognizes common outbound tool names and shell egress commands including `curl`, `wget`, `scp`, and `rsync`.
+This pack denies recognizable outbound tool calls and shell network commands when their arguments include either a labelled high-confidence identifier (such as an MRN, medical-record number, patient ID, or SSN) or a patient/member reference paired with diagnosis, treatment, medication, prescription, condition, or symptom information. It decodes JSON tool arguments before matching, recognizes common outbound tool names, treats named MCP tools as potentially outbound, and recognizes shell egress commands including `curl`, `wget`, `scp`, and `rsync`.
 
 It allows health-policy text, local file writes, and outbound calls without those indicators. It cannot identify every outbound tool, inspect indirect data in files or variables, determine whether the recipient is authorized, or decide whether the use has a permitted purpose or meets a minimum-necessary standard. It is a narrow data-egress control, not a HIPAA compliance determination.
 
