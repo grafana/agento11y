@@ -814,16 +814,18 @@ with experiments.experiment("nightly", experiment_id="nightly-42") as exp:
             print(case_id, evaluation.status.value, evaluation.attempts)
 ```
 
-The evaluator must already exist in Grafana Cloud; the SDK does not create it. A
-trial graded this way closes as `completed` with no local `final_score`.
+Use `EvaluatorsClient.ensure(StoredEvaluator(...))` to provision a versioned
+definition, or reference an existing evaluator. A trial graded this way closes
+as `completed` with no local `final_score`.
 
 Three consequences worth knowing before you go looking for the score:
 
 - The score is attached to the conversation and the trial, not to a generation,
   so a per-generation score lookup returns nothing. Read it from the
   experiment's scores or from each trial's `scores` in `exp.report()`.
-- `pass_rate` in the report stays unset, because that verdict comes from a score
-  stored under the `final` key and a stored evaluator writes under its own key.
+- `pass_rate` in the report stays unset because the stored evaluator writes an
+  unannotated score under its own key. Reports first select a score marked
+  `primary_verdict`, then fall back to an unannotated legacy `final` score.
 - Leave `score_count` unset when finalizing. The server counts every stored
   score for the run, cloud ones included, so a locally derived count raises
   `ConflictError` with `ConflictKind.SCORE_COUNT_MISMATCH`.
@@ -981,6 +983,27 @@ the experiment points at the same trace your agent already emits. See the
 `agento11y-experiments` skill
 (`python/skills/agento11y-experiments/SKILL.md`) and the runnable example at
 `examples/experiments/python/` for grading patterns, including LLM-as-judge.
+
+For a first text-reference suite, **Grafana Agent O11y Evals** provides
+`experiments.run_evals(suite, run_agent)`. Cases use `input.prompt` and a reviewed
+`expected.assistant_response`. The helper validates all cases before writing,
+uses strict exact matching, and records explicit primary verdicts. Your target
+receives and returns strings; existing instrumentation binds conversations.
+Set `record_io=True` only to capture input/output for an uninstrumented target.
+Use a rubric or native framework metric for open-ended answers rather than
+assuming exact matching measures general quality. The
+[local demo](../examples/experiments/grafana/README.md) publishes a suite and
+compares a deliberately failing candidate with its correction.
+
+For multiple LLM judges and deterministic checks, use `text_case`,
+`EvaluationPlan([Check(...)])`, and `run_evals(..., plan=plan)`.
+`StoredEvaluator.llm_judge` provisions content-addressed remote judges;
+`LLMJudge.for_case` uses the same reference/rubric selectors locally.
+One `overall` verdict requires all required checks to pass; diagnostics do not
+affect it, and required judge errors remain unrated. `setup_evals()` provides
+one-call OTel setup without replacing application-owned providers. See the
+[evaluation-plan guide](docs/evaluation-plans.md) and
+[runnable mixed-judge example](../examples/experiments/grafana/judged.py).
 
 ## Public API Overview
 
