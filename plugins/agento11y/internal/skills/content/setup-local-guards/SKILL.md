@@ -69,6 +69,8 @@ Explain the trade-offs relevant to the user's request:
 - Destructive commands blocks recursive force deletion even for temporary build output, but does not block every deletion.
 - Permissions targets selected root and home spellings, not every directory.
 - Disk wipe uses broad command-name patterns that can also block read-only inspection.
+- High-risk prompt triage blocks explicit high-impact decisions about people in specified domains. It cannot judge discrimination, explanation quality, legality, or real human oversight, and it only works where the host submits prompt preflight checks.
+- PHI-like data egress blocks a narrow set of recognizable outbound tools and shell network commands carrying high-confidence health identifiers. It cannot identify every egress path or determine authorization, permitted purpose, or minimum necessary scope.
 
 State that text matching can miss indirect operations and can block harmless mentions.
 Unknown tools, unsupported hooks, and scripts that perform dangerous operations internally can escape these checks.

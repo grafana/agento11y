@@ -1,7 +1,7 @@
 # Local guard packs
 
-Local guard packs check coding-agent tool calls before tools run.
-Five packs deny matching calls; **Secret redaction** rewrites matching secret values in tool arguments.
+Local guard packs check coding-agent prompts and tool calls before they run.
+Seven packs deny matching requests; **Secret redaction** rewrites matching secret values in tool arguments.
 Use this guide to choose packs and understand their limits.
 
 These checks apply only to calls that your coding agent submits to the local agento11y daemon.
@@ -122,9 +122,21 @@ The other patterns match `mkfs`, `mkfs.*`, `wipefs`, `fdisk`, and `parted` witho
 For example, `fdisk -l` matches even though it lists partitions.
 Do not rely on this pack as a complete disk-access policy.
 
+### High-risk prompt triage
+
+This pack denies explicit requests to decide, rank, select, approve, deny, or otherwise act on people in employment, credit, insurance, health care, benefits, law enforcement, migration, or justice contexts. For example, it denies a request to rank job candidates and choose whom to hire, or to decide whether to grant an applicant asylum.
+
+It allows general educational requests such as explaining employment fairness or summarizing a health-care policy. The matching is a coarse regular-expression triage: it cannot determine whether a use is lawful, discriminatory, explainable, or subject to meaningful human oversight. It only runs in integrations that submit prompt preflight checks; it does not inspect prior conversation context or an assistant response.
+
+### PHI-like data egress
+
+This pack denies recognizable outbound tool calls and shell network commands when their arguments include either a labelled high-confidence identifier (such as an MRN, medical-record number, patient ID, or SSN) or a patient/member reference paired with diagnosis, treatment, medication, prescription, condition, or symptom information. It recognizes common outbound tool names and shell egress commands including `curl`, `wget`, `scp`, and `rsync`.
+
+It allows health-policy text, local file writes, and outbound calls without those indicators. It cannot identify every outbound tool, inspect indirect data in files or variables, determine whether the recipient is authorized, or decide whether the use has a permitted purpose or meets a minimum-necessary standard. It is a narrow data-egress control, not a HIPAA compliance determination.
+
 ## Enforcement limits
 
-Shell rules match decoded command text with regular expressions.
+Prompt and shell rules match text with regular expressions.
 They recognize selected syntax variations, but do not interpret the shell, expand arbitrary variables, follow aliases, or decode executable payloads.
 Quoted text and heredoc bodies can match even when they only describe a command.
 Commands hidden inside scripts or other programs can pass.
@@ -133,7 +145,7 @@ Shell matching recognizes `Bash`, `shell`, `run_terminal_cmd`, `execute_command`
 It reads a nonempty string or string array from `command`, `cmd`, or `script` arguments.
 Arrays are joined with spaces without reconstructing quoting, so matching can differ from the tool's interpretation of the arguments.
 Recognizing a PowerShell tool does not add patterns for every PowerShell command.
-Unknown tools or argument shapes can pass without a shell check.
+Unknown tools or argument shapes can pass without a shell or egress check.
 
 Host hooks determine which calls reach guards and whether returned transforms can be applied.
 For example, Codex guards only its supported Bash, patch, and MCP tool types.
@@ -229,7 +241,7 @@ To check a command without executing it, use `agento11y guards test 'git push or
 
 ## Pack updates and upgrades
 
-Packs are stored as rules named `pack.secrets`, `pack.files`, `pack.git`, `pack.destructive`, `pack.permissions`, and `pack.disk`.
+Packs are stored as rules named `pack.secrets`, `pack.files`, `pack.git`, `pack.destructive`, `pack.permissions`, `pack.disk`, `pack.high_risk_prompt_triage`, and `pack.phi_egress`.
 Keep custom rules under different IDs.
 
 An enabled switch identifies a stored rule; it does not prove that the rule compiled or still matches the shipped definition.

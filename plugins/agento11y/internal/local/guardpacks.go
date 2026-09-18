@@ -16,14 +16,16 @@ import (
 const packRulePrefix = "pack."
 
 const (
-	packSecrets     = "secrets"
-	packFiles       = "files"
-	packGit         = "git"
-	packDestructive = "destructive"
-	packPermissions = "permissions"
-	packDisk        = "disk"
-	packKindRedact  = "redact"
-	packKindDeny    = "deny"
+	packSecrets              = "secrets"
+	packFiles                = "files"
+	packGit                  = "git"
+	packDestructive          = "destructive"
+	packPermissions          = "permissions"
+	packDisk                 = "disk"
+	packHighRiskPromptTriage = "high_risk_prompt_triage"
+	packPHIEgress            = "phi_egress"
+	packKindRedact           = "redact"
+	packKindDeny             = "deny"
 )
 
 // guardPack is one toggle on the Local tab.
@@ -107,6 +109,22 @@ func catalogPacks() []guardPack {
 			Detail:      "dd of=/dev, mkfs, wipefs, fdisk, parted",
 			Preview:     diskPreview,
 		},
+		{
+			ID:          packHighRiskPromptTriage,
+			Title:       "High-risk prompt triage",
+			Description: "Block explicit requests to make high-impact decisions about people.",
+			Kind:        packKindDeny,
+			Detail:      "employment, credit, insurance, health care, benefits, law enforcement, migration, and justice",
+			Preview:     highRiskPromptPreview,
+		},
+		{
+			ID:          packPHIEgress,
+			Title:       "PHI-like data egress",
+			Description: "Block recognizable outbound tools and network commands carrying high-confidence health identifiers.",
+			Kind:        packKindDeny,
+			Detail:      "known egress tools and curl/wget/scp-style commands",
+			Preview:     phiEgressPreview,
+		},
 	}
 }
 
@@ -176,6 +194,46 @@ var diskPatterns = []string{
 	`(?i)\bparted\b`,
 }
 
+var highRiskPromptPreview = []string{
+	"Hiring, promotion, or termination decisions",
+	"Credit, loan, insurance, or benefits decisions",
+	"Health care, law-enforcement, migration, or justice decisions",
+}
+
+// The matching is intentionally a triage, not an assessment of whether a use
+// is lawful or fair. It needs both a specified high-impact domain and a request
+// to decide, rank, select, or otherwise act on a person.
+const highRiskDomainPattern = `(?:employment|job[ _-]?applicant|candidates?|employee|hiring|recruit(?:ment|ing)|promotion|termination|credit|loan|mortgage|insurance|underwrit(?:e|ing)|benefits?|welfare|health[ _-]?care|healthcare|patient|medical|law[ _-]?enforcement|police|migration|immigration|visa|asylum|justice|court|sentencing|parole|bail)`
+const highRiskDecisionPattern = `(?:decide|determine|recommend|rank|score|select|screen|shortlist|approve|deny|reject|hire|fire|promote|terminate|underwrite|adjudicate|sentence|arrest|detain|deport)`
+
+var highRiskPromptPatterns = []any{
+	`(?is)\b` + highRiskDomainPattern + `\b.{0,200}\b` + highRiskDecisionPattern + `\b`,
+	`(?is)\b` + highRiskDecisionPattern + `\b.{0,200}\b` + highRiskDomainPattern + `\b`,
+}
+
+var phiEgressPreview = []string{
+	"MRN or medical-record number in an outbound call",
+	"Patient/member data combined with diagnosis or treatment details",
+	"SSN-labelled values in a recognizable outbound call",
+}
+
+// A PHI determination needs context the local daemon cannot see, such as the
+// data controller, authorization, purpose, and destination. These patterns
+// therefore only identify high-confidence identifiers or a person-plus-health
+// context in a single tool call.
+const phiStrongIdentifierPattern = `(?:\b(?:mrn|medical[ _-]?record(?:[ _-]?number)?|patient[ _-]?id)\b["']?\s*[:=]\s*["']?[A-Za-z0-9-]{4,}|\b(?:ssn|social[ _-]?security(?:[ _-]?number)?)\b["']?\s*[:=]\s*["']?\d{3}-?\d{2}-?\d{4}\b)`
+const phiHealthContextPattern = `(?:\b(?:patient|member)\b.{0,160}\b(?:diagnos(?:is|ed)|treat(?:ment|ed)?|medication|prescription|condition|symptoms?)\b|\b(?:diagnos(?:is|ed)|treat(?:ment|ed)?|medication|prescription|condition|symptoms?)\b.{0,160}\b(?:patient|member)\b)`
+const directEgressToolPattern = `(?:http(?:[_-]?request)?|webhook|fetch|send[_-]?(?:email|message)|email|slack|teams|discord|pagerduty|notion|linear|github|gitlab|upload(?:[_-]?file)?)`
+const shellToolPattern = `(?:bash|shell|run[_-]?terminal[_-]?cmd|execute[_-]?command|run[_-]?command|terminal|powershell|pwsh)`
+const shellEgressCommandPattern = `(?:curl|wget|httpie|scp|sftp|rsync|nc|ncat)\b`
+const phiPattern = `(?:` + phiStrongIdentifierPattern + `|` + phiHealthContextPattern + `)`
+
+var phiEgressPatterns = []any{
+	`(?is)\[tool_call\]\s*` + directEgressToolPattern + `\b.{0,800}` + phiPattern,
+	`(?is)\[tool_call\]\s*` + shellToolPattern + `\b.{0,800}` + shellEgressCommandPattern + `.{0,800}` + phiPattern,
+	`(?is)\[tool_call\]\s*` + shellToolPattern + `\b.{0,800}` + phiPattern + `.{0,800}` + shellEgressCommandPattern,
+}
+
 var filesPreview = []string{
 	".env",
 	".env.local",
@@ -204,7 +262,7 @@ func envFileBlockedNames() []string {
 }
 
 func packByID() map[string]guardPack {
-	out := make(map[string]guardPack, 6)
+	out := make(map[string]guardPack, len(catalogPacks()))
 	for _, p := range catalogPacks() {
 		out[p.ID] = p
 	}
@@ -225,8 +283,46 @@ func packRule(id string) (guardeval.Rule, error) {
 		return denyShellRule(packPermissions, 40, permissionsPatterns), nil
 	case packDisk:
 		return denyShellRule(packDisk, 50, diskPatterns), nil
+	case packHighRiskPromptTriage:
+		return highRiskPromptTriagePackRule(), nil
+	case packPHIEgress:
+		return phiEgressPackRule(), nil
 	default:
 		return guardeval.Rule{}, fmt.Errorf("unknown pack %q", id)
+	}
+}
+
+func highRiskPromptTriagePackRule() guardeval.Rule {
+	return guardeval.Rule{
+		RuleID:       packRuleID(packHighRiskPromptTriage),
+		Phase:        "preflight",
+		Priority:     5,
+		ActionOnFail: "deny",
+		Evaluators: []guardeval.EvaluatorSpec{{
+			Kind: "regex",
+			Config: map[string]any{
+				"target":   "input",
+				"reject":   true,
+				"patterns": highRiskPromptPatterns,
+			},
+		}},
+	}
+}
+
+func phiEgressPackRule() guardeval.Rule {
+	return guardeval.Rule{
+		RuleID:       packRuleID(packPHIEgress),
+		Phase:        "postflight",
+		Priority:     12,
+		ActionOnFail: "deny",
+		Evaluators: []guardeval.EvaluatorSpec{{
+			Kind: "regex",
+			Config: map[string]any{
+				"target":   "response",
+				"reject":   true,
+				"patterns": phiEgressPatterns,
+			},
+		}},
 	}
 }
 

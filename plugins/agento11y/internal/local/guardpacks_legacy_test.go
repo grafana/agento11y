@@ -17,10 +17,15 @@ import (
 func TestLegacyPackDefinitions(t *testing.T) {
 	raw, err := guardeval.ParseRules(legacyGuardPacks)
 	require.NoError(t, err)
-	require.Len(t, raw, len(catalogPacks()))
-	for i, old := range raw {
+	for _, old := range raw {
+		var legacyFields map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(old, &legacyFields))
+		var legacyRuleID string
+		require.NoError(t, json.Unmarshal(legacyFields["rule_id"], &legacyRuleID))
+		legacyPackID, ok := packIDFromRule(legacyRuleID)
+		require.True(t, ok)
 		for _, state := range []string{"omitted", "true", "false"} {
-			t.Run(catalogPacks()[i].ID+"/"+state, func(t *testing.T) {
+			t.Run(legacyPackID+"/"+state, func(t *testing.T) {
 				var fields map[string]json.RawMessage
 				require.NoError(t, json.Unmarshal(old, &fields))
 				if state != "omitted" {
@@ -30,7 +35,7 @@ func TestLegacyPackDefinitions(t *testing.T) {
 				require.NoError(t, err)
 				upgraded := upgradeLegacyPackRules([]json.RawMessage{input})
 				require.Len(t, upgraded, 1)
-				current, err := packRule(catalogPacks()[i].ID)
+				current, err := packRule(legacyPackID)
 				require.NoError(t, err)
 				if state != "omitted" {
 					value := state == "true"

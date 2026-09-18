@@ -52,7 +52,7 @@ func TestApplyPackUpdates_UnknownPack(t *testing.T) {
 }
 
 func TestPackRulesCompile(t *testing.T) {
-	for _, id := range []string{packSecrets, packFiles, packGit, packDestructive, packPermissions, packDisk} {
+	for _, id := range []string{packSecrets, packFiles, packGit, packDestructive, packPermissions, packDisk, packHighRiskPromptTriage, packPHIEgress} {
 		t.Run(id, func(t *testing.T) {
 			rule, err := packRule(id)
 			require.NoError(t, err)
