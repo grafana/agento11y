@@ -1,0 +1,42 @@
+# Copy this file to .github/workflows/agent-observability-experiment.yml in the
+# repository that owns the agent. It assumes that repository provides
+# ./scripts/run-agent-experiment, which must publish the experiment, print its
+# Agent Observability URL, and exit non-zero only after applying its quality gate.
+name: Agent Observability experiment
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  experiment:
+    name: Offline experiment
+    runs-on: ubuntu-latest
+    env:
+      # Configure these as repository or organization Actions secrets.
+      AGENTO11Y_ENDPOINT: ${{ secrets.AGENTO11Y_ENDPOINT }}
+      AGENTO11Y_AUTH_TOKEN: ${{ secrets.AGENTO11Y_AUTH_TOKEN }}
+      AGENTO11Y_AUTH_TENANT_ID: ${{ secrets.AGENTO11Y_AUTH_TENANT_ID }}
+      AGENTO11Y_GRAFANA_URL: ${{ secrets.AGENTO11Y_GRAFANA_URL }}
+      # Set these only when the runner reads, updates, or publishes a stored
+      # test suite. The service account needs the corresponding Agent O11y role.
+      AGENTO11Y_CONTROL_ENDPOINT: ${{ secrets.AGENTO11Y_CONTROL_ENDPOINT }}
+      AGENTO11Y_SERVICE_ACCOUNT_TOKEN: ${{ secrets.AGENTO11Y_SERVICE_ACCOUNT_TOKEN }}
+      # Keep the run id stable across an individual job retry and unique per
+      # candidate. The runner should attach this SHA as candidate.git_sha too.
+      AGENTO11Y_EXPERIMENT_ID: ci-${{ github.sha }}
+      GIT_SHA: ${{ github.sha }}
+      MIN_PASS_RATE: '0.90'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      # Install the runtime and dependencies used by your agent here.
+      # For example: setup-python + uv, setup-go, or setup-node + pnpm.
+
+      - name: Run, publish, and gate experiment
+        run: ./scripts/run-agent-experiment

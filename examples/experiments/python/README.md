@@ -163,5 +163,7 @@ View in Agent Observability: https://<your-stack>.grafana.net/a/grafana-agento11
   `grader_generation_id` on the score.
 - **Image artifacts:** use `trial.artifact("name", path="/tmp/file.png")` after
   rendering the file before upload. The dashboard example uses this for pyplot PNGs.
-- **CI gate:** inspect `report.summary.pass_rate` and exit non-zero to
-  fail a pull request.
+- **CI gate:** inspect `report.summary.pass_rate` and exit non-zero only after
+  publishing the report. The language-neutral [CI recipe](../ci/README.md)
+  includes the safe ordering, GitHub Actions template, and equivalent Go and
+  TypeScript patterns.

@@ -175,6 +175,7 @@ The experiments are offline evals: run an agent over a dataset, grade it, and pu
 | Go (evaluator stored in your tenant) | [`examples/experiments/go/cloud-evaluator/`](examples/experiments/go/cloud-evaluator/) |
 | TypeScript (evaluator stored in your tenant) | [`examples/experiments/typescript/`](examples/experiments/typescript/) |
 | DeepEval | [`examples/experiments/deepeval/`](examples/experiments/deepeval/) |
+| CI quality gate (Python, Go, or TypeScript) | [`examples/experiments/ci/`](examples/experiments/ci/) |
 
 The reference app is a fuller FastAPI service with framework callbacks and manual instrumentation side by side.
 
