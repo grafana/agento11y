@@ -520,6 +520,31 @@ notebook, or agent harness. The SDK records runs, trials, scores, usage,
 artifacts, and telemetry links; it does not schedule the experiment or require
 a stored test suite.
 
+The recommended first text-reference workflow is **Grafana Agent O11y Evals**:
+Python `agento11y.experiments.run_evals(suite, target)` uses `input.prompt` and a
+reviewed `expected.assistant_response`, validates before writing, and publishes
+strict exact-match primary verdicts. Use native metrics or a rubric judge for
+open-ended correctness. Input-only conversation promotions need reviewed expected
+answers or reference-free grading; an observed answer is not automatically correct.
+Publish a reviewed suite checkpoint and pin its version when comparing candidates.
+Choose Grafana or Git as the authoring source of truth; SDK push/pull are explicit
+transfers, not automatic bidirectional synchronization.
+
+The Grafana `run_evals` helper accepts an `evaluate(trial, case, answer)`
+callback for local scoring or stored evaluator invocation. Its recommended
+mixed-judge flow is `text_case(...)`,
+`EvaluationPlan([Check("correctness", StoredEvaluator.llm_judge(...)), ...])`,
+then `run_evals(suite, instrumented_agent, plan=plan)`. Reference correctness is
+the default judge mode; rubric-only and reference-free modes are explicit.
+`LLMJudge.for_case` shares the same nested case selectors for local judging.
+All required checks must pass; individual results are diagnostic and exactly
+one aggregate primary verdict is emitted. Required judge errors remain unrated;
+remaining cases/checks still execute. `EvaluatorsClient.ensure` creates or
+verifies exact definitions with control-plane credentials, never overwrites
+versions. `setup_evals()` configures HTTP/protobuf OTLP using existing
+dependencies and reuses application providers. `AgentOutput` can carry an
+existing conversation ID and flush callback. See `python/docs/evaluation-plans.md`.
+
 - Run-side publishing uses `AGENTO11Y_ENDPOINT`, `AGENTO11Y_AUTH_TOKEN`, and
   optional `AGENTO11Y_AUTH_TENANT_ID`.
 - Stored suite push/pull is optional and additionally uses

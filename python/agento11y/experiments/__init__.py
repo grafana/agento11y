@@ -52,7 +52,10 @@ from __future__ import annotations
 from ..errors import EvaluationExecutionError, EvaluationTimeoutError, ExperimentalFeatureDisabledError
 from ..models import ReportRole, TrialEvaluation, TrialEvaluationStatus
 from . import otel, score
+from .cases import case_value, text_case
 from .client import Client
+from .control import EvaluatorsClient, StoredEvaluator
+from .evals import AgentOutput, run_evals
 from .evaluators import (
     DEFAULT_LLM_JUDGE_PROMPT,
     EvaluationResult,
@@ -62,7 +65,9 @@ from .evaluators import (
     RegexJudge,
 )
 from .experiment import Experiment, Trial, experiment, experiment_from_suite, stable_id
+from .plan import Check, EvaluationPlan, ExactMatch
 from .suites import PushedSuite, TestSuitesClient
+from .telemetry import EvalTelemetry, setup_evals
 from .types import (
     Candidate,
     Evaluator,
@@ -76,6 +81,16 @@ from .types import (
 )
 
 __all__ = [
+    "text_case",
+    "case_value",
+    "EvaluatorsClient",
+    "StoredEvaluator",
+    "Check",
+    "EvaluationPlan",
+    "ExactMatch",
+    "AgentOutput",
+    "EvalTelemetry",
+    "setup_evals",
     "Client",
     "TestSuitesClient",
     "PushedSuite",
@@ -104,6 +119,7 @@ __all__ = [
     "normalize_evaluator_kind",
     "experiment",
     "experiment_from_suite",
+    "run_evals",
     "stable_id",
     "score",
     "otel",

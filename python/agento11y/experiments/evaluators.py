@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from ..models import TokenUsage
-from .types import Evaluator, EvaluatorKind
+from .cases import render_case_prompt
+from .types import Evaluator, EvaluatorKind, TestCase
 
 JudgeInvoke = Callable[[str], Any]
 JudgeParser = Callable[[str], tuple[float, bool, str]]
@@ -109,10 +111,49 @@ class LLMJudge:
             kind=EvaluatorKind.LLM_JUDGE.value,
         )
 
-    def evaluate_output(self, *, input: Any, output: Any, expected: Any = None) -> EvaluationResult:
+    @classmethod
+    def for_case(
+        cls,
+        evaluator_id: str,
+        invoke: JudgeInvoke,
+        *,
+        model_name: str,
+        model_provider: str,
+        mode: str = "reference",
+        **options: Any,
+    ) -> LLMJudge:
+        """Grounded judge with the same case selectors as stored remote judges."""
+        from .control import StoredEvaluator
+
+        definition = StoredEvaluator.llm_judge(
+            evaluator_id, provider=model_provider, model=model_name, mode=mode, **options
+        )
+        prompt = (
+            definition.config["system_prompt"]
+            + "\n"
+            + definition.config["user_prompt"]
+            + '\nReturn only JSON: {"score": <0 to 1>, "passed": <boolean>, "explanation": "<reason>"}'
+        )
+        return cls(
+            evaluator_id,
+            invoke,
+            model_name=model_name,
+            model_provider=model_provider,
+            version=definition.version,
+            prompt_template=prompt,
+            score_key="quality",
+        )
+
+    def evaluate_output(
+        self, *, input: Any, output: Any, expected: Any = None, case_metadata: dict[str, Any] | None = None
+    ) -> EvaluationResult:
         """Grades explicit input/output values; it does not fetch a conversation."""
 
-        prompt = _render_prompt(self.prompt_template, input=input, output=output, expected=expected)
+        prompt = render_case_prompt(
+            self.prompt_template,
+            TestCase("judge", input=input, expected=expected, metadata=case_metadata or {}),
+            output,
+        )
         response = self.invoke(prompt)
         raw = _response_text(response)
         usage = self.usage_extractor(response) if self.usage_extractor is not None else _response_usage(response)
@@ -146,7 +187,12 @@ class LLMJudge:
             raise ValueError("LLM judge response did not contain a JSON object")
         for payload in reversed(objects):
             try:
-                score = max(0.0, min(1.0, float(payload["score"])))
+                if isinstance(payload["score"], bool):
+                    continue
+                score = float(payload["score"])
+                if not math.isfinite(score):
+                    continue
+                score = max(0.0, min(1.0, score))
             except (KeyError, TypeError, ValueError):
                 continue
             passed = _parse_passed(payload.get("passed", payload.get("pass")), score, self.pass_threshold)
@@ -300,10 +346,7 @@ def _first_int(value: Any, *names: str) -> int | None:
 
 
 def _render_prompt(template: str, *, input: Any, output: Any, expected: Any) -> str:
-    """Replaces judge placeholders without treating JSON braces as formatting."""
-
-    values = {"input": str(input), "output": str(output), "expected": str(expected)}
-    return re.sub(r"\{(input|output|expected)\}", lambda match: values[match.group(1)], template)
+    return render_case_prompt(template, TestCase("judge", input=input, expected=expected), output)
 
 
 def _parse_passed(value: Any, score: float, threshold: float) -> bool:
