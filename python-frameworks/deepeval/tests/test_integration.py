@@ -470,6 +470,43 @@ def test_blank_conversation_content_is_rejected_before_writing() -> None:
     assert client.experiments == []
 
 
+def test_errored_user_only_conversation_does_not_block_sibling() -> None:
+    client = FakeClient()
+    evaluation = NativeEvaluationResult(
+        test_results=[
+            NativeTestResult(
+                name="errored-chat",
+                success=False,
+                metrics_data=[MetricData(name="Completeness", error="judge failed")],
+                conversational=True,
+                turns=[TurnApi(role="user", content="Hello", order=0)],
+            ),
+            NativeTestResult(
+                name="successful-chat",
+                success=True,
+                metrics_data=[MetricData(name="Completeness", score=1.0, success=True)],
+                conversational=True,
+                turns=[
+                    TurnApi(role="user", content="Hello", order=0),
+                    TurnApi(role="assistant", content="Hi", order=1),
+                ],
+            ),
+        ],
+        confident_link=None,
+        test_run_id="partial-conversation-run",
+    )
+
+    published = publish_deepeval_results(evaluation, experiment_name="partial conversations", client=client)
+
+    assert published.trial_count == 2
+    assert published.score_count == 1
+    assert len(client.trials) == 2
+    assert len(client.generations) == 2
+    assert client.trial_updates[0]["status"] == "failed"
+    assert client.trial_updates[0]["error"] == "Completeness: judge failed"
+    assert client.scores[0].passed is True
+
+
 def test_live_conversation_uses_completed_turns_without_mutating_caller(monkeypatch) -> None:
     from deepeval.test_case import ConversationalTestCase, Turn
 

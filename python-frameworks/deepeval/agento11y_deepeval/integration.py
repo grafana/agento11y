@@ -280,7 +280,7 @@ def publish_deepeval_results(
             ) as trial:
                 result_metadata = _deepeval_metadata(result)
                 if _is_conversational(result):
-                    turns = _conversation_turns(result, require_assistant=True)
+                    turns = _conversation_turns(result, require_assistant=not _has_deepeval_error(result))
                     if conversation_id or record_io:
                         _bind_or_publish_conversation(
                             exp.client,
@@ -371,15 +371,16 @@ def _select_primary_metric(results: Iterable[Any], requested: str | None) -> str
 
 def _validate_primary_metric(results: Iterable[Any], primary_metric: str) -> None:
     for index, result in enumerate(results):
+        has_error = _has_deepeval_error(result)
         if _is_conversational(result):
-            _conversation_turns(result, index=index, require_assistant=True)
+            _conversation_turns(result, index=index, require_assistant=not has_error)
         names = [
             str(getattr(metric, "name", "") or "").strip() for metric in getattr(result, "metrics_data", None) or []
         ]
         names = [name for name in names if name]
         if len(names) != len(set(names)):
             raise ValueError(f"DeepEval test result {index} contains duplicate metric names")
-        if primary_metric not in names and not _nonblank(str(getattr(result, "error", "") or "")):
+        if primary_metric not in names and not has_error:
             raise ValueError(f"DeepEval test result {index} does not contain primary metric {primary_metric!r}")
 
 
@@ -628,6 +629,14 @@ def _metric_value(metric: Any) -> float | bool:
     if isinstance(success, bool):
         return success
     return False
+
+
+def _has_deepeval_error(result: Any) -> bool:
+    if _nonblank(str(getattr(result, "error", "") or "")):
+        return True
+    return any(
+        _nonblank(str(getattr(metric, "error", "") or "")) for metric in getattr(result, "metrics_data", None) or []
+    )
 
 
 def _metric_passed(metric: Any) -> bool | None:
