@@ -1614,6 +1614,7 @@ func TestRun_DoctorSubcommand(t *testing.T) {
 		wantStdoutHas string
 	}{
 		{name: "unconfigured is healthy and exits 0", argv: []string{"doctor"}, wantStdoutHas: "agento11y doctor"},
+		{name: "require Cloud fails when unconfigured", argv: []string{"doctor", "--require-cloud"}, wantExit: intPtr(1), wantStdoutHas: "Cloud requirement failed"},
 		{name: "json mode emits sections", argv: []string{"doctor", "--json"}, wantStdoutHas: `"conversations"`},
 		{
 			name:     "conversations set but no OTLP exits 1",
