@@ -67,6 +67,10 @@ type Fragment struct {
 	LastEventAt     string             `json:"lastEventAt,omitempty"`
 	Model           string             `json:"model,omitempty"`
 	Provider        string             `json:"provider,omitempty"`
+	// ModelParams is Cursor's `model_params` flattened to id -> value
+	// (optimize_for, thinking, effort, ...). Accumulated across the turn's
+	// events and exported as `model_param.<id>` tags.
+	ModelParams map[string]string `json:"modelParams,omitempty"`
 
 	// PendingStop is set by handleStop before it tries to emit. If emission
 	// fails the fragment stays on disk with this set so sessionEnd can replay
