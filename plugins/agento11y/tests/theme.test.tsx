@@ -14,7 +14,11 @@ import {
   themeShortcutToggles,
   toggledThemePreference,
 } from '../internal/local/web/src/settings-model';
-import { type HistoryImport, SettingsAppearanceCard, SettingsView } from '../internal/local/web/src/settings-screen';
+import {
+  type HistoryImport,
+  SettingsAppearanceCard,
+  SettingsSecurityView,
+} from '../internal/local/web/src/settings-screen';
 import settingsSource from '../internal/local/web/src/settings-screen.tsx?raw';
 import type { ConfigResponse, Settings, ThemePreference } from '../internal/local/web/src/types';
 
@@ -455,7 +459,7 @@ describe('SettingsAppearanceCard', () => {
   });
 });
 
-describe('SettingsView theme preview', () => {
+describe('SettingsSecurityView theme preview', () => {
   beforeEach(() => {
     vi.stubGlobal(
       'fetch',
@@ -478,16 +482,16 @@ describe('SettingsView theme preview', () => {
     const dark = config('dark');
     const light = config('light');
     const props = viewProps(dark, onThemePreview);
-    const rendered = render(<SettingsView {...props} />);
+    const rendered = render(<SettingsSecurityView activeSection="settings" {...props} />);
 
     expect(screen.getByRole('button', { name: 'Dark' }).getAttribute('aria-pressed')).toBe('true');
-    rendered.rerender(<SettingsView {...props} config={light} />);
+    rendered.rerender(<SettingsSecurityView activeSection="settings" {...props} config={light} />);
     expect(screen.getByRole('button', { name: 'Light' }).getAttribute('aria-pressed')).toBe('true');
     expect(onThemePreview).toHaveBeenLastCalledWith(null);
 
     fireEvent.click(screen.getByRole('switch', { name: 'Debug logging' }));
     expect(onThemePreview).toHaveBeenLastCalledWith('light');
-    rendered.rerender(<SettingsView {...props} config={dark} />);
+    rendered.rerender(<SettingsSecurityView activeSection="settings" {...props} config={dark} />);
     expect(screen.getByRole('button', { name: 'Light' }).getAttribute('aria-pressed')).toBe('true');
     expect(onThemePreview).toHaveBeenLastCalledWith('light');
   });
@@ -495,11 +499,16 @@ describe('SettingsView theme preview', () => {
   it('Reset adopts the latest saved theme and unmount clears a preview', () => {
     const onThemePreview = vi.fn();
     const props = viewProps(config('dark'), onThemePreview);
-    const rendered = render(<SettingsView {...props} />);
+    const rendered = render(<SettingsSecurityView activeSection="settings" {...props} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Light' }));
     expect(onThemePreview).toHaveBeenLastCalledWith('light');
-    rendered.rerender(<SettingsView {...props} config={config('system')} />);
+    const polled = config('system');
+    rendered.rerender(<SettingsSecurityView activeSection="security" {...props} config={polled} />);
+    expect(onThemePreview).toHaveBeenLastCalledWith('light');
+    expect(screen.queryByRole('button', { name: 'Light' })).toBeNull();
+    rendered.rerender(<SettingsSecurityView activeSection="settings" {...props} config={polled} />);
+    expect(screen.getByRole('button', { name: 'Light' }).getAttribute('aria-pressed')).toBe('true');
 
     fireEvent.click(screen.getByRole('button', { name: 'Reset' }));
     expect(screen.getByRole('button', { name: 'Match system' }).getAttribute('aria-pressed')).toBe('true');
@@ -522,7 +531,7 @@ describe('SettingsView theme preview', () => {
     vi.stubGlobal('fetch', fetchMock);
     const onThemePreview = vi.fn();
     const props = viewProps(config('dark'), onThemePreview);
-    render(<SettingsView {...props} />);
+    render(<SettingsSecurityView activeSection="settings" {...props} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Light' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save to config.env' }));

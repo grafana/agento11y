@@ -15,9 +15,9 @@ import {
   SURFACE_BG,
   SurfaceCard,
 } from './notices';
-import { fieldInput } from './routing';
-import type { LocalGuardsUpdate, SettingsLocalGuardsProps } from './settings-local-guards';
-import { SettingsLocalGuardsCard } from './settings-local-guards';
+import { fieldInput, isPlainLeftClick } from './routing';
+import { SecurityView } from './security-screen';
+import type { LocalGuardsUpdate } from './settings-local-guards';
 import {
   cloneSettings,
   cloudConfigured,
@@ -1122,7 +1122,7 @@ const SETTINGS_TABS: SettingsTab[] = [
     icon: 'cloud',
     desc: 'Ingest, auth, forwarding',
   },
-  { id: 'local', label: 'Local', icon: 'box', desc: 'Guards, tags, appearance' },
+  { id: 'local', label: 'Local', icon: 'box', desc: 'Tags, appearance, runtime' },
   {
     id: 'history',
     label: 'History',
@@ -2417,13 +2417,26 @@ interface SettingsLocalTabProps {
   setTag: (index: number, patch: Partial<Tag>) => void;
   addTag: () => void;
   removeTag: (index: number) => void;
-  localGuards: SettingsLocalGuardsProps;
+  onOpenSecurity?: () => void;
 }
 
-function SettingsLocalTab({ form, set, setTag, addTag, removeTag, localGuards }: SettingsLocalTabProps) {
+function SettingsLocalTab({ form, set, setTag, addTag, removeTag, onOpenSecurity }: SettingsLocalTabProps) {
   return (
     <>
-      <SettingsLocalGuardsCard {...localGuards} />
+      <div style={{ marginBottom: 16, fontSize: 13, color: 'var(--fg2)' }}>
+        Manage local guards in{' '}
+        <a
+          href="/security"
+          onClick={(event) => {
+            if (!onOpenSecurity || !isPlainLeftClick(event)) return;
+            event.preventDefault();
+            onOpenSecurity();
+          }}
+        >
+          Security
+        </a>
+        .
+      </div>
       <SettingsTagsEditor tags={form.tags} setTag={setTag} addTag={addTag} removeTag={removeTag} />
       <SettingsAppearanceCard theme={form.theme} onChange={(theme) => set({ theme })} />
       <SettingsCard>
@@ -2700,7 +2713,7 @@ interface SettingsTabPanelsProps {
   onConnect: (parsed: ConnectBlock, mode: string) => void;
   onDisconnect: () => void;
   onMode: (mode: string, forceLocalOff?: boolean) => void;
-  localGuards: SettingsLocalGuardsProps;
+  onOpenSecurity?: () => void;
   history: HistoryImport;
 }
 
@@ -2720,7 +2733,7 @@ function SettingsTabPanels({
   onConnect,
   onDisconnect,
   onMode,
-  localGuards,
+  onOpenSecurity,
   history,
 }: SettingsTabPanelsProps) {
   return (
@@ -2747,7 +2760,7 @@ function SettingsTabPanels({
           setTag={setTag}
           addTag={addTag}
           removeTag={removeTag}
-          localGuards={localGuards}
+          onOpenSecurity={onOpenSecurity}
         />
       )}
       {activeSettingsTab === 'history' && <SettingsHistoryTab history={history} />}
@@ -2755,7 +2768,9 @@ function SettingsTabPanels({
   );
 }
 
-interface SettingsViewProps {
+interface SettingsSecurityViewProps {
+  activeSection: 'settings' | 'security';
+  onOpenSecurity?: () => void;
   history: HistoryImport;
   config: ConfigResponse | null;
   configError: string | null;
@@ -2766,10 +2781,12 @@ interface SettingsViewProps {
   onThemePreview?: (theme: ThemePreference | null) => void;
 }
 
-// SettingsView edits config.env. App() polls
+// SettingsSecurityView edits config.env. App() polls
 // /api/v1/config for the header chip, and this view hydrates from the same
 // response so one poll serves both.
-export function SettingsView({
+export function SettingsSecurityView({
+  activeSection,
+  onOpenSecurity,
   history,
   config,
   configError,
@@ -2778,7 +2795,7 @@ export function SettingsView({
   onConfig,
   onConfigWriteStart,
   onThemePreview,
-}: SettingsViewProps) {
+}: SettingsSecurityViewProps) {
   const [form, setForm] = useState<Settings | null>(null);
   const [saved, setSaved] = useState<Settings | null>(null);
   const [preview, setPreview] = useState('');
@@ -2833,7 +2850,7 @@ export function SettingsView({
 
   // Guard GETs supply pack data only. The config poll owns the enabled state.
   useEffect(() => {
-    if (!config || activeSettingsTab !== 'local' || writing || guardsEnabledPending !== null) return;
+    if (!config || activeSection !== 'security' || writing || guardsEnabledPending !== null) return;
     const controller = new AbortController();
     fetch('/api/v1/guards', { signal: controller.signal })
       .then((r) =>
@@ -2850,7 +2867,7 @@ export function SettingsView({
         if (!controller.signal.aborted && !writingRef.current) setGuardsError(String(err.message || err));
       });
     return () => controller.abort();
-  }, [config, activeSettingsTab, writing, guardsEnabledPending]);
+  }, [config, activeSection, writing, guardsEnabledPending]);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -2906,7 +2923,7 @@ export function SettingsView({
   // Each run aborts the prior in-flight request and ignores its result, so
   // a slow older response can never overwrite a newer one.
   useEffect(() => {
-    if (!form) return;
+    if (!form || activeSection !== 'settings') return;
     let ignore = false;
     const controller = new AbortController();
     const t = setTimeout(() => {
@@ -2927,7 +2944,7 @@ export function SettingsView({
       controller.abort();
       clearTimeout(t);
     };
-  }, [form]);
+  }, [form, activeSection]);
 
   const dirty = !!form && !sameSettings(form, saved);
   const previewTheme = dirty && form ? form.theme : null;
@@ -2941,6 +2958,7 @@ export function SettingsView({
 
   const pageStyle = { paddingBottom: 110 };
   if (!form) {
+    if (activeSection === 'security') return <SecurityView localGuards={null} configError={configError} />;
     return (
       <PageShell maxWidth={1400} style={pageStyle}>
         {configError ? (
@@ -3157,9 +3175,31 @@ export function SettingsView({
         .catch(() => {});
     }
   };
+  if (activeSection === 'security') {
+    return (
+      <SecurityView
+        configError={configError}
+        localGuards={{
+          data: guardsData,
+          enabled: guardsEnabledPending ?? saved?.guards !== 'off',
+          busy: writesBlocked,
+          error: guardsError,
+          onChange: putGuards,
+        }}
+      />
+    );
+  }
   return (
     <PageShell maxWidth={1400} style={pageStyle}>
       <SettingsHero dirty={dirty} path={path} />
+
+      {guardsEnabledPending !== null && guardsError && (
+        <div style={{ marginBottom: 16 }}>
+          <Notice kind="error" title="Couldn't refresh settings">
+            {guardsError}
+          </Notice>
+        </div>
+      )}
 
       {error && (
         <div style={{ marginBottom: 16 }}>
@@ -3195,13 +3235,7 @@ export function SettingsView({
             onConnect={connect}
             onDisconnect={disconnect}
             onMode={commitMode}
-            localGuards={{
-              data: guardsData,
-              enabled: guardsEnabledPending ?? saved?.guards !== 'off',
-              busy: writesBlocked,
-              error: guardsError,
-              onChange: putGuards,
-            }}
+            onOpenSecurity={onOpenSecurity}
             history={history}
           />
         </div>

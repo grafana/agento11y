@@ -79,6 +79,11 @@ export function settingsRouteActive() {
   return window.location.pathname.replace(/\/$/, '') === '/settings';
 }
 
+export function securityRouteActive() {
+  if (typeof window === 'undefined') return false;
+  return window.location.pathname.replace(/\/$/, '') === '/security';
+}
+
 // analyticsRouteActive reports whether the URL is the Analytics tab.
 export function analyticsRouteActive() {
   if (typeof window === 'undefined') return false;

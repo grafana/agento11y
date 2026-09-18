@@ -187,6 +187,7 @@ function Wordmark() {
     >
       <GrafanaMark size={22} />
       <span
+        className="viewer-wordmark-text"
         style={{
           fontFamily: 'var(--fontFamily)',
           fontSize: 15,
@@ -427,6 +428,7 @@ function NavTab({ label, href, active, onClick }: NavTabProps) {
   return (
     <a
       href={href}
+      aria-current={active ? 'page' : undefined}
       onClick={(e) => {
         if (!isPlainLeftClick(e)) return;
         e.preventDefault();
@@ -439,7 +441,7 @@ function NavTab({ label, href, active, onClick }: NavTabProps) {
         alignSelf: 'stretch',
         padding: '0 2px',
         fontFamily: 'var(--fontFamily)',
-        fontSize: 13,
+        fontSize: 'inherit',
         color: active ? 'var(--fg-max)' : 'var(--fg2)',
         textDecoration: 'none',
         whiteSpace: 'nowrap',
@@ -492,14 +494,15 @@ interface TopBarProps {
 export function TopBar({ tabs = [], activeTab, config, onOpenSettings }: TopBarProps) {
   return (
     <header
+      className="viewer-header"
       style={{
         height: HEADER_H,
         background: 'var(--bg-primary)',
         borderBottom: '1px solid var(--border-weak)',
         display: 'flex',
         alignItems: 'center',
-        padding: '0 16px',
-        gap: 20,
+        padding: '0 var(--viewer-header-padding, 16px)',
+        gap: 'var(--viewer-header-gap, 20px)',
         position: 'sticky',
         top: 0,
         zIndex: 5,
@@ -507,6 +510,7 @@ export function TopBar({ tabs = [], activeTab, config, onOpenSettings }: TopBarP
     >
       <Wordmark />
       <div
+        className="viewer-header-divider"
         style={{
           width: 1,
           height: 28,
@@ -519,10 +523,11 @@ export function TopBar({ tabs = [], activeTab, config, onOpenSettings }: TopBarP
           display: 'flex',
           alignItems: 'center',
           alignSelf: 'stretch',
-          gap: 18,
+          gap: 'var(--viewer-nav-gap, 18px)',
+          fontSize: 'var(--viewer-nav-font-size, 13px)',
           minWidth: 0,
           flex: 1,
-          overflow: 'hidden',
+          overflowX: 'auto',
         }}
       >
         {tabs.map((t) => (

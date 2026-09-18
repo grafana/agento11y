@@ -26,7 +26,7 @@ Pack updates preserve custom rules but remove TOML comments and formatting.
 For manual setup:
 
 1. Run `agento11y local open` to open the local app.
-1. Open **Settings** > **Local**, then turn on **Guards**.
+1. Open **Security** > **Guards**, then turn on **Enable guards**.
 1. Turn on each pack you want. Use **view** beside a pack to inspect its examples or secret formats.
 1. Start a fresh agent session through local mode, for example `agento11y claude --local` or `agento11y pi --local`.
 1. Test the saved rules with the [offline checks](#test-without-running-a-dangerous-command).
@@ -202,7 +202,7 @@ Use fake values for redaction tests: output can include the original command and
 
 ## Create a custom rule
 
-Add `[[rules]]` entries to the `guards.toml` path shown in **Settings** > **Local** > **Guards**, preserving existing rules.
+Add `[[rules]]` entries to the `guards.toml` path shown in **Security** > **Guards**, preserving existing rules.
 This example denies the literal command form `git push`:
 
 ```toml

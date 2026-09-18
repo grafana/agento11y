@@ -685,6 +685,8 @@ func TestServer_Routing(t *testing.T) {
 		{name: "conversation path serves viewer HTML", method: http.MethodGet, path: "/conversations/conv-123", want: http.StatusOK, wantContentType: "text/html", wantBodyHas: `src="/assets/app.js"`},
 		{name: "settings path serves viewer HTML", method: http.MethodGet, path: "/settings", want: http.StatusOK, wantContentType: "text/html", wantBodyHas: `src="/assets/app.js"`},
 		{name: "settings trailing slash serves viewer HTML", method: http.MethodGet, path: "/settings/", want: http.StatusOK, wantContentType: "text/html", wantBodyHas: `src="/assets/app.js"`},
+		{name: "security path serves viewer HTML", method: http.MethodGet, path: "/security", want: http.StatusOK, wantContentType: "text/html", wantBodyHas: `src="/assets/app.js"`},
+		{name: "security trailing slash serves viewer HTML", method: http.MethodGet, path: "/security/", want: http.StatusOK, wantContentType: "text/html", wantBodyHas: `src="/assets/app.js"`},
 		{name: "analytics path serves viewer HTML", method: http.MethodGet, path: "/analytics", want: http.StatusOK, wantContentType: "text/html", wantBodyHas: `src="/assets/app.js"`},
 		{name: "analytics trailing slash serves viewer HTML", method: http.MethodGet, path: "/analytics/", want: http.StatusOK, wantContentType: "text/html", wantBodyHas: `src="/assets/app.js"`},
 		{name: "CSS asset", method: http.MethodGet, path: "/assets/app.css", want: http.StatusOK, wantContentType: "text/css", wantBodyHas: ":root"},
@@ -833,7 +835,7 @@ func TestServer_DocumentThemeStamping(t *testing.T) {
 			if tt.env != nil {
 				require.NoError(t, dotenv.WriteDotenv(srv.configPath, tt.env, nil))
 			}
-			for _, path := range []string{"/", "/conversations/conv-1", "/conversations/conv-1/", "/settings", "/settings/", "/analytics", "/analytics/"} {
+			for _, path := range []string{"/", "/conversations/conv-1", "/conversations/conv-1/", "/settings", "/settings/", "/security", "/security/", "/analytics", "/analytics/"} {
 				rr := httptest.NewRecorder()
 				srv.ServeHTTP(rr, newLocalRequest(http.MethodGet, path, nil))
 				require.Equal(t, http.StatusOK, rr.Code, path)

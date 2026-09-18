@@ -807,12 +807,19 @@
     .tools-chart-stack a:hover { filter: brightness(1.18); }
 
     @media (max-width: 760px) {
+      .viewer-header {
+        --viewer-header-padding: 8px;
+        --viewer-header-gap: 8px;
+        --viewer-nav-gap: 8px;
+        --viewer-nav-font-size: 12px;
+      }
+      .viewer-wordmark-text, .viewer-header-divider { display: none; }
       .tools-search { min-width: min(260px, calc(100vw - 80px)); flex: 1; }
       .tools-filter-spacer { display: none; }
       .tools-panel-caption { width: 100%; }
     }
 
-    /* The header nav is flex:1 with overflow hidden and the forwarding chip is
+    /* The header nav is flex:1 with horizontal scrolling and the forwarding chip is
        flexShrink:0, so a narrow window squeezes the nav first. Below 900px the
        chip drops its kicker and keeps the icon and the value, which is the part
        that discloses. */

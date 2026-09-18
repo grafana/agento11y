@@ -42,7 +42,7 @@ Identify the target coding agent, its installed agento11y integration, and wheth
 Opening the local app does not route a running agent through it.
 For Codex, ask the user to open `/hooks` and trust the agento11y hooks after installation.
 
-Use the running app's **Settings** > **Local** > **Guards** to inspect the saved enablement, rules path, pack selections, and compilation errors.
+Use the running app's **Security** > **Guards** to inspect the saved enablement, rules path, pack selections, and compilation errors.
 If the app is stopped, ask before running `agento11y local open` to start it.
 Use the displayed rules path rather than assuming `~/.config/agento11y/guards.toml`.
 Read an existing rules file before proposing edits; do not replace it with a template.
@@ -90,7 +90,7 @@ Configure bundled packs in the app or custom rules in `guards.toml`.
 
 ### Bundled packs
 
-Use **Settings** > **Local** > **Guards** to enable guards and toggle only the approved packs.
+Use **Security** > **Guards** to enable guards and toggle only the approved packs.
 If you cannot operate the app, give the user those steps and wait for confirmation.
 There is no `agento11y guards enable` or `agento11y guards install` command; do not invent one or reconstruct shipped pack regexes.
 
