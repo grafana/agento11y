@@ -1,0 +1,99 @@
+# grafana-agento11y-hermes: agent setup guide
+
+Source: https://github.com/grafana/agento11y/tree/main/plugins/hermes
+Read the README there before installing. This is an inactive snapshot import from
+`4f946a2f1ecfda2e8ebccd35faa13d81db64b0b2`. Version `0.10.0` is retained, but
+monorepo migration changes are unreleased. The published PyPI version does not
+include the new privacy behavior.
+
+## Scope
+
+Install `grafana-agento11y-hermes` in the Python environment that runs Hermes.
+The `hermes_agent.plugins` entry point is `agento11y = grafana_agento11y_hermes`.
+There is no `agento11y hermes` launcher. Shared launcher login, `config.env`,
+local viewer, and local mode do not apply. Do not send the user through those flows.
+
+## Explain privacy before enabling export
+
+The migration uses SDK 0.17.x and defaults to `metadata_only`, not the old
+snapshot's `full` mode. Structure, tool names, model, usage, timing, IDs, and
+sampling parameters may leave the machine. Prompts, responses, system prompts,
+tool descriptions/schemas, tool I/O, and detailed errors do not.
+
+`full` opts into content. `no_tool_content` still exports generation content;
+`full_with_metadata_spans` exports content through generation ingest but not
+spans. `default` and invalid modes fall back to `metadata_only`.
+
+Shared secret redaction sanitizes exported content and tool-execution spans.
+It is pattern matching, not complete personal-data protection. Truncation and
+sampling are not redaction. Prompt redaction defaults to on.
+`AGENTO11Y_REDACT_INPUT_MESSAGES=false` disables only user-prompt redaction;
+invalid values keep it on. Assistant text and errors use lightweight patterns.
+System prompts and tool payloads also use key/value patterns. Email addresses
+are redacted.
+
+Automatic user/repo/branch tags are off by default. No automatic `cwd` is sent.
+`AGENTO11Y_AUTO_CODING_AGENT_TAGS=true` enables automatic client tags.
+`AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=user,repo` narrows the enabled names;
+`branch` and `all` are also accepted. The list alone enables nothing.
+Explicit `AGENTO11Y_TAGS` values win over automatic values.
+Explain that user tags may contain personal data and branch tags add metric
+series. Hermes freezes these values when its process-wide client is built.
+Capture modes do not remove custom tags or metadata. Keep secrets out of both.
+
+## Install and enable
+
+1. Find the interpreter behind `hermes`; do not assume the shell's Python is correct.
+2. With that environment active, run `python -m pip install ./plugins/hermes`
+   from the monorepo root. Ask before installing or changing files.
+3. Add `agento11y` to `plugins.enabled` in `~/.hermes/config.yaml`, preserving
+   other plugins. On Hermes 0.19.0, the enable/list CLI misses pip plugins.
+4. If replacing `hermes-plugin-sigil`, uninstall it and replace the enabled
+   `sigil` key. Prefer current `AGENTO11Y_*` variables over supported legacy aliases.
+
+Python 3.11+ is required. Hermes 0.16.0 is the floor; the snapshot was tested
+against 0.19.0. Do not assume newer hook contracts from upstream HEAD.
+
+## Configure only the destinations the user approves
+
+The plugin has independent generation and OpenTelemetry channels:
+
+- Generations use `AGENTO11Y_ENDPOINT`, `AGENTO11Y_PROTOCOL=http`,
+  `AGENTO11Y_AUTH_MODE=basic`, `AGENTO11Y_AUTH_TENANT_ID`, and `AGENTO11Y_AUTH_TOKEN`.
+  A token or explicit non-`none` auth mode activates this channel; an endpoint alone does not.
+- OTel uses `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_EXPORTER_OTLP_HEADERS`.
+  The base endpoint activates setup. `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT`
+  is an alias; the standard name wins. HTTP exporters append the signal paths.
+  Tool executions are spans and metrics, not separate generation-ingest records.
+
+For Cloud, ask the user to open
+`https://<stack>.grafana.net/a/grafana-agento11y-app/setup`, create a token,
+and copy the environment block into their chosen secret store or environment.
+Do not ask them to paste a live token into chat. Never guess endpoint regions,
+construct credentials from placeholders, or repeat tokens in summaries.
+The setup token can serve both channels.
+
+Ask where settings should live before editing anything. Hermes reads its process
+environment and `~/.hermes/.env`; that file overrides shell exports.
+It does not read the shared launcher's config file. Preserve existing OTLP settings.
+
+With no channels configured, telemetry is disabled. For generation export off,
+remove credentials and set `AGENTO11Y_AUTH_MODE=none`. For plugin OTel setup off,
+remove both base endpoint names and set `AGENTO11Y_HERMES_OTEL_AUTO=false`.
+Host-owned providers remain the host's responsibility.
+
+## Verify only with permission
+
+Use interactive `AGENTO11Y_DEBUG=true hermes`, then inspect
+`~/.hermes/logs/agent.log`. One-shot `hermes -z` disables logging.
+Run a turn only after the user approves the provider and telemetry destinations.
+Check generation arrival separately from traces and metrics.
+
+For optional credential-free testing, read `.agents/skills/e2e-test/SKILL.md`
+under the plugin directory and inspect its scripts first. Use an explicit
+LOOPBACK model provider. Route both telemetry channels to loopback receivers,
+or explicitly disable each unused channel. A telemetry sink does not disable
+paid model calls. Do not run the imported Cloud verification scripts by default.
+
+Plugin-specific knobs, limitations, and troubleshooting are in README.md.
+Contributor constraints and check commands are in AGENTS.md.

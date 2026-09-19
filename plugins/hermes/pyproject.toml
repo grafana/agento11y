@@ -1,0 +1,78 @@
+[build-system]
+requires = ["hatchling>=1.18"]
+build-backend = "hatchling.build"
+
+[project]
+name = "grafana-agento11y-hermes"
+version = "0.10.0"
+description = "Grafana Agent Observability plugin for Hermes Agent. Records LLM calls and tool executions as generations and OTel traces+metrics."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Alexander Akhmetov" }]
+requires-python = ">=3.11"
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Software Development :: Libraries",
+]
+dependencies = [
+  "agento11y>=0.17,<0.18",
+  "opentelemetry-sdk>=1.27",
+  "opentelemetry-exporter-otlp-proto-http>=1.27",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.0",
+  "pytest-cov>=6.0",
+  "ruff>=0.16.3",
+  "ty==0.0.73",
+]
+
+[project.entry-points."hermes_agent.plugins"]
+agento11y = "grafana_agento11y_hermes"
+
+[project.urls]
+Homepage = "https://github.com/grafana/agento11y/tree/main/plugins/hermes"
+Repository = "https://github.com/grafana/agento11y"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/grafana_agento11y_hermes"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "src/grafana_agento11y_hermes",
+  "README.md",
+  "CHANGELOG.md",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501"]
+
+[tool.ty.environment]
+# The lowest version we support, so ty catches use of a 3.12+ feature.
+python-version = "3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.coverage.run]
+source = ["grafana_agento11y_hermes"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 99

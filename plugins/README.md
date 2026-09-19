@@ -4,6 +4,8 @@ Send conversations from your coding agent to [Grafana Agent Observability](https
 
 Full docs: [Instrument coding agents](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/guides/instrument-coding-agents/).
 
+Hermes is an [inactive snapshot import](hermes/README.md), installed separately in Hermes's Python environment. The launcher instructions below do not apply to Hermes. Its package remains `grafana-agento11y-hermes` at `0.10.0`, with migration changes unreleased and no publishing workflow.
+
 ## Install
 
 On macOS use Homebrew; on Linux and Windows (or any platform with Go 1.25+) use `go install`.
@@ -45,12 +47,15 @@ Cursor has no launcher; see [`cursor/README.md`](cursor/README.md) for setup.
 | [OpenCode](https://opencode.ai) | [`opencode/`](opencode/) | Available |
 | [Pi](https://github.com/earendil-works/pi) | [`pi/`](pi/) | Available |
 | [Vibe](https://github.com/mistralai/mistral-vibe) | [`vibe/`](vibe/) | Experimental |
+| [Hermes](https://github.com/NousResearch/hermes-agent) | [`hermes/`](hermes/) | Inactive snapshot; no launcher |
 
 ## Content and redaction
 
 Plugins send metadata only by default. `AGENTO11Y_CONTENT_CAPTURE_MODE=full` adds conversation content; see [Content Capture Modes](../docs/concepts/content-capture-modes.md).
 
-When a plugin exports content, it redacts known secret formats first. That covers user prompts, system prompts, assistant text, thinking, conversation titles, error messages, tool arguments, and tool results, on the generation and on the tool-execution span. Set `AGENTO11Y_REDACT_INPUT_MESSAGES=false` to send prompts without redaction; everything else stays redacted. The strength differs per field, and prose fields are deliberately treated more gently than pasted content; [Content Capture Modes](../docs/concepts/content-capture-modes.md#strength-per-field) has the table.
+When a plugin exports content, it redacts known secret formats first. That covers user prompts, system prompts, assistant text, thinking, conversation titles, error messages, tool arguments, and tool results, on the generation and on the tool-execution span. Set `AGENTO11Y_REDACT_INPUT_MESSAGES=false` to send user prompts without redaction; everything else stays redacted. The strength differs per field, and prose fields are deliberately treated more gently than pasted content; [Content Capture Modes](../docs/concepts/content-capture-modes.md#strength-per-field) has the table.
+
+Hermes's migration adopts SDK 0.17.x, metadata-only capture, shared secret redaction, and opt-in automatic user/repo/branch tags. It emits no automatic `cwd`. These changes are not in the historical PyPI release.
 
 ## Configuration
 
