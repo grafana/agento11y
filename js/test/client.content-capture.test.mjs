@@ -891,6 +891,7 @@ for (const mode of STRIPPED_MODES) {
       const recorder = env.client.startToolExecution({
         toolName: 'weather',
         toolCallId: 'call_1',
+        skillName: '  weather-forecast  ',
         includeContent: true,
         conversationTitle: 'Sensitive tool title',
         toolDescription: 'Get weather: free-form provider-supplied text',
@@ -906,6 +907,11 @@ for (const mode of STRIPPED_MODES) {
       assert.equal('gen_ai.tool.description' in span.attributes, false, 'tool description must be absent');
       // Identity attributes still emitted.
       assert.equal(span.attributes['gen_ai.tool.name'], 'weather');
+      assert.equal(span.attributes['agento11y.skill.name'], 'weather-forecast');
+
+      const snapshot = env.client.debugSnapshot();
+      assert.equal(snapshot.toolExecutions.length, 1);
+      assert.equal(snapshot.toolExecutions[0].skillName, 'weather-forecast');
     } finally {
       await env.close();
     }

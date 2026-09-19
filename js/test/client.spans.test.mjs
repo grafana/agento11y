@@ -397,12 +397,57 @@ test('tool execution includeContent controls argument/result attributes', async 
   }
 });
 
+test('tool execution skill marker is trimmed and omitted for ordinary tools', async () => {
+  const harness = newHarness();
+  const cases = [
+    { toolName: 'marked_tool', skillName: '  research  ', expected: 'research' },
+    { toolName: 'ordinary_tool', skillName: undefined, expected: undefined },
+    { toolName: 'whitespace_tool', skillName: ' \t\n ', expected: undefined },
+  ];
+
+  try {
+    for (const tc of cases) {
+      const recorder = harness.client.startToolExecution({
+        toolName: tc.toolName,
+        skillName: tc.skillName,
+      });
+      recorder.setResult({ result: 'ok' });
+      recorder.end();
+      assert.equal(recorder.getError(), undefined, tc.toolName);
+    }
+
+    const spans = toolSpans(harness.spanExporter);
+    const executions = harness.client.debugSnapshot().toolExecutions;
+    assert.equal(spans.length, cases.length);
+    assert.equal(executions.length, cases.length);
+
+    for (const tc of cases) {
+      const span = spans.find((candidate) => candidate.attributes['gen_ai.tool.name'] === tc.toolName);
+      const execution = executions.find((candidate) => candidate.toolName === tc.toolName);
+      assert.ok(span, `${tc.toolName}: expected execute_tool span`);
+      assert.ok(execution, `${tc.toolName}: expected completed debug snapshot`);
+      assert.equal(span.attributes['agento11y.skill.name'], tc.expected, `${tc.toolName}: span marker`);
+      assert.equal(execution.skillName, tc.expected, `${tc.toolName}: snapshot marker`);
+      if (tc.expected === undefined) {
+        assert.equal(
+          Object.hasOwn(span.attributes, 'agento11y.skill.name'),
+          false,
+          `${tc.toolName}: marker must be omitted`,
+        );
+      }
+    }
+  } finally {
+    await shutdownHarness(harness);
+  }
+});
+
 test('tool execution callError is surfaced locally and marks error span', async () => {
   const harness = newHarness();
 
   try {
     const recorder = harness.client.startToolExecution({
       toolName: 'weather',
+      skillName: '  weather-forecast  ',
     });
     recorder.setCallError(new Error('tool failed'));
     recorder.end();
@@ -411,6 +456,8 @@ test('tool execution callError is surfaced locally and marks error span', async 
     const span = singleToolSpan(harness.spanExporter);
     assert.equal(span.status.code, SpanStatusCode.ERROR);
     assert.equal(span.attributes['error.type'], 'tool_execution_error');
+    assert.equal(span.attributes['agento11y.skill.name'], 'weather-forecast');
+    assert.equal(harness.client.debugSnapshot().toolExecutions[0].skillName, 'weather-forecast');
   } finally {
     await shutdownHarness(harness);
   }
