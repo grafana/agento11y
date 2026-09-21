@@ -1016,6 +1016,17 @@ describe('AnalyticsView', () => {
     expect(range.compareDocumentPosition(refresh) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it('offers last 30 days between 7 and 90 days', () => {
+    render(<AnalyticsView {...viewProps()} />);
+
+    fireEvent.click(screen.getByTitle('Time range'));
+    const seven = screen.getByRole('button', { name: 'Last 7 days' });
+    const thirty = screen.getByRole('button', { name: 'Last 30 days' });
+    const ninety = screen.getByRole('button', { name: 'Last 90 days' });
+    expect(seven.compareDocumentPosition(thirty) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(thirty.compareDocumentPosition(ninety) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('keeps the Overview workspace copy unchanged', () => {
     render(<AnalyticsView {...viewProps()} />);
 

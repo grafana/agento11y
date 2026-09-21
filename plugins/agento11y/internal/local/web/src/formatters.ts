@@ -86,6 +86,7 @@ export const TIME_RANGES: TimeRangeOption[] = [
   { value: '6h', label: 'Last 6 hours', ms: 6 * 60 * 60 * 1000 },
   { value: '24h', label: 'Last 24 hours', ms: 24 * 60 * 60 * 1000 },
   { value: '7d', label: 'Last 7 days', ms: 7 * 24 * 60 * 60 * 1000 },
+  { value: '30d', label: 'Last 30 days', ms: 30 * 24 * 60 * 60 * 1000 },
   { value: '90d', label: 'Last 90 days', ms: 90 * 24 * 60 * 60 * 1000 },
   { value: 'all', label: 'All', ms: null },
 ];
