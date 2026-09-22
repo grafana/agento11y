@@ -21,6 +21,7 @@ A/B testing is just two runs with different experiment ids or tags over the same
 
 | Example | Stack | Where |
 | --- | --- | --- |
+| Grafana Agent O11y Evals | Default text-reference workflow; local pass/fail comparison | [`grafana/`](grafana/) |
 | Framework-free | Python + core `agento11y` | [`python/`](python/) |
 | Framework-free | Go + `agento11y/go` | [`go/`](go/) |
 | Prompt optimizer | Go + `agento11y/go/experiments` | [`go/prompt-optimization/`](go/prompt-optimization/) |

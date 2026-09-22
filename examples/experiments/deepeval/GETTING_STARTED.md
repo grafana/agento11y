@@ -3,11 +3,11 @@
 Run from the SDK repository root. These examples use the current checkout;
 install compatible published artifacts only once they contain the live APIs.
 
-The real-agent walkthrough requires a local Sigil stack with Grafana, Alloy,
-Tempo and Prometheus (ports 8080, 3000 and 4318), Docker, `uv`, and an
-`ANTHROPIC_API_KEY` in your environment. It makes **paid model calls**.
+The real-agent walkthrough requires Grafana Cloud Agent Observability ingest and
+control-plane credentials, an OTLP exporter configured for your stack, `uv`, and
+an `ANTHROPIC_API_KEY` in your environment. It makes **paid model calls**.
 It uses ten reviewed ledger questions and actual provider responses, not canned
-answers. Telemetry goes to the local stack; model requests go to Anthropic.
+answers. Telemetry goes to Grafana Cloud; model requests go to Anthropic.
 
 Set `HARBOR_CHECKOUT` to a compatible Harbor checkout. Use a fresh batch name
 on every invocation; finalized runs cannot be overwritten.
