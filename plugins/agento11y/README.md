@@ -202,9 +202,12 @@ Errors take precedence over allow or deny. When some rules compile, their partia
 
 The local Agent Observability app starts empty: it only has sessions captured after you installed agento11y. To backfill earlier sessions, prefer the app — a banner on the Sessions page, or Settings → History. Imports run in the background with live progress; you can cancel them, and a cancelled run keeps what it already imported.
 
-You can also use the CLI. Supported agents are `claude-code`, `codex`, `cursor`, `opencode`, and `pi` (`agento11y history import` with no agent lists them):
+You can also use the CLI. Supported agents are `claude-code`, `codex`, `cursor`, `opencode`, and `pi`. Use `auto` to discover and select sessions across all of them in one import:
 
 ```sh
+# Discover history from every supported agent, choose sessions once, then import.
+agento11y history import auto --local
+
 # See what would be imported. Nothing is decoded, exported, or stored.
 agento11y history import claude-code --dry-run
 

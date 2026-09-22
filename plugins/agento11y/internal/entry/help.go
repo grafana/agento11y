@@ -40,7 +40,7 @@ func publicHelpPages() map[string]clihelp.Page {
 		add("local "+row.Name, row.Description, usage)
 	}
 	add("history", "Backfill sessions recorded before agento11y was installed.", "<command>")
-	add("history import", "Import native agent sessions. Without a terminal, preview only unless --all --yes is set.", "<agent> [flags]")
+	add("history import", "Import native agent sessions. Use auto to select across every supported agent. Without a terminal, preview only unless --all --yes is set.", "<agent|auto> [flags]")
 	add("skills", "List or print the agent skills bundled into this binary.", "<command>")
 	add("skills list", "List bundled skills and their descriptions.", "")
 	add("skills show", "Print a bundled skill as raw Markdown.", "<name>")
