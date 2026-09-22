@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.7.1] - 2026-09-22
+
+### Bug Fixes
+
+- **sdk-java**: carry parentGenerationIds through GenerationRecorder (#789)
+
 ## [0.7.0] - 2026-08-25
 
 ### Features
