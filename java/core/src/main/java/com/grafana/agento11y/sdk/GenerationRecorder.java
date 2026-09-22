@@ -271,6 +271,12 @@ public class GenerationRecorder implements AutoCloseable {
         generation.setThinkingEnabled(result.getThinkingEnabled() == null ? seed.getThinkingEnabled() : result.getThinkingEnabled());
         generation.setEffectiveVersion(firstNonBlank(result.getEffectiveVersion(), seed.getEffectiveVersion()));
 
+        if (!result.getParentGenerationIds().isEmpty()) {
+            generation.getParentGenerationIds().addAll(result.getParentGenerationIds());
+        } else {
+            generation.getParentGenerationIds().addAll(seed.getParentGenerationIds());
+        }
+
         for (Message message : result.getInput()) {
             generation.getInput().add(message == null ? new Message() : message.copy());
         }
