@@ -12,6 +12,10 @@ on:
           - minor
           - major
         default: minor
+      existing-version:
+        description: 'Retry Maven publication from an existing sdk-java/vX.Y.Z tag (overrides bump type)'
+        required: false
+        type: string
       dry-run:
         description: 'Preview only, do not publish or push tags'
         required: false
@@ -30,6 +34,7 @@ jobs:
     outputs:
       new-version: ${{ steps.bump.outputs.new-version }}
       changelog-section: ${{ steps.bump.outputs.section }}
+      source-sha: ${{ steps.bump.outputs.source-sha }}
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -43,7 +48,23 @@ jobs:
         env:
           BUMP: ${{ inputs.version }}
           DRY_RUN: ${{ inputs.dry-run }}
+          EXISTING_VERSION: ${{ inputs.existing-version }}
         run: |
+          if [[ -n "$EXISTING_VERSION" ]]; then
+            SOURCE_SHA=$(./.github/scripts/java-release-target.sh "$EXISTING_VERSION")
+            echo "new-version=${EXISTING_VERSION}" >> "$GITHUB_OUTPUT"
+            echo "source-sha=${SOURCE_SHA}" >> "$GITHUB_OUTPUT"
+            {
+              echo "## Retry Java SDK Maven publication"
+              echo ""
+              echo "- version: \`${EXISTING_VERSION}\`"
+              echo "- source: \`${SOURCE_SHA}\`"
+              echo "- dry-run: \`${DRY_RUN}\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "source-sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           CURRENT=$(git tag -l 'sdk-java/v*' | sed 's|sdk-java/v||' | sort -V | tail -1)
           CURRENT=${CURRENT:-0.0.0}
 
@@ -86,6 +107,11 @@ jobs:
             printf '%s\n' "$SECTION"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Check out release source
+        env:
+          SOURCE_SHA: ${{ steps.bump.outputs.source-sha }}
+        run: git checkout --detach "$SOURCE_SHA"
+
       - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
         with:
           distribution: temurin
@@ -120,6 +146,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+          ref: ${{ needs.build.outputs.source-sha }}
 
       - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
         with:
@@ -135,11 +162,11 @@ jobs:
           ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ fromJSON(steps.get-secrets.outputs.secrets).GPG_PASSPHRASE }}
           PKG_VERSION: ${{ needs.build.outputs.new-version }}
         run: |
-          ./gradlew --no-daemon publishAllPublicationsToMavenCentralRepository \
+          ./gradlew --no-daemon publishAndReleaseToMavenCentral \
             -Pversion="${PKG_VERSION}"
 
   release-pr:
-    if: ${{ !inputs.dry-run }}
+    if: ${{ !inputs.dry-run && inputs.existing-version == '' }}
     needs: [build, publish]
     runs-on: ubuntu-latest
     permissions:

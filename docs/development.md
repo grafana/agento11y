@@ -102,3 +102,9 @@ The plugin gets its own generated table rather than importing the SDK's: `plugin
 ### Conformance
 
 `mise run test:sdk:redaction-conformance` runs the shared fixtures in `redaction/fixtures/` through all six engines. [`redaction/README.md`](../redaction/README.md) covers how to add a pattern and what the fixtures assert.
+
+## Java SDK releases
+
+Run the `Publish Java SDK to Maven Central` workflow on `main`, select a version bump, and disable `dry-run` to release. The workflow builds and tests the SDK, signs and uploads all five artifacts, and requests publication to Maven Central. It then opens a changelog PR; merging that PR creates the release tag and GitHub release notes. Maven Central may take additional time to serve the published artifacts.
+
+If a tagged version was uploaded but never published, set `existing-version` to its `X.Y.Z` version and disable `dry-run`. This overrides the bump type, builds and publishes the exact `sdk-java/vX.Y.Z` commit, and skips creating another changelog PR. Use this only for versions that are not already published to Maven Central; published versions cannot be overwritten.

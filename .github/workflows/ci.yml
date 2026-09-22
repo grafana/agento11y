@@ -20,6 +20,9 @@ jobs:
       - name: Test bump-version.sh
         run: ./.github/scripts/bump-version.test.sh
 
+      - name: Test java-release-target.sh
+        run: ./.github/scripts/java-release-target.test.sh
+
       - name: Test changelog-for-release.sh
         run: ./.github/scripts/changelog-for-release.test.sh
 
