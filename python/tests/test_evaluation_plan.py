@@ -70,6 +70,17 @@ def test_mixed_local_plan_has_one_primary_and_separate_grader_evidence():
     assert len(client.upserts[0].metadata["evaluation_plan"]) == 3
 
 
+def test_local_case_judge_accepts_hyphenated_id():
+    judge = LLMJudge.for_case(
+        "answer-quality",
+        lambda _: '{"score":1,"passed":true}',
+        model_name="model",
+        model_provider="provider",
+    )
+
+    assert judge.evaluator.evaluator_id == "answer-quality"
+
+
 def test_validate_all_cases_before_target_or_provisioning():
     judge = StoredEvaluator.llm_judge("quality", provider="provider", model="model")
     plan = EvaluationPlan([Check("quality", judge)])

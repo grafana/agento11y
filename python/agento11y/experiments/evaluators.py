@@ -125,9 +125,7 @@ class LLMJudge:
         """Grounded judge with the same case selectors as stored remote judges."""
         from .control import StoredEvaluator
 
-        definition = StoredEvaluator.llm_judge(
-            evaluator_id, provider=model_provider, model=model_name, mode=mode, **options
-        )
+        definition = StoredEvaluator.llm_judge("local", provider=model_provider, model=model_name, mode=mode, **options)
         prompt = (
             definition.config["system_prompt"]
             + "\n"
