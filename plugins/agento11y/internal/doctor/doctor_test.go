@@ -232,7 +232,7 @@ func TestHelpPageFlags(t *testing.T) {
 			}
 		}
 	}
-	if want := []string{"--json", "--no-color", "--help, -h"}; !slices.Equal(names, want) {
+	if want := []string{"--json", "--no-color", "--require-cloud", "--help, -h"}; !slices.Equal(names, want) {
 		t.Fatalf("help flags = %v, want %v", names, want)
 	}
 	var out bytes.Buffer
@@ -267,6 +267,43 @@ func TestReportExitCode(t *testing.T) {
 			}
 			if got := r.exitCode(); got != tc.want {
 				t.Fatalf("exitCode = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestReportExitCodeRequireCloud(t *testing.T) {
+	healthy := &Report{
+		Conversations: ConversationsSection{
+			Endpoint: envValue{Set: true}, TenantID: envValue{Set: true}, Token: tokenValue{Set: true}, Health: HealthOK,
+		},
+		Analytics: AnalyticsSection{Endpoint: envValue{Set: true}, Health: HealthOK},
+		Config:    ConfigSection{Health: HealthOK},
+	}
+	if got := healthy.exitCodeFor(Options{RequireCloud: true}); got != 0 {
+		t.Fatalf("healthy Cloud report exit = %d, want 0", got)
+	}
+
+	for name, report := range map[string]*Report{
+		"missing conversations": {
+			Conversations: ConversationsSection{Health: HealthWarn},
+			Analytics:     AnalyticsSection{Endpoint: envValue{Set: true}, Health: HealthOK},
+			Config:        ConfigSection{Health: HealthOK},
+		},
+		"missing analytics": {
+			Conversations: ConversationsSection{
+				Endpoint: envValue{Set: true}, TenantID: envValue{Set: true}, Token: tokenValue{Set: true}, Health: HealthOK,
+			},
+			Analytics: AnalyticsSection{Health: HealthWarn},
+			Config:    ConfigSection{Health: HealthOK},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := report.exitCode(); got != 0 {
+				t.Fatalf("default exit = %d, want 0", got)
+			}
+			if got := report.exitCodeFor(Options{RequireCloud: true}); got != 1 {
+				t.Fatalf("strict Cloud exit = %d, want 1", got)
 			}
 		})
 	}
