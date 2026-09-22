@@ -1,8 +1,9 @@
 package codec
 
 import (
-	"github.com/grafana/agento11y/go/agento11y/model"
 	"testing"
+
+	"github.com/grafana/agento11y/go/agento11y/model"
 )
 
 func TestModalityPresence(t *testing.T) {

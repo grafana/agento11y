@@ -373,8 +373,6 @@ func modalityToProto(c *model.ModalityTokenCounts) *agento11yv1.ModalityTokenCou
 		return nil
 	}
 	tokens := make(map[string]int64, len(c.Tokens))
-	for m, n := range c.Tokens {
-		tokens[m] = n
-	}
+	maps.Copy(tokens, c.Tokens)
 	return &agento11yv1.ModalityTokenCounts{Tokens: tokens, Complete: c.Complete}
 }
