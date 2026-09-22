@@ -277,6 +277,10 @@ func usageToProto(usage model.TokenUsage) *agento11yv1.TokenUsage {
 		CacheWriteInputTokens: usage.CacheWriteInputTokens,
 		ReasoningTokens:       usage.ReasoningTokens,
 		InputSemantics:        agento11yv1.TokenInputSemantics(usage.InputSemantics),
+		InputByModality:       modalityToProto(usage.InputByModality),
+		OutputByModality:      modalityToProto(usage.OutputByModality),
+		CacheReadByModality:   modalityToProto(usage.CacheReadByModality),
+		CacheWriteByModality:  modalityToProto(usage.CacheWriteByModality),
 	}
 }
 
@@ -362,4 +366,15 @@ func cloneStringSlice(in []string) []string {
 	out := make([]string, len(in))
 	copy(out, in)
 	return out
+}
+
+func modalityToProto(c *model.ModalityTokenCounts) *agento11yv1.ModalityTokenCounts {
+	if c == nil {
+		return nil
+	}
+	tokens := make(map[string]int64, len(c.Tokens))
+	for m, n := range c.Tokens {
+		tokens[m] = n
+	}
+	return &agento11yv1.ModalityTokenCounts{Tokens: tokens, Complete: c.Complete}
 }

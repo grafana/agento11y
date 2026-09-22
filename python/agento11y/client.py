@@ -2022,6 +2022,13 @@ def _set_generation_span_attributes(span: Span, generation: Generation) -> None:
         span.set_attribute(_span_attr_cache_write_tokens, usage.cache_write_input_tokens)
     if usage.reasoning_tokens:
         span.set_attribute(_span_attr_reasoning_tokens, usage.reasoning_tokens)
+    modality_details = {}
+    for name in ("input_by_modality", "output_by_modality", "cache_read_by_modality", "cache_write_by_modality"):
+        detail = getattr(usage, name)
+        if detail is not None:
+            modality_details[name] = {"tokens": detail.tokens, "complete": detail.complete}
+    if modality_details:
+        span.set_attribute("agento11y.usage.modality_details", json.dumps(modality_details))
     if usage.input_semantics == TokenInputSemantics.INCLUSIVE:
         span.set_attribute(_attr_token_semantics, _token_semantics_inclusive)
 

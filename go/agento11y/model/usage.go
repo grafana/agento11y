@@ -1,5 +1,7 @@
 package model
 
+import "maps"
+
 // TokenInputSemantics declares what InputTokens covers, mirroring
 // agento11y.v1.TokenInputSemantics.
 type TokenInputSemantics int32
@@ -16,7 +18,17 @@ const (
 	TokenInputSemanticsInclusive TokenInputSemantics = 1
 )
 
+type ModalityTokenCounts struct {
+	Tokens   map[string]int64 `json:"tokens"`
+	Complete bool             `json:"complete"`
+}
+
 type TokenUsage struct {
+	InputByModality      *ModalityTokenCounts `json:"input_by_modality,omitempty"`
+	OutputByModality     *ModalityTokenCounts `json:"output_by_modality,omitempty"`
+	CacheReadByModality  *ModalityTokenCounts `json:"cache_read_by_modality,omitempty"`
+	CacheWriteByModality *ModalityTokenCounts `json:"cache_write_by_modality,omitempty"`
+
 	// InputTokens is the prompt-side token count. Under
 	// TokenInputSemanticsInclusive it includes both cache buckets, per the
 	// OTel GenAI semantic conventions.
@@ -40,5 +52,19 @@ func (u TokenUsage) Normalize() TokenUsage {
 	}
 
 	u.TotalTokens = u.InputTokens + u.OutputTokens
+	return u
+}
+
+func (u TokenUsage) Clone() TokenUsage {
+	clone := func(c *ModalityTokenCounts) *ModalityTokenCounts {
+		if c == nil {
+			return nil
+		}
+		return &ModalityTokenCounts{Tokens: maps.Clone(c.Tokens), Complete: c.Complete}
+	}
+	u.InputByModality = clone(u.InputByModality)
+	u.OutputByModality = clone(u.OutputByModality)
+	u.CacheReadByModality = clone(u.CacheReadByModality)
+	u.CacheWriteByModality = clone(u.CacheWriteByModality)
 	return u
 }

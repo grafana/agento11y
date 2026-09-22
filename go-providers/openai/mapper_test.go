@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"encoding/json"
 	"testing"
 
 	osdk "github.com/openai/openai-go/v3"
@@ -853,5 +854,16 @@ func TestParseJSONOrStringPreservesWhitespace(t *testing.T) {
 	}
 	if got := parseJSONOrString(""); got != nil {
 		t.Fatalf("expected nil for empty string, got %q", string(got))
+	}
+}
+
+func TestResponsesUsagePreservesNewModalityFields(t *testing.T) {
+	var usage oresponses.ResponseUsage
+	if err := json.Unmarshal([]byte(`{"input_tokens":100,"output_tokens":10,"input_tokens_details":{"cached_tokens":0,"text_tokens":40,"image_tokens":60},"output_tokens_details":{"reasoning_tokens":0,"image_tokens":10}}`), &usage); err != nil {
+		t.Fatal(err)
+	}
+	mapped := mapResponsesUsage(usage)
+	if mapped.InputByModality == nil || !mapped.InputByModality.Complete || mapped.InputByModality.Tokens["image"] != 60 || mapped.OutputByModality.Tokens["image"] != 10 {
+		t.Fatalf("lost raw fields: %+v", mapped)
 	}
 }

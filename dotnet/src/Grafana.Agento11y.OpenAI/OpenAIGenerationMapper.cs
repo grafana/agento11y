@@ -1,5 +1,6 @@
 using global::OpenAI.Chat;
 using global::OpenAI.Embeddings;
+using System.ClientModel.Primitives;
 using System.Text;
 using System.Text.Json;
 using OpenAIResponses = global::OpenAI.Responses;
@@ -1015,6 +1016,12 @@ public static class OpenAIGenerationMapper
         {
             mapped.TotalTokens = mapped.InputTokens + mapped.OutputTokens;
         }
+        using var usageJson = JsonDocument.Parse(ModelReaderWriter.Write(usage).ToMemory());
+        var rawUsage = usageJson.RootElement;
+        var inputDetails = ModalityUsage.Property(rawUsage, "input_tokens_details");
+        mapped.InputByModality = ModalityUsage.Partition(inputDetails, mapped.InputTokens, openai: true);
+        mapped.OutputByModality = ModalityUsage.Partition(ModalityUsage.Property(rawUsage, "output_tokens_details"), mapped.OutputTokens, openai: true);
+        mapped.CacheReadByModality = ModalityUsage.Partition(ModalityUsage.Property(inputDetails, "cached_tokens_details"), mapped.CacheReadInputTokens, openai: true);
         return mapped;
     }
 
