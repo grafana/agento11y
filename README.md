@@ -42,7 +42,7 @@ curl -fsSL https://raw.githubusercontent.com/grafana/gcx/main/scripts/install.sh
 Or with Homebrew:
 
 ```sh
-brew install grafana/grafana/gcx
+brew install gcx
 ```
 
 Then install the skill:
