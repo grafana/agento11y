@@ -126,7 +126,7 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Publish to Maven Central
+      - name: Publish and release to Maven Central
         working-directory: java
         env:
           ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ fromJSON(steps.get-secrets.outputs.secrets).CENTRAL_USERNAME }}
@@ -135,7 +135,7 @@ jobs:
           ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ fromJSON(steps.get-secrets.outputs.secrets).GPG_PASSPHRASE }}
           PKG_VERSION: ${{ needs.build.outputs.new-version }}
         run: |
-          ./gradlew --no-daemon publishAllPublicationsToMavenCentralRepository \
+          ./gradlew --no-daemon publishAndReleaseToMavenCentral --no-configuration-cache \
             -Pversion="${PKG_VERSION}"
 
   release-pr:
