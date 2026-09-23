@@ -13,6 +13,8 @@ and the opencode plugin reuses the JS one:
 | shared `agento11y` binary | `plugins/agento11y/internal/redact/patterns_gen.go` |
 | opencode plugin | imports the JS table through `@grafana/agento11y-core` |
 
+The [Hermes plugin](../plugins/hermes/README.md) reuses Python SDK 0.17.x redaction, with no separate engine or generated pattern table. Hermes sanitizes tool-execution spans separately because they do not pass through the generation sanitizer. Published PyPI `0.10.0` has no shared secret redaction; see the [installation guide](../plugins/hermes/README.md#install).
+
 Do not edit a generated file. `mise run check:redaction` regenerates the five
 tables into a temporary directory and diffs them against the tree, so a hand
 edit fails CI with the file name and the command to run.
@@ -78,9 +80,7 @@ case-insensitive matching does not follow the host culture.
 
 ## Which tier runs on which field
 
-The table says what a pattern matches; the caller decides which tier runs. Both
-the SDKs' generation sanitizer and every coding-agent plugin split it the same
-way: tier 1 + tier 2 on a user prompt, a system prompt and a tool payload,
+The table says what a pattern matches; the caller decides which tier runs. The SDKs' generation sanitizer and the coding-agent plugins, including Hermes, split it the same way: tier 1 + tier 2 on a user prompt, a system prompt and a tool payload,
 tier 1 only on assistant text, reasoning, a conversation title and an error
 message. Prose is left on tier 1 because the tier 2 heuristics rewrite the word
 after any `key:` in a sentence. `docs/concepts/content-capture-modes.md` has the
@@ -95,9 +95,9 @@ choice. The SDKs redact addresses by default (`RedactEmailAddresses`). The
 routinely carry commit authors and reviewer addresses, and redacting them costs
 more context than it protects.
 
-The pi plugin is the exception among the plugins. It redacts through the SDK's
-generation sanitizer instead of its own mapper, so it takes the SDK default and
-does redact addresses. Unlike the tiering, this has not been unified.
+Pi and Hermes use their SDK sanitizers and redact email addresses.
+Hermes also redacts addresses on tool-execution spans. Unlike the tiering,
+email handling has not been unified across plugins.
 
 ## Known limitations
 

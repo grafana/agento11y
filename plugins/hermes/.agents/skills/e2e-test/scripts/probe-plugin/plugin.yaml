@@ -1,0 +1,15 @@
+name: hookdump
+version: "1.0.0"
+description: "Test probe: appends every hook payload it receives to hooks.jsonl."
+author: grafana-agento11y-hermes tests
+hooks:
+  - pre_api_request
+  - post_api_request
+  - api_request_error
+  - pre_llm_call
+  - post_llm_call
+  - pre_tool_call
+  - post_tool_call
+  - on_session_start
+  - on_session_end
+  - on_session_finalize
