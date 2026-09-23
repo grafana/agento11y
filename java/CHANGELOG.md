@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.7.2] - 2026-09-23
+
+_No user-facing changes._
+
 ## [0.7.1] - 2026-09-22
 
 ### Bug Fixes
