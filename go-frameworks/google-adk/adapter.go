@@ -523,15 +523,7 @@ func resolveProvider(explicitProvider string, eventProvider string, modelName st
 }
 
 func normalizeProvider(value string) string {
-	normalized := strings.ToLower(strings.TrimSpace(value))
-	switch normalized {
-	case "openai", "anthropic", "gemini":
-		return normalized
-	case "":
-		return ""
-	default:
-		return "custom"
-	}
+	return strings.ToLower(strings.TrimSpace(value))
 }
 
 func inferProvider(modelName string) string {

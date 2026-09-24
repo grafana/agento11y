@@ -46,6 +46,10 @@ type GenerationStart struct {
 	MaxTokens           *int64
 	Temperature         *float64
 	TopP                *float64
+	TopK                *int64
+	ChoiceCount         *int64
+	Seed                *int64
+	OutputType          *string
 	ToolChoice          *string
 	ThinkingEnabled     *bool
 	ParentGenerationIDs []string
@@ -87,8 +91,13 @@ func cloneGeneration(in Generation) Generation {
 		MaxTokens:           cloneInt64Ptr(in.MaxTokens),
 		Temperature:         cloneFloat64Ptr(in.Temperature),
 		TopP:                cloneFloat64Ptr(in.TopP),
+		TopK:                cloneInt64Ptr(in.TopK),
+		ChoiceCount:         cloneInt64Ptr(in.ChoiceCount),
+		Seed:                cloneInt64Ptr(in.Seed),
+		OutputType:          cloneStringPtr(in.OutputType),
 		ToolChoice:          cloneStringPtr(in.ToolChoice),
 		ThinkingEnabled:     cloneBoolPtr(in.ThinkingEnabled),
+		ResponseStatus:      cloneStringPtr(in.ResponseStatus),
 		ParentGenerationIDs: cloneStringSlice(in.ParentGenerationIDs),
 		EffectiveVersion:    in.EffectiveVersion,
 		Usage:               in.Usage,
@@ -118,6 +127,10 @@ func cloneGenerationStart(in GenerationStart) GenerationStart {
 		MaxTokens:           cloneInt64Ptr(in.MaxTokens),
 		Temperature:         cloneFloat64Ptr(in.Temperature),
 		TopP:                cloneFloat64Ptr(in.TopP),
+		TopK:                cloneInt64Ptr(in.TopK),
+		ChoiceCount:         cloneInt64Ptr(in.ChoiceCount),
+		Seed:                cloneInt64Ptr(in.Seed),
+		OutputType:          cloneStringPtr(in.OutputType),
 		ToolChoice:          cloneStringPtr(in.ToolChoice),
 		ThinkingEnabled:     cloneBoolPtr(in.ThinkingEnabled),
 		ParentGenerationIDs: cloneStringSlice(in.ParentGenerationIDs),
@@ -169,9 +182,10 @@ func cloneMessages(in []Message) []Message {
 	out := make([]Message, len(in))
 	for i := range in {
 		out[i] = Message{
-			Role:  in[i].Role,
-			Name:  in[i].Name,
-			Parts: cloneParts(in[i].Parts),
+			Role:         in[i].Role,
+			Name:         in[i].Name,
+			Parts:        cloneParts(in[i].Parts),
+			FinishReason: in[i].FinishReason,
 		}
 	}
 
