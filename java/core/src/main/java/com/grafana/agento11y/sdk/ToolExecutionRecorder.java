@@ -90,6 +90,7 @@ public class ToolExecutionRecorder implements AutoCloseable {
                 .setToolCallId(seed.getToolCallId())
                 .setToolType(seed.getToolType())
                 .setToolDescription(seed.getToolDescription())
+                .setSkillName(Agento11yClient.normalizeSkillName(seed.getSkillName()))
                 .setConversationId(seed.getConversationId())
                 .setAgentName(seed.getAgentName())
                 .setAgentVersion(seed.getAgentVersion())

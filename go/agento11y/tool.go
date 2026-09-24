@@ -5,6 +5,7 @@ import "time"
 // ToolExecutionStart seeds a tool execution span before the tool call runs.
 type ToolExecutionStart struct {
 	ToolName          string
+	SkillName         string
 	ToolCallID        string
 	ToolType          string
 	ToolDescription   string

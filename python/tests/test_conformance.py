@@ -782,6 +782,7 @@ def test_conformance_tool_execution_semantics() -> None:
                             tool_name="weather",
                             tool_call_id="call-weather-1",
                             tool_type="function",
+                            skill_name="  code-review  ",
                             include_content=True,
                         )
                     )
@@ -803,12 +804,16 @@ def test_conformance_tool_execution_semantics() -> None:
         assert span.attributes["gen_ai.tool.name"] == "weather"
         assert span.attributes["gen_ai.tool.call.id"] == "call-weather-1"
         assert span.attributes["gen_ai.tool.type"] == "function"
+        assert span.attributes["agento11y.skill.name"] == "code-review"
         assert "Paris" in str(span.attributes["gen_ai.tool.call.arguments"])
         assert "sunny" in str(span.attributes["gen_ai.tool.call.result"])
         assert span.attributes[_span_attr_conversation_title] == "Context title"
         assert span.attributes["gen_ai.agent.name"] == "agent-context"
         assert span.attributes["gen_ai.agent.version"] == "v-context"
         assert "gen_ai.client.operation.duration" in metrics
+        duration_points = list(metrics["gen_ai.client.operation.duration"].data_points)
+        assert duration_points
+        assert all("agento11y.skill.name" not in point.attributes for point in duration_points)
         assert "gen_ai.client.time_to_first_token" not in metrics
     finally:
         env.shutdown()

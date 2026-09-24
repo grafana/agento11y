@@ -1176,6 +1176,45 @@ func TestStartToolExecutionSetsExecuteToolAttributes(t *testing.T) {
 	}
 }
 
+const testSkillNameAttributeKey = "agento11y.skill.name"
+
+func TestToolExecutionSkillNameAttribute(t *testing.T) {
+	tests := []struct {
+		name      string
+		skillName string
+		want      string
+	}{
+		{name: "populated is trimmed", skillName: " code-review ", want: "code-review"},
+		{name: "omitted"},
+		{name: "whitespace omitted", skillName: " \t\n "},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client, recorder, _ := newTestClient(t, Config{})
+			_, toolRecorder := client.StartToolExecution(context.Background(), ToolExecutionStart{
+				ToolName:  "weather",
+				SkillName: tc.skillName,
+			})
+			toolRecorder.End()
+			if err := toolRecorder.Err(); err != nil {
+				t.Fatalf("end tool execution: %v", err)
+			}
+
+			attrs := spanAttributeMap(onlyToolSpan(t, recorder.Ended()))
+			if tc.want == "" {
+				if _, ok := attrs[testSkillNameAttributeKey]; ok {
+					t.Fatalf("did not expect %s for skill name %q", testSkillNameAttributeKey, tc.skillName)
+				}
+				return
+			}
+			if got := attrs[testSkillNameAttributeKey].AsString(); got != tc.want {
+				t.Fatalf("expected %s=%q, got %q", testSkillNameAttributeKey, tc.want, got)
+			}
+		})
+	}
+}
+
 func TestToolExecutionRecorderContentCapture(t *testing.T) {
 	// Backward compat: Config{} with IncludeContent controls tool content.
 	client, recorder, _ := newTestClient(t, Config{})
@@ -1233,7 +1272,8 @@ func TestToolExecutionRecorderContentCapture(t *testing.T) {
 func TestToolExecutionRecorderErrorSetsStatusAndType(t *testing.T) {
 	client, recorder, _ := newTestClient(t, Config{})
 	_, toolRecorder := client.StartToolExecution(context.Background(), ToolExecutionStart{
-		ToolName: "weather",
+		ToolName:  "weather",
+		SkillName: " code-review ",
 	})
 
 	toolRecorder.SetExecError(errors.New("tool failed"))
@@ -1250,6 +1290,12 @@ func TestToolExecutionRecorderErrorSetsStatusAndType(t *testing.T) {
 	attrs := spanAttributeMap(span)
 	if attrs[spanAttrErrorType].AsString() != "tool_execution_error" {
 		t.Fatalf("expected error.type=tool_execution_error")
+	}
+	if attrs[spanAttrErrorCategory].AsString() != "sdk_error" {
+		t.Fatalf("expected error.category=sdk_error")
+	}
+	if attrs[testSkillNameAttributeKey].AsString() != "code-review" {
+		t.Fatalf("expected %s=code-review on failed tool", testSkillNameAttributeKey)
 	}
 }
 

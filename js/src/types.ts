@@ -522,6 +522,7 @@ export interface ToolExecutionStart {
   toolCallId?: string;
   toolType?: string;
   toolDescription?: string;
+  skillName?: string;
   conversationId?: string;
   conversationTitle?: string;
   agentName?: string;
@@ -568,6 +569,7 @@ export interface ToolExecution {
   toolCallId?: string;
   toolType?: string;
   toolDescription?: string;
+  skillName?: string;
   conversationId?: string;
   conversationTitle?: string;
   agentName?: string;
