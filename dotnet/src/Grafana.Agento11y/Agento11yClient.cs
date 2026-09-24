@@ -1348,6 +1348,12 @@ public sealed partial class Agento11yClient : IAsyncDisposable
             activity.SetTag(SpanAttrReasoningTokens, generation.Usage.ReasoningTokens);
         }
 
+        var modalityDetails = new Dictionary<string, object>();
+        if (generation.Usage.InputByModality is { } inputByModality) { modalityDetails["input_by_modality"] = new { tokens = inputByModality.Tokens, complete = inputByModality.Complete }; }
+        if (generation.Usage.OutputByModality is { } outputByModality) { modalityDetails["output_by_modality"] = new { tokens = outputByModality.Tokens, complete = outputByModality.Complete }; }
+        if (generation.Usage.CacheReadByModality is { } cacheReadByModality) { modalityDetails["cache_read_by_modality"] = new { tokens = cacheReadByModality.Tokens, complete = cacheReadByModality.Complete }; }
+        if (generation.Usage.CacheWriteByModality is { } cacheWriteByModality) { modalityDetails["cache_write_by_modality"] = new { tokens = cacheWriteByModality.Tokens, complete = cacheWriteByModality.Complete }; }
+        if (modalityDetails.Count > 0) { activity.SetTag("agento11y.usage.modality_details", JsonSerializer.Serialize(modalityDetails)); }
         if (generation.Usage.InputSemantics == TokenInputSemantics.Inclusive)
         {
             activity.SetTag(AttrTokenSemantics, TokenSemanticsInclusive);

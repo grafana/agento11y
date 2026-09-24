@@ -116,7 +116,12 @@ func fullContentGeneration() *agento11yv1.Generation {
 				Deferred:        true,
 			},
 		},
+		Pricing: &agento11yv1.GenerationPricing{Status: "unpriced", Reason: "missing_rate", CostUsdMicros: func() *int64 { v := int64(1); return &v }()},
 		Usage: &agento11yv1.TokenUsage{
+			InputByModality:       &agento11yv1.ModalityTokenCounts{Tokens: map[string]int64{"image": 1}, Complete: true},
+			OutputByModality:      &agento11yv1.ModalityTokenCounts{Tokens: map[string]int64{"image": 1}, Complete: true},
+			CacheReadByModality:   &agento11yv1.ModalityTokenCounts{Tokens: map[string]int64{"image": 1}, Complete: true},
+			CacheWriteByModality:  &agento11yv1.ModalityTokenCounts{Tokens: map[string]int64{"image": 1}, Complete: true},
 			InputTokens:           120,
 			OutputTokens:          42,
 			TotalTokens:           162,

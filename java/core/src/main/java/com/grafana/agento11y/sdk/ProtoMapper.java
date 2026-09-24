@@ -84,7 +84,7 @@ final class ProtoMapper {
 
         TokenUsage usage = generation.getUsage();
         if (usage != null) {
-            builder.setUsage(GenerationIngest.TokenUsage.newBuilder()
+            var usageBuilder = GenerationIngest.TokenUsage.newBuilder()
                     .setInputTokens(usage.getInputTokens())
                     .setOutputTokens(usage.getOutputTokens())
                     .setTotalTokens(usage.getTotalTokens())
@@ -92,8 +92,12 @@ final class ProtoMapper {
                     .setCacheWriteInputTokens(usage.getCacheWriteInputTokens())
                     .setReasoningTokens(usage.getReasoningTokens())
                     .setInputSemanticsValue(
-                            usage.getInputSemantics() == TokenUsage.TokenInputSemantics.INCLUSIVE ? 1 : 0)
-                    .build());
+                            usage.getInputSemantics() == TokenUsage.TokenInputSemantics.INCLUSIVE ? 1 : 0);
+            if (usage.getInputByModality() != null) { usageBuilder.setInputByModality(GenerationIngest.ModalityTokenCounts.newBuilder().putAllTokens(usage.getInputByModality().tokens()).setComplete(usage.getInputByModality().complete())); }
+            if (usage.getOutputByModality() != null) { usageBuilder.setOutputByModality(GenerationIngest.ModalityTokenCounts.newBuilder().putAllTokens(usage.getOutputByModality().tokens()).setComplete(usage.getOutputByModality().complete())); }
+            if (usage.getCacheReadByModality() != null) { usageBuilder.setCacheReadByModality(GenerationIngest.ModalityTokenCounts.newBuilder().putAllTokens(usage.getCacheReadByModality().tokens()).setComplete(usage.getCacheReadByModality().complete())); }
+            if (usage.getCacheWriteByModality() != null) { usageBuilder.setCacheWriteByModality(GenerationIngest.ModalityTokenCounts.newBuilder().putAllTokens(usage.getCacheWriteByModality().tokens()).setComplete(usage.getCacheWriteByModality().complete())); }
+            builder.setUsage(usageBuilder.build());
         }
 
         for (Message message : generation.getInput()) {

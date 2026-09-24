@@ -1957,6 +1957,24 @@ func generationSpanAttributes(g Generation) []attribute.KeyValue {
 	if g.Usage.ReasoningTokens != 0 {
 		attrs = append(attrs, attribute.Int64(spanAttrReasoningTokens, g.Usage.ReasoningTokens))
 	}
+	details := map[string]*ModalityTokenCounts{}
+	if g.Usage.InputByModality != nil {
+		details["input_by_modality"] = g.Usage.InputByModality
+	}
+	if g.Usage.OutputByModality != nil {
+		details["output_by_modality"] = g.Usage.OutputByModality
+	}
+	if g.Usage.CacheReadByModality != nil {
+		details["cache_read_by_modality"] = g.Usage.CacheReadByModality
+	}
+	if g.Usage.CacheWriteByModality != nil {
+		details["cache_write_by_modality"] = g.Usage.CacheWriteByModality
+	}
+	if len(details) > 0 {
+		if encoded, err := json.Marshal(details); err == nil {
+			attrs = append(attrs, attribute.String("agento11y.usage.modality_details", string(encoded)))
+		}
+	}
 	if g.Usage.InputSemantics == TokenInputSemanticsInclusive {
 		attrs = append(attrs, attribute.String(attrTokenSemantics, tokenSemanticsInclusive))
 	}

@@ -479,6 +479,10 @@ function mapUsageToProto(usage: TokenUsage | undefined): Record<string, unknown>
     cacheWriteInputTokens: toInt64String(usage.cacheWriteInputTokens),
     reasoningTokens: toInt64String(usage.reasoningTokens),
     ...(usage.inputSemantics === 'inclusive' ? { inputSemantics: 'TOKEN_INPUT_SEMANTICS_INCLUSIVE' } : {}),
+    inputByModality: usage.inputByModality,
+    outputByModality: usage.outputByModality,
+    cacheReadByModality: usage.cacheReadByModality,
+    cacheWriteByModality: usage.cacheWriteByModality,
   };
 }
 

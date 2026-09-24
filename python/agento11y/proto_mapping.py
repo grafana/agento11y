@@ -46,6 +46,38 @@ def generation_to_proto(generation: Generation) -> agento11y_pb2.Generation:
             cache_write_input_tokens=generation.usage.cache_write_input_tokens,
             reasoning_tokens=generation.usage.reasoning_tokens,
             input_semantics=int(generation.usage.input_semantics),
+            input_by_modality=(
+                {
+                    "tokens": generation.usage.input_by_modality.tokens,
+                    "complete": generation.usage.input_by_modality.complete,
+                }
+                if generation.usage.input_by_modality is not None
+                else None
+            ),
+            output_by_modality=(
+                {
+                    "tokens": generation.usage.output_by_modality.tokens,
+                    "complete": generation.usage.output_by_modality.complete,
+                }
+                if generation.usage.output_by_modality is not None
+                else None
+            ),
+            cache_read_by_modality=(
+                {
+                    "tokens": generation.usage.cache_read_by_modality.tokens,
+                    "complete": generation.usage.cache_read_by_modality.complete,
+                }
+                if generation.usage.cache_read_by_modality is not None
+                else None
+            ),
+            cache_write_by_modality=(
+                {
+                    "tokens": generation.usage.cache_write_by_modality.tokens,
+                    "complete": generation.usage.cache_write_by_modality.complete,
+                }
+                if generation.usage.cache_write_by_modality is not None
+                else None
+            ),
         ),
         stop_reason=generation.stop_reason,
         tags=dict(generation.tags),
