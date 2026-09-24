@@ -44,6 +44,7 @@ def generation_to_proto(generation: Generation) -> agento11y_pb2.Generation:
             total_tokens=generation.usage.total_tokens,
             cache_read_input_tokens=generation.usage.cache_read_input_tokens,
             cache_write_input_tokens=generation.usage.cache_write_input_tokens,
+            cache_write1h_input_tokens=generation.usage.cache_write_1h_input_tokens,
             reasoning_tokens=generation.usage.reasoning_tokens,
             input_semantics=int(generation.usage.input_semantics),
         ),

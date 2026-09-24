@@ -163,12 +163,13 @@ func TestSpecMetrics(t *testing.T) {
 			mutate: func(inv *otelgenai.Invocation) {
 				inv.Usage.CacheReadInputTokens = 12
 				inv.Usage.CacheWriteInputTokens = 7
+				inv.Usage.CacheWrite1hInputTokens = 3
 				inv.Usage.ReasoningTokens = 5
 			},
 			check: func(t *testing.T, metrics map[string]metricdata.Metrics) {
 				sums := tokenTypeSums(t, metrics["gen_ai.client.token.usage"])
-				if sums["cache_read"] != 12 || sums["cache_write"] != 7 || sums["reasoning"] != 5 {
-					t.Errorf("token sums = %v, want cache_read 12, cache_write 7, reasoning 5", sums)
+				if sums["cache_read"] != 12 || sums["cache_write"] != 7 || sums["cache_write1h"] != 3 || sums["reasoning"] != 5 {
+					t.Errorf("token sums = %v, want cache_read 12, cache_write 7, cache_write1h 3, reasoning 5", sums)
 				}
 			},
 		},

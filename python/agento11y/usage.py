@@ -27,6 +27,7 @@ def from_anthropic(raw: Any) -> TokenUsage:
         total_tokens=flat.total_tokens,
         cache_read_input_tokens=flat.cache_read_input_tokens,
         cache_write_input_tokens=flat.cache_write_input_tokens,
+        cache_write_1h_input_tokens=flat.cache_write_1h_input_tokens,
         input_semantics=TokenInputSemantics.INCLUSIVE,
     ).normalize()
 
@@ -47,6 +48,7 @@ def _flat_raw_usage(raw: Any) -> TokenUsage:
         total_tokens=_as_int(_read(raw, "total_tokens")),
         cache_read_input_tokens=_as_int(_read(raw, "cache_read_input_tokens")),
         cache_write_input_tokens=cache_write,
+        cache_write_1h_input_tokens=_as_int(_read(_read(raw, "cache_creation"), "ephemeral_1h_input_tokens")),
     )
 
 
@@ -158,6 +160,7 @@ def from_generic(raw: Any) -> TokenUsage:
         total_tokens=total_tokens,
         cache_read_input_tokens=_as_int(_read(raw, "cache_read_input_tokens")),
         cache_write_input_tokens=cache_write,
+        cache_write_1h_input_tokens=_as_int(_read(_read(raw, "cache_creation"), "ephemeral_1h_input_tokens")),
         reasoning_tokens=_as_int(_read(raw, "reasoning_tokens")),
     )
 

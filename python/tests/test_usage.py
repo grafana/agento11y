@@ -25,6 +25,7 @@ class TestFromAnthropic:
             "cache_read_input_tokens": 10,
             "cache_write_input_tokens": 5,
             "cache_creation_input_tokens": 3,
+            "cache_creation": {"ephemeral_5m_input_tokens": 1, "ephemeral_1h_input_tokens": 2},
         }
         usage = from_anthropic(raw)
         # Inclusive contract: input sums Anthropic's additive buckets up
@@ -35,6 +36,7 @@ class TestFromAnthropic:
         assert usage.cache_read_input_tokens == 10
         # When both upstream fields are present, prefer cache_write_input_tokens.
         assert usage.cache_write_input_tokens == 5
+        assert usage.cache_write_1h_input_tokens == 2
         assert usage.reasoning_tokens == 0
         assert usage.input_semantics == TokenInputSemantics.INCLUSIVE
 
@@ -392,6 +394,17 @@ class TestFromGeneric:
         }
         usage = from_generic(raw)
         assert usage.cache_write_input_tokens == 0
+
+    def test_anthropic_cache_tier_survives_generic_bedrock_usage(self):
+        usage = from_generic({
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "cache_creation_input_tokens": 6,
+            "cache_creation": {"ephemeral_1h_input_tokens": 4},
+        })
+        assert usage.cache_write_input_tokens == 6
+        assert usage.cache_write_1h_input_tokens == 4
+        assert usage.total_tokens == 15
 
     def test_flat_reasoning_tokens(self):
         raw = {"input_tokens": 100, "reasoning_tokens": 25}
