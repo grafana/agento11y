@@ -921,12 +921,12 @@ func collectConfig(osEnv, fileEnv map[string]string) ConfigSection {
 			sec.AutoTagNamesSource = autoTagNames.source
 		}
 		// `user` is the one name doctor cannot resolve the way a session will.
-		// With USER_ID unset, Claude Code and Cursor attach the account they are
-		// signed in to, which doctor has no hook payload to read, and only an
-		// agent that supplies no identity falls back to the operating-system
-		// account name. Feeding a placeholder through the same tier the adapters
-		// fill keeps the row from presenting one of those outcomes as the value;
-		// the message below names both.
+		// With USER_ID unset, Claude Code, Codex, and Cursor attach the account
+		// they are signed in to, which doctor has no hook payload to read, and
+		// only an agent that supplies no identity falls back to the
+		// operating-system account name. Feeding a placeholder through the same
+		// tier the adapters fill keeps the row from presenting one of those
+		// outcomes as the value; the message below names both.
 		in := autotag.Inputs{Lookup: snapshotLookup}
 		if !userID.set {
 			in.UserID = agentUserPlaceholder
@@ -1074,7 +1074,7 @@ func collectConfig(osEnv, fileEnv map[string]string) ConfigSection {
 	// value the session attaches depends on which agent runs it.
 	if sec.AutoTags[autotag.KeyUser] == agentUserPlaceholder {
 		sec.Messages = append(sec.Messages, fmt.Sprintf(
-			"the auto tag user depends on the coding agent: Claude Code and Cursor attach the account they are signed in to, and the others attach the operating-system account name; set %s to pin one value",
+			"the auto tag user depends on the coding agent: Claude Code, Codex, and Cursor attach the account they are signed in to, and the others attach the operating-system account name; set %s to pin one value",
 			envconfig.PreferredKey("USER_ID")))
 	}
 	if autoTags.conflict {

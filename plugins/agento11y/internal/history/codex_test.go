@@ -15,6 +15,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/codexlog"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/fragment"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/mapper"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/userid"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
 
@@ -204,6 +205,7 @@ func TestCodexTurnsMapThroughTheLiveMapper(t *testing.T) {
 		},
 		ContentCapture: agento11y.ContentCaptureModeFull,
 		RawContent:     true,
+		UserID:         userid.Resolve(),
 		Now:            time.Date(2026, 1, 10, 13, 0, 0, 0, time.UTC),
 	}).Generation
 	// The importer stamps its own deterministic ID and the conversation title;

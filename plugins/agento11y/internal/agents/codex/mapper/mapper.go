@@ -48,7 +48,11 @@ type Inputs struct {
 	// SkipPromptRedaction exports the user prompt without redaction. The zero
 	// value redacts; envconfig.ResolveRedactInput owns the policy.
 	SkipPromptRedaction bool
-	Now                 time.Time
+	// UserID is the identity the hook or importer already resolved. Map copies
+	// it onto the generation and does not look up auth itself. Blank leaves
+	// user_id unset.
+	UserID string
+	Now    time.Time
 }
 
 type Mapped struct {
@@ -94,9 +98,11 @@ func Map(in Inputs) Mapped {
 	conversationID, agentName, parentIDs, metadata := linkFields(frag, in.SubagentLink, tags, in.agent())
 	usage, metadata := usageFields(in.TokenSnapshot, metadata)
 
+	uid := strings.TrimSpace(in.UserID)
 	start := agento11y.GenerationStart{
 		ID:                  id,
 		ConversationID:      conversationID,
+		UserID:              uid,
 		AgentName:           agentName,
 		Mode:                agento11y.GenerationModeSync,
 		OperationName:       "generateText",
@@ -111,6 +117,7 @@ func Map(in Inputs) Mapped {
 	gen := agento11y.Generation{
 		ID:                  id,
 		ConversationID:      conversationID,
+		UserID:              uid,
 		AgentName:           agentName,
 		Mode:                agento11y.GenerationModeSync,
 		OperationName:       "generateText",
