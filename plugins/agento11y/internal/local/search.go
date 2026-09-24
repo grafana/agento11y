@@ -1,10 +1,16 @@
 package local
 
 import (
+	"bufio"
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/grafana/agento11y/go/agento11y"
@@ -19,6 +25,11 @@ const snippetMaxLen = 320
 // preserves before truncation. Picked so a typical match still has enough
 // context for "rate limit" to make sense without flooding the row.
 const snippetWindow = 80
+
+// Cap scan concurrency at 16 to bound disk pressure.
+func searchWorkers() int {
+	return min(max(runtime.GOMAXPROCS(0), 1)*2, 16)
+}
 
 // SearchHit is one ranked result for conversation search. The fields mirror
 // what ConversationSummary exposes so the viewer can reuse the existing
@@ -41,8 +52,8 @@ type SearchHit struct {
 	TokenBuckets TokenBuckets `json:"token_buckets"`
 }
 
-// SearchConversations runs a case-insensitive full-text search across
-// every recorded conversation. The match runs over title, agent and
+// SearchConversations runs a case-insensitive full-text search across every
+// readable recorded conversation. The match runs over title, agent and
 // model names, plus every text/thinking part and every tool-call input
 // and tool-result content in every generation. Hits are ranked by total
 // match count, with newer-last-activity as a tiebreak.
@@ -51,10 +62,13 @@ type SearchHit struct {
 // every term at least once (an AND across terms). An empty or whitespace
 // query returns no hits without error, matching the endpoint contract.
 // limit ≤ 0 means no cap.
-func (s *Storage) SearchConversations(query string, limit int) ([]SearchHit, error) {
+func (s *Storage) SearchConversations(ctx context.Context, query string, limit int) ([]SearchHit, error) {
 	terms := searchTerms(query)
 	if len(terms) == 0 {
 		return nil, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	dir := filepath.Join(s.dir, ConversationsDir)
 	entries, err := os.ReadDir(dir)
@@ -64,22 +78,26 @@ func (s *Storage) SearchConversations(query string, limit int) ([]SearchHit, err
 		}
 		return nil, err
 	}
-	out := make([]SearchHit, 0, len(entries))
+	paths := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".jsonl" {
+			continue
+		}
+		paths = append(paths, filepath.Join(dir, entry.Name()))
+	}
+
 	var skipped int
 	defer func() { s.logSkipped("search", skipped) }()
-	for _, e := range entries {
-		if e.IsDir() || filepath.Ext(e.Name()) != ".jsonl" {
-			continue
+	slots, skipped, err := scanConversationFiles(ctx, paths, terms, searchConversationFile)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]SearchHit, 0, len(slots))
+	for _, result := range slots {
+		if result.ok {
+			out = append(out, result.hit)
 		}
-		hit, ok, n, err := searchConversationFile(filepath.Join(dir, e.Name()), terms)
-		skipped += n
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			continue
-		}
-		out = append(out, hit)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].MatchCount != out[j].MatchCount {
@@ -92,6 +110,65 @@ func (s *Storage) SearchConversations(query string, limit int) ([]SearchHit, err
 		out = out[:limit]
 	}
 	return out, nil
+}
+
+type searchFileFunc func(string, []string) (SearchHit, bool, int, error)
+
+type searchSlot struct {
+	hit SearchHit
+	ok  bool
+}
+
+func scanConversationFiles(ctx context.Context, paths, terms []string, scan searchFileFunc) ([]searchSlot, int, error) {
+	slots := make([]searchSlot, len(paths))
+	var skipped atomic.Int64
+	var wg sync.WaitGroup
+	workerCtx, cancelWorkers := context.WithCancel(ctx)
+	defer cancelWorkers()
+	var scanErr error
+	var scanErrOnce sync.Once
+	next := make(chan int)
+	wg.Go(func() {
+		defer close(next)
+		for i := range paths {
+			select {
+			case next <- i:
+			case <-workerCtx.Done():
+				return
+			}
+		}
+	})
+	for range min(searchWorkers(), max(len(paths), 1)) {
+		wg.Go(func() {
+			for i := range next {
+				if workerCtx.Err() != nil {
+					return
+				}
+				hit, ok, n, err := scan(paths[i], terms)
+				skipped.Add(int64(n))
+				if errors.Is(err, bufio.ErrTooLong) {
+					skipped.Add(1)
+					continue
+				}
+				if err != nil {
+					scanErrOnce.Do(func() {
+						scanErr = err
+						cancelWorkers()
+					})
+					return
+				}
+				slots[i] = searchSlot{hit: hit, ok: ok}
+			}
+		})
+	}
+	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, int(skipped.Load()), err
+	}
+	if scanErr != nil {
+		return nil, int(skipped.Load()), scanErr
+	}
+	return slots, int(skipped.Load()), nil
 }
 
 // searchTerms splits the user query into lower-cased terms. Whitespace is
