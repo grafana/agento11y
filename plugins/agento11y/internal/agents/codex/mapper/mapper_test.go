@@ -492,6 +492,27 @@ func TestMapWithoutTokenSnapshotPreservesExistingBehavior(t *testing.T) {
 	}
 }
 
+func TestMapUserID(t *testing.T) {
+	f := &fragment.Fragment{SessionID: "sess", TurnID: "turn", Model: "gpt-5.5"}
+	got := Map(Inputs{
+		Fragment:       f,
+		UserID:         "  wei@example.com  ",
+		ContentCapture: agento11y.ContentCaptureModeMetadataOnly,
+		Now:            time.Unix(1, 0),
+	})
+	if got.Start.UserID != "wei@example.com" {
+		t.Fatalf("Start.UserID = %q, want wei@example.com", got.Start.UserID)
+	}
+	if got.Generation.UserID != "wei@example.com" {
+		t.Fatalf("Generation.UserID = %q, want wei@example.com", got.Generation.UserID)
+	}
+
+	blank := Map(Inputs{Fragment: f, UserID: "   ", ContentCapture: agento11y.ContentCaptureModeMetadataOnly, Now: time.Unix(1, 0)})
+	if blank.Generation.UserID != "" {
+		t.Fatalf("whitespace UserID = %q, want empty", blank.Generation.UserID)
+	}
+}
+
 // TestMapAgentNameOverride pins the exported identity against Inputs.AgentName
 // on both the plain and the linked-subagent path. Every case also asserts the
 // entrypoint tag and the model provider, which name the product rather than the

@@ -14,6 +14,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/config"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/fragment"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/mapper"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/userid"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/guard"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/autotag"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/emit"
@@ -229,10 +230,11 @@ func Stop(p Payload, cfg config.Config, logger *log.Logger) {
 			}
 		}()
 	}
-	client := buildClient(cfg, frag.Cwd, providers, logger)
+	userID := userid.Resolve()
+	client := buildClient(cfg, frag.Cwd, userID, providers, logger)
 	defer func() { _ = client.Shutdown(ctx) }()
 
-	mapped := mapper.Map(mapper.Inputs{Fragment: frag, SubagentLink: subagentLink, TokenSnapshot: tokenSnapshot, ContentCapture: cfg.ContentCapture, AgentName: cfg.Agent(), SkipPromptRedaction: cfg.SkipPromptRedaction})
+	mapped := mapper.Map(mapper.Inputs{Fragment: frag, SubagentLink: subagentLink, TokenSnapshot: tokenSnapshot, ContentCapture: cfg.ContentCapture, AgentName: cfg.Agent(), SkipPromptRedaction: cfg.SkipPromptRedaction, UserID: userID})
 	logger.Printf("stop: export id=%s conversation=%s agent=%s model=%s", mapped.Generation.ID, mapped.Generation.ConversationID, mapped.Generation.AgentName, mapped.Generation.Model.Name)
 	if err := emitGeneration(ctx, client, frag, mapped, cfg.ContentCapture, logger); err != nil {
 		logger.Printf("stop: emit: %v", err)
@@ -245,7 +247,7 @@ func Stop(p Payload, cfg config.Config, logger *log.Logger) {
 	// generations drain together. Their on-disk fragments are deleted only
 	// after Flush succeeds; if Flush fails the fragments stay on disk with
 	// their PendingRetry flag set, ready for the next Stop to try again.
-	sweptPaths := sweepPendingRetries(ctx, client, cfg, p.SessionID, p.TurnID, logger)
+	sweptPaths := sweepPendingRetries(ctx, client, cfg, p.SessionID, p.TurnID, userID, logger)
 
 	if err := client.Flush(ctx); err != nil {
 		logger.Printf("stop: agento11y flush: %v", err)
@@ -298,7 +300,7 @@ func markPendingRetry(sessionID, turnID string, logger *log.Logger) {
 // transcript path and turn id, which is enough for both helpers. Without
 // this, retried subagent turns would silently re-export as plain `codex`
 // turns with empty token usage.
-func sweepPendingRetries(ctx context.Context, client *agento11y.Client, cfg config.Config, sessionID, currentTurnID string, logger *log.Logger) []string {
+func sweepPendingRetries(ctx context.Context, client *agento11y.Client, cfg config.Config, sessionID, currentTurnID, userID string, logger *log.Logger) []string {
 	currentPath := fragment.FragmentFilePath(sessionID, currentTurnID)
 	paths := fragment.ListTurnFiles(sessionID, logger)
 	enqueued := make([]string, 0, len(paths))
@@ -327,6 +329,7 @@ func sweepPendingRetries(ctx context.Context, client *agento11y.Client, cfg conf
 			// fragment was written in. A name changed between turns
 			// re-stamps a retried turn with the current one.
 			AgentName: cfg.Agent(),
+			UserID:    userID,
 		})
 		logger.Printf("stop: retry id=%s session=%s turn=%s", mapped.Generation.ID, f.SessionID, f.TurnID)
 		if err := emitGeneration(ctx, client, f, mapped, cfg.ContentCapture, logger); err != nil {
@@ -482,17 +485,18 @@ func applySessionDefaults(f *fragment.Fragment, s *fragment.Session) {
 // buildClient constructs the agento11y client with the shared HTTP/basic-auth
 // export defaults. Endpoint, tenant ID, and token come from the SDK's automatic
 // SIGIL_* env resolution, matching copilot and cursor. cwd is the turn's
-// working directory, which auto-tags resolve the repository and branch from;
-// codex payloads carry no user identity, so that falls back to the configured
-// AGENTO11Y_USER_ID or the OS account name.
-func buildClient(cfg config.Config, cwd string, providers *otel.Providers, logger *log.Logger) *agento11y.Client {
+// working directory, which auto-tags resolve the repository and branch from.
+// userID is the identity Resolve already found (configured USER_ID or the
+// ChatGPT email in auth.json); auto-tags use it before falling back to the
+// OS account name.
+func buildClient(cfg config.Config, cwd, userID string, providers *otel.Providers, logger *log.Logger) *agento11y.Client {
 	return emit.NewClient(emit.ClientOptions{
 		InstrumentationName: otelInstrumentationName,
 		ContentCapture:      cfg.ContentCapture,
 		Logger:              logger,
 		Providers:           providers,
 		UserAgent:           useragent.For("codex"),
-		Tags:                autotag.FromEnv(autotag.Inputs{Cwd: cwd}, logger),
+		Tags:                autotag.FromEnv(autotag.Inputs{Cwd: cwd, UserID: userID}, logger),
 	})
 }
 

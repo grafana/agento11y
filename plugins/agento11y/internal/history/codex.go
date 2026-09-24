@@ -17,6 +17,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/codexlog"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/fragment"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/mapper"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/userid"
 )
 
 func init() {
@@ -329,6 +330,9 @@ func (c *codexImporter) Turns(ctx context.Context, sess SessionPreview) iter.Seq
 				sess.SessionID,
 				codexSessionIDFromPath(sess.SourcePath),
 			),
+			// Match live capture: the hook attaches the user id from
+			// AGENTO11Y_USER_ID or ~/.codex/auth.json to every generation.
+			userID:    userid.Resolve(),
 			toolNames: map[string]string{},
 			yield:     yield,
 		}
@@ -357,6 +361,7 @@ type codexReplay struct {
 	sess      SessionPreview
 	link      *fragment.SubagentLink
 	sessionID string
+	userID    string
 	yield     func(HistoricalGeneration, error) bool
 
 	segments      codexSegmenter
@@ -628,6 +633,7 @@ func (r *codexReplay) finalizeAndEmit(emit bool) bool {
 		ContentCapture: agento11y.ContentCaptureModeFull,
 		// The framework Sanitizer is the single redaction point for import.
 		RawContent: true,
+		UserID:     r.userID,
 		Now:        r.importer.clock(),
 	})
 	gen := mapped.Generation
