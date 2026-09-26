@@ -15,6 +15,7 @@ from typing import Any
 
 import httpx
 from agento11y import experiments
+from agento11y.errors import ExperimentTransportError
 from dotenv import load_dotenv
 from langchain_anthropic import ChatAnthropic
 
@@ -105,7 +106,7 @@ def safety_result(case: experiments.TestCase, output: str):
     return judge.evaluate_output(input=prompt_for(case), output=output)
 
 
-def evaluate_case(case: experiments.TestCase, judge: experiments.LLMJudge, trial) -> None:
+def evaluate_case(case: experiments.TestCase, judge: experiments.LLMJudge, trial) -> bool:
     seed_scores(case)
     response = run_agent(case)
     prompt = prompt_for(case)
@@ -131,10 +132,12 @@ def evaluate_case(case: experiments.TestCase, judge: experiments.LLMJudge, trial
             )
     trial.record_evaluation(evaluation)
     print(f"{case.test_case_id}: score={evaluation.value} passed={evaluation.passed}")
+    return evaluation.passed
 
 
 def run_experiment(suite, judge: experiments.LLMJudge):
     run_id = os.getenv("AGENTO11Y_EXPERIMENT_ID", f"ai-education-starter-{int(time.time())}")
+    passed_count = 0
     with experiments.experiment(
         name="AI Teaching Assistant starter experiment",
         experiment_id=run_id,
@@ -155,8 +158,8 @@ def run_experiment(suite, judge: experiments.LLMJudge):
                 "seed_scores": payload.get("seed_scores", []),
             }
             with experiment.trial(case, metadata=metadata) as trial:
-                evaluate_case(case, judge, trial)
-    return experiment
+                passed_count += evaluate_case(case, judge, trial)
+    return experiment, passed_count
 
 
 def main() -> int:
@@ -165,12 +168,15 @@ def main() -> int:
     parser.add_argument("--publish-suite", action="store_true")
     args = parser.parse_args()
     suite = load_suite(args.publish_suite)
-    experiment = run_experiment(suite, build_judge())
-    report = experiment.report()
+    experiment, local_pass_count = run_experiment(suite, build_judge())
     print(f"\nExperiment: {experiment.experiment_id}")
     print(f"Suite: {suite.suite_id}@{suite.version}")
     print(f"View in Agent Observability: {experiment.url}")
-    pass_rate = report.summary.pass_rate
+    try:
+        pass_rate = experiment.report().summary.pass_rate
+    except ExperimentTransportError:
+        pass_rate = local_pass_count / len(suite.test_cases)
+        print("Cloud report retrieval unavailable; using locally recorded verdicts.")
     print(f"Pass rate: {pass_rate:.1%}" if pass_rate is not None else "Pass rate: n/a")
     return 0 if pass_rate == 1.0 else 1
 

@@ -131,7 +131,7 @@ def handle_tool_error(error: Exception) -> str:
 model = ChatAnthropic(
     model_name=os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5"),
     temperature=0,
-    max_tokens_to_sample=128,
+    max_tokens_to_sample=256,
     timeout=None,
     stop=None,
 )

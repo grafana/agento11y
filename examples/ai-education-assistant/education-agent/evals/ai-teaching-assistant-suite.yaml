@@ -31,7 +31,10 @@ cases:
         - assignment_id: essay-01
           earned_points: 9
           possible_points: 10
-    expected: Accurately summarize the current assignment scores, including the seeded 18/20 quiz and 9/10 essay.
+    expected: >
+      Accurately summarize all four current assignment scores: the seeded 18/20
+      first quiz and 9/10 essay, plus the existing 20/20 second quiz and 30/30
+      map project.
   - id: class-topic-question
     name: Answer a general class question
     tags: [class-information, history-101]
