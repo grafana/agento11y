@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import atexit
 import os
 import uuid
 from pathlib import Path
@@ -75,8 +74,6 @@ def configure_tracing() -> None:
     metrics.set_meter_provider(meter_provider)
 
     HTTPXClientInstrumentor().instrument()
-    atexit.register(meter_provider.shutdown)
-    atexit.register(tracer_provider.shutdown)
 
 
 configure_tracing()

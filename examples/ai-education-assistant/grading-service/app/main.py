@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import atexit
 import logging
 import os
 from dataclasses import asdict
@@ -80,8 +79,6 @@ def configure_telemetry() -> None:
     )
     logging.getLogger().addHandler(LoggingHandler(level=logging.INFO, logger_provider=logs))
     logging.getLogger().setLevel(logging.INFO)
-    atexit.register(provider.shutdown)
-    atexit.register(logs.shutdown)
 
 
 configure_telemetry()

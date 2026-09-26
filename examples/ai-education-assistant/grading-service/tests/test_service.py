@@ -1,3 +1,4 @@
+import traffic
 from app import main as service
 from fastapi.testclient import TestClient
 
@@ -50,3 +51,11 @@ def test_unknown_student_returns_not_found_before_failure(monkeypatch) -> None:
 def test_assignment_ids_are_validated() -> None:
     response = client.get("/api/assignments/not-valid")
     assert response.status_code == 422
+
+
+def test_traffic_generator_stops_cleanly(monkeypatch) -> None:
+    def interrupt() -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(traffic, "generate_request_batch", interrupt)
+    traffic.main()

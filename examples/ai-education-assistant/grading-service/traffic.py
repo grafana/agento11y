@@ -20,12 +20,15 @@ def generate_request_batch() -> None:
 
 
 def main() -> None:
-    while True:
-        try:
-            generate_request_batch()
-        except httpx.HTTPError as error:
-            print(f"traffic request failed: {type(error).__name__}")
-        time.sleep(2)
+    try:
+        while True:
+            try:
+                generate_request_batch()
+            except httpx.HTTPError as error:
+                print(f"traffic request failed: {type(error).__name__}")
+            time.sleep(2)
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":
