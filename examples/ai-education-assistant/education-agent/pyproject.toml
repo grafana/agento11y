@@ -1,0 +1,31 @@
+[project]
+name = "ai-education-assistant"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "agento11y>=0.17.0",
+  "agento11y-langgraph>=0.17.0",
+  "anthropic>=0.40",
+  "fastapi>=0.115",
+  "httpx>=0.28",
+  "langchain-anthropic>=0.3",
+  "langchain-core>=0.3",
+  "langgraph>=0.2",
+  "opentelemetry-exporter-otlp-proto-http>=1.29",
+  "opentelemetry-instrumentation-httpx>=0.50b0",
+  "opentelemetry-sdk>=1.29",
+  "python-dotenv>=1.0",
+  "uvicorn[standard]>=0.34",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+agento11y = { path = "../../../python", editable = true }
+agento11y-langgraph = { path = "../../../python-frameworks/langgraph", editable = true }
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+extraPaths = ["../../../python", "../../../python-frameworks/langgraph"]

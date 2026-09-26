@@ -18,11 +18,16 @@ can browse and compare. See [`experiments/README.md`](experiments/README.md) for
 what an experiment run is (dataset → target → scorer → publish) and the
 per-language examples.
 
-## Reference app — [`python-langchain/`](python-langchain/)
+## Reference apps
 
-A fuller FastAPI service showing a LangChain agent with framework callbacks and
-manual SDK instrumentation side by side. Use this when you want to see the SDK
-wired into a real service rather than a single script.
+- [`python-langchain/`](python-langchain/) is a FastAPI service showing a
+  LangChain agent with framework callbacks and manual SDK instrumentation.
+- [`ai-education-assistant/`](ai-education-assistant/) is a two-service LangGraph
+  application with distributed tracing, user feedback, an evaluation suite,
+  experiments, and a Grafana dashboard.
+
+Use these when you want to see the SDK wired into a fuller application rather
+than a single script.
 
 ## Amazon Bedrock AgentCore — [`bedrock-agentcore/`](bedrock-agentcore/)
 

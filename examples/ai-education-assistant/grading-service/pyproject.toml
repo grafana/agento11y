@@ -1,0 +1,28 @@
+[project]
+name = "ai-education-grading-service"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115",
+  "httpx>=0.28",
+  "uvicorn[standard]>=0.34",
+  "python-dotenv>=1.0",
+  "opentelemetry-exporter-otlp-proto-http>=1.29",
+  "opentelemetry-instrumentation-fastapi>=0.50b0",
+  "opentelemetry-sdk>=1.29",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8",
+]
+
+[tool.uv]
+package = false
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

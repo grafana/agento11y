@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Teaching Assistant</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100dvh; padding: 28px; background: #111217; color: #d8d9da; }
+    main { max-width: 1100px; height: calc(100dvh - 56px); margin: auto; display: grid; grid-template-columns: minmax(0, 1fr) 390px; gap: 18px; }
+    .panel { min-height: 0; border: 1px solid #2c3235; border-radius: 8px; background: #181b1f; overflow: hidden; box-shadow: 0 16px 44px #0008; }
+    header { padding: 18px 22px; border-bottom: 1px solid #2c3235; background: #1b1e22; }
+    h1 { margin: 0 0 4px; font-size: 18px; font-weight: 500; color: #f0f0f0; }
+    .subtle { font-size: 12px; color: #8e8e93; }
+    .content { padding: 18px; overflow: auto; height: calc(100% - 72px); }
+    .assignment { padding: 14px 0; border-bottom: 1px solid #2c3235; }
+    .assignment:last-child { border: 0; }
+    .row { display: flex; justify-content: space-between; gap: 12px; }
+    .title { font-size: 13px; color: #f0f0f0; }
+    .score { font-size: 13px; color: #f46800; font-weight: 600; }
+    .bar { height: 5px; margin: 9px 0; background: #2c3235; border-radius: 5px; overflow: hidden; }
+    .fill { height: 100%; background: #f46800; }
+    .feedback { font-size: 12px; color: #a8aaad; line-height: 1.4; }
+    .chat { display: flex; flex-direction: column; }
+    .messages { flex: 1; min-height: 0; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+    .message { max-width: 88%; padding: 10px 12px; border: 1px solid #303438; border-radius: 8px; font-size: 13px; line-height: 1.4; white-space: pre-wrap; }
+    .assistant { align-self: flex-start; background: #22252a; }
+    .user { align-self: flex-end; background: #3a2418; border-color: #6b3516; }
+    .processing { color: #a8aaad; font-style: italic; }
+    form { display: flex; gap: 8px; padding: 12px 16px 16px; border-top: 1px solid #2c3235; background: #1b1e22; }
+    input, textarea, select { border: 1px solid #454a4f; background: #111217; color: inherit; border-radius: 6px; padding: 9px; font: inherit; font-size: 13px; }
+    input { min-width: 0; flex: 1; }
+    select { display: block; min-width: 160px; }
+    button { border: 0; border-radius: 6px; padding: 0 16px; background: #f46800; color: #161719; font-size: 13px; font-weight: 600; }
+    button:disabled { opacity: .6; cursor: wait; }
+    .fb-row { display: flex; gap: 6px; margin-top: 8px; }
+    .fb-btn, .fb-comment-actions button { background: transparent; border: 1px solid #454a4f; padding: 4px 9px; color: #a8aaad; cursor: pointer; }
+    .fb-comment { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+    .fb-comment textarea { width: 100%; min-height: 50px; resize: vertical; }
+    .fb-comment-actions { display: flex; gap: 6px; justify-content: flex-end; }
+    .fb-comment-actions button.fb-send { background: #f46800; border-color: #f46800; color: #161719; }
+    .fb-sent, .fb-error { margin-top: 6px; font-size: 12px; }
+    .fb-sent { color: #8e8e93; font-style: italic; }
+    .fb-error { color: #e05a4e; }
+    @media (max-width: 760px) { body { padding: 14px; } main { height: calc(100dvh - 28px); grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; } }
+  </style>
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <main>
+    <section class="panel">
+      <header><div class="row"><h1>History 101 Gradebook</h1><select id="student" aria-label="Student"></select></div><div class="subtle">Spring term, 4 assignments</div></header>
+      <div class="content" id="assignments"><div class="subtle">Loading assignments...</div></div>
+    </section>
+    <section class="panel chat">
+      <header><h1>AI Teaching Assistant</h1><div class="subtle">Ask about your class, assignments, or grades.</div></header>
+      <div class="messages" id="messages"><div class="message assistant">Hi! I can pull your assignments and help you understand your grades.</div></div>
+      <form id="form"><input id="input" maxlength="4000" placeholder="Ask about your first quiz..." autocomplete="off" aria-label="Question"><button>Send</button></form>
+    </section>
+  </main>
+</body>
+</html>
