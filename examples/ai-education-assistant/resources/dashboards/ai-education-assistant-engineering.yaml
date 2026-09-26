@@ -1,0 +1,171 @@
+apiVersion: dashboard.grafana.app/v1beta1
+kind: Dashboard
+metadata:
+  name: ai-education-assistant-engineering
+  annotations:
+    grafana.app/folder: demos
+spec:
+  title: AI Education Assistant - Engineering Health
+  description: >-
+    Deliberately limited engineering view for the AI Education Assistant demo.
+    This dashboard uses only standard OTEL GenAI metrics and intentionally does
+    not include Agent Observability quality, evaluation, or conversation panels.
+    The default 30-minute window is tuned for the live demo interaction.
+  tags:
+    - demo
+    - agent
+    - engineering-metrics
+    - otel
+  timezone: browser
+  schemaVersion: 39
+  refresh: 10s
+  time:
+    from: now-30m
+    to: now
+  templating:
+    list: []
+  panels:
+    - id: 1
+      title: Request success rate
+      description: Percentage of completed generation operations without an OTEL error category.
+      type: stat
+      gridPos: { h: 5, w: 6, x: 0, y: 0 }
+      datasource: { type: prometheus, uid: grafanacloud-prom }
+      targets:
+        - refId: A
+          instant: true
+          expr: >-
+            100 * (
+              sum(increase(gen_ai_client_operation_duration_seconds_count{gen_ai_agent_name="ai-education-assistant"}[$__range]))
+              - (sum(increase(gen_ai_client_operation_duration_seconds_count{gen_ai_agent_name="ai-education-assistant",error_category!=""}[$__range])) or vector(0))
+            )
+            /
+            sum(increase(gen_ai_client_operation_duration_seconds_count{gen_ai_agent_name="ai-education-assistant"}[$__range]))
+      fieldConfig:
+        defaults:
+          unit: percent
+          decimals: 1
+          color: { mode: thresholds }
+          thresholds:
+            mode: absolute
+            steps:
+              - { color: red }
+              - { color: yellow, value: 95 }
+              - { color: green, value: 99 }
+        overrides: []
+      options:
+        reduceOptions: { calcs: [lastNotNull], fields: "", values: false }
+        colorMode: value
+        graphMode: none
+        justifyMode: center
+        textMode: auto
+
+    - id: 2
+      title: Error rate
+      description: Percentage of generation operations carrying a non-empty OTEL error category.
+      type: stat
+      gridPos: { h: 5, w: 6, x: 6, y: 0 }
+      datasource: { type: prometheus, uid: grafanacloud-prom }
+      targets:
+        - refId: A
+          instant: true
+          expr: >-
+            100 * (sum(increase(gen_ai_client_operation_duration_seconds_count{gen_ai_agent_name="ai-education-assistant",error_category!=""}[$__range])) or vector(0))
+            /
+            sum(increase(gen_ai_client_operation_duration_seconds_count{gen_ai_agent_name="ai-education-assistant"}[$__range]))
+      fieldConfig:
+        defaults:
+          unit: percent
+          decimals: 2
+          color: { mode: thresholds }
+          thresholds:
+            mode: absolute
+            steps:
+              - { color: green }
+              - { color: yellow, value: 1 }
+              - { color: red, value: 5 }
+        overrides: []
+      options:
+        reduceOptions: { calcs: [lastNotNull], fields: "", values: false }
+        colorMode: value
+        graphMode: none
+        justifyMode: center
+        textMode: auto
+
+    - id: 3
+      title: Generation operations
+      description: Cumulative completed LLM generation operations observed by the OTEL SDK.
+      type: stat
+      gridPos: { h: 5, w: 6, x: 12, y: 0 }
+      datasource: { type: prometheus, uid: grafanacloud-prom }
+      targets:
+        - refId: A
+          instant: true
+          expr: sum(increase(gen_ai_client_operation_duration_seconds_count{gen_ai_agent_name="ai-education-assistant"}[$__range]))
+      fieldConfig:
+        defaults:
+          unit: short
+          decimals: 0
+          color: { mode: thresholds }
+          thresholds:
+            mode: absolute
+            steps: [{ color: green }]
+        overrides: []
+      options:
+        reduceOptions: { calcs: [lastNotNull], fields: "", values: false }
+        colorMode: value
+        graphMode: none
+        justifyMode: center
+        textMode: auto
+
+    - id: 4
+      title: Token usage by type
+      description: Input and output token rate from the standard OTEL GenAI token usage histogram.
+      type: timeseries
+      gridPos: { h: 8, w: 12, x: 0, y: 5 }
+      datasource: { type: prometheus, uid: grafanacloud-prom }
+      targets:
+        - refId: A
+          expr: >-
+            sum by (gen_ai_token_type) (
+              rate(gen_ai_client_token_usage_sum{gen_ai_agent_name="ai-education-assistant"}[$__rate_interval])
+            )
+          legendFormat: "{{gen_ai_token_type}} tokens/s"
+      fieldConfig:
+        defaults:
+          unit: short
+          decimals: 0
+          color: { mode: palette-classic }
+        overrides: []
+      options:
+        legend: { displayMode: list, placement: bottom }
+        tooltip: { mode: multi, sort: desc }
+
+    - id: 5
+      title: Generation duration
+      description: P50 and P95 latency for completed LLM generation operations.
+      type: timeseries
+      gridPos: { h: 8, w: 12, x: 12, y: 5 }
+      datasource: { type: prometheus, uid: grafanacloud-prom }
+      targets:
+        - refId: A
+          expr: >-
+            histogram_quantile(0.50,
+              sum by (le) (rate(gen_ai_client_operation_duration_seconds_bucket{gen_ai_agent_name="ai-education-assistant"}[$__rate_interval]))
+            )
+          legendFormat: p50
+        - refId: B
+          expr: >-
+            histogram_quantile(0.95,
+              sum by (le) (rate(gen_ai_client_operation_duration_seconds_bucket{gen_ai_agent_name="ai-education-assistant"}[$__rate_interval]))
+            )
+          legendFormat: p95
+      fieldConfig:
+        defaults:
+          unit: s
+          decimals: 2
+          color: { mode: palette-classic }
+        overrides: []
+      options:
+        legend: { displayMode: list, placement: bottom }
+        tooltip: { mode: multi, sort: desc }
