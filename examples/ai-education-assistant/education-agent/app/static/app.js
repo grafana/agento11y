@@ -18,6 +18,25 @@ function createElement(tag, className, text) {
   return node;
 }
 
+const SVG_NS = "http://www.w3.org/2000/svg";
+const THUMB_UP_PATH =
+  "M1 21h4V9H1v12zm22-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-1.91l-.01-.01L23 10z";
+const THUMB_DOWN_PATH =
+  "M15 3H6c-.83 0-1.54.5-1.84 1.22l-3.02 7.05c-.09.23-.14.47-.14.73v1.91l.01.01L1 14c0 1.1.89 2 2 2h6.31l-.95 4.57-.03.32c0 .41.17.79.44 1.06L9.83 23l6.59-6.59c.36-.36.58-.86.58-1.41V5c0-1.1-.9-2-2-2zm4 0v12h4V3h-4z";
+
+function createIcon(pathData) {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("width", "14");
+  svg.setAttribute("height", "14");
+  svg.setAttribute("fill", "currentColor");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS(SVG_NS, "path");
+  path.setAttribute("d", pathData);
+  svg.appendChild(path);
+  return svg;
+}
+
 function addMessage(text, kind) {
   const bubble = createElement("div", `message ${kind}`, text);
   messages.appendChild(bubble);
@@ -113,8 +132,10 @@ function showCommentBox(bubble, row) {
 
 function attachFeedback(bubble) {
   const row = createElement("div", "fb-row");
-  const good = createElement("button", "fb-btn fb-up", "Good");
-  const bad = createElement("button", "fb-btn fb-down", "Bad");
+  const good = createElement("button", "fb-btn fb-up");
+  const bad = createElement("button", "fb-btn fb-down");
+  good.appendChild(createIcon(THUMB_UP_PATH));
+  bad.appendChild(createIcon(THUMB_DOWN_PATH));
   good.type = bad.type = "button";
   good.title = "Good response";
   bad.title = "Bad response";
