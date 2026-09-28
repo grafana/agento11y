@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ConvRow, TokenChart, type TokenChartBucket } from '../internal/local/web/src/conversations';
+import { chartTooltipLeftPct } from '../internal/local/web/src/formatters';
 import type { ConversationSummary, ModelPrices, TokenBucketKey } from '../internal/local/web/src/types';
 
 afterEach(cleanup);
@@ -132,5 +133,27 @@ describe('TokenChart', () => {
     renderChart({ hidden: new Set<TokenBucketKey>(['fresh_input']) });
     expect(screen.getByTitle('Show Input')).toBeTruthy();
     expect(screen.getByTitle('Hide Cache read')).toBeTruthy();
+  });
+
+  it('renders the hover tooltip on a fixed layer above the clipped card', () => {
+    renderChart();
+    fireEvent.mouseEnter(screen.getByRole('button', { name: /11:00.*tokens/ }));
+
+    const tooltip = screen.getByRole('tooltip');
+    expect(tooltip.textContent).toContain('Input');
+    expect(tooltip.textContent).toContain('Cache read');
+    expect(tooltip.textContent).toContain('Output');
+    expect(tooltip.style.position).toBe('fixed');
+    expect(Number(tooltip.style.zIndex)).toBeGreaterThanOrEqual(80);
+    expect(tooltip.parentElement).toBe(document.body);
+  });
+});
+
+describe('chartTooltipLeftPct', () => {
+  it('centers a bar and clamps the first and last buckets away from the edge', () => {
+    expect(chartTooltipLeftPct(0, 1)).toBe(50);
+    expect(chartTooltipLeftPct(0, 10)).toBe(12);
+    expect(chartTooltipLeftPct(9, 10)).toBe(88);
+    expect(chartTooltipLeftPct(4, 10)).toBe(45);
   });
 });

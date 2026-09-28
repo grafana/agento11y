@@ -1,13 +1,19 @@
 import type React from 'react';
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useMemo, useRef, useState } from 'react';
 import { AnalyticsPage } from './analytics-page';
-import { ChartXLabels, ChartYAxis, TimeRangePicker, type WorkspaceAggregate, WorkspaceFacet } from './conversations';
+import {
+  ChartHoverTooltip,
+  ChartXLabels,
+  ChartYAxis,
+  TimeRangePicker,
+  type WorkspaceAggregate,
+  WorkspaceFacet,
+} from './conversations';
 import {
   bucketTokenUsage,
   type CostEstimate,
   cacheInputHitPercent,
   chartGrid,
-  chartTooltipLeft,
   conversationCost,
   conversationCostEstimateByModel,
   conversationTime,
@@ -750,6 +756,7 @@ export function AnalyticsChart({
   const nowMs = now ?? Date.now();
   const [hoverStart, setHoverStart] = useState<number | null>(null);
   const [selection, setSelection] = useState<TimeSpan | null>(null);
+  const plotRef = useRef<HTMLDivElement>(null);
   const usagePoints = useMemo(() => points.filter((point) => tokenTotal(point) > 0), [points]);
   const grid = useMemo(() => {
     const interval = timeRangeOption(timeRange).ms == null ? tokenIntervalMs : 0;
@@ -918,6 +925,7 @@ export function AnalyticsChart({
               <ChartYAxis top={rightTop} mid={rightMid} height={170} side="right" />
             )}
             <div
+              ref={plotRef}
               style={{
                 position: 'relative',
                 margin: '0 44px',
@@ -1050,26 +1058,7 @@ export function AnalyticsChart({
               {hovered &&
                 hoveredPosition >= 0 &&
                 (unit === 'cost' ? hoveredCost?.hasUsage : visibleTokens(hovered) > 0) && (
-                  <div
-                    role="tooltip"
-                    style={{
-                      position: 'absolute',
-                      left: chartTooltipLeft(hoveredPosition, usage.buckets.length),
-                      transform: 'translate(-50%, -100%)',
-                      top: -4,
-                      padding: '6px 8px',
-                      border: '1px solid var(--border-medium)',
-                      borderRadius: 2,
-                      background: 'var(--bg-secondary)',
-                      boxShadow: 'var(--shadow-z2)',
-                      color: 'var(--fg1)',
-                      fontFamily: 'var(--fontFamilyMonospace)',
-                      fontSize: 11,
-                      whiteSpace: 'nowrap',
-                      pointerEvents: 'none',
-                      zIndex: 1,
-                    }}
-                  >
+                  <ChartHoverTooltip plotRef={plotRef} index={hoveredPosition} count={usage.buckets.length}>
                     <div style={{ color: 'var(--fg3)', marginBottom: 4 }}>
                       {hovered.t}
                       {visibleTokens(hovered) > 0 ? ` · ${formatTokens(visibleTokens(hovered))} tok` : ''}
@@ -1090,7 +1079,7 @@ export function AnalyticsChart({
                           </span>
                         </div>
                       ))}
-                  </div>
+                  </ChartHoverTooltip>
                 )}
             </div>
             <ChartXLabels data={usage.buckets} gutter={44} />

@@ -1,5 +1,6 @@
 import type React from 'react';
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { ActivityBucket, TimeBucket, TimeRangeOption, TimeSpan, TokenBucketTotals } from './formatters';
 import {
   bucketActivity,
@@ -7,7 +8,7 @@ import {
   cacheInputHitPercent,
   chartBucketMs,
   chartGrid,
-  chartTooltipLeft,
+  chartTooltipLeftPct,
   conversationCostByModel,
   conversationCostEstimateByModel,
   conversationTime,
@@ -156,6 +157,68 @@ export function ChartYAxis({ top, mid, height = 130, side = 'left', color = 'var
   );
 }
 
+// ChartHoverTooltip sits above its bar in viewport coordinates and
+// portals to document.body. SurfaceCard clips overflow, so an in-card
+// absolute tooltip gets cut off at the card edge and then paints under
+// the KPI tiles. HelpTip uses the same fixed + z-index 80 layer.
+interface ChartHoverTooltipProps {
+  plotRef: React.RefObject<HTMLDivElement>;
+  index: number;
+  count: number;
+  children: React.ReactNode;
+}
+
+export function ChartHoverTooltip({ plotRef, index, count, children }: ChartHoverTooltipProps) {
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+
+  const update = useCallback(() => {
+    const el = plotRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setPos({
+      top: r.top - 4,
+      left: r.left + (chartTooltipLeftPct(index, count) / 100) * r.width,
+    });
+  }, [plotRef, index, count]);
+
+  useLayoutEffect(() => {
+    update();
+    window.addEventListener('scroll', update, true);
+    window.addEventListener('resize', update);
+    return () => {
+      window.removeEventListener('scroll', update, true);
+      window.removeEventListener('resize', update);
+    };
+  }, [update]);
+
+  if (!pos) return null;
+  return createPortal(
+    <div
+      role="tooltip"
+      style={{
+        position: 'fixed',
+        left: pos.left,
+        top: pos.top,
+        transform: 'translate(-50%, -100%)',
+        zIndex: 80,
+        background: 'var(--bg-secondary)',
+        border: '1px solid var(--border-medium)',
+        borderRadius: 2,
+        padding: '6px 8px',
+        fontFamily: 'var(--fontFamilyMonospace)',
+        fontSize: 11,
+        color: 'var(--fg1)',
+        whiteSpace: 'nowrap',
+        pointerEvents: 'none',
+        boxShadow: 'var(--shadow-z2)',
+      }}
+    >
+      {children}
+    </div>,
+    document.body,
+  );
+}
+
 interface ActivityChartProps {
   data: ActivityChartBucket[];
   bucketLabel: string;
@@ -180,6 +243,7 @@ function ActivityChart({
   const gap = (W / Math.max(1, data.length)) * 0.3;
   const [hover, setHover] = useState<number | null>(null);
   const hovered = hover === null ? null : (data[hover] ?? null);
+  const plotRef = useRef<HTMLDivElement>(null);
 
   return (
     <SurfaceCard
@@ -231,6 +295,7 @@ function ActivityChart({
       <div style={{ position: 'relative' }}>
         <ChartYAxis top={String(max)} mid={String(Math.round(max / 2))} />
         <div
+          ref={plotRef}
           style={{
             marginLeft: 44,
             position: 'relative',
@@ -293,27 +358,10 @@ function ActivityChart({
             })}
           </svg>
           {hover !== null && hovered && (
-            <div
-              style={{
-                position: 'absolute',
-                left: chartTooltipLeft(hover, data.length),
-                transform: 'translate(-50%, -100%)',
-                top: -4,
-                background: 'var(--bg-secondary)',
-                border: '1px solid var(--border-medium)',
-                borderRadius: 2,
-                padding: '4px 8px',
-                fontFamily: 'var(--fontFamilyMonospace)',
-                fontSize: 11,
-                color: 'var(--fg1)',
-                whiteSpace: 'nowrap',
-                pointerEvents: 'none',
-                boxShadow: 'var(--shadow-z2)',
-              }}
-            >
+            <ChartHoverTooltip plotRef={plotRef} index={hover} count={data.length}>
               <span style={{ color: 'var(--fg3)' }}>{hovered.t}</span> · {hovered.c}{' '}
               {hovered.c === 1 ? 'session' : 'sessions'}
-            </div>
+            </ChartHoverTooltip>
           )}
         </div>
         <ChartXLabels data={data} />
@@ -359,6 +407,7 @@ export function TokenChart({
   const gap = (W / Math.max(1, data.length)) * 0.3;
   const [hover, setHover] = useState<number | null>(null);
   const hovered = hover === null ? null : (data[hover] ?? null);
+  const plotRef = useRef<HTMLDivElement>(null);
   // Only show legend entries for series that actually appear, so a
   // pure-Anthropic store doesn't carry an always-zero "Reasoning"
   // swatch. Fall back to the full set when there's no data at all.
@@ -461,6 +510,7 @@ export function TokenChart({
       <div style={{ position: 'relative' }}>
         {!empty && visible.length > 0 && <ChartYAxis top={formatTokens(max)} mid={formatTokens(Math.round(max / 2))} />}
         <div
+          ref={plotRef}
           style={{
             marginLeft: 44,
             position: 'relative',
@@ -552,25 +602,7 @@ export function TokenChart({
             </div>
           )}
           {hover !== null && hovered && visibleTotal(hovered) > 0 && (
-            <div
-              style={{
-                position: 'absolute',
-                left: chartTooltipLeft(hover, data.length),
-                transform: 'translate(-50%, -100%)',
-                top: -4,
-                background: 'var(--bg-secondary)',
-                border: '1px solid var(--border-medium)',
-                borderRadius: 2,
-                padding: '6px 8px',
-                fontFamily: 'var(--fontFamilyMonospace)',
-                fontSize: 11,
-                color: 'var(--fg1)',
-                whiteSpace: 'nowrap',
-                pointerEvents: 'none',
-                boxShadow: 'var(--shadow-z2)',
-                zIndex: 1,
-              }}
-            >
+            <ChartHoverTooltip plotRef={plotRef} index={hover} count={data.length}>
               <div style={{ color: 'var(--fg3)', marginBottom: 4 }}>
                 {hovered.t} · {formatTokens(visibleTotal(hovered))} tok
               </div>
@@ -604,7 +636,7 @@ export function TokenChart({
                     </span>
                   </div>
                 ))}
-            </div>
+            </ChartHoverTooltip>
           )}
         </div>
         <ChartXLabels data={data} />

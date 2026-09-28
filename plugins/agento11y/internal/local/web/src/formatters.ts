@@ -160,10 +160,11 @@ export function formatBucketLabel(ts: number, bucketMs: number): string {
   return time;
 }
 
-// chartTooltipLeft centers the hover tooltip on its bar but keeps it
-// clear of the card edges so the first and last buckets don't clip.
-export function chartTooltipLeft(i: number, n: number): string {
-  return `${Math.min(88, Math.max(12, ((i + 0.5) / n) * 100))}%`;
+// chartTooltipLeftPct is the bar-centered hover point as a 0–100
+// percentage of the plot width, clamped so the first and last buckets
+// don't pin the tooltip to the card edge.
+export function chartTooltipLeftPct(i: number, n: number): number {
+  return Math.min(88, Math.max(12, ((i + 0.5) / n) * 100));
 }
 
 // Per-model dot colour. New models fall back to a neutral grey
