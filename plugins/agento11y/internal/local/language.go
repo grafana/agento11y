@@ -376,7 +376,7 @@ func limitPaths(paths []string) []string {
 
 func patchFilePaths(text string) []string {
 	var out []string
-	for _, line := range strings.Split(text, "\n") {
+	for line := range strings.SplitSeq(text, "\n") {
 		line = strings.TrimSpace(line)
 		for _, marker := range patchFileMarkers {
 			rest, ok := strings.CutPrefix(line, marker)
