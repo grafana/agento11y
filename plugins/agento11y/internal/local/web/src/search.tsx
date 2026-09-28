@@ -1,7 +1,7 @@
 import type { Dispatch, SetStateAction } from 'react';
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import { formatAgo, formatTokens } from './formatters';
-import { SurfaceCard } from './notices';
+import { type PageHeroStat, SurfaceCard } from './notices';
 import { conversationPath, highlightTerms, isPlainLeftClick, SEARCH_DEBOUNCE_MS } from './routing';
 import { AgentPill, Icon, ModelPill } from './shell';
 import type { SearchHit, SearchResponse } from './types';
@@ -9,6 +9,8 @@ import type { SearchHit, SearchResponse } from './types';
 // ============================================================
 // Conversation search — the panel the top bar opens, and the fetch behind it.
 // ============================================================
+
+const SEARCH_RESULT_LIMIT = 100;
 
 // SearchResultRow is one ranked hit. Stays consistent with ConvRow's dense
 // mono grid and agent/model pills, and adds a two-line clamp on the snippet.
@@ -191,7 +193,33 @@ function SearchResultRow({ hit, now, query, selected, onSelect, onOpen }: Search
   );
 }
 
-type SearchPhase = 'done' | 'loading';
+export type SearchPhase = 'done' | 'loading';
+
+export function searchHeroStats(phase: SearchPhase, hits: SearchHit[], mode: string): PageHeroStat[] {
+  return [
+    {
+      label: 'Search',
+      value: mode === 'semantic' ? 'QMD' : 'Full scan',
+      tone: 'var(--primary-text)',
+    },
+    {
+      label: 'Results',
+      value: phase === 'loading' ? null : String(hits.length),
+      tone: phase === 'done' && hits.length ? 'var(--success-text)' : 'var(--fg3)',
+    },
+    {
+      label: 'Status',
+      value: phase === 'loading' ? 'Searching' : 'Ready',
+      tone: phase === 'loading' ? 'var(--warning-text)' : undefined,
+    },
+  ];
+}
+
+export function searchResultCountLabel(phase: SearchPhase, count: number): string | null {
+  if (phase === 'loading') return null;
+  const capLabel = count === SEARCH_RESULT_LIMIT ? ' (capped)' : '';
+  return `${count} ${count === 1 ? 'result' : 'results'}${capLabel}`;
+}
 
 interface SearchResultsState {
   phase: SearchPhase;
@@ -298,6 +326,7 @@ export function ConversationSearchPanel({
   const showResults = !!query && !error;
   const showNoResults = showResults && phase === 'done' && hits.length === 0;
   const showLoadingSkeleton = showResults && phase === 'loading' && hits.length === 0;
+  const resultCountLabel = searchResultCountLabel(phase, hits.length);
 
   return (
     <SurfaceCard style={{ overflow: 'hidden' }}>
@@ -369,9 +398,7 @@ export function ConversationSearchPanel({
               color: 'var(--fg3)',
             }}
           >
-            <span>
-              {hits.length} {hits.length === 1 ? 'result' : 'results'}
-            </span>
+            <span>{resultCountLabel}</span>
             <span style={{ flex: 1 }} />
             <span style={{ fontSize: 11 }}>ranked by {mode === 'semantic' ? 'relevance (qmd)' : 'matches'}</span>
           </div>
