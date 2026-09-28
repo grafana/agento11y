@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -689,7 +689,9 @@ describe('AnalyticsView', () => {
     expect(typescript?.textContent).toContain('$1.50');
     expect(go?.textContent).toContain('50%');
     expect(go?.textContent).toContain('$0.50');
-    expect(screen.getByText('Session share · allocated cost estimate')).toBeTruthy();
+    const mix = screen.getByTestId('language-mix');
+    expect(within(mix).getByText('Share')).toBeTruthy();
+    expect(within(mix).getByText('Cost')).toBeTruthy();
     expect(document.querySelector('[data-language-shared]')?.textContent).toBe('$0');
     const language = screen.getByText('Language mix');
     const merge = screen.getByText('Merge status');
@@ -740,7 +742,9 @@ describe('AnalyticsView', () => {
       />,
     );
 
-    expect(screen.getByText('Session share · allocated tokens')).toBeTruthy();
+    const mix = screen.getByTestId('language-mix');
+    expect(within(mix).getByText('Share')).toBeTruthy();
+    expect(within(mix).getByText('Tokens')).toBeTruthy();
     expect(document.querySelector('[data-language-row="go"]')?.textContent).toContain('50k');
     expect(document.querySelector('[data-language-row="go"]')?.textContent).toContain('100%');
   });
