@@ -343,6 +343,7 @@ describe('light theme CSS contract', () => {
     expect(detailSource).toContain("color: 'var(--agent-accent-text)'");
     expect(searchSource).toContain("color: 'var(--search-match-text)'");
 
+    expect(appCSS).toMatch(/svg\s+:focus-visible\s*\{[^}]*outline:\s*none;[^}]*border-radius:\s*0;/);
     expect(appCSS).toMatch(/input::placeholder\s*\{[^}]*opacity:\s*1;/);
     expect(appCSS).not.toMatch(/\.tools-mode-label span\s*\{[^}]*opacity:/);
     expect(analyticsSource).not.toContain('opacity: hidden ? 0.6 : 1');
