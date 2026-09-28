@@ -1232,6 +1232,8 @@ func TestConversationDetail_ThreadMessages(t *testing.T) {
 					assert.Equal(t, want.text, part.Text, "message %d text", i)
 				case agento11y.PartKindThinking:
 					// No thinking parts are used in this table; case included for exhaustiveness.
+				case agento11y.PartKindMedia:
+					// No media parts are used in this table; case included for exhaustiveness.
 				}
 			}
 		})
