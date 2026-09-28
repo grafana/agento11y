@@ -1,6 +1,5 @@
 import type React from 'react';
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import type { ActivityBucket, TimeBucket, TimeRangeOption, TimeSpan, TokenBucketTotals } from './formatters';
 import {
   bucketActivity,
@@ -157,10 +156,11 @@ export function ChartYAxis({ top, mid, height = 130, side = 'left', color = 'var
   );
 }
 
-// ChartHoverTooltip sits above its bar in viewport coordinates and
-// portals to document.body. SurfaceCard clips overflow, so an in-card
-// absolute tooltip gets cut off at the card edge and then paints under
-// the KPI tiles. HelpTip uses the same fixed + z-index 80 layer.
+// ChartHoverTooltip sits above its bar in viewport coordinates.
+// SurfaceCard clips overflow, so an in-card absolute tooltip gets cut
+// off at the card edge and then paints under the KPI tiles. HelpTip
+// uses the same fixed + z-index 80 layer; the viewer bundle has no
+// react-dom shim, so this stays a fixed child instead of a portal.
 interface ChartHoverTooltipProps {
   plotRef: React.RefObject<HTMLDivElement>;
   index: number;
@@ -192,7 +192,7 @@ export function ChartHoverTooltip({ plotRef, index, count, children }: ChartHove
   }, [update]);
 
   if (!pos) return null;
-  return createPortal(
+  return (
     <div
       role="tooltip"
       style={{
@@ -214,8 +214,7 @@ export function ChartHoverTooltip({ plotRef, index, count, children }: ChartHove
       }}
     >
       {children}
-    </div>,
-    document.body,
+    </div>
   );
 }
 

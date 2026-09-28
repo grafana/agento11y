@@ -145,7 +145,6 @@ describe('TokenChart', () => {
     expect(tooltip.textContent).toContain('Output');
     expect(tooltip.style.position).toBe('fixed');
     expect(Number(tooltip.style.zIndex)).toBeGreaterThanOrEqual(80);
-    expect(tooltip.parentElement).toBe(document.body);
   });
 });
 
