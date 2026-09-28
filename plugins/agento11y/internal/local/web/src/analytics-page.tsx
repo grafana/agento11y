@@ -46,7 +46,7 @@ export function AnalyticsPage({ children, stats, tabs, style }: AnalyticsPagePro
     <PageShell maxWidth={1400} style={style}>
       <PageHero
         title="Analytics"
-        desc="Cost, tokens, tools, and workspaces across captured local sessions."
+        desc="Cost, tokens, tools, languages, and workspaces across captured local sessions."
         stats={stats}
       />
       {tabs && <AnalyticsTabs {...tabs} />}

@@ -42,6 +42,7 @@ interface IconProps {
 export function Icon({ name, size = 16, style, className }: IconProps) {
   const paths: Record<string, React.ReactNode> = {
     search: <path d="M11 19a8 8 0 1 1 5.3-2L21 21M11 19a8 8 0 0 0 5.3-2L11 19Z" />,
+    code: <path d="m8 8-4 4 4 4M16 8l4 4-4 4M13 5l-2 14" />,
     chevron: <path d="m6 9 6 6 6-6" />,
     cright: <path d="m9 6 6 6-6 6" />,
     clock: (

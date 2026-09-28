@@ -36,9 +36,11 @@ type fileSummary struct {
 	// generations is the narrow per-generation projection used to build
 	// period-clipped conversation rows. toolOccurrences holds one timestamped
 	// occurrence per call (or orphan result), after calls and results have been
-	// paired across generations.
+	// paired across generations. languageTouches holds the file paths those
+	// calls named, clipped on the same generation timestamp.
 	generations     []periodGeneration
 	toolOccurrences []toolOccurrence
+	languageTouches []languageTouch
 
 	// skipped counts the lines no projection could decode. A reader adds it
 	// on every hit, so the count it reports describes the store rather than
@@ -487,6 +489,9 @@ func decodeFileSummary(f conversationFile) (*fileSummary, error) {
 			hasError:  gen.CallError != "",
 		})
 		tools.addGeneration(gen, timestamp)
+		if paths := generationToolPaths(gen); len(paths) > 0 {
+			entry.languageTouches = append(entry.languageTouches, languageTouch{Timestamp: timestamp, Paths: paths})
+		}
 
 		if p, ok := tokenUsagePoint(rec); ok {
 			entry.points = append(entry.points, p)

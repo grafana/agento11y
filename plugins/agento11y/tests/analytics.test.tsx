@@ -620,6 +620,7 @@ describe('AnalyticsView', () => {
 
     for (const title of [
       'Cost over time',
+      'Language mix',
       'Workspaces',
       'Models',
       'Branches',
@@ -633,6 +634,115 @@ describe('AnalyticsView', () => {
       ).toBe(true);
     }
     expect(screen.getByText('No agent usage in the last 7 days.')).toBeTruthy();
+  });
+
+  it('shows language session share and allocated cost', () => {
+    const buckets = (fresh: number): TokenBuckets => ({ ...EMPTY, fresh_input: fresh });
+    render(
+      <AnalyticsView
+        {...viewProps({
+          aggregate: {
+            calls: 2,
+            errored: 0,
+            agents: 1,
+            agent_hosts: ['pi'],
+            workspaces: 1,
+            token_buckets: buckets(200_000),
+            token_buckets_by_model: { 'costly-model': buckets(200_000) },
+            models: ['costly-model'],
+            language_sessions: 2,
+            language_rows: [
+              {
+                id: 'typescript',
+                name: 'TypeScript',
+                sessions: 2,
+                files: 3,
+                token_buckets: buckets(150_000),
+                token_buckets_by_model: { 'costly-model': buckets(150_000) },
+              },
+              {
+                id: 'go',
+                name: 'Go',
+                sessions: 1,
+                files: 1,
+                token_buckets: buckets(50_000),
+                token_buckets_by_model: { 'costly-model': buckets(50_000) },
+              },
+            ],
+            language_shared: {
+              id: 'shared',
+              name: 'Shared / unlinked',
+              sessions: 0,
+              files: 0,
+              token_buckets: buckets(0),
+              token_buckets_by_model: {},
+            },
+          },
+        })}
+      />,
+    );
+
+    const typescript = document.querySelector('[data-language-row="typescript"]');
+    const go = document.querySelector('[data-language-row="go"]');
+    expect(typescript?.textContent).toContain('TypeScript');
+    expect(typescript?.textContent).toContain('100%');
+    expect(typescript?.textContent).toContain('$1.50');
+    expect(go?.textContent).toContain('50%');
+    expect(go?.textContent).toContain('$0.50');
+    expect(screen.getByText('Session share · allocated cost estimate')).toBeTruthy();
+    expect(document.querySelector('[data-language-shared]')?.textContent).toBe('$0');
+    const language = screen.getByText('Language mix');
+    const merge = screen.getByText('Merge status');
+    const heaviest = screen.getByText('Heaviest sessions');
+    expect(heaviest.compareDocumentPosition(language) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(language.compareDocumentPosition(merge) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /Shared \/ unlinked/ }));
+    expect(screen.getByText(/Sessions with no recognized file land here in full/)).toBeTruthy();
+  });
+
+  it('switches the language mix to allocated tokens', () => {
+    const buckets = (fresh: number): TokenBuckets => ({ ...EMPTY, fresh_input: fresh });
+    render(
+      <AnalyticsView
+        {...viewProps({
+          unit: 'tokens',
+          aggregate: {
+            calls: 1,
+            errored: 0,
+            agents: 1,
+            agent_hosts: ['pi'],
+            workspaces: 1,
+            token_buckets: buckets(50_000),
+            token_buckets_by_model: { 'costly-model': buckets(50_000) },
+            models: ['costly-model'],
+            language_sessions: 1,
+            language_rows: [
+              {
+                id: 'go',
+                name: 'Go',
+                sessions: 1,
+                files: 1,
+                token_buckets: buckets(50_000),
+                token_buckets_by_model: { 'costly-model': buckets(50_000) },
+              },
+            ],
+            language_shared: {
+              id: 'shared',
+              name: 'Shared / unlinked',
+              sessions: 0,
+              files: 0,
+              token_buckets: buckets(0),
+              token_buckets_by_model: {},
+            },
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByText('Session share · allocated tokens')).toBeTruthy();
+    expect(document.querySelector('[data-language-row="go"]')?.textContent).toContain('50k');
+    expect(document.querySelector('[data-language-row="go"]')?.textContent).toContain('100%');
   });
 
   it('ranks branches by cost and keeps the same branch name in two workspaces apart', () => {
@@ -987,7 +1097,9 @@ describe('AnalyticsView', () => {
     expect(screen.getByTitle('Filter by workspace').textContent).toContain('3');
     expect(screen.queryByText(/Workspace options are incomplete/)).toBeNull();
     expect(
-      screen.getByText(/KPI totals, model totals, token charts, and trends cover all generations in range/),
+      screen.getByText(
+        /KPI totals, model totals, language mix, token charts, and trends cover all generations in range/,
+      ),
     ).toBeTruthy();
     expect(screen.getAllByText(/vs previous period$/)).toHaveLength(3);
   });

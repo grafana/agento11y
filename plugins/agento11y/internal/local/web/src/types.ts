@@ -70,6 +70,15 @@ export interface BranchMergeResponse {
   branches: Array<Pick<BranchMetricsAggregate, 'name' | 'workspace' | 'merge_status'>>;
 }
 
+export interface LanguageMetricsAggregate {
+  id: string;
+  name: string;
+  sessions: number;
+  files: number;
+  token_buckets: TokenBuckets;
+  token_buckets_by_model: Record<string, TokenBuckets>;
+}
+
 export interface ConversationMetricsAggregate {
   calls: number;
   errored: number;
@@ -81,6 +90,11 @@ export interface ConversationMetricsAggregate {
   models: string[];
   workspace_rows?: WorkspaceMetricsAggregate[];
   branch_rows?: BranchMetricsAggregate[];
+  /** Present when the metrics response includes a language mix. */
+  language_rows?: LanguageMetricsAggregate[];
+  language_shared?: LanguageMetricsAggregate;
+  /** Session-share denominator. Zero when the response did not compute a mix. */
+  language_sessions?: number;
 }
 
 export interface ConversationMetricsResponse {

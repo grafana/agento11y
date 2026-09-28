@@ -246,8 +246,27 @@ type toolProbePart struct {
 }
 
 type toolProbeCall struct {
-	ID   string `json:"id,omitempty"`
-	Name string `json:"name"`
+	ID    string   `json:"id,omitempty"`
+	Name  string   `json:"name"`
+	Paths []string `json:"-"`
+}
+
+// UnmarshalJSON keeps the call id and name, and the file paths the call
+// named. The input body itself is not retained: summary reads run for every
+// analytics request, and tool inputs hold file contents.
+func (c *toolProbeCall) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		ID        string          `json:"id"`
+		Name      string          `json:"name"`
+		InputJSON json.RawMessage `json:"input_json"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	c.ID = raw.ID
+	c.Name = raw.Name
+	c.Paths = filePathsFromToolInput(raw.Name, raw.InputJSON)
+	return nil
 }
 
 type toolProbeResult struct {

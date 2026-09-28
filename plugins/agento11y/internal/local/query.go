@@ -46,6 +46,11 @@ type ConversationSummary struct {
 	Workspace string `json:"workspace,omitempty"`
 	Branch    string `json:"branch,omitempty"`
 	Subagents int    `json:"subagents,omitempty"`
+	// languageFiles counts distinct in-period paths per language id.
+	// unclassifiedFiles counts paths that were not a known language.
+	// Both stay off the JSON payload; language_rows is the client contract.
+	languageFiles     map[string]int
+	unclassifiedFiles int
 }
 
 // ConversationMetricsAggregate contains exact KPI totals across every
@@ -61,6 +66,12 @@ type ConversationMetricsAggregate struct {
 	Models              []string                `json:"models"`
 	WorkspaceRows       []WorkspaceAggregate    `json:"workspace_rows"`
 	BranchRows          []BranchAggregate       `json:"branch_rows"`
+	// LanguageRows splits the same token totals by the files each session
+	// touched. LanguageShared is the unattributed remainder. LanguageSessions
+	// is the session-share denominator (every matched conversation).
+	LanguageRows     []LanguageAggregate `json:"language_rows"`
+	LanguageShared   LanguageAggregate   `json:"language_shared"`
+	LanguageSessions int                 `json:"language_sessions"`
 }
 
 type WorkspaceAggregate struct {
@@ -547,6 +558,7 @@ func aggregateConversationMetrics(rows []ConversationSummary) ConversationMetric
 	aggregate.Agents = len(aggregate.AgentHosts)
 	aggregate.Models = sortedKeys(models)
 	aggregate.Workspaces = len(workspaces)
+	aggregate.LanguageRows, aggregate.LanguageShared, aggregate.LanguageSessions = aggregateLanguageMix(rows)
 	for _, workspace := range workspaces {
 		aggregate.WorkspaceRows = append(aggregate.WorkspaceRows, *workspace)
 	}
@@ -722,6 +734,7 @@ func clippedConversationSummary(entry *fileSummary, since, before time.Time) (Co
 	if hasError {
 		sum.Status = "err"
 	}
+	sum.languageFiles, sum.unclassifiedFiles = countLanguageFiles(entry.languageTouches, since, before)
 	return sum, true
 }
 
