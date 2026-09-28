@@ -636,6 +636,14 @@ describe('AnalyticsView', () => {
     expect(screen.getByText('No agent usage in the last 7 days.')).toBeTruthy();
   });
 
+  it('does not treat a missing language mix as no recognized files', () => {
+    render(<AnalyticsView {...viewProps()} />);
+
+    const mix = screen.getByTestId('language-mix');
+    expect(mix.textContent).toContain('Last 24 hours');
+    expect(mix.textContent).not.toContain('No recognized files');
+  });
+
   it('shows language session share and allocated cost', () => {
     const buckets = (fresh: number): TokenBuckets => ({ ...EMPTY, fresh_input: fresh });
     render(

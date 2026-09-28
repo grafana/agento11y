@@ -1291,7 +1291,7 @@ function LanguageMixPanel({
         />
         {!showRows ? (
           <div style={{ gridColumn: '1 / -1', margin: '0 -18px', fontFamily: 'var(--fontFamily)' }}>
-            <EmptyPanel>{known || sessionCount === 0 ? empty : 'No recognized files in this range.'}</EmptyPanel>
+            <EmptyPanel>{!known || sessionCount === 0 ? empty : 'No recognized files in this range.'}</EmptyPanel>
           </div>
         ) : (
           <>

@@ -30,6 +30,8 @@ func TestClassifyToolPath(t *testing.T) {
 		{path: "requirements.txt", want: "configuration"},
 		{path: ".env.local", want: "configuration"},
 		{path: "src/", want: ""},
+		{path: "src", want: ""},
+		{path: "plugins/agento11y", want: ""},
 		{path: "**/*.go", want: ""},
 		{path: "https://example.com/main.go", want: ""},
 		{path: "notes.bin", want: ""},
@@ -52,6 +54,19 @@ func TestFilePathsFromToolInput(t *testing.T) {
 		raw, err := json.Marshal(encoded)
 		require.NoError(t, err)
 		assert.Equal(t, []string{"lib/main.py"}, filePathsFromToolInput("Read", raw))
+	})
+
+	t.Run("drops grep and glob search roots", func(t *testing.T) {
+		grep, err := json.Marshal(map[string]any{"path": "plugins/agento11y", "pattern": "foo"})
+		require.NoError(t, err)
+		assert.Empty(t, filePathsFromToolInput("Grep", grep))
+		glob, err := json.Marshal(map[string]any{"path": "src", "glob": "*.go"})
+		require.NoError(t, err)
+		assert.Empty(t, filePathsFromToolInput("Glob", glob))
+
+		file, err := json.Marshal(map[string]any{"path": "src/main.go"})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"src/main.go"}, filePathsFromToolInput("Grep", file))
 	})
 
 	t.Run("reads codex apply_patch markers", func(t *testing.T) {

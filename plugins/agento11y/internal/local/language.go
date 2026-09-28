@@ -394,6 +394,9 @@ func patchFilePaths(text string) []string {
 
 // normalizeToolPath returns a stable path for classification, or "" when
 // the value is a directory, a glob, a URL, or otherwise not a file.
+// Grep and Glob pass the search root in path without a trailing slash, so
+// a path is a directory unless its base has an extension or is a known
+// extensionless filename such as Dockerfile.
 func normalizeToolPath(raw string) string {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" || len(trimmed) > 1024 || strings.ContainsAny(trimmed, "*?\r\n") {
@@ -411,7 +414,21 @@ func normalizeToolPath(raw string) string {
 	case ".", "..", "/":
 		return ""
 	}
+	if !looksLikeFile(cleaned) {
+		return ""
+	}
 	return cleaned
+}
+
+func looksLikeFile(cleaned string) bool {
+	base := strings.ToLower(path.Base(cleaned))
+	if strings.HasPrefix(base, ".env") {
+		return true
+	}
+	if _, ok := basenameLanguages[base]; ok {
+		return true
+	}
+	return path.Ext(base) != ""
 }
 
 // classifyToolPath reports the language id for a normalized path, or ""
