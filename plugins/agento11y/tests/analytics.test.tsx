@@ -1330,7 +1330,7 @@ describe('AnalyticsChart', () => {
 
   it('switches the title and uses one cost bar or stacked TOKEN_SERIES bars', () => {
     const costRender = renderChart('cost');
-    expect(screen.getAllByText('Cost over time').length).toBe(2);
+    expect(screen.getAllByText('Cost over time').length).toBe(1);
     expect(document.querySelectorAll('[data-bar-unit="cost"]')).toHaveLength(1);
     expect(document.querySelector('[data-series]')).toBeNull();
     const costLine = document.querySelector('[data-secondary-series="tokens"]');
@@ -1338,7 +1338,7 @@ describe('AnalyticsChart', () => {
     cleanup();
 
     renderChart('tokens');
-    expect(screen.getAllByText('Tokens over time').length).toBe(2);
+    expect(screen.getAllByText('Tokens over time').length).toBe(1);
     expect(document.querySelector('[data-series="fresh_input"]')).toBeTruthy();
     expect(document.querySelector('[data-series="cache_read"]')).toBeTruthy();
     expect(document.querySelector('[data-series="cache_write"]')).toBeTruthy();
@@ -1430,7 +1430,7 @@ describe('AnalyticsChart', () => {
       points,
       hiddenSeries: new Set(Object.keys(EMPTY) as Array<keyof TokenBuckets>),
     });
-    const bucket = document.querySelector(`g[data-cost-status="${status}"]`);
+    const bucket = document.querySelector(`button[data-cost-status="${status}"]`);
     if (!bucket) throw new Error(`missing ${status} cost bucket`);
 
     fireEvent.mouseEnter(bucket);

@@ -218,6 +218,62 @@ export function ChartHoverTooltip({ plotRef, index, count, children }: ChartHove
   );
 }
 
+export function ChartBucketHits({
+  count,
+  height,
+  items,
+}: {
+  count: number;
+  height: number;
+  items: Array<{
+    id: string;
+    label: string;
+    costStatus?: string;
+    onEnter: () => void;
+    onLeave: () => void;
+    onActivate?: () => void;
+  }>;
+}) {
+  return (
+    <div
+      className="chart-bucket-hits"
+      style={{
+        position: 'absolute',
+        inset: 0,
+        height,
+        display: 'grid',
+        gridTemplateColumns: `repeat(${Math.max(1, count)}, minmax(0, 1fr))`,
+      }}
+    >
+      {items.map((item) => (
+        <button
+          key={item.id}
+          type="button"
+          className={item.onActivate ? 'chart-bucket' : 'chart-bucket chart-bucket-inert'}
+          data-cost-status={item.costStatus}
+          aria-label={item.label}
+          onMouseDown={(event) => event.preventDefault()}
+          onMouseEnter={item.onEnter}
+          onMouseLeave={item.onLeave}
+          onFocus={item.onEnter}
+          onBlur={item.onLeave}
+          onClick={item.onActivate}
+          onKeyDown={
+            item.onActivate
+              ? (event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    item.onActivate?.();
+                  }
+                }
+              : undefined
+          }
+        />
+      ))}
+    </div>
+  );
+}
+
 interface ActivityChartProps {
   data: ActivityChartBucket[];
   bucketLabel: string;
@@ -304,9 +360,9 @@ function ActivityChart({
           <svg
             viewBox={`0 0 ${W} ${H}`}
             preserveAspectRatio="none"
-            style={{ width: '100%', height: 130, display: 'block' }}
+            style={{ width: '100%', height: 130, display: 'block', pointerEvents: 'none' }}
+            aria-hidden="true"
           >
-            <title>Session activity over time</title>
             {[0, 0.5].map((g) => (
               <line key={g} x1={0} x2={W} y1={H * g} y2={H * g} stroke="var(--chart-grid)" strokeWidth="0.2" />
             ))}
@@ -322,27 +378,7 @@ function ActivityChart({
                 selection && (d.start + d.end) / 2 >= selection.start && (d.start + d.end) / 2 < selection.end;
               const dim = selection && !isSel;
               return (
-                // biome-ignore lint/a11y/useSemanticElements: The bucket must stay in the SVG coordinate system.
-                <g
-                  key={i}
-                  role="button"
-                  tabIndex={0}
-                  aria-label={`${d.t}: ${d.c} ${d.c === 1 ? 'session' : 'sessions'}. Filter to this time bucket.`}
-                  onMouseEnter={() => setHover(i)}
-                  onMouseLeave={() => setHover(null)}
-                  onFocus={() => setHover(i)}
-                  onBlur={() => setHover(null)}
-                  onClick={onBucketClick ? () => onBucketClick(d) : undefined}
-                  onKeyDown={(e) => {
-                    if (onBucketClick && (e.key === 'Enter' || e.key === ' ')) {
-                      e.preventDefault();
-                      onBucketClick(d);
-                    }
-                  }}
-                  style={{
-                    cursor: onBucketClick ? 'pointer' : 'default',
-                  }}
-                >
+                <g key={i}>
                   <rect x={x - 0.4} y={0} width={barW + 0.8} height={H} fill="transparent" />
                   <rect
                     x={x}
@@ -356,6 +392,17 @@ function ActivityChart({
               );
             })}
           </svg>
+          <ChartBucketHits
+            count={data.length}
+            height={130}
+            items={data.map((d, i) => ({
+              id: String(d.start),
+              label: `${d.t}: ${d.c} ${d.c === 1 ? 'session' : 'sessions'}. Filter to this time bucket.`,
+              onEnter: () => setHover(i),
+              onLeave: () => setHover(null),
+              onActivate: onBucketClick ? () => onBucketClick(d) : undefined,
+            }))}
+          />
           {hover !== null && hovered && (
             <ChartHoverTooltip plotRef={plotRef} index={hover} count={data.length}>
               <span style={{ color: 'var(--fg3)' }}>{hovered.t}</span> · {hovered.c}{' '}
@@ -519,9 +566,9 @@ export function TokenChart({
           <svg
             viewBox={`0 0 ${W} ${H}`}
             preserveAspectRatio="none"
-            style={{ width: '100%', height: 130, display: 'block' }}
+            style={{ width: '100%', height: 130, display: 'block', pointerEvents: 'none' }}
+            aria-hidden="true"
           >
-            <title>Token usage over time</title>
             {[0, 0.5].map((g) => (
               <line key={g} x1={0} x2={W} y1={H * g} y2={H * g} stroke="var(--chart-grid)" strokeWidth="0.2" />
             ))}
@@ -553,33 +600,24 @@ export function TokenChart({
                 );
               }
               return (
-                // biome-ignore lint/a11y/useSemanticElements: The bucket must stay in the SVG coordinate system.
-                <g
-                  key={i}
-                  role="button"
-                  tabIndex={0}
-                  aria-label={`${d.t}: ${formatTokens(visibleTotal(d))} tokens. Filter to this time bucket.`}
-                  onMouseEnter={() => setHover(i)}
-                  onMouseLeave={() => setHover(null)}
-                  onFocus={() => setHover(i)}
-                  onBlur={() => setHover(null)}
-                  onClick={onBucketClick ? () => onBucketClick(d) : undefined}
-                  onKeyDown={(e) => {
-                    if (onBucketClick && (e.key === 'Enter' || e.key === ' ')) {
-                      e.preventDefault();
-                      onBucketClick(d);
-                    }
-                  }}
-                  style={{
-                    cursor: onBucketClick ? 'pointer' : 'default',
-                  }}
-                >
+                <g key={i}>
                   <rect x={x - 0.4} y={0} width={barW + 0.8} height={H} fill="transparent" />
                   {segs}
                 </g>
               );
             })}
           </svg>
+          <ChartBucketHits
+            count={data.length}
+            height={130}
+            items={data.map((d, i) => ({
+              id: String(d.start),
+              label: `${d.t}: ${formatTokens(visibleTotal(d))} tokens. Filter to this time bucket.`,
+              onEnter: () => setHover(i),
+              onLeave: () => setHover(null),
+              onActivate: onBucketClick ? () => onBucketClick(d) : undefined,
+            }))}
+          />
           {empty && (
             <div
               style={{

@@ -2,6 +2,7 @@ import type React from 'react';
 import { Fragment, useMemo, useRef, useState } from 'react';
 import { AnalyticsPage } from './analytics-page';
 import {
+  ChartBucketHits,
   ChartHoverTooltip,
   ChartXLabels,
   ChartYAxis,
@@ -935,9 +936,9 @@ export function AnalyticsChart({
               <svg
                 viewBox="0 0 100 32"
                 preserveAspectRatio="none"
-                style={{ width: '100%', height: 170, display: 'block' }}
+                style={{ width: '100%', height: 170, display: 'block', pointerEvents: 'none' }}
+                aria-hidden="true"
               >
-                <title>{title}</title>
                 {[0, 0.5].map((line) => (
                   <line
                     key={line}
@@ -959,7 +960,6 @@ export function AnalyticsChart({
                   const hoveredBucket = hoverStart === bucket.start;
                   const baseOpacity = hoveredBucket || selected ? 1 : dimmed ? 0.3 : 0.9;
                   const costBucket = costBuckets[position] || { value: null, complete: false, hasUsage: false };
-                  const costDescription = chartCostDescription(costBucket);
                   const segments: React.ReactElement[] = [];
                   if (unit === 'cost') {
                     const value = costBucket.value;
@@ -1002,10 +1002,8 @@ export function AnalyticsChart({
                     }
                   }
                   return (
-                    // biome-ignore lint/a11y/useSemanticElements: SVG buckets must remain in the chart coordinate system.
                     <g
                       key={`${bucket.start}:${bucket.end}`}
-                      role="button"
                       data-line-x={((position + 0.5) / Math.max(1, usage.buckets.length)) * 100}
                       data-cost-status={
                         !costBucket.hasUsage
@@ -1016,24 +1014,6 @@ export function AnalyticsChart({
                               ? 'unknown'
                               : 'partial'
                       }
-                      tabIndex={0}
-                      aria-label={`${bucket.t}: ${
-                        unit === 'cost'
-                          ? costDescription
-                          : `${formatTokens(visibleTokens(bucket))} tokens; ${costDescription}`
-                      }. Open this time bucket.`}
-                      onMouseEnter={() => setHoverStart(bucket.start)}
-                      onMouseLeave={() => setHoverStart(null)}
-                      onFocus={() => setHoverStart(bucket.start)}
-                      onBlur={() => setHoverStart(null)}
-                      onClick={() => openBucket(bucket)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter' || event.key === ' ') {
-                          event.preventDefault();
-                          openBucket(bucket);
-                        }
-                      }}
-                      style={{ cursor: 'pointer' }}
                     >
                       <rect x={x - slot * 0.05} y={0} width={width + slot * 0.1} height={32} fill="transparent" />
                       {segments}
@@ -1055,6 +1035,32 @@ export function AnalyticsChart({
                   />
                 ))}
               </svg>
+              <ChartBucketHits
+                count={usage.buckets.length}
+                height={170}
+                items={usage.buckets.map((bucket, position) => {
+                  const costBucket = costBuckets[position] || { value: null, complete: false, hasUsage: false };
+                  const costDescription = chartCostDescription(costBucket);
+                  return {
+                    id: `${bucket.start}:${bucket.end}`,
+                    label: `${bucket.t}: ${
+                      unit === 'cost'
+                        ? costDescription
+                        : `${formatTokens(visibleTokens(bucket))} tokens; ${costDescription}`
+                    }. Open this time bucket.`,
+                    costStatus: !costBucket.hasUsage
+                      ? 'no-usage'
+                      : costBucket.complete
+                        ? 'complete'
+                        : costBucket.value == null
+                          ? 'unknown'
+                          : 'partial',
+                    onEnter: () => setHoverStart(bucket.start),
+                    onLeave: () => setHoverStart(null),
+                    onActivate: () => openBucket(bucket),
+                  };
+                })}
+              />
               {hovered &&
                 hoveredPosition >= 0 &&
                 (unit === 'cost' ? hoveredCost?.hasUsage : visibleTokens(hovered) > 0) && (

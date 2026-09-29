@@ -358,15 +358,32 @@
       border-radius: var(--radius-default);
     }
 
-    /* Chart buckets are focusable groups inside an SVG drawn with
-       preserveAspectRatio="none". Chromium paints the rounded focus
-       ring above in that stretched coordinate space, so clicking a
-       bar draws a large blue-and-white oval. The charts already
-       brighten the focused bucket, which stays in screen pixels. */
+    /* Chart buckets are HTML hit targets over an SVG drawn with
+       preserveAspectRatio="none". A CSS focus ring on the SVG group
+       stretches into a large blue-and-white oval, so the overlay
+       buttons never show one. Hover and selection already brighten
+       the bar. */
     svg :focus-visible {
       outline: none;
       outline-offset: 0;
       border-radius: 0;
+    }
+    .chart-bucket {
+      margin: 0;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      cursor: pointer;
+      border-radius: 0;
+    }
+    .chart-bucket-inert {
+      cursor: default;
+    }
+    .chart-bucket:focus,
+    .chart-bucket:focus-visible {
+      outline: none;
+      outline-offset: 0;
+      box-shadow: none;
     }
 
     /* Agent prose is rendered from markdown into a React tree by
