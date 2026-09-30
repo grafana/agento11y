@@ -242,6 +242,45 @@ def test_anthropic_mapper_maps_thinking_disabled() -> None:
     assert mapped.thinking_enabled is False
 
 
+def test_anthropic_mapper_accepts_sdk_message_model() -> None:
+    from anthropic.types.message import Message as AnthropicMessage
+    from anthropic.types.text_block import TextBlock
+    from anthropic.types.usage import Usage
+
+    response = AnthropicMessage(
+        id="resp-sdk",
+        type="message",
+        role="assistant",
+        model="claude-sonnet-4-5-20260210",
+        content=[TextBlock(type="text", text="from the sdk")],
+        stop_reason="end_turn",
+        usage=Usage(
+            input_tokens=120,
+            output_tokens=40,
+            cache_read_input_tokens=12,
+            cache_creation_input_tokens=4,
+        ),
+    )
+
+    mapped = messages.from_request_response(_request(), response)
+    assert mapped.response_id == "resp-sdk"
+    assert mapped.response_model == "claude-sonnet-4-5-20260210"
+    assert mapped.output[0].role.value == "assistant"
+    assert mapped.output[0].parts[0].text == "from the sdk"
+    assert mapped.usage.cache_write_input_tokens == 4
+    assert mapped.usage.cache_read_input_tokens == 12
+
+    mapped_with_artifacts = messages.from_request_response(
+        _request(),
+        response,
+        AnthropicOptions(raw_artifacts=True),
+    )
+    response_artifact = next(
+        artifact for artifact in mapped_with_artifacts.artifacts if artifact.kind.value == "response"
+    )
+    assert b'"id":"resp-sdk"' in response_artifact.payload
+
+
 def test_anthropic_provider_explicitly_has_no_embeddings_surface() -> None:
     assert "messages" in agento11y_anthropic.__all__
     assert "embeddings" not in agento11y_anthropic.__all__

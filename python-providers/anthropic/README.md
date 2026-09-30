@@ -12,6 +12,8 @@ This helper currently supports Anthropic Messages APIs only. Native Anthropic em
 pip install agento11y agento11y-anthropic anthropic
 ```
 
+This package supports Anthropic Python SDK 0.79 through 1.x. SDK 1.x rejects `temperature`, `top_p`, and `top_k` as arguments to `messages.create()` and `messages.stream()`. Pass them through `extra_body` when an older model still needs them. The wrapper still records `temperature` and `top_p` when they are present on the request object it is given.
+
 ## Wrapper Mode (Sync)
 
 ```python
