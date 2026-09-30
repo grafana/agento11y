@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.18.0] - 2026-09-30
+
+### Features
+
+- **python**: allow Anthropic SDK 1.x in agento11y-anthropic (#807)
+- **experiments**: default grafana evals sdk creation (#780)
+- **experiments**: add deepeval publishing support (#779)
+
+### Bug Fixes
+
+- **python**: map LangChain ToolMessage to a tool-result part (#749)
+- **security**: resolve 75 CVEs across the npm, Python and Go dependency trees (#718)
+- **strands**: properly support sub agent flows and metrics guidance (#697)
+- **frameworks**: record Strands token usage and the configured streaming mode (#651)
+
 ## [0.17.0] - 2026-08-25
 
 ### Features
