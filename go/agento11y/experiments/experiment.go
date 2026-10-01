@@ -20,6 +20,8 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+const instrumentationName = "agento11y.experiments"
+
 type ExperimentOptions struct {
 	ExperimentID        string
 	RunID               string
@@ -130,7 +132,7 @@ func WithExperiment(ctx context.Context, client *Client, opts ExperimentOptions,
 	}
 	if experiment.useOTel {
 		var span trace.Span
-		ctx, span = otel.Tracer("sigil_sdk.experiments").Start(ctx, "test_suite_run", trace.WithAttributes(
+		ctx, span = otel.Tracer(instrumentationName).Start(ctx, "test_suite_run", trace.WithAttributes(
 			attribute.String("test.suite.run.id", experiment.ExperimentID),
 			attribute.String("test.suite.name", experiment.Name),
 			attribute.String("test.suite.run.status", "in_progress"),
@@ -539,7 +541,7 @@ func (t *Trial) Enter(ctx context.Context) error {
 	t.started = time.Now()
 	t.mu.Unlock()
 	if t.useOTel {
-		tracer := otel.Tracer("sigil_sdk.experiments")
+		tracer := otel.Tracer(instrumentationName)
 		attrs := t.identityAttributes()
 		ctx, t.span = tracer.Start(ctx, "eval.trial "+t.Ref.TestCaseID, trace.WithAttributes(attrs...))
 		t.spanContext = ctx

@@ -636,7 +636,7 @@ test('pushSuite ignores object property order when detecting transformations', a
     const pushed = await newClient(endpoint).pushSuite({
       suiteId: 'smoke',
       name: 'Smoke',
-      testCases: [{ testCaseId: 'same', input: { first: 1, second: 2 } }],
+      testCases: [{ testCaseId: 'same', input: { first: 1, second: 2 }, expected: null }],
     });
     assert.deepEqual(pushed.transformedCaseIds, []);
   } finally {

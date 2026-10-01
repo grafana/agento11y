@@ -18,13 +18,8 @@
 
 import type { AttributeValue } from '@opentelemetry/api';
 
-/**
- * The OTel instrumentation scope name is a telemetry-visible data contract
- * consumed outside this repository, so it intentionally keeps the pre-rename
- * module name. Do not update it for the sigil-sdk -> agento11y rename without
- * server-side dual-read support.
- */
-export const INSTRUMENTATION_NAME = 'sigil_sdk.experiments';
+/** OTel instrumentation scope shared by experiment spans. */
+export const INSTRUMENTATION_NAME = 'agento11y.experiments';
 export const SCHEMA_VERSION = 'experiments-otel-2026-06';
 export const ATTR_SCHEMA_VERSION = 'agento11y.eval.schema.version';
 

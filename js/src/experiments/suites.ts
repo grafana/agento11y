@@ -225,7 +225,10 @@ export class TestSuitesClient {
       transformedCaseIds: storedCases
         .filter((stored, index) => {
           const local = suite.testCases[index];
-          return !jsonValuesEqual(stored.input, local?.input) || !jsonValuesEqual(stored.expected, local?.expected);
+          return (
+            !jsonValuesEqual(stored.input, local?.input) ||
+            !jsonValuesEqual(stored.expected ?? undefined, local?.expected ?? undefined)
+          );
         })
         .map((testCase) => testCase.testCaseId),
     };

@@ -62,6 +62,9 @@ func TestWithExperimentParentsTrialAndAgentSpans(t *testing.T) {
 	if len(spans) != 3 {
 		t.Fatalf("expected agent/trial/suite spans, got %d", len(spans))
 	}
+	if spans[1].InstrumentationScope().Name != instrumentationName || spans[2].InstrumentationScope().Name != instrumentationName {
+		t.Fatalf("unexpected experiment instrumentation scopes: %q, %q", spans[1].InstrumentationScope().Name, spans[2].InstrumentationScope().Name)
+	}
 	if spans[0].Parent().SpanID() != spans[1].SpanContext().SpanID() || spans[1].Parent().SpanID() != spans[2].SpanContext().SpanID() {
 		t.Fatal("agent/trial/suite ancestry was lost")
 	}

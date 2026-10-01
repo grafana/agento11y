@@ -82,7 +82,7 @@ test('the opt-in emits a trial span with the documented identity attributes', as
     assert.equal(spans.length, 1);
     const span = spans[0];
     assert.equal(span.name, 'eval.trial add');
-    assert.equal(span.instrumentationScope.name, 'sigil_sdk.experiments');
+    assert.equal(span.instrumentationScope.name, 'agento11y.experiments');
     assert.equal(span.attributes['agento11y.eval.schema.version'], 'experiments-otel-2026-06');
     assert.equal(span.attributes['test.suite.run.id'], 'run-1');
     assert.equal(span.attributes['test.suite.id'], 'smoke');
