@@ -59,6 +59,13 @@ type ScoreValue = agento11y.ScoreValue
 type ScoreItem = agento11y.ScoreItem
 type ScoreType = agento11y.ScoreType
 type ScoreSource = agento11y.ScoreSource
+type ReportRole = agento11y.ReportRole
+
+const (
+	ReportRolePrimaryVerdict = agento11y.ReportRolePrimaryVerdict
+	ReportRoleDiagnostic     = agento11y.ReportRoleDiagnostic
+)
+
 type ExperimentReport struct {
 	Run     agento11y.Experiment
 	Summary ExperimentReportSummary

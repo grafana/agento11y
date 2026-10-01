@@ -19,6 +19,41 @@ func TestExperimentRunTrialIDWithoutSuiteDoesNotPanic(t *testing.T) {
 	}
 }
 
+func TestExperimentRunPrimaryVerdictLifecycleParity(t *testing.T) {
+	trial := NewTrial(nil, TrialRef{RunID: "run-1", TestCaseID: "case-1"})
+	passed, failed := true, false
+	trial.FinalScore(BoolScoreValue(true), ScoreOptions{Passed: &passed})
+	trial.Score("quality", NumberScoreValue(0.2), ScoreOptions{
+		Passed: &failed, ReportRole: ReportRolePrimaryVerdict,
+	})
+	trial.resolveEndStatus(nil)
+	if trial.status != TrialStatusFailed {
+		t.Fatalf("primary verdict must override legacy final, got %q", trial.status)
+	}
+	duplicate := trial.Score("safety", NumberScoreValue(1), ScoreOptions{
+		Passed: &passed, ReportRole: ReportRolePrimaryVerdict,
+	})
+	if duplicate.ScoreID != "" || trial.status != TrialStatusErrored || len(trial.buffer) != 2 {
+		t.Fatalf("duplicate primary verdict must error without buffering: item=%#v status=%q", duplicate, trial.status)
+	}
+
+	diagnostic := NewTrial(nil, TrialRef{RunID: "run-1", TestCaseID: "case-2"})
+	diagnostic.FinalScore(BoolScoreValue(true), ScoreOptions{ReportRole: ReportRoleDiagnostic})
+	diagnostic.resolveEndStatus(nil)
+	if diagnostic.status != TrialStatusFailed || diagnostic.errorText != "trial exited without a final score" {
+		t.Fatalf("diagnostic final became a verdict: status=%q error=%q", diagnostic.status, diagnostic.errorText)
+	}
+}
+
+func TestExperimentRunPreservesMarkedOperationalError(t *testing.T) {
+	trial := NewTrial(nil, TrialRef{RunID: "run-1", TestCaseID: "case-1"})
+	trial.MarkErrored(errors.New("provider timed out"))
+	trial.resolveEndStatus(nil)
+	if trial.status != TrialStatusErrored || trial.errorText != "provider timed out" {
+		t.Fatalf("operational error was overwritten: status=%q error=%q", trial.status, trial.errorText)
+	}
+}
+
 func TestExperimentRunCopiesSuiteAtBoundary(t *testing.T) {
 	suite := &TestSuite{
 		SuiteID: "suite-1",

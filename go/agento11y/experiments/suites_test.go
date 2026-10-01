@@ -135,6 +135,8 @@ func TestPushSuiteCreatesDraftPrunesAndPublishes(t *testing.T) {
 			}
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/versions"):
 			_, _ = w.Write([]byte(`{"version":"v3","published":false,"changelog":"new"}`))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/test-cases"):
+			_, _ = w.Write([]byte(`{"test_case_id":"keep","input":{"value":"a"},"expected":{"value":"[redacted]"},"metadata":{"agento11y.sdk.portability":{"version":1,"weight":2,"wrapped_fields":["input","expected"]}}}`))
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/versions/v3/test-cases"):
 			_, _ = w.Write([]byte(`{"items":[{"test_case_id":"keep","input":{"value":"a"}},{"test_case_id":"remove","input":{"value":"x"}}]}`))
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, ":publish"):
@@ -161,6 +163,9 @@ func TestPushSuiteCreatesDraftPrunesAndPublishes(t *testing.T) {
 		len(result.PrunedCaseIDs) != 1 || result.PrunedCaseIDs[0] != "remove" {
 		t.Fatalf("unexpected push result: %#v", result)
 	}
+	if len(result.TransformedCaseIDs) != 1 || result.TransformedCaseIDs[0] != "keep" || result.Suite.TestCases[0].Expected != "[redacted]" {
+		t.Fatalf("expected canonical stored case, got %#v", result)
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	found := false
@@ -171,6 +176,12 @@ func TestPushSuiteCreatesDraftPrunesAndPublishes(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("prune request not found: %#v", methods)
+	}
+}
+
+func TestJSONValuesEqualNormalizesJSONNumbersAndObjectOrder(t *testing.T) {
+	if !jsonValuesEqual(map[string]any{"a": 1, "b": []any{2}}, map[string]any{"b": []any{float64(2)}, "a": float64(1)}) {
+		t.Fatal("equivalent JSON values were reported as transformed")
 	}
 }
 

@@ -565,6 +565,22 @@ test('pushSuite creates the suite, opens a draft, upserts cases, and publishes',
     if (request.method === 'POST' && path === '/test-suites/smoke/versions') {
       return { status: 200, body: { version: 'v1', published: false } };
     }
+    if (request.method === 'POST' && path.endsWith('/test-cases')) {
+      return {
+        status: 200,
+        body: {
+          test_case_id: 'add',
+          input: { value: '2+2' },
+          expected: { value: '[redacted]' },
+          metadata: {
+            'agento11y.sdk.portability': {
+              version: 1,
+              wrapped_fields: ['input', 'expected'],
+            },
+          },
+        },
+      };
+    }
     if (request.method === 'POST' && path.endsWith(':publish')) {
       return { status: 200, body: { version: 'v1', published: true } };
     }
@@ -584,6 +600,8 @@ test('pushSuite creates the suite, opens a draft, upserts cases, and publishes',
     assert.equal(pushed.suiteVersion, 'v1');
     assert.equal(pushed.published, true);
     assert.deepEqual(pushed.prunedCaseIds, []);
+    assert.deepEqual(pushed.transformedCaseIds, ['add']);
+    assert.equal(pushed.suite.testCases[0].expected, '[redacted]');
     const paths = seen.map((entry) => `${entry.method} ${entry.url.split('/resources/eval')[1]}`);
     assert.deepEqual(paths, [
       'GET /test-suites/smoke',
@@ -595,6 +613,32 @@ test('pushSuite creates the suite, opens a draft, upserts cases, and publishes',
       'POST /test-suites/smoke/versions/v1:publish',
     ]);
     assert.deepEqual(JSON.parse(seen[4].body), { changelog: 'first cut' });
+  } finally {
+    await close();
+  }
+});
+
+test('pushSuite ignores object property order when detecting transformations', async () => {
+  const { endpoint, close } = await startServer((request) => {
+    const path = request.url.replace('/api/plugins/grafana-agento11y-app/resources/eval', '');
+    if (request.method === 'GET' && path === '/test-suites/smoke') {
+      return {
+        status: 200,
+        body: { suite_id: 'smoke', name: 'Smoke', versions: [{ version: 'v1', published: false }] },
+      };
+    }
+    if (request.method === 'POST' && path.endsWith('/test-cases')) {
+      return { status: 200, body: { test_case_id: 'same', input: { second: 2, first: 1 } } };
+    }
+    return { status: 200, body: {} };
+  });
+  try {
+    const pushed = await newClient(endpoint).pushSuite({
+      suiteId: 'smoke',
+      name: 'Smoke',
+      testCases: [{ testCaseId: 'same', input: { first: 1, second: 2 } }],
+    });
+    assert.deepEqual(pushed.transformedCaseIds, []);
   } finally {
     await close();
   }

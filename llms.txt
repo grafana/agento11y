@@ -562,6 +562,12 @@ existing conversation ID and flush callback. See `python/docs/evaluation-plans.m
 - Local `LLMJudge` and `RegexJudge` helpers do not require an evaluator created
   in Grafana. Frameworks can submit their native grader result and transcript
   through `trial.record_evaluation(...)`.
+- Use `ReportRole.PRIMARY_VERDICT` on the one score intended to drive the trial
+  headline and pass rate. Use `ReportRole.DIAGNOSTIC` for supporting scores that
+  remain available for analysis but must not determine the verdict. If no score
+  declares a role, an unannotated score under the legacy `final` key remains the
+  fallback. A primary verdict takes precedence over that fallback, and a
+  diagnostic `final` score is never selected.
 - `trial.evaluate(evaluator_id)` grades the trial's bound
   conversation with an evaluator that already exists in the tenant, instead of a
   locally computed score. Go spells it `trial.Evaluate(ctx, evaluatorID)` and
@@ -577,8 +583,9 @@ existing conversation ID and flush callback. See `python/docs/evaluation-plans.m
   - The score is stored against the conversation and the trial, with no
     `generation_id`, so read it from the experiment's scores or the trial's
     `scores` in the report rather than from a per-generation lookup.
-  - Leave `score_count` unset when finalizing such a run, and expect the report's
-    `pass_rate` to be unset: it only counts a score stored under the `final` key.
+  - Leave `score_count` unset when finalizing such a run. The report selects a
+    score marked `primary_verdict`, then falls back to an unannotated score under
+    the legacy `final` key; without either, `pass_rate` remains unset.
   - For concurrent evaluations use `client.trigger_trial_evaluation(...)` and
     `client.get_trial_evaluation(...)`, keeping both the trigger and the polling
     inside the experiment block. Finalizing while one is still queued raises a

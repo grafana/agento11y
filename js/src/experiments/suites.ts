@@ -77,6 +77,8 @@ export interface PushedSuite {
   remoteSuite: Record<string, unknown>;
   remoteVersion: Record<string, unknown>;
   prunedCaseIds: string[];
+  /** Cases whose stored input or expected value differs from the submitted value. */
+  transformedCaseIds: string[];
 }
 
 export class TestSuitesClient {
@@ -177,8 +179,9 @@ export class TestSuitesClient {
       throw transportError('test suite version: missing version');
     }
 
+    const storedCases: TestCase[] = [];
     for (const testCase of suite.testCases) {
-      await this.upsertCase(suiteId, versionId, testCase);
+      storedCases.push(await this.upsertCase(suiteId, versionId, testCase));
     }
 
     const prunedCaseIds: string[] = [];
@@ -214,11 +217,17 @@ export class TestSuitesClient {
           suite.description !== undefined && suite.description.length > 0 ? suite.description : str(remote.description),
         tags: suite.tags !== undefined && suite.tags.length > 0 ? [...suite.tags] : remoteTags(remote),
         changelog,
-        testCases: [...suite.testCases],
+        testCases: storedCases,
       },
       remoteSuite: remote,
       remoteVersion: version,
       prunedCaseIds,
+      transformedCaseIds: storedCases
+        .filter((stored, index) => {
+          const local = suite.testCases[index];
+          return !jsonValuesEqual(stored.input, local?.input) || !jsonValuesEqual(stored.expected, local?.expected);
+        })
+        .map((testCase) => testCase.testCaseId),
     };
   }
 
@@ -301,12 +310,16 @@ export class TestSuitesClient {
     }
   }
 
-  private async upsertCase(suiteId: string, version: string, testCase: TestCase): Promise<void> {
-    await this.request(
+  private async upsertCase(suiteId: string, version: string, testCase: TestCase): Promise<TestCase> {
+    const body = await this.request(
       'POST',
       `/test-suites/${encodeURIComponent(suiteId)}/versions/${encodeURIComponent(version)}/test-cases`,
       { payload: localCaseToRemote(testCase) },
     );
+    if (!isRecord(body)) {
+      throw transportError('test suite case: missing stored case');
+    }
+    return remoteCaseToLocal(body);
   }
 
   private async deleteCase(suiteId: string, version: string, testCaseId: string): Promise<void> {
@@ -612,6 +625,24 @@ function unwrapValue(value: unknown): unknown {
     return value.value;
   }
   return value;
+}
+
+function jsonValuesEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) {
+    return true;
+  }
+  if (Array.isArray(left) && Array.isArray(right)) {
+    return left.length === right.length && left.every((value, index) => jsonValuesEqual(value, right[index]));
+  }
+  if (isRecord(left) && isRecord(right)) {
+    const leftKeys = Object.keys(left);
+    const rightKeys = Object.keys(right);
+    return (
+      leftKeys.length === rightKeys.length &&
+      leftKeys.every((key) => Object.hasOwn(right, key) && jsonValuesEqual(left[key], right[key]))
+    );
+  }
+  return false;
 }
 
 function items(body: unknown): Record<string, unknown>[] {

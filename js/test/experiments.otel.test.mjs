@@ -5,7 +5,7 @@ import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-ho
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 
 import { ExperimentsClient } from '../.test-dist/experiments/client.js';
-import { Experiment } from '../.test-dist/experiments/experiment.js';
+import { Experiment, withExperiment } from '../.test-dist/experiments/experiment.js';
 import {
   runStatusTelemetry,
   scoreEventAttributes,
@@ -48,6 +48,21 @@ test('experimental telemetry is off by default', async () => {
     });
     await experiment.finalize('completed');
     assert.deepEqual(recorder.exporter.getFinishedSpans(), [], 'no experiments span without the opt-in');
+  } finally {
+    await recorder.dispose();
+  }
+});
+
+test('the suite span reflects an explicitly failed experiment', async () => {
+  const recorder = withRecorder();
+  try {
+    const client = new FakeExperimentsClient({ useExperimentalOtel: true });
+    await withExperiment(client, { experimentId: 'run-1', name: 'nightly', suite }, async (experiment) => {
+      await experiment.finalize('failed', { error: 'candidate failed' });
+    });
+    const span = recorder.exporter.getFinishedSpans().find((item) => item.name === 'test_suite_run');
+    assert.equal(span.attributes['test.suite.run.status'], 'failure');
+    assert.equal(span.status.code, SpanStatusCode.ERROR);
   } finally {
     await recorder.dispose();
   }

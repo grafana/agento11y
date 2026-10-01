@@ -340,6 +340,33 @@ run, err := experiments.WithExperiment(ctx, client, experiments.ExperimentOption
 })
 ```
 
+Use `ScoreOptions.ReportRole` to identify one score as the report headline and
+supporting scores as diagnostics:
+
+```go
+passed := true
+trial.Score("answer_relevancy", 0.91, experiments.ScoreOptions{
+	Passed:     &passed,
+	ReportRole: experiments.ReportRolePrimaryVerdict,
+})
+trial.Score("groundedness", 0.87, experiments.ScoreOptions{
+	ReportRole: experiments.ReportRoleDiagnostic,
+})
+```
+
+`ReportRolePrimaryVerdict` identifies the score intended to drive the experiment
+headline and pass rate. `ReportRoleDiagnostic` keeps a score available for
+analysis without determining the headline verdict. The role is optional and
+omitted from ingest when unset; existing backends and runs using the legacy
+`final` score remain compatible.
+
+Post-hoc importers can call `trial.SetDuration(&duration)` to preserve native
+execution time, or `trial.SetDuration(nil)` when it is unknown. Call
+`trial.MarkErrored(err)` for an operational failure that should not abort sibling
+trials. With experimental OTel enabled, `WithExperiment` emits a
+`test_suite_run` span and runs trial callbacks beneath it, so instrumented agent
+spans inherit the suite and trial trace ancestry.
+
 Keep `ExperimentID`, case ID, and attempt stable when resuming. The SDK derives
 stable trial/generation/conversation IDs and occurrence-aware score IDs from
 them. Reusing the same case/attempt twice in one run is rejected; increment the
@@ -356,6 +383,11 @@ pushed, err := suites.PushSuite(ctx, *suite, experiments.PushSuiteOptions{
 	Prune: true, Publish: true, Changelog: "nightly sync",
 })
 ```
+
+`PushSuite` returns the server-stored cases in `pushed.Suite`; use those cases
+for execution because the control plane may sanitize submitted content.
+`pushed.TransformedCaseIDs` identifies cases whose stored input or expected
+value changed.
 
 Stored-suite operations additionally use `AGENTO11Y_CONTROL_ENDPOINT` (or
 `AGENTO11Y_GRAFANA_URL`) and `AGENTO11Y_SERVICE_ACCOUNT_TOKEN`. Run ingest

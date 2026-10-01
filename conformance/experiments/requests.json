@@ -75,6 +75,7 @@
           "evaluator_id": "exact",
           "evaluator_version": "1",
           "score_key": "final",
+          "report_role": "primary_verdict",
           "value": { "bool": true },
           "conversation_id": "conv-agent-1",
           "experiment_id": "conformance-run",

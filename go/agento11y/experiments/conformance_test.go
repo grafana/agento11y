@@ -40,6 +40,7 @@ type conformanceInputs struct {
 	ScoreEvaluatorID      string   `json:"score_evaluator_id"`
 	ScoreEvaluatorVersion string   `json:"score_evaluator_version"`
 	ScoreKey              string   `json:"score_key"`
+	ScoreReportRole       string   `json:"score_report_role"`
 	ScoreCreatedAt        string   `json:"score_created_at"`
 	PlannedTrialCount     int      `json:"planned_trial_count"`
 	Tags                  []string `json:"tags"`
@@ -187,6 +188,7 @@ func TestExperimentsConformanceRequestBodies(t *testing.T) {
 					// Local-only on purpose: no SDK puts the evaluator kind on the wire.
 					EvaluatorKind:  "deterministic",
 					ScoreKey:       inputs.ScoreKey,
+					ReportRole:     agento11y.ReportRole(inputs.ScoreReportRole),
 					Value:          agento11y.BoolScoreValue(true),
 					ConversationID: inputs.ConversationID, RunID: inputs.ExperimentID,
 					TrialID: trialID, TestCaseID: inputs.TestCaseID,

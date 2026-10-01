@@ -128,9 +128,29 @@ func WithExperiment(ctx context.Context, client *Client, opts ExperimentOptions,
 	if err = experiment.Enter(ctx); err != nil {
 		return experiment, err
 	}
+	if experiment.useOTel {
+		var span trace.Span
+		ctx, span = otel.Tracer("sigil_sdk.experiments").Start(ctx, "test_suite_run", trace.WithAttributes(
+			attribute.String("test.suite.run.id", experiment.ExperimentID),
+			attribute.String("test.suite.name", experiment.Name),
+			attribute.String("test.suite.run.status", "in_progress"),
+		))
+		defer func() {
+			status := "success"
+			if err != nil || experiment.status == ExperimentStatusFailed {
+				status = "failure"
+				span.SetStatus(codes.Error, "experiment failed")
+			} else if !experiment.autoFinalize {
+				status = "in_progress"
+			}
+			span.SetAttributes(attribute.String("test.suite.run.status", status))
+			span.End()
+		}()
+	}
 	defer func() {
 		recovered := recover()
 		if recovered != nil {
+			err = fmt.Errorf("experiment callback panic: %v", recovered)
 			if experiment.autoFinalize {
 				cleanup, cancel := cleanupContext(ctx)
 				_ = experiment.Finalize(cleanup, ExperimentStatusFailed, FinalizeOptions{Error: fmt.Sprint(recovered)})
@@ -453,11 +473,15 @@ type Trial struct {
 	hasGeneration      bool
 	io                 map[string]any
 	usage              map[string]any
+	observedDuration   *time.Duration
+	durationSet        bool
 	buffer             []ScoreItem
 	accepted           int
 	hasFinal           bool
+	hasPrimaryVerdict  bool
 	cloudEvaluated     bool
 	finalPassed        *bool
+	primaryPassed      *bool
 	occurrences        map[string]int
 	artifacts          []ExperimentArtifactRef
 	span               trace.Span
@@ -571,15 +595,15 @@ func (t *Trial) Close(ctx context.Context, callbackErr error) error {
 		t.Status, t.Error = TrialStatusErrored, callbackErr.Error()
 	} else if t.Status == TrialStatusRunning {
 		switch {
-		case !t.hasFinal && t.cloudEvaluated:
+		case !t.hasPrimaryVerdict && !t.hasFinal && t.cloudEvaluated:
 			// A stored evaluator graded this trial; the verdict and the score count
 			// come from the backend, not from a local final score.
 			t.Status = TrialStatusCompleted
-		case !t.hasFinal:
+		case !t.hasPrimaryVerdict && !t.hasFinal:
 			t.Status, t.Error = TrialStatusFailed, "trial closed without a final score"
-		case t.finalPassed == nil:
+		case t.hasPrimaryVerdict && t.primaryPassed == nil, !t.hasPrimaryVerdict && t.finalPassed == nil:
 			t.Status = TrialStatusCompleted
-		case *t.finalPassed:
+		case t.hasPrimaryVerdict && *t.primaryPassed, !t.hasPrimaryVerdict && *t.finalPassed:
 			t.Status = TrialStatusPassed
 		default:
 			t.Status = TrialStatusFailed
@@ -647,7 +671,10 @@ func (t *Trial) finalize(ctx context.Context) error {
 	if value, ok := t.usage["output_tokens"].(int); ok {
 		req.OutputTokens = &value
 	}
-	if !t.started.IsZero() {
+	if t.durationSet && t.observedDuration != nil {
+		value := int(t.observedDuration.Milliseconds())
+		req.DurationMillis = &value
+	} else if !t.durationSet && !t.started.IsZero() {
 		value := int(time.Since(t.started).Milliseconds())
 		req.DurationMillis = &value
 	}
@@ -738,9 +765,38 @@ func (t *Trial) SetUsage(inputTokens, outputTokens *int, cost *float64) *Trial {
 	return t
 }
 
+// SetDuration uses native execution time for a post-hoc result. Nil means unknown.
+func (t *Trial) SetDuration(duration *time.Duration) *Trial {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.durationSet = true
+	if duration == nil {
+		t.observedDuration = nil
+		return t
+	}
+	value := max(*duration, 0)
+	t.observedDuration = &value
+	return t
+}
+
+// MarkErrored records an operational failure without aborting sibling trials.
+func (t *Trial) MarkErrored(err error) *Trial {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.Status = TrialStatusErrored
+	if err != nil {
+		t.Error = err.Error()
+	}
+	if t.Error == "" {
+		t.Error = "error"
+	}
+	return t
+}
+
 type ScoreOptions struct {
 	Evaluator                                                                          *Evaluator
 	Passed                                                                             *bool
+	ReportRole                                                                         ReportRole
 	Explanation, GenerationID, GraderConversationID, GraderGenerationID, GraderTraceID string
 	Metadata                                                                           map[string]any
 }
@@ -763,6 +819,10 @@ func (t *Trial) score(scoreKey string, value any, opts ScoreOptions, scoreID str
 		opts.Passed = &passed
 	}
 	t.mu.Lock()
+	if opts.ReportRole == ReportRolePrimaryVerdict && t.hasPrimaryVerdict {
+		t.mu.Unlock()
+		return ScoreItem{}, fmt.Errorf("%w: trial may declare only one primary_verdict", agento11y.ErrScoreValidationFailed)
+	}
 	if scoreID == "" {
 		scoreID = t.nextScoreID(scoreKey, evaluator.EvaluatorID)
 	}
@@ -779,6 +839,7 @@ func (t *Trial) score(scoreKey string, value any, opts ScoreOptions, scoreID str
 	item := ScoreItem{
 		ScoreID: scoreID, EvaluatorID: evaluator.EvaluatorID, EvaluatorVersion: evaluator.Version,
 		EvaluatorKind: string(evaluator.Kind), ScoreKey: scoreKey, Value: scoreValue,
+		ReportRole:   opts.ReportRole,
 		GenerationID: generationID, TrialID: t.TrialID, ConversationID: t.ConversationID,
 		TraceID: t.TraceID, SpanID: t.SpanID, RunID: t.Ref.ExperimentID,
 		TestCaseID: t.Ref.TestCaseID, GraderConversationID: opts.GraderConversationID,
@@ -787,7 +848,9 @@ func (t *Trial) score(scoreKey string, value any, opts ScoreOptions, scoreID str
 		Source: &ScoreSource{Kind: "experiment", ID: t.Ref.ExperimentID},
 	}
 	t.buffer = append(t.buffer, item)
-	if scoreKey == "final" {
+	if opts.ReportRole == ReportRolePrimaryVerdict {
+		t.hasPrimaryVerdict, t.primaryPassed = true, opts.Passed
+	} else if scoreKey == "final" && opts.ReportRole == "" {
 		t.hasFinal, t.finalPassed = true, opts.Passed
 	}
 	t.emitEvaluationEvent(scoreKey, scoreValue, evaluator, opts)
@@ -829,6 +892,7 @@ func (t *Trial) RubricScore(name string, value any, opts ScoreOptions) (ScoreIte
 type RecordEvaluationOptions struct {
 	ScoreKey      string
 	PublishGrader *bool
+	ReportRole    ReportRole
 	Metadata      map[string]any
 }
 
@@ -874,6 +938,7 @@ func (t *Trial) RecordEvaluation(ctx context.Context, result EvaluationResult, o
 	evaluator := result.Evaluator
 	return t.score(scoreKey, result.Value, ScoreOptions{
 		Evaluator: &evaluator, Passed: &passed, Explanation: result.Explanation,
+		ReportRole:           opts.ReportRole,
 		GraderConversationID: graderConversationID, GraderGenerationID: graderGenerationID,
 		Metadata: mergeMaps(result.Metadata, opts.Metadata),
 	}, scoreID)
@@ -1384,7 +1449,7 @@ func artifactKind(mediaType string) string {
 
 func objectValue(value any) any {
 	if value == nil {
-		return map[string]any{}
+		return nil
 	}
 	if _, ok := value.(map[string]any); ok {
 		return value

@@ -285,6 +285,8 @@ type PushedSuite struct {
 	RemoteSuite   map[string]any
 	RemoteVersion map[string]any
 	PrunedCaseIDs []string
+	// TransformedCaseIDs names cases whose stored input or expected value differs from the submitted value.
+	TransformedCaseIDs []string
 }
 
 func (c *TestSuitesClient) PushSuite(ctx context.Context, suite TestSuite, opts PushSuiteOptions) (*PushedSuite, error) {
@@ -310,16 +312,18 @@ func (c *TestSuitesClient) PushSuite(ctx context.Context, suite TestSuite, opts 
 	if versionID == "" {
 		return nil, fmt.Errorf("%w: created draft is missing version", ErrTransport)
 	}
+	storedCases := make([]TestCase, 0, len(suite.TestCases))
 	for _, testCase := range suite.TestCases {
 		payload, err := localCaseToRemote(testCase)
 		if err != nil {
 			return nil, err
 		}
 		path := fmt.Sprintf("/test-suites/%s/versions/%s/test-cases", url.PathEscape(suite.SuiteID), url.PathEscape(versionID))
-		var ignored map[string]any
-		if err := c.request(ctx, http.MethodPost, path, payload, &ignored); err != nil {
+		var stored map[string]any
+		if err := c.request(ctx, http.MethodPost, path, payload, &stored); err != nil {
 			return nil, err
 		}
+		storedCases = append(storedCases, remoteCaseToLocal(stored))
 	}
 	var pruned []string
 	if opts.Prune {
@@ -356,11 +360,25 @@ func (c *TestSuitesClient) PushSuite(ctx context.Context, suite TestSuite, opts 
 	pulled := *cloneSuite(&suite)
 	pulled.Version = versionID
 	pulled.Changelog = firstNonBlank(opts.Changelog, suite.Changelog)
+	pulled.TestCases = storedCases
+	transformed := make([]string, 0)
+	for i, stored := range storedCases {
+		local := suite.TestCases[i]
+		if !jsonValuesEqual(stored.Input, local.Input) || !jsonValuesEqual(stored.Expected, local.Expected) {
+			transformed = append(transformed, stored.TestCaseID)
+		}
+	}
 	return &PushedSuite{
 		SuiteID: suite.SuiteID, SuiteVersion: versionID, Published: published,
 		Suite: pulled, RemoteSuite: remote, RemoteVersion: version,
-		PrunedCaseIDs: pruned,
+		PrunedCaseIDs: pruned, TransformedCaseIDs: transformed,
 	}, nil
+}
+
+func jsonValuesEqual(left, right any) bool {
+	leftJSON, leftErr := json.Marshal(left)
+	rightJSON, rightErr := json.Marshal(right)
+	return leftErr == nil && rightErr == nil && bytes.Equal(leftJSON, rightJSON)
 }
 
 func (c *TestSuitesClient) ensureSuite(ctx context.Context, suite TestSuite) (map[string]any, error) {

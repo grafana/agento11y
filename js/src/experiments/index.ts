@@ -149,6 +149,7 @@ export {
   parseExperimentReport,
   parseExperimentRunResponse,
   parseTrialEvaluation,
+  ReportRole,
 } from './models.js';
 
 export * as otel from './otel.js';

@@ -113,6 +113,7 @@ test('score export matches the fixture', async () => {
         // Local-only on purpose: no SDK puts the evaluator kind on the wire.
         evaluatorKind: 'deterministic',
         scoreKey: inputs.score_key,
+        reportRole: inputs.score_report_role,
         value: { boolean: true },
         conversationId: inputs.conversation_id,
         experimentId: inputs.experiment_id,

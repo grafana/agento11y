@@ -91,11 +91,21 @@ type ScoreSource struct {
 
 type ScoreType string
 
+// ReportRole describes how an experiment score participates in report rollups.
+type ReportRole string
+
 const (
 	ScoreTypeNumber ScoreType = "number"
 	ScoreTypeBool   ScoreType = "bool"
 	ScoreTypeString ScoreType = "string"
+
+	ReportRolePrimaryVerdict ReportRole = "primary_verdict"
+	ReportRoleDiagnostic     ReportRole = "diagnostic"
 )
+
+func (r ReportRole) Valid() bool {
+	return r == ReportRolePrimaryVerdict || r == ReportRoleDiagnostic
+}
 
 type ScoreItem struct {
 	ScoreID              string         `json:"score_id"`
@@ -105,6 +115,7 @@ type ScoreItem struct {
 	EvaluatorKind        string         `json:"evaluator_kind,omitempty"`
 	ScoreKey             string         `json:"score_key"`
 	Value                ScoreValue     `json:"value"`
+	ReportRole           ReportRole     `json:"report_role,omitempty"`
 	ConversationID       string         `json:"conversation_id,omitempty"`
 	TraceID              string         `json:"trace_id,omitempty"`
 	SpanID               string         `json:"span_id,omitempty"`
@@ -463,6 +474,7 @@ type GenerationScore struct {
 	RuleID               string         `json:"rule_id,omitempty"`
 	ExperimentID         string         `json:"experiment_id,omitempty"`
 	ScoreKey             string         `json:"score_key"`
+	ReportRole           ReportRole     `json:"report_role,omitempty"`
 	ScoreType            ScoreType      `json:"score_type,omitempty"`
 	Value                ScoreValue     `json:"value"`
 	Unit                 string         `json:"unit,omitempty"`

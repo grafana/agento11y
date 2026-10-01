@@ -255,6 +255,7 @@ def test_score_export_matches_the_fixture() -> None:
         # Local-only on purpose: no SDK puts the evaluator kind on the wire.
         evaluator_kind="deterministic",
         score_key=INPUTS["score_key"],
+        report_role=INPUTS["score_report_role"],
         value=ScoreValue(boolean=True),
         conversation_id=INPUTS["conversation_id"],
         experiment_id=INPUTS["experiment_id"],

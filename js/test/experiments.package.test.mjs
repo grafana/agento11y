@@ -32,6 +32,7 @@ test('the experiments entrypoint exports the public surface', async () => {
     'TrialEvaluationFailedError',
     'TrialEvaluationTimeoutError',
     'ExperimentConflictError',
+    'ReportRole',
     'parseSuiteYAML',
     'stringifySuiteYAML',
     'trialRefFromEnv',

@@ -425,6 +425,51 @@ func TestExportScoresOmitsEvaluatorKindFromWire(t *testing.T) {
 	}
 }
 
+func TestExportScoresSerializesReportRolesAndOmitsUnsetRole(t *testing.T) {
+	recorder := &experimentRecorder{}
+	recorder.push(http.StatusAccepted, map[string]any{"accepted": 3})
+	server := httptest.NewServer(recorder.handler(t))
+	defer server.Close()
+
+	client := newExperimentTestClient(t, server.URL)
+	scores := []ScoreItem{
+		{ScoreID: "primary", TrialID: "trial-1", EvaluatorID: "judge", EvaluatorVersion: "1", ScoreKey: "answer_relevancy", Value: NumberScoreValue(0.9), ReportRole: ReportRolePrimaryVerdict},
+		{ScoreID: "diagnostic", TrialID: "trial-1", EvaluatorID: "judge", EvaluatorVersion: "1", ScoreKey: "groundedness", Value: NumberScoreValue(0.9), ReportRole: ReportRoleDiagnostic},
+		{ScoreID: "legacy", TrialID: "trial-1", EvaluatorID: "judge", EvaluatorVersion: "1", ScoreKey: "final", Value: NumberScoreValue(0.9)},
+	}
+	if _, err := client.ExportScores(context.Background(), scores); err != nil {
+		t.Fatalf("export scores: %v", err)
+	}
+	wireScores := recorder.request(0).Payload["scores"].([]any)
+	if got := wireScores[0].(map[string]any)["report_role"]; got != "primary_verdict" {
+		t.Fatalf("unexpected primary report role: %#v", got)
+	}
+	if got := wireScores[1].(map[string]any)["report_role"]; got != "diagnostic" {
+		t.Fatalf("unexpected diagnostic report role: %#v", got)
+	}
+	if _, exists := wireScores[2].(map[string]any)["report_role"]; exists {
+		t.Fatalf("unset report role must be omitted: %#v", wireScores[2])
+	}
+}
+
+func TestExportScoresRejectsInvalidReportRoleBeforeSending(t *testing.T) {
+	recorder := &experimentRecorder{}
+	server := httptest.NewServer(recorder.handler(t))
+	defer server.Close()
+
+	client := newExperimentTestClient(t, server.URL)
+	_, err := client.ExportScores(context.Background(), []ScoreItem{{
+		ScoreID: "invalid", TrialID: "trial-1", EvaluatorID: "judge", EvaluatorVersion: "1",
+		ScoreKey: "answer_relevancy", Value: NumberScoreValue(0.9), ReportRole: ReportRole("headline"),
+	}})
+	if !errors.Is(err, ErrScoreValidationFailed) || !strings.Contains(err.Error(), "report_role") {
+		t.Fatalf("expected report role validation error, got %v", err)
+	}
+	if recorder.requestCount() != 0 {
+		t.Fatalf("invalid score must not send a request")
+	}
+}
+
 func TestGetExperimentReportParsesTypedTrialSummary(t *testing.T) {
 	recorder := &experimentRecorder{}
 	recorder.push(http.StatusOK, map[string]any{
@@ -531,6 +576,7 @@ func TestListExperimentScoresParsesTypedScores(t *testing.T) {
 			"evaluator_id":      "exact",
 			"evaluator_version": "1",
 			"score_key":         "final",
+			"report_role":       "diagnostic",
 			"score_type":        "number",
 			"value":             map[string]any{"number": 0.75},
 			"passed":            true,
@@ -556,7 +602,7 @@ func TestListExperimentScoresParsesTypedScores(t *testing.T) {
 		t.Fatalf("unexpected score list: %#v", response)
 	}
 	score := response.Items[0]
-	if score.ScoreID != "score-1" || score.ScoreType != ScoreTypeNumber || score.Value.Number == nil || *score.Value.Number != 0.75 {
+	if score.ScoreID != "score-1" || score.ReportRole != ReportRoleDiagnostic || score.ScoreType != ScoreTypeNumber || score.Value.Number == nil || *score.Value.Number != 0.75 {
 		t.Fatalf("unexpected typed score: %#v", score)
 	}
 }

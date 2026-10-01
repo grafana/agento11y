@@ -23,7 +23,7 @@ import type {
   TrialEvaluation,
   TrialStatus,
 } from './models.js';
-import { normalizeEvaluatorKind } from './models.js';
+import { normalizeEvaluatorKind, ReportRole } from './models.js';
 import * as otel from './otel.js';
 import { throwIfAborted } from './transport.js';
 import type { TestCase, TestSuite, TrialRef } from './types.js';
@@ -92,6 +92,7 @@ export interface RecordIOOptions {
 export interface ScoreOptions {
   evaluator?: Evaluator;
   passed?: boolean;
+  reportRole?: ReportRole;
   explanation?: string;
   generationId?: string;
   graderConversationId?: string;
@@ -143,6 +144,8 @@ export class Trial {
   private accepted = 0;
   private hasFinal = false;
   private finalPassed: boolean | undefined;
+  private hasPrimaryVerdict = false;
+  private primaryVerdictPassed: boolean | undefined;
   private cloudEvaluated = false;
   private closed = false;
   private trialCreated = false;
@@ -151,6 +154,8 @@ export class Trial {
   private io: Record<string, unknown> = {};
   private usage: { inputTokens?: number; outputTokens?: number; cost?: number } = {};
   private startedAtMs: number | undefined;
+  private observedDurationMs: number | undefined;
+  private observedDurationSet = false;
   private scoreOccurrences = new Map<string, number>();
   private span: Span | undefined;
 
@@ -328,12 +333,32 @@ export class Trial {
     return this;
   }
 
+  /** Uses native execution time for a post-hoc result; `null` means unknown. */
+  setDuration(durationMs: number | null): Trial {
+    if (durationMs !== null && (!Number.isFinite(durationMs) || durationMs < 0)) {
+      throw validationError('durationMs must be a finite non-negative number or null');
+    }
+    this.observedDurationMs = durationMs === null ? undefined : Math.trunc(durationMs);
+    this.observedDurationSet = true;
+    return this;
+  }
+
+  /** Marks an operational failure without aborting sibling trials. */
+  markErrored(error: unknown): Trial {
+    this.status = 'errored';
+    this.error = asError(error).message || 'error';
+    return this;
+  }
+
   // --- scoring ------------------------------------------------------------- //
 
   /** Records a score for this trial. The general primitive. */
   score(scoreKey: string, value: ScoreValue | number | boolean | string, options: ScoreOptions = {}): ScoreItem {
     const evaluator = options.evaluator ?? this.defaultEvaluator;
     const scoreValue = coerceValue(value);
+    if (options.reportRole === ReportRole.PrimaryVerdict && this.hasPrimaryVerdict) {
+      throw validationError('declare only one primary_verdict');
+    }
     let passed = options.passed;
     if (scoreKey === 'final' && passed === undefined) {
       passed = inferFinalPassed(scoreValue);
@@ -349,6 +374,7 @@ export class Trial {
       evaluatorKind: normalizeEvaluatorKind(evaluator.kind ?? 'custom'),
       scoreKey,
       value: scoreValue,
+      ...(options.reportRole !== undefined ? { reportRole: options.reportRole } : {}),
       // generation_id only when one exists; trial_id is what attributes the score.
       generationId: options.generationId ?? (this.hasGeneration ? this.generationId : ''),
       trialId: this.trialId,
@@ -373,7 +399,10 @@ export class Trial {
     };
     this.buffer.push(item);
     this.emitScoreEvent(scoreKey, scoreValue, evaluator, passed, options.explanation ?? '', options.generationId ?? '');
-    if (scoreKey === 'final') {
+    if (options.reportRole === ReportRole.PrimaryVerdict) {
+      this.hasPrimaryVerdict = true;
+      this.primaryVerdictPassed = passed;
+    } else if (scoreKey === 'final' && options.reportRole === undefined) {
       this.hasFinal = true;
       this.finalPassed = passed;
     }
@@ -434,7 +463,12 @@ export class Trial {
    */
   async recordEvaluation(
     result: EvaluationResult,
-    options: { scoreKey?: string; publishGrader?: boolean; metadata?: Record<string, unknown> } = {},
+    options: {
+      scoreKey?: string;
+      publishGrader?: boolean;
+      reportRole?: ReportRole;
+      metadata?: Record<string, unknown>;
+    } = {},
   ): Promise<ScoreItem> {
     const scoreKey = options.scoreKey ?? result.scoreKey ?? 'final';
     const scoreId = this.nextScoreId(scoreKey, result.evaluator.evaluatorId);
@@ -473,6 +507,7 @@ export class Trial {
       evaluator: result.evaluator,
       passed: result.passed,
       explanation: result.explanation ?? '',
+      ...(options.reportRole !== undefined ? { reportRole: options.reportRole } : {}),
       graderConversationId,
       graderGenerationId,
       metadata: { ...(result.metadata ?? {}), ...(options.metadata ?? {}) },
@@ -494,6 +529,7 @@ export class Trial {
       expected?: unknown;
       scoreKey?: string;
       publishGrader?: boolean;
+      reportRole?: ReportRole;
       metadata?: Record<string, unknown>;
     },
   ): Promise<ScoreItem> {
@@ -505,6 +541,7 @@ export class Trial {
     return this.recordEvaluation(result, {
       ...(options.scoreKey !== undefined ? { scoreKey: options.scoreKey } : {}),
       ...(options.publishGrader !== undefined ? { publishGrader: options.publishGrader } : {}),
+      ...(options.reportRole !== undefined ? { reportRole: options.reportRole } : {}),
       ...(options.metadata !== undefined ? { metadata: options.metadata } : {}),
     });
   }
@@ -689,10 +726,10 @@ export class Trial {
    * Flushes and terminalizes this trial.
    *
    * The close status follows the same state machine as Go and Python: a callback
-   * error closes `errored`; no final score and no cloud evaluation closes `failed`
+   * error closes `errored`; no verdict and no cloud evaluation closes `failed`
    * with `trial closed without a final score`; a cloud-evaluated trial closes
-   * `completed`; a final score closes `passed` or `failed` on its verdict, or
-   * `completed` when the verdict is unknown.
+   * `completed`; an explicit primary verdict takes precedence over an
+   * unannotated legacy `final` score.
    */
   async close(options: { error?: unknown } = {}): Promise<void> {
     if (this.closed) {
@@ -703,7 +740,9 @@ export class Trial {
       this.status = 'errored';
       this.error = asError(callbackError).message || 'error';
     } else if (this.status === 'running') {
-      if (!this.hasFinal) {
+      const hasVerdict = this.hasPrimaryVerdict || this.hasFinal;
+      const verdictPassed = this.hasPrimaryVerdict ? this.primaryVerdictPassed : this.finalPassed;
+      if (!hasVerdict) {
         if (this.cloudEvaluated) {
           // A stored evaluator graded this trial; the verdict and score count come
           // from the backend, not from a local final score.
@@ -712,10 +751,10 @@ export class Trial {
           this.status = 'failed';
           this.error = 'trial closed without a final score';
         }
-      } else if (this.finalPassed === undefined) {
+      } else if (verdictPassed === undefined) {
         this.status = 'completed';
       } else {
-        this.status = this.finalPassed ? 'passed' : 'failed';
+        this.status = verdictPassed ? 'passed' : 'failed';
       }
     }
     let flushError: unknown;
@@ -780,8 +819,16 @@ export class Trial {
         traceId: this.traceId,
         spanId: this.spanId,
         ...(snapshot !== undefined ? { testCase: snapshot } : {}),
-        ...(this.ref.testCaseName !== undefined && this.ref.testCaseName.length > 0
-          ? { metadata: { test_case_name: this.ref.testCaseName } }
+        ...(Object.keys(this.metadata).length > 0 ||
+        (this.ref.testCaseName !== undefined && this.ref.testCaseName.length > 0)
+          ? {
+              metadata: {
+                ...this.metadata,
+                ...(this.ref.testCaseName !== undefined && this.ref.testCaseName.length > 0
+                  ? { test_case_name: this.ref.testCaseName }
+                  : {}),
+              },
+            }
           : {}),
       },
       { ...(options.signal !== undefined ? { signal: options.signal } : {}) },
@@ -810,6 +857,9 @@ export class Trial {
   }
 
   private durationMs(): number | undefined {
+    if (this.observedDurationSet) {
+      return this.observedDurationMs;
+    }
     if (this.startedAtMs === undefined) {
       return undefined;
     }
@@ -986,10 +1036,12 @@ export class Trial {
       description: testCase.description ?? '',
       tags: [...(testCase.tags ?? [])],
       category: testCase.category ?? '',
-      input: objectValue(testCase.input),
-      expected: objectValue(testCase.expected),
+      ...(testCase.input !== undefined && testCase.input !== null ? { input: objectValue(testCase.input) } : {}),
+      ...(testCase.expected !== undefined && testCase.expected !== null
+        ? { expected: objectValue(testCase.expected) }
+        : {}),
       metadata: { ...(testCase.metadata ?? {}) },
-      artifact_refs: artifactRefs.map((ref) => ({ ...ref })),
+      ...(artifactRefs.length > 0 ? { artifact_refs: artifactRefs.map((ref) => ({ ...ref })) } : {}),
     };
   }
 }
@@ -1248,6 +1300,43 @@ export async function withExperiment<T>(
   fn: (experiment: Experiment) => Promise<T> | T,
 ): Promise<T> {
   const experiment = await Experiment.start(client, options);
+  if (options.useExperimentalOtel ?? client.useExperimentalOtel) {
+    return trace.getTracer(otel.INSTRUMENTATION_NAME).startActiveSpan(
+      'test_suite_run',
+      {
+        attributes: {
+          'test.suite.run.id': experiment.experimentId,
+          'test.suite.name': options.suite?.name || experiment.name,
+          'test.suite.run.status': 'in_progress',
+        },
+      },
+      async (span) => {
+        try {
+          const result = await finishExperiment(experiment, client, fn);
+          const failed = experiment.status === 'failed';
+          span.setAttribute('test.suite.run.status', failed ? 'failure' : 'success');
+          if (failed) {
+            span.setStatus({ code: SpanStatusCode.ERROR });
+          }
+          return result;
+        } catch (error) {
+          span.setAttribute('test.suite.run.status', 'failure');
+          span.setStatus({ code: SpanStatusCode.ERROR });
+          throw error;
+        } finally {
+          span.end();
+        }
+      },
+    );
+  }
+  return finishExperiment(experiment, client, fn);
+}
+
+async function finishExperiment<T>(
+  experiment: Experiment,
+  client: ExperimentsClient,
+  fn: (experiment: Experiment) => Promise<T> | T,
+): Promise<T> {
   let result: T;
   try {
     result = await fn(experiment);

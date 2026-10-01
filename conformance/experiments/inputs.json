@@ -12,6 +12,7 @@
   "score_evaluator_id": "exact",
   "score_evaluator_version": "1",
   "score_key": "final",
+  "score_report_role": "primary_verdict",
   "score_created_at": "2026-01-01T00:00:00Z",
   "planned_trial_count": 1,
   "tags": ["conformance"]

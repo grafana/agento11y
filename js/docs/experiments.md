@@ -123,6 +123,31 @@ can publish it.
 `finalScore(true)` and `finalScore(false)` set the verdict from the boolean. A
 numeric score needs an explicit `passed` to become a verdict.
 
+Use `ReportRole` when the report semantics should be explicit:
+
+```ts
+import { ReportRole } from "@grafana/agento11y/experiments";
+
+trial.score("answer_relevancy", 0.91, {
+  passed: true,
+  reportRole: ReportRole.PrimaryVerdict,
+});
+trial.score("groundedness", 0.87, {
+  reportRole: ReportRole.Diagnostic,
+});
+```
+
+`PrimaryVerdict` identifies the score intended to drive the experiment headline
+and pass rate. `Diagnostic` keeps a score available for analysis without
+determining the headline verdict. The role is optional and omitted from ingest
+when unset; existing backends and runs using the legacy `final` score remain
+compatible.
+
+Post-hoc importers can call `trial.setDuration(durationMs)` to preserve native
+execution time, or `trial.setDuration(null)` when it is unknown. Call
+`trial.markErrored(error)` for an operational failure that should not abort
+sibling trials.
+
 ## Local judges
 
 `LLMJudge` and `RegexJudge` need no evaluator stored in Grafana:
@@ -260,6 +285,11 @@ const pulled = await suites.pullSuite("smoke", "latest_published");
 const pushed = await suites.pushSuite(localSuite, { publish: true, changelog: "add refusal cases" });
 ```
 
+`pushSuite` returns the server-stored cases in `pushed.suite`; use those cases
+for execution because the control plane may sanitize submitted content.
+`pushed.transformedCaseIds` identifies cases whose stored input or expected
+value changed.
+
 `TestSuitesClient` also takes `controlEndpoint` (environment variable
 `AGENTO11Y_CONTROL_ENDPOINT`), which falls back to `grafanaUrl`. It accepts a
 Grafana base URL, a UI app URL, or the resources path itself; all three normalize
@@ -294,8 +324,9 @@ retry is idempotent.
 
 Experimental OpenTelemetry trial telemetry is off by default. Set
 `AGENTO11Y_USE_EXPERIMENTAL_OTEL=true`, or pass `useExperimentalOtel: true`, to
-emit one `eval.trial <case>` span per trial with `test.*` identity attributes and
-one `gen_ai.evaluation.result` event per score. Some of those attribute names are
+emit a `test_suite_run` span around `withExperiment`, one child
+`eval.trial <case>` span per trial with `test.*` identity attributes, and one
+`gen_ai.evaluation.result` event per score. Some of those attribute names are
 still moving through the OpenTelemetry GenAI SIG, so the SDK stamps
 `agento11y.eval.schema.version` on the span. An upstream rename then shows up as a
 version bump rather than silent drift.

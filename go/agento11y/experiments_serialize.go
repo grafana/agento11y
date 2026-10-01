@@ -24,6 +24,9 @@ func validateScore(score ScoreItem) error {
 	if strings.TrimSpace(score.GenerationID) == "" && strings.TrimSpace(score.TrialID) == "" {
 		return fmt.Errorf("%w: generation_id or trial_id is required", ErrScoreValidationFailed)
 	}
+	if score.ReportRole != "" && !score.ReportRole.Valid() {
+		return fmt.Errorf("%w: report_role must be primary_verdict or diagnostic", ErrScoreValidationFailed)
+	}
 	set := 0
 	if score.Value.Number != nil {
 		set++
@@ -82,6 +85,9 @@ func serializeScore(score ScoreItem) map[string]any {
 	}
 	if score.GenerationID != "" {
 		out["generation_id"] = score.GenerationID
+	}
+	if score.ReportRole != "" {
+		out["report_role"] = string(score.ReportRole)
 	}
 	if score.ConversationID != "" {
 		out["conversation_id"] = score.ConversationID

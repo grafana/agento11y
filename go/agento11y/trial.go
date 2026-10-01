@@ -59,13 +59,17 @@ type Trial struct {
 	trialCreated       bool
 	usage              map[string]any
 	started            time.Time
+	observedDuration   *time.Duration
+	durationSet        bool
 
-	buffer         []ScoreItem
-	accepted       int
-	hasFinal       bool
-	cloudEvaluated bool
-	finalPassed    *bool
-	artifacts      []map[string]any
+	buffer            []ScoreItem
+	accepted          int
+	hasFinal          bool
+	hasPrimaryVerdict bool
+	cloudEvaluated    bool
+	finalPassed       *bool
+	primaryPassed     *bool
+	artifacts         []map[string]any
 }
 
 func NewTrial(client *Client, ref TrialRef, opts ...TrialOption) *Trial {
@@ -144,7 +148,10 @@ func (t *Trial) resolveEndStatus(err error) {
 		t.flushFailed = false
 		return
 	}
-	if !t.hasFinal && t.cloudEvaluated {
+	if t.status == TrialStatusErrored && !t.flushFailed {
+		return
+	}
+	if !t.hasPrimaryVerdict && !t.hasFinal && t.cloudEvaluated {
 		// A stored evaluator graded this trial; the verdict and the score count come
 		// from the backend, not from a local final score.
 		if t.status == TrialStatusRunning || t.flushFailed {
@@ -154,7 +161,7 @@ func (t *Trial) resolveEndStatus(err error) {
 		t.flushFailed = false
 		return
 	}
-	if !t.hasFinal {
+	if !t.hasPrimaryVerdict && !t.hasFinal {
 		t.status = TrialStatusFailed
 		if t.errorText == "" || t.flushFailed {
 			t.errorText = "trial exited without a final score"
@@ -163,7 +170,13 @@ func (t *Trial) resolveEndStatus(err error) {
 		return
 	}
 	if t.status == TrialStatusRunning || t.flushFailed {
-		if t.finalPassed != nil && *t.finalPassed {
+		passed := t.finalPassed
+		if t.hasPrimaryVerdict {
+			passed = t.primaryPassed
+		}
+		if passed == nil {
+			t.status = TrialStatusCompleted
+		} else if *passed {
 			t.status = TrialStatusPassed
 		} else {
 			t.status = TrialStatusFailed
@@ -231,7 +244,10 @@ func (t *Trial) finalizeTrial(ctx context.Context) error {
 	if v, ok := t.usage["output_tokens"].(int); ok {
 		req.OutputTokens = &v
 	}
-	if !t.started.IsZero() {
+	if t.durationSet && t.observedDuration != nil {
+		ms := int(t.observedDuration.Milliseconds())
+		req.DurationMillis = &ms
+	} else if !t.durationSet && !t.started.IsZero() {
 		ms := int(time.Since(t.started).Milliseconds())
 		req.DurationMillis = &ms
 	}
@@ -507,9 +523,34 @@ func (t *Trial) SetUsage(inputTokens, outputTokens *int, cost *float64) *Trial {
 	return t
 }
 
+// SetDuration uses native execution time for a post-hoc result. Nil means unknown.
+func (t *Trial) SetDuration(duration *time.Duration) *Trial {
+	t.durationSet = true
+	if duration == nil {
+		t.observedDuration = nil
+		return t
+	}
+	value := max(*duration, 0)
+	t.observedDuration = &value
+	return t
+}
+
+// MarkErrored records an operational failure without aborting sibling trials.
+func (t *Trial) MarkErrored(err error) *Trial {
+	t.status = TrialStatusErrored
+	if err != nil {
+		t.errorText = err.Error()
+	}
+	if t.errorText == "" {
+		t.errorText = "error"
+	}
+	return t
+}
+
 type ScoreOptions struct {
 	Evaluator            *Evaluator
 	Passed               *bool
+	ReportRole           ReportRole
 	Explanation          string
 	GenerationID         string
 	GraderConversationID string
@@ -519,6 +560,10 @@ type ScoreOptions struct {
 }
 
 func (t *Trial) Score(scoreKey string, value ScoreValue, opts ScoreOptions) ScoreItem {
+	if opts.ReportRole == ReportRolePrimaryVerdict && t.hasPrimaryVerdict {
+		t.MarkErrored(fmt.Errorf("%w: trial may declare only one primary_verdict", ErrScoreValidationFailed))
+		return ScoreItem{}
+	}
 	if scoreKey == "final" {
 		opts.Passed = inferFinalPassed(value, opts.Passed)
 	}
@@ -544,6 +589,7 @@ func (t *Trial) Score(scoreKey string, value ScoreValue, opts ScoreOptions) Scor
 		EvaluatorKind:        string(ev.Kind),
 		ScoreKey:             scoreKey,
 		Value:                value,
+		ReportRole:           opts.ReportRole,
 		GenerationID:         generationID,
 		TrialID:              t.trialID,
 		ConversationID:       t.conversationID,
@@ -560,7 +606,10 @@ func (t *Trial) Score(scoreKey string, value ScoreValue, opts ScoreOptions) Scor
 		Source:               &ScoreSource{Kind: "experiment", ID: t.ref.RunID},
 	}
 	t.buffer = append(t.buffer, item)
-	if scoreKey == "final" {
+	if opts.ReportRole == ReportRolePrimaryVerdict {
+		t.hasPrimaryVerdict = true
+		t.primaryPassed = opts.Passed
+	} else if scoreKey == "final" && opts.ReportRole == "" {
 		t.hasFinal = true
 		t.finalPassed = opts.Passed
 	}

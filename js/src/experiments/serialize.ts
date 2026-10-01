@@ -74,6 +74,7 @@ export function serializeScore(score: ScoreItem): Record<string, unknown> {
     score_key: score.scoreKey,
     value: serializeScoreValue(score.value),
   };
+  putNonBlank(out, 'report_role', score.reportRole);
   putNonBlank(out, 'generation_id', score.generationId);
   putNonBlank(out, 'conversation_id', score.conversationId);
   putNonBlank(out, 'experiment_id', score.experimentId);
@@ -123,6 +124,9 @@ export function validateScore(score: ScoreItem): void {
   // The backend requires a generation_id OR a trial_id.
   if ((score.generationId ?? '').trim().length === 0 && (score.trialId ?? '').trim().length === 0) {
     throw new Error('agento11y score validation failed: generation_id or trial_id is required');
+  }
+  if (score.reportRole !== undefined && score.reportRole !== 'primary_verdict' && score.reportRole !== 'diagnostic') {
+    throw new Error('agento11y score validation failed: report_role must be primary_verdict or diagnostic');
   }
   serializeScoreValue(score.value);
 }

@@ -9,6 +9,14 @@ export type TrialStatus = 'running' | 'completed' | 'passed' | 'failed' | 'error
 /** The OTel-aligned evaluator type vocabulary. */
 export type EvaluatorKind = 'llm_judge' | 'deterministic' | 'human' | 'custom';
 
+/** Typed values describing how a score participates in experiment reports. */
+export const ReportRole = {
+  PrimaryVerdict: 'primary_verdict',
+  Diagnostic: 'diagnostic',
+} as const;
+
+export type ReportRole = (typeof ReportRole)[keyof typeof ReportRole];
+
 /** Durable state of a stored evaluator run for an experiment trial. */
 export type TrialEvaluationStatus = 'queued' | 'claimed' | 'success' | 'failed';
 
@@ -54,6 +62,7 @@ export interface ScoreItem {
   evaluatorKind?: string;
   scoreKey: string;
   value: ScoreValue;
+  reportRole?: ReportRole;
   generationId?: string;
   conversationId?: string;
   experimentId?: string;

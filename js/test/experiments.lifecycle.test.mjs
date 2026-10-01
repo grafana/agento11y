@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { Experiment, Trial, withExperiment } from '../.test-dist/experiments/experiment.js';
+import { ReportRole } from '../.test-dist/experiments/index.js';
 import { FakeExperimentsClient } from './experimentsFakeClient.mjs';
 
 const suite = {
@@ -90,6 +91,71 @@ test('a numeric final score with an explicit verdict keeps it', async () => {
   await trial.close();
   assert.equal(trial.status, 'passed');
   assert.equal(client.scores[0].passed, true);
+});
+
+test('an explicit primary verdict drives trial status without the legacy final key', async () => {
+  const client = new FakeExperimentsClient();
+  const experiment = await openExperiment(client);
+  const trial = experiment.trial('add');
+  await trial.start();
+  trial.score('quality', 0.9, {
+    passed: true,
+    evaluator: verifier,
+    reportRole: ReportRole.PrimaryVerdict,
+  });
+  await trial.close();
+
+  assert.equal(trial.status, 'passed');
+  assert.equal(client.trialUpdates[0].error, '');
+});
+
+test('a diagnostic final score is not a verdict', async () => {
+  const client = new FakeExperimentsClient();
+  const experiment = await openExperiment(client);
+  const trial = experiment.trial('add');
+  await trial.start();
+  trial.finalScore(true, { evaluator: verifier, reportRole: ReportRole.Diagnostic });
+  await trial.close();
+
+  assert.equal(trial.status, 'failed');
+  assert.equal(trial.error, 'trial closed without a final score');
+});
+
+test('a trial rejects a second primary verdict', async () => {
+  const client = new FakeExperimentsClient();
+  const experiment = await openExperiment(client);
+  const trial = experiment.trial('add');
+  await trial.start();
+  trial.score('quality', 0.9, { evaluator: verifier, reportRole: ReportRole.PrimaryVerdict });
+  assert.throws(
+    () => trial.score('safety', 1, { evaluator: verifier, reportRole: ReportRole.PrimaryVerdict }),
+    /declare only one primary_verdict/,
+  );
+  await trial.close();
+});
+
+test('native duration and operational error override exporter lifecycle', async () => {
+  const client = new FakeExperimentsClient();
+  const experiment = await openExperiment(client);
+  const trial = experiment.trial('add');
+  await trial.start();
+  trial.setDuration(12345).markErrored(new Error('provider timed out'));
+  await trial.close();
+
+  assert.equal(client.trialUpdates[0].durationMs, 12345);
+  assert.equal(client.trialUpdates[0].status, 'failed');
+  assert.equal(client.trialUpdates[0].error, 'provider timed out');
+});
+
+test('explicit unknown native duration is omitted', async () => {
+  const client = new FakeExperimentsClient();
+  const experiment = await openExperiment(client);
+  const trial = experiment.trial('add');
+  await trial.start();
+  trial.setDuration(null).finalScore(true);
+  await trial.close();
+
+  assert.equal('durationMs' in client.trialUpdates[0], false);
 });
 
 test('a trial closed without a final score fails with the documented error', async () => {
@@ -345,6 +411,19 @@ test('repeating one score key and evaluator yields distinct ids', async () => {
   const second = trial.score('accuracy', 0, { evaluator: verifier });
   assert.notEqual(first.scoreId, second.scoreId);
   assert.match(first.scoreId, /^score-[0-9a-f]{16}$/);
+});
+
+test('trial scoring preserves explicit report roles without assigning a default', async () => {
+  const client = new FakeExperimentsClient();
+  const experiment = await openExperiment(client);
+  const trial = experiment.trial('add');
+  await trial.start();
+  const primary = trial.score('answer_relevancy', 0.91, { reportRole: ReportRole.PrimaryVerdict });
+  const diagnostic = trial.checkScore('json_valid', { passed: true, reportRole: ReportRole.Diagnostic });
+  const legacy = trial.finalScore(true);
+  assert.equal(primary.reportRole, 'primary_verdict');
+  assert.equal(diagnostic.reportRole, 'diagnostic');
+  assert.equal('reportRole' in legacy, false);
 });
 
 test('score metadata carries the trial identity', async () => {
