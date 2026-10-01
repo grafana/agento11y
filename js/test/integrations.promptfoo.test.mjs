@@ -21,7 +21,7 @@ test('publishes Promptfoo aggregate and named scores with report roles', async (
           score: 0.9,
           latencyMs: 12,
           vars: { question: 'What is 2+2?' },
-          provider: { id: 'file://provider.mjs', label: 'local-agent' },
+          provider: { id: 'file://provider.mjs', label: 'deterministic-agent' },
           response: { output: '4' },
           gradingResult: { reason: 'All assertions passed' },
           namedScores: { exact_match: 1, concise: 0.8 },

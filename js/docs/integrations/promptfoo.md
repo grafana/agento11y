@@ -110,7 +110,7 @@ for (const run of published.runs) console.log(run.url);
 ```
 
 The adapter does not create or invoke Agent Observability stored evaluators.
-Promptfoo performs grading locally (including any model-backed assertions) and
+Promptfoo performs grading (including any model-backed assertions) and
 the adapter publishes the resulting scores.
 
 See the [runnable example](../../../examples/experiments/promptfoo/README.md).

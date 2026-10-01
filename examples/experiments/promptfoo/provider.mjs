@@ -3,9 +3,9 @@ const answers = new Map([
   ['What is 2 + 2?', '5'], // Deliberate failure; the assertion still expects 4.
 ]);
 
-export default class LocalExampleProvider {
+export default class DeterministicExampleProvider {
   id() {
-    return 'local:deterministic-example';
+    return 'deterministic-example';
   }
 
   async callApi(prompt) {

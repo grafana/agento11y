@@ -234,7 +234,7 @@ async function publishPromptfooCandidate(
         promptfoo_eval_id: options.evalId,
         promptfoo_config_id: options.configId,
         promptfoo_candidate_id: stableId('candidate', promptfooCandidateIdentity(results[0] as PromptfooResult)),
-        suite_publication_policy: options.suitePublicationPolicy ?? 'local',
+        suite_publication_policy: options.suitePublicationPolicy ?? 'snapshot',
         executed_case_count: new Set(cases.map(({ testCase }) => testCase.testCaseId)).size,
         ...(options.metadata ?? {}),
       },
