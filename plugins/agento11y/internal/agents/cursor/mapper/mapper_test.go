@@ -498,8 +498,13 @@ func TestCanonicalizeCursorModel(t *testing.T) {
 		{"cursor-grok-4.5-medium", "grok-4.5"},
 		{"cursor-grok-4.5", "grok-4.5"},
 		{"CURSOR-GROK-4.6-HIGH-FAST", "GROK-4.6"},
-		{"grok-4.5", "grok-4.5"},           // already a catalog id
-		{"grok-4.1-fast", "grok-4.1-fast"}, // xAI's own *-fast SKU
+		{"grok-4.5", "grok-4.5"},             // already a catalog id
+		{"grok-4.7", "grok-4.7"},             // already a catalog id
+		{"grok-4.7-high", "grok-4.7"},        // current composer slug, no cursor- prefix
+		{"grok-4.7-medium", "grok-4.7"},      // current composer slug, no cursor- prefix
+		{"grok-4.7-high-fast", "grok-4.7"},   // effort and speed, no cursor- prefix
+		{"grok-4.7-medium-fast", "grok-4.7"}, // effort and speed, no cursor- prefix
+		{"grok-4.1-fast", "grok-4.1-fast"},   // xAI's own *-fast SKU
 		{"claude-sonnet-4-6", "claude-sonnet-4-6"},
 		{"claude-opus-4-8-thinking-max", "claude-opus-4-8-thinking-max"},
 		{"composer-2.5-fast", "composer-2.5-fast"},
@@ -560,6 +565,13 @@ func TestMapFragment_CanonicalizesCursorGrokForPricing(t *testing.T) {
 			wantProvider: "x-ai",
 			wantName:     "grok-4.5",
 			wantResponse: "grok-4.5",
+		},
+		{
+			name:         "current composer slug without cursor- prefix",
+			model:        "grok-4.7-high",
+			wantProvider: "x-ai",
+			wantName:     "grok-4.7",
+			wantResponse: "grok-4.7-high",
 		},
 		{
 			name:         "generic cursor provider is overridden",

@@ -234,11 +234,10 @@ func resolveModel(frag *fragment.Fragment) (provider, catalogName, responseModel
 }
 
 // cursorGrokEffortSuffixes are thinking/speed tiers Cursor appends to hosted
-// Grok SKUs (`cursor-grok-4.6-high-fast`). Longest overlapping suffixes first:
-// "-xhigh-fast" must precede "-high-fast" (otherwise xhigh-fast strips to
-// grok-*-x) and "-high-fast" must precede "-high". Bare "-fast" is omitted:
-// xAI ships models named grok-*-fast, and those names only reach this path
-// without a cursor- prefix.
+// Grok SKUs (`cursor-grok-4.6-high-fast`, and current composers' `grok-4.7-high`).
+// Longest overlapping suffixes first: "-xhigh-fast" must precede "-high-fast"
+// (otherwise xhigh-fast strips to grok-*-x) and "-high-fast" must precede "-high".
+// Bare "-fast" is omitted: xAI ships models named grok-*-fast.
 var cursorGrokEffortSuffixes = []string{
 	"-xhigh-fast",
 	"-extra-high-fast",
@@ -253,10 +252,10 @@ var cursorGrokEffortSuffixes = []string{
 }
 
 // canonicalizeCursorModel maps a Cursor composer slug onto the catalog name
-// Agent Observability prices against. Hosted Grok SKUs are prefixed with
-// "cursor-" and often carry an effort tier; stripping both yields grok-4.5
-// from cursor-grok-4.5-high-fast. Names that are not cursor-grok SKUs are
-// returned unchanged, including a bare grok-4.5 model_id.
+// Agent Observability prices against. Hosted Grok SKUs often carry an effort
+// tier, with or without a "cursor-" prefix; stripping both yields grok-4.7
+// from grok-4.7-high and grok-4.5 from cursor-grok-4.5-high-fast. Names that
+// are not Grok SKUs are returned unchanged.
 func canonicalizeCursorModel(name string) string {
 	trimmed := strings.TrimSpace(name)
 	if trimmed == "" {
@@ -264,11 +263,12 @@ func canonicalizeCursorModel(name string) string {
 	}
 	lower := strings.ToLower(trimmed)
 	const cursorPrefix = "cursor-"
-	if !strings.HasPrefix(lower, cursorPrefix) {
-		return trimmed
+	rest := trimmed
+	restLower := lower
+	if strings.HasPrefix(lower, cursorPrefix) {
+		rest = trimmed[len(cursorPrefix):]
+		restLower = lower[len(cursorPrefix):]
 	}
-	rest := trimmed[len(cursorPrefix):]
-	restLower := lower[len(cursorPrefix):]
 	if !strings.Contains(restLower, "grok") {
 		return trimmed
 	}

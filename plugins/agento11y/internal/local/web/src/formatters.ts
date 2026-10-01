@@ -282,9 +282,11 @@ export function maximumEstimatedTokenRate(prices: ModelPrices | null | undefined
   return maximum;
 }
 
-// Cursor hosted Grok SKUs are `cursor-grok-4.6-high-fast`. models.dev (and
-// the Cloud catalog) key the same model as `grok-4.6`. Keep this suffix
-// list in sync with canonicalizeCursorModel in the cursor mapper.
+// Cursor hosted Grok SKUs are `cursor-grok-4.6-high-fast` or, on current
+// composers, `grok-4.7-high`. models.dev (and the Cloud catalog) key the
+// same model as `grok-4.6` / `grok-4.7`. Keep this suffix list in sync with
+// canonicalizeCursorModel in the cursor mapper. Longest overlapping
+// suffixes first. Bare `-fast` is omitted: xAI ships models named grok-*-fast.
 const CURSOR_GROK_EFFORT_SUFFIXES: string[] = [
   '-xhigh-fast',
   '-extra-high-fast',
@@ -303,9 +305,12 @@ export function canonicalizePriceModel(model: string | null | undefined): string
   if (!trimmed) return trimmed;
   const lower = trimmed.toLowerCase();
   const prefix = 'cursor-';
-  if (!lower.startsWith(prefix)) return trimmed;
-  const rest = trimmed.slice(prefix.length);
-  const restLower = lower.slice(prefix.length);
+  let rest = trimmed;
+  let restLower = lower;
+  if (lower.startsWith(prefix)) {
+    rest = trimmed.slice(prefix.length);
+    restLower = lower.slice(prefix.length);
+  }
   if (!restLower.includes('grok')) return trimmed;
   for (const suffix of CURSOR_GROK_EFFORT_SUFFIXES) {
     if (restLower.endsWith(suffix)) {

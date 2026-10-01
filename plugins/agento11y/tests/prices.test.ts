@@ -13,7 +13,10 @@ import type { ModelPrices, TokenBuckets, TokenUsagePoint } from '../internal/loc
 // and the speed tier appended. models.dev prices the xAI model, so the id has
 // to be canonicalized before the lookup or the turn prices to nothing.
 
-const prices: ModelPrices = { 'grok-4.6': { input: 2, output: 6, cache_read: 0.5 } };
+const prices: ModelPrices = {
+  'grok-4.6': { input: 2, output: 6, cache_read: 0.5 },
+  'grok-4.7': { input: 2, output: 6, cache_read: 0.5 },
+};
 
 const buckets: TokenBuckets = { fresh_input: 1e6, output: 0, cache_read: 0, cache_write: 0, reasoning: 0 };
 
@@ -23,10 +26,16 @@ describe('canonicalizePriceModel', () => {
     expect(canonicalizePriceModel('cursor-grok-4.6-xhigh-fast')).toBe('grok-4.6');
     expect(canonicalizePriceModel('cursor-grok-4.6-xhigh')).toBe('grok-4.6');
     expect(canonicalizePriceModel('cursor-grok-4.5-medium')).toBe('grok-4.5');
+    expect(canonicalizePriceModel('grok-4.7-high')).toBe('grok-4.7');
+    expect(canonicalizePriceModel('grok-4.7-medium')).toBe('grok-4.7');
+    expect(canonicalizePriceModel('grok-4.7-high-fast')).toBe('grok-4.7');
+    expect(canonicalizePriceModel('grok-4.7-medium-fast')).toBe('grok-4.7');
   });
 
   it('leaves every other id alone', () => {
     expect(canonicalizePriceModel('grok-4.6')).toBe('grok-4.6');
+    expect(canonicalizePriceModel('grok-4.7')).toBe('grok-4.7');
+    expect(canonicalizePriceModel('grok-4.1-fast')).toBe('grok-4.1-fast');
     expect(canonicalizePriceModel('claude-opus-4-8')).toBe('claude-opus-4-8');
     expect(canonicalizePriceModel('composer-2.5-fast')).toBe('composer-2.5-fast');
   });
@@ -37,6 +46,8 @@ describe('liveModelCost', () => {
     expect(liveModelCost(prices, 'grok-4.6')).toEqual(prices['grok-4.6']);
     expect(liveModelCost(prices, 'cursor-grok-4.6-high-fast')).toEqual(prices['grok-4.6']);
     expect(liveModelCost(prices, 'cursor-grok-4.6-xhigh-fast')).toEqual(prices['grok-4.6']);
+    expect(liveModelCost(prices, 'grok-4.7-high')).toEqual(prices['grok-4.7']);
+    expect(liveModelCost(prices, 'grok-4.7-medium')).toEqual(prices['grok-4.7']);
   });
 
   it('returns null when the canonical id is not priced either', () => {
@@ -48,6 +59,7 @@ describe('conversationCost', () => {
   it('prices a Cursor Grok conversation at the xAI rate', () => {
     expect(conversationCost({ models: ['grok-4.6'], token_buckets: buckets }, prices)).toBe(2);
     expect(conversationCost({ models: ['cursor-grok-4.6-high-fast'], token_buckets: buckets }, prices)).toBe(2);
+    expect(conversationCost({ models: ['grok-4.7-high'], token_buckets: buckets }, prices)).toBe(2);
   });
 
   it('reports no cost when the catalog is empty', () => {
