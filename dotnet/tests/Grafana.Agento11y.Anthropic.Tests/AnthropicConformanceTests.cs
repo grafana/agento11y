@@ -55,7 +55,7 @@ public sealed class AnthropicConformanceTests
     {
         var request = CreateRequest();
         var summary = new AnthropicStreamSummary();
-        summary.Events.Add(CreateMessageStartEvent("msg_stream_1", "stream output"));
+        summary.Events.Add(CreateMessageStartEvent("msg_stream_1", "stream output", cacheWrite1hTokens: 4));
         summary.Events.Add(CreateMessageDeltaEvent(80, 25, 8, 4, 3, 2));
 
         var generation = AnthropicGenerationMapper.FromStream(request, summary, new AnthropicAgento11yOptions().WithRawArtifacts());
@@ -74,6 +74,7 @@ public sealed class AnthropicConformanceTests
         Assert.Equal(3L + streamWebFetchRequests, ReadMetadataLong(generation, "agento11y.gen_ai.usage.server_tool_use.total_requests"));
         // Inclusive contract: input = 80 + 8 read + 4 creation = 92; total = 92 + 25.
         Assert.Equal(117, generation.Usage.TotalTokens);
+        Assert.Equal(4, generation.Usage.CacheWrite1hInputTokens);
         Assert.Equal(TokenInputSemantics.Inclusive, generation.Usage.InputSemantics);
         Assert.Contains(generation.Artifacts, artifact => artifact.Kind == ArtifactKind.ProviderEvent);
     }
@@ -338,8 +339,28 @@ public sealed class AnthropicConformanceTests
         await Task.CompletedTask;
     }
 
-    private static RawMessageStreamEvent CreateMessageStartEvent(string id, string text)
+    private static RawMessageStreamEvent CreateMessageStartEvent(string id, string text, long? cacheWrite1hTokens = null)
     {
+        var usage = new Usage
+        {
+            InputTokens = 0,
+            OutputTokens = 0,
+            CacheCreation = null,
+            CacheCreationInputTokens = null,
+            CacheReadInputTokens = null,
+            InferenceGeo = "us",
+            ServerToolUse = null,
+            ServiceTier = null,
+        };
+        if (cacheWrite1hTokens.HasValue)
+        {
+            usage.CacheCreation = new CacheCreation
+            {
+                Ephemeral1hInputTokens = cacheWrite1hTokens.Value,
+                Ephemeral5mInputTokens = 0,
+            };
+        }
+
         return new RawMessageStreamEvent(new RawMessageStartEvent
         {
             Type = JsonSerializer.SerializeToElement("message_start"),
@@ -359,17 +380,7 @@ public sealed class AnthropicConformanceTests
                 ],
                 StopReason = null,
                 StopSequence = null,
-                Usage = new Usage
-                {
-                    InputTokens = 0,
-                    OutputTokens = 0,
-                    CacheCreation = null,
-                    CacheCreationInputTokens = null,
-                    CacheReadInputTokens = null,
-                    InferenceGeo = "us",
-                    ServerToolUse = null,
-                    ServiceTier = null,
-                },
+                Usage = usage,
             },
         });
     }

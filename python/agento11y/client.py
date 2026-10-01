@@ -110,6 +110,7 @@ _span_attr_embedding_dim_count = "gen_ai.embeddings.dimension.count"
 _span_attr_request_encoding_formats = "gen_ai.request.encoding_formats"
 _span_attr_cache_read_tokens = "gen_ai.usage.cache_read_input_tokens"
 _span_attr_cache_write_tokens = "gen_ai.usage.cache_write_input_tokens"
+_span_attr_cache_write_1h_tokens = "gen_ai.usage.cache_write1h_input_tokens"
 _span_attr_reasoning_tokens = "gen_ai.usage.reasoning_tokens"
 _span_attr_tool_name = "gen_ai.tool.name"
 _span_attr_tool_call_id = "gen_ai.tool.call.id"
@@ -141,6 +142,7 @@ _attr_token_semantics = "gen_ai.token.semantics"
 _token_semantics_inclusive = "inclusive"
 _metric_token_type_cache_read = "cache_read"
 _metric_token_type_cache_write = "cache_write"
+_metric_token_type_cache_write_1h = "cache_write1h"
 _metric_token_type_reasoning = "reasoning"
 
 _DURATION_BUCKETS_SECONDS: tuple[float, ...] = (
@@ -1194,6 +1196,7 @@ class Client:
         self._record_token_usage(generation, _metric_token_type_output, usage.output_tokens)
         self._record_token_usage(generation, _metric_token_type_cache_read, usage.cache_read_input_tokens)
         self._record_token_usage(generation, _metric_token_type_cache_write, usage.cache_write_input_tokens)
+        self._record_token_usage(generation, _metric_token_type_cache_write_1h, usage.cache_write_1h_input_tokens)
         self._record_token_usage(generation, _metric_token_type_reasoning, usage.reasoning_tokens)
 
         self._tool_calls_histogram.record(
@@ -2020,6 +2023,8 @@ def _set_generation_span_attributes(span: Span, generation: Generation) -> None:
         span.set_attribute(_span_attr_cache_read_tokens, usage.cache_read_input_tokens)
     if usage.cache_write_input_tokens:
         span.set_attribute(_span_attr_cache_write_tokens, usage.cache_write_input_tokens)
+    if usage.cache_write_1h_input_tokens:
+        span.set_attribute(_span_attr_cache_write_1h_tokens, usage.cache_write_1h_input_tokens)
     if usage.reasoning_tokens:
         span.set_attribute(_span_attr_reasoning_tokens, usage.reasoning_tokens)
     if usage.input_semantics == TokenInputSemantics.INCLUSIVE:

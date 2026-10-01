@@ -34,6 +34,10 @@ func TestConformance_AnthropicSyncMapping(t *testing.T) {
 			OutputTokens:             42,
 			CacheReadInputTokens:     30,
 			CacheCreationInputTokens: 10,
+			CacheCreation: asdk.BetaCacheCreation{
+				Ephemeral5mInputTokens: 6,
+				Ephemeral1hInputTokens: 4,
+			},
 			ServerToolUse: asdk.BetaServerToolUsage{
 				WebSearchRequests: 2,
 				WebFetchRequests:  1,
@@ -86,6 +90,9 @@ func TestConformance_AnthropicSyncMapping(t *testing.T) {
 	if got := testkit.StringValue(t, exported, "usage", "cache_write_input_tokens"); got != "10" {
 		t.Fatalf("unexpected usage.cache_write_input_tokens: got %q want %q", got, "10")
 	}
+	if got := testkit.StringValue(t, exported, "usage", "cache_write1h_input_tokens"); got != "4" {
+		t.Fatalf("unexpected usage.cache_write1h_input_tokens: got %q want %q", got, "4")
+	}
 	if got := testkit.FloatValue(t, exported, "metadata", "agento11y.gen_ai.usage.server_tool_use.total_requests"); got != 3 {
 		t.Fatalf("unexpected server tool total requests: got %v want %v", got, float64(3))
 	}
@@ -103,6 +110,10 @@ func TestConformance_AnthropicStreamMapping(t *testing.T) {
 				Message: asdk.BetaMessage{
 					ID:    "msg_conformance_stream",
 					Model: asdk.Model("claude-sonnet-4-5"),
+					Usage: asdk.BetaUsage{CacheCreation: asdk.BetaCacheCreation{
+						Ephemeral5mInputTokens: 6,
+						Ephemeral1hInputTokens: 4,
+					}},
 				},
 			},
 			{
@@ -191,6 +202,9 @@ func TestConformance_AnthropicStreamMapping(t *testing.T) {
 	}
 	if got := testkit.StringValue(t, exported, "usage", "total_tokens"); got != "105" {
 		t.Fatalf("unexpected streamed usage.total_tokens: got %q want %q", got, "105")
+	}
+	if got := testkit.StringValue(t, exported, "usage", "cache_write1h_input_tokens"); got != "4" {
+		t.Fatalf("unexpected streamed usage.cache_write1h_input_tokens: got %q want %q", got, "4")
 	}
 }
 

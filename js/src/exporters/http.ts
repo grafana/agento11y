@@ -387,6 +387,7 @@ function mapUsageToProtoJSON(usage: TokenUsage | undefined): Record<string, unkn
     total_tokens: toInt64String(totalTokens),
     cache_read_input_tokens: toInt64String(usage.cacheReadInputTokens),
     cache_write_input_tokens: toInt64String(usage.cacheWriteInputTokens),
+    cache_write1h_input_tokens: toInt64String(usage.cacheWrite1hInputTokens),
     reasoning_tokens: toInt64String(usage.reasoningTokens),
     ...(usage.inputSemantics === 'inclusive' ? { input_semantics: 'TOKEN_INPUT_SEMANTICS_INCLUSIVE' } : {}),
   };

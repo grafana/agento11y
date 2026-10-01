@@ -317,6 +317,8 @@ export interface TokenUsage {
   totalTokens?: number;
   cacheReadInputTokens?: number;
   cacheWriteInputTokens?: number;
+  /** One-hour subset of cacheWriteInputTokens when the provider reports cache TTLs. */
+  cacheWrite1hInputTokens?: number;
   reasoningTokens?: number;
   /**
    * Set only by SDK adapters that positively identified the provider payload

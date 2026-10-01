@@ -1322,6 +1322,7 @@ function mapUsage(rawUsage: unknown): TokenUsage | undefined {
   const inputTokens = asInt(read(usage, 'prompt_tokens')) || asInt(read(usage, 'input_tokens'));
   const outputTokens = asInt(read(usage, 'completion_tokens')) || asInt(read(usage, 'output_tokens'));
   const totalTokens = asInt(read(usage, 'total_tokens')) || inputTokens + outputTokens;
+  const cacheCreation = asRecord(read(usage, 'cache_creation'));
 
   if (inputTokens === 0 && outputTokens === 0 && totalTokens === 0) {
     return undefined;
@@ -1331,6 +1332,8 @@ function mapUsage(rawUsage: unknown): TokenUsage | undefined {
     inputTokens,
     outputTokens,
     totalTokens,
+    cacheWriteInputTokens: asInt(read(usage, 'cache_write_input_tokens')) || asInt(read(usage, 'cache_creation_input_tokens')) || undefined,
+    cacheWrite1hInputTokens: asInt(read(cacheCreation, 'ephemeral_1h_input_tokens')) || undefined,
   };
 }
 
