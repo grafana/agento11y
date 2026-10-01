@@ -70,13 +70,9 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.91.0",
-    "@google/adk": "^0.6.0",
     "@google/genai": "^1.41.0",
     "@grpc/grpc-js": "^1.14.4",
     "@grpc/proto-loader": "^0.8.0",
-    "@langchain/core": "^1.2.1",
-    "@langchain/langgraph": "^1.2.0",
-    "@openai/agents": "^0.8.0",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/exporter-metrics-otlp-grpc": "^0.213.0",
     "@opentelemetry/exporter-metrics-otlp-http": "^0.213.0",
@@ -84,15 +80,18 @@
     "@opentelemetry/exporter-trace-otlp-http": "^0.213.0",
     "@opentelemetry/sdk-metrics": "^2.1.0",
     "@opentelemetry/sdk-trace-base": "^2.5.0",
-    "llamaindex": "^0.12.1",
     "openai": "^6.27.0",
     "yaml": "^2.8.3"
   },
   "peerDependencies": {
-    "@strands-agents/sdk": "^1.0.0-rc.5"
+    "@strands-agents/sdk": "^1.0.0-rc.5",
+    "llamaindex": "*"
   },
   "peerDependenciesMeta": {
     "@strands-agents/sdk": {
+      "optional": true
+    },
+    "llamaindex": {
       "optional": true
     }
   },
@@ -100,6 +99,7 @@
     "@opentelemetry/context-async-hooks": "2.6.1",
     "@strands-agents/sdk": "1.0.0-rc.5",
     "@types/node": "24.12.0",
+    "llamaindex": "0.12.1",
     "typescript": "6.0.2"
   }
 }

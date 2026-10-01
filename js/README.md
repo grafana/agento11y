@@ -359,6 +359,8 @@ Use module subpath exports for framework callback integrations:
 - Vercel AI SDK guide: `docs/frameworks/vercel-ai-sdk.md`
 - Strands Agents guide: `docs/frameworks/strands.md`
 
+The framework SDKs are not installed with this package. Install the one you use; each guide lists the command.
+
 ```ts
 import { Agento11yClient } from "@grafana/agento11y";
 import { withAgento11yLangChainCallbacks } from "@grafana/agento11y/langchain";
