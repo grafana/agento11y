@@ -8,7 +8,7 @@
 
 ## Coding agent observability
 
-Capture sessions from the coding agents you already use — Cursor, Claude Code, Codex, Copilot CLI, OpenCode, Pi, Vibe, and others — so you can observe usage, cost, tokens, and tools across all of them in one place.
+Capture sessions from the coding agents you already use — Cursor, Claude Code, Codex, Copilot CLI, OpenCode, Pi, Vibe, experimental Kiro CLI, and others — so you can observe usage, cost, tokens, and tools across all of them in one place.
 
 Install `agento11y`:
 

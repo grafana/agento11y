@@ -56,6 +56,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/copilot"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor"
 	cursorinstall "github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/install"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/kiro"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/opencode"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/pi"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe"
@@ -157,6 +158,7 @@ var agents = map[string]agentHook{
 	"copilot":     copilot.Hook,
 	"cursor":      cursor.Hook,
 	"vibe":        vibe.Hook,
+	"kiro":        kiro.Hook,
 }
 
 // launchers maps the argv name to its launcher adapter. Launchers are
@@ -170,6 +172,7 @@ var launchers = map[string]agentLauncher{
 	"opencode": opencode.Launch,
 	"pi":       pi.Launch,
 	"vibe":     vibe.Launch,
+	"kiro":     kiro.Launch,
 }
 
 // exit is a package var so tests can intercept termination.
@@ -193,6 +196,8 @@ var (
 	cursorUninstall = cursorinstall.Uninstall
 	claudeInstall   = claudecode.Install
 	copilotInstall  = copilot.Install
+	kiroInstall     = kiro.Install
+	kiroUninstall   = kiro.Uninstall
 	opencodeInstall = opencode.Install
 	piInstall       = pi.Install
 )
@@ -252,11 +257,15 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 		return
 	}
 
+	if handleKiroUninstall(args, stderr) {
+		return
+	}
+
 	// These installers configure one host without launching it or prompting for
 	// Agent Observability credentials. They are safe to invoke from unattended
 	// setup after the current user's config.env is in place.
 	if len(args) >= 2 && args[1] == "install" &&
-		(args[0] == "claude" || args[0] == "copilot" || args[0] == "opencode" || args[0] == "pi") {
+		(args[0] == "kiro" || args[0] == "claude" || args[0] == "copilot" || args[0] == "opencode" || args[0] == "pi") {
 		runAgentInstall(args[0], args[2:], stdout, stderr)
 		return
 	}
@@ -771,6 +780,8 @@ func runAgentInstall(agent string, args []string, stdout, stderr io.Writer) {
 	switch agent {
 	case "claude":
 		changed, err = claudeInstall(context.Background(), writer)
+	case "kiro":
+		changed, err = kiroInstall()
 	case "copilot":
 		changed, err = copilotInstall()
 	case "opencode":
@@ -1354,4 +1365,21 @@ func runLocalCommand(args []string, stdout, stderr io.Writer) {
 		_, _ = fmt.Fprintf(stderr, "agento11y: unknown local verb %q\n", args[0])
 		exit(2)
 	}
+}
+
+// handleKiroUninstall routes removal before the launcher can forward the verb.
+func handleKiroUninstall(args []string, stderr io.Writer) bool {
+	if len(args) < 2 || args[0] != "kiro" || args[1] != "uninstall" {
+		return false
+	}
+	if len(args) != 2 {
+		usageError(stderr, "kiro uninstall", "unexpected arguments")
+		exit(2)
+		return true
+	}
+	if err := kiroUninstall(); err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		exit(1)
+	}
+	return true
 }
