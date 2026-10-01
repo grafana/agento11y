@@ -52,6 +52,17 @@ const (
 // fails TestProtoFieldCoverage with its proto path, so a new content field
 // cannot be added without someone deciding whether the strip has to clear it.
 var generationFieldClasses = map[string]contentClass{
+	"agento11y.v1.Generation.pricing":                 classRetained,
+	"agento11y.v1.GenerationPricing.status":           classRetained,
+	"agento11y.v1.GenerationPricing.reason":           classRetained,
+	"agento11y.v1.GenerationPricing.cost_usd_micros":  classRetained,
+	"agento11y.v1.ModalityTokenCounts.tokens":         classRetained,
+	"agento11y.v1.ModalityTokenCounts.complete":       classRetained,
+	"agento11y.v1.TokenUsage.input_by_modality":       classRetained,
+	"agento11y.v1.TokenUsage.output_by_modality":      classRetained,
+	"agento11y.v1.TokenUsage.cache_read_by_modality":  classRetained,
+	"agento11y.v1.TokenUsage.cache_write_by_modality": classRetained,
+
 	"agento11y.v1.Generation.id":                    classRetained,
 	"agento11y.v1.Generation.conversation_id":       classRetained,
 	"agento11y.v1.Generation.operation_name":        classRetained,

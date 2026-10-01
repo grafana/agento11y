@@ -18,3 +18,13 @@ class TestUsageMapping:
     def test_unspecified_semantics_stays_default(self):
         proto = generation_to_proto(Generation(usage=TokenUsage(input_tokens=10)))
         assert proto.usage.input_semantics == 0  # TOKEN_INPUT_SEMANTICS_UNSPECIFIED
+
+    def test_modality_presence_and_normalization(self):
+        from agento11y.models import ModalityTokenCounts
+
+        usage = TokenUsage(input_tokens=3, input_by_modality=ModalityTokenCounts(tokens={"image": 3}, complete=True))
+        proto = generation_to_proto(Generation(usage=usage.normalize()))
+        assert proto.usage.HasField("input_by_modality")
+        assert not proto.usage.HasField("output_by_modality")
+        assert proto.usage.input_by_modality.tokens["image"] == 3
+        assert proto.usage.input_by_modality.complete

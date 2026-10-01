@@ -11,6 +11,20 @@ namespace Grafana.Agento11y.OpenAI.Tests;
 public sealed class OpenAIConformanceTests
 {
     [Fact]
+    public void ResponsesPreserveModalityFieldsFromWireJSON()
+    {
+        var response = ReadResponse("""
+        {"id":"image-response","created_at":1,"model":"image","object":"response","output":[],"parallel_tool_calls":false,"tool_choice":"auto","tools":[],"status":"completed","usage":{"input_tokens":100,"output_tokens":10,"total_tokens":110,"input_tokens_details":{"cached_tokens":0,"text_tokens":40,"image_tokens":60},"output_tokens_details":{"reasoning_tokens":0,"image_tokens":10}}}
+        """);
+        var generation = OpenAIGenerationMapper.ResponsesFromRequestResponse("image", new List<ResponseItem>(), new CreateResponseOptions(), response);
+        Assert.NotNull(generation.Usage.InputByModality);
+        Assert.True(generation.Usage.InputByModality.Complete);
+        Assert.Equal(60, generation.Usage.InputByModality.Tokens["image"]);
+        Assert.Equal(10, generation.Usage.OutputByModality!.Tokens["image"]);
+        Assert.Null(generation.Usage.CacheReadByModality);
+    }
+
+    [Fact]
     public void ChatCompletionsFromRequestResponse_MapsSyncModeAndDefaultsRawArtifactsOff()
     {
         var messages = new List<ChatMessage>

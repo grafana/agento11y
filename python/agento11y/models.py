@@ -115,6 +115,14 @@ class TokenInputSemantics(IntEnum):
 
 
 @dataclass(slots=True)
+class ModalityTokenCounts:
+    """A token partition; absent entries are zero only when complete."""
+
+    tokens: dict[str, int] = field(default_factory=dict)
+    complete: bool = False
+
+
+@dataclass(slots=True)
 class TokenUsage:
     """Token usage counters for request/response.
 
@@ -132,6 +140,10 @@ class TokenUsage:
     #: Set only by SDK adapters that positively identified the provider
     #: payload shape. Manual user-supplied usage leaves it UNSPECIFIED.
     input_semantics: TokenInputSemantics = TokenInputSemantics.UNSPECIFIED
+    input_by_modality: ModalityTokenCounts | None = None
+    output_by_modality: ModalityTokenCounts | None = None
+    cache_read_by_modality: ModalityTokenCounts | None = None
+    cache_write_by_modality: ModalityTokenCounts | None = None
 
     def normalize(self) -> TokenUsage:
         """Returns a copy with `total_tokens` auto-filled when missing."""
@@ -144,6 +156,24 @@ class TokenUsage:
             cache_write_input_tokens=self.cache_write_input_tokens,
             reasoning_tokens=self.reasoning_tokens,
             input_semantics=self.input_semantics,
+            input_by_modality=ModalityTokenCounts(dict(self.input_by_modality.tokens), self.input_by_modality.complete)
+            if self.input_by_modality is not None
+            else None,
+            output_by_modality=ModalityTokenCounts(
+                dict(self.output_by_modality.tokens), self.output_by_modality.complete
+            )
+            if self.output_by_modality is not None
+            else None,
+            cache_read_by_modality=ModalityTokenCounts(
+                dict(self.cache_read_by_modality.tokens), self.cache_read_by_modality.complete
+            )
+            if self.cache_read_by_modality is not None
+            else None,
+            cache_write_by_modality=ModalityTokenCounts(
+                dict(self.cache_write_by_modality.tokens), self.cache_write_by_modality.complete
+            )
+            if self.cache_write_by_modality is not None
+            else None,
         )
         if normalized.total_tokens == 0:
             normalized.total_tokens = normalized.input_tokens + normalized.output_tokens
