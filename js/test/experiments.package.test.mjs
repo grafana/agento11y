@@ -13,7 +13,17 @@ test('the package publishes the experiments subpath', async () => {
     types: './dist/experiments/index.d.ts',
     import: './dist/experiments/index.js',
   });
+  assert.deepEqual(manifest.exports['./promptfoo'], {
+    types: './dist/integrations/promptfoo/index.d.ts',
+    import: './dist/integrations/promptfoo/index.js',
+  });
   assert.equal(typeof manifest.dependencies.yaml, 'string', 'stored suites need a YAML parser at runtime');
+});
+
+test('the Promptfoo entrypoint exports the integration surface', async () => {
+  const module = await import('../.test-dist/integrations/promptfoo/index.js');
+  assert.equal(typeof module.createPromptfooExtension, 'function');
+  assert.equal(typeof module.publishPromptfooResults, 'function');
 });
 
 test('the experiments entrypoint exports the public surface', async () => {

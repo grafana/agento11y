@@ -1,0 +1,14 @@
+{
+  "name": "agento11y-promptfoo-example",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build:sdk": "pnpm --dir ../../../js build",
+    "eval": "pnpm run build:sdk && promptfoo eval -c promptfooconfig.yaml --no-cache"
+  },
+  "dependencies": {
+    "@grafana/agento11y": "link:../../../js",
+    "promptfoo": "0.123.0"
+  }
+}

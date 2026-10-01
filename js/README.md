@@ -634,3 +634,8 @@ await experiment.withTrial(testCase, async (trial) => {
 See [`docs/experiments.md`](docs/experiments.md) for the full surface: score
 kinds, local judges, artifacts, reports, portable and stored suites, cross-process
 trials, and experimental OpenTelemetry trial telemetry.
+
+Promptfoo users can publish a completed eval through its `afterAll` hook with
+`createPromptfooExtension` from `@grafana/agento11y/promptfoo`. See the
+[`Promptfoo integration guide`](docs/integrations/promptfoo.md) and the
+[`runnable example`](../examples/experiments/promptfoo/README.md).

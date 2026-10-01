@@ -19,6 +19,10 @@
       "types": "./dist/experiments/index.d.ts",
       "import": "./dist/experiments/index.js"
     },
+    "./promptfoo": {
+      "types": "./dist/integrations/promptfoo/index.d.ts",
+      "import": "./dist/integrations/promptfoo/index.js"
+    },
     "./langchain": {
       "types": "./dist/frameworks/langchain/index.d.ts",
       "import": "./dist/frameworks/langchain/index.js"

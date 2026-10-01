@@ -548,6 +548,13 @@ versions. `setup_evals()` configures HTTP/protobuf OTLP using existing
 dependencies and reuses application providers. `AgentOutput` can carry an
 existing conversation ID and flush callback. See `python/docs/evaluation-plans.md`.
 
+Promptfoo can register `createPromptfooExtension(...)` from
+`@grafana/agento11y/promptfoo` as an `afterAll` extension. Promptfoo keeps
+execution and grading; the extension publishes each completed result row as a
+trial, marks the aggregate row score as `primary_verdict`, and marks supporting
+named scores as `diagnostic`. It does not create or invoke stored cloud
+evaluators. See `examples/experiments/promptfoo/`.
+
 - Run-side publishing uses `AGENTO11Y_ENDPOINT`, `AGENTO11Y_AUTH_TOKEN`, and
   optional `AGENTO11Y_AUTH_TENANT_ID`.
 - Stored suite push/pull is optional and additionally uses

@@ -1,0 +1,30 @@
+description: Agent Observability Promptfoo example
+
+prompts:
+  - "{{question}}"
+
+providers:
+  - file://provider.mjs
+
+tests:
+  - description: Capital of France
+    vars:
+      question: What is the capital of France?
+    metadata:
+      agento11y.test_case_id: capital-fr
+    assert:
+      - type: equals
+        value: Paris
+        metric: exact_match
+  - description: Two plus two
+    vars:
+      question: What is 2 + 2?
+    metadata:
+      agento11y.test_case_id: addition
+    assert:
+      - type: equals
+        value: "4"
+        metric: exact_match
+
+extensions:
+  - file://agento11y-extension.mjs:afterAll
