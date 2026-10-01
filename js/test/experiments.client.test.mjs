@@ -402,7 +402,7 @@ test('score explanations are redacted by default and left alone when disabled', 
     status: 200,
     body: { results: [{ score_id: 'score-1', accepted: true }] },
   }));
-  const secret = 'token is glc_abcdefghijklmnopqrstuvwxyz012345';
+  const secret = 'token is glc_abcdefghijklmnopqrstuvwxyz012345'; // trufflehog:ignore
   const score = {
     scoreId: 'score-1',
     evaluatorId: 'exact',
@@ -430,7 +430,7 @@ test('score metadata is redacted through a null-prototype object and a class ins
     status: 200,
     body: { results: [{ score_id: 'score-1', accepted: true }] },
   }));
-  const secret = 'glc_abcdefghijklmnopqrstuvwxyz012345';
+  const secret = 'glc_abcdefghijklmnopqrstuvwxyz012345'; // trufflehog:ignore
   class Detail {
     constructor(note) {
       this.note = note;

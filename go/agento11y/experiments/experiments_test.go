@@ -623,7 +623,7 @@ func TestExperimentOTelIsOptInAndRedactsEventExplanation(t *testing.T) {
 	if err := trial.Enter(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	const secret = "glc_abcdefghijklmnopqrstuvwxyz123456"
+	const secret = "glc_abcdefghijklmnopqrstuvwxyz123456" // trufflehog:ignore
 	if _, err := trial.FinalScore(true, ScoreOptions{Explanation: secret}); err != nil {
 		t.Fatal(err)
 	}
