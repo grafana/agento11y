@@ -55,7 +55,7 @@ func publicHelpPages() map[string]clihelp.Page {
 	for _, name := range launcherNames {
 		add(name, "Configure capture and launch "+name+". Arguments after -- belong to the host agent.", "[flags] [-- args...]")
 	}
-	for _, name := range []string{"claude", "copilot", "opencode", "pi"} {
+	for _, name := range []string{"claude", "copilot", "opencode", "pi", "kiro"} {
 		add(name+" install", "Install the "+name+" integration without launching it or prompting.", "[--json]")
 	}
 	for _, spec := range history.Specs() {
@@ -84,10 +84,15 @@ func publicHelpPages() map[string]clihelp.Page {
 	children("history", "Commands", "import")
 	children("skills", "Commands", "list", "show", "get")
 	children("claude eval", "Commands", "import")
-	for _, name := range []string{"claude", "copilot", "opencode", "pi"} {
+	for _, name := range []string{"claude", "copilot", "opencode", "pi", "kiro"} {
 		children(name, "Commands", "install")
 	}
 	children("claude", "Experiments", "eval")
+	add("kiro uninstall", "Remove agento11y hooks from the current workspace.", "")
+	children("kiro", "Removal", "uninstall")
+	pageKiro := pages["kiro"]
+	pageKiro.Summary = "Experimental Kiro CLI 3 capture: prompts and tools only. Installs hooks in the current workspace. Arguments after -- belong to kiro-cli."
+	pages["kiro"] = pageKiro
 	page := pages["agents reconcile"]
 	targets := clihelp.Section{Title: "Installers"}
 	for _, spec := range registeredInstallers() {
@@ -154,7 +159,7 @@ func helpFlags(path string) *flag.FlagSet {
 		return historyHelpFlags()
 	case path == "claude eval import":
 		return claudeEvalHelpFlags()
-	case path == "claude install" || path == "copilot install" || path == "opencode install" || path == "pi install":
+	case path == "kiro install" || path == "claude install" || path == "copilot install" || path == "opencode install" || path == "pi install":
 		fs, _ := newJSONFlags(path)
 		return fs
 	default:

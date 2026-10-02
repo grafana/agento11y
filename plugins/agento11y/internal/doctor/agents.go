@@ -8,6 +8,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/copilot"
 	cursorinstall "github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/install"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/kiro"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/opencode"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/pi"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe"
@@ -48,6 +49,7 @@ var lookPath = exec.LookPath
 // agentProbes is the detection/probe table. Cursor is hook-based and its
 // effective version is the shared agento11y binary's.
 var agentProbes = []agentProbe{
+	{name: "kiro", bin: "kiro-cli", status: kiro.Status, configBased: true, notInstalledLabel: "not configured", note: "experimental; current workspace hooks"},
 	{name: "claude", bin: "claude", status: claudecode.Status, configBased: true},
 	{name: "codex", bin: "codex", status: codex.Status},
 	{name: "copilot", bin: "copilot", status: copilot.Status, configBased: true, notInstalledLabel: "not configured", note: "hook-based"},

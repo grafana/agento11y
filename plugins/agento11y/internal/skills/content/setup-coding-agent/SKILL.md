@@ -2,7 +2,7 @@
 name: setup-coding-agent
 description: >-
   Set up Grafana Agent observability for a coding agent (Claude Code, Codex,
-  Copilot CLI, Cursor, OpenCode, pi, or Vibe) with the agento11y binary:
+  Copilot CLI, Cursor, OpenCode, pi, Vibe, or experimental Kiro CLI) with the agento11y binary:
   install it, save credentials, wire the agent, verify a session reaches
   Grafana Cloud, and diagnose a broken pipeline. Use when the user says "set
   up agento11y", "monitor my coding agent", "agento11y doctor says something
@@ -242,11 +242,11 @@ rules in the Reference.
 | OpenCode | `agento11y opencode` | installs `@grafana/agento11y-opencode` |
 | pi | `agento11y pi` | installs `@grafana/agento11y-pi` |
 | Vibe | `agento11y vibe` | shared Go binary via `hooks.toml` |
+| Kiro CLI 3 (experimental) | `agento11y kiro -- chat` | current workspace hooks; prompts/tools only, no assistant text, model usage, cost, or guards |
 
 After the first `agento11y codex` launch, open `/hooks` inside Codex and trust
 the agento11y hooks. Codex does not export turns until the user completes this
 manual step, and doctor cannot detect whether they did.
-
 Vibe hooks are experimental. The launcher enables them in the child process, so
 launch Vibe through `agento11y vibe` for capture.
 

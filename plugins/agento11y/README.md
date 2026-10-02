@@ -4,7 +4,7 @@
   <img src="../../.github/img/agento11y.gif" alt="agento11y capturing a coding agent session" width="80%" />
 </p>
 
-Monitor the coding agents you already use — Cursor, Claude Code, Codex, Copilot CLI, OpenCode, Pi, Vibe, and others. Observe usage, cost, tokens, and tools across all of them in one place. Keep sessions on your machine with the local Agent Observability app, or send them to [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/).
+Monitor the coding agents you already use — Cursor, Claude Code, Codex, Copilot CLI, OpenCode, Pi, Vibe, experimental Kiro CLI, and others. Observe usage, cost, tokens, and tools across all of them in one place. Keep sessions on your machine with the local Agent Observability app, or send them to [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/).
 
 ## Quick start
 
@@ -80,8 +80,11 @@ agento11y claude
 | [OpenCode](https://opencode.ai) | `agento11y opencode` |
 | [Pi](https://github.com/earendil-works/pi) | `agento11y pi` |
 | [Vibe](https://github.com/mistralai/vibe) | `agento11y vibe` |
+| [Kiro CLI 3 (experimental)](../kiro/README.md) | `agento11y kiro -- chat` |
 
 Cursor has no launcher. Run `agento11y cursor install` once, then start Cursor normally. Remove its hooks with `agento11y cursor uninstall`. See also [`cursor/README.md`](../cursor/README.md). Per-agent notes and glue live under [`plugins/`](../).
+
+Kiro capture is workspace-scoped and captures prompts and tools only; assistant text, model usage, and cost are unavailable. See the [Kiro limitations](../kiro/README.md#captured-data-and-limits).
 
 ## Claude plugin evals
 
