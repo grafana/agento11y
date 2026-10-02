@@ -6,7 +6,12 @@ import logging
 from uuid import uuid4
 
 import pytest
-from agento11y.framework_handler import Agento11yFrameworkHandlerBase, _extract_tool_output, _map_chat_input_message
+from agento11y.framework_handler import (
+    Agento11yFrameworkHandlerBase,
+    _extract_tool_output,
+    _map_chat_input_message,
+    _map_framework_usage,
+)
 from agento11y.models import MessageRole, PartKind
 
 
@@ -136,3 +141,16 @@ def test_map_chat_input_message_leaves_other_roles_as_text() -> None:
     assert mapped is not None
     assert mapped.role is MessageRole.USER
     assert [part.kind for part in mapped.parts] == [PartKind.TEXT]
+
+
+def test_map_framework_usage_reads_langchain_cache_read_and_cache_creation() -> None:
+    usage = _map_framework_usage(
+        {
+            "input_tokens": 9000,
+            "output_tokens": 40,
+            "total_tokens": 9040,
+            "input_token_details": {"cache_read": 8796, "cache_creation": 51},
+        }
+    )
+    assert usage.cache_read_input_tokens == 8796
+    assert usage.cache_write_input_tokens == 51
