@@ -48,6 +48,29 @@ test('sdk js core package keeps provider and framework dependencies out of defau
   }
 });
 
+test('sdk js package keeps framework SDKs out of default install', async () => {
+  const packageJsonPath = path.join(__dirname, '..', 'package.json');
+  const packageJsonRaw = await readFile(packageJsonPath, 'utf8');
+  const packageJson = JSON.parse(packageJsonRaw);
+
+  for (const dependencyName of [
+    '@google/adk',
+    '@langchain/core',
+    '@langchain/langgraph',
+    '@openai/agents',
+    'llamaindex',
+  ]) {
+    assert.equal(
+      packageJson.dependencies?.[dependencyName],
+      undefined,
+      `${dependencyName} should not be a default dependency of @grafana/agento11y`,
+    );
+  }
+
+  // The LlamaIndex handler is the only one that imports its framework.
+  assert.equal(packageJson.peerDependenciesMeta?.llamaindex?.optional, true);
+});
+
 test('core entrypoint loads in runtimes without process or Buffer globals', () => {
   // The core package promises to load on edge-like runtimes where Node-only
   // globals (process, Buffer) and Node built-in modules (node:async_hooks,
