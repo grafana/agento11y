@@ -1381,6 +1381,7 @@ public sealed class ContentCaptureModeTests
         {
             ToolName = "weather",
             ToolCallId = "call_1",
+            SkillName = "  weather-lookup  ",
             ConversationTitle = "Sensitive tool title",
             ToolDescription = "Get weather: free-form provider-supplied text",
             IncludeContent = true,
@@ -1402,6 +1403,7 @@ public sealed class ContentCaptureModeTests
         Assert.Null(span.GetTagItem("gen_ai.tool.description"));
         // Identity attributes still emitted.
         Assert.Equal("weather", span.GetTagItem("gen_ai.tool.name")?.ToString());
+        Assert.Equal("weather-lookup", span.GetTagItem("agento11y.skill.name")?.ToString());
     }
 
     // Tools have no proto export; under both stripped modes the raw provider

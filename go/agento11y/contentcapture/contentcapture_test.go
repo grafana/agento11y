@@ -391,6 +391,7 @@ func TestIsTraceContentAttribute(t *testing.T) {
 		{key: "gen_ai.retrieval.documents", want: true},
 		{key: "agento11y.generation.raw_artifacts", want: true},
 		{key: "gen_ai.tool.name", want: false},
+		{key: "agento11y.skill.name", want: false},
 		{key: "gen_ai.usage.input_tokens", want: false},
 		{key: contentcapture.ErrorCategoryAttributeKey, want: false},
 		{key: contentcapture.MetadataKeyCallError, want: false},

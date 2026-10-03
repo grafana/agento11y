@@ -1153,6 +1153,7 @@ class ContentCaptureModeTest {
             try (ToolExecutionRecorder rec = env.client.startToolExecution(new ToolExecutionStart()
                     .setToolName("weather")
                     .setToolCallId("call_1")
+                    .setSkillName("  weather-research  ")
                     .setConversationTitle("Sensitive tool title")
                     .setToolDescription("Get weather: free-form provider-supplied text")
                     .setIncludeContent(true))) {
@@ -1168,6 +1169,8 @@ class ContentCaptureModeTest {
             assertThat(toolSpan.getAttributes().get(AttributeKey.stringKey("gen_ai.tool.description"))).isNull();
             // Identity attributes still emitted.
             assertThat(toolSpan.getAttributes().get(AttributeKey.stringKey("gen_ai.tool.name"))).isEqualTo("weather");
+            assertThat(toolSpan.getAttributes().get(AttributeKey.stringKey("agento11y.skill.name")))
+                    .isEqualTo("weather-research");
         }
     }
 

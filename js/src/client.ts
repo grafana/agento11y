@@ -136,6 +136,7 @@ const spanAttrToolName = 'gen_ai.tool.name';
 const spanAttrToolCallID = 'gen_ai.tool.call.id';
 const spanAttrToolType = 'gen_ai.tool.type';
 const spanAttrToolDescription = 'gen_ai.tool.description';
+const spanAttrSkillName = 'agento11y.skill.name';
 const spanAttrToolCallArguments = 'gen_ai.tool.call.arguments';
 const spanAttrToolCallResult = 'gen_ai.tool.call.result';
 const spanAttrTagPrefix = 'agento11y.tag.';
@@ -1761,6 +1762,8 @@ class ToolExecutionRecorderImpl implements ToolExecutionRecorder {
     seed: ToolExecutionStart,
   ) {
     this.seed = cloneToolExecutionStart(seed);
+    const skillName = this.seed.skillName?.trim();
+    this.seed.skillName = skillName !== undefined && skillName.length > 0 ? skillName : undefined;
     if (!notEmpty(this.seed.conversationId)) {
       this.seed.conversationId = conversationIdFromContext();
     }
@@ -1825,6 +1828,7 @@ class ToolExecutionRecorderImpl implements ToolExecutionRecorder {
       toolCallId: this.seed.toolCallId,
       toolType: this.seed.toolType,
       toolDescription: this.seed.toolDescription,
+      skillName: this.seed.skillName,
       conversationId: this.seed.conversationId,
       conversationTitle: this.seed.conversationTitle,
       agentName: this.seed.agentName,
@@ -2168,6 +2172,7 @@ function setToolSpanAttributes(
     toolCallId?: string;
     toolType?: string;
     toolDescription?: string;
+    skillName?: string;
     conversationId?: string;
     conversationTitle?: string;
     agentName?: string;
@@ -2189,6 +2194,7 @@ function setToolSpanAttributes(
   if (notEmpty(tool.toolDescription)) {
     span.setAttribute(spanAttrToolDescription, tool.toolDescription);
   }
+  projectSkillName(span, tool.skillName);
   if (notEmpty(tool.conversationId)) {
     span.setAttribute(spanAttrConversationID, tool.conversationId);
   }
@@ -2206,6 +2212,13 @@ function setToolSpanAttributes(
   }
   if (notEmpty(tool.requestModel)) {
     span.setAttribute(spanAttrRequestModel, tool.requestModel);
+  }
+}
+
+function projectSkillName(span: Span, skillName: string | undefined): void {
+  const normalized = skillName?.trim();
+  if (normalized !== undefined && normalized.length > 0) {
+    span.setAttribute(spanAttrSkillName, normalized);
   }
 }
 

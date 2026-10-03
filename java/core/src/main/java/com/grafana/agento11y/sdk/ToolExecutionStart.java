@@ -8,6 +8,7 @@ public final class ToolExecutionStart {
     private String toolCallId = "";
     private String toolType = "";
     private String toolDescription = "";
+    private String skillName = "";
     private String conversationId = "";
     private String conversationTitle = "";
     private String agentName = "";
@@ -51,6 +52,15 @@ public final class ToolExecutionStart {
 
     public ToolExecutionStart setToolDescription(String toolDescription) {
         this.toolDescription = toolDescription == null ? "" : toolDescription;
+        return this;
+    }
+
+    public String getSkillName() {
+        return skillName;
+    }
+
+    public ToolExecutionStart setSkillName(String skillName) {
+        this.skillName = skillName == null ? "" : skillName;
         return this;
     }
 
@@ -149,6 +159,7 @@ public final class ToolExecutionStart {
                 .setToolCallId(toolCallId)
                 .setToolType(toolType)
                 .setToolDescription(toolDescription)
+                .setSkillName(skillName)
                 .setConversationId(conversationId)
                 .setConversationTitle(conversationTitle)
                 .setAgentName(agentName)

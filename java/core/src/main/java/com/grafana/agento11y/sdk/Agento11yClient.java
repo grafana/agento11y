@@ -76,6 +76,7 @@ public final class Agento11yClient implements AutoCloseable {
     static final String SPAN_ATTR_TOOL_CALL_ID = "gen_ai.tool.call.id";
     static final String SPAN_ATTR_TOOL_TYPE = "gen_ai.tool.type";
     static final String SPAN_ATTR_TOOL_DESCRIPTION = "gen_ai.tool.description";
+    static final String SPAN_ATTR_SKILL_NAME = "agento11y.skill.name";
     static final String SPAN_ATTR_TOOL_CALL_ARGUMENTS = "gen_ai.tool.call.arguments";
     static final String SPAN_ATTR_TOOL_CALL_RESULT = "gen_ai.tool.call.result";
     static final String SPAN_ATTR_TAG_PREFIX = "agento11y.tag.";
@@ -1257,6 +1258,37 @@ public final class Agento11yClient implements AutoCloseable {
         if (!seed.getToolDescription().isBlank()) {
             span.setAttribute(SPAN_ATTR_TOOL_DESCRIPTION, seed.getToolDescription());
         }
+        projectSkillName(span, seed.getSkillName());
+    }
+
+    private static void projectSkillName(Span span, String skillName) {
+        String normalized = normalizeSkillName(skillName);
+        if (!normalized.isEmpty()) {
+            span.setAttribute(SPAN_ATTR_SKILL_NAME, normalized);
+        }
+    }
+
+    static String normalizeSkillName(String skillName) {
+        if (skillName == null || skillName.isEmpty()) {
+            return "";
+        }
+        int start = 0;
+        int end = skillName.length();
+        while (start < end) {
+            int codePoint = skillName.codePointAt(start);
+            if (!Character.isWhitespace(codePoint) && !Character.isSpaceChar(codePoint)) {
+                break;
+            }
+            start += Character.charCount(codePoint);
+        }
+        while (start < end) {
+            int codePoint = skillName.codePointBefore(end);
+            if (!Character.isWhitespace(codePoint) && !Character.isSpaceChar(codePoint)) {
+                break;
+            }
+            end -= Character.charCount(codePoint);
+        }
+        return skillName.substring(start, end);
     }
 
     static Attributes tagAttributes(Map<String, String> tags) {
