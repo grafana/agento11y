@@ -274,7 +274,7 @@ def _strip_content(generation: Generation, error_category: str) -> None:
 
 
 def _strip_message_content(message: Message) -> None:
-    """Strips all content from message parts (text, thinking, tool call input, tool result)."""
+    """Strips all content from message parts (text, thinking, tool call input, tool result, media URL)."""
     for part in message.parts:
         part.text = ""
         part.thinking = ""
@@ -283,6 +283,11 @@ def _strip_message_content(message: Message) -> None:
         if part.tool_result is not None:
             part.tool_result.content = ""
             part.tool_result.content_json = b""
+        if part.media is not None:
+            # A media URL is content: it can point at the payload or hold the bytes
+            # inline as a data: URI, and both forms are cleared. The kind, mime type,
+            # and name are references and stay.
+            part.media.url = ""
 
 
 def _serialize_tool_result_payload(value: Any) -> tuple[str, bytes]:
