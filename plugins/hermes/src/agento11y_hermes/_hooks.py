@@ -61,7 +61,7 @@ def _fail_open(handler: Callable[..., None]) -> Callable[..., None]:
         try:
             handler(*args, **kwargs)
         except Exception as exc:
-            logger.warning("grafana-agento11y-hermes: %s failed: %s", name, exc)
+            logger.warning("agento11y-hermes: %s failed: %s", name, exc)
 
     return wrapper
 
@@ -80,7 +80,7 @@ def _warn_legacy_hermes_once() -> None:
         return
     _WARNED_LEGACY_HERMES = True
     logger.warning(
-        "grafana-agento11y-hermes: this hermes does not send api_request_id. "
+        "agento11y-hermes: this hermes does not send api_request_id. "
         "Using the legacy matching path, which mis-attributes concurrent "
         "requests in one session. Upgrade to hermes v2026.6.5 (PyPI 0.16.0) or newer."
     )
@@ -92,7 +92,7 @@ def _warn_deprecated_version_once() -> None:
         return
     _WARNED_DEPRECATED_VERSION = True
     logger.warning(
-        "grafana-agento11y-hermes: AGENTO11Y_HERMES_AGENT_VERSION is deprecated. "
+        "agento11y-hermes: AGENTO11Y_HERMES_AGENT_VERSION is deprecated. "
         "Rename it to AGENTO11Y_AGENT_VERSION, which also sets the agent_version "
         "metric dimension."
     )
@@ -116,7 +116,7 @@ def _log_truncated_request_once() -> None:
         return
     _LOGGED_TRUNCATED_REQUEST = True
     logger.info(
-        "grafana-agento11y-hermes: hermes truncated the request payload, so the system "
+        "agento11y-hermes: hermes truncated the request payload, so the system "
         "prompt and tool schemas come from an earlier request in this session, where "
         "there is one. Raising HERMES_PLUGIN_PAYLOAD_MAX_CHARS recovers the tool "
         "schemas; a system prompt over 8000 chars stays clipped at any value."
@@ -822,16 +822,16 @@ def _finish_generation(
             call_error=call_error_message,
         )
     except Exception as exc:
-        logger.warning("grafana-agento11y-hermes: set_result failed: %s", exc)
+        logger.warning("agento11y-hermes: set_result failed: %s", exc)
     if call_error is not None:
         try:
             recorder.set_call_error(call_error)
         except Exception as exc:
-            logger.warning("grafana-agento11y-hermes: set_call_error failed: %s", exc)
+            logger.warning("agento11y-hermes: set_call_error failed: %s", exc)
     try:
         recorder.__exit__(None, None, None)
     except Exception as exc:
-        logger.warning("grafana-agento11y-hermes: recorder __exit__ failed: %s", exc)
+        logger.warning("agento11y-hermes: recorder __exit__ failed: %s", exc)
 
 
 def _close_pending_for_session(session_id: str, conversation_history: Any) -> None:
@@ -931,7 +931,7 @@ def _stamp_parent_generation(recorder: Any, link: Any) -> None:
             return
         span.set_attribute("agento11y.generation.parent_generation_ids", [generation_id])
     except Exception as exc:
-        logger.debug("grafana-agento11y-hermes: parent generation attribute failed: %s", exc)
+        logger.debug("agento11y-hermes: parent generation attribute failed: %s", exc)
 
 
 @_fail_open
@@ -1063,12 +1063,12 @@ def on_post_tool_call(
                 completed_at=completed_at,
             )
         except Exception as exc:
-            logger.warning("grafana-agento11y-hermes: tool set_result failed: %s", exc)
+            logger.warning("agento11y-hermes: tool set_result failed: %s", exc)
     finally:
         try:
             recorder.__exit__(None, None, None)
         except Exception as exc:
-            logger.warning("grafana-agento11y-hermes: tool recorder __exit__ failed: %s", exc)
+            logger.warning("agento11y-hermes: tool recorder __exit__ failed: %s", exc)
 
 
 @_fail_open

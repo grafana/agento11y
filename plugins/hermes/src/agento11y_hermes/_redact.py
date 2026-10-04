@@ -19,7 +19,7 @@ from dataclasses import fields, is_dataclass, replace
 from enum import Enum
 from typing import Any
 
-from agento11y import Generation
+from agento11y import Generation, ToolDefinition
 from agento11y.redaction import SecretRedactionOptions, create_secret_redaction_sanitizer, redact_secret_text
 
 _MAX_DEPTH = 4
@@ -91,12 +91,31 @@ def redact_record(value: Any) -> Any:
     if isinstance(value, bytes):
         return redact_secret_text(value.decode("utf-8", errors="replace")).encode("utf-8")
     if is_dataclass(value) and not isinstance(value, type):
-        return replace(value, **{field.name: redact_record(getattr(value, field.name)) for field in fields(value)})
+        return replace(
+            value,
+            **{
+                field.name: (
+                    _redact_schema(value.input_schema_json)
+                    if isinstance(value, ToolDefinition) and field.name == "input_schema_json"
+                    else redact_record(getattr(value, field.name))
+                )
+                for field in fields(value)
+            },
+        )
     if isinstance(value, dict):
         return {redact_record(key): redact_record(item) for key, item in value.items()}
     if isinstance(value, list):
         return [redact_record(item) for item in value]
     return value
+
+
+def _redact_schema(value: bytes) -> bytes:
+    try:
+        json.loads(value)
+    except ValueError:
+        return b""
+    # Regex replacements can leave secret suffixes after escaped quotes, so changed schemas are omitted.
+    return value if redact_record(value) == value else b""
 
 
 def safe_value(

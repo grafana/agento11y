@@ -71,6 +71,14 @@
     ]
   },
   {
+    "id": "hermes",
+    "changelog": "plugins/hermes/CHANGELOG.md",
+    "tag_prefix": "plugins/hermes",
+    "paths": [
+      "plugins/hermes"
+    ]
+  },
+  {
     "id": "opencode",
     "changelog": "plugins/opencode/CHANGELOG.md",
     "tag_prefix": "plugins/opencode",

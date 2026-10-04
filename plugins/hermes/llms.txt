@@ -1,13 +1,13 @@
-# grafana-agento11y-hermes: agent setup guide
+# agento11y-hermes: agent setup guide
 
 Source: https://github.com/grafana/agento11y/tree/main/plugins/hermes
-Read the README there before installing, including its warning about privacy
-differences between the source and published PyPI `0.10.0`.
+Read the README there before installing, including removal of the retired
+`grafana-agento11y-hermes` distribution and its different privacy defaults.
 
 ## Scope
 
-Install `grafana-agento11y-hermes` in the Python environment that runs Hermes.
-The `hermes_agent.plugins` entry point is `agento11y = grafana_agento11y_hermes`.
+Install `agento11y-hermes` in the Python environment that runs Hermes.
+The `hermes_agent.plugins` entry point is `agento11y = agento11y_hermes`.
 There is no `agento11y hermes` launcher. Shared launcher login, `config.env`,
 local viewer, and local mode do not apply. Do not send the user through those flows.
 
@@ -23,6 +23,7 @@ tool descriptions/schemas, tool I/O, and detailed errors do not.
 spans. `default` and invalid modes fall back to `metadata_only`.
 
 Shared secret redaction sanitizes exported content and tool-execution spans.
+Tool schemas are omitted if they are invalid JSON or trigger secret redaction.
 It is pattern matching, not complete personal-data protection. Truncation and
 sampling are not redaction. Prompt redaction defaults to on.
 `AGENTO11Y_REDACT_INPUT_MESSAGES=false` disables only user-prompt redaction;
@@ -42,12 +43,20 @@ Capture modes do not remove custom tags or metadata. Keep secrets out of both.
 ## Install and enable
 
 1. Find the interpreter behind `hermes`; do not assume the shell's Python is correct.
-2. With that environment active, run `python -m pip install ./plugins/hermes`
-   from the repository root. Ask before installing or changing files.
-3. Add `agento11y` to `plugins.enabled` in `~/.hermes/config.yaml`, preserving
-   other plugins. On Hermes 0.19.0, the enable/list CLI misses pip plugins.
-4. If replacing `hermes-plugin-sigil`, uninstall it and replace the enabled
-   `sigil` key. Prefer current `AGENTO11Y_*` variables over supported legacy aliases.
+2. Ask before installing or changing files. In Hermes's Python environment,
+   uninstall `grafana-agento11y-hermes` and `hermes-plugin-sigil` if present.
+   Do not leave either installed alongside `agento11y-hermes`.
+3. Run `python -m pip install --upgrade "agento11y-hermes>=0.11.0"`.
+   If the first release is not yet published, run
+   `python -m pip install ./plugins/hermes` from the repository root instead.
+4. Keep or add `agento11y` in `plugins.enabled` in `~/.hermes/config.yaml`,
+   preserving other plugins. Replace `sigil` if migrating from `hermes-plugin-sigil`.
+   On Hermes 0.19.0, the enable/list CLI misses pip plugins.
+5. Restart Hermes. Prefer `AGENTO11Y_*` variables over supported legacy aliases.
+
+The retired `grafana-agento11y-hermes` `0.10.0` defaults to full content without
+shared secret redaction. Updating that distribution does not install the renamed
+package. Direct Python imports must use `agento11y_hermes`.
 
 Python 3.11+ is required. Hermes 0.16.0 is the floor; the plugin was tested
 against 0.19.0. Do not assume newer hook contracts from upstream HEAD.

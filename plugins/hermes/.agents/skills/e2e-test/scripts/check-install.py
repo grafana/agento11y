@@ -13,7 +13,7 @@ from importlib.metadata import entry_points, version
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s %(message)s")
 
 print("hermes-agent:", version("hermes-agent"))
-print("plugin:", version("grafana-agento11y-hermes"))
+print("plugin:", version("agento11y-hermes"))
 for ep in entry_points(group="hermes_agent.plugins"):
     if ep.name == "agento11y":
         print("entry point:", ep.name, "->", ep.value)

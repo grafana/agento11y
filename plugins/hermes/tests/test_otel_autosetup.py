@@ -10,7 +10,7 @@ from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import ProxyTracerProvider
 
-from grafana_agento11y_hermes import _client, _config, _otel
+from agento11y_hermes import _client, _config, _otel
 
 
 @pytest.fixture(autouse=True)

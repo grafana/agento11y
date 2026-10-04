@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from grafana_agento11y_hermes import _client, _config, _hooks, _state
+from agento11y_hermes import _client, _config, _hooks, _state
 from tests.conftest import FakeClient, FakeRecorder
 
 # --- sampling ---

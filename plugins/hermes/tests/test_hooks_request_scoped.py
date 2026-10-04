@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 from opentelemetry import trace as otel_trace
 
-from grafana_agento11y_hermes import _client, _errors, _hooks, _state
+from agento11y_hermes import _client, _errors, _hooks, _state
 
 # No system message: hermes prepends the system prompt to the list that goes on
 # the wire, not to the running conversation it hands the hooks.
@@ -1024,7 +1024,7 @@ def test_the_exported_spans_share_a_trace_and_carry_the_client_tags(
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-    from grafana_agento11y_hermes import _otel
+    from agento11y_hermes import _otel
 
     exporter = InMemorySpanExporter()
     provider = TracerProvider()

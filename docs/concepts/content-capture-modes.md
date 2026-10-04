@@ -42,11 +42,11 @@ The default differs between SDK clients and coding-agent plugins.
 | Surface | Default mode |
 | --- | --- |
 | Core SDK client (Go, Python, JS/TS, Java, .NET) | `no_tool_content`. Generation content is captured; tool-execution arguments and results stay out of spans. |
-| Coding-agent plugins (shared `agento11y` binary, `@grafana/agento11y-pi`, `@grafana/agento11y-opencode`, `grafana-agento11y-hermes`) | `metadata_only`. Coding-agent sessions usually run on shared machines, so the plugins ship metadata-only by default. |
+| Coding-agent plugins (shared `agento11y` binary, `@grafana/agento11y-pi`, `@grafana/agento11y-opencode`, `agento11y-hermes`) | `metadata_only`. Coding-agent sessions usually run on shared machines, so the plugins ship metadata-only by default. |
 
 `default` at the client level resolves to `no_tool_content`. To get full content on a core SDK client, set `contentCapture: 'full'` (or the language equivalent) explicitly.
 
-These Hermes defaults apply to source installations. Published PyPI `grafana-agento11y-hermes` `0.10.0` defaults to full content without shared secret redaction. See the [Hermes installation guide](../../plugins/hermes/README.md#install).
+These defaults apply to `agento11y-hermes` starting at `0.11.0`. The retired `grafana-agento11y-hermes` `0.10.0` defaults to full content without shared secret redaction. Uninstall the old distribution before installing the renamed package. Refer to the [Hermes installation guide](../../plugins/hermes/README.md#install).
 
 ## Resolution precedence
 
@@ -78,7 +78,7 @@ Per-language READMEs include code examples:
 - Java: [`java/README.md`](../../java/README.md)
 - .NET: [`dotnet/README.md`](../../dotnet/README.md)
 
-For coding-agent plugins, the relevant env var is `AGENTO11Y_CONTENT_CAPTURE_MODE`. All plugins (the shared `agento11y` binary used by Claude Code, Codex, Copilot, Cursor, and Vibe; Pi via `@grafana/agento11y-pi`; OpenCode via `@grafana/agento11y-opencode`; Hermes via `grafana-agento11y-hermes`) accept `full`, `no_tool_content`, `metadata_only`, and `full_with_metadata_spans`. `default` is accepted as an alias for `metadata_only` so plugins match the Go envconfig resolver rather than the JS SDK's client-level default of `no_tool_content`.
+For coding-agent plugins, the relevant env var is `AGENTO11Y_CONTENT_CAPTURE_MODE`. All plugins (the shared `agento11y` binary used by Claude Code, Codex, Copilot, Cursor, and Vibe; Pi via `@grafana/agento11y-pi`; OpenCode via `@grafana/agento11y-opencode`; Hermes via `agento11y-hermes`) accept `full`, `no_tool_content`, `metadata_only`, and `full_with_metadata_spans`. `default` is accepted as an alias for `metadata_only` so plugins match the Go envconfig resolver rather than the JS SDK's client-level default of `no_tool_content`.
 
 Unknown values fall back to `metadata_only`. The launchers, Pi, and OpenCode log a warning; Hermes falls back silently. A plugin can still export less than the SDK allows. For example, an adapter may drop a field if the host agent does not pass it through.
 

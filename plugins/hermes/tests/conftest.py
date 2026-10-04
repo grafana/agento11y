@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 from opentelemetry import trace
 
-from grafana_agento11y_hermes import _client, _hooks, _state, _tags
+from agento11y_hermes import _client, _hooks, _state, _tags
 
 
 class FakeSpan:
@@ -172,7 +172,7 @@ def patch_client(monkeypatch: pytest.MonkeyPatch, env_creds: None) -> FakeClient
 
     monkeypatch.setattr(agento11y, "Client", factory)
     # Skip the real OTel auto-setup — tests for that path are isolated.
-    from grafana_agento11y_hermes import _otel
+    from agento11y_hermes import _otel
 
     monkeypatch.setattr(_otel, "setup_if_needed", lambda cfg: True)
 
@@ -186,7 +186,7 @@ def failing_client(monkeypatch: pytest.MonkeyPatch, env_creds: None) -> Callable
     """Build the singleton with named client and recorder methods raising ``SdkExploded``."""
     import agento11y
 
-    from grafana_agento11y_hermes import _otel
+    from agento11y_hermes import _otel
 
     def build(*names: str) -> FakeClient:
         raises = frozenset(names)

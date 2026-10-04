@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from grafana_agento11y_hermes import _hooks, _state
+from agento11y_hermes import _hooks, _state
 from tests.conftest import FakeClient
 
 # Every SDK call the plugin makes across a full turn. Each one is a place the
@@ -226,7 +226,7 @@ def test_a_client_that_cannot_be_built_leaves_every_hook_a_no_op(
 ) -> None:
     import agento11y
 
-    from grafana_agento11y_hermes import _otel
+    from agento11y_hermes import _otel
 
     def explode(*_: Any, **__: Any) -> Any:
         raise RuntimeError("no client for you")

@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from grafana_agento11y_hermes import _compat
+from agento11y_hermes import _compat
 
 
 def test_old_name_is_copied_not_moved() -> None:

@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from grafana_agento11y_hermes import _version
+from agento11y_hermes import _version
 
 
 @pytest.fixture
@@ -23,6 +23,15 @@ def sdk_version_import_fails(monkeypatch: pytest.MonkeyPatch) -> None:
         return real_import(name, globals, locals, fromlist, level)
 
     monkeypatch.setattr(builtins, "__import__", guarded)
+
+
+def test_plugin_version_uses_renamed_distribution(monkeypatch) -> None:
+    def lookup(name: str) -> str:
+        assert name == "agento11y-hermes"
+        return "0.11.0"
+
+    monkeypatch.setattr(_version, "version", lookup)
+    assert _version._plugin_version() == "0.11.0"
 
 
 def test_plugin_user_agent_format() -> None:

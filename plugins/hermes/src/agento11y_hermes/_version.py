@@ -18,7 +18,7 @@ _SDK_PRODUCT = "agento11y-sdk-python"
 
 def _plugin_version() -> str:
     try:
-        return version("grafana-agento11y-hermes")
+        return version("agento11y-hermes")
     except PackageNotFoundError:
         return "dev"
 

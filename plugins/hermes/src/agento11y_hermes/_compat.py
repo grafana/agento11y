@@ -84,7 +84,7 @@ def apply_legacy_env(env: MutableMapping[str, str] | None = None) -> list[str]:
             continue
         if (target.get(new) or "").strip():
             logger.warning(
-                "grafana-agento11y-hermes: %s and %s are both set, using %s",
+                "agento11y-hermes: %s and %s are both set, using %s",
                 old,
                 new,
                 new,
@@ -95,7 +95,7 @@ def apply_legacy_env(env: MutableMapping[str, str] | None = None) -> list[str]:
 
     if promoted:
         logger.warning(
-            "grafana-agento11y-hermes: applied %d renamed env %s for now. Rename %s.",
+            "agento11y-hermes: applied %d renamed env %s for now. Rename %s.",
             len(promoted),
             "var" if len(promoted) == 1 else "vars",
             ", ".join(f"{old} to {new}" for old, new in sorted((o, renames()[o]) for o in promoted)),

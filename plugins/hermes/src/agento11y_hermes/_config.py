@@ -1,4 +1,4 @@
-"""Plugin-specific configuration for grafana-agento11y-hermes.
+"""Plugin-specific configuration for agento11y-hermes.
 
 Transport, auth, agent identity, debug, and content-capture-mode resolution
 are owned by the SDK's ``Client()`` constructor. See the canonical
@@ -67,7 +67,7 @@ def _env_float(name: str, default: float) -> float:
     try:
         return float(raw)
     except ValueError:
-        logger.warning("grafana-agento11y-hermes: invalid %s=%r, using default %s", name, raw, default)
+        logger.warning("agento11y-hermes: invalid %s=%r, using default %s", name, raw, default)
         return default
 
 
@@ -78,7 +78,7 @@ def _env_int(name: str, default: int) -> int:
     try:
         return int(raw)
     except ValueError:
-        logger.warning("grafana-agento11y-hermes: invalid %s=%r, using default %s", name, raw, default)
+        logger.warning("agento11y-hermes: invalid %s=%r, using default %s", name, raw, default)
         return default
 
 

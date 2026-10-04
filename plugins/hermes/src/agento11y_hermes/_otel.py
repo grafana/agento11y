@@ -172,7 +172,7 @@ def setup_if_needed(plugin_cfg: _config.PluginConfig) -> bool:
     if not plugin_cfg.otel_auto:
         if needs_tracer or needs_meter:
             logger.warning(
-                "grafana-agento11y-hermes: AGENTO11Y_HERMES_OTEL_AUTO=false and no provider is configured "
+                "agento11y-hermes: AGENTO11Y_HERMES_OTEL_AUTO=false and no provider is configured "
                 "for %s — telemetry is disabled.",
                 "TracerProvider+MeterProvider"
                 if (needs_tracer and needs_meter)
@@ -187,7 +187,7 @@ def setup_if_needed(plugin_cfg: _config.PluginConfig) -> bool:
             trace.set_tracer_provider(provider)
             _INSTALLED_TRACER_PROVIDER = provider
             logger.info(
-                "grafana-agento11y-hermes: installed TracerProvider with OTLP HTTP exporter%s",
+                "agento11y-hermes: installed TracerProvider with OTLP HTTP exporter%s",
                 _auth_source(derived_auth),
             )
         if needs_meter:
@@ -195,11 +195,11 @@ def setup_if_needed(plugin_cfg: _config.PluginConfig) -> bool:
             metrics.set_meter_provider(provider)
             _INSTALLED_METER_PROVIDER = provider
             logger.info(
-                "grafana-agento11y-hermes: installed MeterProvider with OTLP HTTP exporter%s",
+                "agento11y-hermes: installed MeterProvider with OTLP HTTP exporter%s",
                 _auth_source(derived_auth),
             )
     except Exception as exc:
-        logger.warning("grafana-agento11y-hermes: failed to set up OTel providers: %s", exc)
+        logger.warning("agento11y-hermes: failed to set up OTel providers: %s", exc)
         _SETUP_DONE = True
         return False
 
@@ -226,12 +226,12 @@ def force_flush(timeout_millis: int | None = None) -> None:
         try:
             _INSTALLED_TRACER_PROVIDER.force_flush(**kwargs)
         except Exception as exc:
-            logger.warning("grafana-agento11y-hermes: TracerProvider force_flush failed: %s", exc)
+            logger.warning("agento11y-hermes: TracerProvider force_flush failed: %s", exc)
     if _INSTALLED_METER_PROVIDER is not None:
         try:
             _INSTALLED_METER_PROVIDER.force_flush(**kwargs)
         except Exception as exc:
-            logger.warning("grafana-agento11y-hermes: MeterProvider force_flush failed: %s", exc)
+            logger.warning("agento11y-hermes: MeterProvider force_flush failed: %s", exc)
 
 
 def _reset_for_tests() -> None:

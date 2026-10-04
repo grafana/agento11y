@@ -39,11 +39,11 @@ CI runs `mise run check:redaction` in the same job as the proto drift check. `re
 
 ## Releases run off `.github/sdk-releases.json`
 
-That table holds each release line's id, tag prefix, changelog path, and the commit paths its changelog section is generated from. Seven lines are listed: the five SDKs plus `plugins/pi` and `plugins/opencode`.
+That table holds each release line's id, tag prefix, changelog path, and the commit paths its changelog section is generated from. Eight lines are listed: the five SDKs plus `plugins/pi`, `plugins/opencode`, and `plugins/hermes`.
 
-The commit paths live only there, and every release workflow reads them with `jq`. Tag prefixes and changelog paths are duplicated: the five SDK workflows still spell out their own `sdk-python/v*`-style prefix and `python/CHANGELOG.md`-style path inline, and `sdk-github-releases.yml` hand-copies all seven prefixes into `on.push.tags`, which GitHub cannot template from a file. So a new release line needs a row *and* a pass over those workflows; a row on its own gets the line tagged with no release page.
+The commit paths live only there, and every release workflow reads them with `jq`. Tag prefixes and changelog paths are duplicated: the five SDK workflows still spell out their own `sdk-python/v*`-style prefix and `python/CHANGELOG.md`-style path inline, and `sdk-github-releases.yml` hand-copies all eight prefixes into `on.push.tags`, which GitHub cannot template from a file. So a new release line needs a row *and* a pass over those workflows; a row on its own gets the line tagged with no release page.
 
-Each SDK row carries `:(exclude)` pathspecs for tests and READMEs, because a conformance test under `go/` would otherwise put a JS-only commit in the Go changelog. The two plugin rows own their whole directory and need no excludes.
+Each SDK row carries `:(exclude)` pathspecs for tests and READMEs, because a conformance test under `go/` would otherwise put a JS-only commit in the Go changelog. The three plugin rows own their whole directory and need no excludes.
 
 Three steps run per release, and none of them creates a tag on the release PR:
 
@@ -70,7 +70,7 @@ Three steps run per release, and none of them creates a tag on the release PR:
 | `plugins/agento11y/` | The shared Go binary, installed as `agento11y` (`brew install grafana/grafana/agento11y`; the old `sigil` name still works but will be removed). Has subcommands `claude`, `codex`, `copilot`, `cursor`, `opencode`, `pi`, `vibe`, `login`, `doctor`, `local`, `history`, `skills`, `help`. This is also what consumers use. |
 | `plugins/claude-code/`, `plugins/codex/`, `plugins/copilot/`, `plugins/cursor/` | Thin glue: hook scripts and READMEs that wire the host agent to the shared `agento11y` binary. No independent code paths. |
 | `plugins/opencode/` | Independent npm package `@grafana/agento11y-opencode`. Runs in-process inside opencode through its TypeScript plugin API; `agento11y opencode` installs and launches it. |
-| `plugins/hermes/` | Independent Python package `grafana-agento11y-hermes`. Runs in-process through Hermes's `agento11y` plugin entry point. No shared launcher/login/config/local mode or release-table registration. See `plugins/hermes/README.md` for setup and release limitations. |
+| `plugins/hermes/` | Independent Python package `agento11y-hermes`, module `agento11y_hermes`. Runs in-process through Hermes's `agento11y` plugin entry point. `hermes-publish.yml` prepares release PRs and publishes merged `plugins/hermes/v*` tags to PyPI. No shared launcher/login/config/local mode. See `plugins/hermes/README.md` for setup. |
 | `plugins/pi/` | Independent npm package `@grafana/agento11y-pi`. Runs in-process inside pi; `agento11y pi` installs and launches it. |
 | `plugins/vibe/` | README only. `agento11y vibe` upserts three `[[hooks]]` entries into `hooks.toml` under `$VIBE_HOME` (default `~/.vibe`) and sets `VIBE_ENABLE_EXPERIMENTAL_HOOKS=true` on the child, which only a vibe below 2.21.0 needs. Vibe 2.21.0 renamed all three hook types, so the install path picks the spelling from `vibe --version` and the hook dispatcher answers to both. See `internal/agents/vibe/version.go`. |
 
@@ -121,6 +121,6 @@ test_home=$(mktemp -d)
   GOPATH="$go_path" GOCACHE="$go_cache" TMPDIR=/tmp GOWORK=off "$go_root/bin/go" test ./...)
 ```
 
-Hermes uses `format:py:plugin-hermes`, `lint:py:plugin-hermes`, `typecheck:py:plugin-hermes`, `test:py:plugin-hermes`, and `build:py:plugin-hermes`. The build validates wheel and source-distribution artifacts. CI tests Python 3.11–3.14 with branch coverage and a 99% minimum. Optional real-Hermes tests require an explicit loopback provider and both telemetry channels routed locally or disabled; inspect the plugin's e2e skill and scripts first.
+Hermes uses `format:py:plugin-hermes`, `lint:py:plugin-hermes`, `typecheck:py:plugin-hermes`, `test:py:plugin-hermes`, and `build:py:plugin-hermes`. The build validates wheel and source-distribution artifacts, including the full Apache license. Keep `plugins/hermes/LICENSE` identical to the root license. Its release version is independent of the Python SDK; do not add Hermes to `sdk:py:bump`. CI tests Python 3.11–3.14 with branch coverage and a 99% minimum. Optional real-Hermes tests require an explicit loopback provider and both telemetry channels routed locally or disabled; inspect the plugin's e2e skill and scripts first.
 
 `mise run check` is the full local CI gate: lint + typecheck + proto-drift + redaction-drift + every SDK suite + Hermes artifact validation. For a focused change, run the matching narrow task (e.g. `mise run test:py:sdk-langgraph`); the full gate is slow.

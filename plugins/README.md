@@ -55,7 +55,7 @@ Plugins send metadata only by default. `AGENTO11Y_CONTENT_CAPTURE_MODE=full` add
 
 When a plugin exports content, it redacts known secret formats first. That covers user prompts, system prompts, assistant text, thinking, conversation titles, error messages, tool arguments, and tool results, on the generation and on the tool-execution span. Set `AGENTO11Y_REDACT_INPUT_MESSAGES=false` to send user prompts without redaction; everything else stays redacted. The strength differs per field, and prose fields are deliberately treated more gently than pasted content; [Content Capture Modes](../docs/concepts/content-capture-modes.md#strength-per-field) has the table.
 
-See the [Hermes installation guide](hermes/README.md#install) for privacy differences between the source and published PyPI `0.10.0`.
+The [Hermes installation guide](hermes/README.md#install) explains migration from `grafana-agento11y-hermes` to `agento11y-hermes`. The retired `0.10.0` package defaults to full content without shared secret redaction.
 
 ## Configuration
 
