@@ -32,13 +32,6 @@ jobs:
       - name: Test changelog-latest-section.sh
         run: ./.github/scripts/changelog-latest-section.test.sh
 
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
-        with:
-          python-version: '3.11'
-
-      - name: Test Hermes release scripts
-        run: python .github/scripts/hermes-release.test.py
-
   proto:
     name: Protobuf drift
     runs-on: ubuntu-latest

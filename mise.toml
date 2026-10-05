@@ -43,10 +43,6 @@ description = "Test Hermes with isolated credentials and 99% branch coverage"
 usage = 'arg "[python]" default="3.11"'
 run = 'bash plugins/hermes/scripts/run-check.sh test "${usage_python?}"'
 
-[tasks."test:py:plugin-hermes-release"]
-description = "Test Hermes release guards and version preparation without network access"
-run = "python3 .github/scripts/hermes-release.test.py"
-
 [tasks."build:py:plugin-hermes"]
 description = "Verify Hermes wheel and rebuilt sdist outside the checkout"
 run = "bash plugins/hermes/scripts/run-check.sh build"
@@ -748,18 +744,20 @@ PACKAGE_DIRS=(
   python-frameworks/deepeval
   python-frameworks/strands
   python-frameworks/claude-agent-sdk
+  plugins/hermes
 )
 
 for dir in "${PACKAGE_DIRS[@]}"; do
   file="${dir}/pyproject.toml"
   perl -i -pe "s/^version = \".*\"/version = \"${VERSION}\"/" "$file"
-  if [[ "$dir" != "python" ]]; then
+  if [[ "$dir" != "python" && "$dir" != "plugins/hermes" ]]; then
     perl -i -pe "s/\"agento11y>=.*\"/\"agento11y>=${VERSION}\"/" "$file"
   fi
   echo "  updated ${file}"
 done
+(cd plugins/hermes && uv --no-config lock)
 
-echo "All Python SDK versions bumped to ${VERSION}"
+echo "All Python package versions bumped to ${VERSION}"
 '''
 
 # --- Proto generation ---
@@ -986,5 +984,5 @@ ls -la "$web/vendor" "$web/fonts"
 
 [tasks.check]
 description = "Run lint + typecheck + tests + Hermes artifact verification"
-depends = ["lint", "typecheck", "check:proto", "check:redaction", "build:py:plugin-hermes", "test:py:plugin-hermes-release"]
+depends = ["lint", "typecheck", "check:proto", "check:redaction", "build:py:plugin-hermes"]
 run = "mise run test:sdk:all"

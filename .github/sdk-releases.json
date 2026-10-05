@@ -27,6 +27,7 @@
       "python",
       "python-providers",
       "python-frameworks",
+      "plugins/hermes",
       ":(exclude)**/tests/**",
       ":(exclude)**/README.md"
     ]
@@ -68,14 +69,6 @@
     "tag_prefix": "plugins/pi",
     "paths": [
       "plugins/pi"
-    ]
-  },
-  {
-    "id": "hermes",
-    "changelog": "plugins/hermes/CHANGELOG.md",
-    "tag_prefix": "plugins/hermes",
-    "paths": [
-      "plugins/hermes"
     ]
   },
   {

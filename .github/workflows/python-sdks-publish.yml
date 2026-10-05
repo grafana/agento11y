@@ -59,6 +59,10 @@ jobs:
       - name: Install build tools
         run: pip install build
 
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: false
+
       - name: Compute and apply version bump
         id: bump
         shell: bash
@@ -119,16 +123,18 @@ jobs:
             python-frameworks/deepeval
             python-frameworks/strands
             python-frameworks/claude-agent-sdk
+            plugins/hermes
           )
 
           for dir in "${PACKAGE_DIRS[@]}"; do
             file="${dir}/pyproject.toml"
             sed -i "s/^version = \".*\"/version = \"${NEW}\"/" "$file"
-            if [[ "$dir" != "python" ]]; then
+            if [[ "$dir" != "python" && "$dir" != "plugins/hermes" ]]; then
               sed -i "s/\"agento11y>=.*\"/\"agento11y>=${NEW}\"/" "$file"
             fi
             echo "  updated ${file}"
           done
+          (cd plugins/hermes && uv --no-config lock)
 
       - name: Build all packages
         shell: bash
@@ -155,6 +161,7 @@ jobs:
             echo "Building ${pkg_name} from ${dir}..."
             python -m build "$dir" --outdir "dist/${pkg_name}"
           done
+          bash plugins/hermes/scripts/run-check.sh build --expected-version "${{ steps.bump.outputs.new-version }}" --output-dir "$GITHUB_WORKSPACE/dist/agento11y-hermes"
 
       - name: Upload built distributions
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -192,6 +199,8 @@ jobs:
             python/pyproject.toml
             python-providers/*/pyproject.toml
             python-frameworks/*/pyproject.toml
+            plugins/hermes/pyproject.toml
+            plugins/hermes/uv.lock
           commit-message: "chore(sdk-python): bump version to ${{ steps.bump.outputs.new-version }}"
           title: "chore(sdk-python): bump version to ${{ steps.bump.outputs.new-version }}"
           body-path: /tmp/pr-body.md
@@ -253,6 +262,7 @@ jobs:
           - agento11y-deepeval
           - agento11y-strands
           - agento11y-claude-agent-sdk
+          - agento11y-hermes
 
     steps:
       - name: Download distributions

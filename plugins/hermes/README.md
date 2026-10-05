@@ -125,8 +125,6 @@ The build task checks the wheel, source distribution, installed entry point, and
 
 Real-Hermes end-to-end testing is optional, not part of the normal checks. Read [.agents/skills/e2e-test/SKILL.md](.agents/skills/e2e-test/SKILL.md) for a credential-free loopback recipe. A local telemetry sink alone does not make the model provider local.
 
-Release preparation and PyPI setup are documented in the [contributor guide](../../docs/development.md#hermes-releases). Hermes uses its own version and `plugins/hermes/v*` tags, separate from the Python SDK.
-
 ## License
 
 Copyright 2026 Grafana Labs. [Apache-2.0](LICENSE).

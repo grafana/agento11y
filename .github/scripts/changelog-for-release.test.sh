@@ -125,23 +125,15 @@ assert_contains 'frameworks path included' '- **frameworks/langchain**: new adap
 assert_not_contains 'path outside the SDK excluded' 'outside the python tree' "$out"
 assert_not_contains 'seed before previous tag excluded' 'seed core' "$out"
 
+git tag sdk-python/v0.2.0
 mkdir -p plugins/hermes
-printf 'hermes\n' > plugins/hermes/file.txt
-git add plugins/hermes/file.txt
-git commit -q -m 'feat(hermes): import plugin'
-git tag sdk-python/v9.0.0
-out=$("$CHANGELOG" 0.10.1 plugins/hermes plugins/hermes)
-assert_contains 'first Hermes release includes import without a baseline tag' '- **hermes**: import plugin' "$out"
-assert_not_contains 'Hermes excludes SDK changes' 'core export change' "$out"
-assert_not_contains 'Hermes excludes other plugin changes' 'repair login' "$out"
-
-git tag plugins/hermes/v0.10.1
-printf 'fix\n' >> plugins/hermes/file.txt
+printf 'fix\n' > plugins/hermes/file.txt
 git add plugins/hermes/file.txt
 git commit -q -m 'fix(hermes): repair export'
-out=$("$CHANGELOG" 0.10.2 plugins/hermes plugins/hermes)
-assert_contains 'Hermes uses its own previous tag' '- **hermes**: repair export' "$out"
-assert_not_contains 'previous Hermes release excluded' 'import plugin' "$out"
+out=$("$CHANGELOG" 0.3.0 sdk-python python python-providers python-frameworks plugins/hermes)
+assert_contains 'Hermes joins Python SDK changelog' '- **hermes**: repair export' "$out"
+assert_not_contains 'previous SDK release excluded' 'core export change' "$out"
+assert_not_contains 'unrelated path excluded' 'outside the python tree' "$out"
 
 echo "passed: ${pass}, failed: ${fail}"
 [[ $fail -eq 0 ]]

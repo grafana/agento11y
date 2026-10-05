@@ -28,7 +28,7 @@ wheels = [
 
 [[package]]
 name = "agento11y-hermes"
-version = "0.11.0"
+version = "0.18.0"
 source = { editable = "." }
 dependencies = [
     { name = "agento11y" },
@@ -46,7 +46,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agento11y", specifier = ">=0.17,<0.18" },
+    { name = "agento11y", specifier = ">=0.17" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.27" },
     { name = "opentelemetry-sdk", specifier = ">=1.27" },
 ]
