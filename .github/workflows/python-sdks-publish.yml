@@ -12,6 +12,28 @@ on:
           - minor
           - major
         default: minor
+      package:
+        description: 'Package to release (all releases the whole Python SDK set)'
+        required: true
+        type: choice
+        options:
+          - all
+          - agento11y
+          - agento11y-openai
+          - agento11y-anthropic
+          - agento11y-gemini
+          - agento11y-langchain
+          - agento11y-langgraph
+          - agento11y-openai-agents
+          - agento11y-llamaindex
+          - agento11y-google-adk
+          - agento11y-litellm
+          - agento11y-pydantic-ai
+          - agento11y-deepeval
+          - agento11y-strands
+          - agento11y-claude-agent-sdk
+          - agento11y-hermes
+        default: all
       dry-run:
         description: 'Preview only, do not publish, open a PR, or push tags'
         required: false
@@ -31,6 +53,7 @@ jobs:
       id-token: write
     outputs:
       new-version: ${{ steps.bump.outputs.new-version }}
+      dependents: ${{ steps.bump.outputs.dependents }}
 
     steps:
       - name: Generate GitHub token
@@ -57,7 +80,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install build tools
-        run: pip install build
+        run: pip install build 'twine==7.0.0' 'packaging==26.2'
 
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
@@ -69,45 +92,8 @@ jobs:
         env:
           BUMP: ${{ inputs.version }}
           DRY_RUN: ${{ inputs.dry-run }}
+          PACKAGE: ${{ inputs.package }}
         run: |
-          CURRENT=$(grep '^version = ' python/pyproject.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-
-          # A tag appears only when the release PR merges, so a changelog top
-          # version ahead of the newest tag means the last release merged
-          # untagged. Stop, rather than emit a second section for it.
-          LATEST=$(git tag -l 'sdk-python/v*' | sed 's|sdk-python/v||' | sort -V | tail -1)
-          LATEST=${LATEST:-0.0.0}
-          TOP=$(./.github/scripts/changelog-top-version.sh python/CHANGELOG.md)
-          if [[ -n "$TOP" && "$TOP" != "$LATEST" \
-                && "$(printf '%s\n%s\n' "$TOP" "$LATEST" | sort -V | tail -1)" == "$TOP" ]]; then
-            echo "::error::python/CHANGELOG.md top v${TOP} is ahead of the latest sdk-python/v* tag v${LATEST}; create the missing tag and retry."
-            exit 1
-          fi
-
-          NEW=$(./.github/scripts/bump-version.sh "$BUMP" "$CURRENT")
-
-          echo "new-version=${NEW}" >> "$GITHUB_OUTPUT"
-
-          ROW=$(jq -r '.[] | select(.id == "python")' .github/sdk-releases.json)
-          mapfile -t PATHS < <(jq -r '.paths[]' <<<"$ROW")
-          SECTION=$(./.github/scripts/changelog-for-release.sh "$NEW" sdk-python "${PATHS[@]}")
-          printf '%s\n' "$SECTION" > /tmp/section.md
-          printf '%s\n' "$SECTION" | ./.github/scripts/prepend-changelog.sh python/CHANGELOG.md
-
-          {
-            echo "## Python SDK release plan"
-            echo ""
-            echo "- bump type: \`${BUMP}\`"
-            echo "- current: \`${CURRENT}\`"
-            echo "- new: \`${NEW}\`"
-            echo "- tag: \`sdk-python/v${NEW}\`"
-            echo "- dry-run: \`${DRY_RUN}\`"
-            echo ""
-            echo "### Changelog section"
-            echo ""
-            printf '%s\n' "$SECTION"
-          } >> "$GITHUB_STEP_SUMMARY"
-
           PACKAGE_DIRS=(
             python
             python-providers/openai
@@ -126,18 +112,106 @@ jobs:
             plugins/hermes
           )
 
+          TARGET=python
+          if [[ "$PACKAGE" != all ]]; then
+            TARGET=
+            for dir in "${PACKAGE_DIRS[@]}"; do
+              name=$(grep '^name = ' "${dir}/pyproject.toml" | head -1 | sed 's/name = "\(.*\)"/\1/')
+              if [[ "$name" == "$PACKAGE" ]]; then
+                TARGET=$dir
+                break
+              fi
+            done
+            if [[ -z "$TARGET" ]]; then
+              echo "::error::Unknown Python package: ${PACKAGE}"
+              exit 1
+            fi
+          fi
+          CURRENT=$(grep '^version = ' "${TARGET}/pyproject.toml" | head -1 | sed 's/version = "\(.*\)"/\1/')
+
+          if [[ "$PACKAGE" == all || "$PACKAGE" == agento11y ]]; then
+            # A tag appears only when the release PR merges, so a changelog top
+            # version ahead of the newest tag means the last release merged
+            # untagged. Stop, rather than emit a second section for it.
+            LATEST=$(git tag -l 'sdk-python/v*' | sed 's|sdk-python/v||' | sort -V | tail -1)
+            LATEST=${LATEST:-0.0.0}
+            TOP=$(./.github/scripts/changelog-top-version.sh python/CHANGELOG.md)
+            if [[ -n "$TOP" && "$TOP" != "$LATEST" \
+                  && "$(printf '%s\n%s\n' "$TOP" "$LATEST" | sort -V | tail -1)" == "$TOP" ]]; then
+              echo "::error::python/CHANGELOG.md top v${TOP} is ahead of the latest sdk-python/v* tag v${LATEST}; create the missing tag and retry."
+              exit 1
+            fi
+          fi
+
+          NEW=$(./.github/scripts/bump-version.sh "$BUMP" "$CURRENT")
+          echo "new-version=${NEW}" >> "$GITHUB_OUTPUT"
+
+          if [[ "$PACKAGE" == all || "$PACKAGE" == agento11y ]]; then
+            ROW=$(jq -r '.[] | select(.id == "python")' .github/sdk-releases.json)
+            mapfile -t PATHS < <(jq -r '.paths[]' <<<"$ROW")
+            SECTION=$(./.github/scripts/changelog-for-release.sh "$NEW" sdk-python "${PATHS[@]}")
+            printf '%s\n' "$SECTION" > /tmp/section.md
+            printf '%s\n' "$SECTION" | ./.github/scripts/prepend-changelog.sh python/CHANGELOG.md
+          fi
+
+          {
+            echo "## Python SDK release plan"
+            echo ""
+            echo "- package: \`${PACKAGE}\`"
+            echo "- bump type: \`${BUMP}\`"
+            if [[ "$PACKAGE" == all ]]; then
+              echo "- core current: \`${CURRENT}\`"
+              echo "- core new: \`${NEW}\`"
+            else
+              echo "- current: \`${CURRENT}\`"
+              echo "- new: \`${NEW}\`"
+            fi
+            echo "- dry-run: \`${DRY_RUN}\`"
+            if [[ "$PACKAGE" == all || "$PACKAGE" == agento11y ]]; then
+              echo "- tag: \`sdk-python/v${NEW}\`"
+              echo ""
+              echo "### Changelog section"
+              echo ""
+              printf '%s\n' "$SECTION"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "$PACKAGE" == all ]]; then
+            mapfile -t DEPENDENTS < <(for dir in "${PACKAGE_DIRS[@]:1}"; do grep '^name = ' "${dir}/pyproject.toml" | head -1 | sed 's/name = "\(.*\)"/\1/'; done)
+          elif [[ "$PACKAGE" == agento11y ]]; then
+            DEPENDENTS=()
+          else
+            DEPENDENTS=("$PACKAGE")
+          fi
+          printf 'dependents=%s\n' "$(printf '%s\n' "${DEPENDENTS[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))')" >> "$GITHUB_OUTPUT"
+
           for dir in "${PACKAGE_DIRS[@]}"; do
+            if [[ "$PACKAGE" != all && "$dir" != "$TARGET" ]]; then
+              continue
+            fi
             file="${dir}/pyproject.toml"
-            sed -i "s/^version = \".*\"/version = \"${NEW}\"/" "$file"
-            if [[ "$dir" != "python" && "$dir" != "plugins/hermes" ]]; then
+            VERSION=$NEW
+            if [[ "$PACKAGE" == all && "$dir" != python ]]; then
+              current=$(grep '^version = ' "$file" | head -1 | sed 's/version = "\(.*\)"/\1/')
+              VERSION=$(./.github/scripts/bump-version.sh "$BUMP" "$current")
+            fi
+            sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" "$file"
+            if [[ "$PACKAGE" == all && "$dir" != "python" && "$dir" != "plugins/hermes" ]]; then
               sed -i "s/\"agento11y>=.*\"/\"agento11y>=${NEW}\"/" "$file"
             fi
-            echo "  updated ${file}"
+            if [[ "$dir" == plugins/hermes ]]; then
+              echo "hermes-version=${VERSION}" >> "$GITHUB_OUTPUT"
+            fi
+            echo "  updated ${file} to ${VERSION}"
           done
-          (cd plugins/hermes && uv --no-config lock)
+          if [[ "$PACKAGE" == all || "$PACKAGE" == agento11y-hermes ]]; then
+            (cd plugins/hermes && uv --no-config lock)
+          fi
 
-      - name: Build all packages
+      - name: Build distributions
         shell: bash
+        env:
+          PACKAGE: ${{ inputs.package }}
         run: |
           PACKAGE_DIRS=(
             python
@@ -158,10 +232,16 @@ jobs:
 
           for dir in "${PACKAGE_DIRS[@]}"; do
             pkg_name=$(grep '^name = ' "${dir}/pyproject.toml" | head -1 | sed 's/name = "\(.*\)"/\1/')
+            if [[ "$PACKAGE" != all && "$PACKAGE" != "$pkg_name" ]]; then
+              continue
+            fi
             echo "Building ${pkg_name} from ${dir}..."
             python -m build "$dir" --outdir "dist/${pkg_name}"
           done
-          bash plugins/hermes/scripts/run-check.sh build --expected-version "${{ steps.bump.outputs.new-version }}" --output-dir "$GITHUB_WORKSPACE/dist/agento11y-hermes"
+          if [[ "$PACKAGE" == all || "$PACKAGE" == agento11y-hermes ]]; then
+            bash plugins/hermes/scripts/run-check.sh build --expected-version "${{ steps.bump.outputs.hermes-version }}" --output-dir "$GITHUB_WORKSPACE/dist/agento11y-hermes"
+          fi
+          python -m twine check --strict dist/*/*
 
       - name: Upload built distributions
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -174,16 +254,25 @@ jobs:
         if: ${{ !inputs.dry-run }}
         env:
           NEW_VERSION: ${{ steps.bump.outputs.new-version }}
+          PACKAGE: ${{ inputs.package }}
         run: |
-          {
-            echo "Releases the Python SDKs at \`${NEW_VERSION}\`."
-            echo ""
-            cat /tmp/section.md
-            echo ""
-            echo "---"
-            echo ""
-            echo "Merging this PR creates \`sdk-python/v${NEW_VERSION}\` via \`tag-releases-on-merge.yml\`."
-          } > /tmp/pr-body.md
+          if [[ "$PACKAGE" == all || "$PACKAGE" == agento11y ]]; then
+            {
+              if [[ "$PACKAGE" == all ]]; then
+                echo "Releases the Python packages, including \`agento11y\` at \`${NEW_VERSION}\`."
+              else
+                echo "Releases \`agento11y\` at \`${NEW_VERSION}\`."
+              fi
+              echo ""
+              cat /tmp/section.md
+              echo ""
+              echo "---"
+              echo ""
+              echo "Merging this PR creates \`sdk-python/v${NEW_VERSION}\` via \`tag-releases-on-merge.yml\`."
+            } > /tmp/pr-body.md
+          else
+            echo "Releases \`${PACKAGE}\` at \`${NEW_VERSION}\` without changing the shared Python SDK changelog or tag." > /tmp/pr-body.md
+          fi
 
       - name: Open release PR
         id: cpr
@@ -191,7 +280,7 @@ jobs:
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
           token: ${{ steps.generate-github-token.outputs.token }}
-          branch: release/sdk-python-${{ steps.bump.outputs.new-version }}
+          branch: release/${{ inputs.package == 'all' && 'sdk-python' || inputs.package }}-${{ steps.bump.outputs.new-version }}
           base: main
           sign-commits: true
           add-paths: |
@@ -201,8 +290,8 @@ jobs:
             python-frameworks/*/pyproject.toml
             plugins/hermes/pyproject.toml
             plugins/hermes/uv.lock
-          commit-message: "chore(sdk-python): bump version to ${{ steps.bump.outputs.new-version }}"
-          title: "chore(sdk-python): bump version to ${{ steps.bump.outputs.new-version }}"
+          commit-message: "chore(${{ inputs.package == 'all' && 'sdk-python' || inputs.package }}): bump version to ${{ steps.bump.outputs.new-version }}"
+          title: "chore(${{ inputs.package == 'all' && 'sdk-python' || inputs.package }}): bump version to ${{ steps.bump.outputs.new-version }}"
           body-path: /tmp/pr-body.md
 
       - name: Enable auto-merge
@@ -214,7 +303,7 @@ jobs:
         run: gh pr merge "${BRANCH}" --auto --squash --delete-branch
 
   publish-core:
-    if: ${{ !inputs.dry-run }}
+    if: ${{ !inputs.dry-run && (inputs.package == 'all' || inputs.package == 'agento11y') }}
     needs: build
     runs-on: ubuntu-latest
     environment: pypi
@@ -229,7 +318,7 @@ jobs:
           path: dist/
 
       - name: Publish agento11y to PyPI
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           packages-dir: dist/agento11y/
           # PEP 740 attestations via OIDC (id-token: write). Default since
@@ -239,7 +328,7 @@ jobs:
           attestations: true
 
   publish-dependents:
-    if: ${{ !inputs.dry-run }}
+    if: ${{ always() && !inputs.dry-run && needs.build.result == 'success' && (inputs.package == 'all' && needs.publish-core.result == 'success' || inputs.package != 'all' && inputs.package != 'agento11y') }}
     needs: [build, publish-core]
     runs-on: ubuntu-latest
     environment: pypi
@@ -248,21 +337,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package:
-          - agento11y-openai
-          - agento11y-anthropic
-          - agento11y-gemini
-          - agento11y-langchain
-          - agento11y-langgraph
-          - agento11y-openai-agents
-          - agento11y-llamaindex
-          - agento11y-google-adk
-          - agento11y-litellm
-          - agento11y-pydantic-ai
-          - agento11y-deepeval
-          - agento11y-strands
-          - agento11y-claude-agent-sdk
-          - agento11y-hermes
+        package: ${{ fromJSON(needs.build.outputs.dependents || '[]') }}
 
     steps:
       - name: Download distributions
@@ -272,7 +347,7 @@ jobs:
           path: dist/
 
       - name: Publish ${{ matrix.package }} to PyPI
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           packages-dir: dist/${{ matrix.package }}/
           attestations: true

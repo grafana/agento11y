@@ -22,13 +22,17 @@ Tests must run without inherited Cloud/provider credentials or personal configur
 
 ### Hermes releases
 
-Hermes releases with the Python SDK packages from `python-sdks-publish.yml`. `mise run sdk:py:bump <VERSION>` updates its version and lockfile alongside the SDKs. The Python SDK changelog includes changes under `plugins/hermes/`; the separate `plugins/hermes/v0.11.0` tag remains historical. Hermes keeps its own `CHANGELOG.md` for older releases.
+Hermes releases through `python-sdks-publish.yml`, either with the Python SDK packages or on its own. The workflow bumps Hermes from its own version. `mise run sdk:py:bump <VERSION>` instead sets all Python packages to a specified version. New sections of `python/CHANGELOG.md` record core SDK changes only; the separate `plugins/hermes/v0.11.0` tag remains historical. Hermes keeps its own `CHANGELOG.md` for older releases.
 
-The release workflow builds and checks the Hermes wheel and source distribution, then publishes them from the existing Python dependents job. The Hermes dependency allows the last released core SDK because the new core SDK is not available on PyPI when the release artifacts are built.
+When Hermes is selected, the release workflow builds and checks its wheel and source distribution, then publishes them from the Python dependents job. The Hermes dependency allows the last released core SDK because the new core SDK is not available on PyPI when the release artifacts are built.
 
 Before the first release from this workflow, a PyPI owner must configure a [Trusted Publisher](https://docs.pypi.org/trusted-publishers/adding-a-publisher/) for `agento11y-hermes` with owner `grafana`, repository `agento11y`, workflow filename `python-sdks-publish.yml`, and environment `pypi`. The failed `0.11.0` publish used `hermes-publish.yml`; changing the workflow does not configure PyPI. Confirm the GitHub `pypi` environment permits the SDK release workflow. These are administrative changes, not effects of merging repository files.
 
-Run **Publish Python SDKs to PyPI** on `main`. The workflow previews by default; disabling `dry-run` publishes packages and opens a version PR. Verify the PyPI artifacts and installation in Hermes's environment. Uninstall the old `grafana-agento11y-hermes` distribution first; pip does not treat the new project name as an upgrade. Keep the old project and its releases. Remove its old Trusted Publisher after verifying the replacement release.
+Run **Publish Python SDKs to PyPI** on `main`. The workflow previews by default. Select `all` to bump each package from its own version, build and publish them together, and open a version PR. To release one package, select its distribution name. The workflow bumps and builds only that package, publishes only its artifacts, and opens a PR for its changed files.
+
+Core-only and `all` releases update `python/CHANGELOG.md` with core changes; merging their PRs creates an `sdk-python/v*` tag for the new core version. Dependent-only releases do not change this changelog or create an SDK tag. Disable `dry-run` only when ready to publish; this workflow publishes before the release PR merges. Do not use `all` to retry one failed publication. PyPI rejects filenames that the first run already uploaded.
+
+Verify the PyPI artifacts and installation in Hermes's environment. Uninstall the old `grafana-agento11y-hermes` distribution first; pip does not treat the new project name as an upgrade. Keep the old project and its releases. Remove its old Trusted Publisher after verifying the replacement release.
 
 To retain locally validated upload artifacts, pass an empty output directory:
 
