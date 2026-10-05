@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.19.0] - 2026-10-05
+
+### Features
+
+- **hermes**: rename package and configure PyPI publishing (#822)
+
 ## [0.18.0] - 2026-09-30
 
 ### Features
