@@ -467,6 +467,88 @@ func TestSpanLifecycle(t *testing.T) {
 				if got := attrs["gen_ai.tool.type"].AsString(); got != "function" {
 					t.Errorf("gen_ai.tool.type = %q, want function", got)
 				}
+				if _, ok := attrs["agento11y.skill.name"]; ok {
+					t.Error("tool execution without a skill name carries agento11y.skill.name")
+				}
+			},
+		},
+		{
+			name: "tool execution carries a trimmed skill marker",
+			mutate: func(inv *otelgenai.Invocation) {
+				inv.Operation = otelgenai.OperationExecuteTool
+				inv.SkillName = "  weather-research\t"
+			},
+			checkStarted: func(t *testing.T, span sdktrace.ReadOnlySpan) {
+				if _, ok := spanAttrs(span)["agento11y.skill.name"]; ok {
+					t.Error("started tool span carries the end-scoped agento11y.skill.name")
+				}
+			},
+			check: func(t *testing.T, span sdktrace.ReadOnlySpan) {
+				if got := spanAttrs(span)["agento11y.skill.name"].AsString(); got != "weather-research" {
+					t.Errorf("agento11y.skill.name = %q, want weather-research", got)
+				}
+			},
+		},
+		{
+			name: "hook reclassification does not leak the skill marker",
+			options: []otelgenai.Option{otelgenai.WithEndHook(
+				otelgenai.EndHookFunc(func(_ context.Context, inv *otelgenai.Invocation, _ otelgenai.CaptureMode) []attribute.KeyValue {
+					*inv = otelgenai.Invocation{
+						Operation:    otelgenai.OperationChat,
+						RequestModel: "gpt-5",
+					}
+					return nil
+				}),
+			)},
+			mutate: func(inv *otelgenai.Invocation) {
+				inv.Operation = otelgenai.OperationExecuteTool
+				inv.ToolName = "load_skill"
+				inv.SkillName = "code-review"
+			},
+			check: func(t *testing.T, span sdktrace.ReadOnlySpan) {
+				if got := span.Name(); got != "chat gpt-5" {
+					t.Errorf("span name = %q, want chat gpt-5", got)
+				}
+				attrs := spanAttrs(span)
+				if got := attrs["gen_ai.operation.name"].AsString(); got != "chat" {
+					t.Errorf("gen_ai.operation.name = %q, want chat", got)
+				}
+				if _, ok := attrs["agento11y.skill.name"]; ok {
+					t.Error("reclassified non-tool span carries agento11y.skill.name")
+				}
+			},
+		},
+		{
+			name: "tool execution omits a blank skill marker",
+			mutate: func(inv *otelgenai.Invocation) {
+				inv.Operation = otelgenai.OperationExecuteTool
+				inv.SkillName = " \t\n "
+			},
+			checkStarted: func(t *testing.T, span sdktrace.ReadOnlySpan) {
+				if _, ok := spanAttrs(span)["agento11y.skill.name"]; ok {
+					t.Error("started tool span carries agento11y.skill.name for a blank skill name")
+				}
+			},
+			check: func(t *testing.T, span sdktrace.ReadOnlySpan) {
+				if _, ok := spanAttrs(span)["agento11y.skill.name"]; ok {
+					t.Error("tool span carries agento11y.skill.name for a blank skill name")
+				}
+			},
+		},
+		{
+			name: "skill marker is scoped to tool execution",
+			mutate: func(inv *otelgenai.Invocation) {
+				inv.SkillName = "weather-research"
+			},
+			checkStarted: func(t *testing.T, span sdktrace.ReadOnlySpan) {
+				if _, ok := spanAttrs(span)["agento11y.skill.name"]; ok {
+					t.Error("started non-tool span carries agento11y.skill.name")
+				}
+			},
+			check: func(t *testing.T, span sdktrace.ReadOnlySpan) {
+				if _, ok := spanAttrs(span)["agento11y.skill.name"]; ok {
+					t.Error("non-tool span carries agento11y.skill.name")
+				}
 			},
 		},
 		{
