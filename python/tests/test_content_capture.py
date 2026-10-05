@@ -26,6 +26,7 @@ from agento11y import (
     Generation,
     GenerationExportConfig,
     GenerationStart,
+    Media,
     Message,
     MessageRole,
     ModelRef,
@@ -36,6 +37,7 @@ from agento11y import (
     ToolDefinition,
     ToolExecutionStart,
     ToolResult,
+    media_part,
     validate_generation,
 )
 from agento11y.context import content_capture_mode_from_context, with_content_capture_mode
@@ -193,7 +195,20 @@ def _full_generation() -> Generation:
     return Generation(
         system_prompt="You are helpful.",
         input=[
-            Message(role=MessageRole.USER, parts=[Part(kind=PartKind.TEXT, text="What is the weather?")]),
+            Message(
+                role=MessageRole.USER,
+                parts=[
+                    Part(kind=PartKind.TEXT, text="What is the weather?"),
+                    media_part(
+                        Media(
+                            kind="image",
+                            url="data:image/png;base64,abc123",
+                            mime_type="image/png",
+                            name="weather-map.png",
+                        )
+                    ),
+                ],
+            ),
             Message(
                 role=MessageRole.TOOL,
                 parts=[
@@ -319,6 +334,7 @@ class TestContentStripping:
             assert gen.output[0].parts[2].text == ""
             assert gen.input[1].parts[0].tool_result.content == ""
             assert gen.input[1].parts[0].tool_result.content_json == b""
+            assert gen.input[0].parts[1].media.url == ""
             assert gen.tools[0].description == ""
             assert gen.tools[0].input_schema_json == b""
             assert gen.conversation_title == ""
@@ -334,6 +350,10 @@ class TestContentStripping:
             assert gen.output[0].parts[1].tool_call.id == "call_1"
             assert gen.input[1].parts[0].tool_result.tool_call_id == "call_1"
             assert gen.input[1].parts[0].tool_result.name == "weather"
+            assert gen.input[0].parts[1].kind == PartKind.MEDIA
+            assert gen.input[0].parts[1].media.kind == "image"
+            assert gen.input[0].parts[1].media.mime_type == "image/png"
+            assert gen.input[0].parts[1].media.name == "weather-map.png"
             assert gen.tools[0].name == "weather"
             assert gen.usage.input_tokens == 120
             assert gen.usage.output_tokens == 42
@@ -1618,6 +1638,9 @@ class TestModeCoverageMatrix:
             assert gen.input[1].parts[0].tool_result.content_json == (
                 b"" if expect.proto_content_stripped else b'{"temp":18}'
             )
+            assert gen.input[0].parts[1].media.url == (
+                "" if expect.proto_content_stripped else "data:image/png;base64,abc123"
+            )
             assert gen.tools[0].description == ("" if expect.proto_content_stripped else "Get weather info")
             assert gen.tools[0].input_schema_json == (b"" if expect.proto_content_stripped else b'{"type":"object"}')
             # Conversation title lives only in metadata (no top-level proto
@@ -1626,7 +1649,11 @@ class TestModeCoverageMatrix:
             # Structural fields (counts, names, IDs, roles) always preserved.
             assert len(gen.input) == 2
             assert len(gen.output) == 1
+            assert len(gen.input[0].parts) == 2
             assert len(gen.output[0].parts) == 3
+            assert gen.input[0].parts[1].media.kind == "image"
+            assert gen.input[0].parts[1].media.mime_type == "image/png"
+            assert gen.input[0].parts[1].media.name == "weather-map.png"
             assert gen.output[0].parts[1].tool_call.name == "weather"
             assert gen.output[0].parts[1].tool_call.id == "call_1"
             assert gen.tools[0].name == "weather"

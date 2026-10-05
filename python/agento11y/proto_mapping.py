@@ -166,7 +166,7 @@ def _map_generation_mode(mode: GenerationMode | None) -> int:
 
 def _map_message(message: object) -> agento11y_pb2.Message:
     role_value = message.role.value if hasattr(message.role, "value") else str(message.role)
-    parts = [_map_part(part) for part in message.parts]
+    parts = [mapped for mapped in (_map_part(part) for part in message.parts) if mapped is not None]
     return agento11y_pb2.Message(
         role=_map_message_role(role_value),
         name=message.name,
@@ -184,7 +184,7 @@ def _map_message_role(role: str) -> int:
     return agento11y_pb2.MESSAGE_ROLE_UNSPECIFIED
 
 
-def _map_part(part: object) -> agento11y_pb2.Part:
+def _map_part(part: object) -> agento11y_pb2.Part | None:
     metadata = None
     provider_type = getattr(part.metadata, "provider_type", "") if getattr(part, "metadata", None) is not None else ""
     if provider_type:
@@ -213,6 +213,23 @@ def _map_part(part: object) -> agento11y_pb2.Part:
                 content=part.tool_result.content,
                 content_json=bytes(part.tool_result.content_json),
                 is_error=part.tool_result.is_error,
+            ),
+        )
+    if kind_value == PartKind.MEDIA.value:
+        media = part.media
+        if media is None:
+            # A media part with no payload is dropped rather than sent as an empty
+            # part, which the server decodes as empty text. Go's codec.partsToProto
+            # skips this part the same way; the payload-less tool_call and
+            # tool_result parts it also skips raise here instead.
+            return None
+        return agento11y_pb2.Part(
+            metadata=metadata,
+            media=agento11y_pb2.Media(
+                kind=media.kind,
+                url=media.url,
+                mime_type=media.mime_type,
+                name=media.name,
             ),
         )
     return agento11y_pb2.Part(metadata=metadata)
