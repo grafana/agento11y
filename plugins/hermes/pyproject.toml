@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agento11y-hermes"
-version = "0.18.0"
+version = "0.19.0"
 description = "Grafana Agent Observability plugin for Hermes Agent. Records LLM calls and tool executions as generations and OTel traces+metrics."
 readme = "README.md"
 license = { text = "Apache-2.0" }
