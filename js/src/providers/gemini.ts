@@ -1,3 +1,7 @@
+import { modalityPartition } from './modality.js';
+
+export { interactionsUsage } from './modality.js';
+
 import type { Content, GenerateContentConfig, GenerateContentResponse } from '@google/genai';
 import type { Agento11yClient } from '../client.js';
 import type { EmbeddingResult, GenerationResult, Message, TokenUsage, ToolDefinition } from '../types.js';
@@ -513,10 +517,10 @@ function mapGeminiUsage(rawUsage: unknown): TokenUsage | undefined {
 
   const out: TokenUsage = {};
   if (inputTokens !== undefined) {
-    out.inputTokens = inputTokens;
+    out.inputTokens = inputTokens + (toolUsePromptTokens ?? 0);
   }
   if (outputTokens !== undefined) {
-    out.outputTokens = outputTokens;
+    out.outputTokens = outputTokens + (reasoningTokens ?? 0);
   }
   if (totalTokens !== undefined) {
     out.totalTokens = totalTokens;
@@ -539,6 +543,17 @@ function mapGeminiUsage(rawUsage: unknown): TokenUsage | undefined {
   // is the inclusive contract as-is. tool_use_prompt handling stays unchanged
   // pending the open contract decision (see the rollout plan).
   out.inputSemantics = 'inclusive';
+  out.inputByModality = modalityPartition(rawUsage.promptTokensDetails, inputTokens ?? 0);
+  out.outputByModality = modalityPartition(
+    rawUsage.candidatesTokensDetails,
+    out.outputTokens ?? 0,
+    reasoningTokens ?? 0,
+  );
+  out.cacheReadByModality = modalityPartition(rawUsage.cacheTokensDetails, cacheReadInputTokens ?? 0);
+  if (toolUsePromptTokens) {
+    out.inputByModality ??= { tokens: {}, complete: false };
+    out.inputByModality.tokens.tool_use = toolUsePromptTokens;
+  }
 
   return out;
 }

@@ -1,3 +1,7 @@
+import { modalityPartition } from './modality.js';
+
+export { imageUsage } from './modality.js';
+
 import type OpenAI from 'openai';
 import type { Agento11yClient } from '../client.js';
 import type { EmbeddingResult, GenerationResult, Message, TokenUsage, ToolDefinition } from '../types.js';
@@ -978,6 +982,12 @@ function mapResponsesUsage(value: unknown): TokenUsage | undefined {
   // OpenAI's prompt/input token totals already include cached tokens, which
   // is the inclusive contract as-is.
   out.inputSemantics = 'inclusive';
+  out.inputByModality = modalityPartition(value.input_tokens_details, inputTokens ?? 0, 0, true);
+  out.outputByModality = modalityPartition(value.output_tokens_details, outputTokens ?? 0, 0, true);
+  const cacheDetails = isRecord(value.input_tokens_details)
+    ? value.input_tokens_details.cached_tokens_details
+    : undefined;
+  out.cacheReadByModality = modalityPartition(cacheDetails, cacheReadInputTokens ?? 0, 0, true);
 
   return out;
 }

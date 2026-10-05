@@ -16,6 +16,7 @@ import com.grafana.agento11y.sdk.MessageRole;
 import com.grafana.agento11y.sdk.ModelRef;
 import com.grafana.agento11y.sdk.PartMetadata;
 import com.grafana.agento11y.sdk.TokenUsage;
+import com.grafana.agento11y.sdk.ModalityTokenCounts;
 import com.grafana.agento11y.sdk.ToolCall;
 import com.grafana.agento11y.sdk.ToolDefinition;
 import com.grafana.agento11y.sdk.ToolResultPart;
@@ -763,7 +764,7 @@ final class OpenAiGenerationMapper {
         }
         Map<String, Object> inputDetails = asMap(getFirst(usage, "input_tokens_details", "inputTokensDetails"));
         Map<String, Object> outputDetails = asMap(getFirst(usage, "output_tokens_details", "outputTokensDetails"));
-        return new TokenUsage()
+        TokenUsage result = new TokenUsage()
                 .setInputTokens(defaultLong(asLong(getFirst(usage, "input_tokens", "inputTokens"))))
                 .setOutputTokens(defaultLong(asLong(getFirst(usage, "output_tokens", "outputTokens"))))
                 .setTotalTokens(defaultLong(asLong(getFirst(usage, "total_tokens", "totalTokens"))))
@@ -771,6 +772,10 @@ final class OpenAiGenerationMapper {
                 .setReasoningTokens(defaultLong(asLong(getFirst(outputDetails, "reasoning_tokens", "reasoningTokens"))))
                 // The Responses API input_tokens already includes cached tokens: inclusive as-is.
                 .setInputSemantics(TokenUsage.TokenInputSemantics.INCLUSIVE);
+        result.setInputByModality(ModalityTokenCounts.fromProvider(inputDetails, result.getInputTokens(), 0, true));
+        result.setOutputByModality(ModalityTokenCounts.fromProvider(outputDetails, result.getOutputTokens(), 0, true));
+        result.setCacheReadByModality(ModalityTokenCounts.fromProvider(inputDetails.get("cached_tokens_details"), result.getCacheReadInputTokens(), 0, true));
+        return result;
     }
 
     private static String firstChoiceFinishReason(Map<String, Object> responsePayload) {
