@@ -1,0 +1,12 @@
+{
+  "name": "agento11y-agent-clis",
+  "private": true,
+  "description": "The agent CLIs TestAgentIntegration drives in CI, pinned so a new release arrives as its own dependency bump.",
+  "devDependencies": {
+    "@anthropic-ai/claude-code": "2.1.273",
+    "@openai/codex": "0.154.0"
+  },
+  "allowScripts": {
+    "@anthropic-ai/claude-code": true
+  }
+}
