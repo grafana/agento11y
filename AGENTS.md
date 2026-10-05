@@ -39,13 +39,13 @@ CI runs `mise run check:redaction` in the same job as the proto drift check. `re
 
 ## Releases run off `.github/sdk-releases.json`
 
-That table holds each release line's id, tag prefix, changelog path, and the commit paths its changelog section is generated from. Seven lines are listed: the five SDKs plus `plugins/pi` and `plugins/opencode`. Hermes releases with the Python SDKs.
+That table holds each release line's id, tag prefix, changelog path, and the commit paths its changelog section is generated from. Seven lines are listed: the five SDKs plus `plugins/pi` and `plugins/opencode`. Hermes uses the Python SDK release workflow, either with the SDKs or alone.
 
 The commit paths live only there, and every release workflow reads them with `jq`. Tag prefixes and changelog paths are duplicated: the five SDK workflows still spell out their own `sdk-python/v*`-style prefix and `python/CHANGELOG.md`-style path inline, and `sdk-github-releases.yml` hand-copies all seven prefixes into `on.push.tags`, which GitHub cannot template from a file. So a new release line needs a row *and* a pass over those workflows; a row on its own gets the line tagged with no release page.
 
-Each SDK row carries `:(exclude)` pathspecs for tests and READMEs, because a conformance test under `go/` would otherwise put a JS-only commit in the Go changelog. The two plugin rows own their whole directory and need no excludes. The Python row also includes `plugins/hermes/`.
+Each SDK row carries `:(exclude)` pathspecs for tests and READMEs, because a conformance test under `go/` would otherwise put a JS-only commit in the Go changelog. The two plugin rows own their whole directory and need no excludes. The Python row covers only the core SDK; provider, framework, and Hermes releases have no shared changelog entry.
 
-Three steps run per release, and none of them creates a tag on the release PR:
+Three steps run per tagged release, and none of them creates a tag on the release PR:
 
 1. The release workflow generates a section with `changelog-for-release.sh` and opens a PR that changes `CHANGELOG.md`.
 2. `tag-releases-on-merge.yml` fires on the merge, reads the top version with `changelog-top-version.sh`, and tags the merge commit, so every tag stays reachable from `main`.
@@ -81,7 +81,7 @@ If you change shared-binary behavior, the four glue plugins and vibe all see it.
 - Use `cache_write_input_tokens`, not `cache_creation_input_tokens`. This was renamed in cbe0363; pretrained models tend to suggest the old name, so don't follow them.
 - Conformance suites cross-check the SDKs. `mise run test:sdk:conformance` runs seven of them. Core, provider-wrapper, framework-adapter, hook, and experiment cover Go/Python/JS/Java/.NET. Pi-session covers Go and JS. Redaction covers the four SDKs that have a redaction engine plus both plugins, and no Java. If you change behavior in one SDK, expect to update fixtures or matching code in the others.
 - Python has one package per framework (`agento11y-langgraph`, `agento11y-openai`, …). JS has one package with subpath exports (`@grafana/agento11y/langgraph`). Don't reflexively assume one layout for the other.
-- Python version bumps go through `mise run sdk:py:bump <VERSION>`. It updates the SDK and Hermes `pyproject.toml` files, the SDK dependency pins, and the Hermes lockfile. Hand-editing one version leaves the others inconsistent.
+- `mise run sdk:py:bump <VERSION>` sets every Python package to one version and updates SDK dependency pins and the Hermes lockfile. The `package` selection in `python-sdks-publish.yml` bumps each selected package from its own version. Core releases update `python/CHANGELOG.md`; merging their PRs creates an `sdk-python/v*` tag. Dependent-only releases do neither.
 
 ## A skill served by the binary lives inside the binary's tree
 
@@ -121,6 +121,6 @@ test_home=$(mktemp -d)
   GOPATH="$go_path" GOCACHE="$go_cache" TMPDIR=/tmp GOWORK=off "$go_root/bin/go" test ./...)
 ```
 
-Hermes uses `format:py:plugin-hermes`, `lint:py:plugin-hermes`, `typecheck:py:plugin-hermes`, `test:py:plugin-hermes`, and `build:py:plugin-hermes`. The build validates wheel and source-distribution artifacts, including the full Apache license. Keep `plugins/hermes/LICENSE` identical to the root license. Its release version follows the Python SDK; `sdk:py:bump` updates the plugin version and lockfile. CI tests Python 3.11–3.14 with branch coverage and a 99% minimum. Optional real-Hermes tests require an explicit loopback provider and both telemetry channels routed locally or disabled; inspect the plugin's e2e skill and scripts first.
+Hermes uses `format:py:plugin-hermes`, `lint:py:plugin-hermes`, `typecheck:py:plugin-hermes`, `test:py:plugin-hermes`, and `build:py:plugin-hermes`. The build validates wheel and source-distribution artifacts, including the full Apache license. Keep `plugins/hermes/LICENSE` identical to the root license. The Python release workflow bumps Hermes from its own version, including when all packages are selected. `sdk:py:bump` instead sets all packages to a specified version. CI tests Python 3.11–3.14 with branch coverage and a 99% minimum. Optional real-Hermes tests require an explicit loopback provider and both telemetry channels routed locally or disabled; inspect the plugin's e2e skill and scripts first.
 
 `mise run check` is the full local CI gate: lint + typecheck + proto-drift + redaction-drift + every SDK suite + Hermes artifact validation. For a focused change, run the matching narrow task (e.g. `mise run test:py:sdk-langgraph`); the full gate is slow.

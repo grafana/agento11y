@@ -25,9 +25,6 @@
     "tag_prefix": "sdk-python",
     "paths": [
       "python",
-      "python-providers",
-      "python-frameworks",
-      "plugins/hermes",
       ":(exclude)**/tests/**",
       ":(exclude)**/README.md"
     ]

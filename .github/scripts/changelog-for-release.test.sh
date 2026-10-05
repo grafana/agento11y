@@ -135,5 +135,12 @@ assert_contains 'Hermes joins Python SDK changelog' '- **hermes**: repair export
 assert_not_contains 'previous SDK release excluded' 'core export change' "$out"
 assert_not_contains 'unrelated path excluded' 'outside the python tree' "$out"
 
+mapfile -t python_paths < <(jq -r '.[] | select(.id == "python") | .paths[]' "${DIR}/../sdk-releases.json")
+out=$(CHANGELOG_FROM=sdk-python/v0.1.0 "$CHANGELOG" 0.3.0 sdk-python "${python_paths[@]}")
+assert_contains 'core release path included' 'core export change' "$out"
+assert_not_contains 'provider release path excluded' 'patch wrapper' "$out"
+assert_not_contains 'framework release path excluded' 'new adapter' "$out"
+assert_not_contains 'Hermes release path excluded' 'repair export' "$out"
+
 echo "passed: ${pass}, failed: ${fail}"
 [[ $fail -eq 0 ]]
