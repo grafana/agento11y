@@ -5,7 +5,7 @@ import logging
 
 import pytest
 
-from grafana_agento11y_hermes import _config
+from agento11y_hermes import _config
 
 
 def _expected_basic(tenant: str, token: str) -> str:

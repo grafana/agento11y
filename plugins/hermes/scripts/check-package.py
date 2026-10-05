@@ -13,7 +13,7 @@ import tomllib
 import zipfile
 from pathlib import Path
 
-DISTRIBUTION = "grafana-agento11y-hermes"
+DISTRIBUTION = "agento11y-hermes"
 
 
 def require(condition: bool, message: str) -> None:
@@ -24,12 +24,13 @@ def require(condition: bool, message: str) -> None:
 def check_installed(expected: str) -> None:
     import agento11y
 
-    from grafana_agento11y_hermes._version import plugin_user_agent
+    from agento11y_hermes._version import plugin_user_agent
 
     dist = importlib.metadata.distribution(DISTRIBUTION)
     require(dist.version == expected, f"Installed version {dist.version} != {expected}")
     entries = [ep for ep in dist.entry_points if ep.group == "hermes_agent.plugins" and ep.name == "agento11y"]
     require(len(entries) == 1, "Expected one Hermes agento11y entry point")
+    require(entries[0].value == "agento11y_hermes", "Unexpected Hermes entry point module")
     module = entries[0].load()
     require(callable(module.register), "Hermes register is not callable")
     for loaded in (module, agento11y):
@@ -46,12 +47,19 @@ def check_installed(expected: str) -> None:
     print(f"Installed entry point and User-Agent verified: {dist.version}")
 
 
-def check_metadata(artifact: Path, expected: str) -> None:
+def check_metadata(artifact: Path, expected: str, license_text: bytes) -> None:
     if artifact.suffix == ".whl":
         with zipfile.ZipFile(artifact) as wheel:
             names = [name for name in wheel.namelist() if name.endswith(".dist-info/METADATA")]
             require(len(names) == 1, "Expected one wheel METADATA")
             data = wheel.read(names[0])
+            licenses = [
+                name
+                for name in wheel.namelist()
+                if name.endswith((".dist-info/licenses/LICENSE", ".dist-info/LICENSE"))
+            ]
+            require(len(licenses) == 1, "Expected one wheel LICENSE")
+            require(wheel.read(licenses[0]) == license_text, "Wheel LICENSE differs from source")
     else:
         with tarfile.open(artifact) as sdist:
             names = [name for name in sdist.getnames() if name.count("/") == 1 and name.endswith("/PKG-INFO")]
@@ -60,16 +68,28 @@ def check_metadata(artifact: Path, expected: str) -> None:
             if stream is None:
                 raise ValueError("Missing sdist metadata")
             data = stream.read()
+            license_name = names[0].rsplit("/", 1)[0] + "/LICENSE"
+            require(license_name in sdist.getnames(), "Expected sdist LICENSE")
+            license_stream = sdist.extractfile(license_name)
+            if license_stream is None:
+                raise ValueError("Missing sdist LICENSE contents")
+            require(license_stream.read() == license_text, "Sdist LICENSE differs from source")
     metadata = email.parser.BytesParser().parsebytes(data)
     require(metadata["Name"] == DISTRIBUTION, f"Unexpected distribution in {artifact.name}")
     require(metadata["Version"] == expected, f"Artifact version {metadata['Version']} != {expected}")
 
 
-def check_build(expected: str | None) -> None:
+def check_build(expected: str | None, output_dir: Path | None = None) -> None:
     root = Path(__file__).resolve().parents[1]
     project = tomllib.loads((root / "pyproject.toml").read_text())["project"]
     expected = expected or project["version"]
     require(project["version"] == expected, f"Project version {project['version']} != {expected}")
+    license_text = (root / "LICENSE").read_bytes()
+    require(b"END OF TERMS AND CONDITIONS" in license_text, "Source LICENSE is incomplete")
+    if output_dir is not None:
+        output_dir = output_dir.resolve()
+        output_dir.mkdir(parents=True, exist_ok=True)
+        require(not any(output_dir.iterdir()), "Output directory must be empty")
     with tempfile.TemporaryDirectory(prefix="hermes-package-") as temporary:
         work = Path(temporary)
         home = work / "home"
@@ -101,12 +121,12 @@ def check_build(expected: str | None) -> None:
         uv("build", "--no-sources", "--python", sys.executable, "--sdist", "--wheel", "--out-dir", dist, root)
         (wheel,) = dist.glob("*.whl")
         (sdist,) = dist.glob("*.tar.gz")
-        check_metadata(wheel, expected)
-        check_metadata(sdist, expected)
+        check_metadata(wheel, expected, license_text)
+        check_metadata(sdist, expected, license_text)
         rebuilt = work / "rebuilt"
         uv("build", "--no-sources", "--python", sys.executable, "--wheel", "--out-dir", rebuilt, sdist)
         (rebuilt_wheel,) = rebuilt.glob("*.whl")
-        check_metadata(rebuilt_wheel, expected)
+        check_metadata(rebuilt_wheel, expected, license_text)
         checker = work / "check-package.py"
         shutil.copyfile(__file__, checker)
         for index, artifact in enumerate((wheel, rebuilt_wheel)):
@@ -115,6 +135,11 @@ def check_build(expected: str | None) -> None:
             python = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
             uv("pip", "install", "--python", python, "--requirements", requirements, artifact)
             subprocess.run([str(python), "-I", str(checker), "--installed", expected], cwd=work, env=env, check=True)
+        if output_dir is not None:
+            for artifact in (wheel, sdist):
+                with artifact.open("rb") as source, (output_dir / artifact.name).open("xb") as target:
+                    shutil.copyfileobj(source, target)
+            print(f"Validated distributions saved to {output_dir}")
         print("Wheel and rebuilt sdist verified outside the checkout")
 
 
@@ -122,8 +147,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--installed", metavar="VERSION")
     parser.add_argument("--expected-version")
+    parser.add_argument("--output-dir", type=Path)
     args = parser.parse_args()
     if args.installed:
         check_installed(args.installed)
     else:
-        check_build(args.expected_version)
+        check_build(args.expected_version, args.output_dir)

@@ -2,9 +2,43 @@
 
 from __future__ import annotations
 
-import pytest
+import copy
+import json
 
-from grafana_agento11y_hermes import _redact
+import pytest
+from agento11y import ToolDefinition
+
+from agento11y_hermes import _redact
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        b"",
+        b"not json",
+        b"\xff",
+        rb'{"examples":[{"token":"prefix\"SECRET_SUFFIX"}]}',
+        rb'{"default":{"token":"prefix\"SECRET_SUFFIX"}}',
+        rb'{"examples":[{"token":"prefix\",\"other\":\"SECRET_SUFFIX"}]}',
+    ],
+)
+def test_unsafe_tool_schema_is_removed_without_mutation(schema: bytes) -> None:
+    definition = ToolDefinition(name="read", type="function", input_schema_json=schema)
+    original = copy.deepcopy(definition)
+    redacted = _redact.redact_record(definition)
+    assert redacted.input_schema_json == b""
+    assert redacted.name == "read"
+    assert redacted.type == "function"
+    assert definition == original
+    assert redacted is not definition
+
+
+@pytest.mark.parametrize("schema", [{"type": "object", "properties": {"token": {"type": "string"}}}, True, False])
+def test_safe_tool_schema_is_preserved(schema: object) -> None:
+    encoded = json.dumps(schema).encode()
+    redacted = _redact.redact_record(ToolDefinition(input_schema_json=encoded))
+    assert redacted.input_schema_json == encoded
+    assert json.loads(redacted.input_schema_json) == schema
 
 
 def test_truncate_long_string_uses_caller_max_chars() -> None:

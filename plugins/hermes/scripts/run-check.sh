@@ -2,6 +2,13 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+mode=${1:?expected format, lint, typecheck, test, or build}
+shift
+python=3.11
+if [[ $# -gt 0 && $1 != --* ]]; then
+  python=$1
+  shift
+fi
 home=$(mktemp -d)
 trap 'rm -rf "$home"' EXIT
 uv_bin=$(command -v uv)
@@ -16,13 +23,14 @@ env -i PATH="$PATH" HOME="$home" TMPDIR="$home" UV_CACHE_DIR="$cache" UV_PYTHON_
     uv_bin=$1
     mode=$2
     python=$3
+    shift 3
     run() { "$uv_bin" --no-config run --locked --isolated --no-env-file --python "$python" "$@"; }
     case "$mode" in
       format) run ruff format .; run ruff check --fix . ;;
       lint) run ruff format --check .; run ruff check . ;;
       typecheck) run ty check ;;
       test) run python -m pytest --cov ;;
-      build) run python scripts/check-package.py ;;
+      build) run python scripts/check-package.py "$@" ;;
       *) echo "Unknown check: $mode" >&2; exit 2 ;;
     esac
-  ' bash "$uv_bin" "${1:?expected format, lint, typecheck, test, or build}" "${2:-3.11}"
+  ' bash "$uv_bin" "$mode" "$python" "$@"

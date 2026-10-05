@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from grafana_agento11y_hermes._coerce import as_int, as_optional_float, as_optional_int, coerce_text
+from agento11y_hermes._coerce import as_int, as_optional_float, as_optional_int, coerce_text
 
 
 class _Block:

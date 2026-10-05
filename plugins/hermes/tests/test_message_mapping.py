@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 from agento11y import MessageRole
 
-from grafana_agento11y_hermes import _client, _config, _hooks
+from agento11y_hermes import _client, _config, _hooks
 
 
 class _Function:

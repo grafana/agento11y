@@ -43,6 +43,10 @@ description = "Test Hermes with isolated credentials and 99% branch coverage"
 usage = 'arg "[python]" default="3.11"'
 run = 'bash plugins/hermes/scripts/run-check.sh test "${usage_python?}"'
 
+[tasks."test:py:plugin-hermes-release"]
+description = "Test Hermes release guards and version preparation without network access"
+run = "python3 .github/scripts/hermes-release.test.py"
+
 [tasks."build:py:plugin-hermes"]
 description = "Verify Hermes wheel and rebuilt sdist outside the checkout"
 run = "bash plugins/hermes/scripts/run-check.sh build"
@@ -982,5 +986,5 @@ ls -la "$web/vendor" "$web/fonts"
 
 [tasks.check]
 description = "Run lint + typecheck + tests + Hermes artifact verification"
-depends = ["lint", "typecheck", "check:proto", "check:redaction", "build:py:plugin-hermes"]
+depends = ["lint", "typecheck", "check:proto", "check:redaction", "build:py:plugin-hermes", "test:py:plugin-hermes-release"]
 run = "mise run test:sdk:all"

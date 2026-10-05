@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 from dataclasses import asdict
 from typing import Any
 
@@ -13,7 +14,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from grafana_agento11y_hermes import _client, _compat, _config, _hooks, _redact
+from agento11y_hermes import _client, _compat, _config, _hooks, _redact
 
 SECRET = "glc_abcdefghijklmnopqrstuvwxyz1234"
 
@@ -86,8 +87,30 @@ def test_real_sdk_privacy(monkeypatch, mode, redact_setting, redact_inputs, secr
         },
         {"role": "tool", "tool_call_id": secret, "content": secret},
     ]
-    request = {"body": {"tools": [{"name": "read", "description": secret, "input_schema": {"default": secret}}]}}
+    safe_schema = {"type": "object", "properties": {"path": {"type": "string"}}}
+    schema_secret = 'prefix"SECRET_SUFFIX'
+    schemas = [
+        {"default": secret},
+        safe_schema,
+        {
+            "type": "object",
+            "properties": {"token": {"type": "string"}},
+            "examples": [{"token": schema_secret}],
+        },
+        {"type": "object", "default": {"token": schema_secret}},
+        {"type": "object", "properties": {"config": {"default": {"token": schema_secret}}}},
+        {"type": "object", "properties": {"token": {"type": "string", "default": secret}}},
+    ]
+    request = {
+        "body": {
+            "tools": [
+                {"name": f"read_{index}", "description": secret, "input_schema": schema}
+                for index, schema in enumerate(schemas)
+            ]
+        }
+    }
     original = copy.deepcopy(request)
+    original_history = copy.deepcopy(history)
     try:
         _hooks.on_pre_api_request(
             api_request_id="request-1",
@@ -124,6 +147,11 @@ def test_real_sdk_privacy(monkeypatch, mode, redact_setting, redact_inputs, secr
         assert generation.usage.input_tokens == 10
         assert generation.metadata["hermes.task_id"] != secret
         serialized = repr(asdict(generation))
+        assert "SECRET_SUFFIX" not in serialized
+        assert len(generation.tools) == len(schemas)
+        for definition in generation.tools:
+            if definition.input_schema_json:
+                json.loads(definition.input_schema_json)
         if mode is None:
             assert all(not part.text for message in generation.input + generation.output for part in message.parts)
             assert all(not tool.description and not tool.input_schema_json for tool in generation.tools)
@@ -135,10 +163,15 @@ def test_real_sdk_privacy(monkeypatch, mode, redact_setting, redact_inputs, secr
             assert "sort key: name" in repr(generation.output)
             assert "sort key: name" in exports.generations[1].call_error
             assert secret not in repr(generation.tools)
+            assert json.loads(generation.tools[1].input_schema_json) == safe_schema
+            assert all(not tool.input_schema_json for index, tool in enumerate(generation.tools) if index != 1)
             assert (secret not in repr(generation.input)) == redact_inputs
         assert secret not in repr(asdict(exports.generations[1]))
         finished = spans.get_finished_spans()
         assert len(finished) == 3
+        for span in finished:
+            assert "SECRET_SUFFIX" not in repr(dict(span.attributes or {}))
+            assert "SECRET_SUFFIX" not in repr([dict(event.attributes or {}) for event in span.events])
         if redact_inputs or mode in (None, "full_with_metadata_spans"):
             for span in finished:
                 assert secret not in repr(dict(span.attributes or {}))
@@ -155,7 +188,7 @@ def test_real_sdk_privacy(monkeypatch, mode, redact_setting, redact_inputs, secr
         else:
             assert "gen_ai.tool.call.arguments" not in (tool.attributes or {})
         assert request == original
-        assert history[0]["content"] == f"user {secret}"
+        assert history == original_history
     finally:
         client.shutdown()
         provider.shutdown()

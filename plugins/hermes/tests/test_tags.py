@@ -7,7 +7,7 @@ import pathlib
 
 import pytest
 
-from grafana_agento11y_hermes import _tags
+from agento11y_hermes import _tags
 
 
 @pytest.fixture(autouse=True)

@@ -1,4 +1,4 @@
-# grafana-agento11y-hermes
+# agento11y-hermes
 
 [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/) plugin for [Hermes Agent](https://github.com/NousResearch/hermes-agent).
 
@@ -8,15 +8,29 @@ The shared launcher does not support Hermes. `agento11y login`, its shared `conf
 
 Install into the Python environment that runs Hermes, not an unrelated system Python. Python 3.11 or newer is required. Hermes 0.16.0 is the supported floor; the plugin was tested against Hermes 0.19.0.
 
-From the repository root, with Hermes's Python environment active:
+If you have `grafana-agento11y-hermes` or `hermes-plugin-sigil` installed, remove it from Hermes's Python environment first:
+
+```sh
+python -m pip uninstall grafana-agento11y-hermes hermes-plugin-sigil
+```
+
+These distributions register the same plugin or its retired `sigil` key. Do not install them alongside `agento11y-hermes`.
+
+With Hermes's Python environment active, install the published package:
+
+```sh
+python -m pip install --upgrade "agento11y-hermes>=0.11.0"
+```
+
+If the first release is not yet published, install from the repository root instead:
 
 ```sh
 python -m pip install ./plugins/hermes
 ```
 
-The package is `grafana-agento11y-hermes`. Its `hermes_agent.plugins` entry point is `agento11y = grafana_agento11y_hermes`.
+The distribution is `agento11y-hermes`; the Python module is `agento11y_hermes`. Its `hermes_agent.plugins` entry point is `agento11y = agento11y_hermes`.
 
-The privacy behavior documented below is unreleased. Published PyPI `0.10.0` defaults to full content and truncates payloads without shared secret redaction. Install from source to use metadata-only defaults and shared redaction.
+The retired `grafana-agento11y-hermes` `0.10.0` defaults to full content without shared secret redaction. Upgrading that distribution alone does not install `agento11y-hermes` or change those defaults.
 
 Add `agento11y` to `plugins.enabled` in `~/.hermes/config.yaml`, preserving other entries:
 
@@ -28,7 +42,7 @@ plugins:
 
 On Hermes 0.19.0, `hermes plugins enable` and `hermes plugins list` do not see pip-installed plugins. Enable through YAML and verify exported telemetry instead.
 
-If upgrading from `hermes-plugin-sigil`, uninstall that distribution first to avoid registering two plugins. Replace the old `sigil` enabled key with `agento11y`. Retired `SIGIL_*` variables remain compatibility inputs where supported; use `AGENTO11Y_*` for new configuration.
+Keep the `agento11y` enabled key when replacing `grafana-agento11y-hermes`. If replacing `hermes-plugin-sigil`, replace the `sigil` key with `agento11y`. Restart Hermes after installation. Retired `SIGIL_*` variables remain compatibility inputs where supported; use `AGENTO11Y_*` for new configuration.
 
 For agent-assisted setup, use [llms.txt](llms.txt).
 
@@ -62,7 +76,7 @@ The plugin uses Python SDK 0.17.x for content capture and secret redaction.
 - `metadata_only` is the default. Message structure, tool names, model, usage, timing, IDs, and sampling parameters can leave the machine. Prompt text, responses, system prompts, tool schemas, tool I/O, and detailed error text do not.
 - Set `AGENTO11Y_CONTENT_CAPTURE_MODE=full` only when you want content exported. `no_tool_content` still exports generation content. `full_with_metadata_spans` sends content only through generation ingest.
 - `default`, an empty value, and unknown modes resolve to `metadata_only`; Hermes currently falls back without a warning.
-- Shared secret redaction sanitizes exported content, including tool-execution spans. Structural truncation is not secret redaction. Pattern matching is not a guarantee that all secrets or personal data are removed.
+- Shared secret redaction sanitizes exported content, including tool-execution spans. A tool schema is omitted if it is invalid JSON or triggers secret redaction. This prevents regex replacements from leaving secret fragments in schema JSON. Structural truncation is not secret redaction. Pattern matching is not a guarantee that all secrets or personal data are removed.
 - Prompt redaction defaults to on. `AGENTO11Y_REDACT_INPUT_MESSAGES=false` disables only user-prompt redaction; invalid values keep it on. Assistant text and errors use lightweight patterns. System prompts and tool payloads also use key/value patterns. Email addresses are redacted.
 - No automatic `cwd` tag is emitted. Automatic user, repository, and branch tags are off by default.
 
@@ -107,10 +121,12 @@ mise run test:py:plugin-hermes
 mise run build:py:plugin-hermes
 ```
 
-The build task checks the wheel and source distribution. Root `mise run check` includes this artifact check. CI tests Python 3.11, 3.12, 3.13, and 3.14 with branch coverage enabled and a 99% minimum.
+The build task checks the wheel, source distribution, installed entry point, and packaged Apache license. Root `mise run check` includes this artifact check. CI tests Python 3.11, 3.12, 3.13, and 3.14 with branch coverage enabled and a 99% minimum.
 
 Real-Hermes end-to-end testing is optional, not part of the normal checks. Read [.agents/skills/e2e-test/SKILL.md](.agents/skills/e2e-test/SKILL.md) for a credential-free loopback recipe. A local telemetry sink alone does not make the model provider local.
 
+Release preparation and PyPI setup are documented in the [contributor guide](../../docs/development.md#hermes-releases). Hermes uses its own version and `plugins/hermes/v*` tags, separate from the Python SDK.
+
 ## License
 
-Copyright 2026 Grafana Labs. [Apache-2.0](../../LICENSE).
+Copyright 2026 Grafana Labs. [Apache-2.0](LICENSE).

@@ -14,30 +14,67 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 CHECKS = runpy.run_path(str(ROOT / "scripts/check-package.py"))
+LICENSE = (ROOT / "LICENSE").read_bytes()
 
 
 @pytest.mark.parametrize("kind", ["wheel", "sdist"])
-@pytest.mark.parametrize("version,valid", [("0.10.0", True), ("0.9.0", False)])
-def test_artifact_version(tmp_path, kind, version, valid):
-    data = f"Name: grafana-agento11y-hermes\nVersion: {version}\n".encode()
+@pytest.mark.parametrize(
+    "version,name,license_text,error",
+    [
+        ("0.11.0", "agento11y-hermes", LICENSE, None),
+        ("0.10.0", "agento11y-hermes", LICENSE, "Artifact version"),
+        ("0.11.0", "grafana-agento11y-hermes", LICENSE, "Unexpected distribution"),
+        ("0.11.0", "agento11y-hermes", None, "LICENSE"),
+        ("0.11.0", "agento11y-hermes", b"Apache-2.0", "LICENSE differs"),
+    ],
+)
+def test_artifact_metadata(tmp_path, kind, version, name, license_text, error):
+    data = f"Name: {name}\nVersion: {version}\n".encode()
     if kind == "wheel":
         artifact = tmp_path / "plugin.whl"
         with zipfile.ZipFile(artifact, "w") as wheel:
-            wheel.writestr("grafana_agento11y_hermes.dist-info/METADATA", data)
+            wheel.writestr("agento11y_hermes.dist-info/METADATA", data)
+            if license_text is not None:
+                wheel.writestr("agento11y_hermes.dist-info/licenses/LICENSE", license_text)
     else:
         artifact = tmp_path / "plugin.tar.gz"
         with tarfile.open(artifact, "w:gz") as sdist:
-            entry = tarfile.TarInfo("grafana_agento11y_hermes/PKG-INFO")
-            entry.size = len(data)
-            sdist.addfile(entry, io.BytesIO(data))
-    if valid:
-        CHECKS["check_metadata"](artifact, "0.10.0")
+            for path, content in (("PKG-INFO", data), ("LICENSE", license_text)):
+                if content is not None:
+                    entry = tarfile.TarInfo(f"agento11y_hermes/{path}")
+                    entry.size = len(content)
+                    sdist.addfile(entry, io.BytesIO(content))
+    if error is None:
+        CHECKS["check_metadata"](artifact, "0.11.0", LICENSE)
     else:
-        with pytest.raises(ValueError, match="Artifact version"):
-            CHECKS["check_metadata"](artifact, "0.10.0")
+        with pytest.raises(ValueError, match=error):
+            CHECKS["check_metadata"](artifact, "0.11.0", LICENSE)
 
 
-def test_check_runner_clears_credentials(tmp_path):
+def test_license_matches_repository():
+    assert LICENSE == (ROOT.parents[1] / "LICENSE").read_bytes()
+
+
+@pytest.mark.parametrize(
+    "command,invocation",
+    [
+        (["test", "3.12"], ["--python", "3.12", "python", "-m", "pytest", "--cov"]),
+        (
+            ["build", "--expected-version", "0.11.0", "--output-dir", "/tmp/hermes-dists"],
+            [
+                "--python",
+                "3.11",
+                "python",
+                "scripts/check-package.py",
+                "--expected-version",
+                "0.11.0",
+                "--output-dir",
+                "/tmp/hermes-dists",
+            ],
+        ),
+    ],
+)
+def test_check_runner_clears_credentials(tmp_path, command, invocation):
     uv = tmp_path / "uv"
     uv.write_text(
         f"#!{sys.executable}\n"
@@ -49,7 +86,7 @@ def test_check_runner_clears_credentials(tmp_path):
     )
     uv.chmod(0o755)
     result = subprocess.run(
-        ["bash", str(ROOT / "scripts/run-check.sh"), "test", "3.12"],
+        ["bash", str(ROOT / "scripts/run-check.sh"), *command],
         env={
             **os.environ,
             "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
@@ -80,10 +117,5 @@ def test_check_runner_clears_credentials(tmp_path):
         "--locked",
         "--isolated",
         "--no-env-file",
-        "--python",
-        "3.12",
-        "python",
-        "-m",
-        "pytest",
-        "--cov",
+        *invocation,
     ]

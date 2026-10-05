@@ -100,7 +100,7 @@ def _get_client(create_if_missing: bool = True) -> Any:
         cfg = _config.load()
         if not (cfg.generations_configured or cfg.otel_configured):
             logger.warning(
-                "grafana-agento11y-hermes: no channel configured. Set AGENTO11Y_AUTH_TOKEN "
+                "agento11y-hermes: no channel configured. Set AGENTO11Y_AUTH_TOKEN "
                 "(with AGENTO11Y_ENDPOINT/AGENTO11Y_PROTOCOL/AGENTO11Y_AUTH_*) for generations, "
                 "or OTEL_EXPORTER_OTLP_ENDPOINT for traces+metrics. Telemetry disabled."
             )
@@ -118,13 +118,13 @@ def _get_client(create_if_missing: bool = True) -> Any:
             _CLIENT = Client() if override is None else Client(override)
             _CONFIG = cfg
             logger.info(
-                "grafana-agento11y-hermes: client initialized (generations=%s, otel=%s)",
+                "agento11y-hermes: client initialized (generations=%s, otel=%s)",
                 "configured" if cfg.generations_configured else "unconfigured",
                 "configured" if cfg.otel_configured else "unconfigured",
             )
             return _CLIENT
         except Exception as exc:
-            logger.warning("grafana-agento11y-hermes: failed to initialize client: %s", exc)
+            logger.warning("agento11y-hermes: failed to initialize client: %s", exc)
             _CLIENT = _INIT_FAILED
             return None
 
@@ -146,7 +146,7 @@ def _flush_channels(otel_timeout_millis: int | None = None) -> None:
         try:
             client.flush()
         except Exception as exc:
-            logger.warning("grafana-agento11y-hermes: client.flush failed: %s", exc)
+            logger.warning("agento11y-hermes: client.flush failed: %s", exc)
     _flush_otel(otel_timeout_millis)
 
 
@@ -180,7 +180,7 @@ def flush_bounded(timeout: float) -> bool:
     threading.Thread(target=run, name="agento11y-hermes-flush", daemon=True).start()
     if done.wait(timeout):
         return True
-    logger.debug("grafana-agento11y-hermes: flush did not finish within %ss", timeout)
+    logger.debug("agento11y-hermes: flush did not finish within %ss", timeout)
     return False
 
 

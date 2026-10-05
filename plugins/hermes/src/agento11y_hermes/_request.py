@@ -105,7 +105,7 @@ def parse(
     except Exception as exc:
         # The reads below are inside their own guards, but this one decides
         # what they read from, so it cannot be left to them.
-        logger.debug("grafana-agento11y-hermes: could not read the request envelope: %s", exc)
+        logger.debug("agento11y-hermes: could not read the request envelope: %s", exc)
         facts.truncated = True
 
     inference: Any = {}
@@ -125,7 +125,7 @@ def parse(
         facts.top_p = as_optional_float(_first_present((body, "top_p"), (inference, "topP")))
         facts.tool_choice = _tool_choice(body.get("tool_choice"))
     except Exception as exc:
-        logger.debug("grafana-agento11y-hermes: could not read the request body: %s", exc)
+        logger.debug("agento11y-hermes: could not read the request body: %s", exc)
 
     # Tools last, in their own block. The mapping runs through a private SDK
     # path, so a break there must not also cost the sampling params above.
@@ -137,7 +137,7 @@ def parse(
         facts.tools_clipped = _carries_clip_marker(raw_tools)
         facts.tools = _tool_definitions(_flatten_tool_specs(raw_tools))
     except Exception as exc:
-        logger.debug("grafana-agento11y-hermes: could not read the request tools: %s", exc)
+        logger.debug("agento11y-hermes: could not read the request tools: %s", exc)
 
     return facts
 

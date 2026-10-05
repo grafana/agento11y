@@ -3,8 +3,8 @@ requires = ["hatchling>=1.18"]
 build-backend = "hatchling.build"
 
 [project]
-name = "grafana-agento11y-hermes"
-version = "0.10.0"
+name = "agento11y-hermes"
+version = "0.11.0"
 description = "Grafana Agent Observability plugin for Hermes Agent. Records LLM calls and tool executions as generations and OTel traces+metrics."
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -36,20 +36,21 @@ dev = [
 ]
 
 [project.entry-points."hermes_agent.plugins"]
-agento11y = "grafana_agento11y_hermes"
+agento11y = "agento11y_hermes"
 
 [project.urls]
 Homepage = "https://github.com/grafana/agento11y/tree/main/plugins/hermes"
 Repository = "https://github.com/grafana/agento11y"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/grafana_agento11y_hermes"]
+packages = ["src/agento11y_hermes"]
 
 [tool.hatch.build.targets.sdist]
 include = [
-  "src/grafana_agento11y_hermes",
+  "src/agento11y_hermes",
   "README.md",
   "CHANGELOG.md",
+  "LICENSE",
 ]
 
 [tool.ruff]
@@ -69,7 +70,7 @@ testpaths = ["tests"]
 addopts = "-q"
 
 [tool.coverage.run]
-source = ["grafana_agento11y_hermes"]
+source = ["agento11y_hermes"]
 branch = true
 
 [tool.coverage.report]

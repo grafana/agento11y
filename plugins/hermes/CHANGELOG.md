@@ -1,9 +1,13 @@
 # Changelog
 
-## Unreleased
+## [0.11.0] - 2026-10-03
 
-- Upgrade to Python SDK 0.17.x and default to `metadata_only`. Shared secret redaction protects captured content and tool-execution spans.
+- Rename the distribution to `agento11y-hermes` and the Python module to `agento11y_hermes`. Uninstall `grafana-agento11y-hermes` before installing the renamed package; keep the `agento11y` enabled key in Hermes.
+- Upgrade to Python SDK 0.17.x and default to `metadata_only`. Shared secret redaction sanitizes captured content and tool-execution spans.
 - Make automatic user/repo/branch tags opt-in and remove unconditional `cwd` tagging.
+- Prevent escaped quotes in tool schemas from leaving secret fragments after redaction.
+- Include the full Apache license in wheel and source distributions.
+- Publish from `grafana/agento11y` using `plugins/hermes/v*` release tags.
 
 ## [0.10.0] - 2026-08-16
 

@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from grafana_agento11y_hermes import _client, _hooks, _otel
+from agento11y_hermes import _client, _hooks, _otel
 from tests.conftest import FakeClient
 
 

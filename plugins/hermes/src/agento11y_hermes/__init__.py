@@ -1,4 +1,4 @@
-"""grafana-agento11y-hermes: Grafana Agent Observability plugin for Hermes Agent.
+"""agento11y-hermes: Grafana Agent Observability plugin for Hermes Agent.
 
 Records every LLM API call (`pre_api_request`/`post_api_request`) as a
 generation and every tool invocation (`post_tool_call`) as a tool execution.

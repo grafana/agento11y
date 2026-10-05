@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 from agento11y import GenerationStart, MessageRole, PartKind, ToolExecutionStart
 
-from grafana_agento11y_hermes import _hooks, _state
+from agento11y_hermes import _hooks, _state
 
 
 def _sample_messages() -> list[dict]:
@@ -216,7 +216,7 @@ def test_client_init_failure_is_cached(monkeypatch: pytest.MonkeyPatch, env_cred
     """Construction error → handlers swallow, subsequent calls don't retry."""
     import agento11y
 
-    from grafana_agento11y_hermes import _otel
+    from agento11y_hermes import _otel
 
     monkeypatch.setattr(_otel, "setup_if_needed", lambda cfg: True)
 
@@ -269,7 +269,7 @@ def test_session_end_force_flushes_installed_providers(
 ) -> None:
     import agento11y
 
-    from grafana_agento11y_hermes import _client, _otel
+    from agento11y_hermes import _client, _otel
     from tests.conftest import FakeClient
 
     class FakeProvider:
@@ -299,7 +299,7 @@ def test_session_end_does_not_flush_user_owned_providers(
     import agento11y
     from opentelemetry import trace
 
-    from grafana_agento11y_hermes import _client, _otel
+    from agento11y_hermes import _client, _otel
     from tests.conftest import FakeClient
 
     class FakeProvider:
@@ -327,7 +327,7 @@ def test_on_session_end_does_not_initialize_client(monkeypatch: pytest.MonkeyPat
     """on_session_end must use create_if_missing=False and not trigger init."""
     import agento11y
 
-    from grafana_agento11y_hermes import _otel
+    from agento11y_hermes import _otel
 
     monkeypatch.setattr(_otel, "setup_if_needed", lambda cfg: True)
 
@@ -353,7 +353,7 @@ def test_post_tool_call_with_unknown_id_is_safe(patch_client) -> None:
 
 def test_sample_rate_zero_skips_recording(monkeypatch: pytest.MonkeyPatch, patch_client) -> None:
     """AGENTO11Y_HERMES_SAMPLE_RATE=0 → pre-hooks short-circuit, no recorder created."""
-    from grafana_agento11y_hermes import _client, _config
+    from agento11y_hermes import _client, _config
 
     monkeypatch.setattr(
         _client,
@@ -669,7 +669,7 @@ def test_post_llm_call_clears_running_convo(patch_client) -> None:
         session_id="s1",
         conversation_history=[{"role": "user", "content": "hi"}],
     )
-    from grafana_agento11y_hermes import _state
+    from agento11y_hermes import _state
 
     # Convo is keyed by session_id only — task_id is not passed to pre_llm_call.
     assert _state.convo_get(("", "s1")) != []
@@ -698,7 +698,7 @@ def test_client_called_with_content_capture_override_when_generations_configured
     import agento11y
     from agento11y import ContentCaptureMode
 
-    from grafana_agento11y_hermes import _client, _otel
+    from agento11y_hermes import _client, _otel
 
     monkeypatch.delenv("AGENTO11Y_CONTENT_CAPTURE_MODE", raising=False)
     captured: list[Any] = []
@@ -733,7 +733,7 @@ def test_client_sends_plugin_user_agent_when_content_capture_mode_set(
     """Transport and auth stay env-resolved with an explicit capture mode."""
     import agento11y
 
-    from grafana_agento11y_hermes import _client, _otel
+    from agento11y_hermes import _client, _otel
 
     monkeypatch.setenv("AGENTO11Y_CONTENT_CAPTURE_MODE", "no_tool_content")
     captured: list[Any] = []
@@ -761,7 +761,7 @@ def test_export_headers_preserved_and_user_agent_override_wins(
 ) -> None:
     import agento11y
 
-    from grafana_agento11y_hermes import _client, _otel
+    from agento11y_hermes import _client, _otel
 
     monkeypatch.setenv("AGENTO11Y_HEADERS", "X-Custom=1,User-Agent=my-agent/9")
     captured: list[Any] = []
@@ -821,7 +821,7 @@ def test_client_config_uses_protocol_none_when_only_otel_configured(
     """OTel-only mode: no AGENTO11Y_AUTH_TOKEN/MODE → SDK's HTTP exporter is disabled."""
     import agento11y
 
-    from grafana_agento11y_hermes import _client, _otel
+    from agento11y_hermes import _client, _otel
 
     for name in (
         "AGENTO11Y_AUTH_TOKEN",

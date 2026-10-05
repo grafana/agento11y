@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from grafana_agento11y_hermes import _request
+from agento11y_hermes import _request
 
 ANTHROPIC_TOOL = {"name": "read_file", "description": "d", "input_schema": {"type": "object"}}
 OPENAI_TOOL = {"type": "function", "function": {"name": "read_file", "parameters": {"type": "object"}}}
@@ -248,7 +248,7 @@ def test_an_unreadable_tool_list_does_not_cost_the_rest_of_the_body(caplog: pyte
         def __iter__(self) -> Any:
             raise RuntimeError("boom")
 
-    with caplog.at_level(logging.DEBUG, logger="grafana_agento11y_hermes._request"):
+    with caplog.at_level(logging.DEBUG, logger="agento11y_hermes._request"):
         facts = _request.parse(
             {"method": "POST", "body": {"system": "be helpful", "max_tokens": 8192, "tools": Hostile()}}
         )
@@ -266,7 +266,7 @@ def test_an_unreadable_body_never_reaches_the_hook(caplog: pytest.LogCaptureFixt
         def get(self, *_: Any, **__: Any) -> Any:
             raise RuntimeError("body refused to answer")
 
-    with caplog.at_level(logging.DEBUG, logger="grafana_agento11y_hermes._request"):
+    with caplog.at_level(logging.DEBUG, logger="agento11y_hermes._request"):
         facts = _request.parse({"method": "POST", "body": HostileBody(system="be helpful")})
 
     assert "could not read the request body" in caplog.text
@@ -281,7 +281,7 @@ def test_an_unreadable_envelope_never_reaches_the_hook(caplog: pytest.LogCapture
         def get(self, *_: Any, **__: Any) -> Any:
             raise RuntimeError("envelope refused to answer")
 
-    with caplog.at_level(logging.DEBUG, logger="grafana_agento11y_hermes._request"):
+    with caplog.at_level(logging.DEBUG, logger="agento11y_hermes._request"):
         facts = _request.parse(HostileRequest(body={"system": "be helpful"}))
 
     assert "could not read the request envelope" in caplog.text
