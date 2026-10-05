@@ -270,13 +270,14 @@ func toolsToProto(tools []model.ToolDefinition) []*agento11yv1.ToolDefinition {
 
 func usageToProto(usage model.TokenUsage) *agento11yv1.TokenUsage {
 	return &agento11yv1.TokenUsage{
-		InputTokens:           usage.InputTokens,
-		OutputTokens:          usage.OutputTokens,
-		TotalTokens:           usage.TotalTokens,
-		CacheReadInputTokens:  usage.CacheReadInputTokens,
-		CacheWriteInputTokens: usage.CacheWriteInputTokens,
-		ReasoningTokens:       usage.ReasoningTokens,
-		InputSemantics:        agento11yv1.TokenInputSemantics(usage.InputSemantics),
+		InputTokens:             usage.InputTokens,
+		OutputTokens:            usage.OutputTokens,
+		TotalTokens:             usage.TotalTokens,
+		CacheReadInputTokens:    usage.CacheReadInputTokens,
+		CacheWriteInputTokens:   usage.CacheWriteInputTokens,
+		CacheWrite1HInputTokens: usage.CacheWrite1hInputTokens,
+		ReasoningTokens:         usage.ReasoningTokens,
+		InputSemantics:          agento11yv1.TokenInputSemantics(usage.InputSemantics),
 	}
 }
 

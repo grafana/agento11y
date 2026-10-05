@@ -360,6 +360,49 @@ func TestFromStream(t *testing.T) {
 	}
 }
 
+func TestFromStreamPreservesOneHourCacheWriteFromMessageStart(t *testing.T) {
+	req := testRequest()
+	summary := StreamSummary{
+		Events: []asdk.BetaRawMessageStreamEventUnion{
+			{
+				Type: "message_start",
+				Message: asdk.BetaMessage{
+					ID:    "msg_stream_cache_tiers",
+					Model: asdk.Model("claude-sonnet-4-5"),
+					Usage: asdk.BetaUsage{
+						CacheCreation: asdk.BetaCacheCreation{
+							Ephemeral5mInputTokens: 6,
+							Ephemeral1hInputTokens: 4,
+						},
+					},
+				},
+			},
+			{
+				Type: "message_delta",
+				Usage: asdk.BetaMessageDeltaUsage{
+					InputTokens:              80,
+					OutputTokens:             25,
+					CacheCreationInputTokens: 10,
+				},
+			},
+		},
+	}
+
+	generation, err := FromStream(req, summary)
+	if err != nil {
+		t.Fatalf("from stream: %v", err)
+	}
+	if generation.Usage.CacheWriteInputTokens != 10 {
+		t.Fatalf("cache write tokens = %d, want 10", generation.Usage.CacheWriteInputTokens)
+	}
+	if generation.Usage.CacheWrite1hInputTokens != 4 {
+		t.Fatalf("one-hour cache write tokens = %d, want 4", generation.Usage.CacheWrite1hInputTokens)
+	}
+	if generation.Usage.InputTokens != 90 || generation.Usage.TotalTokens != 115 {
+		t.Fatalf("totals changed: %#v", generation.Usage)
+	}
+}
+
 func TestFromStream_DeltaAccumulation(t *testing.T) {
 	req := testRequest()
 	summary := StreamSummary{

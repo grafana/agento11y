@@ -428,6 +428,9 @@ public final class AnthropicAdapter {
         long output = usage.outputTokens();
         long cacheRead = usage.cacheReadInputTokens().orElse(0L);
         long cacheWrite = usage.cacheCreationInputTokens().orElse(0L);
+        Map<String, Object> usagePayload = asMap(first(toMap(response), "usage"));
+        Map<String, Object> cacheCreation = asMap(first(usagePayload, "cache_creation", "cacheCreation"));
+        long cacheWrite1h = asLong(first(cacheCreation, "ephemeral_1h_input_tokens", "ephemeral1hInputTokens"));
         // Anthropic reports input_tokens exclusive of both cache buckets. The
         // OTel GenAI Anthropic rule requires summing them into the inclusive
         // input_tokens this SDK emits.
@@ -439,6 +442,7 @@ public final class AnthropicAdapter {
                 .setTotalTokens(input + output)
                 .setCacheReadInputTokens(cacheRead)
                 .setCacheWriteInputTokens(cacheWrite)
+                .setCacheWrite1hInputTokens(cacheWrite1h)
                 .setInputSemantics(TokenUsage.TokenInputSemantics.INCLUSIVE);
     }
 
