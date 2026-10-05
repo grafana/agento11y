@@ -4,7 +4,7 @@ Notes for contributors working in this repo.
 
 ## Hermes plugin
 
-[`plugins/hermes`](../plugins/hermes/README.md) is the independent Python distribution `agento11y-hermes`, with module `agento11y_hermes`. Install in Hermes's Python environment, not through the shared launcher.
+[`plugins/hermes`](../plugins/hermes/README.md) is the Python distribution `agento11y-hermes`, with module `agento11y_hermes`. Install it in Hermes's Python environment, not through the shared launcher.
 
 Run these tasks from the repository root:
 
@@ -13,7 +13,6 @@ mise run format:py:plugin-hermes
 mise run lint:py:plugin-hermes
 mise run typecheck:py:plugin-hermes
 mise run test:py:plugin-hermes
-mise run test:py:plugin-hermes-release
 mise run build:py:plugin-hermes
 ```
 
@@ -23,36 +22,18 @@ Tests must run without inherited Cloud/provider credentials or personal configur
 
 ### Hermes releases
 
-Hermes has its own version in `plugins/hermes/pyproject.toml` and `uv.lock`. Do not include it in Python SDK version bumps. The release line in `.github/sdk-releases.json` uses `plugins/hermes/v*` tags.
+Hermes releases with the Python SDK packages from `python-sdks-publish.yml`. `mise run sdk:py:bump <VERSION>` updates its version and lockfile alongside the SDKs. The Python SDK changelog includes changes under `plugins/hermes/`; the separate `plugins/hermes/v0.11.0` tag remains historical. Hermes keeps its own `CHANGELOG.md` for older releases.
 
-Before the first release, a PyPI owner must configure a [pending Trusted Publisher](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/) for the new project:
+The release workflow builds and checks the Hermes wheel and source distribution, then publishes them from the existing Python dependents job. The Hermes dependency allows the last released core SDK because the new core SDK is not available on PyPI when the release artifacts are built.
 
-| Setting | Value |
-| --- | --- |
-| PyPI project | `agento11y-hermes` |
-| GitHub owner | `grafana` |
-| Repository | `agento11y` |
-| Workflow filename | `hermes-publish.yml` |
-| Environment | `pypi` |
+Before the first release from this workflow, a PyPI owner must configure a [Trusted Publisher](https://docs.pypi.org/trusted-publishers/adding-a-publisher/) for `agento11y-hermes` with owner `grafana`, repository `agento11y`, workflow filename `python-sdks-publish.yml`, and environment `pypi`. The failed `0.11.0` publish used `hermes-publish.yml`; changing the workflow does not configure PyPI. Confirm the GitHub `pypi` environment permits the SDK release workflow. These are administrative changes, not effects of merging repository files.
 
-A pending publisher does not reserve the package name. Use the intended Grafana maintainer account; project ownership and GitHub publishing permission are separate. Confirm the GitHub `pypi` environment permits `plugins/hermes/v*` tags. Configure required reviewers without blocking the SDK workflows that also use this environment. These are administrative changes, not effects of merging repository files.
-
-The first activation PR includes version `0.11.0`, its changelog section, release registration, and the publishing workflow together. Configure PyPI before merging it. Do not register Hermes against the imported `0.10.0` heading: the shared tagger reads every release line on any changelog push.
-
-For subsequent releases:
-
-1. Run **Publish Hermes to PyPI** on `main`, choosing a patch, minor, or major bump. Keep `dry-run` enabled to preview without remote writes.
-2. Run again with `dry-run` disabled to open a release PR. Review and merge that PR; the workflow does not auto-merge.
-3. `tag-releases-on-merge.yml` creates the tag at the merge commit. The Hermes workflow tests the tag, checks that it is reachable from `main`, and validates matching tag, manifest, changelog, and artifact versions.
-4. The publishing job uploads the exact validated wheel and sdist through the `pypi` environment. `sdk-github-releases.yml` creates the GitHub release notes independently.
-5. Verify the PyPI artifacts and installation inside Hermes's environment. The old distribution must be uninstalled first; pip does not treat a different project name as an upgrade.
-
-Keep the existing `grafana-agento11y-hermes` project and historical releases. Remove its old Trusted Publisher only after the replacement release is verified. Do not delete or reuse published filenames.
+Run **Publish Python SDKs to PyPI** on `main`. The workflow previews by default; disabling `dry-run` publishes packages and opens a version PR. Verify the PyPI artifacts and installation in Hermes's environment. Uninstall the old `grafana-agento11y-hermes` distribution first; pip does not treat the new project name as an upgrade. Keep the old project and its releases. Remove its old Trusted Publisher after verifying the replacement release.
 
 To retain locally validated upload artifacts, pass an empty output directory:
 
 ```sh
-bash plugins/hermes/scripts/run-check.sh build --expected-version 0.11.0 --output-dir /tmp/hermes-dist
+bash plugins/hermes/scripts/run-check.sh build --expected-version 0.18.0 --output-dir /tmp/hermes-dist
 ```
 
 The checker includes the full `plugins/hermes/LICENSE` in both artifacts and validates a wheel rebuilt from the sdist. Keep that license identical to the repository-root `LICENSE`.
