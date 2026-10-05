@@ -31,6 +31,7 @@ jobs:
       id-token: write
     outputs:
       new-version: ${{ steps.bump.outputs.new-version }}
+      pull-request-branch: ${{ steps.cpr.outputs.pull-request-branch }}
 
     steps:
       - name: Generate GitHub token
@@ -117,6 +118,7 @@ jobs:
             python-frameworks/litellm
             python-frameworks/pydantic-ai
             python-frameworks/deepeval
+            python-frameworks/harbor
             python-frameworks/strands
             python-frameworks/claude-agent-sdk
           )
@@ -146,6 +148,7 @@ jobs:
             python-frameworks/litellm
             python-frameworks/pydantic-ai
             python-frameworks/deepeval
+            python-frameworks/harbor
             python-frameworks/strands
             python-frameworks/claude-agent-sdk
           )
@@ -196,14 +199,6 @@ jobs:
           title: "chore(sdk-python): bump version to ${{ steps.bump.outputs.new-version }}"
           body-path: /tmp/pr-body.md
 
-      - name: Enable auto-merge
-        if: ${{ !inputs.dry-run }}
-        shell: bash
-        env:
-          GH_TOKEN: ${{ steps.generate-github-token.outputs.token }}
-          BRANCH: ${{ steps.cpr.outputs.pull-request-branch }}
-        run: gh pr merge "${BRANCH}" --auto --squash --delete-branch
-
   publish-core:
     if: ${{ !inputs.dry-run }}
     needs: build
@@ -251,6 +246,7 @@ jobs:
           - agento11y-litellm
           - agento11y-pydantic-ai
           - agento11y-deepeval
+          - agento11y-harbor
           - agento11y-strands
           - agento11y-claude-agent-sdk
 
@@ -266,3 +262,27 @@ jobs:
         with:
           packages-dir: dist/${{ matrix.package }}/
           attestations: true
+
+  auto-merge:
+    if: ${{ !inputs.dry-run }}
+    needs: [build, publish-core, publish-dependents]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+
+    steps:
+      - name: Generate GitHub token
+        id: generate-github-token
+        uses: grafana/shared-workflows/actions/create-github-app-token@46f48da11e78ebdba7a8747ae456b11062fac83e # create-github-app-token/v0.3.1
+        with:
+          github_app: grafana-plugins-platform-bot
+
+      - name: Enable auto-merge
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.generate-github-token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          BRANCH: ${{ needs.build.outputs.pull-request-branch }}
+        run: gh pr merge "${BRANCH}" --auto --squash --delete-branch
