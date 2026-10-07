@@ -146,6 +146,7 @@ const (
 	doctorExpansionJSONL    = `{"type":"user","isMeta":true,"sessionId":"sess-title","timestamp":"2025-06-01T12:00:01Z","message":{"role":"user","content":[{"type":"text","text":"# Claude Code Doctor\n\nHealth-check my Claude Code setup and fix what's wrong."}]}}`
 	ideOpenedFileJSONL      = `{"type":"user","sessionId":"sess-title","timestamp":"2025-06-01T12:00:00Z","message":{"role":"user","content":[{"type":"text","text":"<ide_opened_file>The user opened the file /projects/test/main.go in the IDE. This may or may not be related to the current task.</ide_opened_file>"},{"type":"text","text":"explain this file"}]}}`
 	ideSelectionJSONL       = `{"type":"user","sessionId":"sess-title","timestamp":"2025-06-01T12:00:00Z","message":{"role":"user","content":[{"type":"text","text":"<ide_selection>The user selected the lines 31 to 31 from /projects/test/main.go:\nreturn nil\n\nThis may or may not be related to the current task.</ide_selection>"},{"type":"text","text":"why does this return nil?"}]}}`
+	sidechainPromptJSONL    = `{"type":"user","isSidechain":true,"agentId":"a18f9a9d9f1f3d28e","sessionId":"sess-title","timestamp":"2025-06-01T12:00:00Z","message":{"role":"user","content":"list every package under internal/"}}`
 )
 
 // Regression: the title was the first user text in the transcript, so a
@@ -182,6 +183,13 @@ func TestIntegration_ConversationTitleSkipsClaudeCodeText(t *testing.T) {
 			name:  "whitespace-only text before the prompt",
 			lines: []string{buildUserJSONL("sess-title", " \n"), buildUserJSONL("sess-title", "fix the bug"), answer},
 			want:  "fix the bug",
+		},
+		{
+			// Older transcripts keep a subagent's lines inline, marked as
+			// sidechain; its prompt is the task it was given.
+			name:  "subagent prompt before the session's prompt",
+			lines: []string{sidechainPromptJSONL, buildUserJSONL("sess-title", "explain the repo"), answer},
+			want:  "explain the repo",
 		},
 	}
 	for _, tt := range tests {
@@ -257,6 +265,13 @@ func TestIntegration_ConversationTitleFollowsClaudeCodeTitles(t *testing.T) {
 		buildAssistantJSONL(sessionID, "req-2", "claude-sonnet-4-20250514", 10, "Done.") + "\n")
 	if second != "login flake" {
 		t.Errorf("second batch title = %q, want the custom-title", second)
+	}
+
+	// No title line in this range: only the state file remembers the rename.
+	third := exportBatch(buildUserJSONL(sessionID, "and the docs") + "\n" +
+		buildAssistantJSONL(sessionID, "req-3", "claude-sonnet-4-20250514", 10, "Updated.") + "\n")
+	if third != "login flake" {
+		t.Errorf("third batch title = %q, want the custom-title kept in state", third)
 	}
 }
 

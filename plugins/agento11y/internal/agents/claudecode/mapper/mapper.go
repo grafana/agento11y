@@ -52,10 +52,6 @@ type Options struct {
 	// them in the session state, where a newer one replaces an older one, so
 	// the session follows a rename.
 	Titles transcript.Titles
-	// NoPromptTitle stops Process taking the title from a prompt. The history
-	// importer sets it for a subagent transcript, whose first prompt is the
-	// task the subagent was given, not what the session is about.
-	NoPromptTitle bool
 }
 
 // agent is the base agent name for every generation this run produces: the
@@ -406,11 +402,7 @@ func conversationTitle(st *state.Session, sessionID string, r *redact.Redactor) 
 	if st == nil {
 		return sessionID
 	}
-	title := cmp.Or(st.CustomTitle, st.AITitle, st.Title)
-	if title == "" {
-		return sessionID
-	}
-	t := strings.TrimSpace(title)
+	t := strings.TrimSpace(cmp.Or(st.CustomTitle, st.AITitle, st.Title))
 	if r != nil {
 		t = r.Title(t)
 	}
@@ -433,6 +425,8 @@ func conversationTitle(st *state.Session, sessionID string, r *redact.Redactor) 
 //
 //   - meta lines: the caveat in front of a local command, and the expanded
 //     body of a slash command or skill;
+//   - sidechain lines: a subagent's prompts, the first of which is the task it
+//     was given, not what the session is about;
 //   - a slash command's record (<command-name>…). It is held as a candidate,
 //     because a command the model answers, such as /doctor or a skill, is what
 //     the conversation is about. A local command such as /model writes its
@@ -440,7 +434,7 @@ func conversationTitle(st *state.Session, sessionID string, r *redact.Redactor) 
 //   - the context block the IDE extensions send ahead of the typed prompt,
 //     naming the open file (<ide_opened_file>) or selection (<ide_selection>).
 func noteTitle(line transcript.Line, text string, uctx *userContext, st *state.Session) {
-	if st.Title != "" || line.IsMeta {
+	if st.Title != "" || line.IsMeta || line.IsSidechain {
 		return
 	}
 	t := strings.TrimSpace(text)
@@ -570,9 +564,7 @@ func processUserLine(line transcript.Line, uctx *userContext, st *state.Session,
 	if text != "" {
 		uctx.prompt = text
 		uctx.toolResults = nil
-		if !opts.NoPromptTitle {
-			noteTitle(line, text, uctx, st)
-		}
+		noteTitle(line, text, uctx, st)
 		return
 	}
 
@@ -584,9 +576,7 @@ func processUserLine(line transcript.Line, uctx *userContext, st *state.Session,
 		if b.Type == "text" && b.Text != "" {
 			uctx.prompt = b.Text
 			uctx.toolResults = nil
-			if !opts.NoPromptTitle {
-				noteTitle(line, b.Text, uctx, st)
-			}
+			noteTitle(line, b.Text, uctx, st)
 		}
 		if b.Type == "tool_result" {
 			if b.ToolUseID != "" && !resultAt.IsZero() {

@@ -264,11 +264,11 @@ func TestClaudeTurnsMatchTheLiveMapper(t *testing.T) {
 		t.Fatal(err)
 	}
 	want, _ := mapper.Process(mapper.CoalesceSession(lines), &state.Session{}, mapper.Options{SessionID: preview.SessionID, Titles: titles}, nil)
-	if want[0].ConversationTitle != "Build and tests" {
-		t.Fatalf("live mapper title = %q, want the ai-title", want[0].ConversationTitle)
-	}
 	if len(want) != len(turns) {
 		t.Fatalf("the importer produced %d turns, the live mapper %d", len(turns), len(want))
+	}
+	if want[0].ConversationTitle != "Build and tests" {
+		t.Fatalf("live mapper title = %q, want the ai-title", want[0].ConversationTitle)
 	}
 	for i := range want {
 		got := turns[i].Gen
