@@ -192,9 +192,9 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 		r = redact.New()
 	}
 
-	mapper.NoteTitles(&st, titles)
 	gens, toolResultAt := mapper.Process(lines, &st, mapper.Options{
 		SessionID:           input.SessionID,
+		Titles:              titles,
 		Logger:              logger,
 		ExtraTags:           extraTags,
 		AgentName:           resolvedAgentName,

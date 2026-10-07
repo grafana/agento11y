@@ -1796,3 +1796,54 @@ func TestHook_PromptRedactionWiring(t *testing.T) {
 		})
 	}
 }
+
+// TestHook_ExportsClaudeCodeTitle pins the wire from the transcript's title
+// lines to the exported generation. The mapper tests cover the precedence;
+// this one fails if the hook stops handing the titles it read to the mapper.
+func TestHook_ExportsClaudeCodeTitle(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	envconfig.PinAliasEnvBlank(t)
+
+	var gotBody atomic.Value
+	gotBody.Store("")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "read body", http.StatusBadRequest)
+			return
+		}
+		gotBody.Store(string(body))
+		r.Body = io.NopCloser(strings.NewReader(string(body)))
+		acceptGenerationExport(w, r)
+	}))
+	defer server.Close()
+
+	setHookExportEnv(t, server.URL)
+	t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "full")
+
+	sessionID := "title-wiring-session"
+	transcriptPath := filepath.Join(dir, "transcript.jsonl")
+	content := `{"type":"ai-title","aiTitle":"Flaky login test","sessionId":"title-wiring-session"}` + "\n" +
+		buildHookUserJSONL(sessionID, "the login test fails") + "\n" +
+		buildHookAssistantJSONL(sessionID, "req-1", "end_turn", "It races the token refresh.", 5) + "\n"
+	if err := os.WriteFile(transcriptPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	runHookForTest(t, hookInput{
+		HookEventName:  "Stop",
+		SessionID:      sessionID,
+		TranscriptPath: transcriptPath,
+	})
+
+	body, _ := gotBody.Load().(string)
+	if body == "" {
+		t.Fatal("expected an export request")
+	}
+	// The ai-title appears nowhere in the transcript's turns, so it reaches
+	// the body only as the conversation title.
+	if !strings.Contains(body, "Flaky login test") {
+		t.Errorf("export does not carry the ai-title: %s", body)
+	}
+}

@@ -1,6 +1,7 @@
 package mapper
 
 import (
+	"cmp"
 	"encoding/json"
 	"log"
 	"maps"
@@ -20,7 +21,7 @@ import (
 const (
 	agentName       = "claude-code"
 	maxToolInputLen = mapperutil.MaxToolInputBytes
-	// maxTitleLen caps the conversation title derived from the first user prompt.
+	// maxTitleLen caps the conversation title.
 	maxTitleLen = 100
 )
 
@@ -47,6 +48,14 @@ type Options struct {
 	// separately. Live capture leaves it nil, so it keeps recording summaries
 	// when the parent transcript is the only record of the subagent run.
 	SuppressSyntheticSubagentToolCallIDs map[string]bool
+	// Titles are the title lines the transcript read returned. Process records
+	// them in the session state, where a newer one replaces an older one, so
+	// the session follows a rename.
+	Titles transcript.Titles
+	// NoPromptTitle stops Process taking the title from a prompt. The history
+	// importer sets it for a subagent transcript, whose first prompt is the
+	// task the subagent was given, not what the session is about.
+	NoPromptTitle bool
 }
 
 // agent is the base agent name for every generation this run produces: the
@@ -290,7 +299,8 @@ type agentCall struct {
 // span has no width, because a tool call and its result live on separate lines.
 // A tool call ID is present in that map only when its result line carried a
 // parseable timestamp, so a present key always means a usable end time.
-// Process updates st.Title with the conversation title if discovered.
+// Process records opts.Titles in st, and updates st.Title with the first
+// prompt if discovered.
 //
 // Claude Code subagents do not produce their own lines in the main transcript —
 // the only evidence of their execution is the Agent tool_use (spawn) and the
@@ -314,6 +324,7 @@ func Process(lines []transcript.Line, st *state.Session, opts Options, r *redact
 		// current format only the main-chain key is ever set.
 		prevAt = map[bool]time.Time{}
 	)
+	noteTitles(st, opts.Titles)
 
 	for _, line := range lines {
 		switch line.Type {
@@ -375,9 +386,9 @@ func clampSpanStart(derivedStart, completedAt time.Time) time.Time {
 	return derivedStart
 }
 
-// NoteTitles records the title lines a transcript read returned. A newer title
+// noteTitles records the title lines a transcript read returned. A newer title
 // replaces an older one, so the session follows a rename.
-func NoteTitles(st *state.Session, t transcript.Titles) {
+func noteTitles(st *state.Session, t transcript.Titles) {
 	if t.AI != "" {
 		st.AITitle = t.AI
 	}
@@ -395,13 +406,7 @@ func conversationTitle(st *state.Session, sessionID string, r *redact.Redactor) 
 	if st == nil {
 		return sessionID
 	}
-	title := st.CustomTitle
-	if title == "" {
-		title = st.AITitle
-	}
-	if title == "" {
-		title = st.Title
-	}
+	title := cmp.Or(st.CustomTitle, st.AITitle, st.Title)
 	if title == "" {
 		return sessionID
 	}
@@ -565,7 +570,9 @@ func processUserLine(line transcript.Line, uctx *userContext, st *state.Session,
 	if text != "" {
 		uctx.prompt = text
 		uctx.toolResults = nil
-		noteTitle(line, text, uctx, st)
+		if !opts.NoPromptTitle {
+			noteTitle(line, text, uctx, st)
+		}
 		return
 	}
 
@@ -577,7 +584,9 @@ func processUserLine(line transcript.Line, uctx *userContext, st *state.Session,
 		if b.Type == "text" && b.Text != "" {
 			uctx.prompt = b.Text
 			uctx.toolResults = nil
-			noteTitle(line, b.Text, uctx, st)
+			if !opts.NoPromptTitle {
+				noteTitle(line, b.Text, uctx, st)
+			}
 		}
 		if b.Type == "tool_result" {
 			if b.ToolUseID != "" && !resultAt.IsZero() {

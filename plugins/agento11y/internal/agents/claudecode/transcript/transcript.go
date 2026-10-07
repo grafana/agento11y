@@ -39,6 +39,11 @@ type Line struct {
 	// user typed: the caveat in front of a local command such as /model, or
 	// the expanded body of a slash command or skill.
 	IsMeta bool `json:"isMeta"`
+	// AITitle and CustomTitle are set on Claude Code's "ai-title" and
+	// "custom-title" lines, which ReadWithTitles returns as Titles rather than
+	// as lines.
+	AITitle     string `json:"aiTitle"`
+	CustomTitle string `json:"customTitle"`
 
 	// EndOffset is the byte position after this line in the transcript file.
 	// Set by Read(), not deserialized from JSON.
@@ -149,22 +154,16 @@ type Titles struct {
 
 // note records the title an "ai-title" or "custom-title" line carries, and
 // ignores every other kind. An empty title changes nothing.
-func (t *Titles) note(kind string, data []byte) {
-	if kind != "ai-title" && kind != "custom-title" {
-		return
-	}
-	var rec struct {
-		AITitle     string `json:"aiTitle"`
-		CustomTitle string `json:"customTitle"`
-	}
-	if json.Unmarshal(data, &rec) != nil {
-		return
-	}
-	if v := strings.TrimSpace(rec.AITitle); kind == "ai-title" && v != "" {
-		t.AI = v
-	}
-	if v := strings.TrimSpace(rec.CustomTitle); kind == "custom-title" && v != "" {
-		t.Custom = v
+func (t *Titles) note(line Line) {
+	switch line.Type {
+	case "ai-title":
+		if v := strings.TrimSpace(line.AITitle); v != "" {
+			t.AI = v
+		}
+	case "custom-title":
+		if v := strings.TrimSpace(line.CustomTitle); v != "" {
+			t.Custom = v
+		}
 	}
 }
 
@@ -223,7 +222,7 @@ func ReadWithTitles(path string, offset int64) ([]Line, int64, Titles, error) {
 		// them would let one sit at the tail of a read, where the Stop settle
 		// read mistakes it for a turn still landing.
 		if line.Type != "user" && line.Type != "assistant" {
-			titles.note(line.Type, data)
+			titles.note(line)
 			continue
 		}
 

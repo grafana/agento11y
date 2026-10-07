@@ -178,6 +178,11 @@ func TestIntegration_ConversationTitleSkipsClaudeCodeText(t *testing.T) {
 			lines: []string{ideSelectionJSONL, answer},
 			want:  "why does this return nil?",
 		},
+		{
+			name:  "whitespace-only text before the prompt",
+			lines: []string{buildUserJSONL("sess-title", " \n"), buildUserJSONL("sess-title", "fix the bug"), answer},
+			want:  "fix the bug",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -228,8 +233,7 @@ func TestIntegration_ConversationTitleFollowsClaudeCodeTitles(t *testing.T) {
 			t.Fatal(err)
 		}
 		coalesced, offset := Coalesce(lines)
-		NoteTitles(&st, titles)
-		gens, _ := Process(coalesced, &st, Options{SessionID: sessionID}, nil)
+		gens, _ := Process(coalesced, &st, Options{SessionID: sessionID, Titles: titles}, nil)
 		if len(gens) != 1 {
 			t.Fatalf("got %d generations, want 1", len(gens))
 		}

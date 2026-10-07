@@ -240,6 +240,12 @@ func TestClaudePreviewIsBounded(t *testing.T) {
 func TestClaudeTurnsMatchTheLiveMapper(t *testing.T) {
 	root := t.TempDir()
 	path := writeClaudeSession(t, root, "-work-repo", "sess-a")
+	// Claude Code writes its own title for the session; both paths must use it.
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, path, claudeLine(map[string]any{"type": "ai-title", "aiTitle": "Build and tests", "sessionId": "sess-a"})+string(body))
 	imp := claudeImporterAt(root)
 
 	preview, ok, err := imp.Preview(context.Background(), path)
@@ -253,11 +259,14 @@ func TestClaudeTurnsMatchTheLiveMapper(t *testing.T) {
 
 	// The same lines through Coalesce and Process directly, the path the live
 	// hook runs.
-	lines, _, err := transcript.Read(path, 0)
+	lines, _, titles, err := transcript.ReadWithTitles(path, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, _ := mapper.Process(mapper.CoalesceSession(lines), &state.Session{}, mapper.Options{SessionID: preview.SessionID}, nil)
+	want, _ := mapper.Process(mapper.CoalesceSession(lines), &state.Session{}, mapper.Options{SessionID: preview.SessionID, Titles: titles}, nil)
+	if want[0].ConversationTitle != "Build and tests" {
+		t.Fatalf("live mapper title = %q, want the ai-title", want[0].ConversationTitle)
+	}
 	if len(want) != len(turns) {
 		t.Fatalf("the importer produced %d turns, the live mapper %d", len(turns), len(want))
 	}
@@ -439,12 +448,20 @@ func TestClaudeSubagentTurnsLinkToTheirParent(t *testing.T) {
 // the whole conversation after a subagent's task.
 func TestClaudeImportTitlesEveryTurnWithTheSessionTitle(t *testing.T) {
 	tests := []struct {
-		name    string
-		aiTitle string
-		want    string
+		name         string
+		aiTitle      string
+		parentPrompt string
+		want         string
 	}{
-		{name: "Claude Code's title", aiTitle: "Repo tour", want: "Repo tour"},
-		{name: "first prompt without a Claude Code title", want: "explore the repo"},
+		{name: "Claude Code's title", aiTitle: "Repo tour", parentPrompt: "explore the repo", want: "Repo tour"},
+		{name: "first prompt without a Claude Code title", parentPrompt: "explore the repo", want: "explore the repo"},
+		{
+			// The parent's only prompt is IDE context, so the session has no
+			// title at all; the subagent's task must not become one.
+			name:         "no session title",
+			parentPrompt: "<ide_opened_file>The user opened the file /work/repo/main.go in the IDE.</ide_opened_file>",
+			want:         "sess-title",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -458,7 +475,7 @@ func TestClaudeImportTitlesEveryTurnWithTheSessionTitle(t *testing.T) {
 			if tt.aiTitle != "" {
 				parentBody = claudeLine(map[string]any{"type": "ai-title", "aiTitle": tt.aiTitle, "sessionId": sessionID})
 			}
-			parentBody += claudeUserLine(sessionID, "/work/repo", "2026-01-10T12:00:00Z", "explore the repo") +
+			parentBody += claudeUserLine(sessionID, "/work/repo", "2026-01-10T12:00:00Z", tt.parentPrompt) +
 				claudeAssistantLine(sessionID, "/work/repo", "2026-01-10T12:00:10Z", "req-1", "", []map[string]any{
 					{"type": "tool_use", "id": "tu_agent", "name": "Agent", "input": map[string]any{"subagent_type": "explorer"}},
 				}) +

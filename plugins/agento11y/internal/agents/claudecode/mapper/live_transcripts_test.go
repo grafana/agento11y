@@ -43,13 +43,13 @@ func TestLiveTranscripts(t *testing.T) {
 			continue
 		}
 		t.Run(path, func(t *testing.T) {
-			lines, _, err := transcript.Read(path, 0)
+			lines, _, titles, err := transcript.ReadWithTitles(path, 0)
 			if err != nil {
 				t.Fatalf("read %s: %v", path, err)
 			}
 			coalesced, safeOffset := Coalesce(lines)
 			st := &state.Session{}
-			gens, _ := Process(coalesced, st, Options{SessionID: "live-test"}, nil)
+			gens, _ := Process(coalesced, st, Options{SessionID: "live-test", Titles: titles}, nil)
 
 			var inTokens, outTokens int64
 			var fieldErrors []string
