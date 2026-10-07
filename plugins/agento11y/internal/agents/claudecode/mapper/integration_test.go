@@ -146,6 +146,14 @@ const (
 	doctorExpansionJSONL    = `{"type":"user","isMeta":true,"sessionId":"sess-title","timestamp":"2025-06-01T12:00:01Z","message":{"role":"user","content":[{"type":"text","text":"# Claude Code Doctor\n\nHealth-check my Claude Code setup and fix what's wrong."}]}}`
 	ideOpenedFileJSONL      = `{"type":"user","sessionId":"sess-title","timestamp":"2025-06-01T12:00:00Z","message":{"role":"user","content":[{"type":"text","text":"<ide_opened_file>The user opened the file /projects/test/main.go in the IDE. This may or may not be related to the current task.</ide_opened_file>"},{"type":"text","text":"explain this file"}]}}`
 	ideSelectionJSONL       = `{"type":"user","sessionId":"sess-title","timestamp":"2025-06-01T12:00:00Z","message":{"role":"user","content":[{"type":"text","text":"<ide_selection>The user selected the lines 31 to 31 from /projects/test/main.go:\nreturn nil\n\nThis may or may not be related to the current task.</ide_selection>"},{"type":"text","text":"why does this return nil?"}]}}`
+	interruptedJSONL        = `{"type":"user","sessionId":"sess-title","timestamp":"2025-06-01T12:00:02Z","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}`
+	apiErrorJSONL           = `{"type":"assistant","isApiErrorMessage":true,"error":"server_error","requestId":"req-err","sessionId":"sess-title","timestamp":"2025-06-01T12:00:02Z","message":{"model":"<synthetic>","role":"assistant","type":"message","content":[{"type":"text","text":"API Error: 529 Overloaded. This is a server-side issue, usually temporary."}],"stop_reason":"stop_sequence","usage":{"input_tokens":0,"output_tokens":0}}}`
+
+	// Bash mode lines are not in a captured transcript. Their tags come from
+	// the Claude Code 2.1 binary, which parses them with
+	// ^<bash-input>([\s\S]*?)<\/bash-input>.
+	bashInputJSONL  = `{"type":"user","sessionId":"sess-title","timestamp":"2025-06-01T12:00:00Z","message":{"role":"user","content":"<bash-input>git status</bash-input>"}}`
+	bashOutputJSONL = `{"type":"user","sessionId":"sess-title","timestamp":"2025-06-01T12:00:01Z","message":{"role":"user","content":"<bash-stdout>On branch main</bash-stdout><bash-stderr></bash-stderr>"}}`
 )
 
 // Regression: the title was the first user text in the transcript, so a
@@ -178,27 +186,62 @@ func TestIntegration_ConversationTitleSkipsClaudeCodeText(t *testing.T) {
 			lines: []string{ideSelectionJSONL, answer},
 			want:  "why does this return nil?",
 		},
+		{
+			name:  "IDE context and prompt in one text",
+			lines: []string{buildUserJSONL("sess-title", "<ide_opened_file>The user opened the file /projects/test/main.go in the IDE.</ide_opened_file>\nexplain this file"), answer},
+			want:  "explain this file",
+		},
+		{
+			name:  "slash command interrupted before the answer",
+			lines: []string{doctorCommandJSONL, doctorExpansionJSONL, interruptedJSONL, buildUserJSONL("sess-title", "hello"), answer},
+			want:  "hello",
+		},
+		{
+			name:  "slash command answered only by an API error",
+			lines: []string{doctorCommandJSONL, doctorExpansionJSONL, apiErrorJSONL, buildUserJSONL("sess-title", "hello"), answer},
+			want:  "hello",
+		},
+		{
+			name:  "shell command before the first prompt",
+			lines: []string{localCommandCaveatJSONL, bashInputJSONL, bashOutputJSONL, buildUserJSONL("sess-title", "hello"), answer},
+			want:  "hello",
+		},
+		{
+			name:  "whitespace-only text before the prompt",
+			lines: []string{buildUserJSONL("sess-title", " \n"), buildUserJSONL("sess-title", "fix the bug"), answer},
+			want:  "fix the bug",
+		},
+	}
+	// Live capture and history import coalesce the same lines differently;
+	// the title must not depend on which one ran.
+	coalescers := []struct {
+		name     string
+		coalesce func([]transcript.Line) []transcript.Line
+	}{
+		{"live", func(lines []transcript.Line) []transcript.Line { out, _ := Coalesce(lines); return out }},
+		{"import", CoalesceSession},
 	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			jsonlPath := filepath.Join(t.TempDir(), "title.jsonl")
-			if err := os.WriteFile(jsonlPath, []byte(strings.Join(tt.lines, "\n")+"\n"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			lines, _, err := transcript.Read(jsonlPath, 0)
-			if err != nil {
-				t.Fatal(err)
-			}
-			coalesced, _ := Coalesce(lines)
-			st := state.Session{}
-			gens, _ := Process(coalesced, &st, Options{SessionID: "sess-title"}, nil)
-			if len(gens) != 1 {
-				t.Fatalf("got %d generations, want 1", len(gens))
-			}
-			if gens[0].ConversationTitle != tt.want {
-				t.Errorf("ConversationTitle = %q, want %q", gens[0].ConversationTitle, tt.want)
-			}
-		})
+		for _, c := range coalescers {
+			t.Run(tt.name+"/"+c.name, func(t *testing.T) {
+				jsonlPath := filepath.Join(t.TempDir(), "title.jsonl")
+				if err := os.WriteFile(jsonlPath, []byte(strings.Join(tt.lines, "\n")+"\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				lines, _, err := transcript.Read(jsonlPath, 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				st := state.Session{}
+				gens, _ := Process(c.coalesce(lines), &st, Options{SessionID: "sess-title"}, nil)
+				if len(gens) != 1 {
+					t.Fatalf("got %d generations, want 1", len(gens))
+				}
+				if gens[0].ConversationTitle != tt.want {
+					t.Errorf("ConversationTitle = %q, want %q", gens[0].ConversationTitle, tt.want)
+				}
+			})
+		}
 	}
 }
 

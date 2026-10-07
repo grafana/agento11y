@@ -416,9 +416,43 @@ func TestProcess_ConversationTitle(t *testing.T) {
 }
 
 func TestSlashCommandTitle(t *testing.T) {
-	record := "<command-name>/model</command-name>\n            <command-message>model</command-message>\n            <command-args>opus</command-args>"
-	if got := slashCommandTitle(record); got != "/model opus" {
-		t.Errorf("slashCommandTitle = %q, want %q", got, "/model opus")
+	tests := []struct {
+		name   string
+		record string
+		want   string
+	}{
+		{
+			name:   "name and args",
+			record: "<command-name>/model</command-name>\n            <command-message>model</command-message>\n            <command-args>opus</command-args>",
+			want:   "/model opus",
+		},
+		{
+			name:   "empty args",
+			record: "<command-name>/model</command-name>\n            <command-message>model</command-message>\n            <command-args></command-args>",
+			want:   "/model",
+		},
+		{
+			name:   "message before name, no args",
+			record: "<command-message>doctor</command-message>\n<command-name>/doctor</command-name>",
+			want:   "/doctor",
+		},
+		{
+			name:   "name not closed",
+			record: "<command-name>/foo\n<command-args>bar baz</command-args>",
+			want:   "",
+		},
+		{
+			name:   "no name",
+			record: "<command-message>doctor</command-message>",
+			want:   "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := slashCommandTitle(tt.record); got != tt.want {
+				t.Errorf("slashCommandTitle = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

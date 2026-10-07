@@ -323,10 +323,12 @@ func Process(lines []transcript.Line, st *state.Session, opts Options, r *redact
 			gens = append(gens, synthesiseSubagentGens(line, &uctx, agentCalls, opts)...)
 
 		case "assistant":
-			if st.Title == "" && uctx.commandTitle != "" {
-				st.Title = uctx.commandTitle
-			}
 			if gen, ok := processAssistantLine(line, &uctx, st, opts, r, prevAt[line.IsSidechain]); ok {
+				// Only a real answer promotes a held slash command: an API
+				// error marker means the model never answered it.
+				if st.Title == "" && uctx.commandTitle != "" {
+					st.Title = uctx.commandTitle
+				}
 				// Index Agent tool calls from this generation's output.
 				for _, msg := range gen.Output {
 					for _, part := range msg.Parts {
@@ -409,23 +411,49 @@ func conversationTitle(st *state.Session, sessionID string, r *redact.Redactor) 
 //     because a command the model answers, such as /doctor or a skill, is what
 //     the conversation is about. A local command such as /model writes its
 //     <local-command-stdout> next and the candidate is dropped;
+//   - text that ran on the machine and never reached the model as a prompt:
+//     a shell command typed with "!" (<bash-input>, then <bash-stdout>) and a
+//     note saved with "#" (<user-memory-input>);
+//   - the marker of a stopped turn, "[Request interrupted by user]";
 //   - the context block the IDE extensions send ahead of the typed prompt,
 //     naming the open file (<ide_opened_file>) or selection (<ide_selection>).
+//     It usually arrives as a block of its own; when it shares one text with
+//     the prompt, the prompt after it is kept.
 func noteTitle(line transcript.Line, text string, uctx *userContext, st *state.Session) {
 	if st.Title != "" || line.IsMeta {
 		return
 	}
-	t := strings.TrimSpace(text)
+	t := stripIDEContext(strings.TrimSpace(text))
 	switch {
-	case strings.HasPrefix(t, "<local-command-"):
+	case t == "", strings.HasPrefix(t, "[Request interrupted by user"):
+		// Nothing the user typed.
+	case strings.HasPrefix(t, "<local-command-"),
+		strings.HasPrefix(t, "<bash-"),
+		strings.HasPrefix(t, "<user-memory-input>"):
 		uctx.commandTitle = ""
 	case strings.HasPrefix(t, "<command-name>"), strings.HasPrefix(t, "<command-message>"):
 		uctx.commandTitle = slashCommandTitle(t)
-	case strings.HasPrefix(t, "<ide_"):
-		// IDE context; the typed prompt follows in the next block.
 	default:
-		st.Title = text
+		st.Title = t
 	}
+}
+
+// stripIDEContext removes the <ide_…>…</ide_…> blocks at the start of t. It
+// returns "" when a block is not closed, so a cut-off context block is never
+// taken for the prompt.
+func stripIDEContext(t string) string {
+	for strings.HasPrefix(t, "<ide_") {
+		name, _, ok := strings.Cut(t[1:], ">")
+		if !ok {
+			return ""
+		}
+		_, rest, ok := strings.Cut(t, "</"+name+">")
+		if !ok {
+			return ""
+		}
+		t = strings.TrimSpace(rest)
+	}
+	return t
 }
 
 // slashCommandTitle renders a slash command record as the user typed it, for
@@ -440,13 +468,16 @@ func slashCommandTitle(record string) string {
 }
 
 // tagText returns the trimmed text between <tag> and </tag> in s, or "" when s
-// has no such element.
+// has no such element or it is not closed.
 func tagText(s, tag string) string {
 	_, rest, ok := strings.Cut(s, "<"+tag+">")
 	if !ok {
 		return ""
 	}
-	inner, _, _ := strings.Cut(rest, "</"+tag+">")
+	inner, _, ok := strings.Cut(rest, "</"+tag+">")
+	if !ok {
+		return ""
+	}
 	return strings.TrimSpace(inner)
 }
 
