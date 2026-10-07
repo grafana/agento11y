@@ -10,12 +10,20 @@ independent opt-in for experimental trial spans and evaluation-result events.
 from __future__ import annotations
 
 import os
+from enum import Enum
 
 from .errors import ExperimentalFeatureDisabledError
 
 ENV_ENABLE_EXPERIMENTAL_FEATURES = "AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES"
 
-FEATURE_CLOUD_TRIAL_EVALUATION = "cloud trial evaluation"
+
+class ExperimentalFeature(str, Enum):
+    CLOUD_TRIAL_EVALUATION = "cloud trial evaluation"
+    OTEL_GENERATION_EXPORT = "otel generation export"
+
+
+FEATURE_CLOUD_TRIAL_EVALUATION = ExperimentalFeature.CLOUD_TRIAL_EVALUATION.value
+FEATURE_OTEL_GENERATION_EXPORT = ExperimentalFeature.OTEL_GENERATION_EXPORT.value
 
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
@@ -35,7 +43,9 @@ def require_experimental(feature: str) -> None:
 
 __all__ = [
     "ENV_ENABLE_EXPERIMENTAL_FEATURES",
+    "ExperimentalFeature",
     "FEATURE_CLOUD_TRIAL_EVALUATION",
+    "FEATURE_OTEL_GENERATION_EXPORT",
     "experimental_features_enabled",
     "require_experimental",
 ]

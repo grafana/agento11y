@@ -7,7 +7,7 @@ protoc = "34.1"
 "go:google.golang.org/grpc/cmd/protoc-gen-go-grpc" = "v1.6.1"
 
 [env]
-PYTHON_BIN = "python3"
+PYTHON_BIN = "{{ env.PYTHON_BIN | default(value='python3') }}"
 # Pin the Python protobuf toolchain so generated stubs are reproducible across
 # machines and CI. Bumping these requires regenerating stubs via
 # `mise run generate:proto:python`.
@@ -360,8 +360,21 @@ run = "pnpm run test:build && node --test test/frameworks.langchain.test.mjs tes
 # --- Python SDK tests ---
 
 [tasks."test:py:sdk-core"]
-description = "Run Python SDK core parity tests"
-run = "uv run --python \"$PYTHON_BIN\" --with '.[dev]' --directory python pytest tests"
+description = "Run Python SDK core tests with and without the OTel extra"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+mise run test:py:sdk-core-base
+mise run test:py:sdk-core-otel
+"""
+
+[tasks."test:py:sdk-core-base"]
+description = "Run Python SDK core tests without the OTel extra"
+run = "uv run --locked --exact --python \"$PYTHON_BIN\" --extra dev --directory python python -c 'import importlib.util; import pytest; assert importlib.util.find_spec(\"opentelemetry.util.genai\") is None, \"base install must not include opentelemetry-util-genai\"; raise SystemExit(pytest.main([\"tests\"]))'"
+
+[tasks."test:py:sdk-core-otel"]
+description = "Run Python SDK core tests with the OTel extra"
+run = "uv run --locked --exact --python \"$PYTHON_BIN\" --extra dev --extra otel --directory python python -c 'import opentelemetry.util.genai.handler; import pytest; raise SystemExit(pytest.main([\"tests\"]))'"
 
 [tasks."test:py:sdk-conformance"]
 description = "Run Python SDK core conformance tests"

@@ -10,24 +10,47 @@ import pytest
 from agento11y import ApiConfig, Client, ClientConfig, GenerationExportConfig
 from agento11y.config import _WARNED_LEGACY_ENV, default_config, resolve_config
 from agento11y.models import ContentCaptureMode, GenerationStart, ModelRef
+from opentelemetry.metrics import NoOpMeterProvider
+from opentelemetry.trace import NoOpTracerProvider
 
 _DEFAULT_EXPORT_TIMEOUT = timedelta(seconds=30)
 
 
-def test_client_warns_when_metrics_provider_is_not_registered(monkeypatch, caplog: pytest.LogCaptureFixture) -> None:
-    class ProxyMeterProvider:
+@pytest.mark.parametrize("protocol", ["none", "otel"])
+@pytest.mark.parametrize("direct_meter", [False, True])
+@pytest.mark.parametrize("provider_source", ["none", "explicit", "global"])
+def test_client_warns_when_metrics_provider_is_not_registered(
+    monkeypatch, caplog: pytest.LogCaptureFixture, protocol: str, direct_meter: bool, provider_source: str
+) -> None:
+    if protocol == "otel":
+        pytest.importorskip("opentelemetry.util.genai", reason="requires agento11y[otel]")
+
+    class ProxyMeterProvider(NoOpMeterProvider):
         pass
 
-    monkeypatch.setattr("agento11y.client.metrics.get_meter_provider", ProxyMeterProvider)
+    provider = NoOpMeterProvider()
+    monkeypatch.setattr(
+        "agento11y.client.metrics.get_meter_provider",
+        lambda: provider if provider_source == "global" else ProxyMeterProvider(),
+    )
     with caplog.at_level(logging.WARNING, logger="agento11y"):
         client = Client(
             ClientConfig(
-                generation_export=GenerationExportConfig(protocol="none"),
+                generation_export=GenerationExportConfig(protocol=protocol),
+                meter=provider.get_meter("direct") if direct_meter else None,
+                meter_provider=provider if provider_source == "explicit" else None,
             )
         )
         client.shutdown()
 
-    assert any("OTel metrics are not configured" in record.getMessage() for record in caplog.records)
+    warnings = [
+        record.getMessage() for record in caplog.records if "OTel metrics are not configured" in record.getMessage()
+    ]
+    should_warn = provider_source == "none" and (protocol == "otel" or not direct_meter)
+    assert len(warnings) == int(should_warn)
+    if should_warn:
+        hint = "ClientConfig(meter_provider=...)" if protocol == "otel" else "ClientConfig(meter=...)"
+        assert hint in warnings[0]
 
 
 def _check_no_env(cfg: ClientConfig) -> None:
@@ -42,6 +65,8 @@ def _check_no_env(cfg: ClientConfig) -> None:
     assert cfg.agent_name == ""
     assert cfg.debug is False
     assert cfg.use_experimental_otel is False
+    assert cfg.tracer_provider is None
+    assert cfg.meter_provider is None
 
 
 def _check_transport(cfg: ClientConfig) -> None:
@@ -598,6 +623,29 @@ def test_resolve_config_does_not_mutate_caller() -> None:
     assert out2.user_id == "bob"
 
 
+def test_resolve_config_preserves_instruments_and_providers_by_reference() -> None:
+    tracer_provider = NoOpTracerProvider()
+    meter_provider = NoOpMeterProvider()
+    tracer = tracer_provider.get_tracer("test")
+    meter = meter_provider.get_meter("test")
+    config = ClientConfig(
+        tracer=tracer,
+        meter=meter,
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+    )
+
+    resolved = resolve_config(config, env={})
+
+    assert resolved is not config
+    assert resolved.generation_export is not config.generation_export
+    assert resolved.tracer is tracer
+    assert resolved.meter is meter
+    assert resolved.tracer_provider is tracer_provider
+    assert resolved.meter_provider is meter_provider
+    assert config.generation_export.protocol is None
+
+
 def test_default_config_returns_concrete_values() -> None:
     """default_config() returns concrete schema defaults, not None sentinels."""
     cfg = default_config()
@@ -653,10 +701,10 @@ def test_client_reads_env_automatically(monkeypatch: pytest.MonkeyPatch) -> None
 
     client = Client()
     try:
-        rec = client.start_generation(GenerationStart(model=ModelRef(provider="openai", name="gpt-5")))
-        assert rec.seed.agent_name == "from-env"
-        assert rec.seed.user_id == "alice"
-        assert rec.seed.tags == {"team": "ai"}
+        with client.start_generation(GenerationStart(model=ModelRef(provider="openai", name="gpt-5"))) as rec:
+            assert rec.seed.agent_name == "from-env"
+            assert rec.seed.user_id == "alice"
+            assert rec.seed.tags == {"team": "ai"}
     finally:
         client.shutdown()
 
@@ -668,14 +716,14 @@ def test_client_per_call_overrides_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
     client = Client()
     try:
-        rec = client.start_generation(
+        with client.start_generation(
             GenerationStart(
                 model=ModelRef(provider="openai", name="gpt-5"),
                 agent_name="reviewer",
                 tags={"env": "staging", "task": "summarize"},
             ),
-        )
-        assert rec.seed.agent_name == "reviewer"
-        assert rec.seed.tags == {"env": "staging", "task": "summarize"}
+        ) as rec:
+            assert rec.seed.agent_name == "reviewer"
+            assert rec.seed.tags == {"env": "staging", "task": "summarize"}
     finally:
         client.shutdown()

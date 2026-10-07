@@ -82,12 +82,17 @@ def generation_to_proto(generation: Generation) -> agento11y_pb2.Generation:
     if generation.thinking_enabled is not None:
         message.thinking_enabled = generation.thinking_enabled
 
-    trimmed_effective_version = generation.effective_version.strip()
-    if trimmed_effective_version:
-        digest = hashlib.sha256(trimmed_effective_version.encode("utf-8")).hexdigest()
-        message.effective_version = "sha256:" + digest
+    if digest := _effective_version_digest(generation.effective_version):
+        message.effective_version = digest
 
     return message
+
+
+def _effective_version_digest(effective_version: str) -> str:
+    trimmed = effective_version.strip()
+    if not trimmed:
+        return ""
+    return "sha256:" + hashlib.sha256(trimmed.encode("utf-8")).hexdigest()
 
 
 def generation_to_proto_json(generation: Generation) -> dict[str, object]:
