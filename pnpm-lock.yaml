@@ -41,13 +41,13 @@ importers:
         version: 0.91.1(zod@4.3.6)
       '@google/adk':
         specifier: ^0.6.0
-        version: 0.6.1(73c59507c9a8c6a855a2093fe4cdc104)
+        version: 0.6.1(6f613b4599cf494572c064a26425943f)
       '@google/genai':
         specifier: ^1.41.0
         version: 1.47.0(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))
       '@grpc/grpc-js':
         specifier: ^1.14.4
-        version: 1.14.4
+        version: 1.14.5
       '@grpc/proto-loader':
         specifier: ^0.8.0
         version: 0.8.0
@@ -96,7 +96,7 @@ importers:
         version: 2.6.1(@opentelemetry/api@1.9.1)
       '@strands-agents/sdk':
         specifier: 1.0.0-rc.5
-        version: 1.0.0-rc.5(@a2a-js/sdk@0.3.13(@grpc/grpc-js@1.14.4)(express@4.22.2))(@anthropic-ai/sdk@0.91.1(zod@4.3.6))(@google/genai@1.47.0(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.3.6)))(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(@opentelemetry/api@1.9.1)(@opentelemetry/exporter-metrics-otlp-http@0.213.0(@opentelemetry/api@1.9.1))(@opentelemetry/exporter-trace-otlp-http@0.213.0(@opentelemetry/api@1.9.1))(@opentelemetry/resources@2.6.1(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-metrics@2.6.1(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-base@2.6.1(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-node@2.6.1(@opentelemetry/api@1.9.1))(express@4.22.2)(openai@6.33.0(ws@8.21.0)(zod@4.3.6))(zod@4.3.6)
+        version: 1.0.0-rc.5(@a2a-js/sdk@0.3.13(@grpc/grpc-js@1.14.5)(express@4.22.2))(@anthropic-ai/sdk@0.91.1(zod@4.3.6))(@google/genai@1.47.0(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.3.6)))(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(@opentelemetry/api@1.9.1)(@opentelemetry/exporter-metrics-otlp-http@0.213.0(@opentelemetry/api@1.9.1))(@opentelemetry/exporter-trace-otlp-http@0.213.0(@opentelemetry/api@1.9.1))(@opentelemetry/resources@2.6.1(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-metrics@2.6.1(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-base@2.6.1(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-node@2.6.1(@opentelemetry/api@1.9.1))(express@4.22.2)(openai@6.33.0(ws@8.21.0)(zod@4.3.6))(zod@4.3.6)
       '@types/node':
         specifier: 24.12.0
         version: 24.12.0
@@ -112,7 +112,7 @@ importers:
     devDependencies:
       '@grpc/grpc-js':
         specifier: 1.14.4
-        version: 1.14.4
+        version: 1.14.5
       '@grpc/proto-loader':
         specifier: 0.8.0
         version: 0.8.0
@@ -205,7 +205,7 @@ importers:
     dependencies:
       '@grpc/grpc-js':
         specifier: ^1.14.4
-        version: 1.14.4
+        version: 1.14.5
       '@grpc/proto-loader':
         specifier: ^0.8.0
         version: 0.8.0
@@ -773,6 +773,10 @@ packages:
 
   '@grpc/grpc-js@1.14.4':
     resolution: {integrity: sha512-k9Dj3DV/itK9D06Y8f190Qgop7/Ui+D0njFV3LHMPwPT75DpXLQohE9Wmz0QElrJnzsjB7KPWiKJbOl7IPDArQ==}
+    engines: {node: '>=12.10.0'}
+
+  '@grpc/grpc-js@1.14.5':
+    resolution: {integrity: sha512-7VZM+SVdEcUUqSQeNI3zM8Qs/BhQKZndPo2h5VkYkAM8Iz0wJIa8mKV5ekQGqG8UUsnkQ0NMxIxwkIHYvj0qOw==}
     engines: {node: '>=12.10.0'}
 
   '@grpc/proto-loader@0.8.0':
@@ -4295,11 +4299,11 @@ packages:
 
 snapshots:
 
-  '@a2a-js/sdk@0.3.13(@grpc/grpc-js@1.14.4)(express@4.22.2)':
+  '@a2a-js/sdk@0.3.13(@grpc/grpc-js@1.14.5)(express@4.22.2)':
     dependencies:
       uuid: 11.1.1
     optionalDependencies:
-      '@grpc/grpc-js': 1.14.4
+      '@grpc/grpc-js': 1.14.5
       express: 4.22.2
 
   '@anthropic-ai/sdk@0.91.1(zod@4.3.6)':
@@ -5050,9 +5054,9 @@ snapshots:
       - encoding
       - supports-color
 
-  '@google/adk@0.6.1(73c59507c9a8c6a855a2093fe4cdc104)':
+  '@google/adk@0.6.1(6f613b4599cf494572c064a26425943f)':
     dependencies:
-      '@a2a-js/sdk': 0.3.13(@grpc/grpc-js@1.14.4)(express@4.22.2)
+      '@a2a-js/sdk': 0.3.13(@grpc/grpc-js@1.14.5)(express@4.22.2)
       '@google-cloud/opentelemetry-cloud-monitoring-exporter': 0.21.0(@opentelemetry/api@1.9.1)(@opentelemetry/core@2.8.0(@opentelemetry/api@1.9.1))(@opentelemetry/resources@2.6.1(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-metrics@2.6.1(@opentelemetry/api@1.9.1))(encoding@0.1.13)
       '@google-cloud/opentelemetry-cloud-trace-exporter': 3.0.0(@opentelemetry/api@1.9.1)(@opentelemetry/core@2.8.0(@opentelemetry/api@1.9.1))(@opentelemetry/resources@2.6.1(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-base@2.6.1(@opentelemetry/api@1.9.1))(encoding@0.1.13)
       '@google-cloud/storage': 7.19.0(encoding@0.1.13)
@@ -5104,6 +5108,11 @@ snapshots:
       - utf-8-validate
 
   '@grpc/grpc-js@1.14.4':
+    dependencies:
+      '@grpc/proto-loader': 0.8.0
+      '@js-sdsl/ordered-map': 4.4.2
+
+  '@grpc/grpc-js@1.14.5':
     dependencies:
       '@grpc/proto-loader': 0.8.0
       '@js-sdsl/ordered-map': 4.4.2
@@ -5685,7 +5694,7 @@ snapshots:
 
   '@opentelemetry/exporter-metrics-otlp-grpc@0.213.0(@opentelemetry/api@1.9.1)':
     dependencies:
-      '@grpc/grpc-js': 1.14.4
+      '@grpc/grpc-js': 1.14.5
       '@opentelemetry/api': 1.9.1
       '@opentelemetry/core': 2.8.0(@opentelemetry/api@1.9.1)
       '@opentelemetry/exporter-metrics-otlp-http': 0.213.0(@opentelemetry/api@1.9.1)
@@ -5715,7 +5724,7 @@ snapshots:
 
   '@opentelemetry/exporter-trace-otlp-grpc@0.213.0(@opentelemetry/api@1.9.1)':
     dependencies:
-      '@grpc/grpc-js': 1.14.4
+      '@grpc/grpc-js': 1.14.5
       '@opentelemetry/api': 1.9.1
       '@opentelemetry/core': 2.8.0(@opentelemetry/api@1.9.1)
       '@opentelemetry/otlp-exporter-base': 0.213.0(@opentelemetry/api@1.9.1)
@@ -5762,7 +5771,7 @@ snapshots:
 
   '@opentelemetry/otlp-grpc-exporter-base@0.213.0(@opentelemetry/api@1.9.1)':
     dependencies:
-      '@grpc/grpc-js': 1.14.4
+      '@grpc/grpc-js': 1.14.5
       '@opentelemetry/api': 1.9.1
       '@opentelemetry/core': 2.8.0(@opentelemetry/api@1.9.1)
       '@opentelemetry/otlp-exporter-base': 0.213.0(@opentelemetry/api@1.9.1)
@@ -6295,7 +6304,7 @@ snapshots:
 
   '@standard-schema/spec@1.1.0': {}
 
-  '@strands-agents/sdk@1.0.0-rc.5(@a2a-js/sdk@0.3.13(@grpc/grpc-js@1.14.4)(express@4.22.2))(@anthropic-ai/sdk@0.91.1(zod@4.3.6))(@google/genai@1.47.0(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.3.6)))(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(@opentelemetry/api@1.9.1)(@opentelemetry/exporter-metrics-otlp-http@0.213.0(@opentelemetry/api@1.9.1))(@opentelemetry/exporter-trace-otlp-http@0.213.0(@opentelemetry/api@1.9.1))(@opentelemetry/resources@2.6.1(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-metrics@2.6.1(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-base@2.6.1(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-node@2.6.1(@opentelemetry/api@1.9.1))(express@4.22.2)(openai@6.33.0(ws@8.21.0)(zod@4.3.6))(zod@4.3.6)':
+  '@strands-agents/sdk@1.0.0-rc.5(@a2a-js/sdk@0.3.13(@grpc/grpc-js@1.14.5)(express@4.22.2))(@anthropic-ai/sdk@0.91.1(zod@4.3.6))(@google/genai@1.47.0(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.3.6)))(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(@opentelemetry/api@1.9.1)(@opentelemetry/exporter-metrics-otlp-http@0.213.0(@opentelemetry/api@1.9.1))(@opentelemetry/exporter-trace-otlp-http@0.213.0(@opentelemetry/api@1.9.1))(@opentelemetry/resources@2.6.1(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-metrics@2.6.1(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-base@2.6.1(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-node@2.6.1(@opentelemetry/api@1.9.1))(express@4.22.2)(openai@6.33.0(ws@8.21.0)(zod@4.3.6))(zod@4.3.6)':
     dependencies:
       '@aws-sdk/client-bedrock-runtime': 3.1038.0
       '@modelcontextprotocol/sdk': 1.29.0(@cfworker/json-schema@4.1.1)(zod@4.3.6)
@@ -6305,7 +6314,7 @@ snapshots:
       yaml: 2.8.3
       zod: 4.3.6
     optionalDependencies:
-      '@a2a-js/sdk': 0.3.13(@grpc/grpc-js@1.14.4)(express@4.22.2)
+      '@a2a-js/sdk': 0.3.13(@grpc/grpc-js@1.14.5)(express@4.22.2)
       '@anthropic-ai/sdk': 0.91.1(zod@4.3.6)
       '@google/genai': 1.47.0(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))
       '@opentelemetry/exporter-metrics-otlp-http': 0.213.0(@opentelemetry/api@1.9.1)
