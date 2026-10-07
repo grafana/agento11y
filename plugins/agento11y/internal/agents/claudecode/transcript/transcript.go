@@ -39,6 +39,11 @@ type Line struct {
 	// user typed: the caveat in front of a local command such as /model, or
 	// the expanded body of a slash command or skill.
 	IsMeta bool `json:"isMeta"`
+	// AITitle and CustomTitle are set on Claude Code's "ai-title" and
+	// "custom-title" lines, which ReadWithTitles returns as Titles rather than
+	// as lines.
+	AITitle     string `json:"aiTitle"`
+	CustomTitle string `json:"customTitle"`
 
 	// EndOffset is the byte position after this line in the transcript file.
 	// Set by Read(), not deserialized from JSON.
@@ -136,21 +141,57 @@ func ParseUserContent(raw json.RawMessage) (text string, blocks []UserContentBlo
 // tests can lower it.
 var maxLineBytes = 10 * 1024 * 1024
 
+// Titles holds the newest title records Claude Code wrote in a read range.
+type Titles struct {
+	// AI is the title Claude Code generates for the session (an "ai-title"
+	// line). Claude Code writes it once the session has something to
+	// summarise, before or after the first answer, and rewrites it as the
+	// session goes on. A session of one trivial prompt may never get one.
+	AI string
+	// Custom is the name the user gave the session, with /rename or in the
+	// IDE (a "custom-title" line).
+	Custom string
+}
+
+// note records the title an "ai-title" or "custom-title" line carries, and
+// ignores every other kind. An empty title changes nothing.
+func (t *Titles) note(line Line) {
+	switch line.Type {
+	case "ai-title":
+		if v := strings.TrimSpace(line.AITitle); v != "" {
+			t.AI = v
+		}
+	case "custom-title":
+		if v := strings.TrimSpace(line.CustomTitle); v != "" {
+			t.Custom = v
+		}
+	}
+}
+
 // Read reads JSONL lines from path starting at the given byte offset.
 // Returns parsed lines, the new byte offset, and any I/O error.
 // Lines other than user and assistant turns, unparseable lines, and lines
 // longer than maxLineBytes are skipped; the returned offset always advances
 // past them.
 func Read(path string, offset int64) ([]Line, int64, error) {
+	lines, pos, _, err := ReadWithTitles(path, offset)
+	return lines, pos, err
+}
+
+// ReadWithTitles is Read that also returns the newest title records in the
+// range. The title records are not returned as lines, for the same reason no
+// other non-turn line is.
+func ReadWithTitles(path string, offset int64) ([]Line, int64, Titles, error) {
+	var titles Titles
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, offset, err
+		return nil, offset, titles, err
 	}
 	defer func() { _ = f.Close() }()
 
 	if offset > 0 {
 		if _, err := f.Seek(offset, io.SeekStart); err != nil {
-			return nil, offset, err
+			return nil, offset, titles, err
 		}
 	}
 
@@ -165,7 +206,7 @@ func Read(path string, offset int64) ([]Line, int64, error) {
 			break
 		}
 		if err != nil {
-			return lines, pos, err
+			return lines, pos, titles, err
 		}
 		pos += consumed
 		if tooLong {
@@ -182,6 +223,7 @@ func Read(path string, offset int64) ([]Line, int64, error) {
 		// them would let one sit at the tail of a read, where the Stop settle
 		// read mistakes it for a turn still landing.
 		if line.Type != "user" && line.Type != "assistant" {
+			titles.note(line)
 			continue
 		}
 
@@ -189,7 +231,7 @@ func Read(path string, offset int64) ([]Line, int64, error) {
 		lines = append(lines, line)
 	}
 
-	return lines, pos, nil
+	return lines, pos, titles, nil
 }
 
 // readLine returns the next line without its trailing newline, and the bytes

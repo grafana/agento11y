@@ -240,6 +240,12 @@ func TestClaudePreviewIsBounded(t *testing.T) {
 func TestClaudeTurnsMatchTheLiveMapper(t *testing.T) {
 	root := t.TempDir()
 	path := writeClaudeSession(t, root, "-work-repo", "sess-a")
+	// Claude Code writes its own title for the session; both paths must use it.
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, path, claudeLine(map[string]any{"type": "ai-title", "aiTitle": "Build and tests", "sessionId": "sess-a"})+string(body))
 	imp := claudeImporterAt(root)
 
 	preview, ok, err := imp.Preview(context.Background(), path)
@@ -253,13 +259,16 @@ func TestClaudeTurnsMatchTheLiveMapper(t *testing.T) {
 
 	// The same lines through Coalesce and Process directly, the path the live
 	// hook runs.
-	lines, _, err := transcript.Read(path, 0)
+	lines, _, titles, err := transcript.ReadWithTitles(path, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, _ := mapper.Process(mapper.CoalesceSession(lines), &state.Session{}, mapper.Options{SessionID: preview.SessionID}, nil)
+	want, _ := mapper.Process(mapper.CoalesceSession(lines), &state.Session{}, mapper.Options{SessionID: preview.SessionID, Titles: titles}, nil)
 	if len(want) != len(turns) {
 		t.Fatalf("the importer produced %d turns, the live mapper %d", len(turns), len(want))
+	}
+	if want[0].ConversationTitle != "Build and tests" {
+		t.Fatalf("live mapper title = %q, want the ai-title", want[0].ConversationTitle)
 	}
 	for i := range want {
 		got := turns[i].Gen
@@ -430,6 +439,92 @@ func TestClaudeSubagentTurnsLinkToTheirParent(t *testing.T) {
 		if turn.Gen.AgentName == "claude-code/explorer" && !strings.Contains(turn.Source.SourcePath, "/subagents/") {
 			t.Fatalf("the parent transcript still produced a summary generation %q", turn.Gen.ID)
 		}
+	}
+}
+
+// Regression: each subagent transcript was mapped with a fresh state, so its
+// turns were titled with the prompt the subagent was given. They belong to the
+// session's conversation, and a store that keeps the latest title could rename
+// the whole conversation after a subagent's task.
+func TestClaudeImportTitlesEveryTurnWithTheSessionTitle(t *testing.T) {
+	tests := []struct {
+		name         string
+		aiTitle      string
+		parentPrompt string
+		want         string
+	}{
+		{name: "Claude Code's title", aiTitle: "Repo tour", parentPrompt: "explore the repo", want: "Repo tour"},
+		{name: "first prompt without a Claude Code title", parentPrompt: "explore the repo", want: "explore the repo"},
+		{
+			// The parent's only prompt is IDE context, so the session has no
+			// title at all; the subagent's task must not become one.
+			name:         "no session title",
+			parentPrompt: "<ide_opened_file>The user opened the file /work/repo/main.go in the IDE.</ide_opened_file>",
+			want:         "sess-title",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			sessionID := "sess-title"
+			project := filepath.Join(root, "-work-repo")
+			subDir := filepath.Join(project, sessionID, "subagents")
+			agentID := "a18f9a9d9f1f3d28e"
+
+			var parentBody string
+			if tt.aiTitle != "" {
+				parentBody = claudeLine(map[string]any{"type": "ai-title", "aiTitle": tt.aiTitle, "sessionId": sessionID})
+			}
+			parentBody += claudeUserLine(sessionID, "/work/repo", "2026-01-10T12:00:00Z", tt.parentPrompt) +
+				claudeAssistantLine(sessionID, "/work/repo", "2026-01-10T12:00:10Z", "req-1", "", []map[string]any{
+					{"type": "tool_use", "id": "tu_agent", "name": "Agent", "input": map[string]any{"subagent_type": "explorer"}},
+				}) +
+				claudeToolResultLine(sessionID, "tu_agent", "agentId: "+agentID+"\nTranscript dir: "+subDir+"\nfound three packages") +
+				claudeAssistantLine(sessionID, "/work/repo", "2026-01-10T12:02:00Z", "req-2", "Summarised.", nil)
+			parentPath := writeFile(t, filepath.Join(project, sessionID+".jsonl"), parentBody)
+
+			subBody := claudeLine(map[string]any{
+				"type":        "user",
+				"sessionId":   sessionID,
+				"isSidechain": true,
+				"agentId":     agentID,
+				"timestamp":   "2026-01-10T12:00:11Z",
+				"message":     map[string]any{"role": "user", "content": "list every package under internal/"},
+			}) + claudeLine(map[string]any{
+				"type":             "assistant",
+				"sessionId":        sessionID,
+				"isSidechain":      true,
+				"agentId":          agentID,
+				"attributionAgent": "explorer",
+				"timestamp":        "2026-01-10T12:00:20Z",
+				"requestId":        "req-side",
+				"message": map[string]any{
+					"model":       "claude-sonnet-4-20250514",
+					"stop_reason": "end_turn",
+					"usage":       map[string]any{"input_tokens": 10, "output_tokens": 7},
+					"content":     []map[string]any{{"type": "text", "text": "three packages"}},
+				},
+			})
+			writeFile(t, filepath.Join(subDir, "agent-"+agentID+".jsonl"), subBody)
+
+			imp := claudeImporterAt(root)
+			preview, ok, err := imp.Preview(context.Background(), parentPath)
+			if err != nil || !ok {
+				t.Fatalf("Preview: ok=%v err=%v", ok, err)
+			}
+			var sawSubagent bool
+			for _, turn := range collectTurns(t, imp, preview) {
+				if strings.Contains(turn.Source.SourcePath, "/subagents/") {
+					sawSubagent = true
+				}
+				if turn.Gen.ConversationTitle != tt.want {
+					t.Errorf("%s turn title = %q, want %q", turn.Gen.AgentName, turn.Gen.ConversationTitle, tt.want)
+				}
+			}
+			if !sawSubagent {
+				t.Fatal("no subagent turn imported")
+			}
+		})
 	}
 }
 

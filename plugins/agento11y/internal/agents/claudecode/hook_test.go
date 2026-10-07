@@ -592,7 +592,7 @@ func TestReadTranscriptSettled_CapturesLateFinalTurn(t *testing.T) {
 	}()
 
 	logs := log.New(io.Discard, "", 0)
-	lines, safeOffset, rawCount := readTranscriptSettled(context.Background(), path, 0, false, logs)
+	lines, safeOffset, rawCount, _ := readTranscriptSettled(context.Background(), path, 0, false, logs)
 
 	if rawCount != 3 {
 		t.Fatalf("rawCount = %d, want 3 (tool-use turn, tool_result, final turn)", rawCount)
@@ -620,7 +620,7 @@ func TestReadTranscriptSettled_StopWaitsForTranscriptCreatedLate(t *testing.T) {
 		_ = os.WriteFile(path, []byte(buildHookAssistantJSONL("late-file", "req_a", "end_turn", "done", 5)+"\n"), 0o644)
 	}()
 
-	lines, _, rawCount := readTranscriptSettled(context.Background(), path, 0, true, log.New(io.Discard, "", 0))
+	lines, _, rawCount, _ := readTranscriptSettled(context.Background(), path, 0, true, log.New(io.Discard, "", 0))
 	if rawCount != 1 || len(lines) != 1 {
 		t.Fatalf("rawCount=%d len(lines)=%d, want 1/1 (the turn written after Stop)", rawCount, len(lines))
 	}
@@ -651,7 +651,7 @@ func TestReadTranscriptSettled_StopWaitsPastToolUseTail(t *testing.T) {
 			buildHookAssistantJSONL(sessionID, "req_b", "end_turn", "all done", 5) + "\n")
 	}()
 
-	lines, _, rawCount := readTranscriptSettled(context.Background(), path, 0, true, log.New(io.Discard, "", 0))
+	lines, _, rawCount, _ := readTranscriptSettled(context.Background(), path, 0, true, log.New(io.Discard, "", 0))
 	if rawCount != 3 {
 		t.Fatalf("rawCount = %d, want 3 (tool-use turn, tool_result, final turn)", rawCount)
 	}
@@ -704,7 +704,7 @@ func TestReadTranscriptSettled_ReturnsImmediatelyWhenTerminal(t *testing.T) {
 	}
 
 	start := time.Now()
-	lines, safeOffset, rawCount := readTranscriptSettled(context.Background(), path, 0, true, log.New(io.Discard, "", 0))
+	lines, safeOffset, rawCount, _ := readTranscriptSettled(context.Background(), path, 0, true, log.New(io.Discard, "", 0))
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("settled read took %s; expected near-immediate return", elapsed)
 	}
@@ -736,7 +736,7 @@ func TestReadTranscriptSettled_EmptyReadReturnsImmediately(t *testing.T) {
 	// Read from end-of-file: a prior export already consumed everything.
 	eof := int64(len(content))
 	start := time.Now()
-	lines, safeOffset, rawCount := readTranscriptSettled(context.Background(), path, eof, false, log.New(io.Discard, "", 0))
+	lines, safeOffset, rawCount, _ := readTranscriptSettled(context.Background(), path, eof, false, log.New(io.Discard, "", 0))
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("empty read took %s; expected immediate return without waiting out the settle window", elapsed)
 	}
@@ -765,7 +765,7 @@ func TestReadTranscriptSettled_TrailingPromptAfterCompleteTurn(t *testing.T) {
 	}
 
 	start := time.Now()
-	lines, safeOffset, rawCount := readTranscriptSettled(context.Background(), path, 0, false, log.New(io.Discard, "", 0))
+	lines, safeOffset, rawCount, _ := readTranscriptSettled(context.Background(), path, 0, false, log.New(io.Discard, "", 0))
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("trailing-prompt read took %s; expected immediate return (completed turn already present)", elapsed)
 	}
@@ -809,7 +809,7 @@ func TestReadTranscriptSettled_LonePromptWaitsForReply(t *testing.T) {
 		_, _ = f.WriteString(buildHookAssistantJSONL(sessionID, "req_a", "end_turn", "hello", 4) + "\n")
 	}()
 
-	lines, safeOffset, rawCount := readTranscriptSettled(context.Background(), path, 0, false, log.New(io.Discard, "", 0))
+	lines, safeOffset, rawCount, _ := readTranscriptSettled(context.Background(), path, 0, false, log.New(io.Discard, "", 0))
 	if rawCount != 2 {
 		t.Fatalf("rawCount = %d, want 2 (prompt + late assistant reply)", rawCount)
 	}
@@ -1794,5 +1794,56 @@ func TestHook_PromptRedactionWiring(t *testing.T) {
 				t.Errorf("assistant text lost its redaction: %s", body)
 			}
 		})
+	}
+}
+
+// TestHook_ExportsClaudeCodeTitle pins the wire from the transcript's title
+// lines to the exported generation. The mapper tests cover the precedence;
+// this one fails if the hook stops handing the titles it read to the mapper.
+func TestHook_ExportsClaudeCodeTitle(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	envconfig.PinAliasEnvBlank(t)
+
+	var gotBody atomic.Value
+	gotBody.Store("")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "read body", http.StatusBadRequest)
+			return
+		}
+		gotBody.Store(string(body))
+		r.Body = io.NopCloser(strings.NewReader(string(body)))
+		acceptGenerationExport(w, r)
+	}))
+	defer server.Close()
+
+	setHookExportEnv(t, server.URL)
+	t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "full")
+
+	sessionID := "title-wiring-session"
+	transcriptPath := filepath.Join(dir, "transcript.jsonl")
+	content := `{"type":"ai-title","aiTitle":"Flaky login test","sessionId":"title-wiring-session"}` + "\n" +
+		buildHookUserJSONL(sessionID, "the login test fails") + "\n" +
+		buildHookAssistantJSONL(sessionID, "req-1", "end_turn", "It races the token refresh.", 5) + "\n"
+	if err := os.WriteFile(transcriptPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	runHookForTest(t, hookInput{
+		HookEventName:  "Stop",
+		SessionID:      sessionID,
+		TranscriptPath: transcriptPath,
+	})
+
+	body, _ := gotBody.Load().(string)
+	if body == "" {
+		t.Fatal("expected an export request")
+	}
+	// The ai-title appears nowhere in the transcript's turns, so it reaches
+	// the body only as the conversation title.
+	if !strings.Contains(body, "Flaky login test") {
+		t.Errorf("export does not carry the ai-title: %s", body)
 	}
 }

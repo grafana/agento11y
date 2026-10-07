@@ -175,7 +175,7 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 	defer func() { _ = otelProviders.Shutdown(hookCtx) }()
 
 	stop := strings.TrimSpace(input.HookEventName) == "Stop"
-	lines, safeOffset, rawCount := readTranscriptSettled(hookCtx, input.TranscriptPath, st.Offset, stop, logger)
+	lines, safeOffset, rawCount, titles := readTranscriptSettled(hookCtx, input.TranscriptPath, st.Offset, stop, logger)
 	if rawCount == 0 {
 		return nil
 	}
@@ -194,6 +194,7 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 
 	gens, toolResultAt := mapper.Process(lines, &st, mapper.Options{
 		SessionID:           input.SessionID,
+		Titles:              titles,
 		Logger:              logger,
 		ExtraTags:           extraTags,
 		AgentName:           resolvedAgentName,
@@ -324,14 +325,15 @@ func handleUserPromptSubmit(ctx context.Context, stdout io.Writer, input *hookIn
 // SessionEnd that would catch up is cancelled when -p exits.
 //
 // Returns the coalesced lines, the safe offset, and the raw line count so the
-// caller can distinguish "nothing to read" from "read but nothing complete".
-func readTranscriptSettled(ctx context.Context, path string, offset int64, stop bool, logger *log.Logger) ([]transcript.Line, int64, int) {
+// caller can distinguish "nothing to read" from "read but nothing complete",
+// and the title lines Claude Code wrote in the range.
+func readTranscriptSettled(ctx context.Context, path string, offset int64, stop bool, logger *log.Logger) ([]transcript.Line, int64, int, transcript.Titles) {
 	deadline := time.Now().Add(transcriptSettleWindow)
 	for {
-		raw, _, err := transcript.Read(path, offset)
+		raw, _, titles, err := transcript.ReadWithTitles(path, offset)
 		if err != nil && (!stop || !errors.Is(err, fs.ErrNotExist)) {
 			logger.Printf("read transcript: %v", err)
-			return nil, 0, 0
+			return nil, 0, 0, transcript.Titles{}
 		}
 
 		coalesced, safeOffset := mapper.Coalesce(raw)
@@ -347,14 +349,14 @@ func readTranscriptSettled(ctx context.Context, path string, offset int64, stop 
 			if err != nil {
 				logger.Printf("read transcript: %v", err)
 			}
-			return coalesced, safeOffset, len(raw)
+			return coalesced, safeOffset, len(raw), titles
 		}
 
 		timer := time.NewTimer(transcriptSettleInterval)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return coalesced, safeOffset, len(raw)
+			return coalesced, safeOffset, len(raw), titles
 		case <-timer.C:
 		}
 	}

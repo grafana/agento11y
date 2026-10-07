@@ -1,6 +1,7 @@
 package mapper
 
 import (
+	"cmp"
 	"encoding/json"
 	"log"
 	"maps"
@@ -20,7 +21,7 @@ import (
 const (
 	agentName       = "claude-code"
 	maxToolInputLen = mapperutil.MaxToolInputBytes
-	// maxTitleLen caps the conversation title derived from the first user prompt.
+	// maxTitleLen caps the conversation title.
 	maxTitleLen = 100
 )
 
@@ -47,6 +48,10 @@ type Options struct {
 	// separately. Live capture leaves it nil, so it keeps recording summaries
 	// when the parent transcript is the only record of the subagent run.
 	SuppressSyntheticSubagentToolCallIDs map[string]bool
+	// Titles are the title lines the transcript read returned. Process records
+	// them in the session state, where a newer one replaces an older one, so
+	// the session follows a rename.
+	Titles transcript.Titles
 }
 
 // agent is the base agent name for every generation this run produces: the
@@ -290,7 +295,8 @@ type agentCall struct {
 // span has no width, because a tool call and its result live on separate lines.
 // A tool call ID is present in that map only when its result line carried a
 // parseable timestamp, so a present key always means a usable end time.
-// Process updates st.Title with the conversation title if discovered.
+// Process records opts.Titles in st, and updates st.Title with the first
+// prompt if discovered.
 //
 // Claude Code subagents do not produce their own lines in the main transcript —
 // the only evidence of their execution is the Agent tool_use (spawn) and the
@@ -314,6 +320,7 @@ func Process(lines []transcript.Line, st *state.Session, opts Options, r *redact
 		// current format only the main-chain key is ever set.
 		prevAt = map[bool]time.Time{}
 	)
+	noteTitles(st, opts.Titles)
 
 	for _, line := range lines {
 		switch line.Type {
@@ -375,14 +382,27 @@ func clampSpanStart(derivedStart, completedAt time.Time) time.Time {
 	return derivedStart
 }
 
-// conversationTitle returns a truncated version of the session title derived
-// from the first user prompt. Falls back to the session ID when no title is
-// available (e.g. transcript with no user lines processed yet).
+// noteTitles records the title lines a transcript read returned. A newer title
+// replaces an older one, so the session follows a rename.
+func noteTitles(st *state.Session, t transcript.Titles) {
+	if t.AI != "" {
+		st.AITitle = t.AI
+	}
+	if t.Custom != "" {
+		st.CustomTitle = t.Custom
+	}
+}
+
+// conversationTitle returns the session title, truncated: the name the user
+// gave the session, else the title Claude Code generated for it, else the
+// first prompt the user typed. These are the names Claude Code itself lists
+// the session under. Falls back to the session ID when none is available (e.g.
+// transcript with no user lines processed yet).
 func conversationTitle(st *state.Session, sessionID string, r *redact.Redactor) string {
-	if st == nil || st.Title == "" {
+	if st == nil {
 		return sessionID
 	}
-	t := strings.TrimSpace(st.Title)
+	t := strings.TrimSpace(cmp.Or(st.CustomTitle, st.AITitle, st.Title))
 	if r != nil {
 		t = r.Title(t)
 	}
@@ -405,6 +425,8 @@ func conversationTitle(st *state.Session, sessionID string, r *redact.Redactor) 
 //
 //   - meta lines: the caveat in front of a local command, and the expanded
 //     body of a slash command or skill;
+//   - sidechain lines: a subagent's prompts, the first of which is the task it
+//     was given, not what the session is about;
 //   - a slash command's record (<command-name>…). It is held as a candidate,
 //     because a command the model answers, such as /doctor or a skill, is what
 //     the conversation is about. A local command such as /model writes its
@@ -412,11 +434,13 @@ func conversationTitle(st *state.Session, sessionID string, r *redact.Redactor) 
 //   - the context block the IDE extensions send ahead of the typed prompt,
 //     naming the open file (<ide_opened_file>) or selection (<ide_selection>).
 func noteTitle(line transcript.Line, text string, uctx *userContext, st *state.Session) {
-	if st.Title != "" || line.IsMeta {
+	if st.Title != "" || line.IsMeta || line.IsSidechain {
 		return
 	}
 	t := strings.TrimSpace(text)
 	switch {
+	case t == "":
+		// A whitespace-only block; taking it would block every later prompt.
 	case strings.HasPrefix(t, "<local-command-"):
 		uctx.commandTitle = ""
 	case strings.HasPrefix(t, "<command-name>"), strings.HasPrefix(t, "<command-message>"):
@@ -440,13 +464,16 @@ func slashCommandTitle(record string) string {
 }
 
 // tagText returns the trimmed text between <tag> and </tag> in s, or "" when s
-// has no such element.
+// has no such element or it is not closed.
 func tagText(s, tag string) string {
 	_, rest, ok := strings.Cut(s, "<"+tag+">")
 	if !ok {
 		return ""
 	}
-	inner, _, _ := strings.Cut(rest, "</"+tag+">")
+	inner, _, ok := strings.Cut(rest, "</"+tag+">")
+	if !ok {
+		return ""
+	}
 	return strings.TrimSpace(inner)
 }
 
