@@ -35,6 +35,10 @@ type Line struct {
 	// example "general-purpose". The mapper appends it to the agent name so a
 	// subagent turn is distinguishable from a main-thread one.
 	AttributionAgent string `json:"attributionAgent"`
+	// IsMeta marks a user line Claude Code wrote itself rather than one the
+	// user typed: the caveat in front of a local command such as /model, or
+	// the expanded body of a slash command or skill.
+	IsMeta bool `json:"isMeta"`
 
 	// EndOffset is the byte position after this line in the transcript file.
 	// Set by Read(), not deserialized from JSON.

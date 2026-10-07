@@ -415,6 +415,13 @@ func TestProcess_ConversationTitle(t *testing.T) {
 	}
 }
 
+func TestSlashCommandTitle(t *testing.T) {
+	record := "<command-name>/model</command-name>\n            <command-message>model</command-message>\n            <command-args>opus</command-args>"
+	if got := slashCommandTitle(record); got != "/model opus" {
+		t.Errorf("slashCommandTitle = %q, want %q", got, "/model opus")
+	}
+}
+
 func TestProcess_ToolUses(t *testing.T) {
 	lines := []transcript.Line{
 		makeUserLine("read file.go"),
