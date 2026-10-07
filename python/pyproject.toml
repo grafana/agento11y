@@ -17,6 +17,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+otel = [
+  "opentelemetry-util-genai>=1.2b0,<1.3",
+]
 dev = [
   "grpcio-tools>=1.80.0",
   "pytest>=8.2.0",

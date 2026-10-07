@@ -7,7 +7,7 @@ protoc = "34.1"
 "go:google.golang.org/grpc/cmd/protoc-gen-go-grpc" = "v1.6.1"
 
 [env]
-PYTHON_BIN = "python3"
+PYTHON_BIN = "{{ env.PYTHON_BIN | default(value='python3') }}"
 # Pin the Python protobuf toolchain so generated stubs are reproducible across
 # machines and CI. Bumping these requires regenerating stubs via
 # `mise run generate:proto:python`.
@@ -360,8 +360,16 @@ run = "pnpm run test:build && node --test test/frameworks.langchain.test.mjs tes
 # --- Python SDK tests ---
 
 [tasks."test:py:sdk-core"]
-description = "Run Python SDK core parity tests"
-run = "uv run --python \"$PYTHON_BIN\" --with '.[dev]' --directory python pytest tests"
+description = "Run Python SDK core parity tests without the OTel utility"
+run = '''
+uv run --python "$PYTHON_BIN" --isolated --no-project --with './python[dev]' python -c "import importlib.metadata as m; import pytest; assert 'opentelemetry-util-genai' not in {d.metadata['Name'].lower().replace('_', '-') for d in m.distributions()}, 'base tests must exclude the OTel utility'; raise SystemExit(pytest.main(['python/tests']))"
+'''
+
+[tasks."test:py:sdk-otel"]
+description = "Run Python SDK tests with the OTel generation extra"
+run = '''
+uv run --python "$PYTHON_BIN" --isolated --no-project --with './python[dev,otel]' python -c "from opentelemetry.util.genai.handler import TelemetryHandler; import pytest; raise SystemExit(pytest.main(['python/tests']))"
+'''
 
 [tasks."test:py:sdk-conformance"]
 description = "Run Python SDK core conformance tests"
@@ -704,6 +712,7 @@ mise run test:ts:plugin-opencode
 mise run test:ts:local-viewer
 mise run test:py:plugin-hermes
 mise run test:py:sdk-core
+mise run test:py:sdk-otel
 mise run test:py:sdk-provider-conformance
 mise run test:py:sdk-framework-conformance
 mise run test:cs:sdk-core

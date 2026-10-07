@@ -50,8 +50,9 @@ class ContentCaptureMode(str, Enum):
     # Use this mode when the gRPC ingest destination is private but the OTel
     # trace/metric destination is shared and must not receive any content.
     # Tool execution and embedding spans behave identically to METADATA_ONLY
-    # under this mode (they have no separate gRPC export). Rating comments
-    # are preserved.
+    # under this mode (they have no separate gRPC export). Active experimental
+    # OTel clients resolve this mode locally to FULL, since spans are the only
+    # generation destination. Rating comments are preserved.
     FULL_WITH_METADATA_SPANS = "full_with_metadata_spans"
 
 

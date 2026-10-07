@@ -11,7 +11,7 @@ import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
@@ -36,6 +36,8 @@ from .context import (
 from .errors import (
     ClientShutdownError,
     EnqueueError,
+    ExportFlushError,
+    FlushNotVerifiableError,
     QueueFullError,
     RatingConflictError,
     RatingTransportError,
@@ -72,6 +74,9 @@ from .models import (
 )
 from .proto_mapping import generation_to_proto, workflow_step_to_proto
 from .validation import validate_embedding_result, validate_embedding_start, validate_generation
+
+if TYPE_CHECKING:
+    from opentelemetry.util.genai.invocation import InferenceInvocation
 
 _span_attr_generation_id = "agento11y.generation.id"
 _span_attr_sdk_name = "agento11y.sdk.name"
@@ -345,9 +350,16 @@ class Client:
         self._shutting_down = False
         self._closed = False
 
+        self._otel_handler = None
+        protocol = self._config.generation_export.protocol.strip().lower()
         self._generation_exporter = self._config.generation_exporter
-        if self._generation_exporter is None:
-            protocol = self._config.generation_export.protocol.strip().lower()
+        if protocol == "otel":
+            if self._generation_exporter is not None:
+                raise ValueError("agento11y: protocol='otel' conflicts with generation_exporter")
+            from .otel_export import build_otel_handler
+
+            self._otel_handler = build_otel_handler(self._config)
+        elif self._generation_exporter is None:
             if protocol == "http":
                 self._generation_exporter = HTTPGenerationExporter(
                     endpoint=self._config.generation_export.endpoint,
@@ -367,15 +379,21 @@ class Client:
                 raise ValueError(f"unsupported generation export protocol {self._config.generation_export.protocol!r}")
 
         self._tracer = (
-            self._config.tracer if self._config.tracer is not None else trace.get_tracer(_instrumentation_name)
+            self._config.tracer
+            if self._config.tracer is not None
+            else trace.get_tracer(_instrumentation_name, tracer_provider=self._config.tracer_provider)
         )
-        if self._config.meter is None and _global_meter_provider_is_proxy():
+        if self._config.meter is None and self._config.meter_provider is None and _global_meter_provider_is_proxy():
             self._log_warn(
                 "OTel metrics are not configured: register a MeterProvider and pass its meter to "
                 "ClientConfig(meter=...). Generation export can still work, but token usage, cost, "
                 "and latency metrics will be missing."
             )
-        self._meter = self._config.meter if self._config.meter is not None else metrics.get_meter(_instrumentation_name)
+        self._meter = (
+            self._config.meter
+            if self._config.meter is not None
+            else metrics.get_meter(_instrumentation_name, meter_provider=self._config.meter_provider)
+        )
 
         self._operation_duration_histogram: Histogram = self._meter.create_histogram(
             _metric_operation_duration,
@@ -398,10 +416,34 @@ class Client:
             _metric_tool_calls_per_operation, unit="count"
         )
 
+        if self._otel_handler is not None:
+            from .otel_export import SCHEMA_URL
+
+            generation_meter = metrics.get_meter(
+                _instrumentation_name,
+                "",
+                meter_provider=self._config.meter_provider,
+                schema_url=SCHEMA_URL,
+            )
+            self._otel_token_usage_histogram = generation_meter.create_histogram(
+                _metric_token_usage,
+                description="Number of input and output tokens used by GenAI clients",
+                unit="{token}",
+                explicit_bucket_boundaries_advisory=_TOKEN_USAGE_BUCKETS,
+            )
+            self._otel_ttft_histogram = generation_meter.create_histogram(
+                _metric_ttft,
+                unit="s",
+                explicit_bucket_boundaries_advisory=_DURATION_BUCKETS_SECONDS,
+            )
+            self._otel_tool_calls_histogram = generation_meter.create_histogram(
+                _metric_tool_calls_per_operation, unit="count"
+            )
+
         self._timer_stop = threading.Event()
         self._timer_thread: threading.Thread | None = None
         flush_interval_s = self._config.generation_export.flush_interval.total_seconds()
-        if flush_interval_s > 0:
+        if flush_interval_s > 0 and self._otel_handler is None:
             self._timer_thread = threading.Thread(target=self._run_flush_timer, daemon=True)
             self._timer_thread.start()
 
@@ -450,6 +492,7 @@ class Client:
             _resolve_content_capture_mode(resolver_mode, self._config.content_capture)
         )
 
+        embedding_mode = self._resolve_otel_capture_mode(embedding_mode)
         span = self._tracer.start_span(
             _embedding_span_name(seed.model.name),
             kind=SpanKind.CLIENT,
@@ -502,7 +545,9 @@ class Client:
         resolver_mode = _call_content_capture_resolver(self._config.content_capture_resolver, {}, self._config.logger)
         effective_client_default = _resolve_content_capture_mode(resolver_mode, self._config.content_capture)
         ctx_mode = content_capture_mode_from_context()
-        tool_mode = _resolve_tool_content_capture_mode(seed.content_capture, ctx_mode, effective_client_default)
+        tool_mode = self._resolve_otel_capture_mode(
+            _resolve_tool_content_capture_mode(seed.content_capture, ctx_mode, effective_client_default)
+        )
 
         if tool_mode in (
             ContentCaptureMode.METADATA_ONLY,
@@ -822,14 +867,22 @@ class Client:
         )
 
     def flush(self) -> None:
-        """Flushes all queued generations immediately."""
+        """Flushes queued generations with native export.
+
+        OTel requires an explicit tracer_provider with force_flush() and flushes
+        traces only. Success confirms local processor completion, not backend acceptance.
+        """
 
         if self._shutting_down:
             raise ClientShutdownError("agento11y: client is shutting down")
         self._flush_internal()
 
     def shutdown(self) -> None:
-        """Flushes pending data and shuts down exporters."""
+        """Flushes pending data and shuts down exporters with native export.
+
+        OTel attempts a trace flush and closes the SDK client without flushing
+        metrics or shutting down application providers.
+        """
 
         with self._shutdown_lock:
             if self._closed:
@@ -853,6 +906,11 @@ class Client:
                 self._log_warn("agento11y generation exporter shutdown failed", exc)
 
             self._closed = True
+
+    def _resolve_otel_capture_mode(self, mode: ContentCaptureMode) -> ContentCaptureMode:
+        if self._otel_handler is not None and mode == ContentCaptureMode.FULL_WITH_METADATA_SPANS:
+            return ContentCaptureMode.FULL
+        return mode
 
     def _start_generation(self, start: GenerationStart, default_mode: GenerationMode) -> GenerationRecorder:
         self._assert_open()
@@ -915,6 +973,23 @@ class Client:
             else seed.conversation_title
         )
 
+        otel_invocation = None
+        if self._otel_handler is not None:
+            from .otel_export import start_invocation
+
+            otel_invocation = start_invocation(self._otel_handler, seed)
+            recorder = GenerationRecorder(
+                client=self,
+                seed=seed,
+                span=otel_invocation.span,
+                started_at=started_at,
+                _content_capture_mode=self._resolve_otel_capture_mode(cc_mode),
+                _otel_invocation=otel_invocation,
+            )
+            # Keep shared capture context protocol-neutral for native clients.
+            _push_capture_mode(id(recorder), cc_mode)
+            return recorder
+
         span = self._tracer.start_span(
             _generation_span_name(seed.operation_name, seed.model.name),
             kind=SpanKind.CLIENT,
@@ -952,7 +1027,7 @@ class Client:
         _push_capture_mode(id(recorder), cc_mode)
         return recorder
 
-    def _enqueue_generation(self, generation: Generation) -> None:
+    def _check_generation_admission(self, generation: Generation) -> None:
         if self._shutting_down or self._closed:
             raise ClientShutdownError("agento11y: client is shutting down")
 
@@ -962,6 +1037,8 @@ class Client:
             if payload_size > max_payload_bytes:
                 raise EnqueueError(f"generation payload exceeds max bytes ({payload_size} > {max_payload_bytes})")
 
+    def _enqueue_generation(self, generation: Generation) -> None:
+        self._check_generation_admission(generation)
         should_trigger_flush = False
         with self._pending_lock:
             if len(self._pending_generations) >= self._config.generation_export.queue_size:
@@ -974,7 +1051,9 @@ class Client:
             self._trigger_async_flush()
 
     def enqueue_workflow_step(self, step: WorkflowStep) -> None:
-        """Enqueues a workflow execution node for background export.
+        """Enqueues a workflow execution node for background export with native export.
+
+        Raises EnqueueError on an open OTel client.
 
         The step is normalized the same way generations are: timestamps default
         to the client clock (UTC), client-level ``tags`` are merged in (the
@@ -988,6 +1067,9 @@ class Client:
         """
         if self._shutting_down or self._closed:
             raise ClientShutdownError("agento11y: client is shutting down")
+
+        if self._otel_handler is not None:
+            raise EnqueueError("agento11y: workflow step export is unsupported with protocol='otel'; use http/grpc")
 
         # Validate the raw input before defaulting timestamps, matching Go and
         # JS. The completed_at < started_at rule only fires when the caller
@@ -1049,6 +1131,16 @@ class Client:
         return copy.deepcopy(sanitized)
 
     def _flush_internal(self) -> None:
+        if self._otel_handler is not None:
+            provider = self._config.tracer_provider
+            force_flush = getattr(provider, "force_flush", None)
+            if not callable(force_flush):
+                raise FlushNotVerifiableError(
+                    "agento11y: OTel flush requires an explicit tracer_provider with force_flush"
+                )
+            if force_flush() is not True:
+                raise ExportFlushError("agento11y: OTel tracer provider did not complete force_flush")
+            return
         first_error: Exception | None = None
         with self._flush_lock:
             while True:
@@ -1164,7 +1256,34 @@ class Client:
         error_type: str,
         error_category: str,
         first_token_at: datetime | None,
+        otel_invocation: InferenceInvocation | None = None,
     ) -> None:
+        if otel_invocation is not None:
+            attrs = dict(otel_invocation.metric_attributes)
+            if generation.response_model:
+                attrs[_span_attr_response_model] = generation.response_model
+            if error_type:
+                attrs[_span_attr_error_type] = error_type
+            context = otel_invocation.context
+            usage = generation.usage
+            for token_type, count in (
+                (_metric_token_type_cache_read, usage.cache_read_input_tokens),
+                (_metric_token_type_cache_write, usage.cache_write_input_tokens),
+                (_metric_token_type_reasoning, usage.reasoning_tokens),
+            ):
+                if count != 0:
+                    self._otel_token_usage_histogram.record(
+                        count, attributes={**attrs, _metric_attr_token_type: token_type}, context=context
+                    )
+            self._otel_tool_calls_histogram.record(
+                _count_tool_call_parts(generation.output), attributes=attrs, context=context
+            )
+            if generation.mode == GenerationMode.STREAM and first_token_at is not None and generation.started_at:
+                seconds = (first_token_at - generation.started_at).total_seconds()
+                if seconds >= 0:
+                    self._otel_ttft_histogram.record(seconds, attributes=attrs, context=context)
+            return
+
         started_at = generation.started_at
         completed_at = generation.completed_at
         if started_at is None or completed_at is None:
@@ -1314,6 +1433,8 @@ class GenerationRecorder:
     started_at: datetime
 
     _content_capture_mode: ContentCaptureMode = ContentCaptureMode.NO_TOOL_CONTENT
+    _otel_invocation: InferenceInvocation | None = field(default=None, repr=False)
+    _otel_finished: bool = field(default=False, init=False, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _ended: bool = False
     _call_error: Exception | None = None
@@ -1391,7 +1512,10 @@ class GenerationRecorder:
                 self._extra_metadata[CACHE_DIAGNOSTICS_PREVIOUS_MESSAGE_ID_KEY] = prev
 
     def end(self) -> None:
-        """Finalizes span and queues generation export. Safe to call multiple times."""
+        """Finalizes the span and queues generation export with native export.
+
+        OTel completes the invocation without a native queue. Safe to call multiple times.
+        """
 
         with self._lock:
             if self._ended:
@@ -1408,11 +1532,20 @@ class GenerationRecorder:
             generation = self._normalize_generation(result, completed_at, call_error, extra_metadata)
             _apply_trace_context_from_span(self.span, generation)
 
+            call_failed = call_error is not None or generation.call_error != ""
+            call_category = ""
+            if self._otel_invocation is not None and call_failed:
+                call_category = _error_category_from_exception(
+                    call_error if call_error is not None else generation.call_error, fallback_sdk=True
+                )
+
             effective_content_capture_mode = self._content_capture_mode
             _stamp_content_capture_metadata(generation, self._content_capture_mode)
             validation_target = copy.deepcopy(generation)
             if self._content_capture_mode == ContentCaptureMode.METADATA_ONLY:
-                error_cat = _error_category_from_exception(call_error, fallback_sdk=True) if call_error else ""
+                error_cat = call_category
+                if self._otel_invocation is None:
+                    error_cat = _error_category_from_exception(call_error, fallback_sdk=True) if call_error else ""
                 _strip_content(generation, error_cat)
             elif self.client._has_generation_sanitizer():
                 try:
@@ -1420,7 +1553,9 @@ class GenerationRecorder:
                     validation_target = copy.deepcopy(generation)
                 except Exception:  # noqa: BLE001
                     effective_content_capture_mode = ContentCaptureMode.METADATA_ONLY
-                    error_cat = _error_category_from_exception(call_error, fallback_sdk=True) if call_error else ""
+                    error_cat = call_category
+                    if self._otel_invocation is None:
+                        error_cat = _error_category_from_exception(call_error, fallback_sdk=True) if call_error else ""
                     _strip_content(generation, error_cat)
                     _stamp_content_capture_metadata(generation, effective_content_capture_mode)
                     if self.client._config.logger is not None:
@@ -1428,6 +1563,18 @@ class GenerationRecorder:
                             "agento11y: generation sanitization failed, falling back to metadata_only",
                             exc_info=True,
                         )
+
+            if self._otel_invocation is not None:
+                self._end_otel_generation(
+                    generation,
+                    validation_target,
+                    call_failed,
+                    call_category,
+                    mapping_error,
+                    first_token_at,
+                    effective_content_capture_mode,
+                )
+                return
 
             self.span.update_name(_generation_span_name(generation.operation_name, generation.model.name))
             # FULL_WITH_METADATA_SPANS: proto export keeps full content, but
@@ -1525,8 +1672,125 @@ class GenerationRecorder:
             with self._lock:
                 self._last_generation = copy.deepcopy(generation)
                 self._final_error = local_error
+        except Exception as exc:  # noqa: BLE001
+            if self._otel_invocation is None:
+                raise
+            local_error = ValidationError("agento11y: generation normalization failed")
+            local_error.__cause__ = exc
+            self._reject_otel_generation(local_error)
+            with self._lock:
+                self._final_error = local_error
         finally:
             _pop_capture_mode(id(self))
+
+    def _finish_otel_invocation(self, error_type: str = "", message: str = "") -> None:
+        if self._otel_finished:
+            return
+        self._otel_finished = True
+        try:
+            if error_type:
+                from opentelemetry.util.genai.invocation import Error
+
+                self._otel_invocation.fail(Error(type=error_type, message=message))
+            else:
+                self._otel_invocation.stop()
+        except Exception:  # noqa: BLE001
+            # Utility completion ends the span even when telemetry extensions raise;
+            # an already published record cannot become a local rejection.
+            self.client._logger.warning("agento11y: OTel invocation completion failed; span may already be exported")
+
+    def _reject_otel_generation(self, error: Exception) -> None:
+        invocation = self._otel_invocation
+        invocation.attributes.clear()
+        invocation.attributes.update(
+            {
+                "agento11y.record": "false",
+                _span_attr_operation_name: "agento11y.invalid_generation",
+                _span_attr_error_category: "sdk_error",
+                "agento11y.export.error": type(error).__name__,
+            }
+        )
+        invocation.metric_attributes[_span_attr_operation_name] = "agento11y.invalid_generation"
+        invocation.metric_attributes[_span_attr_error_category] = "sdk_error"
+        self.span.update_name("agento11y.invalid_generation")
+        self._finish_otel_invocation("sdk_export_error", "sdk_error")
+
+    def _end_otel_generation(
+        self,
+        generation: Generation,
+        validation_target: Generation,
+        call_failed: bool,
+        category: str,
+        mapping_error: Exception | None,
+        first_token_at: datetime | None,
+        capture_mode: ContentCaptureMode,
+    ) -> None:
+        from .otel_export import generation_attributes, metric_attributes, operation_name, provider_name
+
+        local_error: Exception | None = None
+        attrs = None
+        try:
+            if mapping_error is not None:
+                raise mapping_error
+            validate_generation(validation_target)
+            attrs = generation_attributes(generation, capture_mode, self.client._config.tags)
+        except Exception as exc:  # noqa: BLE001
+            local_error = ValidationError("agento11y: OTel generation validation or encoding failed")
+            local_error.__cause__ = exc
+        if local_error is None:
+            try:
+                self.client._check_generation_admission(generation)
+            except ClientShutdownError as exc:
+                local_error = exc
+            except Exception as exc:  # noqa: BLE001
+                local_error = EnqueueError("agento11y: generation admission failed")
+                local_error.__cause__ = exc
+
+        if local_error is not None:
+            self._reject_otel_generation(local_error)
+        else:
+            invocation = self._otel_invocation
+            operation = operation_name(generation.operation_name)
+            provider = provider_name(generation.model.provider)
+            invocation.attributes.update(attrs)
+            invocation.metric_attributes.update(
+                {
+                    _span_attr_operation_name: operation,
+                    _span_attr_provider_name: provider,
+                    _span_attr_request_model: generation.model.name,
+                    **metric_attributes(generation, self.client._config.tags, error_category=category),
+                }
+            )
+            invocation.conversation_id = generation.conversation_id or None
+            invocation.response_model_name = generation.response_model or None
+            invocation.response_id = generation.response_id or None
+            invocation.finish_reasons = [generation.stop_reason] if generation.stop_reason else None
+            invocation.input_tokens = generation.usage.input_tokens or None
+            invocation.output_tokens = generation.usage.output_tokens or None
+            invocation.thinking_tokens = generation.usage.reasoning_tokens or None
+            invocation.cache_read_input_tokens = generation.usage.cache_read_input_tokens or None
+            invocation.cache_write_input_tokens = generation.usage.cache_write_input_tokens or None
+            invocation.temperature = generation.temperature
+            invocation.top_p = generation.top_p
+            invocation.max_tokens = generation.max_tokens
+            if category:
+                invocation.attributes[_span_attr_error_category] = category
+            self.span.update_name(f"{operation} {generation.model.name}" if generation.model.name else operation)
+            self.client._record_generation_metrics(
+                generation,
+                "provider_call_error" if call_failed else "",
+                category,
+                first_token_at,
+                otel_invocation=invocation,
+            )
+            message = (
+                (generation.call_error or category) if capture_mode != ContentCaptureMode.METADATA_ONLY else category
+            )
+            self._finish_otel_invocation("provider_call_error" if call_failed else "", message)
+
+        with self._lock:
+            self._last_generation = copy.deepcopy(generation)
+            self._final_error = local_error
 
     def err(self) -> Exception | None:
         """Returns local validation/enqueue error after `end()`."""
