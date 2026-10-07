@@ -144,8 +144,9 @@ var maxLineBytes = 10 * 1024 * 1024
 // Titles holds the newest title records Claude Code wrote in a read range.
 type Titles struct {
 	// AI is the title Claude Code generates for the session (an "ai-title"
-	// line). It is written before the first answer and refined as the session
-	// goes on.
+	// line). Claude Code writes it once the session has something to
+	// summarise, before or after the first answer, and rewrites it as the
+	// session goes on. A session of one trivial prompt may never get one.
 	AI string
 	// Custom is the name the user gave the session, with /rename or in the
 	// IDE (a "custom-title" line).
