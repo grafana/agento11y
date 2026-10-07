@@ -254,7 +254,7 @@ func (c *claudeImporter) Turns(ctx context.Context, sess SessionPreview) iter.Se
 			yield(HistoricalGeneration{}, err)
 			return
 		}
-		lines, _, err := transcript.Read(sess.SourcePath, 0)
+		lines, _, titles, err := transcript.ReadWithTitles(sess.SourcePath, 0)
 		if err != nil {
 			yield(HistoricalGeneration{}, fmt.Errorf("read claude transcript %s: %w", sess.SourcePath, err))
 			return
@@ -268,7 +268,9 @@ func (c *claudeImporter) Turns(ctx context.Context, sess SessionPreview) iter.Se
 
 		processed := make([]claudeProcessedTranscript, 0, 1+len(subagentFiles))
 		ids := newClaudeGenIDs()
-		processed = append(processed, claudeProcess(sess, sess.SourcePath, lines, refs, ids))
+		st := &state.Session{}
+		mapper.NoteTitles(st, titles)
+		processed = append(processed, claudeProcess(sess, sess.SourcePath, lines, refs, ids, st))
 		for _, subPath := range subagentFiles {
 			if err := ctx.Err(); err != nil {
 				yield(HistoricalGeneration{}, err)
@@ -279,7 +281,10 @@ func (c *claudeImporter) Turns(ctx context.Context, sess SessionPreview) iter.Se
 				yield(HistoricalGeneration{}, fmt.Errorf("read claude subagent transcript %s: %w", subPath, err))
 				return
 			}
-			processed = append(processed, claudeProcess(sess, subPath, subLines, refs, ids))
+			// A subagent's generations belong to the session's conversation, so
+			// they carry its title, not the prompt the subagent was given.
+			sub := *st
+			processed = append(processed, claudeProcess(sess, subPath, subLines, refs, ids, &sub))
 		}
 
 		parents := claudeSubagentParentMap(processed, refs)
@@ -374,7 +379,7 @@ type claudeProcessedTranscript struct {
 	gens       []agento11y.Generation
 }
 
-func claudeProcess(sess SessionPreview, sourcePath string, lines []transcript.Line, refs claudeSubagentRefs, ids *claudeGenIDs) claudeProcessedTranscript {
+func claudeProcess(sess SessionPreview, sourcePath string, lines []transcript.Line, refs claudeSubagentRefs, ids *claudeGenIDs, st *state.Session) claudeProcessedTranscript {
 	// CoalesceSession, not Coalesce: an imported transcript is complete, so the
 	// trailing assistant turn is kept instead of being held back for a next
 	// read that never comes.
@@ -382,7 +387,7 @@ func claudeProcess(sess SessionPreview, sourcePath string, lines []transcript.Li
 	// The discarded map holds each tool result's arrival time, which the live
 	// hook uses to time separate tool spans. An import emits none: tool activity
 	// travels in the generation's message parts.
-	gens, _ := mapper.Process(coalesced, &state.Session{}, mapper.Options{
+	gens, _ := mapper.Process(coalesced, st, mapper.Options{
 		SessionID: sess.SessionID,
 		// A subagent whose own transcript is imported must not also appear as
 		// the parent's one-line Agent summary.

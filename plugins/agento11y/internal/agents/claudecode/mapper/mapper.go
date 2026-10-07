@@ -375,14 +375,37 @@ func clampSpanStart(derivedStart, completedAt time.Time) time.Time {
 	return derivedStart
 }
 
-// conversationTitle returns a truncated version of the session title derived
-// from the first user prompt. Falls back to the session ID when no title is
-// available (e.g. transcript with no user lines processed yet).
+// NoteTitles records the title lines a transcript read returned. A newer title
+// replaces an older one, so the session follows a rename.
+func NoteTitles(st *state.Session, t transcript.Titles) {
+	if t.AI != "" {
+		st.AITitle = t.AI
+	}
+	if t.Custom != "" {
+		st.CustomTitle = t.Custom
+	}
+}
+
+// conversationTitle returns the session title, truncated: the name the user
+// gave the session, else the title Claude Code generated for it, else the
+// first prompt the user typed. These are the names Claude Code itself lists
+// the session under. Falls back to the session ID when none is available (e.g.
+// transcript with no user lines processed yet).
 func conversationTitle(st *state.Session, sessionID string, r *redact.Redactor) string {
-	if st == nil || st.Title == "" {
+	if st == nil {
 		return sessionID
 	}
-	t := strings.TrimSpace(st.Title)
+	title := st.CustomTitle
+	if title == "" {
+		title = st.AITitle
+	}
+	if title == "" {
+		title = st.Title
+	}
+	if title == "" {
+		return sessionID
+	}
+	t := strings.TrimSpace(title)
 	if r != nil {
 		t = r.Title(t)
 	}
@@ -417,6 +440,8 @@ func noteTitle(line transcript.Line, text string, uctx *userContext, st *state.S
 	}
 	t := strings.TrimSpace(text)
 	switch {
+	case t == "":
+		// A whitespace-only block; taking it would block every later prompt.
 	case strings.HasPrefix(t, "<local-command-"):
 		uctx.commandTitle = ""
 	case strings.HasPrefix(t, "<command-name>"), strings.HasPrefix(t, "<command-message>"):
@@ -440,13 +465,16 @@ func slashCommandTitle(record string) string {
 }
 
 // tagText returns the trimmed text between <tag> and </tag> in s, or "" when s
-// has no such element.
+// has no such element or it is not closed.
 func tagText(s, tag string) string {
 	_, rest, ok := strings.Cut(s, "<"+tag+">")
 	if !ok {
 		return ""
 	}
-	inner, _, _ := strings.Cut(rest, "</"+tag+">")
+	inner, _, ok := strings.Cut(rest, "</"+tag+">")
+	if !ok {
+		return ""
+	}
 	return strings.TrimSpace(inner)
 }
 

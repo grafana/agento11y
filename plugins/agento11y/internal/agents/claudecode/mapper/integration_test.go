@@ -202,6 +202,60 @@ func TestIntegration_ConversationTitleSkipsClaudeCodeText(t *testing.T) {
 	}
 }
 
+// Live capture across two Stop events: the title Claude Code writes before the
+// first answer names the first batch, and a rename between turns names the
+// next one. The state file carries the titles from one hook run to the next.
+func TestIntegration_ConversationTitleFollowsClaudeCodeTitles(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	const sessionID = "sess-title"
+	jsonlPath := filepath.Join(dir, "title.jsonl")
+
+	exportBatch := func(body string) string {
+		t.Helper()
+		f, err := os.OpenFile(jsonlPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.WriteString(body); err != nil {
+			t.Fatal(err)
+		}
+		_ = f.Close()
+
+		st := state.Load(sessionID)
+		lines, _, titles, err := transcript.ReadWithTitles(jsonlPath, st.Offset)
+		if err != nil {
+			t.Fatal(err)
+		}
+		coalesced, offset := Coalesce(lines)
+		NoteTitles(&st, titles)
+		gens, _ := Process(coalesced, &st, Options{SessionID: sessionID}, nil)
+		if len(gens) != 1 {
+			t.Fatalf("got %d generations, want 1", len(gens))
+		}
+		st.Offset = offset
+		if err := state.Save(sessionID, st); err != nil {
+			t.Fatal(err)
+		}
+		return gens[0].ConversationTitle
+	}
+
+	first := exportBatch(`{"type":"ai-title","aiTitle":"Flaky login test","sessionId":"sess-title"}` + "\n" +
+		buildUserJSONL(sessionID, "the login test fails") + "\n" +
+		buildAssistantJSONL(sessionID, "req-1", "claude-sonnet-4-20250514", 10, "It races the token refresh.") + "\n")
+	if first != "Flaky login test" {
+		t.Errorf("first batch title = %q, want the ai-title", first)
+	}
+
+	second := exportBatch(`{"type":"custom-title","sessionId":"sess-title","customTitle":"login flake"}` + "\n" +
+		`{"type":"ai-title","aiTitle":"Flaky login test","sessionId":"sess-title"}` + "\n" +
+		buildUserJSONL(sessionID, "fix it") + "\n" +
+		buildAssistantJSONL(sessionID, "req-2", "claude-sonnet-4-20250514", 10, "Done.") + "\n")
+	if second != "login flake" {
+		t.Errorf("second batch title = %q, want the custom-title", second)
+	}
+}
+
 func TestIntegration_StreamingFragments(t *testing.T) {
 	// Simulate a streaming response with 3 fragments
 	tr := buildUserJSONL("sess-stream", "help me") + "\n" +

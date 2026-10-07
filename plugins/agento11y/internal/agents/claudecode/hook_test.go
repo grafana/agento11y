@@ -592,7 +592,7 @@ func TestReadTranscriptSettled_CapturesLateFinalTurn(t *testing.T) {
 	}()
 
 	logs := log.New(io.Discard, "", 0)
-	lines, safeOffset, rawCount := readTranscriptSettled(context.Background(), path, 0, false, logs)
+	lines, safeOffset, rawCount, _ := readTranscriptSettled(context.Background(), path, 0, false, logs)
 
 	if rawCount != 3 {
 		t.Fatalf("rawCount = %d, want 3 (tool-use turn, tool_result, final turn)", rawCount)
@@ -620,7 +620,7 @@ func TestReadTranscriptSettled_StopWaitsForTranscriptCreatedLate(t *testing.T) {
 		_ = os.WriteFile(path, []byte(buildHookAssistantJSONL("late-file", "req_a", "end_turn", "done", 5)+"\n"), 0o644)
 	}()
 
-	lines, _, rawCount := readTranscriptSettled(context.Background(), path, 0, true, log.New(io.Discard, "", 0))
+	lines, _, rawCount, _ := readTranscriptSettled(context.Background(), path, 0, true, log.New(io.Discard, "", 0))
 	if rawCount != 1 || len(lines) != 1 {
 		t.Fatalf("rawCount=%d len(lines)=%d, want 1/1 (the turn written after Stop)", rawCount, len(lines))
 	}
@@ -651,7 +651,7 @@ func TestReadTranscriptSettled_StopWaitsPastToolUseTail(t *testing.T) {
 			buildHookAssistantJSONL(sessionID, "req_b", "end_turn", "all done", 5) + "\n")
 	}()
 
-	lines, _, rawCount := readTranscriptSettled(context.Background(), path, 0, true, log.New(io.Discard, "", 0))
+	lines, _, rawCount, _ := readTranscriptSettled(context.Background(), path, 0, true, log.New(io.Discard, "", 0))
 	if rawCount != 3 {
 		t.Fatalf("rawCount = %d, want 3 (tool-use turn, tool_result, final turn)", rawCount)
 	}
@@ -704,7 +704,7 @@ func TestReadTranscriptSettled_ReturnsImmediatelyWhenTerminal(t *testing.T) {
 	}
 
 	start := time.Now()
-	lines, safeOffset, rawCount := readTranscriptSettled(context.Background(), path, 0, true, log.New(io.Discard, "", 0))
+	lines, safeOffset, rawCount, _ := readTranscriptSettled(context.Background(), path, 0, true, log.New(io.Discard, "", 0))
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("settled read took %s; expected near-immediate return", elapsed)
 	}
@@ -736,7 +736,7 @@ func TestReadTranscriptSettled_EmptyReadReturnsImmediately(t *testing.T) {
 	// Read from end-of-file: a prior export already consumed everything.
 	eof := int64(len(content))
 	start := time.Now()
-	lines, safeOffset, rawCount := readTranscriptSettled(context.Background(), path, eof, false, log.New(io.Discard, "", 0))
+	lines, safeOffset, rawCount, _ := readTranscriptSettled(context.Background(), path, eof, false, log.New(io.Discard, "", 0))
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("empty read took %s; expected immediate return without waiting out the settle window", elapsed)
 	}
@@ -765,7 +765,7 @@ func TestReadTranscriptSettled_TrailingPromptAfterCompleteTurn(t *testing.T) {
 	}
 
 	start := time.Now()
-	lines, safeOffset, rawCount := readTranscriptSettled(context.Background(), path, 0, false, log.New(io.Discard, "", 0))
+	lines, safeOffset, rawCount, _ := readTranscriptSettled(context.Background(), path, 0, false, log.New(io.Discard, "", 0))
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("trailing-prompt read took %s; expected immediate return (completed turn already present)", elapsed)
 	}
@@ -809,7 +809,7 @@ func TestReadTranscriptSettled_LonePromptWaitsForReply(t *testing.T) {
 		_, _ = f.WriteString(buildHookAssistantJSONL(sessionID, "req_a", "end_turn", "hello", 4) + "\n")
 	}()
 
-	lines, safeOffset, rawCount := readTranscriptSettled(context.Background(), path, 0, false, log.New(io.Discard, "", 0))
+	lines, safeOffset, rawCount, _ := readTranscriptSettled(context.Background(), path, 0, false, log.New(io.Discard, "", 0))
 	if rawCount != 2 {
 		t.Fatalf("rawCount = %d, want 2 (prompt + late assistant reply)", rawCount)
 	}

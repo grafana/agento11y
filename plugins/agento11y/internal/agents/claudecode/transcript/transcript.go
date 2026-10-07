@@ -136,21 +136,62 @@ func ParseUserContent(raw json.RawMessage) (text string, blocks []UserContentBlo
 // tests can lower it.
 var maxLineBytes = 10 * 1024 * 1024
 
+// Titles holds the newest title records Claude Code wrote in a read range.
+type Titles struct {
+	// AI is the title Claude Code generates for the session (an "ai-title"
+	// line). It is written before the first answer and refined as the session
+	// goes on.
+	AI string
+	// Custom is the name the user gave the session, with /rename or in the
+	// IDE (a "custom-title" line).
+	Custom string
+}
+
+// note records the title an "ai-title" or "custom-title" line carries, and
+// ignores every other kind. An empty title changes nothing.
+func (t *Titles) note(kind string, data []byte) {
+	if kind != "ai-title" && kind != "custom-title" {
+		return
+	}
+	var rec struct {
+		AITitle     string `json:"aiTitle"`
+		CustomTitle string `json:"customTitle"`
+	}
+	if json.Unmarshal(data, &rec) != nil {
+		return
+	}
+	if v := strings.TrimSpace(rec.AITitle); kind == "ai-title" && v != "" {
+		t.AI = v
+	}
+	if v := strings.TrimSpace(rec.CustomTitle); kind == "custom-title" && v != "" {
+		t.Custom = v
+	}
+}
+
 // Read reads JSONL lines from path starting at the given byte offset.
 // Returns parsed lines, the new byte offset, and any I/O error.
 // Lines other than user and assistant turns, unparseable lines, and lines
 // longer than maxLineBytes are skipped; the returned offset always advances
 // past them.
 func Read(path string, offset int64) ([]Line, int64, error) {
+	lines, pos, _, err := ReadWithTitles(path, offset)
+	return lines, pos, err
+}
+
+// ReadWithTitles is Read that also returns the newest title records in the
+// range. The title records are not returned as lines, for the same reason no
+// other non-turn line is.
+func ReadWithTitles(path string, offset int64) ([]Line, int64, Titles, error) {
+	var titles Titles
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, offset, err
+		return nil, offset, titles, err
 	}
 	defer func() { _ = f.Close() }()
 
 	if offset > 0 {
 		if _, err := f.Seek(offset, io.SeekStart); err != nil {
-			return nil, offset, err
+			return nil, offset, titles, err
 		}
 	}
 
@@ -165,7 +206,7 @@ func Read(path string, offset int64) ([]Line, int64, error) {
 			break
 		}
 		if err != nil {
-			return lines, pos, err
+			return lines, pos, titles, err
 		}
 		pos += consumed
 		if tooLong {
@@ -182,6 +223,7 @@ func Read(path string, offset int64) ([]Line, int64, error) {
 		// them would let one sit at the tail of a read, where the Stop settle
 		// read mistakes it for a turn still landing.
 		if line.Type != "user" && line.Type != "assistant" {
+			titles.note(line.Type, data)
 			continue
 		}
 
@@ -189,7 +231,7 @@ func Read(path string, offset int64) ([]Line, int64, error) {
 		lines = append(lines, line)
 	}
 
-	return lines, pos, nil
+	return lines, pos, titles, nil
 }
 
 // readLine returns the next line without its trailing newline, and the bytes
