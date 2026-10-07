@@ -67,6 +67,10 @@ func (o Options) logf(format string, args ...any) {
 type userContext struct {
 	prompt      string
 	toolResults []agento11y.Message
+	// commandTitle is a slash command seen before the conversation has a
+	// title. It becomes the title when the model answers it; a local command
+	// such as /model answers itself instead and is dropped.
+	commandTitle string
 }
 
 // Coalesce merges consecutive assistant lines sharing the same RequestID
@@ -319,6 +323,9 @@ func Process(lines []transcript.Line, st *state.Session, opts Options, r *redact
 			gens = append(gens, synthesiseSubagentGens(line, &uctx, agentCalls, opts)...)
 
 		case "assistant":
+			if st.Title == "" && uctx.commandTitle != "" {
+				st.Title = uctx.commandTitle
+			}
 			if gen, ok := processAssistantLine(line, &uctx, st, opts, r, prevAt[line.IsSidechain]); ok {
 				// Index Agent tool calls from this generation's output.
 				for _, msg := range gen.Output {
@@ -390,6 +397,57 @@ func conversationTitle(st *state.Session, sessionID string, r *redact.Redactor) 
 		}
 	}
 	return t
+}
+
+// noteTitle records the conversation title from the first user text that is a
+// prompt the user typed. Claude Code writes other user text into the
+// transcript too, and none of it makes a title:
+//
+//   - meta lines: the caveat in front of a local command, and the expanded
+//     body of a slash command or skill;
+//   - a slash command's record (<command-name>…). It is held as a candidate,
+//     because a command the model answers, such as /doctor or a skill, is what
+//     the conversation is about. A local command such as /model writes its
+//     <local-command-stdout> next and the candidate is dropped;
+//   - the context block the IDE extensions send ahead of the typed prompt,
+//     naming the open file (<ide_opened_file>) or selection (<ide_selection>).
+func noteTitle(line transcript.Line, text string, uctx *userContext, st *state.Session) {
+	if st.Title != "" || line.IsMeta {
+		return
+	}
+	t := strings.TrimSpace(text)
+	switch {
+	case strings.HasPrefix(t, "<local-command-"):
+		uctx.commandTitle = ""
+	case strings.HasPrefix(t, "<command-name>"), strings.HasPrefix(t, "<command-message>"):
+		uctx.commandTitle = slashCommandTitle(t)
+	case strings.HasPrefix(t, "<ide_"):
+		// IDE context; the typed prompt follows in the next block.
+	default:
+		st.Title = text
+	}
+}
+
+// slashCommandTitle renders a slash command record as the user typed it, for
+// example "/model opus" from <command-name>/model</command-name> and
+// <command-args>opus</command-args>.
+func slashCommandTitle(record string) string {
+	name := tagText(record, "command-name")
+	if args := tagText(record, "command-args"); name != "" && args != "" {
+		return name + " " + args
+	}
+	return name
+}
+
+// tagText returns the trimmed text between <tag> and </tag> in s, or "" when s
+// has no such element.
+func tagText(s, tag string) string {
+	_, rest, ok := strings.Cut(s, "<"+tag+">")
+	if !ok {
+		return ""
+	}
+	inner, _, _ := strings.Cut(rest, "</"+tag+">")
+	return strings.TrimSpace(inner)
 }
 
 // synthesiseSubagentGens creates a generation for each Agent tool result in
@@ -479,9 +537,7 @@ func processUserLine(line transcript.Line, uctx *userContext, st *state.Session,
 	if text != "" {
 		uctx.prompt = text
 		uctx.toolResults = nil
-		if st.Title == "" {
-			st.Title = text
-		}
+		noteTitle(line, text, uctx, st)
 		return
 	}
 
@@ -493,9 +549,7 @@ func processUserLine(line transcript.Line, uctx *userContext, st *state.Session,
 		if b.Type == "text" && b.Text != "" {
 			uctx.prompt = b.Text
 			uctx.toolResults = nil
-			if st.Title == "" {
-				st.Title = b.Text
-			}
+			noteTitle(line, b.Text, uctx, st)
 		}
 		if b.Type == "tool_result" {
 			if b.ToolUseID != "" && !resultAt.IsZero() {
