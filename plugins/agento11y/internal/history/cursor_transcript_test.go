@@ -140,6 +140,38 @@ func TestCursorTranscriptTurns(t *testing.T) {
 	}
 }
 
+// Regression: a transcript turn was titled with its own prompt, context blocks
+// and all, so one session carried as many titles as turns, and a store that
+// keeps the latest title named the conversation after its last question.
+func TestCursorTranscriptTurnsShareTheSessionTitle(t *testing.T) {
+	root := t.TempDir()
+	sid := "dddddddd-bbbb-cccc-dddd-eeeeeeeeeeee"
+	path := writeCursorTranscript(t, root, "proj", sid, "context-blocks.jsonl")
+	imp := &cursorImporter{}
+	preview, ok, err := imp.Preview(context.Background(), path)
+	if err != nil || !ok {
+		t.Fatalf("Preview: ok=%v err=%v", ok, err)
+	}
+
+	var gens []HistoricalGeneration
+	for g, err := range imp.Turns(context.Background(), preview) {
+		if err != nil {
+			t.Fatalf("Turns: %v", err)
+		}
+		gens = append(gens, g)
+	}
+	if len(gens) != 3 {
+		t.Fatalf("got %d generations, want 3", len(gens))
+	}
+	// The first turn typed nothing beside its image, so the session is named
+	// after the first prompt that was typed, without the context Cursor added.
+	for i, g := range gens {
+		if g.Gen.ConversationTitle != "why is the panel empty?" {
+			t.Errorf("turn %d title = %q, want the first typed prompt", i, g.Gen.ConversationTitle)
+		}
+	}
+}
+
 func TestCursorTranscriptToolUse(t *testing.T) {
 	root := t.TempDir()
 	sid := "cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee"

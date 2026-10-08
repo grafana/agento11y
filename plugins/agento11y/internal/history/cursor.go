@@ -474,6 +474,15 @@ func (r *cursorReplay) observe(msg chatstore.Message) bool {
 			r.deferContext(msg.Text())
 			return false
 		}
+		// One title for every turn of the session: Cursor's name for the chat
+		// when it has one, else the first prompt typed. Without it each turn was
+		// titled with its own prompt, and a store that keeps the latest title
+		// named the conversation after its last question. It is set before the
+		// open turn is emitted, so a first turn that typed nothing (an image
+		// alone) takes the next prompt's title too.
+		if r.title == "" {
+			r.title = cursorTypedPrompt(msg.Text())
+		}
 		if r.emit() {
 			return true
 		}
@@ -543,6 +552,21 @@ func cursorUnwrapPrompt(text string) string {
 	before, typed := text[:opensAt], text[opensAt+len(cursorPromptOpen):closesAt]
 	after := text[closesAt+len(cursorPromptClose):]
 	return appendText(appendText(before, typed), after)
+}
+
+// cursorTypedPrompt returns only the text the user typed: what Cursor wraps in
+// <user_query>, without the context it attached around it (<image_files>,
+// <external_links>, ...). A prompt with no wrapper is returned whole.
+//
+// It names the session, as the first prompt does in live capture: the hook's
+// beforeSubmitPrompt payload carries the typed text and none of the context.
+func cursorTypedPrompt(text string) string {
+	opensAt := strings.Index(text, cursorPromptOpen)
+	closesAt := strings.LastIndex(text, cursorPromptClose)
+	if opensAt < 0 || closesAt < opensAt {
+		return strings.TrimSpace(text)
+	}
+	return strings.TrimSpace(text[opensAt+len(cursorPromptOpen) : closesAt])
 }
 
 // open starts a turn. Its times are set when it closes, because they come from

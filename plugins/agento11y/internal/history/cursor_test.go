@@ -1014,6 +1014,91 @@ func TestCursorUnwrapsThePrompt(t *testing.T) {
 	}
 }
 
+func TestCursorTypedPrompt(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "the wrapper alone",
+			in:   "<user_query>\nrun the tests\n</user_query>",
+			want: "run the tests",
+		},
+		{
+			// Unlike the prompt, the title drops the context Cursor added.
+			name: "context before the wrapper",
+			in:   "<attached_files>\nplan.md\n</attached_files>\n<user_query>execute the plan</user_query>",
+			want: "execute the plan",
+		},
+		{
+			name: "an image with nothing typed",
+			in:   "[Image]\n<image_files>\n1. /work/repo/a.png\n</image_files>\n<user_query>\n</user_query>",
+			want: "",
+		},
+		{
+			name: "a prompt with no wrapper",
+			in:   " run the tests ",
+			want: "run the tests",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := cursorTypedPrompt(tt.in); got != tt.want {
+				t.Errorf("cursorTypedPrompt() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// Regression: with no chat name in the store, each turn was titled with its
+// own prompt, so one session carried as many titles as turns.
+func TestCursorTurnsShareTheSessionTitle(t *testing.T) {
+	tests := []struct {
+		name     string
+		chatName string
+		prompts  []string
+		want     string
+	}{
+		{
+			name:     "Cursor's name for the chat",
+			chatName: "Rename the flag",
+			prompts:  []string{"<user_query>rename the retry flag</user_query>", "<user_query>and the docs?</user_query>"},
+			want:     "Rename the flag",
+		},
+		{
+			name:    "the first typed prompt when the chat has no name",
+			prompts: []string{"<attached_files>\nplan.md\n</attached_files>\n<user_query>execute the plan</user_query>", "<user_query>and the docs?</user_query>"},
+			want:    "execute the plan",
+		},
+		{
+			name:    "a first turn that typed nothing beside an image",
+			prompts: []string{"<image_files>\n1. /work/repo/a.png\n</image_files>\n<user_query>\n</user_query>", "<user_query>what does it show?</user_query>"},
+			want:    "what does it show?",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			imp, path := cursorBuild(t, "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", func(b *chatstoretest.Builder) {
+				b.Meta.Name = tt.chatName
+				for _, p := range tt.prompts {
+					b.AddPrompt(p)
+					b.AddAssistantText("ok")
+				}
+			})
+			turns := collectTurns(t, imp, cursorPreview(t, imp, path))
+			if len(turns) != len(tt.prompts) {
+				t.Fatalf("got %d turns, want %d", len(turns), len(tt.prompts))
+			}
+			for i, turn := range turns {
+				if turn.Gen.ConversationTitle != tt.want {
+					t.Errorf("turn %d title = %q, want %q", i, turn.Gen.ConversationTitle, tt.want)
+				}
+			}
+		})
+	}
+}
+
 // TestCursorImportedPromptMatchesTheTypedOne walks the wrapper through a real
 // store, with the environment block Cursor sends beside it.
 func TestCursorImportedPromptMatchesTheTypedOne(t *testing.T) {

@@ -434,6 +434,9 @@ type cursorTranscriptReplay struct {
 	current     *cursorTranscriptTurn
 	unreadable  int
 	emitted     int
+	// title names every turn of the session: the first prompt typed, as in
+	// live capture. See cursorReplay.observe.
+	title string
 }
 
 type cursorTranscriptTurn struct {
@@ -469,6 +472,11 @@ func (r *cursorTranscriptReplay) observe(line cursorTranscriptLine) bool {
 		}
 		return false
 	case line.Role == "user":
+		// Set before the open turn is emitted, so a first turn that typed
+		// nothing (an image alone) takes the next prompt's title too.
+		if r.title == "" {
+			r.title = cursorTypedPrompt(cursorStripTranscriptTimestamp(line.Text()))
+		}
 		if r.emit() {
 			return true
 		}
@@ -576,9 +584,10 @@ func (r *cursorTranscriptReplay) emit() bool {
 	mapped := mapper.MapFragment(mapper.Inputs{
 		Fragment: turn.frag,
 		Session: &fragment.Session{
-			ConversationID: r.sessionID,
-			WorkspaceRoots: cursorWorkspaceRoots(r.workspace),
-			StartedAt:      turn.frag.StartedAt,
+			ConversationID:    r.sessionID,
+			ConversationTitle: r.title,
+			WorkspaceRoots:    cursorWorkspaceRoots(r.workspace),
+			StartedAt:         turn.frag.StartedAt,
 		},
 		Stop:           stop,
 		ContentCapture: agento11y.ContentCaptureModeFull,
