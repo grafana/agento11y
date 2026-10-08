@@ -23,6 +23,21 @@ class ClientShutdownError(EnqueueError):
     """Raised when enqueue happens while shutdown is in progress."""
 
 
+class OTelDependencyMissingError(Agento11yError):
+    """Raised when OTel generation export requires the missing otel extra."""
+
+
+class FlushNotVerifiableError(Agento11yError):
+    """Raised when no explicit provider can report local trace flush completion."""
+
+
+class ExportFlushError(Agento11yError):
+    """Raised when the explicit tracer provider's force_flush() does not return True.
+
+    Provider exceptions propagate unchanged.
+    """
+
+
 class MappingError(Agento11yError):
     """Raised when provider mapper logic fails."""
 

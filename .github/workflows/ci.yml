@@ -344,6 +344,64 @@ jobs:
       - name: Test ${{ matrix.suite.name }}
         run: ${{ matrix.suite.cmd }}
 
+  python-core:
+    name: Python SDK core / ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    env:
+      PYTHON_BIN: python3
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.14']
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+
+      - name: Setup mise
+        uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4
+        with:
+          install: false
+
+      - name: Test core
+        run: mise run test:py:sdk-core
+
+  python-otel:
+    name: Python SDK OTel / ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    env:
+      PYTHON_BIN: python3
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.14']
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+
+      - name: Setup mise
+        uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4
+        with:
+          install: false
+
+      - name: Test with the OTel extra
+        run: mise run test:py:sdk-otel
+
   dotnet:
     name: .NET SDK
     runs-on: ubuntu-latest

@@ -13,8 +13,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
-from opentelemetry.metrics import Meter
-from opentelemetry.trace import Tracer
+from opentelemetry.metrics import Meter, MeterProvider
+from opentelemetry.trace import Tracer, TracerProvider
 
 from .exporters.base import DEFAULT_EXPORT_TIMEOUT_SECONDS, GenerationExporter
 from .models import ContentCaptureMode, Generation, utc_now
@@ -179,8 +179,12 @@ class ClientConfig:
     content_capture: ContentCaptureMode | None = None
     content_capture_resolver: Callable[[dict[str, Any]], ContentCaptureMode] | None = None
     generation_sanitizer: GenerationSanitizer | None = None
+    # Direct instruments override providers for ordinary spans and metrics.
+    # OTel generation export uses providers, not these direct instruments.
     tracer: Tracer | None = None
     meter: Meter | None = None
+    tracer_provider: TracerProvider | None = field(default=None, kw_only=True)
+    meter_provider: MeterProvider | None = field(default=None, kw_only=True)
     logger: logging.Logger | None = None
     now: Callable[[], datetime] | None = None
     sleep: Callable[[float], None] | None = None
@@ -542,7 +546,7 @@ def resolve_config(
 def _clone_config(cfg: ClientConfig) -> ClientConfig:
     """Returns a shallow-cloned ClientConfig with fresh nested dataclasses.
 
-    Logger/tracer/exporter fields are shared by reference (not safe to deepcopy).
+    Loggers, instruments, providers, and exporters stay shared by reference.
     Mutable containers get fresh copies so resolve_config can populate them
     without aliasing the caller's input.
     """

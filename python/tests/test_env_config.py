@@ -10,6 +10,8 @@ import pytest
 from agento11y import ApiConfig, Client, ClientConfig, GenerationExportConfig
 from agento11y.config import _WARNED_LEGACY_ENV, default_config, resolve_config
 from agento11y.models import ContentCaptureMode, GenerationStart, ModelRef
+from opentelemetry.metrics import NoOpMeterProvider
+from opentelemetry.trace import NoOpTracerProvider
 
 _DEFAULT_EXPORT_TIMEOUT = timedelta(seconds=30)
 
@@ -42,6 +44,8 @@ def _check_no_env(cfg: ClientConfig) -> None:
     assert cfg.agent_name == ""
     assert cfg.debug is False
     assert cfg.use_experimental_otel is False
+    assert cfg.tracer_provider is None
+    assert cfg.meter_provider is None
 
 
 def _check_transport(cfg: ClientConfig) -> None:
@@ -598,6 +602,29 @@ def test_resolve_config_does_not_mutate_caller() -> None:
     assert out2.user_id == "bob"
 
 
+def test_resolve_config_preserves_instruments_and_providers_by_reference() -> None:
+    tracer_provider = NoOpTracerProvider()
+    meter_provider = NoOpMeterProvider()
+    tracer = tracer_provider.get_tracer("test")
+    meter = meter_provider.get_meter("test")
+    config = ClientConfig(
+        tracer=tracer,
+        meter=meter,
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+    )
+
+    resolved = resolve_config(config, env={})
+
+    assert resolved is not config
+    assert resolved.generation_export is not config.generation_export
+    assert resolved.tracer is tracer
+    assert resolved.meter is meter
+    assert resolved.tracer_provider is tracer_provider
+    assert resolved.meter_provider is meter_provider
+    assert config.generation_export.protocol is None
+
+
 def test_default_config_returns_concrete_values() -> None:
     """default_config() returns concrete schema defaults, not None sentinels."""
     cfg = default_config()
@@ -653,10 +680,10 @@ def test_client_reads_env_automatically(monkeypatch: pytest.MonkeyPatch) -> None
 
     client = Client()
     try:
-        rec = client.start_generation(GenerationStart(model=ModelRef(provider="openai", name="gpt-5")))
-        assert rec.seed.agent_name == "from-env"
-        assert rec.seed.user_id == "alice"
-        assert rec.seed.tags == {"team": "ai"}
+        with client.start_generation(GenerationStart(model=ModelRef(provider="openai", name="gpt-5"))) as rec:
+            assert rec.seed.agent_name == "from-env"
+            assert rec.seed.user_id == "alice"
+            assert rec.seed.tags == {"team": "ai"}
     finally:
         client.shutdown()
 
@@ -668,14 +695,14 @@ def test_client_per_call_overrides_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
     client = Client()
     try:
-        rec = client.start_generation(
+        with client.start_generation(
             GenerationStart(
                 model=ModelRef(provider="openai", name="gpt-5"),
                 agent_name="reviewer",
                 tags={"env": "staging", "task": "summarize"},
             ),
-        )
-        assert rec.seed.agent_name == "reviewer"
-        assert rec.seed.tags == {"env": "staging", "task": "summarize"}
+        ) as rec:
+            assert rec.seed.agent_name == "reviewer"
+            assert rec.seed.tags == {"env": "staging", "task": "summarize"}
     finally:
         client.shutdown()
