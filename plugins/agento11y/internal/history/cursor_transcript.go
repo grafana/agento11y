@@ -412,7 +412,7 @@ func (c *cursorImporter) turnsTranscript(ctx context.Context, sess SessionPrevie
 			yield(HistoricalGeneration{}, fmt.Errorf("read cursor transcript %s: %w", sess.SourcePath, err))
 			return
 		}
-		if r.emit() {
+		if r.emit() || r.titles.finish(r.sessionID) {
 			return
 		}
 		if err := r.walkReport(); err != nil {
@@ -434,13 +434,13 @@ type cursorTranscriptReplay struct {
 	current     *cursorTranscriptTurn
 	unreadable  int
 	emitted     int
-	// title names every turn of the session: the first prompt typed, as in
-	// live capture. See cursorReplay.observe.
-	title string
+	titles      cursorTitler
 }
 
 type cursorTranscriptTurn struct {
-	frag      *fragment.Fragment
+	frag *fragment.Fragment
+	// typed is the text the user typed in the turn's prompt; see cursorTitler.
+	typed     string
 	assistant string
 	stop      *mapper.StopInput
 	notes     []string
@@ -472,11 +472,6 @@ func (r *cursorTranscriptReplay) observe(line cursorTranscriptLine) bool {
 		}
 		return false
 	case line.Role == "user":
-		// Set before the open turn is emitted, so a first turn that typed
-		// nothing (an image alone) takes the next prompt's title too.
-		if r.title == "" {
-			r.title = cursorTypedPrompt(cursorStripTranscriptTimestamp(line.Text()))
-		}
 		if r.emit() {
 			return true
 		}
@@ -492,13 +487,14 @@ func (r *cursorTranscriptReplay) open(line cursorTranscriptLine) {
 	dated := parseCursorTranscriptTimestamp(text)
 	// The timestamp wrapper is Cursor metadata, not what the user typed. Live
 	// capture reads the beforeSubmitPrompt payload, which has neither tag.
-	prompt := cursorUnwrapPrompt(cursorStripTranscriptTimestamp(text))
+	text = cursorStripTranscriptTimestamp(text)
 	r.current = &cursorTranscriptTurn{
 		frag: &fragment.Fragment{
 			ConversationID: r.sessionID,
 			GenerationID:   fallbackTurnID(r.emitted),
-			UserPrompt:     prompt,
+			UserPrompt:     cursorUnwrapPrompt(text),
 		},
+		typed: cursorTypedPrompt(text),
 		dated: dated,
 	}
 }
@@ -581,25 +577,27 @@ func (r *cursorTranscriptReplay) emit() bool {
 	if stop == nil {
 		stop = &mapper.StopInput{Status: string(mapper.StopStatusCompleted)}
 	}
-	mapped := mapper.MapFragment(mapper.Inputs{
-		Fragment: turn.frag,
-		Session: &fragment.Session{
-			ConversationID:    r.sessionID,
-			ConversationTitle: r.title,
-			WorkspaceRoots:    cursorWorkspaceRoots(r.workspace),
-			StartedAt:         turn.frag.StartedAt,
-		},
-		Stop:           stop,
-		ContentCapture: agento11y.ContentCaptureModeFull,
-		Now:            r.importer.clock(),
-	})
-	gen := mapped.Generation
-	gen.ID = src.GenerationID()
-	if mapped.CallError != nil {
-		gen.CallError = mapped.CallError.Error()
-	}
 	r.emitted++
-	return !r.yield(HistoricalGeneration{Source: src, Gen: gen, Quality: quality}, nil)
+	return r.titles.emit(turn.typed, func(title string) bool {
+		mapped := mapper.MapFragment(mapper.Inputs{
+			Fragment: turn.frag,
+			Session: &fragment.Session{
+				ConversationID:    r.sessionID,
+				ConversationTitle: title,
+				WorkspaceRoots:    cursorWorkspaceRoots(r.workspace),
+				StartedAt:         turn.frag.StartedAt,
+			},
+			Stop:           stop,
+			ContentCapture: agento11y.ContentCaptureModeFull,
+			Now:            r.importer.clock(),
+		})
+		gen := mapped.Generation
+		gen.ID = src.GenerationID()
+		if mapped.CallError != nil {
+			gen.CallError = mapped.CallError.Error()
+		}
+		return !r.yield(HistoricalGeneration{Source: src, Gen: gen, Quality: quality}, nil)
+	})
 }
 
 func (r *cursorTranscriptReplay) times(turn *cursorTranscriptTurn) (start, end time.Time) {

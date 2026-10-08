@@ -172,6 +172,41 @@ func TestCursorTranscriptTurnsShareTheSessionTitle(t *testing.T) {
 	}
 }
 
+// A session that only ever sent an image has no typed prompt to be named
+// after; it is titled with its ID rather than with Cursor's context blocks.
+func TestCursorTranscriptNeverTypedIsTitledWithItsID(t *testing.T) {
+	root := t.TempDir()
+	sid := "eeeeeeee-bbbb-cccc-dddd-eeeeeeeeeeee"
+	dir := filepath.Join(root, "proj", "agent-transcripts", sid)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"role":"user","message":{"content":[{"type":"text","text":"[Image]\n<image_files>\n1. /work/repo/assets/panel.png\n</image_files>\n<user_query>\n</user_query>"}]}}` + "\n" +
+		`{"role":"assistant","message":{"content":[{"type":"text","text":"An empty panel."}]}}` + "\n"
+	path := filepath.Join(dir, sid+".jsonl")
+	if err := os.WriteFile(path, []byte(body), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	imp := &cursorImporter{}
+	preview, ok, err := imp.Preview(context.Background(), path)
+	if err != nil || !ok {
+		t.Fatalf("Preview: ok=%v err=%v", ok, err)
+	}
+	var gens []HistoricalGeneration
+	for g, err := range imp.Turns(context.Background(), preview) {
+		if err != nil {
+			t.Fatalf("Turns: %v", err)
+		}
+		gens = append(gens, g)
+	}
+	if len(gens) != 1 {
+		t.Fatalf("got %d generations, want 1", len(gens))
+	}
+	if gens[0].Gen.ConversationTitle != sid {
+		t.Errorf("title = %q, want the session ID", gens[0].Gen.ConversationTitle)
+	}
+}
+
 func TestCursorTranscriptToolUse(t *testing.T) {
 	root := t.TempDir()
 	sid := "cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee"

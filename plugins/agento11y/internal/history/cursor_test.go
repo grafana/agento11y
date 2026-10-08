@@ -790,8 +790,10 @@ func TestCursorTurnMatchesTheLiveMapper(t *testing.T) {
 			want := mapper.MapFragment(mapper.Inputs{
 				Fragment: frag,
 				Session: &fragment.Session{
-					ConversationID:    fx.SessionID,
-					ConversationTitle: fx.Name,
+					ConversationID: fx.SessionID,
+					// Live capture titles a session with its first typed prompt;
+					// the store's chat name is not something it can see.
+					ConversationTitle: fx.nth(t, "prompt", 0).Text,
 					WorkspaceRoots:    []string{"/work/repo"},
 					StartedAt:         start.Format(time.RFC3339Nano),
 				},
@@ -1051,44 +1053,94 @@ func TestCursorTypedPrompt(t *testing.T) {
 	}
 }
 
-// Regression: with no chat name in the store, each turn was titled with its
-// own prompt, so one session carried as many titles as turns.
+// Regression: each turn was titled with its own prompt, Cursor's context
+// blocks included, so one session carried as many titles as turns.
 func TestCursorTurnsShareTheSessionTitle(t *testing.T) {
+	const sessionID = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+	const imageOnly = "<image_files>\n1. /work/repo/a.png\n</image_files>\n<user_query>\n</user_query>"
 	tests := []struct {
-		name     string
-		chatName string
-		prompts  []string
-		want     string
+		name      string
+		setup     func(b *chatstoretest.Builder)
+		wantTurns int
+		want      string
 	}{
 		{
-			name:     "Cursor's name for the chat",
-			chatName: "Rename the flag",
-			prompts:  []string{"<user_query>rename the retry flag</user_query>", "<user_query>and the docs?</user_query>"},
-			want:     "Rename the flag",
+			name: "the first typed prompt, without the context around it",
+			setup: func(b *chatstoretest.Builder) {
+				b.AddPrompt("<attached_files>\nplan.md\n</attached_files>\n<user_query>execute the plan</user_query>")
+				b.AddAssistantText("ok")
+				b.AddPrompt("<user_query>and the docs?</user_query>")
+				b.AddAssistantText("ok")
+			},
+			wantTurns: 2,
+			want:      "execute the plan",
 		},
 		{
-			name:    "the first typed prompt when the chat has no name",
-			prompts: []string{"<attached_files>\nplan.md\n</attached_files>\n<user_query>execute the plan</user_query>", "<user_query>and the docs?</user_query>"},
-			want:    "execute the plan",
+			// Live capture cannot see the store's chat name, so a session
+			// both captured and imported would flip between two titles.
+			name: "the store's chat name is not used",
+			setup: func(b *chatstoretest.Builder) {
+				b.Meta.Name = "Rename the flag"
+				b.AddPrompt("<user_query>rename the retry flag</user_query>")
+				b.AddAssistantText("ok")
+			},
+			wantTurns: 1,
+			want:      "rename the retry flag",
 		},
 		{
-			name:    "a first turn that typed nothing beside an image",
-			prompts: []string{"<image_files>\n1. /work/repo/a.png\n</image_files>\n<user_query>\n</user_query>", "<user_query>what does it show?</user_query>"},
-			want:    "what does it show?",
+			name: "turns that typed nothing beside an image wait for a typed prompt",
+			setup: func(b *chatstoretest.Builder) {
+				for range 2 {
+					b.AddPrompt(imageOnly)
+					b.AddAssistantText("ok")
+				}
+				b.AddPrompt("<user_query>what do they show?</user_query>")
+				b.AddAssistantText("ok")
+			},
+			wantTurns: 3,
+			want:      "what do they show?",
+		},
+		{
+			name: "a session that never typed anything is titled with its ID",
+			setup: func(b *chatstoretest.Builder) {
+				b.AddPreamble("<user_info>OS: darwin</user_info>")
+				b.AddPrompt(imageOnly)
+				b.AddAssistantText("ok")
+			},
+			wantTurns: 1,
+			want:      sessionID,
+		},
+		{
+			// A prompt with no answer is dropped, and must not name the turns
+			// that are exported; a guard may have blocked it.
+			name: "a prompt the model never answered",
+			setup: func(b *chatstoretest.Builder) {
+				b.AddPrompt("<user_query>blocked prompt</user_query>")
+				b.AddPrompt("<user_query>second</user_query>")
+				b.AddAssistantText("ok")
+			},
+			wantTurns: 1,
+			want:      "second",
+		},
+		{
+			name: "an unreadable message after a turn that typed nothing",
+			setup: func(b *chatstoretest.Builder) {
+				b.AddPrompt(imageOnly)
+				b.AddAssistantText("ok")
+				b.ReferenceMissingBlob()
+				b.AddPrompt("<user_query>what now?</user_query>")
+				b.AddAssistantText("ok")
+			},
+			wantTurns: 2,
+			want:      "what now?",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			imp, path := cursorBuild(t, "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", func(b *chatstoretest.Builder) {
-				b.Meta.Name = tt.chatName
-				for _, p := range tt.prompts {
-					b.AddPrompt(p)
-					b.AddAssistantText("ok")
-				}
-			})
-			turns := collectTurns(t, imp, cursorPreview(t, imp, path))
-			if len(turns) != len(tt.prompts) {
-				t.Fatalf("got %d turns, want %d", len(turns), len(tt.prompts))
+			imp, path := cursorBuild(t, sessionID, tt.setup)
+			turns, _ := cursorWalk(t, imp, cursorPreview(t, imp, path))
+			if len(turns) != tt.wantTurns {
+				t.Fatalf("got %d turns, want %d", len(turns), tt.wantTurns)
 			}
 			for i, turn := range turns {
 				if turn.Gen.ConversationTitle != tt.want {

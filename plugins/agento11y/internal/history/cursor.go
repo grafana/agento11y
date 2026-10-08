@@ -353,7 +353,6 @@ func (c *cursorImporter) Turns(ctx context.Context, sess SessionPreview) iter.Se
 			sessionID: firstNonEmptyString(meta.AgentID, sess.SessionID, cursorSessionIDFromPath(sess.SourcePath)),
 			model:     strings.TrimSpace(meta.LastUsedModel),
 			workspace: firstNonEmptyString(root.Workspace(), sess.Workspace),
-			title:     strings.TrimSpace(meta.Name),
 			clock:     newCursorClock(meta.Created(), ids),
 			yield:     yield,
 		}
@@ -369,7 +368,7 @@ func (c *cursorImporter) Turns(ctx context.Context, sess SessionPreview) iter.Se
 				return // the consumer stopped
 			}
 		}
-		if r.emit() {
+		if r.emit() || r.titles.finish(r.sessionID) {
 			return
 		}
 		if err := r.walkReport(); err != nil {
@@ -407,7 +406,7 @@ type cursorReplay struct {
 	sessionID string
 	model     string
 	workspace string
-	title     string
+	titles    cursorTitler
 	window    cursorWindows
 	clock     cursorClock
 	yield     func(HistoricalGeneration, error) bool
@@ -440,6 +439,8 @@ type cursorReplay struct {
 // their output.
 type cursorTurn struct {
 	frag *fragment.Fragment
+	// typed is the text the user typed in the turn's prompt; see cursorTitler.
+	typed string
 	// assistant is the turn's assistant text. It is accumulated here and written
 	// to the fragment as one segment, because the live mapper concatenates
 	// segments with no separator: they are streaming deltas in the live path, and
@@ -473,15 +474,6 @@ func (r *cursorReplay) observe(msg chatstore.Message) bool {
 			// appears.
 			r.deferContext(msg.Text())
 			return false
-		}
-		// One title for every turn of the session: Cursor's name for the chat
-		// when it has one, else the first prompt typed. Without it each turn was
-		// titled with its own prompt, and a store that keeps the latest title
-		// named the conversation after its last question. It is set before the
-		// open turn is emitted, so a first turn that typed nothing (an image
-		// alone) takes the next prompt's title too.
-		if r.title == "" {
-			r.title = cursorTypedPrompt(msg.Text())
 		}
 		if r.emit() {
 			return true
@@ -544,13 +536,10 @@ const (
 // context Cursor added, and it is kept for the same reason the environment
 // preamble is.
 func cursorUnwrapPrompt(text string) string {
-	opensAt := strings.Index(text, cursorPromptOpen)
-	closesAt := strings.LastIndex(text, cursorPromptClose)
-	if opensAt < 0 || closesAt < opensAt {
+	before, typed, after, ok := cursorSplitPrompt(text)
+	if !ok {
 		return text
 	}
-	before, typed := text[:opensAt], text[opensAt+len(cursorPromptOpen):closesAt]
-	after := text[closesAt+len(cursorPromptClose):]
 	return appendText(appendText(before, typed), after)
 }
 
@@ -561,17 +550,76 @@ func cursorUnwrapPrompt(text string) string {
 // It names the session, as the first prompt does in live capture: the hook's
 // beforeSubmitPrompt payload carries the typed text and none of the context.
 func cursorTypedPrompt(text string) string {
+	_, typed, _, ok := cursorSplitPrompt(text)
+	if !ok {
+		return strings.TrimSpace(text)
+	}
+	return strings.TrimSpace(typed)
+}
+
+// cursorSplitPrompt finds Cursor's <user_query> wrapper: the first opening tag
+// and the last closing one, so a tag quoted inside the typed text stays in it.
+func cursorSplitPrompt(text string) (before, typed, after string, ok bool) {
 	opensAt := strings.Index(text, cursorPromptOpen)
 	closesAt := strings.LastIndex(text, cursorPromptClose)
 	if opensAt < 0 || closesAt < opensAt {
-		return strings.TrimSpace(text)
+		return "", "", "", false
 	}
-	return strings.TrimSpace(text[opensAt+len(cursorPromptOpen) : closesAt])
+	return text[:opensAt], text[opensAt+len(cursorPromptOpen) : closesAt], text[closesAt+len(cursorPromptClose):], true
+}
+
+// cursorTitler gives every emitted turn of a session one title: the typed
+// prompt of the first emitted turn that has one, as live capture titles a
+// session from its first typed prompt. A prompt the model never answered, or
+// one that typed nothing beside an image, names nothing. Turns emitted before
+// the title is known wait and go out with it, and a session that never typed
+// anything is titled with its ID rather than with Cursor's context blocks.
+//
+// Without it each turn was titled with its own prompt, so one session carried
+// as many titles as turns, and a store that keeps the latest title named the
+// conversation after its last question.
+type cursorTitler struct {
+	title   string
+	waiting []func(title string) bool
+}
+
+// emit sends a turn whose user typed typed. send maps the turn under a title
+// and yields it, reporting whether the consumer stopped.
+func (c *cursorTitler) emit(typed string, send func(title string) bool) bool {
+	if c.title == "" {
+		c.title = typed
+	}
+	if c.title == "" {
+		c.waiting = append(c.waiting, send)
+		return false
+	}
+	if c.flush(c.title) {
+		return true
+	}
+	return send(c.title)
+}
+
+// finish sends the turns still waiting at the end of the session, under
+// fallback: no emitted turn typed anything.
+func (c *cursorTitler) finish(fallback string) bool {
+	return c.flush(fallback)
+}
+
+func (c *cursorTitler) flush(title string) bool {
+	waiting := c.waiting
+	c.waiting = nil
+	for _, send := range waiting {
+		if send(title) {
+			return true
+		}
+	}
+	return false
 }
 
 // open starts a turn. Its times are set when it closes, because they come from
 // the provider IDs its messages carry and none of them has been read yet.
 func (r *cursorReplay) open(prompt string) {
+	typed := cursorTypedPrompt(prompt)
 	prompt = appendText(r.pendingContext, cursorUnwrapPrompt(prompt))
 	r.pendingContext = ""
 	r.current = &cursorTurn{
@@ -581,6 +629,7 @@ func (r *cursorReplay) open(prompt string) {
 			UserPrompt:     prompt,
 			Model:          r.model,
 		},
+		typed:    typed,
 		awaiting: map[string][]int{},
 	}
 	if r.lostMessage {
@@ -773,23 +822,25 @@ func (r *cursorReplay) emit() bool {
 		Notes:             append([]string{cursorNoteMissingTurnID}, turn.notes...),
 	}
 
-	mapped := mapper.MapFragment(mapper.Inputs{
-		Fragment: turn.frag,
-		Session: &fragment.Session{
-			ConversationID:    r.sessionID,
-			ConversationTitle: r.title,
-			WorkspaceRoots:    cursorWorkspaceRoots(r.workspace),
-			StartedAt:         turn.frag.StartedAt,
-		},
-		Stop:           &mapper.StopInput{Status: string(mapper.StopStatusCompleted)},
-		ContentCapture: agento11y.ContentCaptureModeFull,
-		Now:            r.importer.clock(),
-	})
-	gen := mapped.Generation
-	gen.ID = src.GenerationID()
 	r.emitted++
 
-	return !r.yield(HistoricalGeneration{Source: src, Gen: gen, Quality: quality}, nil)
+	return r.titles.emit(turn.typed, func(title string) bool {
+		mapped := mapper.MapFragment(mapper.Inputs{
+			Fragment: turn.frag,
+			Session: &fragment.Session{
+				ConversationID:    r.sessionID,
+				ConversationTitle: title,
+				WorkspaceRoots:    cursorWorkspaceRoots(r.workspace),
+				StartedAt:         turn.frag.StartedAt,
+			},
+			Stop:           &mapper.StopInput{Status: string(mapper.StopStatusCompleted)},
+			ContentCapture: agento11y.ContentCaptureModeFull,
+			Now:            r.importer.clock(),
+		})
+		gen := mapped.Generation
+		gen.ID = src.GenerationID()
+		return !r.yield(HistoricalGeneration{Source: src, Gen: gen, Quality: quality}, nil)
+	})
 }
 
 // times are the turn's start and end.
