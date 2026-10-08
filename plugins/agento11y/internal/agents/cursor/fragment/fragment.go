@@ -17,6 +17,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/fragmentstore"
 )
@@ -91,6 +93,24 @@ type Session struct {
 	IsBackgroundAgent bool     `json:"isBackgroundAgent,omitempty"`
 	ConversationTitle string   `json:"conversationTitle,omitempty"`
 	StartedAt         string   `json:"startedAt,omitempty"`
+}
+
+// maxSessionTitleLen caps a session title in bytes.
+const maxSessionTitleLen = 100
+
+// SessionTitle is the title a session takes from its first typed prompt: the
+// prompt trimmed and cut to 100 bytes on a rune boundary. Live capture stamps
+// it at beforeSubmitPrompt and the history importer uses it too, so a session
+// both captured and imported carries one title.
+func SessionTitle(prompt string) string {
+	title := strings.TrimSpace(prompt)
+	if len(title) > maxSessionTitleLen {
+		title = title[:maxSessionTitleLen]
+		for !utf8.ValidString(title) {
+			title = title[:len(title)-1]
+		}
+	}
+	return title
 }
 
 // Touch keeps the per-hook timestamps in sync. First arrival wins for

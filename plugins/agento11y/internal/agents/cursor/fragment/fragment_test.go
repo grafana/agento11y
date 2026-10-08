@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -321,5 +322,30 @@ func TestDelete_Idempotent(t *testing.T) {
 	// stop/sessionEnd retries don't error on each other.
 	if err := Delete("conv", "gen1"); err != nil {
 		t.Errorf("second delete should be idempotent; got %v", err)
+	}
+}
+
+func TestSessionTitle(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "trims", in: "  fix the bug \n", want: "fix the bug"},
+		{
+			// Cut first and trimmed by the mapper after: a cut that lands on a
+			// space leaves it for the mapper to drop, in live capture and import.
+			name: "cuts at 100 bytes",
+			in:   strings.Repeat("a", 99) + " and then some",
+			want: strings.Repeat("a", 99) + " ",
+		},
+		{name: "keeps a rune whole", in: strings.Repeat("a", 99) + "é", want: strings.Repeat("a", 99)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := SessionTitle(tt.in); got != tt.want {
+				t.Errorf("SessionTitle() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

@@ -1076,6 +1076,17 @@ func TestCursorTurnsShareTheSessionTitle(t *testing.T) {
 			want:      "execute the plan",
 		},
 		{
+			// Live capture cuts the prompt to 100 bytes before the mapper trims
+			// it; the import must land on the same title.
+			name: "a long prompt is cut as live capture cuts it",
+			setup: func(b *chatstoretest.Builder) {
+				b.AddPrompt("<user_query>" + strings.Repeat("a", 99) + " and then some</user_query>")
+				b.AddAssistantText("ok")
+			},
+			wantTurns: 1,
+			want:      strings.Repeat("a", 99),
+		},
+		{
 			// Live capture cannot see the store's chat name, so a session
 			// both captured and imported would flip between two titles.
 			name: "the store's chat name is not used",
@@ -1101,8 +1112,20 @@ func TestCursorTurnsShareTheSessionTitle(t *testing.T) {
 			want:      "what do they show?",
 		},
 		{
-			name: "a session that never typed anything is titled with its ID",
+			name: "a session that never typed anything takes the store's chat name",
 			setup: func(b *chatstoretest.Builder) {
+				b.Meta.Name = "Debug the empty panel"
+				b.AddPreamble("<user_info>OS: darwin</user_info>")
+				b.AddPrompt(imageOnly)
+				b.AddAssistantText("ok")
+			},
+			wantTurns: 1,
+			want:      "Debug the empty panel",
+		},
+		{
+			name: "a session that never typed anything and has no chat name is titled with its ID",
+			setup: func(b *chatstoretest.Builder) {
+				b.Meta.Name = ""
 				b.AddPreamble("<user_info>OS: darwin</user_info>")
 				b.AddPrompt(imageOnly)
 				b.AddAssistantText("ok")

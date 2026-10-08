@@ -6,7 +6,6 @@ import (
 	"io"
 	"log"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/grafana/agento11y/go/agento11y"
 
@@ -15,9 +14,6 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/guard"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
-
-// maxTitleLen caps the conversation title derived from the first user prompt.
-const maxTitleLen = 100
 
 // beforeSubmitDeny is Cursor's response for blocking a submitted prompt.
 // UserMessage is shown to the user; the model is not called.
@@ -101,15 +97,9 @@ func capturePrompt(p Payload, cfg config.Config, logger *log.Logger) {
 // UpdateSession holds the session lock so this write cannot replace a
 // sessionStart that landed between load and save.
 func setConversationTitle(conversationID, prompt string, logger *log.Logger) {
-	title := strings.TrimSpace(prompt)
+	title := fragment.SessionTitle(prompt)
 	if title == "" {
 		return
-	}
-	if len(title) > maxTitleLen {
-		title = title[:maxTitleLen]
-		for !utf8.ValidString(title) {
-			title = title[:len(title)-1]
-		}
 	}
 	err := fragment.UpdateSession(conversationID, logger, func(s *fragment.Session) bool {
 		if s.ConversationTitle != "" {
