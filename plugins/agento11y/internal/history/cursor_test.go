@@ -793,7 +793,7 @@ func TestCursorTurnMatchesTheLiveMapper(t *testing.T) {
 					ConversationID: fx.SessionID,
 					// Live capture titles a session with its first typed prompt;
 					// the store's chat name is not something it can see.
-					ConversationTitle: fx.nth(t, "prompt", 0).Text,
+					ConversationTitle: fragment.SessionTitle(fx.nth(t, "prompt", 0).Text),
 					WorkspaceRoots:    []string{"/work/repo"},
 					StartedAt:         start.Format(time.RFC3339Nano),
 				},
@@ -1043,6 +1043,13 @@ func TestCursorTypedPrompt(t *testing.T) {
 			in:   " run the tests ",
 			want: "run the tests",
 		},
+		{
+			// The wrapper Cursor writes starts a line; a tag quoted inside an
+			// attached source file does not.
+			name: "attached context that quotes the tag",
+			in:   "<attached_files>\ncursor.go: cursorPromptOpen = \"<user_query>\"\n</attached_files>\n<user_query>\nfix the title\n</user_query>",
+			want: "fix the title",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1112,7 +1119,8 @@ func TestCursorTurnsShareTheSessionTitle(t *testing.T) {
 			want:      "what do they show?",
 		},
 		{
-			name: "a session that never typed anything takes the store's chat name",
+			// As in live capture, which cannot see the chat name.
+			name: "a session that never typed anything is titled with its ID",
 			setup: func(b *chatstoretest.Builder) {
 				b.Meta.Name = "Debug the empty panel"
 				b.AddPreamble("<user_info>OS: darwin</user_info>")
@@ -1120,18 +1128,18 @@ func TestCursorTurnsShareTheSessionTitle(t *testing.T) {
 				b.AddAssistantText("ok")
 			},
 			wantTurns: 1,
-			want:      "Debug the empty panel",
+			want:      sessionID,
 		},
 		{
-			name: "a session that never typed anything and has no chat name is titled with its ID",
+			// Regression: the title was cut before redaction, so a secret the
+			// cut split kept its first part.
+			name: "a secret the cut would split is redacted",
 			setup: func(b *chatstoretest.Builder) {
-				b.Meta.Name = ""
-				b.AddPreamble("<user_info>OS: darwin</user_info>")
-				b.AddPrompt(imageOnly)
+				b.AddPrompt("<user_query>" + strings.Repeat("x", 70) + " ghp_" + strings.Repeat("A", 36) + " please</user_query>")
 				b.AddAssistantText("ok")
 			},
 			wantTurns: 1,
-			want:      sessionID,
+			want:      strings.Repeat("x", 70) + " [REDACTED:github-pat] please",
 		},
 		{
 			// A prompt with no answer is dropped, and must not name the turns

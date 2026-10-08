@@ -21,6 +21,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/fragmentstore"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/redact"
 )
 
 // ToolRecord captures one tool invocation observed via postToolUse(Failure).
@@ -95,22 +96,25 @@ type Session struct {
 	StartedAt         string   `json:"startedAt,omitempty"`
 }
 
-// maxSessionTitleLen caps a session title in bytes.
-const maxSessionTitleLen = 100
+// MaxSessionTitleLen caps a conversation title in bytes.
+const MaxSessionTitleLen = 100
 
 // SessionTitle is the title a session takes from its first typed prompt: the
-// prompt trimmed and cut to 100 bytes on a rune boundary. Live capture stamps
-// it at beforeSubmitPrompt and the history importer uses it too, so a session
-// both captured and imported carries one title.
+// prompt with secrets redacted, cut to MaxSessionTitleLen bytes on a rune
+// boundary, and trimmed. Redaction runs before the cut, because a secret the
+// cut splits no longer matches its pattern and its first part would be
+// exported. Live capture stamps it at beforeSubmitPrompt and the history
+// importer uses it too, so a session both captured and imported carries one
+// title.
 func SessionTitle(prompt string) string {
-	title := strings.TrimSpace(prompt)
-	if len(title) > maxSessionTitleLen {
-		title = title[:maxSessionTitleLen]
+	title := redact.New().Title(strings.TrimSpace(prompt))
+	if len(title) > MaxSessionTitleLen {
+		title = title[:MaxSessionTitleLen]
 		for !utf8.ValidString(title) {
 			title = title[:len(title)-1]
 		}
 	}
-	return title
+	return strings.TrimSpace(title)
 }
 
 // Touch keeps the per-hook timestamps in sync. First arrival wins for

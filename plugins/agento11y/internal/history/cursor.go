@@ -354,10 +354,11 @@ func (c *cursorImporter) Turns(ctx context.Context, sess SessionPreview) iter.Se
 			sessionID: sessionID,
 			model:     strings.TrimSpace(meta.LastUsedModel),
 			workspace: firstNonEmptyString(root.Workspace(), sess.Workspace),
-			// The store's chat name only names a session that never typed
-			// anything: live capture cannot see it, so preferring it would give
-			// a session captured and imported two titles.
-			title: firstNonEmptyString(c.storeTitle(ctx, store, root.MessageIDs), strings.TrimSpace(meta.Name), sessionID),
+			// Not the store's chat name: live capture cannot see it, so using
+			// it would give a session both captured and imported two titles.
+			// A session that never typed anything is titled with its ID, as
+			// live capture titles it.
+			title: firstNonEmptyString(c.storeTitle(ctx, store, root.MessageIDs), sessionID),
 			clock: newCursorClock(meta.Created(), ids),
 			yield: yield,
 		}
@@ -411,11 +412,11 @@ type cursorReplay struct {
 	sessionID string
 	model     string
 	workspace string
-	// title names every turn of the session; see cursorTitleProbe.
+	// title names every turn of the session; see storeTitle.
 	title string
-	// probe, when set, receives each emitted turn's typed prompt in place of
-	// mapping it, and stops the walk by returning true.
-	probe  func(typed string) bool
+	// probe replays the messages without mapping or yielding a turn, for
+	// storeTitle.
+	probe  bool
 	window cursorWindows
 	clock  cursorClock
 	yield  func(HistoricalGeneration, error) bool
@@ -448,7 +449,7 @@ type cursorReplay struct {
 // their output.
 type cursorTurn struct {
 	frag *fragment.Fragment
-	// typed is the text the user typed in the turn's prompt; see cursorTitler.
+	// typed is the text the user typed in the turn's prompt; see storeTitle.
 	typed string
 	// assistant is the turn's assistant text. It is accumulated here and written
 	// to the fragment as one segment, because the live mapper concatenates
@@ -545,11 +546,8 @@ const (
 // context Cursor added, and it is kept for the same reason the environment
 // preamble is.
 func cursorUnwrapPrompt(text string) string {
-	before, typed, after, ok := cursorSplitPrompt(text)
-	if !ok {
-		return text
-	}
-	return appendText(appendText(before, typed), after)
+	unwrapped, _ := cursorPromptParts(text)
+	return unwrapped
 }
 
 // cursorTypedPrompt returns only the text the user typed: what Cursor wraps in
@@ -559,65 +557,87 @@ func cursorUnwrapPrompt(text string) string {
 // It names the session, as the first prompt does in live capture: the hook's
 // beforeSubmitPrompt payload carries the typed text and none of the context.
 func cursorTypedPrompt(text string) string {
-	_, typed, _, ok := cursorSplitPrompt(text)
-	if !ok {
-		return strings.TrimSpace(text)
-	}
-	return strings.TrimSpace(typed)
+	_, typed := cursorPromptParts(text)
+	return typed
 }
 
-// cursorSplitPrompt finds Cursor's <user_query> wrapper: the first opening tag
-// and the last closing one, so a tag quoted inside the typed text stays in it.
+// cursorPromptParts splits a prompt once into what the model saw, with
+// Cursor's wrapper taken off (see cursorUnwrapPrompt), and the text the user
+// typed (see cursorTypedPrompt).
+func cursorPromptParts(text string) (unwrapped, typed string) {
+	before, inner, after, ok := cursorSplitPrompt(text)
+	if !ok {
+		return text, strings.TrimSpace(text)
+	}
+	return appendText(appendText(before, inner), after), strings.TrimSpace(inner)
+}
+
+// cursorSplitPrompt finds Cursor's <user_query> wrapper. Cursor writes the
+// opening tag at the start of a line, after any context it attached, so the
+// first opening tag at a line start is the one: a tag quoted inside attached
+// context, such as a source file, sits mid-line. A wrapper that does not start
+// a line falls back to the first opening tag. The closing tag is the last one,
+// so a tag quoted inside the typed text stays in it.
 func cursorSplitPrompt(text string) (before, typed, after string, ok bool) {
-	opensAt := strings.Index(text, cursorPromptOpen)
 	closesAt := strings.LastIndex(text, cursorPromptClose)
+	if closesAt < 0 {
+		return "", "", "", false
+	}
+	opensAt := -1
+	for from := 0; from < closesAt; {
+		at := strings.Index(text[from:closesAt], cursorPromptOpen)
+		if at < 0 {
+			break
+		}
+		at += from
+		if at == 0 || text[at-1] == '\n' {
+			opensAt = at
+			break
+		}
+		from = at + 1
+	}
+	if opensAt < 0 {
+		opensAt = strings.Index(text, cursorPromptOpen)
+	}
 	if opensAt < 0 || closesAt < opensAt {
 		return "", "", "", false
 	}
 	return text[:opensAt], text[opensAt+len(cursorPromptOpen) : closesAt], text[closesAt+len(cursorPromptClose):], true
 }
 
-// storeTitle walks the store's messages with a title probe; see
-// cursorTitleProbe. A read error ends it with no title and is left to the walk
-// that yields turns to report.
+// storeTitle is the session's title: the typed prompt of the first turn the
+// model answered, through fragment.SessionTitle, as live capture titles a
+// session from its first prompt. A prompt the model never answered names
+// nothing, because the importer cannot tell it from one a guard blocked, and
+// live capture never titles a session with a blocked prompt. It is "" when no
+// answered turn typed anything, or when a read error stops it first; the walk
+// that yields turns reports that error.
+//
+// It replays the messages without mapping anything and stops as soon as that
+// turn has output, usually within the first few messages. The title is
+// resolved before the walk that yields turns, so every turn goes out with it
+// as soon as it closes. Titling each turn as it closed gave it its own prompt:
+// one session carried as many titles as turns, and a store that keeps the
+// latest title named the conversation after its last question.
 func (c *cursorImporter) storeTitle(ctx context.Context, store *chatstore.Store, ids []string) string {
-	var title string
-	r := &cursorReplay{importer: c, probe: cursorTitleProbe(&title)}
+	r := &cursorReplay{importer: c, probe: true}
 	for msg, err := range store.Messages(ctx, ids) {
 		if err != nil {
 			return ""
 		}
-		if r.observe(msg) {
-			return title
+		r.observe(msg)
+		if turn := r.current; turn != nil && turn.typed != "" && turn.answered() {
+			return fragment.SessionTitle(turn.typed)
 		}
 	}
-	r.emit()
-	return title
-}
-
-// cursorTitleProbe returns a replay probe that records the session's title:
-// the typed prompt of the first turn the walk emits that has one, cut as live
-// capture cuts it. A prompt the model never answered names nothing, because
-// the importer cannot tell it from one a guard blocked, and live capture never
-// titles a session with a blocked prompt. The probe stops the walk at that
-// turn, which is usually the first.
-//
-// The title is resolved before the walk that yields turns, so every turn goes
-// out with it as soon as it closes. Titling each turn as it closed gave it its
-// own prompt: one session carried as many titles as turns, and a store that
-// keeps the latest title named the conversation after its last question.
-func cursorTitleProbe(title *string) func(typed string) bool {
-	return func(typed string) bool {
-		*title = fragment.SessionTitle(typed)
-		return *title != ""
-	}
+	return ""
 }
 
 // open starts a turn. Its times are set when it closes, because they come from
 // the provider IDs its messages carry and none of them has been read yet.
 func (r *cursorReplay) open(prompt string) {
-	typed := cursorTypedPrompt(prompt)
-	prompt = appendText(r.pendingContext, cursorUnwrapPrompt(prompt))
+	prompt, typed := cursorPromptParts(prompt)
+	prompt = appendText(r.pendingContext, prompt)
 	r.pendingContext = ""
 	r.current = &cursorTurn{
 		frag: &fragment.Fragment{
@@ -756,6 +776,12 @@ func (t *cursorTurn) takeCall(callID string) (int, bool) {
 }
 
 // note records a local observation about the turn, once.
+// answered reports whether the model produced output for the turn. A turn
+// without any is not exported.
+func (t *cursorTurn) answered() bool {
+	return t.assistant != "" || len(t.frag.Assistant) > 0 || len(t.frag.Tools) > 0
+}
+
 func (t *cursorTurn) note(note string) {
 	if !slices.Contains(t.notes, note) {
 		t.notes = append(t.notes, note)
@@ -790,11 +816,8 @@ func (r *cursorReplay) emit() bool {
 	if turn.assistant != "" {
 		turn.frag.Assistant = []fragment.AssistantSegment{{Text: turn.assistant}}
 	}
-	if len(turn.frag.Assistant) == 0 && len(turn.frag.Tools) == 0 {
+	if !turn.answered() || r.probe {
 		return false
-	}
-	if r.probe != nil {
-		return r.probe(turn.typed)
 	}
 	start, end := r.times(turn)
 	turn.frag.StartedAt = start.Format(time.RFC3339Nano)

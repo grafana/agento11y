@@ -381,7 +381,7 @@ func (c *cursorImporter) turnsTranscript(ctx context.Context, sess SessionPrevie
 		}
 		r.previousEnd = r.window.start
 
-		stopped, err := readCursorTranscript(ctx, sess.SourcePath, r)
+		stopped, err := readCursorTranscript(ctx, sess.SourcePath, r.observe, &r.unreadable)
 		if stopped {
 			return
 		}
@@ -398,10 +398,10 @@ func (c *cursorImporter) turnsTranscript(ctx context.Context, sess SessionPrevie
 	}
 }
 
-// readCursorTranscript feeds the transcript's lines to r until r stops the
-// walk, and reports whether it did. A line that is not JSON is counted in
-// r.unreadable.
-func readCursorTranscript(ctx context.Context, path string, r *cursorTranscriptReplay) (stopped bool, err error) {
+// readCursorTranscript feeds the transcript's lines to observe until it stops
+// the walk by returning true, and reports whether it did. A line that is not
+// JSON is counted in unreadable.
+func readCursorTranscript(ctx context.Context, path string, observe func(cursorTranscriptLine) bool, unreadable *int) (stopped bool, err error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return false, err
@@ -421,10 +421,10 @@ func readCursorTranscript(ctx context.Context, path string, r *cursorTranscriptR
 		}
 		var line cursorTranscriptLine
 		if err := json.Unmarshal(raw, &line); err != nil {
-			r.unreadable++
+			*unreadable++
 			continue
 		}
-		if r.observe(line) {
+		if observe(line) {
 			return true, nil
 		}
 	}
@@ -434,20 +434,21 @@ func readCursorTranscript(ctx context.Context, path string, r *cursorTranscriptR
 	return false, nil
 }
 
-// transcriptTitle walks the transcript with a title probe; see
-// cursorTitleProbe. A read error ends it with no title and is left to the walk
-// that yields turns to report.
+// transcriptTitle is the session's title, chosen and resolved as storeTitle
+// chooses it for a store: the typed prompt of the first turn the model
+// answered. It reads the transcript only up to that turn's first output.
 func (c *cursorImporter) transcriptTitle(ctx context.Context, path string) string {
+	r := &cursorTranscriptReplay{importer: c, probe: true}
 	var title string
-	r := &cursorTranscriptReplay{importer: c, probe: cursorTitleProbe(&title)}
-	stopped, err := readCursorTranscript(ctx, path, r)
-	if stopped {
-		return title
-	}
-	if err != nil {
-		return ""
-	}
-	r.emit()
+	var unreadable int
+	_, _ = readCursorTranscript(ctx, path, func(line cursorTranscriptLine) bool {
+		r.observe(line)
+		if turn := r.current; turn != nil && turn.typed != "" && turn.answered() {
+			title = fragment.SessionTitle(turn.typed)
+			return true
+		}
+		return false
+	}, &unreadable)
 	return title
 }
 
@@ -459,11 +460,11 @@ type cursorTranscriptReplay struct {
 	workspace string
 	window    cursorWindows
 	yield     func(HistoricalGeneration, error) bool
-	// title names every turn of the session; see cursorTitleProbe.
+	// title names every turn of the session; see transcriptTitle.
 	title string
-	// probe, when set, receives each emitted turn's typed prompt in place of
-	// mapping it, and stops the walk by returning true.
-	probe func(typed string) bool
+	// probe replays the lines without mapping or yielding a turn, for
+	// transcriptTitle.
+	probe bool
 
 	previousEnd time.Time
 	current     *cursorTranscriptTurn
@@ -473,13 +474,19 @@ type cursorTranscriptReplay struct {
 
 type cursorTranscriptTurn struct {
 	frag *fragment.Fragment
-	// typed is the text the user typed in the turn's prompt; see cursorTitler.
+	// typed is the text the user typed in the turn's prompt; see transcriptTitle.
 	typed     string
 	assistant string
 	stop      *mapper.StopInput
 	notes     []string
 	// dated is set when the user prompt carried a parseable <timestamp>.
 	dated time.Time
+}
+
+// answered reports whether the model produced output for the turn. A turn
+// without any is not exported.
+func (t *cursorTranscriptTurn) answered() bool {
+	return t.assistant != "" || len(t.frag.Assistant) > 0 || len(t.frag.Tools) > 0
 }
 
 func (t *cursorTranscriptTurn) note(n string) {
@@ -521,14 +528,14 @@ func (r *cursorTranscriptReplay) open(line cursorTranscriptLine) {
 	dated := parseCursorTranscriptTimestamp(text)
 	// The timestamp wrapper is Cursor metadata, not what the user typed. Live
 	// capture reads the beforeSubmitPrompt payload, which has neither tag.
-	text = cursorStripTranscriptTimestamp(text)
+	prompt, typed := cursorPromptParts(cursorStripTranscriptTimestamp(text))
 	r.current = &cursorTranscriptTurn{
 		frag: &fragment.Fragment{
 			ConversationID: r.sessionID,
 			GenerationID:   fallbackTurnID(r.emitted),
-			UserPrompt:     cursorUnwrapPrompt(text),
+			UserPrompt:     prompt,
 		},
-		typed: cursorTypedPrompt(text),
+		typed: typed,
 		dated: dated,
 	}
 }
@@ -584,11 +591,8 @@ func (r *cursorTranscriptReplay) emit() bool {
 	if turn.assistant != "" {
 		turn.frag.Assistant = []fragment.AssistantSegment{{Text: turn.assistant}}
 	}
-	if len(turn.frag.Assistant) == 0 && len(turn.frag.Tools) == 0 {
+	if !turn.answered() || r.probe {
 		return false
-	}
-	if r.probe != nil {
-		return r.probe(turn.typed)
 	}
 	start, end := r.times(turn)
 	turn.frag.StartedAt = start.Format(time.RFC3339Nano)

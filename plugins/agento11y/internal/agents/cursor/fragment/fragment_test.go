@@ -333,13 +333,18 @@ func TestSessionTitle(t *testing.T) {
 	}{
 		{name: "trims", in: "  fix the bug \n", want: "fix the bug"},
 		{
-			// Cut first and trimmed by the mapper after: a cut that lands on a
-			// space leaves it for the mapper to drop, in live capture and import.
-			name: "cuts at 100 bytes",
+			name: "cuts at 100 bytes and trims what the cut leaves",
 			in:   strings.Repeat("a", 99) + " and then some",
-			want: strings.Repeat("a", 99) + " ",
+			want: strings.Repeat("a", 99),
 		},
 		{name: "keeps a rune whole", in: strings.Repeat("a", 99) + "é", want: strings.Repeat("a", 99)},
+		{
+			// Regression: the cut ran before redaction, so a secret it split
+			// no longer matched its pattern and its first part was kept.
+			name: "redacts a secret before the cut splits it",
+			in:   strings.Repeat("x", 70) + " ghp_" + strings.Repeat("A", 36) + " please",
+			want: strings.Repeat("x", 70) + " [REDACTED:github-pat] please",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -26,9 +26,10 @@ import (
 
 var errCursorStop = errors.New("cursor_stop_error")
 
-// maxTitleLen caps the conversation title derived from the first user prompt,
-// matching claude-code so a long first message does not become the list label.
-const maxTitleLen = 100
+// maxTitleLen caps the conversation title, matching claude-code so a long
+// first message does not become the list label. It is the cap live capture
+// and the history importer apply when they title a session.
+const maxTitleLen = fragment.MaxSessionTitleLen
 
 // AgentName is the default value reported as `agent_name` on every emitted
 // generation. AGENTO11Y_AGENT_NAME overrides it per run through
