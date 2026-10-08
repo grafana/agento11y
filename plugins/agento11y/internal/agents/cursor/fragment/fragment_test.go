@@ -350,6 +350,17 @@ func TestSessionTitle(t *testing.T) {
 			in:   strings.Repeat("x", 85) + " ghp_" + strings.Repeat("A", 36) + " please",
 			want: strings.Repeat("x", 85),
 		},
+		{
+			name: "does not leave the start of a redaction marker",
+			in:   strings.Repeat("x", 92) + " ghp_" + strings.Repeat("A", 36) + " please",
+			want: strings.Repeat("x", 92),
+		},
+		{
+			// Only the head is redacted; a secret near the start still is.
+			name: "redacts the head of a large paste",
+			in:   "token ghp_" + strings.Repeat("A", 36) + " " + strings.Repeat("y", 100<<10),
+			want: "token [REDACTED:github-pat] " + strings.Repeat("y", 100-len("token [REDACTED:github-pat] ")),
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

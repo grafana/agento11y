@@ -576,47 +576,13 @@ func cursorPromptParts(text string) (unwrapped, typed string) {
 	return appendText(appendText(before, inner), after), strings.TrimSpace(inner)
 }
 
-// cursorSplitPrompt finds Cursor's <user_query> wrapper: the last top-level
-// pair of tags, with tags paired by nesting depth. Cursor writes the context
-// it attached before the wrapper, so a pair quoted inside that context, such
-// as one in an attached source file, closes before the wrapper opens. A tag
-// quoted inside the typed text, and a message Cursor nests inside another,
-// sit inside the wrapper. Tags that never pair up fall back to the first
-// opening tag and the last closing one.
+// cursorSplitPrompt finds Cursor's <user_query> wrapper: the first opening tag
+// and the last closing one, so a tag quoted inside the typed text stays in it.
 func cursorSplitPrompt(text string) (before, typed, after string, ok bool) {
-	opensAt, closesAt := -1, -1
-	depth, start := 0, 0
-	for i := 0; i < len(text); {
-		next := strings.IndexByte(text[i:], '<')
-		if next < 0 {
-			break
-		}
-		i += next
-		switch {
-		case strings.HasPrefix(text[i:], cursorPromptOpen):
-			if depth == 0 {
-				start = i
-			}
-			depth++
-			i += len(cursorPromptOpen)
-		case strings.HasPrefix(text[i:], cursorPromptClose):
-			if depth > 0 {
-				depth--
-				if depth == 0 {
-					opensAt, closesAt = start, i
-				}
-			}
-			i += len(cursorPromptClose)
-		default:
-			i++
-		}
-	}
-	if opensAt < 0 {
-		opensAt = strings.Index(text, cursorPromptOpen)
-		closesAt = strings.LastIndex(text, cursorPromptClose)
-		if opensAt < 0 || closesAt < opensAt {
-			return "", "", "", false
-		}
+	opensAt := strings.Index(text, cursorPromptOpen)
+	closesAt := strings.LastIndex(text, cursorPromptClose)
+	if opensAt < 0 || closesAt < opensAt {
+		return "", "", "", false
 	}
 	return text[:opensAt], text[opensAt+len(cursorPromptOpen) : closesAt], text[closesAt+len(cursorPromptClose):], true
 }
@@ -636,7 +602,7 @@ func cursorSplitPrompt(text string) (before, typed, after string, ok bool) {
 // one session carried as many titles as turns, and a store that keeps the
 // latest title named the conversation after its last question.
 func (c *cursorImporter) storeTitle(ctx context.Context, store *chatstore.Store, ids []string) string {
-	r := &cursorReplay{importer: c, probe: true}
+	r := &cursorReplay{importer: c, probe: true, yield: discardTurn}
 	for msg, err := range store.Messages(ctx, ids) {
 		if err != nil {
 			return ""
@@ -648,6 +614,11 @@ func (c *cursorImporter) storeTitle(ctx context.Context, store *chatstore.Store,
 	}
 	return ""
 }
+
+// discardTurn is the yield of a title probe. The probe returns before a turn
+// is mapped, so nothing reaches it; it is there so a probe never calls a nil
+// yield.
+func discardTurn(HistoricalGeneration, error) bool { return true }
 
 // open starts a turn. Its times are set when it closes, because they come from
 // the provider IDs its messages carry and none of them has been read yet.

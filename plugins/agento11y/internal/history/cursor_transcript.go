@@ -439,7 +439,7 @@ func readCursorTranscript(ctx context.Context, path string, observe func(cursorT
 // chooses it for a store: the typed prompt of the first turn the model
 // answered. It reads the transcript only up to that turn's first output.
 func (c *cursorImporter) transcriptTitle(ctx context.Context, path string) string {
-	r := &cursorTranscriptReplay{importer: c, probe: true}
+	r := &cursorTranscriptReplay{importer: c, probe: true, yield: discardTurn}
 	var title string
 	var unreadable int
 	_, _ = readCursorTranscript(ctx, path, func(line cursorTranscriptLine) bool {

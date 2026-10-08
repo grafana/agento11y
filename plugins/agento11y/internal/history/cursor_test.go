@@ -1044,20 +1044,11 @@ func TestCursorTypedPrompt(t *testing.T) {
 			want: "run the tests",
 		},
 		{
-			name: "attached source code that quotes the tags",
-			in:   "<attached_files>\ncursor.go: open = \"<user_query>\"\ncursor.go: close = \"</user_query>\"\n</attached_files>\n<user_query>\nfix the title\n</user_query>",
-			want: "fix the title",
-		},
-		{
-			name: "an attached file that quotes the wrapper at the start of a line",
-			in:   "<attached_files>\n```\n<user_query>\nquoted\n</user_query>\n```\n</attached_files>\n<user_query>\nreal\n</user_query>",
-			want: "real",
-		},
-		{
-			// Cursor nests a message it injects inside another wrapper.
-			name: "a wrapper nested inside another",
-			in:   "<user_query>\n<timestamp>Monday</timestamp>\n\n<user_query>injected note</user_query>\n</user_query>",
-			want: "<timestamp>Monday</timestamp>\n\n<user_query>injected note</user_query>",
+			// The first opening tag and the last closing one, as the prompt is
+			// unwrapped: a closing tag typed in the prompt stays in it.
+			name: "a closing tag typed in the prompt",
+			in:   "<user_query>why does </user_query> break the parser?</user_query>",
+			want: "why does </user_query> break the parser?",
 		},
 	}
 	for _, tt := range tests {
