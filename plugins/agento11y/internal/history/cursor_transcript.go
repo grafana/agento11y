@@ -369,47 +369,25 @@ func (c *cursorImporter) turnsTranscript(ctx context.Context, sess SessionPrevie
 			yield(HistoricalGeneration{}, err)
 			return
 		}
-		f, err := os.Open(sess.SourcePath)
-		if err != nil {
-			yield(HistoricalGeneration{}, err)
-			return
-		}
-		defer func() { _ = f.Close() }()
-
 		sessionID := firstNonEmptyString(sess.SessionID, cursorSessionIDFromPath(sess.SourcePath))
 		r := &cursorTranscriptReplay{
 			importer:  c,
 			sess:      sess,
 			sessionID: sessionID,
 			workspace: sess.Workspace,
+			title:     c.transcriptTitle(ctx, sess.SourcePath),
+			untitled:  sessionID,
 			window:    cursorTurnWindows(sess.StartedAt, sess.LastActivityAt, sess.TurnCount),
 			yield:     yield,
 		}
 		r.previousEnd = r.window.start
 
-		sc := bufio.NewScanner(f)
-		// Agent transcripts can hold large tool inputs on one line.
-		sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
-		for sc.Scan() {
-			if err := ctx.Err(); err != nil {
-				yield(HistoricalGeneration{}, err)
-				return
-			}
-			raw := bytes.TrimSpace(sc.Bytes())
-			if len(raw) == 0 {
-				continue
-			}
-			var line cursorTranscriptLine
-			if err := json.Unmarshal(raw, &line); err != nil {
-				r.unreadable++
-				continue
-			}
-			if r.observe(line) {
-				return
-			}
+		stopped, err := readCursorTranscript(ctx, sess.SourcePath, r.observe, &r.unreadable)
+		if stopped {
+			return
 		}
-		if err := sc.Err(); err != nil && !errors.Is(err, io.EOF) {
-			yield(HistoricalGeneration{}, fmt.Errorf("read cursor transcript %s: %w", sess.SourcePath, err))
+		if err != nil {
+			yield(HistoricalGeneration{}, err)
 			return
 		}
 		if r.emit() {
@@ -421,6 +399,60 @@ func (c *cursorImporter) turnsTranscript(ctx context.Context, sess SessionPrevie
 	}
 }
 
+// readCursorTranscript feeds the transcript's lines to observe until it stops
+// the walk by returning true, and reports whether it did. A line that is not
+// JSON is counted in unreadable.
+func readCursorTranscript(ctx context.Context, path string, observe func(cursorTranscriptLine) bool, unreadable *int) (stopped bool, err error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = f.Close() }()
+
+	sc := bufio.NewScanner(f)
+	// Agent transcripts can hold large tool inputs on one line.
+	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	for sc.Scan() {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		raw := bytes.TrimSpace(sc.Bytes())
+		if len(raw) == 0 {
+			continue
+		}
+		var line cursorTranscriptLine
+		if err := json.Unmarshal(raw, &line); err != nil {
+			*unreadable++
+			continue
+		}
+		if observe(line) {
+			return true, nil
+		}
+	}
+	if err := sc.Err(); err != nil && !errors.Is(err, io.EOF) {
+		return false, fmt.Errorf("read cursor transcript %s: %w", path, err)
+	}
+	return false, nil
+}
+
+// transcriptTitle is the session's title, chosen and resolved as storeTitle
+// chooses it for a store: the typed prompt of the first turn the model
+// answered. It reads the transcript only up to that turn's first output.
+func (c *cursorImporter) transcriptTitle(ctx context.Context, path string) string {
+	r := &cursorTranscriptReplay{importer: c, probe: true, yield: discardTurn}
+	var title string
+	var unreadable int
+	_, _ = readCursorTranscript(ctx, path, func(line cursorTranscriptLine) bool {
+		r.observe(line)
+		if turn := r.current; turn != nil && turn.typed != "" && turn.answered() {
+			title = fragment.SessionTitle(turn.typed)
+			return true
+		}
+		return false
+	}, &unreadable)
+	return title
+}
+
 // cursorTranscriptReplay walks a JSONL transcript and holds the open turn only.
 type cursorTranscriptReplay struct {
 	importer  *cursorImporter
@@ -429,6 +461,13 @@ type cursorTranscriptReplay struct {
 	workspace string
 	window    cursorWindows
 	yield     func(HistoricalGeneration, error) bool
+	// title names every turn of the session; see transcriptTitle. untitled
+	// names the turns while no answered turn has typed anything.
+	title    string
+	untitled string
+	// probe replays the lines without mapping or yielding a turn, for
+	// transcriptTitle.
+	probe bool
 
 	previousEnd time.Time
 	current     *cursorTranscriptTurn
@@ -437,12 +476,20 @@ type cursorTranscriptReplay struct {
 }
 
 type cursorTranscriptTurn struct {
-	frag      *fragment.Fragment
+	frag *fragment.Fragment
+	// typed is the text the user typed in the turn's prompt; see transcriptTitle.
+	typed     string
 	assistant string
 	stop      *mapper.StopInput
 	notes     []string
 	// dated is set when the user prompt carried a parseable <timestamp>.
 	dated time.Time
+}
+
+// answered reports whether the model produced output for the turn. A turn
+// without any is not exported.
+func (t *cursorTranscriptTurn) answered() bool {
+	return t.assistant != "" || len(t.frag.Tools) > 0
 }
 
 func (t *cursorTranscriptTurn) note(n string) {
@@ -484,13 +531,14 @@ func (r *cursorTranscriptReplay) open(line cursorTranscriptLine) {
 	dated := parseCursorTranscriptTimestamp(text)
 	// The timestamp wrapper is Cursor metadata, not what the user typed. Live
 	// capture reads the beforeSubmitPrompt payload, which has neither tag.
-	prompt := cursorUnwrapPrompt(cursorStripTranscriptTimestamp(text))
+	prompt, typed := cursorPromptParts(cursorStripTranscriptTimestamp(text))
 	r.current = &cursorTranscriptTurn{
 		frag: &fragment.Fragment{
 			ConversationID: r.sessionID,
 			GenerationID:   fallbackTurnID(r.emitted),
 			UserPrompt:     prompt,
 		},
+		typed: typed,
 		dated: dated,
 	}
 }
@@ -546,8 +594,13 @@ func (r *cursorTranscriptReplay) emit() bool {
 	if turn.assistant != "" {
 		turn.frag.Assistant = []fragment.AssistantSegment{{Text: turn.assistant}}
 	}
-	if len(turn.frag.Assistant) == 0 && len(turn.frag.Tools) == 0 {
+	if !turn.answered() || r.probe {
 		return false
+	}
+	// A probe that a read error stopped leaves the title to the first
+	// answered turn that typed something.
+	if r.title == "" && turn.typed != "" {
+		r.title = fragment.SessionTitle(turn.typed)
 	}
 	start, end := r.times(turn)
 	turn.frag.StartedAt = start.Format(time.RFC3339Nano)
@@ -576,9 +629,10 @@ func (r *cursorTranscriptReplay) emit() bool {
 	mapped := mapper.MapFragment(mapper.Inputs{
 		Fragment: turn.frag,
 		Session: &fragment.Session{
-			ConversationID: r.sessionID,
-			WorkspaceRoots: cursorWorkspaceRoots(r.workspace),
-			StartedAt:      turn.frag.StartedAt,
+			ConversationID:    r.sessionID,
+			ConversationTitle: firstNonEmptyString(r.title, r.untitled),
+			WorkspaceRoots:    cursorWorkspaceRoots(r.workspace),
+			StartedAt:         turn.frag.StartedAt,
 		},
 		Stop:           stop,
 		ContentCapture: agento11y.ContentCaptureModeFull,

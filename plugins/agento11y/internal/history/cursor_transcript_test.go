@@ -140,6 +140,82 @@ func TestCursorTranscriptTurns(t *testing.T) {
 	}
 }
 
+// Regression: a transcript turn was titled with its own prompt, context blocks
+// and all, so one session carried as many titles as turns, and a store that
+// keeps the latest title named the conversation after its last question.
+func TestCursorTranscriptTurnsShareTheSessionTitle(t *testing.T) {
+	imp := &cursorImporter{}
+	path := writeCursorTranscript(t, t.TempDir(), "proj", "dddddddd-bbbb-cccc-dddd-eeeeeeeeeeee", "context-blocks.jsonl")
+	turns, problems := cursorWalk(t, imp, cursorPreview(t, imp, path))
+	if len(problems) != 0 || len(turns) != 3 {
+		t.Fatalf("got %d turns and problems %v, want 3 turns", len(turns), problems)
+	}
+	// The first turn typed nothing beside its image, so the session is named
+	// after the first prompt that was typed, without the context Cursor added.
+	for i, turn := range turns {
+		if turn.Gen.ConversationTitle != "why is the panel empty?" {
+			t.Errorf("turn %d title = %q, want the first typed prompt", i, turn.Gen.ConversationTitle)
+		}
+	}
+}
+
+// writeCursorTranscriptLines writes lines as the transcript of session sid.
+func writeCursorTranscriptLines(t *testing.T, sid string, lines ...string) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "proj", "agent-transcripts", sid)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, sid+".jsonl")
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+const (
+	cursorImageOnlyPromptJSONL = `{"role":"user","message":{"content":[{"type":"text","text":"[Image]\n<image_files>\n1. /work/repo/assets/panel.png\n</image_files>\n<user_query>\n</user_query>"}]}}`
+	cursorAnswerJSONL          = `{"role":"assistant","message":{"content":[{"type":"text","text":"An empty panel."}]}}`
+)
+
+// A session that only ever sent an image has no typed prompt to be named
+// after; it is titled with its ID rather than with Cursor's context blocks.
+func TestCursorTranscriptNeverTypedIsTitledWithItsID(t *testing.T) {
+	sid := "eeeeeeee-bbbb-cccc-dddd-eeeeeeeeeeee"
+	imp := &cursorImporter{}
+	path := writeCursorTranscriptLines(t, sid, cursorImageOnlyPromptJSONL, cursorAnswerJSONL)
+	turns, _ := cursorWalk(t, imp, cursorPreview(t, imp, path))
+	if len(turns) != 1 {
+		t.Fatalf("got %d turns, want 1", len(turns))
+	}
+	if turns[0].Gen.ConversationTitle != sid {
+		t.Errorf("title = %q, want the session ID", turns[0].Gen.ConversationTitle)
+	}
+}
+
+// A read error ends the walk where it happens: the turns before it are still
+// imported, including one that typed nothing and so has no title of its own.
+func TestCursorTranscriptReadErrorKeepsTheTurnsBeforeIt(t *testing.T) {
+	sid := "ffffffff-bbbb-cccc-dddd-eeeeeeeeeeee"
+	tooLong := `{"role":"assistant","message":{"content":[{"type":"text","text":"` + strings.Repeat("x", 17<<20) + `"}]}}`
+	imp := &cursorImporter{}
+	path := writeCursorTranscriptLines(t, sid,
+		cursorImageOnlyPromptJSONL, cursorAnswerJSONL,
+		`{"role":"user","message":{"content":[{"type":"text","text":"<user_query>\nwhy?\n</user_query>"}]}}`,
+		tooLong,
+	)
+	turns, problems := cursorWalk(t, imp, cursorPreview(t, imp, path))
+	if len(problems) == 0 {
+		t.Fatal("expected the oversized line to be reported")
+	}
+	if len(turns) != 1 {
+		t.Fatalf("got %d turns, want the 1 before the error", len(turns))
+	}
+	if turns[0].Gen.ConversationTitle != sid {
+		t.Errorf("title = %q, want the session ID: no answered turn typed anything", turns[0].Gen.ConversationTitle)
+	}
+}
+
 func TestCursorTranscriptToolUse(t *testing.T) {
 	root := t.TempDir()
 	sid := "cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee"

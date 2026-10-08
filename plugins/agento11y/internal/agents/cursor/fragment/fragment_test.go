@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -321,5 +322,51 @@ func TestDelete_Idempotent(t *testing.T) {
 	// stop/sessionEnd retries don't error on each other.
 	if err := Delete("conv", "gen1"); err != nil {
 		t.Errorf("second delete should be idempotent; got %v", err)
+	}
+}
+
+func TestSessionTitle(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "trims", in: "  fix the bug \n", want: "fix the bug"},
+		{
+			name: "cuts at 100 bytes and trims what the cut leaves",
+			in:   strings.Repeat("a", 99) + " and then some",
+			want: strings.Repeat("a", 99),
+		},
+		{name: "keeps a rune whole", in: strings.Repeat("a", 99) + "é", want: strings.Repeat("a", 99)},
+		{
+			// Regression: the cut ran before redaction, so a secret it split
+			// no longer matched its pattern and its first part was kept.
+			name: "redacts a secret before the cut splits it",
+			in:   strings.Repeat("x", 70) + " ghp_" + strings.Repeat("A", 36) + " please",
+			want: strings.Repeat("x", 70) + " [REDACTED:github-pat] please",
+		},
+		{
+			name: "does not cut a redaction marker in half",
+			in:   strings.Repeat("x", 85) + " ghp_" + strings.Repeat("A", 36) + " please",
+			want: strings.Repeat("x", 85),
+		},
+		{
+			name: "does not leave the start of a redaction marker",
+			in:   strings.Repeat("x", 92) + " ghp_" + strings.Repeat("A", 36) + " please",
+			want: strings.Repeat("x", 92),
+		},
+		{
+			// Only the head is redacted; a secret near the start still is.
+			name: "redacts the head of a large paste",
+			in:   "token ghp_" + strings.Repeat("A", 36) + " " + strings.Repeat("y", 100<<10),
+			want: "token [REDACTED:github-pat] " + strings.Repeat("y", 100-len("token [REDACTED:github-pat] ")),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := SessionTitle(tt.in); got != tt.want {
+				t.Errorf("SessionTitle() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

@@ -790,8 +790,10 @@ func TestCursorTurnMatchesTheLiveMapper(t *testing.T) {
 			want := mapper.MapFragment(mapper.Inputs{
 				Fragment: frag,
 				Session: &fragment.Session{
-					ConversationID:    fx.SessionID,
-					ConversationTitle: fx.Name,
+					ConversationID: fx.SessionID,
+					// Live capture titles a session with its first typed prompt;
+					// the store's chat name is not something it can see.
+					ConversationTitle: fragment.SessionTitle(fx.nth(t, "prompt", 0).Text),
 					WorkspaceRoots:    []string{"/work/repo"},
 					StartedAt:         start.Format(time.RFC3339Nano),
 				},
@@ -1009,6 +1011,181 @@ func TestCursorUnwrapsThePrompt(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := cursorUnwrapPrompt(tt.in); got != tt.want {
 				t.Errorf("cursorUnwrapPrompt() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCursorTypedPrompt(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "the wrapper alone",
+			in:   "<user_query>\nrun the tests\n</user_query>",
+			want: "run the tests",
+		},
+		{
+			// Unlike the prompt, the title drops the context Cursor added.
+			name: "context before the wrapper",
+			in:   "<attached_files>\nplan.md\n</attached_files>\n<user_query>execute the plan</user_query>",
+			want: "execute the plan",
+		},
+		{
+			name: "an image with nothing typed",
+			in:   "[Image]\n<image_files>\n1. /work/repo/a.png\n</image_files>\n<user_query>\n</user_query>",
+			want: "",
+		},
+		{
+			name: "a prompt with no wrapper",
+			in:   " run the tests ",
+			want: "run the tests",
+		},
+		{
+			// The first opening tag and the last closing one, as the prompt is
+			// unwrapped: a closing tag typed in the prompt stays in it.
+			name: "a closing tag typed in the prompt",
+			in:   "<user_query>why does </user_query> break the parser?</user_query>",
+			want: "why does </user_query> break the parser?",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := cursorTypedPrompt(tt.in); got != tt.want {
+				t.Errorf("cursorTypedPrompt() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// Regression: each turn was titled with its own prompt, Cursor's context
+// blocks included, so one session carried as many titles as turns.
+func TestCursorTurnsShareTheSessionTitle(t *testing.T) {
+	const sessionID = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+	const imageOnly = "<image_files>\n1. /work/repo/a.png\n</image_files>\n<user_query>\n</user_query>"
+	tests := []struct {
+		name      string
+		setup     func(b *chatstoretest.Builder)
+		wantTurns int
+		want      string
+	}{
+		{
+			name: "the first typed prompt, without the context around it",
+			setup: func(b *chatstoretest.Builder) {
+				b.AddPrompt("<attached_files>\nplan.md\n</attached_files>\n<user_query>execute the plan</user_query>")
+				b.AddAssistantText("ok")
+				b.AddPrompt("<user_query>and the docs?</user_query>")
+				b.AddAssistantText("ok")
+			},
+			wantTurns: 2,
+			want:      "execute the plan",
+		},
+		{
+			// Live capture and import both title with fragment.SessionTitle, so
+			// a long prompt lands on the same 100-byte title.
+			name: "a long prompt is cut as live capture cuts it",
+			setup: func(b *chatstoretest.Builder) {
+				b.AddPrompt("<user_query>" + strings.Repeat("a", 99) + " and then some</user_query>")
+				b.AddAssistantText("ok")
+			},
+			wantTurns: 1,
+			want:      strings.Repeat("a", 99),
+		},
+		{
+			// Live capture cannot see the store's chat name, so a session
+			// both captured and imported would flip between two titles.
+			name: "the store's chat name is not used",
+			setup: func(b *chatstoretest.Builder) {
+				b.Meta.Name = "Rename the flag"
+				b.AddPrompt("<user_query>rename the retry flag</user_query>")
+				b.AddAssistantText("ok")
+			},
+			wantTurns: 1,
+			want:      "rename the retry flag",
+		},
+		{
+			name: "turns that typed nothing beside an image wait for a typed prompt",
+			setup: func(b *chatstoretest.Builder) {
+				for range 2 {
+					b.AddPrompt(imageOnly)
+					b.AddAssistantText("ok")
+				}
+				b.AddPrompt("<user_query>what do they show?</user_query>")
+				b.AddAssistantText("ok")
+			},
+			wantTurns: 3,
+			want:      "what do they show?",
+		},
+		{
+			name: "a session that never typed anything takes the store's chat name",
+			setup: func(b *chatstoretest.Builder) {
+				b.Meta.Name = "Debug the empty panel"
+				b.AddPreamble("<user_info>OS: darwin</user_info>")
+				b.AddPrompt(imageOnly)
+				b.AddAssistantText("ok")
+			},
+			wantTurns: 1,
+			want:      "Debug the empty panel",
+		},
+		{
+			name: "a session that never typed anything and has no chat name is titled with its ID",
+			setup: func(b *chatstoretest.Builder) {
+				b.Meta.Name = ""
+				b.AddPrompt(imageOnly)
+				b.AddAssistantText("ok")
+			},
+			wantTurns: 1,
+			want:      sessionID,
+		},
+		{
+			// Regression: the title was cut before redaction, so a secret the
+			// cut split kept its first part.
+			name: "a secret the cut would split is redacted",
+			setup: func(b *chatstoretest.Builder) {
+				b.AddPrompt("<user_query>" + strings.Repeat("x", 70) + " ghp_" + strings.Repeat("A", 36) + " please</user_query>")
+				b.AddAssistantText("ok")
+			},
+			wantTurns: 1,
+			want:      strings.Repeat("x", 70) + " [REDACTED:github-pat] please",
+		},
+		{
+			// A prompt with no answer is dropped, and must not name the turns
+			// that are exported; a guard may have blocked it.
+			name: "a prompt the model never answered",
+			setup: func(b *chatstoretest.Builder) {
+				b.AddPrompt("<user_query>blocked prompt</user_query>")
+				b.AddPrompt("<user_query>second</user_query>")
+				b.AddAssistantText("ok")
+			},
+			wantTurns: 1,
+			want:      "second",
+		},
+		{
+			name: "an unreadable message after a turn that typed nothing",
+			setup: func(b *chatstoretest.Builder) {
+				b.AddPrompt(imageOnly)
+				b.AddAssistantText("ok")
+				b.ReferenceMissingBlob()
+				b.AddPrompt("<user_query>what now?</user_query>")
+				b.AddAssistantText("ok")
+			},
+			wantTurns: 2,
+			want:      "what now?",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			imp, path := cursorBuild(t, sessionID, tt.setup)
+			turns, _ := cursorWalk(t, imp, cursorPreview(t, imp, path))
+			if len(turns) != tt.wantTurns {
+				t.Fatalf("got %d turns, want %d", len(turns), tt.wantTurns)
+			}
+			for i, turn := range turns {
+				if turn.Gen.ConversationTitle != tt.want {
+					t.Errorf("turn %d title = %q, want %q", i, turn.Gen.ConversationTitle, tt.want)
+				}
 			}
 		})
 	}
