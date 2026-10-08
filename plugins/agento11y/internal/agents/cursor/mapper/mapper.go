@@ -12,7 +12,6 @@ import (
 	"errors"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/grafana/agento11y/go/agento11y"
 
@@ -25,11 +24,6 @@ import (
 )
 
 var errCursorStop = errors.New("cursor_stop_error")
-
-// maxTitleLen caps the conversation title, matching claude-code so a long
-// first message does not become the list label. It is the cap live capture
-// and the history importer apply when they title a session.
-const maxTitleLen = fragment.MaxSessionTitleLen
 
 // AgentName is the default value reported as `agent_name` on every emitted
 // generation. AGENTO11Y_AGENT_NAME overrides it per run through
@@ -125,7 +119,7 @@ func MapFragment(in Inputs) Mapped {
 		userEmail = in.Session.UserEmail
 		isBackgroundAgent = in.Session.IsBackgroundAgent
 	}
-	title := conversationTitle(in.Session, frag, red)
+	title := conversationTitle(in.Session, frag)
 
 	if in.AgentVersion != "" {
 		cursorVersion = in.AgentVersion
@@ -287,7 +281,7 @@ func canonicalizeCursorModel(name string) string {
 // because Cursor had no generation_id yet), the fragment's user prompt is
 // the same string. With neither, the conversation id is still a stable
 // label instead of an empty title the local viewer replaces with a UUID.
-func conversationTitle(session *fragment.Session, frag *fragment.Fragment, red *redact.Redactor) string {
+func conversationTitle(session *fragment.Session, frag *fragment.Fragment) string {
 	raw := ""
 	if session != nil {
 		raw = session.ConversationTitle
@@ -295,27 +289,13 @@ func conversationTitle(session *fragment.Session, frag *fragment.Fragment, red *
 	if strings.TrimSpace(raw) == "" && frag != nil {
 		raw = frag.UserPrompt
 	}
-	fallback := ""
+	if t := fragment.SessionTitle(raw); t != "" {
+		return t
+	}
 	if frag != nil {
-		fallback = frag.ConversationID
+		return frag.ConversationID
 	}
-	t := strings.TrimSpace(raw)
-	if t == "" {
-		return fallback
-	}
-	if red != nil {
-		t = red.Title(t)
-	}
-	if t == "" {
-		return fallback
-	}
-	if len(t) > maxTitleLen {
-		t = t[:maxTitleLen]
-		for !utf8.ValidString(t) {
-			t = t[:len(t)-1]
-		}
-	}
-	return t
+	return ""
 }
 
 // resolveStopStatus normalizes Cursor's stop.status to the subset agento11y uses.

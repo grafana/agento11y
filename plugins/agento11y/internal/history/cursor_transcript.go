@@ -375,7 +375,8 @@ func (c *cursorImporter) turnsTranscript(ctx context.Context, sess SessionPrevie
 			sess:      sess,
 			sessionID: sessionID,
 			workspace: sess.Workspace,
-			title:     firstNonEmptyString(c.transcriptTitle(ctx, sess.SourcePath), sessionID),
+			title:     c.transcriptTitle(ctx, sess.SourcePath),
+			untitled:  sessionID,
 			window:    cursorTurnWindows(sess.StartedAt, sess.LastActivityAt, sess.TurnCount),
 			yield:     yield,
 		}
@@ -460,8 +461,10 @@ type cursorTranscriptReplay struct {
 	workspace string
 	window    cursorWindows
 	yield     func(HistoricalGeneration, error) bool
-	// title names every turn of the session; see transcriptTitle.
-	title string
+	// title names every turn of the session; see transcriptTitle. untitled
+	// names the turns while no answered turn has typed anything.
+	title    string
+	untitled string
 	// probe replays the lines without mapping or yielding a turn, for
 	// transcriptTitle.
 	probe bool
@@ -486,7 +489,7 @@ type cursorTranscriptTurn struct {
 // answered reports whether the model produced output for the turn. A turn
 // without any is not exported.
 func (t *cursorTranscriptTurn) answered() bool {
-	return t.assistant != "" || len(t.frag.Assistant) > 0 || len(t.frag.Tools) > 0
+	return t.assistant != "" || len(t.frag.Tools) > 0
 }
 
 func (t *cursorTranscriptTurn) note(n string) {
@@ -594,6 +597,11 @@ func (r *cursorTranscriptReplay) emit() bool {
 	if !turn.answered() || r.probe {
 		return false
 	}
+	// A probe that a read error stopped leaves the title to the first
+	// answered turn that typed something.
+	if r.title == "" && turn.typed != "" {
+		r.title = fragment.SessionTitle(turn.typed)
+	}
 	start, end := r.times(turn)
 	turn.frag.StartedAt = start.Format(time.RFC3339Nano)
 	turn.frag.LastEventAt = end.Format(time.RFC3339Nano)
@@ -622,7 +630,7 @@ func (r *cursorTranscriptReplay) emit() bool {
 		Fragment: turn.frag,
 		Session: &fragment.Session{
 			ConversationID:    r.sessionID,
-			ConversationTitle: r.title,
+			ConversationTitle: firstNonEmptyString(r.title, r.untitled),
 			WorkspaceRoots:    cursorWorkspaceRoots(r.workspace),
 			StartedAt:         turn.frag.StartedAt,
 		},

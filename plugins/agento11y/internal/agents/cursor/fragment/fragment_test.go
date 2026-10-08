@@ -345,6 +345,11 @@ func TestSessionTitle(t *testing.T) {
 			in:   strings.Repeat("x", 70) + " ghp_" + strings.Repeat("A", 36) + " please",
 			want: strings.Repeat("x", 70) + " [REDACTED:github-pat] please",
 		},
+		{
+			name: "does not cut a redaction marker in half",
+			in:   strings.Repeat("x", 85) + " ghp_" + strings.Repeat("A", 36) + " please",
+			want: strings.Repeat("x", 85),
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -354,13 +354,15 @@ func (c *cursorImporter) Turns(ctx context.Context, sess SessionPreview) iter.Se
 			sessionID: sessionID,
 			model:     strings.TrimSpace(meta.LastUsedModel),
 			workspace: firstNonEmptyString(root.Workspace(), sess.Workspace),
-			// Not the store's chat name: live capture cannot see it, so using
-			// it would give a session both captured and imported two titles.
-			// A session that never typed anything is titled with its ID, as
-			// live capture titles it.
-			title: firstNonEmptyString(c.storeTitle(ctx, store, root.MessageIDs), sessionID),
-			clock: newCursorClock(meta.Created(), ids),
-			yield: yield,
+			title:     c.storeTitle(ctx, store, root.MessageIDs),
+			// The store's chat name only names a session that never typed
+			// anything: live capture cannot see it, so preferring it would
+			// give a session both captured and imported two titles. History
+			// import mostly reads sessions from before agento11y was
+			// installed, so a readable name beats the ID there.
+			untitled: firstNonEmptyString(meta.Name, sessionID),
+			clock:    newCursorClock(meta.Created(), ids),
+			yield:    yield,
 		}
 		r.window = cursorTurnWindows(meta.Created(), sess.LastActivityAt, sess.TurnCount)
 		r.previousEnd = r.window.start
@@ -412,8 +414,10 @@ type cursorReplay struct {
 	sessionID string
 	model     string
 	workspace string
-	// title names every turn of the session; see storeTitle.
-	title string
+	// title names every turn of the session; see storeTitle. untitled names
+	// the turns while no answered turn has typed anything.
+	title    string
+	untitled string
 	// probe replays the messages without mapping or yielding a turn, for
 	// storeTitle.
 	probe  bool
@@ -572,35 +576,47 @@ func cursorPromptParts(text string) (unwrapped, typed string) {
 	return appendText(appendText(before, inner), after), strings.TrimSpace(inner)
 }
 
-// cursorSplitPrompt finds Cursor's <user_query> wrapper. Cursor writes the
-// opening tag at the start of a line, after any context it attached, so the
-// first opening tag at a line start is the one: a tag quoted inside attached
-// context, such as a source file, sits mid-line. A wrapper that does not start
-// a line falls back to the first opening tag. The closing tag is the last one,
-// so a tag quoted inside the typed text stays in it.
+// cursorSplitPrompt finds Cursor's <user_query> wrapper: the last top-level
+// pair of tags, with tags paired by nesting depth. Cursor writes the context
+// it attached before the wrapper, so a pair quoted inside that context, such
+// as one in an attached source file, closes before the wrapper opens. A tag
+// quoted inside the typed text, and a message Cursor nests inside another,
+// sit inside the wrapper. Tags that never pair up fall back to the first
+// opening tag and the last closing one.
 func cursorSplitPrompt(text string) (before, typed, after string, ok bool) {
-	closesAt := strings.LastIndex(text, cursorPromptClose)
-	if closesAt < 0 {
-		return "", "", "", false
-	}
-	opensAt := -1
-	for from := 0; from < closesAt; {
-		at := strings.Index(text[from:closesAt], cursorPromptOpen)
-		if at < 0 {
+	opensAt, closesAt := -1, -1
+	depth, start := 0, 0
+	for i := 0; i < len(text); {
+		next := strings.IndexByte(text[i:], '<')
+		if next < 0 {
 			break
 		}
-		at += from
-		if at == 0 || text[at-1] == '\n' {
-			opensAt = at
-			break
+		i += next
+		switch {
+		case strings.HasPrefix(text[i:], cursorPromptOpen):
+			if depth == 0 {
+				start = i
+			}
+			depth++
+			i += len(cursorPromptOpen)
+		case strings.HasPrefix(text[i:], cursorPromptClose):
+			if depth > 0 {
+				depth--
+				if depth == 0 {
+					opensAt, closesAt = start, i
+				}
+			}
+			i += len(cursorPromptClose)
+		default:
+			i++
 		}
-		from = at + 1
 	}
 	if opensAt < 0 {
 		opensAt = strings.Index(text, cursorPromptOpen)
-	}
-	if opensAt < 0 || closesAt < opensAt {
-		return "", "", "", false
+		closesAt = strings.LastIndex(text, cursorPromptClose)
+		if opensAt < 0 || closesAt < opensAt {
+			return "", "", "", false
+		}
 	}
 	return text[:opensAt], text[opensAt+len(cursorPromptOpen) : closesAt], text[closesAt+len(cursorPromptClose):], true
 }
@@ -775,13 +791,13 @@ func (t *cursorTurn) takeCall(callID string) (int, bool) {
 	return idx, true
 }
 
-// note records a local observation about the turn, once.
 // answered reports whether the model produced output for the turn. A turn
 // without any is not exported.
 func (t *cursorTurn) answered() bool {
-	return t.assistant != "" || len(t.frag.Assistant) > 0 || len(t.frag.Tools) > 0
+	return t.assistant != "" || len(t.frag.Tools) > 0
 }
 
+// note records a local observation about the turn, once.
 func (t *cursorTurn) note(note string) {
 	if !slices.Contains(t.notes, note) {
 		t.notes = append(t.notes, note)
@@ -819,6 +835,11 @@ func (r *cursorReplay) emit() bool {
 	if !turn.answered() || r.probe {
 		return false
 	}
+	// A probe that a read error stopped leaves the title to the first
+	// answered turn that typed something.
+	if r.title == "" && turn.typed != "" {
+		r.title = fragment.SessionTitle(turn.typed)
+	}
 	start, end := r.times(turn)
 	turn.frag.StartedAt = start.Format(time.RFC3339Nano)
 	turn.frag.LastEventAt = end.Format(time.RFC3339Nano)
@@ -849,7 +870,7 @@ func (r *cursorReplay) emit() bool {
 		Fragment: turn.frag,
 		Session: &fragment.Session{
 			ConversationID:    r.sessionID,
-			ConversationTitle: r.title,
+			ConversationTitle: firstNonEmptyString(r.title, r.untitled),
 			WorkspaceRoots:    cursorWorkspaceRoots(r.workspace),
 			StartedAt:         turn.frag.StartedAt,
 		},

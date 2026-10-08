@@ -1044,11 +1044,20 @@ func TestCursorTypedPrompt(t *testing.T) {
 			want: "run the tests",
 		},
 		{
-			// The wrapper Cursor writes starts a line; a tag quoted inside an
-			// attached source file does not.
-			name: "attached context that quotes the tag",
-			in:   "<attached_files>\ncursor.go: cursorPromptOpen = \"<user_query>\"\n</attached_files>\n<user_query>\nfix the title\n</user_query>",
+			name: "attached source code that quotes the tags",
+			in:   "<attached_files>\ncursor.go: open = \"<user_query>\"\ncursor.go: close = \"</user_query>\"\n</attached_files>\n<user_query>\nfix the title\n</user_query>",
 			want: "fix the title",
+		},
+		{
+			name: "an attached file that quotes the wrapper at the start of a line",
+			in:   "<attached_files>\n```\n<user_query>\nquoted\n</user_query>\n```\n</attached_files>\n<user_query>\nreal\n</user_query>",
+			want: "real",
+		},
+		{
+			// Cursor nests a message it injects inside another wrapper.
+			name: "a wrapper nested inside another",
+			in:   "<user_query>\n<timestamp>Monday</timestamp>\n\n<user_query>injected note</user_query>\n</user_query>",
+			want: "<timestamp>Monday</timestamp>\n\n<user_query>injected note</user_query>",
 		},
 	}
 	for _, tt := range tests {
@@ -1083,8 +1092,8 @@ func TestCursorTurnsShareTheSessionTitle(t *testing.T) {
 			want:      "execute the plan",
 		},
 		{
-			// Live capture cuts the prompt to 100 bytes before the mapper trims
-			// it; the import must land on the same title.
+			// Live capture and import both title with fragment.SessionTitle, so
+			// a long prompt lands on the same 100-byte title.
 			name: "a long prompt is cut as live capture cuts it",
 			setup: func(b *chatstoretest.Builder) {
 				b.AddPrompt("<user_query>" + strings.Repeat("a", 99) + " and then some</user_query>")
@@ -1119,11 +1128,20 @@ func TestCursorTurnsShareTheSessionTitle(t *testing.T) {
 			want:      "what do they show?",
 		},
 		{
-			// As in live capture, which cannot see the chat name.
-			name: "a session that never typed anything is titled with its ID",
+			name: "a session that never typed anything takes the store's chat name",
 			setup: func(b *chatstoretest.Builder) {
 				b.Meta.Name = "Debug the empty panel"
 				b.AddPreamble("<user_info>OS: darwin</user_info>")
+				b.AddPrompt(imageOnly)
+				b.AddAssistantText("ok")
+			},
+			wantTurns: 1,
+			want:      "Debug the empty panel",
+		},
+		{
+			name: "a session that never typed anything and has no chat name is titled with its ID",
+			setup: func(b *chatstoretest.Builder) {
+				b.Meta.Name = ""
 				b.AddPrompt(imageOnly)
 				b.AddAssistantText("ok")
 			},

@@ -113,9 +113,16 @@ func SessionTitle(prompt string) string {
 		for !utf8.ValidString(title) {
 			title = title[:len(title)-1]
 		}
+		// A cut inside a redaction marker would leave "[REDACTED:gith".
+		if at := strings.LastIndex(title, redactedMarker); at >= 0 && !strings.Contains(title[at:], "]") {
+			title = title[:at]
+		}
 	}
 	return strings.TrimSpace(title)
 }
+
+// redactedMarker starts the text redaction puts in place of a secret.
+const redactedMarker = "[REDACTED"
 
 // Touch keeps the per-hook timestamps in sync. First arrival wins for
 // StartedAt; last arrival wins for LastEventAt.
