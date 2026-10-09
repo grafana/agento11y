@@ -1059,7 +1059,7 @@ func codexTitleFromText(text string) string {
 	// across lines still matches. Then the collapsed text is redacted again,
 	// because it is what the Sanitizer sees: a separator a pattern does not
 	// take as space, such as \v after "Bearer", collapses into one it does.
-	title := strings.Join(strings.Fields(redact.New().Redact(redact.TitleHead(text))), " ")
+	title := strings.Join(strings.Fields(redact.New().Redact(text)), " ")
 	return redact.RedactTitle(title, codexMaxTitleLen)
 }
 

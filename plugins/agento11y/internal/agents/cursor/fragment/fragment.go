@@ -103,9 +103,10 @@ const MaxSessionTitleLen = 100
 // boundary, and trimmed. Redaction runs before the cut, because a secret the
 // cut splits no longer matches its pattern and its first part would be
 // exported. Live capture stamps it at beforeSubmitPrompt. The history importer
-// cuts the same way but redacts tier 2 too, as its Sanitizer does.
+// redacts tier 2 too before the same cut, as its Sanitizer does, so its title
+// comes through here unchanged when the mapper titles each turn.
 func SessionTitle(prompt string) string {
-	title := redact.New().Title(redact.TitleHead(prompt))
+	title := redact.New().Title(strings.TrimSpace(prompt))
 	return strings.TrimSpace(redact.CutTitle(title, MaxSessionTitleLen))
 }
 

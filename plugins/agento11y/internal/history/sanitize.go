@@ -44,8 +44,9 @@ func Truncate(s string, max int) (string, Truncation) {
 //
 // The conversation title is the exception. Importers cut it to a title's
 // length, and a secret the cut splits no longer matches its pattern, so each
-// importer redacts the title as this Sanitizer does before cutting it; the
-// Sanitizer's own pass over the cut title then changes nothing.
+// importer redacts the title as this Sanitizer does before cutting it, with
+// redact.RedactTitle. The Sanitizer's own pass over the cut title then changes
+// nothing.
 //
 // The zero value works: it uses the default cap and the zero-value Redactor.
 type Sanitizer struct {

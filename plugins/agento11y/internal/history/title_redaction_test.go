@@ -40,6 +40,19 @@ func TestImportedTitlesRedactASecretTheCutSplits(t *testing.T) {
 			text: strings.Repeat("x", 80) + ` "api_key": "supersecretvalue123" please`,
 			leak: "superse",
 		},
+		{
+			// The key only matches once the cut gives it a word boundary, so
+			// the Sanitizer's pass over the cut title found it.
+			name: "a key the cut makes match",
+			text: strings.Repeat("x", 79) + " AKIA" + strings.Repeat("B", 16) + "XYZ please",
+			leak: "AKIA",
+		},
+		{
+			// One pass redacts the key and leaves the token after it.
+			name: "a token only a second pass finds",
+			text: strings.Repeat("x", 20) + " SK" + strings.Repeat("0a", 16) + "ghp_" + strings.Repeat("A", 36) + " please",
+			leak: "ghp_",
+		},
 	}
 	importers := []struct {
 		name  string

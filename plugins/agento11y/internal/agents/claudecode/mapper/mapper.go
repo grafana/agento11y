@@ -411,7 +411,7 @@ func conversationTitle(st *state.Session, sessionID string, r *redact.Redactor) 
 	raw := cmp.Or(st.CustomTitle, st.AITitle, st.Title)
 	var t string
 	if r != nil {
-		t = redact.CutTitle(strings.TrimSpace(r.Title(redact.TitleHead(raw))), maxTitleLen)
+		t = redact.CutTitle(strings.TrimSpace(r.Title(strings.TrimSpace(raw))), maxTitleLen)
 	} else {
 		t = redact.RedactTitle(raw, maxTitleLen)
 	}
