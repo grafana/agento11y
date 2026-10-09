@@ -7,7 +7,6 @@ import (
 	"maps"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/grafana/agento11y/go/agento11y"
@@ -400,10 +399,11 @@ func noteTitles(st *state.Session, t transcript.Titles) {
 // transcript with no user lines processed yet).
 //
 // The title is redacted before it is cut, because a secret the cut splits no
-// longer matches its pattern and its first part would be exported. With no
-// redactor, which is how history import calls Process so that its Sanitizer
-// redacts every field once, the title is redacted here the way the Sanitizer
-// would redact it: the Sanitizer only ever sees the title already cut.
+// longer matches its pattern and its first part would be exported. History
+// import passes no redactor, leaving content to its Sanitizer, which only ever
+// sees the title already cut; the title is redacted here as the Sanitizer
+// redacts. Live capture in metadata_only passes none either, and the SDK drops
+// its title.
 func conversationTitle(st *state.Session, sessionID string, r *redact.Redactor) string {
 	if st == nil {
 		return sessionID
@@ -414,17 +414,8 @@ func conversationTitle(st *state.Session, sessionID string, r *redact.Redactor) 
 	} else {
 		t = redact.New().Redact(t)
 	}
-	t = strings.TrimSpace(t)
-	if t == "" {
+	if t = redact.CutTitle(strings.TrimSpace(t), maxTitleLen); t == "" {
 		return sessionID
-	}
-	if len(t) > maxTitleLen {
-		t = t[:maxTitleLen]
-		// Truncate to valid UTF-8 boundary
-		for !utf8.ValidString(t) {
-			t = t[:len(t)-1]
-		}
-		t = redact.TrimPartialMarker(t)
 	}
 	return t
 }

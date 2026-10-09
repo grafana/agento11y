@@ -445,7 +445,7 @@ func (c *cursorImporter) transcriptTitle(ctx context.Context, path string) strin
 	_, _ = readCursorTranscript(ctx, path, func(line cursorTranscriptLine) bool {
 		r.observe(line)
 		if turn := r.current; turn != nil && turn.typed != "" && turn.answered() {
-			title = fragment.SessionTitle(turn.typed)
+			title = cursorImportTitle(turn.typed)
 			return true
 		}
 		return false
@@ -600,7 +600,7 @@ func (r *cursorTranscriptReplay) emit() bool {
 	// A probe that a read error stopped leaves the title to the first
 	// answered turn that typed something.
 	if r.title == "" && turn.typed != "" {
-		r.title = fragment.SessionTitle(turn.typed)
+		r.title = cursorImportTitle(turn.typed)
 	}
 	start, end := r.times(turn)
 	turn.frag.StartedAt = start.Format(time.RFC3339Nano)

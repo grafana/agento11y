@@ -11,7 +11,6 @@ import (
 	"regexp"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/grafana/agento11y/go/agento11y"
 
@@ -894,11 +893,13 @@ func piTitle(log *piSession, conversationID string) string {
 			firstUserText = strings.TrimSpace(msg.Parts[0].Text)
 		}
 	}
-	if name != "" {
-		return piClipTitle(name)
+	// A title can come out empty when the text was only a redaction marker
+	// the cut left partial.
+	if title := piClipTitle(name); title != "" {
+		return title
 	}
-	if firstUserText != "" {
-		return piClipTitle(firstUserText)
+	if title := piClipTitle(firstUserText); title != "" {
+		return title
 	}
 	return conversationID
 }
@@ -907,11 +908,7 @@ func piTitle(log *piSession, conversationID string) string {
 // the Sanitizer redacts: it only ever sees the title already cut, and a secret
 // the cut splits no longer matches its pattern.
 func piClipTitle(text string) string {
-	text = strings.TrimSpace(redact.New().Redact(redact.TitleHead(text)))
-	if utf8.RuneCountInString(text) <= piMaxTitleLen {
-		return text
-	}
-	return redact.TrimPartialMarker(string([]rune(text)[:piMaxTitleLen]))
+	return redact.CutTitleRunes(strings.TrimSpace(redact.New().Redact(redact.TitleHead(text))), piMaxTitleLen)
 }
 
 // Fork metadata keys, matching what the live plugin writes

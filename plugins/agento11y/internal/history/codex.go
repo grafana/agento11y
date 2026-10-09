@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/codexlog"
@@ -1058,17 +1057,7 @@ func codexTitleFromText(text string) string {
 	// the title already cut, and a secret the cut splits no longer matches its
 	// pattern.
 	title := strings.Join(strings.Fields(redact.New().Redact(redact.TitleHead(text))), " ")
-	if title == "" {
-		return ""
-	}
-	if len(title) > codexMaxTitleLen {
-		title = title[:codexMaxTitleLen]
-		for !utf8.ValidString(title) {
-			title = title[:len(title)-1]
-		}
-		title = redact.TrimPartialMarker(title)
-	}
-	return title
+	return redact.CutTitle(title, codexMaxTitleLen)
 }
 
 func firstNonEmptyString(values ...string) string {

@@ -15,6 +15,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/chatstore"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/fragment"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/mapper"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/redact"
 )
 
 func init() {
@@ -609,10 +610,19 @@ func (c *cursorImporter) storeTitle(ctx context.Context, store *chatstore.Store,
 		}
 		r.observe(msg)
 		if turn := r.current; turn != nil && turn.typed != "" && turn.answered() {
-			return fragment.SessionTitle(turn.typed)
+			return cursorImportTitle(turn.typed)
 		}
 	}
 	return ""
+}
+
+// cursorImportTitle is the title an imported Cursor session takes from its
+// first typed prompt: fragment.SessionTitle's cut of the prompt, redacted as
+// the import Sanitizer redacts. The Sanitizer only sees the title the mapper
+// has already cut, so redacting less here would leave the first part of a
+// key-value secret the cut splits.
+func cursorImportTitle(typed string) string {
+	return strings.TrimSpace(redact.CutTitle(redact.New().Redact(redact.TitleHead(typed)), fragment.MaxSessionTitleLen))
 }
 
 // discardTurn is the yield of a title probe. The probe returns before a turn
@@ -809,7 +819,7 @@ func (r *cursorReplay) emit() bool {
 	// A probe that a read error stopped leaves the title to the first
 	// answered turn that typed something.
 	if r.title == "" && turn.typed != "" {
-		r.title = fragment.SessionTitle(turn.typed)
+		r.title = cursorImportTitle(turn.typed)
 	}
 	start, end := r.times(turn)
 	turn.frag.StartedAt = start.Format(time.RFC3339Nano)

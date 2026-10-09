@@ -18,7 +18,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/fragmentstore"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/redact"
@@ -108,14 +107,7 @@ const MaxSessionTitleLen = 100
 // title.
 func SessionTitle(prompt string) string {
 	title := redact.New().Title(redact.TitleHead(prompt))
-	if len(title) > MaxSessionTitleLen {
-		title = title[:MaxSessionTitleLen]
-		for !utf8.ValidString(title) {
-			title = title[:len(title)-1]
-		}
-		title = redact.TrimPartialMarker(title)
-	}
-	return strings.TrimSpace(title)
+	return strings.TrimSpace(redact.CutTitle(title, MaxSessionTitleLen))
 }
 
 // Touch keeps the per-hook timestamps in sync. First arrival wins for
