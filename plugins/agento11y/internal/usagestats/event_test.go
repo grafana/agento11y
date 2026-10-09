@@ -94,7 +94,7 @@ func TestEventHasNoCredentialShapedFields(t *testing.T) {
 	typ := reflect.TypeFor[Event]()
 	for i := range typ.NumField() {
 		field := typ.Field(i)
-		tag := strings.Split(field.Tag.Get("json"), ",")[0]
+		tag, _, _ := strings.Cut(field.Tag.Get("json"), ",")
 		for _, bad := range forbidden {
 			if strings.Contains(strings.ToLower(field.Name), bad) || strings.Contains(strings.ToLower(tag), bad) {
 				t.Errorf("Event.%s (json %q) contains the forbidden substring %q; usage statistics carry no identifiers, locations, or free text", field.Name, tag, bad)
