@@ -200,29 +200,38 @@ func TestInstallIDConcurrentCreationAgreesOnOneID(t *testing.T) {
 	}
 }
 
-// TestInstallIDRepairsACorruptFile: without the repair a damaged file would
-// make every future run report a throwaway id.
-func TestInstallIDRepairsACorruptFile(t *testing.T) {
+// TestInstallIDCorruptFileIsEphemeral: repairing a corrupt file cannot be done
+// safely without cross-process ownership, so concurrent callers would each
+// overwrite it and report their own id as persisted.
+func TestInstallIDCorruptFileIsEphemeral(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "install-id")
 	if err := os.WriteFile(path, []byte("not-a-uuid"), 0o600); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
-	id, persisted := installID(path)
-	if !persisted {
-		t.Error("persisted = false for a corrupt but writable file; it should be repaired")
-	}
+	const callers = 24
+	ids := make([]string, callers)
+	persisted := make([]bool, callers)
 
-	stored, ok := readInstallID(path)
-	if !ok {
-		t.Fatal("file was not repaired")
+	var start, done sync.WaitGroup
+	start.Add(1)
+	for i := range callers {
+		done.Add(1)
+		go func(i int) {
+			defer done.Done()
+			start.Wait()
+			ids[i], persisted[i] = installID(path)
+		}(i)
 	}
-	if stored != id {
-		t.Errorf("stored %q but returned %q", stored, id)
-	}
+	start.Done()
+	done.Wait()
 
-	again, persisted := installID(path)
-	if !persisted || again != id {
-		t.Errorf("installID() = %q, %v on the next run; want %q, true", again, persisted, id)
+	for i, p := range persisted {
+		if p {
+			t.Errorf("caller %d reported id %q as persisted over a corrupt file", i, ids[i])
+		}
+		if _, err := uuid.Parse(ids[i]); err != nil {
+			t.Errorf("caller %d returned %q, which is not a UUID", i, ids[i])
+		}
 	}
 }

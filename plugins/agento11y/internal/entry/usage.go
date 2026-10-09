@@ -30,7 +30,11 @@ import (
 var usageStatsConfigValue = sync.OnceValue(func() string {
 	fileEnv, err := dotenv.ReadDotenv(dotenv.FilePath(), nil)
 	if err != nil {
-		return ""
+		// A file we cannot parse may hold an opt-out, and the default is
+		// enabled, so an empty value here would report against the user's
+		// wishes. A missing file reads as no error, so first runs still default
+		// to enabled.
+		return string(usagestats.ModeDisabled)
 	}
 	value, _, _ := envconfig.LookupMap(fileEnv, usagestats.EnvSuffix)
 	return value

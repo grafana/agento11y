@@ -471,6 +471,32 @@ func TestDoNotTrackIsNotDefeatedByConfigEnv(t *testing.T) {
 	}
 }
 
+// TestUnreadableConfigDoesNotEnableReporting: ReadDotenv returns a partial map
+// plus an error, so discarding the error used to discard a saved opt-out and
+// fall through to the enabled default.
+func TestUnreadableConfigDoesNotEnableReporting(t *testing.T) {
+	// A line past bufio.Scanner's token limit makes the parse fail after the
+	// opt-out has already been read.
+	writeUsageStatsConfig(t, "AGENTO11Y_ANONYMOUS_USAGE_STATS=disabled\n# "+strings.Repeat("x", 70<<10)+"\n")
+
+	if _, err := dotenv.ReadDotenv(dotenv.FilePath(), nil); err == nil {
+		t.Fatal("precondition failed: the config parsed cleanly, so this does not exercise the error path")
+	}
+
+	configValue := func() string {
+		fileEnv, err := dotenv.ReadDotenv(dotenv.FilePath(), nil)
+		if err != nil {
+			return string(usagestats.ModeDisabled)
+		}
+		value, _, _ := envconfig.LookupMap(fileEnv, usagestats.EnvSuffix)
+		return value
+	}
+
+	if got := usagestats.ResolveMode(usagestats.ShellEnv{}, configValue); got != usagestats.ModeDisabled {
+		t.Errorf("mode = %q for an unreadable config, want %q", got, usagestats.ModeDisabled)
+	}
+}
+
 // writeUsageStatsConfig points $HOME at a tempdir and writes config.env.
 func writeUsageStatsConfig(t *testing.T, contents string) {
 	t.Helper()

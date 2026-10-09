@@ -61,12 +61,15 @@ func installID(path string) (string, bool) {
 	}
 
 	// The file exists but never became a valid id, so it is corrupt rather
-	// than contended. Replace it, or a damaged file would make every future
-	// run report a throwaway id.
-	if err := replaceInstallID(path, fresh); err != nil {
-		return fresh, false
-	}
-	return fresh, true
+	// than contended. Report a throwaway id instead of replacing it:
+	// concurrent repairs cannot agree on one id, and each would claim to be a
+	// separate installation.
+	//
+	// shortcut: a corrupt file is never repaired, so that installation reports
+	// throwaway ids until the file is deleted. Revisit if it ever happens to
+	// anyone -- repairing needs cross-process ownership, which this does not
+	// have.
+	return fresh, false
 }
 
 // readInstallID returns a stored id, or ok=false when the file is missing,
@@ -114,30 +117,4 @@ func awaitInstallID(path string) (string, bool) {
 		time.Sleep(2 * time.Millisecond)
 	}
 	return "", false
-}
-
-// replaceInstallID overwrites a corrupt file through a temporary file and a
-// rename, so a reader sees either the old contents or the new ones.
-func replaceInstallID(path, id string) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	temp, err := os.CreateTemp(dir, ".install-id-*")
-	if err != nil {
-		return err
-	}
-	defer func() { _ = os.Remove(temp.Name()) }()
-
-	if _, err := temp.WriteString(id + "\n"); err != nil {
-		_ = temp.Close()
-		return err
-	}
-	if err := temp.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(temp.Name(), 0o600); err != nil {
-		return err
-	}
-	return os.Rename(temp.Name(), path)
 }
