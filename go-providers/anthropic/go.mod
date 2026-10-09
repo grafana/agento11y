@@ -2,7 +2,7 @@ module github.com/grafana/agento11y/go-providers/anthropic
 
 go 1.25.7
 
-toolchain go1.25.14
+toolchain go1.26.9
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.27.1
