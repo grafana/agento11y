@@ -2,7 +2,7 @@ module github.com/grafana/agento11y/examples/getting-started/go
 
 go 1.25.7
 
-toolchain go1.25.14
+toolchain go1.26.9
 
 require (
 	github.com/grafana/agento11y/go v0.2.0
