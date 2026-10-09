@@ -47,8 +47,8 @@ func TestInstallIDFileIsOwnerOnly(t *testing.T) {
 	}
 }
 
-// TestInstallIDRejectsCorruptContent: a truncated file must not become a
-// correlator shared by every install with the same corruption.
+// TestInstallIDRejectsCorruptContent: a truncated file must not be adopted,
+// or every install with the same corruption shares one id.
 func TestInstallIDRejectsCorruptContent(t *testing.T) {
 	for _, content := range []string{"", "   ", "not-a-uuid", "0", "6c1f0b6e-0d2a"} {
 		t.Run("content="+content, func(t *testing.T) {
@@ -80,8 +80,8 @@ func TestInstallIDTrimsStoredWhitespace(t *testing.T) {
 	}
 }
 
-// TestInstallIDUnwritableDirReportsEphemeral: without persisted=false an
-// unwritable state directory counts as a new install on every invocation.
+// TestInstallIDUnwritableDirReportsEphemeral: an unwritable state directory
+// yields a different id every run, so it must not report as persisted.
 func TestInstallIDUnwritableDirReportsEphemeral(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("unix permission bits")

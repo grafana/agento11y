@@ -1,7 +1,6 @@
 package usagestats
 
-// ServiceName identifies this binary in the envelope; the receiver dispatches
-// on it.
+// ServiceName identifies this binary in the event envelope.
 const ServiceName = "agento11y"
 
 // Outcome values for Event.Outcome.
@@ -37,19 +36,10 @@ const CommandUnknown = "unknown"
 // Event is the flat event describing one invocation. The json encoding is
 // exactly what travels on the wire.
 //
-// Privacy invariant:
-//
-//   - Command, Surface, Agent, Skill, Outcome, ErrorKind and CIProvider come
-//     from vocabularies compiled into this binary (the help-page registry, the
-//     constants here, the launcher and hook maps, skills.Names(), the CI
-//     table). A token from argv that is not a member is never copied.
-//   - Flags carries names only, allowlisted, and stops at the first bare "--".
-//   - No field carries an argument value, endpoint, tenant id, token, tag, user
-//     id, path, or error message. There is no error_message because this
-//     binary's error strings interpolate paths and endpoints.
-//   - ExitCode and DurationMS are raw numbers because they describe the
-//     invocation, not the user's data. A count of imported sessions or captured
-//     turns would be about volume and must be bucketed instead.
+// Every string field except Version comes from a vocabulary compiled into this
+// binary, so a token from argv that is not a member is never copied. Flags
+// holds names only. No field holds an argument value, endpoint, tenant id,
+// token, tag, user id, path, or error message.
 //
 // Adding a field means amending the first-run notice and bumping its revision,
 // or existing installs keep a disclosure that no longer matches.
@@ -59,8 +49,8 @@ type Event struct {
 	OS      string `json:"os"`
 	Arch    string `json:"arch"`
 
-	// InstallIDPersisted false marks a throwaway id, so the receiver can keep
-	// an unwritable state directory from counting as a new install every run.
+	// InstallIDPersisted false marks a throwaway id: the state directory could
+	// not be written, so the next run reports a different one.
 	InstallID          string `json:"install_id"`
 	InstallIDPersisted bool   `json:"install_id_persisted"`
 

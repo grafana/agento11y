@@ -7,13 +7,12 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
 
-// unroutableEndpoint means even a bug bypassing mode resolution cannot reach
-// the real receiver. Port 0 fails immediately rather than hanging.
+// unroutableEndpoint means even a bug bypassing mode resolution cannot send
+// anything. Port 0 fails immediately rather than hanging.
 const unroutableEndpoint = "http://127.0.0.1:0/must-not-be-reached"
 
-// TestMain isolates the package. This package's job is to POST to a
-// Grafana-operated endpoint, so an un-isolated run would file real events from
-// a developer machine.
+// TestMain isolates the package: this code POSTs to a real endpoint, so an
+// un-isolated run would report test traffic as genuine usage.
 //
 // Scrubs both spellings of every alias family, DO_NOT_TRACK (unbranded, so not
 // covered by that scrub), and every CI variable DetectCI reads.
@@ -40,8 +39,8 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// TestPackageEnvIsScrubbed pins the TestMain guard: a regression here is test
-// traffic reaching the real receiver, not just a failing assertion.
+// TestPackageEnvIsScrubbed pins the TestMain guard: a regression here sends
+// test traffic for real, rather than just failing an assertion.
 func TestPackageEnvIsScrubbed(t *testing.T) {
 	for _, key := range append(CIEnvVars(), EnvDoNotTrack) {
 		if v := os.Getenv(key); v != "" {

@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// TestExportPostsTheEventVerbatim pins the request shape the receiver expects.
+// TestExportPostsTheEventVerbatim pins the request shape.
 func TestExportPostsTheEventVerbatim(t *testing.T) {
 	type captured struct {
 		method      string
@@ -58,8 +58,8 @@ func TestExportPostsTheEventVerbatim(t *testing.T) {
 	}
 }
 
-// TestExportCarriesNoTimestamp: the receiver stamps receipt time, so a client
-// clock cannot skew the dataset.
+// TestExportCarriesNoTimestamp: the server stamps receipt time, so a wrong
+// client clock cannot skew it.
 func TestExportCarriesNoTimestamp(t *testing.T) {
 	body, err := json.Marshal(fullyPopulatedEvent())
 	if err != nil {

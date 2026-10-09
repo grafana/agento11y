@@ -257,9 +257,8 @@ func TestUsageFlagAllowlistCoversDefinedFlags(t *testing.T) {
 	}
 
 	// doctor and `guards test` own their flag sets outside the help registry,
-	// so the loop above cannot see them. Checking them from their own
-	// constructors is the point: the first version of this test shared the
-	// allowlist's blind spot and passed while those flags went unrecorded.
+	// so the loop above cannot see them. They must be checked from their own
+	// constructors, or this test shares the allowlist's blind spot.
 	var guardsOpts guardsTestOptions
 	newGuardsTestFlags(&guardsOpts).VisitAll(func(f *flag.Flag) {
 		if !allowed[f.Name] {
@@ -281,8 +280,8 @@ func TestUsageFlagAllowlistCoversDefinedFlags(t *testing.T) {
 	}
 }
 
-// TestUsageFlagNamesRecordsDoctorAndGuardsFlags is the regression test for the
-// gap above: these commands' flags were silently dropped.
+// TestUsageFlagNamesRecordsDoctorAndGuardsFlags: these commands' flags are the
+// ones the registry walk cannot reach.
 func TestUsageFlagNamesRecordsDoctorAndGuardsFlags(t *testing.T) {
 	if got := usageFlagNames([]string{"--require-cloud", "--no-color"}); got != "no-color,require-cloud" {
 		t.Errorf("doctor flags = %q, want %q", got, "no-color,require-cloud")
@@ -292,8 +291,8 @@ func TestUsageFlagNamesRecordsDoctorAndGuardsFlags(t *testing.T) {
 	}
 }
 
-// TestStdoutIsTTYIsNotJustACharDevice pins the fix for a ModeCharDevice check,
-// which reports /dev/null as interactive.
+// TestStdoutIsTTYIsNotJustACharDevice: a ModeCharDevice check reports
+// /dev/null as interactive.
 func TestStdoutIsTTYIsNotJustACharDevice(t *testing.T) {
 	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
 	if err != nil {
@@ -336,9 +335,9 @@ func TestResolveUsageSkillOnlyAcceptsBundledSkills(t *testing.T) {
 	}
 }
 
-// TestLogModeMatchesExportedBody keeps log mode honest. It is the user's only
+// TestLogModeMatchesExportedBody keeps log mode honest: it is the user's only
 // way to inspect what would be sent, and the printer and the POST live in
-// different packages, so they are easy to let drift.
+// different packages.
 func TestLogModeMatchesExportedBody(t *testing.T) {
 	now := time.Now()
 	event := buildUsageEvent(sampleInvocation(now), now)
@@ -397,7 +396,7 @@ func TestEmitUsageEventRespectsMode(t *testing.T) {
 }
 
 // captureEmitted runs the emitter and returns what it wrote to stderr. The
-// endpoint is unroutable so a wrong test cannot reach the real receiver.
+// endpoint is unroutable so a wrong test cannot send anything.
 func captureEmitted(t *testing.T, inv capture.Invocation, mode string) string {
 	t.Helper()
 	envconfig.PinAliasEnvBlank(t)
@@ -422,7 +421,7 @@ func captureEmitted(t *testing.T, inv capture.Invocation, mode string) string {
 
 // TestResolveModeIsStableAcrossApplyEnv lets the emitter resolve its mode
 // without moving dotenv.ApplyEnv, whose call sites are per-branch because
-// renderLocalBanner and runDoctorCommand both need the pre-merge environment.
+// renderLocalBanner and runDoctorCommand need the pre-merge environment.
 func TestResolveModeIsStableAcrossApplyEnv(t *testing.T) {
 	dir := isolateDotenvHome(t)
 	path := dotenv.FilePath()
@@ -462,8 +461,8 @@ func dirOf(path string) string {
 	return "."
 }
 
-// TestEmitUsageOnceIsNotWiredYet documents the deliberate state: the emitter
-// exists and is tested, but no dispatch path reaches it.
+// TestEmitUsageOnceIsNotWiredYet: the emitter exists and is tested, but no
+// dispatch path reaches it yet.
 func TestEmitUsageOnceIsNotWiredYet(t *testing.T) {
 	capture.Reset()
 	resetUsageOnceForTest()
@@ -473,8 +472,8 @@ func TestEmitUsageOnceIsNotWiredYet(t *testing.T) {
 	emitUsage = func(capture.Invocation, time.Time) { calls++ }
 	t.Cleanup(func() { emitUsage = original })
 
-	// Twice on purpose: the guard is what makes the wiring safe across the
-	// several exit paths that will reach it.
+	// Twice on purpose: the guard is what keeps the several exit paths that
+	// will reach it from double-reporting.
 	emitUsageOnce()
 	emitUsageOnce()
 

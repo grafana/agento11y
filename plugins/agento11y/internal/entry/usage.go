@@ -41,8 +41,7 @@ var emitUsage = emitUsageEvent
 
 var usageOnce sync.Once
 
-// emitUsageOnce emits at most one event per invocation. No caller yet: the
-// lifecycle wiring lands separately.
+// emitUsageOnce emits at most one event per invocation.
 func emitUsageOnce() {
 	usageOnce.Do(func() {
 		emitUsage(capture.Snapshot(), time.Now())

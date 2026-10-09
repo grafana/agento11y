@@ -1,13 +1,12 @@
-// Package usagestats implements the agento11y CLI's usage statistics: one
-// flat event per invocation describing the shape of usage (command path, flag
-// names, outcome) and never its content. The only correlator is a random,
-// resettable, per-installation id.
+// Package usagestats implements the agento11y CLI's usage statistics: one flat
+// event per invocation describing the shape of usage (command path, flag names,
+// outcome) and never its content. The only correlator is a random, resettable,
+// per-installation id.
 //
-// Deliberately not called "telemetry": in this binary that word already means
-// the product, so AGENTO11Y_TELEMETRY=disabled would read as "stop capturing
-// my coding sessions".
+// Not called "telemetry" because in this binary that word means the product, so
+// AGENTO11Y_TELEMETRY=disabled would read as "stop capturing my sessions".
 //
-// Library only — event construction and emission are wired in internal/entry.
+// Library only — emission is wired in internal/entry.
 package usagestats
 
 import (
@@ -47,11 +46,10 @@ const (
 	EnvEndpoint = "AGENTO11Y_ANONYMOUS_USAGE_STATS_ENDPOINT"
 )
 
-// ResolveMode resolves the reporting mode. Precedence, highest first: the
-// alias family in the shell, DO_NOT_TRACK, the same key in config.env, the
-// default.
+// ResolveMode resolves the reporting mode. Precedence, highest first: the alias
+// family in the shell, DO_NOT_TRACK, the same key in config.env, the default.
 //
-// configValue is a func so the config read is skipped when the environment
+// configValue is a func so the file read is skipped when the environment
 // already decided, and so this package never triggers dotenv.ApplyEnv.
 func ResolveMode(configValue func() string) Mode {
 	return resolveMode(envconfig.LookupEnv, os.Getenv, configValue)
@@ -77,13 +75,10 @@ func resolveMode(lookup envconfig.Lookup, getenv func(string) string, configValu
 // parseMode maps a raw value to a mode. ok is false only for an empty value,
 // so the caller falls through to the next precedence level.
 //
-// Accepts this repo's boolean vocabulary as well as the three mode words,
-// because envconfig taught users 1/true/yes/on and the settings page writes a
-// literal "false".
-//
-// Not envconfig.ParseBoolDefault: that falls back to the caller's default,
-// which here is enabled, so a typo in an opt-out would opt the user in.
-// Unrecognised values fail toward privacy instead.
+// Accepts the boolean vocabulary as well as the three mode words, since
+// envconfig uses 1/true/yes/on elsewhere. Unrecognised values resolve to
+// disabled: the default is enabled, so a typo in an opt-out must not opt the
+// user in. That is why this is not envconfig.ParseBoolDefault.
 func parseMode(raw string) (mode Mode, ok bool) {
 	trimmed := strings.ToLower(strings.TrimSpace(raw))
 	if trimmed == "" {

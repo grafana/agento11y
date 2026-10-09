@@ -1,13 +1,9 @@
 // Package capture holds the facts about the running invocation that are only
-// known partway through it: when it started, which branch won, whether to
-// report at all, and how it ended.
+// known partway through it.
 //
 // A deliberate leaf: it imports nothing from agento11y, so any package can
-// become a writer without an import-graph audit, and recording a fact does not
-// pull in the HTTP exporter.
-//
-// State is process-global because the invocation is — one per process, written
-// from whichever branch runs, read once at exit.
+// become a writer and recording a fact does not pull in the HTTP exporter.
+// State is process-global because the invocation is.
 package capture
 
 import (
@@ -18,19 +14,14 @@ import (
 // Invocation is the recorded shape of one CLI invocation. The zero value means
 // "nothing recorded yet", never "succeeded".
 type Invocation struct {
-	// Start is set as early as possible so Duration covers the whole run.
-	Start time.Time
-	// Command is the resolved command path from the help-page registry.
-	Command string
-	// Surface is the dispatch branch: command, launcher, or help.
-	Surface string
-	// Agent is the matched launcher or hook agent name.
-	Agent string
-	// Skill is a bundled skill name, already validated by the caller.
-	Skill string
-	// Flags is the sorted, comma-joined list of allowlisted flag names.
+	Start    time.Time
+	Command  string
+	Surface  string
+	Agent    string
+	Skill    string
 	Flags    string
 	ExitCode int
+
 	// Completed means the dispatcher returned; its absence detects a panic
 	// without calling recover().
 	Completed bool
@@ -52,17 +43,15 @@ func SetStart(t time.Time) {
 	cur.Start = t
 }
 
-// SetDispatch records which branch won and what it resolved from argv.
-//
-// This package does no validation or redaction — it cannot, it does not know
-// the vocabularies. Callers must never pass a raw argv token.
+// SetDispatch records which branch won and what it resolved from argv. This
+// package does no validation: callers must never pass a raw argv token.
 func SetDispatch(surface, command, agent, flags string) {
 	mu.Lock()
 	defer mu.Unlock()
 	cur.Surface, cur.Command, cur.Agent, cur.Flags = surface, command, agent, flags
 }
 
-// SetSkill records a bundled skill name, already validated by the caller.
+// SetSkill records a skill name, already validated by the caller.
 func SetSkill(skill string) {
 	mu.Lock()
 	defer mu.Unlock()

@@ -9,12 +9,10 @@ import (
 // provider in the table matched.
 const CIProviderUnknown = "unknown"
 
-// ciProviders maps a provider label to its signature variable. Ported
-// verbatim from gcx (originally github.com/watson/ci-info) so both CLIs
-// produce comparable labels. First match wins.
+// ciProviders maps a provider label to its signature variable, following the
+// ci-info list (github.com/watson/ci-info). First match wins.
 //
-// Read for PRESENCE ONLY: these values carry repo names, URLs, and sometimes
-// tokens.
+// Read for PRESENCE ONLY: the values carry repo names, URLs, sometimes tokens.
 var ciProviders = []struct{ name, envVar string }{
 	{"github_actions", "GITHUB_ACTIONS"},
 	{"gitlab", "GITLAB_CI"},
@@ -37,7 +35,7 @@ var ciProviders = []struct{ name, envVar string }{
 var genericCIVars = []string{"CI", "CONTINUOUS_INTEGRATION", "BUILD_NUMBER"}
 
 // CIEnvVars returns every variable DetectCI reads, so tests can blank the set
-// and behave the same on a laptop as under Actions.
+// and behave the same locally as in CI.
 func CIEnvVars() []string {
 	out := make([]string, 0, len(ciProviders)+len(genericCIVars))
 	for _, p := range ciProviders {

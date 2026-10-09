@@ -14,8 +14,7 @@ import (
 const installIDFileName = "install-id"
 
 // InstallIDPath returns the file backing the id, or "" when no durable state
-// directory is known — an id under TMPDIR resets on reboot and would inflate
-// installation counts.
+// directory is known — an id under TMPDIR would reset on reboot.
 func InstallIDPath() string {
 	root, durable := xdg.AppStateRootDurable()
 	if !durable {
@@ -28,7 +27,7 @@ func InstallIDPath() string {
 //
 // It identifies an installation, not a person: a fresh UUID with nothing
 // derived from hardware, account, hostname, or user. persisted=false means a
-// throwaway id, which the receiver must exclude from installation counts.
+// throwaway id that will differ on the next run.
 func InstallID() (id string, persisted bool) {
 	return installID(InstallIDPath())
 }
@@ -49,11 +48,8 @@ func installID(path string) (string, bool) {
 }
 
 // readInstallID returns a stored id, or ok=false when the file is missing,
-// unreadable, or not a UUID.
-//
-// Validated rather than trusted: a truncated file would otherwise become a
-// correlator shared by every install with the same corruption, silently
-// merging unrelated machines into one.
+// unreadable, or not a UUID. Validated rather than trusted: a truncated file
+// would otherwise be shared by every install with the same corruption.
 func readInstallID(path string) (string, bool) {
 	raw, err := os.ReadFile(path)
 	if err != nil {

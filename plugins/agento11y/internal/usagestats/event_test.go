@@ -34,9 +34,8 @@ func fullyPopulatedEvent() Event {
 }
 
 // wantEventFields is the wire contract. Hand-written on purpose: deriving it
-// from the struct would make the test tautological. A change here should
-// prompt the matching change to the receiver's columns, the docs page, and the
-// first-run notice.
+// from the struct would make the test tautological. Changing it means changing
+// the documented field list and the first-run notice too.
 var wantEventFields = []string{
 	"service",
 	"version",

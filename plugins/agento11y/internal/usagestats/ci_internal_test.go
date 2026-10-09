@@ -63,8 +63,8 @@ func TestCIEnvVarsCoversTheTable(t *testing.T) {
 	}
 }
 
-// TestCIProviderLabelsAreStable: the labels are shared with gcx in one
-// dataset, so a rename silently splits a provider's rows.
+// TestCIProviderLabelsAreStable: the labels are a closed vocabulary, so a
+// rename splits one provider's reports across two names.
 func TestCIProviderLabelsAreStable(t *testing.T) {
 	want := []string{
 		"github_actions", "gitlab", "circleci", "jenkins", "buildkite",

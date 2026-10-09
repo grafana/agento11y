@@ -10,17 +10,14 @@ import (
 	"time"
 )
 
-// DefaultEndpoint is the usage-stats receiver, shared with Grafana, Loki,
-// Mimir, Tempo, and gcx. EnvEndpoint overrides it.
+// DefaultEndpoint is where events are sent. EnvEndpoint overrides it.
 const DefaultEndpoint = "https://stats.grafana.org/agento11y-usage-report"
 
-// exportTimeout caps the whole request. Tight on purpose: reporting must not
-// delay CLI exit, and the payload is one small document.
+// exportTimeout caps the whole request: reporting must not delay CLI exit.
 const exportTimeout = time.Second
 
-// UserAgent identifies usage-stats traffic. Not useragent.For(...), which
-// builds the generation-export agent and would conflate the two in any
-// receiver-side breakdown by client.
+// UserAgent identifies usage-stats traffic. Deliberately not useragent.For,
+// which builds the agent string for exported agent sessions.
 func UserAgent(version string) string {
 	if version == "" {
 		version = "dev"
@@ -29,11 +26,10 @@ func UserAgent(version string) string {
 }
 
 // Export posts the event as a flat JSON body. The json tags are the wire
-// contract; the receiver stamps receipt time, so there is no timestamp.
+// contract, and the server stamps receipt time, so there is no timestamp.
 //
-// Never reports failure, and never retries. Unlike gcx, whose client retries
-// and so can produce duplicate rows, this drops rows instead — query-side code
-// needs no deduplication.
+// Never reports failure and never retries: a dropped event must not affect the
+// command's outcome.
 func Export(event Event, version string) {
 	export(event, endpoint(), version)
 }
@@ -57,8 +53,8 @@ func export(event Event, url, version string) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", UserAgent(version))
-	// Bare client, not a shared helper: a retry transport would burn the whole
-	// timeout budget on an unreachable endpoint, synchronously before exit.
+	// Bare client: a retry transport would burn the whole timeout budget on an
+	// unreachable endpoint, synchronously before exit.
 	client := &http.Client{Timeout: exportTimeout}
 	resp, err := client.Do(req)
 	if err != nil {
