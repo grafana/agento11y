@@ -40,6 +40,25 @@ func AppStateRoot() string {
 	return preferred
 }
 
+// AppStateRootDurable returns the state root and whether it survives a reboot.
+//
+// StateRoot silently falls back to the OS temp directory. That is fine for
+// logs and update stamps — a lost stamp just re-runs a check — so AppStateRoot
+// keeps it. It is wrong for anything that must be stable for the life of the
+// installation, hence a separate function rather than a change to that one.
+func AppStateRootDurable() (root string, durable bool) {
+	return AppStateRoot(), homeIsResolvable()
+}
+
+// homeIsResolvable mirrors StateRoot's conditions; keep the two in step.
+func homeIsResolvable() bool {
+	if x := strings.TrimSpace(os.Getenv("XDG_STATE_HOME")); x != "" && filepath.IsAbs(x) {
+		return true
+	}
+	home, err := os.UserHomeDir()
+	return err == nil && home != "" && filepath.IsAbs(home)
+}
+
 // StateRoot returns the root state directory.
 // Honors XDG_STATE_HOME, falls back to $HOME/.local/state, then OS tempdir.
 func StateRoot(appName string) string {

@@ -24,6 +24,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/login"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/usagestats"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -51,6 +52,16 @@ func TestMain(m *testing.M) {
 		_ = os.Unsetenv(envconfig.PreferredKey(suffix))
 		_ = os.Unsetenv(envconfig.LegacyKey(suffix))
 	}
+	// The alias scrub above covers AGENTO11Y_ANONYMOUS_USAGE_STATS, but
+	// DO_NOT_TRACK is unbranded and the CI variables decide is_ci. Without
+	// these the suite would behave differently under Actions — and a leaked
+	// enabled mode would file real events from a developer laptop.
+	_ = os.Unsetenv(usagestats.EnvDoNotTrack)
+	for _, key := range usagestats.CIEnvVars() {
+		_ = os.Unsetenv(key)
+	}
+	_ = os.Setenv(usagestats.EnvEndpoint, "http://127.0.0.1:0/must-not-be-reached")
+
 	tmp, err := os.MkdirTemp("", "sigil-entry-test-home-*")
 	if err != nil {
 		panic(err)

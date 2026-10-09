@@ -171,6 +171,24 @@ func helpFlags(path string) *flag.FlagSet {
 	return nil
 }
 
+// resolveCommandPath matches the longest prefix of args naming a public help
+// page, returning the path, tokens consumed, and whether anything matched.
+//
+// The only place argv is mapped to the help-page registry, which makes that
+// registry the command vocabulary. usagestats depends on it: a second inlined
+// copy of this loop would let an undefined token reach a recorded command.
+func resolveCommandPath(args []string) (path string, consumed int, ok bool) {
+	pages := publicHelpPages()
+	for i := 1; i <= len(args); i++ {
+		candidate := strings.Join(args[:i], " ")
+		if _, found := pages[candidate]; !found {
+			break
+		}
+		path, consumed = candidate, i
+	}
+	return path, consumed, consumed > 0
+}
+
 func usageError(stderr io.Writer, path, message string) {
 	page, ok := helpPage(path)
 	if !ok {
@@ -217,16 +235,7 @@ func routeHelp(args []string, stdout, stderr io.Writer) bool {
 		}
 		return true
 	}
-	pages := publicHelpPages()
-	path := ""
-	consumed := 0
-	for i := 1; i <= len(args); i++ {
-		candidate := strings.Join(args[:i], " ")
-		if _, ok := pages[candidate]; !ok {
-			break
-		}
-		path, consumed = candidate, i
-	}
+	path, consumed, _ := resolveCommandPath(args)
 	if consumed == 0 {
 		if _, internal := agents[args[0]]; internal {
 			return false
