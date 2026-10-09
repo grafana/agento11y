@@ -430,9 +430,9 @@ func TestResolveModeIsStableAcrossApplyEnv(t *testing.T) {
 	writeUsageStatsConfig(t, "AGENTO11Y_ANONYMOUS_USAGE_STATS=disabled\n")
 
 	shell := usagestats.CaptureShellEnv()
-	before := usagestats.ResolveMode(shell, readUsageStatsConfigValue)
+	before := usagestats.ResolveMode(shell, freshUsageStatsConfigValue(t))
 	dotenv.ApplyEnv(nil)
-	after := usagestats.ResolveMode(shell, readUsageStatsConfigValue)
+	after := usagestats.ResolveMode(shell, freshUsageStatsConfigValue(t))
 
 	if before != usagestats.ModeDisabled {
 		t.Errorf("mode before ApplyEnv = %q, want the config.env value %q", before, usagestats.ModeDisabled)
@@ -455,13 +455,13 @@ func TestDoNotTrackIsNotDefeatedByConfigEnv(t *testing.T) {
 	t.Setenv(usagestats.EnvDoNotTrack, "1")
 
 	shell := usagestats.CaptureShellEnv()
-	if got := usagestats.ResolveMode(shell, readUsageStatsConfigValue); got != usagestats.ModeDisabled {
+	if got := usagestats.ResolveMode(shell, freshUsageStatsConfigValue(t)); got != usagestats.ModeDisabled {
 		t.Fatalf("mode before ApplyEnv = %q, want %q", got, usagestats.ModeDisabled)
 	}
 
 	dotenv.ApplyEnv(nil)
 
-	if got := usagestats.ResolveMode(shell, readUsageStatsConfigValue); got != usagestats.ModeDisabled {
+	if got := usagestats.ResolveMode(shell, freshUsageStatsConfigValue(t)); got != usagestats.ModeDisabled {
 		t.Errorf("mode after ApplyEnv = %q, want %q; config.env must not override DO_NOT_TRACK", got, usagestats.ModeDisabled)
 	}
 	// The live environment now carries the merged value, which is exactly what
@@ -483,16 +483,7 @@ func TestUnreadableConfigDoesNotEnableReporting(t *testing.T) {
 		t.Fatal("precondition failed: the config parsed cleanly, so this does not exercise the error path")
 	}
 
-	configValue := func() string {
-		fileEnv, err := dotenv.ReadDotenv(dotenv.FilePath(), nil)
-		if err != nil {
-			return string(usagestats.ModeDisabled)
-		}
-		value, _, _ := envconfig.LookupMap(fileEnv, usagestats.EnvSuffix)
-		return value
-	}
-
-	if got := usagestats.ResolveMode(usagestats.ShellEnv{}, configValue); got != usagestats.ModeDisabled {
+	if got := usagestats.ResolveMode(usagestats.ShellEnv{}, freshUsageStatsConfigValue(t)); got != usagestats.ModeDisabled {
 		t.Errorf("mode = %q for an unreadable config, want %q", got, usagestats.ModeDisabled)
 	}
 }
@@ -510,13 +501,15 @@ func writeUsageStatsConfig(t *testing.T, contents string) {
 	}
 }
 
-func readUsageStatsConfigValue() string {
-	fileEnv, err := dotenv.ReadDotenv(dotenv.FilePath(), nil)
-	if err != nil {
-		return ""
-	}
-	value, _, _ := envconfig.LookupMap(fileEnv, usagestats.EnvSuffix)
-	return value
+// freshUsageStatsConfigValue rebuilds the production reader so the test sees
+// the config.env it just wrote. Returning a local copy of the logic instead
+// would let the production reader regress without failing anything.
+func freshUsageStatsConfigValue(t *testing.T) func() string {
+	t.Helper()
+	original := usageStatsConfigValue
+	usageStatsConfigValue = newUsageStatsConfigValue()
+	t.Cleanup(func() { usageStatsConfigValue = original })
+	return usageStatsConfigValue
 }
 
 func dirOf(path string) string {

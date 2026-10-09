@@ -27,18 +27,25 @@ import (
 // It reads the file directly and never calls dotenv.ApplyEnv: those call sites
 // are per-branch because renderLocalBanner and runDoctorCommand both need to
 // see the environment before the merge.
-var usageStatsConfigValue = sync.OnceValue(func() string {
-	fileEnv, err := dotenv.ReadDotenv(dotenv.FilePath(), nil)
-	if err != nil {
-		// A file we cannot parse may hold an opt-out, and the default is
-		// enabled, so an empty value here would report against the user's
-		// wishes. A missing file reads as no error, so first runs still default
-		// to enabled.
-		return string(usagestats.ModeDisabled)
-	}
-	value, _, _ := envconfig.LookupMap(fileEnv, usagestats.EnvSuffix)
-	return value
-})
+var usageStatsConfigValue = newUsageStatsConfigValue()
+
+// newUsageStatsConfigValue builds the memoised reader. It is a constructor so
+// tests can rebuild it against the config.env they just wrote, and therefore
+// exercise this code rather than a copy of it.
+func newUsageStatsConfigValue() func() string {
+	return sync.OnceValue(func() string {
+		fileEnv, err := dotenv.ReadDotenv(dotenv.FilePath(), nil)
+		if err != nil {
+			// A file we cannot parse may hold an opt-out, and the default is
+			// enabled, so an empty value here would report against the user's
+			// wishes. A missing file reads as no error, so first runs still
+			// default to enabled.
+			return string(usagestats.ModeDisabled)
+		}
+		value, _, _ := envconfig.LookupMap(fileEnv, usagestats.EnvSuffix)
+		return value
+	})
+}
 
 // usageStatsShell is captured at package init, which runs before run() merges
 // config.env into the environment. Reading it later would let a config.env
