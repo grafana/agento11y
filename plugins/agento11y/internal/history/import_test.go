@@ -258,9 +258,18 @@ func TestRunImportStartsEachDestinationFromTheLedgerBeforeDestinations(t *testin
 		t.Fatalf("filling the old ledger: %+v", got)
 	}
 	for _, endpoint := range []string{"https://agento11y-prod.grafana.net", "http://127.0.0.1:8765"} {
-		if got := importTurns(t, endpoint, nil, "t1", "t2", "t3"); got.Imported != 1 || got.Skipped != 2 {
+		got := importTurns(t, endpoint, nil, "t1", "t2", "t3")
+		if got.Imported != 1 || got.Skipped != 2 {
 			t.Errorf("import into %s after the upgrade: %+v, want the new turn imported and the old two skipped", endpoint, got)
 		}
+		if !got.LedgerSeeded {
+			t.Errorf("import into %s after the upgrade did not report the ledger it started from", endpoint)
+		}
+	}
+	// Only the first import into a destination starts its ledger, so only that
+	// one says some skipped turns may never have arrived.
+	if got := importTurns(t, "https://agento11y-prod.grafana.net", nil, "t1", "t2", "t3"); got.LedgerSeeded || got.Skipped != 3 {
+		t.Errorf("second import into Grafana Cloud: %+v, want 3 skipped and no seeded ledger", got)
 	}
 }
 

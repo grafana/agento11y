@@ -71,6 +71,9 @@ type Ledger struct {
 	mu      sync.Mutex
 	file    *os.File
 	entries map[SourceIdentity]Entry
+	// seeded is set when this open started the ledger from the one from
+	// before destinations; see seedLedger.
+	seeded bool
 }
 
 func ledgerDir() string {
@@ -147,11 +150,22 @@ func OpenLedger(agent AgentID, destination string) (*Ledger, error) {
 		return nil, errors.New("history: open ledger for empty destination")
 	}
 	path := ledgerPath(agent, destination)
-	if err := seedLedger(path, legacyLedgerPath(agent)); err != nil {
+	seeded, err := seedLedger(path, legacyLedgerPath(agent))
+	if err != nil {
 		return nil, err
 	}
-	return openLedgerAt(path)
+	l, err := openLedgerAt(path)
+	if err != nil {
+		return nil, err
+	}
+	l.seeded = seeded
+	return l, nil
 }
+
+// Seeded reports whether this open started the ledger from the one from before
+// destinations. Every turn it then skips counts as sent here, though some may
+// never have reached this destination.
+func (l *Ledger) Seeded() bool { return l.seeded }
 
 // seedLedger starts a destination's ledger from the agent's ledger from before
 // destinations, the first time the destination's ledger is opened. That
@@ -160,23 +174,28 @@ func OpenLedger(agent AgentID, destination string) (*Ledger, error) {
 // only recognises a generation ID it already holds for about a day: past that,
 // a repeat is stored, counted, and billed a second time. A turn the old ledger
 // holds that a destination never received still needs --force there once.
-func seedLedger(path, legacy string) error {
+//
+// It reports whether it seeded the ledger, which only the first open can.
+func seedLedger(path, legacy string) (bool, error) {
 	if _, err := os.Stat(path); err == nil {
-		return nil
+		return false, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("stat import ledger: %w", err)
+		return false, fmt.Errorf("stat import ledger: %w", err)
 	}
 	entries, _, err := readLedger(legacy)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if len(entries) == 0 {
-		return nil
+		return false, nil
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return fmt.Errorf("create ledger dir: %w", err)
+		return false, fmt.Errorf("create ledger dir: %w", err)
 	}
-	return (&Ledger{path: path, entries: entries}).compact()
+	if err := (&Ledger{path: path, entries: entries}).compact(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func openLedgerAt(path string) (*Ledger, error) {

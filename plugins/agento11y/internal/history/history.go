@@ -114,6 +114,11 @@ type ImportResult struct {
 	Failed     int  // generations that errored during export
 	Collisions int  // native session IDs claimed by more than one source
 	DryRun     bool // nothing was decoded, exported, or stored
+	// LedgerSeeded is set when this run opened its destination's ledger for
+	// the first time and started it from the ledger from before destinations.
+	// Its skipped turns count as sent here, though some may never have
+	// reached this destination.
+	LedgerSeeded bool
 	// Warnings say why a session or a batch failed. Failed alone cannot be
 	// acted on: it does not distinguish an unreadable file from a schema
 	// change. Like [Discovery.Warnings], they name sessions and paths, never

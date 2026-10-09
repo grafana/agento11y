@@ -21,6 +21,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/history"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/login"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/xdg"
 )
 
 // historyFixedNow pins the clock so the 90-day default boundary is checkable.
@@ -1219,4 +1220,46 @@ func newCountingIngest(t *testing.T, exported *int) string {
 	}))
 	t.Cleanup(srv.Close)
 	return srv.URL
+}
+
+// The first import into a destination after the ledger became one per
+// destination says that the turns it skipped may never have reached it, and
+// names --force. Later imports do not, so --force is not repeated into Grafana
+// Cloud, where a repeat is counted again.
+func TestHistoryImportNamesForceOnlyAfterStartingFromTheSharedLedger(t *testing.T) {
+	withHistoryNow(t)
+	isolateDotenvHome(t)
+	writeClaudeHistory(t, "sess-recent", 24*time.Hour)
+	exported := 0
+	withStubHistoryExporter(t, &exported)
+	importLocal := func() string {
+		t.Helper()
+		stdout, stderr, code := runHistory(t, "history", "import", "claude-code", "--local", "--all", "--yes")
+		if code != nil {
+			t.Fatalf("exit = %d (stderr=%q)", *code, stderr)
+		}
+		return stdout
+	}
+
+	// Turn this build's ledger into one from before destinations.
+	importLocal()
+	ledgers := filepath.Join(xdg.AppStateRoot(), "history", "ledger")
+	agentDir := filepath.Join(ledgers, xdg.SafeComponent(string(history.AgentClaudeCode)))
+	files, err := filepath.Glob(filepath.Join(agentDir, "*.jsonl"))
+	if err != nil || len(files) != 1 {
+		t.Fatalf("ledgers after the first import = %v (err %v), want one", files, err)
+	}
+	if err := os.Rename(files[0], agentDir+".jsonl"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(agentDir); err != nil {
+		t.Fatal(err)
+	}
+
+	if out := importLocal(); !strings.Contains(out, "some of these 1 may never have reached this one. Pass --force once") {
+		t.Errorf("first import after the upgrade: stdout = %q, want the --force hint", out)
+	}
+	if out := importLocal(); strings.Contains(out, "--force") {
+		t.Errorf("second import after the upgrade: stdout = %q, want no --force hint", out)
+	}
 }

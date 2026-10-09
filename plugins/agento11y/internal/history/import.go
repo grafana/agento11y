@@ -199,6 +199,7 @@ func RunImport(ctx context.Context, opts ImportOptions) (ImportResult, error) {
 		defer func() { _ = opened.Close() }()
 		ledger = opened
 	}
+	result.LedgerSeeded = ledger.Seeded()
 
 	collided := collisionSessionKeys(collisions)
 	sanitizer := Sanitizer{}

@@ -436,6 +436,11 @@ func historyImport(opts historyImportOptions, interactive bool, stdout, stderr i
 		summary = renderer.Success(summary)
 	}
 	_, _ = fmt.Fprintln(stdout, summary)
+	if result.LedgerSeeded {
+		if hint := historySharedLedgerHint(result.Skipped); hint != "" {
+			_, _ = fmt.Fprintln(stdout, renderer.Detail(hint))
+		}
+	}
 	for _, warning := range result.Warnings {
 		_, _ = fmt.Fprintf(stderr, "agento11y: warning: %s\n", warning)
 	}
@@ -538,6 +543,9 @@ func historyImportAuto(opts historyImportOptions, interactive bool, stdout, stde
 
 	total := history.ImportResult{}
 	failed := 0
+	// sharedSkipped counts the turns skipped by agents whose ledger this run
+	// started from the one from before destinations.
+	sharedSkipped := 0
 	for _, plan := range plans {
 		selected := historySessionsForAgent(sessions, plan.Agent)
 		if len(selected) == 0 {
@@ -557,6 +565,9 @@ func historyImportAuto(opts historyImportOptions, interactive bool, stdout, stde
 		total.Imported += result.Imported
 		total.Skipped += result.Skipped
 		total.Failed += result.Failed
+		if result.LedgerSeeded {
+			sharedSkipped += result.Skipped
+		}
 		failed += result.Failed
 		for _, warning := range result.Warnings {
 			_, _ = fmt.Fprintf(stderr, "agento11y: warning: %s\n", warning)
@@ -571,12 +582,31 @@ func historyImportAuto(opts historyImportOptions, interactive bool, stdout, stde
 	}
 	renderer := clihelp.New(stdout)
 	summary := fmt.Sprintf("Imported %d turns from %d sessions (%d already imported, %d failed).", total.Imported, total.Sessions, total.Skipped, total.Failed)
+	hint := historySharedLedgerHint(sharedSkipped)
 	if failed > 0 {
 		_, _ = fmt.Fprintln(stdout, renderer.Warning(summary))
+		if hint != "" {
+			_, _ = fmt.Fprintln(stdout, renderer.Detail(hint))
+		}
 		return fmt.Errorf("%d turns failed to export; rerun to retry them", failed)
 	}
 	_, _ = fmt.Fprintln(stdout, renderer.Success(summary))
+	if hint != "" {
+		_, _ = fmt.Fprintln(stdout, renderer.Detail(hint))
+	}
 	return nil
+}
+
+// historySharedLedgerHint explains the first import into a destination after
+// the import ledger became one per destination. The turns it skipped were
+// recorded when one ledger served every destination, so they count as sent
+// here, though some may never have arrived. It is only said on that first
+// import, because a --force repeated into Grafana Cloud counts turns again.
+func historySharedLedgerHint(skipped int) string {
+	if skipped == 0 {
+		return ""
+	}
+	return fmt.Sprintf("Turns imported before this version count as sent to every destination, so some of these %d may never have reached this one. Pass --force once to send them.", skipped)
 }
 
 func historySessionsForAgent(sessions []history.SessionPreview, agent history.AgentID) []history.SessionPreview {
