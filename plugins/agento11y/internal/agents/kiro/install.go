@@ -186,5 +186,5 @@ func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.
 		return err
 	}
 	_, _ = fmt.Fprintln(stderr, "agento11y: experimental Kiro CLI 3 capture (prompts and tools; no assistant text or token usage)")
-	return execFn(bin, append([]string{bin}, args...), local.Environ(localEnv))
+	return launcher.Exec(execFn, bin, "kiro-cli", args, local.Environ(localEnv))
 }
