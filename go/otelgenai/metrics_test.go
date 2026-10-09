@@ -2,6 +2,7 @@ package otelgenai_test
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -93,6 +94,33 @@ func histogramCount(t *testing.T, m metricdata.Metrics) uint64 {
 		count += point.Count
 	}
 	return count
+}
+
+func metricPointAttributes(t *testing.T, m metricdata.Metrics) []map[string]string {
+	t.Helper()
+
+	var sets []attribute.Set
+	switch data := m.Data.(type) {
+	case metricdata.Histogram[float64]:
+		for _, point := range data.DataPoints {
+			sets = append(sets, point.Attributes)
+		}
+	case metricdata.Histogram[int64]:
+		for _, point := range data.DataPoints {
+			sets = append(sets, point.Attributes)
+		}
+	default:
+		t.Fatalf("%s data = %T, want a histogram", m.Name, m.Data)
+	}
+	out := make([]map[string]string, 0, len(sets))
+	for _, set := range sets {
+		attrs := map[string]string{}
+		for _, attr := range set.ToSlice() {
+			attrs[string(attr.Key)] = attr.Value.Emit()
+		}
+		out = append(out, attrs)
+	}
+	return out
 }
 
 func tokenTypeSums(t *testing.T, m metricdata.Metrics) map[string]int64 {
@@ -468,10 +496,90 @@ func TestSpecMetrics(t *testing.T) {
 				inv.Usage = otelgenai.Usage{Reported: true}
 			},
 			check: func(t *testing.T, metrics map[string]metricdata.Metrics) {
-				// Every count is zero, so no bucket lands on the instrument,
-				// but the invocation still counts as having usage.
+				sums := tokenTypeSums(t, metrics["gen_ai.client.token.usage"])
+				if len(sums) != 2 || sums["input"] != 0 || sums["output"] != 0 {
+					t.Errorf("token sums = %v, want reported input and output zeros", sums)
+				}
+			},
+		},
+		{
+			name: "independently reported zero omits the unknown counter",
+			mutate: func(inv *otelgenai.Invocation) {
+				inv.Usage = otelgenai.Usage{InputTokensReported: true}
+			},
+			check: func(t *testing.T, metrics map[string]metricdata.Metrics) {
+				sums := tokenTypeSums(t, metrics["gen_ai.client.token.usage"])
+				input, present := sums["input"]
+				if len(sums) != 1 || !present || input != 0 {
+					t.Errorf("token sums = %v, want only a reported input zero", sums)
+				}
+			},
+		},
+		{
+			name: "independently reported output zero omits the unknown counter",
+			mutate: func(inv *otelgenai.Invocation) {
+				inv.Usage = otelgenai.Usage{OutputTokensReported: true}
+			},
+			check: func(t *testing.T, metrics map[string]metricdata.Metrics) {
+				sums := tokenTypeSums(t, metrics["gen_ai.client.token.usage"])
+				output, present := sums["output"]
+				if len(sums) != 1 || !present || output != 0 {
+					t.Errorf("token sums = %v, want only a reported output zero", sums)
+				}
+			},
+		},
+		{
+			name: "known output zero and ten produce two observations",
+			mutate: func(inv *otelgenai.Invocation) {
+				inv.Usage = otelgenai.Usage{OutputTokensReported: true}
+			},
+			drive: func(_ context.Context, handler *otelgenai.Handler, _ *otelgenai.Invocation) {
+				next := chatInvocation()
+				next.Usage = otelgenai.Usage{OutputTokens: 10, OutputTokensReported: true}
+				ctx := handler.Start(context.Background(), next)
+				handler.End(ctx, next)
+			},
+			check: func(t *testing.T, metrics map[string]metricdata.Metrics) {
+				histogram, ok := metrics["gen_ai.client.token.usage"].Data.(metricdata.Histogram[int64])
+				if !ok {
+					t.Fatalf("token usage data = %T, want an int64 histogram", metrics["gen_ai.client.token.usage"].Data)
+				}
+				for _, point := range histogram.DataPoints {
+					tokenType, _ := point.Attributes.Value("gen_ai.token.type")
+					if tokenType.AsString() != "output" {
+						continue
+					}
+					if point.Count != 2 || point.Sum != 10 {
+						t.Errorf("output point count = %d, sum = %d; want 2 and 10", point.Count, point.Sum)
+					}
+					return
+				}
+				t.Error("output token point is absent")
+			},
+		},
+		{
+			name: "a nonzero counter does not imply its unknown opposite",
+			mutate: func(inv *otelgenai.Invocation) {
+				inv.Usage = otelgenai.Usage{OutputTokens: 9}
+			},
+			check: func(t *testing.T, metrics map[string]metricdata.Metrics) {
+				sums := tokenTypeSums(t, metrics["gen_ai.client.token.usage"])
+				if len(sums) != 1 || sums["output"] != 9 {
+					t.Errorf("token sums = %v, want only output 9", sums)
+				}
+			},
+		},
+		{
+			name: "fetch response records duration but no token usage",
+			mutate: func(inv *otelgenai.Invocation) {
+				inv.Operation = otelgenai.OperationFetchResponse
+			},
+			check: func(t *testing.T, metrics map[string]metricdata.Metrics) {
+				if _, ok := metrics["gen_ai.client.operation.duration"]; !ok {
+					t.Error("fetch_response records no duration")
+				}
 				if _, ok := metrics["gen_ai.client.token.usage"]; ok {
-					t.Error("a zero-valued usage recorded a token bucket")
+					t.Error("fetch_response records token usage")
 				}
 			},
 		},
@@ -619,6 +727,46 @@ func TestSpecMetrics(t *testing.T) {
 					}
 					if got := firstPointAttribute(t, m, "vendor.tag.repo"); got != "agento11y" {
 						t.Errorf("%s vendor.tag.repo = %q, want agento11y", name, got)
+					}
+				}
+			},
+		},
+		{
+			name: "duration TTFC and token usage share exact dimensions",
+			mutate: func(inv *otelgenai.Invocation) {
+				inv.Stream = true
+				inv.FirstChunkAt = inv.StartedAt.Add(250 * time.Millisecond)
+				inv.ServerAddress = "api.openai.com"
+				inv.ServerPort = 443
+				inv.MetricAttributes = []attribute.KeyValue{attribute.String("vendor.tag.repo", "agento11y")}
+			},
+			drive: func(ctx context.Context, handler *otelgenai.Handler, inv *otelgenai.Invocation) {
+				handler.RecordChunk(ctx, inv)
+			},
+			check: func(t *testing.T, metrics map[string]metricdata.Metrics) {
+				want := map[string]string{
+					"gen_ai.operation.name": "chat",
+					"gen_ai.provider.name":  "openai",
+					"gen_ai.request.model":  "gpt-5",
+					"gen_ai.response.model": "gpt-5-2026",
+					"server.address":        "api.openai.com",
+					"server.port":           "443",
+					"vendor.tag.repo":       "agento11y",
+				}
+				for _, name := range []string{
+					"gen_ai.client.operation.duration",
+					"gen_ai.client.operation.time_to_first_chunk",
+					"gen_ai.client.token.usage",
+				} {
+					points := metricPointAttributes(t, metrics[name])
+					if len(points) == 0 {
+						t.Fatalf("%s has no points", name)
+					}
+					for _, got := range points {
+						delete(got, "gen_ai.token.type")
+						if !reflect.DeepEqual(got, want) {
+							t.Errorf("%s shared dimensions = %v, want %v", name, got, want)
+						}
 					}
 				}
 			},

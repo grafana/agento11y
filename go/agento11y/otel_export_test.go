@@ -1060,13 +1060,13 @@ func (s *recordingSampler) ShouldSample(p sdktrace.SamplingParameters) sdktrace.
 
 func (s *recordingSampler) Description() string { return "recordingSampler" }
 
-func TestOTelStartCarriesRequestAttributes(t *testing.T) {
-	// A head sampler decides at Start, so the request fields the caller already
-	// declared have to be on the span from that instant. Writing them at End is
-	// too late for the decision.
+func TestOTelRequestAttributesAtStartAndEnd(t *testing.T) {
+	// A head sampler needs sampling fields at Start. Other request fields wait
+	// until End so hooks can remove them.
 	sampler := &recordingSampler{}
+	spans := tracetest.NewSpanRecorder()
 	client, _, _ := newOTelTestClient(t, func(cfg *Config) {
-		provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sampler))
+		provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sampler), sdktrace.WithSpanProcessor(spans))
 		t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
 		cfg.TracerProvider = provider
 	})
@@ -1087,14 +1087,26 @@ func TestOTelStartCarriesRequestAttributes(t *testing.T) {
 	for _, kv := range sampler.attributes {
 		got[string(kv.Key)] = kv.Value
 	}
-	want := map[string]attribute.Value{
+	for key, want := range map[string]attribute.Value{
+		"gen_ai.operation.name": attribute.StringValue("chat"),
+		"gen_ai.provider.name":  attribute.StringValue("openai"),
+		"gen_ai.request.model":  attribute.StringValue("gpt-5"),
+	} {
+		if got[key] != want {
+			t.Errorf("sampler saw %s = %v, want %v", key, got[key], want)
+		}
+	}
+	ended := spanAttributeMapOf(onlySpan(t, spans))
+	for key, want := range map[string]attribute.Value{
 		"gen_ai.request.max_tokens":  attribute.IntValue(512),
 		"gen_ai.request.temperature": attribute.Float64Value(0.25),
 		"gen_ai.request.top_p":       attribute.Float64Value(0.75),
-	}
-	for key, wantValue := range want {
-		if got[key] != wantValue {
-			t.Errorf("sampler saw %s = %v, want %v", key, got[key], wantValue)
+	} {
+		if _, ok := got[key]; ok {
+			t.Errorf("sampler saw non-sampling attribute %s", key)
+		}
+		if ended[key] != want {
+			t.Errorf("ended span has %s = %v, want %v", key, ended[key], want)
 		}
 	}
 }
