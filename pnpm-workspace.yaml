@@ -13,7 +13,7 @@ overrides:
   tar: 7.5.21
   ws: 8.21.0
   '@tootallnate/once': 2.0.1
-  undici: 7.29.0
+  undici: 7.29.1
   fast-xml-builder: 1.1.7
   '@hono/node-server': 2.0.10
   ip-address: 10.3.1
@@ -51,8 +51,8 @@ minimumReleaseAgeExclude:
   - "@hono/node-server@2.0.10"
   # Renovate security update: hono@4.12.34 || 4.13.5 || 4.13.7
   - hono@4.12.34 || 4.13.5 || 4.13.7
-  # Renovate security update: undici@7.29.0
-  - undici@7.29.0
+  # Renovate security update: undici@7.29.0 || 7.29.1
+  - undici@7.29.0 || 7.29.1
   # Renovate security update: ip-address@10.3.1
   - ip-address@10.3.1
   # Renovate security update: fast-uri@3.1.5
