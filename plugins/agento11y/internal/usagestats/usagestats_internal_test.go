@@ -86,17 +86,12 @@ func TestResolveMode(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			lookup := func(suffix string) (string, string, bool) {
-				if suffix != EnvSuffix {
-					return "", "", false
-				}
-				return envconfig.LookupMap(tc.env, suffix)
-			}
-			getenv := func(key string) string { return tc.env[key] }
+			mode, _, _ := envconfig.LookupMap(tc.env, EnvSuffix)
+			shell := ShellEnv{Mode: mode, DoNotTrack: tc.env[EnvDoNotTrack]}
 			configValue := func() string { return tc.config }
 
-			if got := resolveMode(lookup, getenv, configValue); got != tc.want {
-				t.Errorf("resolveMode() = %q, want %q", got, tc.want)
+			if got := ResolveMode(shell, configValue); got != tc.want {
+				t.Errorf("ResolveMode() = %q, want %q", got, tc.want)
 			}
 		})
 	}
@@ -105,10 +100,48 @@ func TestResolveMode(t *testing.T) {
 // TestResolveModeToleratesNilConfigValue covers early paths that run before a
 // config reader exists.
 func TestResolveModeToleratesNilConfigValue(t *testing.T) {
-	lookup := func(string) (string, string, bool) { return "", "", false }
-	getenv := func(string) string { return "" }
-	if got := resolveMode(lookup, getenv, nil); got != ModeEnabled {
-		t.Errorf("resolveMode() = %q, want %q", got, ModeEnabled)
+	if got := ResolveMode(ShellEnv{}, nil); got != ModeEnabled {
+		t.Errorf("ResolveMode() = %q, want %q", got, ModeEnabled)
+	}
+}
+
+// TestDoNotTrackSurvivesAConfigValue is the regression test for a config.env
+// value defeating DO_NOT_TRACK.
+//
+// ResolveMode used to read the alias family from the live environment. Once
+// dotenv.ApplyEnv had merged config.env, the file's value sat in the
+// environment under the same name, could not be told from a shell setting, and
+// so outranked DO_NOT_TRACK. Taking the shell values before the merge is what
+// keeps the two sources distinguishable.
+func TestDoNotTrackSurvivesAConfigValue(t *testing.T) {
+	shell := ShellEnv{DoNotTrack: "1"}
+	configEnabled := func() string { return "enabled" }
+
+	if got := ResolveMode(shell, configEnabled); got != ModeDisabled {
+		t.Errorf("ResolveMode() = %q with DO_NOT_TRACK=1 and config.env enabled, want %q", got, ModeDisabled)
+	}
+
+	// A shell setting still wins: that is an explicit per-invocation choice,
+	// unlike a value that merely lives in a file.
+	shell.Mode = "enabled"
+	if got := ResolveMode(shell, configEnabled); got != ModeEnabled {
+		t.Errorf("ResolveMode() = %q with an explicit shell opt-in, want %q", got, ModeEnabled)
+	}
+}
+
+// TestCaptureShellEnvReadsBothSpellings pins that the snapshot honours the
+// alias family rather than only the preferred name.
+func TestCaptureShellEnvReadsBothSpellings(t *testing.T) {
+	envconfig.PinAliasEnvBlank(t)
+	t.Setenv(envconfig.LegacyKey(EnvSuffix), "log")
+	t.Setenv(EnvDoNotTrack, "1")
+
+	got := CaptureShellEnv()
+	if got.Mode != "log" {
+		t.Errorf("Mode = %q, want %q from the legacy spelling", got.Mode, "log")
+	}
+	if got.DoNotTrack != "1" {
+		t.Errorf("DoNotTrack = %q, want %q", got.DoNotTrack, "1")
 	}
 }
 

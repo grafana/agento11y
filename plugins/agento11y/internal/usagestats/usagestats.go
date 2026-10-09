@@ -46,22 +46,40 @@ const (
 	EnvEndpoint = "AGENTO11Y_ANONYMOUS_USAGE_STATS_ENDPOINT"
 )
 
+// ShellEnv is the reporting configuration as it stood in the process
+// environment at startup.
+//
+// It has to be captured before dotenv.ApplyEnv runs. That merge writes
+// config.env values into the environment under the same names, so afterwards a
+// file value is indistinguishable from a shell one — and since a shell setting
+// outranks DO_NOT_TRACK, reading the environment late lets config.env defeat
+// the opt-out.
+type ShellEnv struct {
+	// Mode is the alias family's value: AGENTO11Y_ANONYMOUS_USAGE_STATS, or
+	// the SIGIL_ spelling.
+	Mode string
+	// DoNotTrack is the unbranded cross-tool variable.
+	DoNotTrack string
+}
+
+// CaptureShellEnv reads the reporting variables from the process environment.
+// Call it before any config.env merge; internal/entry captures it at init.
+func CaptureShellEnv() ShellEnv {
+	mode, _, _ := envconfig.LookupEnv(EnvSuffix)
+	return ShellEnv{Mode: mode, DoNotTrack: os.Getenv(EnvDoNotTrack)}
+}
+
 // ResolveMode resolves the reporting mode. Precedence, highest first: the alias
 // family in the shell, DO_NOT_TRACK, the same key in config.env, the default.
 //
-// configValue is a func so the file read is skipped when the environment
-// already decided, and so this package never triggers dotenv.ApplyEnv.
-func ResolveMode(configValue func() string) Mode {
-	return resolveMode(envconfig.LookupEnv, os.Getenv, configValue)
-}
-
-func resolveMode(lookup envconfig.Lookup, getenv func(string) string, configValue func() string) Mode {
-	if value, _, ok := lookup(EnvSuffix); ok {
-		if m, parsed := parseMode(value); parsed {
-			return m
-		}
+// shell must come from CaptureShellEnv, taken before config.env was merged.
+// configValue is a func so the file read is skipped when the shell already
+// decided, and so this package never triggers dotenv.ApplyEnv itself.
+func ResolveMode(shell ShellEnv, configValue func() string) Mode {
+	if m, parsed := parseMode(shell.Mode); parsed {
+		return m
 	}
-	if isDoNotTrack(getenv(EnvDoNotTrack)) {
+	if isDoNotTrack(shell.DoNotTrack) {
 		return ModeDisabled
 	}
 	if configValue != nil {

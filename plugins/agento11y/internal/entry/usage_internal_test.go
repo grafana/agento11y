@@ -400,9 +400,13 @@ func TestEmitUsageEventRespectsMode(t *testing.T) {
 func captureEmitted(t *testing.T, inv capture.Invocation, mode string) string {
 	t.Helper()
 	envconfig.PinAliasEnvBlank(t)
-	t.Setenv(envconfig.PreferredKey(usagestats.EnvSuffix), mode)
 	t.Setenv(usagestats.EnvDoNotTrack, "")
 	t.Setenv(usagestats.EnvEndpoint, "http://127.0.0.1:0/must-not-be-reached")
+
+	// The emitter reads the snapshot taken at init, not the live environment.
+	originalShell := usageStatsShell
+	usageStatsShell = usagestats.ShellEnv{Mode: mode}
+	t.Cleanup(func() { usageStatsShell = originalShell })
 
 	read, write, err := os.Pipe()
 	if err != nil {
@@ -423,28 +427,12 @@ func captureEmitted(t *testing.T, inv capture.Invocation, mode string) string {
 // without moving dotenv.ApplyEnv, whose call sites are per-branch because
 // renderLocalBanner and runDoctorCommand need the pre-merge environment.
 func TestResolveModeIsStableAcrossApplyEnv(t *testing.T) {
-	dir := isolateDotenvHome(t)
-	path := dotenv.FilePath()
-	if err := os.MkdirAll(dirOf(path), 0o700); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	if err := os.WriteFile(path, []byte("AGENTO11Y_ANONYMOUS_USAGE_STATS=disabled\n"), 0o600); err != nil {
-		t.Fatalf("write config.env: %v", err)
-	}
-	t.Logf("config.env at %s (home %s)", path, dir)
+	writeUsageStatsConfig(t, "AGENTO11Y_ANONYMOUS_USAGE_STATS=disabled\n")
 
-	configValue := func() string {
-		fileEnv, err := dotenv.ReadDotenv(dotenv.FilePath(), nil)
-		if err != nil {
-			return ""
-		}
-		value, _, _ := envconfig.LookupMap(fileEnv, usagestats.EnvSuffix)
-		return value
-	}
-
-	before := usagestats.ResolveMode(configValue)
+	shell := usagestats.CaptureShellEnv()
+	before := usagestats.ResolveMode(shell, readUsageStatsConfigValue)
 	dotenv.ApplyEnv(nil)
-	after := usagestats.ResolveMode(configValue)
+	after := usagestats.ResolveMode(shell, readUsageStatsConfigValue)
 
 	if before != usagestats.ModeDisabled {
 		t.Errorf("mode before ApplyEnv = %q, want the config.env value %q", before, usagestats.ModeDisabled)
@@ -452,6 +440,57 @@ func TestResolveModeIsStableAcrossApplyEnv(t *testing.T) {
 	if after != before {
 		t.Errorf("mode changed across ApplyEnv: %q then %q", before, after)
 	}
+}
+
+// TestDoNotTrackIsNotDefeatedByConfigEnv is the end-to-end guard for the bug
+// the snapshot fixes.
+//
+// dotenv.ApplyEnv writes config.env values into the environment under the
+// branded names. Resolving from the live environment afterwards read the file's
+// value as though the user had exported it, which outranks DO_NOT_TRACK and
+// silently re-enabled reporting. Capturing the shell before the merge is what
+// keeps the opt-out intact.
+func TestDoNotTrackIsNotDefeatedByConfigEnv(t *testing.T) {
+	writeUsageStatsConfig(t, "AGENTO11Y_ANONYMOUS_USAGE_STATS=enabled\n")
+	t.Setenv(usagestats.EnvDoNotTrack, "1")
+
+	shell := usagestats.CaptureShellEnv()
+	if got := usagestats.ResolveMode(shell, readUsageStatsConfigValue); got != usagestats.ModeDisabled {
+		t.Fatalf("mode before ApplyEnv = %q, want %q", got, usagestats.ModeDisabled)
+	}
+
+	dotenv.ApplyEnv(nil)
+
+	if got := usagestats.ResolveMode(shell, readUsageStatsConfigValue); got != usagestats.ModeDisabled {
+		t.Errorf("mode after ApplyEnv = %q, want %q; config.env must not override DO_NOT_TRACK", got, usagestats.ModeDisabled)
+	}
+	// The live environment now carries the merged value, which is exactly what
+	// made resolving late unsafe.
+	if live := envconfig.Getenv(usagestats.EnvSuffix); live != "enabled" {
+		t.Fatalf("precondition failed: ApplyEnv did not merge the file value (got %q)", live)
+	}
+}
+
+// writeUsageStatsConfig points $HOME at a tempdir and writes config.env.
+func writeUsageStatsConfig(t *testing.T, contents string) {
+	t.Helper()
+	isolateDotenvHome(t)
+	path := dotenv.FilePath()
+	if err := os.MkdirAll(dirOf(path), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatalf("write config.env: %v", err)
+	}
+}
+
+func readUsageStatsConfigValue() string {
+	fileEnv, err := dotenv.ReadDotenv(dotenv.FilePath(), nil)
+	if err != nil {
+		return ""
+	}
+	value, _, _ := envconfig.LookupMap(fileEnv, usagestats.EnvSuffix)
+	return value
 }
 
 func dirOf(path string) string {

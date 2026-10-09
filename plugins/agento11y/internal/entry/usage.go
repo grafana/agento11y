@@ -36,6 +36,11 @@ var usageStatsConfigValue = sync.OnceValue(func() string {
 	return value
 })
 
+// usageStatsShell is captured at package init, which runs before run() merges
+// config.env into the environment. Reading it later would let a config.env
+// value pass for a shell one and override DO_NOT_TRACK.
+var usageStatsShell = usagestats.CaptureShellEnv()
+
 // emitUsage is the test seam. Production points at emitUsageEvent.
 var emitUsage = emitUsageEvent
 
@@ -60,7 +65,7 @@ func emitUsageEvent(inv capture.Invocation, now time.Time) {
 	if inv.Suppressed {
 		return
 	}
-	mode := usagestats.ResolveMode(usageStatsConfigValue)
+	mode := usagestats.ResolveMode(usageStatsShell, usageStatsConfigValue)
 	if mode == usagestats.ModeDisabled {
 		return
 	}

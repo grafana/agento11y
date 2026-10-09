@@ -1,9 +1,12 @@
 package usagestats
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/xdg"
@@ -39,9 +42,28 @@ func installID(path string) (string, bool) {
 	if existing, ok := readInstallID(path); ok {
 		return existing, true
 	}
+
 	fresh := uuid.NewString()
-	if err := writeInstallID(path, fresh); err != nil {
-		// Report the throwaway id rather than dropping the event.
+	err := createInstallID(path, fresh)
+	switch {
+	case err == nil:
+		return fresh, true
+	case !errors.Is(err, fs.ErrExist):
+		// Report a throwaway id rather than dropping the event.
+		return fresh, false
+	}
+
+	// The file appeared between the read and the create, so another process is
+	// initialising it concurrently. Adopt its id: two first runs that each
+	// reported persisted with a different id would look like two installations.
+	if existing, ok := awaitInstallID(path); ok {
+		return existing, true
+	}
+
+	// The file exists but never became a valid id, so it is corrupt rather
+	// than contended. Replace it, or a damaged file would make every future
+	// run report a throwaway id.
+	if err := replaceInstallID(path, fresh); err != nil {
 		return fresh, false
 	}
 	return fresh, true
@@ -62,11 +84,60 @@ func readInstallID(path string) (string, bool) {
 	return candidate, true
 }
 
-// writeInstallID stores id owner-only: not a secret, but the one correlator
-// in the event.
-func writeInstallID(path, id string) error {
+// createInstallID writes id to path and fails with fs.ErrExist if the file is
+// already there. O_EXCL makes the claim atomic, so concurrent first runs
+// cannot each conclude that they created the file.
+func createInstallID(path, id string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(id+"\n"), 0o600)
+	// Owner-only: not a secret, but the one correlator in the event.
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := file.WriteString(id + "\n"); err != nil {
+		_ = file.Close()
+		return err
+	}
+	return file.Close()
+}
+
+// awaitInstallID re-reads a file another process is in the middle of creating.
+// The winner claims the path before writing to it, so for a moment the loser
+// can see it empty.
+func awaitInstallID(path string) (string, bool) {
+	for range 50 {
+		if id, ok := readInstallID(path); ok {
+			return id, true
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	return "", false
+}
+
+// replaceInstallID overwrites a corrupt file through a temporary file and a
+// rename, so a reader sees either the old contents or the new ones.
+func replaceInstallID(path, id string) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	temp, err := os.CreateTemp(dir, ".install-id-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(temp.Name()) }()
+
+	if _, err := temp.WriteString(id + "\n"); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(temp.Name(), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(temp.Name(), path)
 }
