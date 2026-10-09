@@ -2,15 +2,19 @@ package history
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 
+	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/xdg"
 )
 
@@ -73,25 +77,67 @@ func ledgerDir() string {
 	return filepath.Join(xdg.AppStateRoot(), "history", "ledger")
 }
 
-func ledgerPath(agent AgentID) string {
+// ledgerPath is the ledger for one agent's imports into one destination, under
+// a directory per agent.
+//
+// A ledger from before destinations, <agent>.jsonl beside those directories,
+// is not read. It did not record where its turns went, so a Grafana Cloud
+// import after a local one skipped every turn the local store already held.
+// Each destination's first import re-sends those turns once: Grafana Cloud
+// answers a generation ID it already holds as stored, and the local viewer
+// shows one turn per generation ID.
+func ledgerPath(agent AgentID, destination string) string {
 	// The registered agent IDs are already filename-safe; SafeComponent keeps
 	// that true if the set ever grows.
-	return filepath.Join(ledgerDir(), xdg.SafeComponent(string(agent))+".jsonl")
+	return filepath.Join(ledgerDir(), xdg.SafeComponent(string(agent)), xdg.SafeComponent(destination)+".jsonl")
 }
 
-// OpenLedger loads (or creates) the ledger for an agent. The caller must call
-// [Ledger.Close].
+// localDestination is the local daemon's store, whatever port it listens on:
+// the port can change between runs, and the store behind it does not.
+const localDestination = "local"
+
+// destination names the store a target writes to, for its ledger. A loopback
+// endpoint is the local daemon. Any other is Grafana Cloud, one destination
+// per endpoint and tenant, hashed so a ledger's file name holds neither.
+func (t Target) destination() string {
+	endpoint := t.endpoint()
+	if envconfig.IsLocalEndpoint(endpoint) {
+		return localDestination
+	}
+	tenant := strings.TrimSpace(envconfig.Getenv("AUTH_TENANT_ID"))
+	sum := sha256.Sum256([]byte(normalizedEndpoint(endpoint) + "\n" + tenant))
+	return "cloud-" + hex.EncodeToString(sum[:8])
+}
+
+// normalizedEndpoint spells one endpoint one way: the scheme and host in lower
+// case, and no trailing slash.
+func normalizedEndpoint(endpoint string) string {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return endpoint
+	}
+	u.Scheme = strings.ToLower(u.Scheme)
+	u.Host = strings.ToLower(u.Host)
+	u.Path = strings.TrimRight(u.Path, "/")
+	return u.String()
+}
+
+// OpenLedger loads (or creates) the ledger for an agent's imports into one
+// destination. The caller must call [Ledger.Close].
 //
 // A record that cannot be decoded is skipped: a torn final line after a crash
 // costs one turn's status, and re-importing that turn is harmless because the
 // generation ID is deterministic. A read or permission error is returned
 // rather than swallowed, because degrading to an empty ledger would silently
 // re-export the whole history.
-func OpenLedger(agent AgentID) (*Ledger, error) {
+func OpenLedger(agent AgentID, destination string) (*Ledger, error) {
 	if strings.TrimSpace(string(agent)) == "" {
 		return nil, errors.New("history: open ledger for empty agent")
 	}
-	return openLedgerAt(ledgerPath(agent))
+	if strings.TrimSpace(destination) == "" {
+		return nil, errors.New("history: open ledger for empty destination")
+	}
+	return openLedgerAt(ledgerPath(agent, destination))
 }
 
 func openLedgerAt(path string) (*Ledger, error) {

@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
 
 // pinStateHome points the application state root at a fresh directory so a
@@ -356,8 +358,47 @@ func TestLedgerSkipsUnreadableRecords(t *testing.T) {
 
 func TestOpenLedgerRejectsEmptyAgent(t *testing.T) {
 	pinStateHome(t)
-	if _, err := OpenLedger(""); err == nil {
-		t.Fatal("OpenLedger(\"\") returned nil error")
+	if _, err := OpenLedger("", localDestination); err == nil {
+		t.Fatal("OpenLedger with no agent returned nil error")
+	}
+	if _, err := OpenLedger(AgentClaudeCode, " "); err == nil {
+		t.Fatal("OpenLedger with no destination returned nil error")
+	}
+}
+
+func TestTargetDestination(t *testing.T) {
+	envconfig.PinAliasEnvBlank(t)
+	cloud := func(endpoint, tenant string) string {
+		t.Setenv("AGENTO11Y_AUTH_TENANT_ID", tenant)
+		return Target{Endpoint: endpoint}.destination()
+	}
+
+	// The daemon's port moves between runs, and its store does not.
+	if a, b := cloud("http://127.0.0.1:8765", ""), cloud("http://localhost:8768/", ""); a != localDestination || b != localDestination {
+		t.Errorf("loopback destinations = %q, %q, want both %q", a, b, localDestination)
+	}
+	stack := cloud("https://agento11y-prod.grafana.net", "123")
+	if stack == localDestination || !strings.HasPrefix(stack, "cloud-") {
+		t.Fatalf("Cloud destination = %q", stack)
+	}
+	if same := cloud("https://Agento11y-Prod.grafana.net/", "123"); same != stack {
+		t.Errorf("one endpoint spelled two ways gave %q and %q", stack, same)
+	}
+	if other := cloud("https://agento11y-prod.grafana.net", "456"); other == stack {
+		t.Error("two tenants on one endpoint share a destination")
+	}
+	if strings.Contains(stack, "grafana") || strings.Contains(stack, "123") {
+		t.Errorf("destination %q names its endpoint or tenant", stack)
+	}
+
+	// An empty target endpoint resolves as the exporter resolves it.
+	t.Setenv("AGENTO11Y_ENDPOINT", "https://agento11y-prod.grafana.net")
+	if got := cloud("", "123"); got != stack {
+		t.Errorf("configured endpoint gave %q, want %q", got, stack)
+	}
+	t.Setenv("AGENTO11Y_ENDPOINT", "http://127.0.0.1:8765")
+	if got := cloud("", "123"); got != localDestination {
+		t.Errorf("configured loopback endpoint gave %q, want %q", got, localDestination)
 	}
 }
 
@@ -370,14 +411,14 @@ func TestLedgerPathUsesApplicationStateRoot(t *testing.T) {
 		t.Fatalf("mkdir legacy: %v", err)
 	}
 
-	l, err := OpenLedger(AgentClaudeCode)
+	l, err := OpenLedger(AgentClaudeCode, localDestination)
 	if err != nil {
 		t.Fatalf("open ledger: %v", err)
 	}
 	defer func() { _ = l.Close() }()
 
-	if !strings.HasPrefix(ledgerPath(AgentClaudeCode), legacy+string(filepath.Separator)) {
-		t.Fatalf("ledger path %q is not under the legacy state root %q", ledgerPath(AgentClaudeCode), legacy)
+	if path := ledgerPath(AgentClaudeCode, localDestination); !strings.HasPrefix(path, legacy+string(filepath.Separator)) {
+		t.Fatalf("ledger path %q is not under the legacy state root %q", path, legacy)
 	}
 	if _, err := os.Stat(filepath.Join(state, "agento11y")); !os.IsNotExist(err) {
 		t.Fatalf("opening the ledger created the preferred state root (stat err %v)", err)

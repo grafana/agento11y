@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/grafana/agento11y/go/agento11y"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/xdg"
 )
 
 // recordingExporter captures every turn handed to it and can fail on demand,
@@ -191,6 +193,67 @@ func TestRunImportIsIdempotent(t *testing.T) {
 		if forced.got[i].Source.GenerationID() != first.got[i].Source.GenerationID() {
 			t.Fatalf("force changed the deterministic generation ID for turn %d", i)
 		}
+	}
+}
+
+// twoTurnImport imports one session of two turns into endpoint, through the
+// ledger RunImport opens for it.
+func twoTurnImport(t *testing.T, endpoint string, ledger *Ledger) ImportResult {
+	t.Helper()
+	got, err := RunImport(context.Background(), ImportOptions{
+		Agent: AgentClaudeCode,
+		Importer: &stubImporter{
+			turns: func(context.Context, SessionPreview) iter.Seq2[HistoricalGeneration, error] {
+				return turnSeq([]HistoricalGeneration{turn("t1"), turn("t2")}, nil)
+			},
+		},
+		Sessions: []SessionPreview{sessionAt("/a.jsonl")},
+		Target:   Target{Endpoint: endpoint},
+		Exporter: &recordingExporter{},
+		Ledger:   ledger,
+	})
+	if err != nil {
+		t.Fatalf("import into %s: %v", endpoint, err)
+	}
+	return got
+}
+
+// Regression: one ledger held every destination's turns, so a Grafana Cloud
+// import after a local one skipped every turn the local store already had.
+func TestRunImportKeepsALedgerPerDestination(t *testing.T) {
+	pinStateHome(t)
+	envconfig.PinAliasEnvBlank(t)
+	t.Setenv("AGENTO11Y_AUTH_TENANT_ID", "123")
+	steps := []struct {
+		name              string
+		endpoint          string
+		imported, skipped int
+	}{
+		{name: "into the local store", endpoint: "http://127.0.0.1:8765", imported: 2},
+		{name: "into Grafana Cloud after the local store", endpoint: "https://agento11y-prod.grafana.net", imported: 2},
+		{name: "into Grafana Cloud again", endpoint: "https://agento11y-prod.grafana.net", skipped: 2},
+		{name: "into the local store on another port", endpoint: "http://127.0.0.1:8768", skipped: 2},
+	}
+	for _, s := range steps {
+		got := twoTurnImport(t, s.endpoint, nil)
+		if got.Imported != s.imported || got.Skipped != s.skipped {
+			t.Errorf("%s: %+v, want %d imported and %d skipped", s.name, got, s.imported, s.skipped)
+		}
+	}
+}
+
+// A ledger from before destinations did not say where its turns went, so it is
+// not read: trusting it would skip turns a destination never received.
+func TestRunImportDoesNotReadTheLedgerFromBeforeDestinations(t *testing.T) {
+	pinStateHome(t)
+	envconfig.PinAliasEnvBlank(t)
+	t.Setenv("AGENTO11Y_AUTH_TENANT_ID", "123")
+	legacy := openTestLedger(t, filepath.Join(ledgerDir(), xdg.SafeComponent(string(AgentClaudeCode))+".jsonl"))
+	if got := twoTurnImport(t, "http://127.0.0.1:8765", legacy); got.Imported != 2 {
+		t.Fatalf("seeding the old ledger: %+v", got)
+	}
+	if got := twoTurnImport(t, "https://agento11y-prod.grafana.net", nil); got.Imported != 2 || got.Skipped != 0 {
+		t.Errorf("Grafana Cloud import after the old ledger: %+v, want 2 imported", got)
 	}
 }
 

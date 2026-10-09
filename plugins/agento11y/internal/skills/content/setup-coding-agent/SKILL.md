@@ -481,8 +481,8 @@ skips that question; missing Cloud credentials still starts Cloud setup. That se
 **Local web UI** because locally forwarded imports never relay to Cloud. A noninteractive run never
 asks. It imports only with both `--all` and `--yes`; otherwise it prints a dry-run plan and exits 0.
 
-Without `--since`, an import selects sessions active during the last 90 days. Each imported turn goes into a per-agent ledger that omits the destination.
-To send the same turns to another destination, add `--force` to the second import. If saved local mode would keep that import local, add `--no-local` too.
+Without `--since`, an import selects sessions active during the last 90 days. Each imported turn is recorded in a ledger per agent and destination.
+An import into another destination sends the same turns again without `--force`. If saved local mode would keep that import local, add `--no-local`.
 A cancelled or failed run resumes from turns not marked exported.
 
 ### Auto-update

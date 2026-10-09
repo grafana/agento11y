@@ -104,6 +104,16 @@ func NewExporter(client *agento11y.Client) *Exporter {
 	}
 }
 
+// endpoint is the generation-export endpoint the target writes to: its own, or
+// the configured AGENTO11Y_ENDPOINT. The ledger keys its records by the same
+// resolution, so the two cannot disagree on where an import went.
+func (t Target) endpoint() string {
+	if endpoint := strings.TrimSpace(t.Endpoint); endpoint != "" {
+		return endpoint
+	}
+	return strings.TrimSpace(envconfig.Getenv("ENDPOINT"))
+}
+
 // NewTargetExporter builds the production exporter for an import target.
 //
 // Endpoint, OTLP endpoint, and headers are passed explicitly rather than
@@ -112,10 +122,7 @@ func NewExporter(client *agento11y.Client) *Exporter {
 // in-process import would change what the daemon forwards while the import
 // runs.
 func NewTargetExporter(ctx context.Context, target Target, logger *log.Logger) (*Exporter, func(context.Context) error, error) {
-	endpoint := strings.TrimSpace(target.Endpoint)
-	if endpoint == "" {
-		endpoint = strings.TrimSpace(envconfig.Getenv("ENDPOINT"))
-	}
+	endpoint := target.endpoint()
 	if endpoint == "" {
 		return nil, nil, errors.New("history: no endpoint configured for import (set AGENTO11Y_ENDPOINT or use --local)")
 	}

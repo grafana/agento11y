@@ -131,8 +131,9 @@ type ImportOptions struct {
 	// OnProgress is called after each batch and at the end of each session. It
 	// must not block: the viewer publishes it to the SSE hub.
 	OnProgress func(Progress)
-	// Ledger overrides the per-agent ledger. Tests set it; production leaves
-	// it nil so RunImport opens and closes the real one.
+	// Ledger overrides the ledger for the agent and the target's destination.
+	// Tests set it; production leaves it nil so RunImport opens and closes the
+	// real one.
 	Ledger *Ledger
 	// Collisions are the session-ID clashes the plan found across every
 	// discovered session. Sessions holds one run's selection, which cannot see
@@ -191,7 +192,7 @@ func RunImport(ctx context.Context, opts ImportOptions) (ImportResult, error) {
 
 	ledger := opts.Ledger
 	if ledger == nil {
-		opened, err := OpenLedger(opts.Agent)
+		opened, err := OpenLedger(opts.Agent, opts.Target.destination())
 		if err != nil {
 			return result, err
 		}
