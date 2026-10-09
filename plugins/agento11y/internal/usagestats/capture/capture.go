@@ -1,18 +1,13 @@
-// Package capture holds the facts about the running invocation that usage
-// statistics need but that are only known partway through it: when it started,
-// which dispatch branch won, whether it should report at all, and how it
-// ended.
+// Package capture holds the facts about the running invocation that are only
+// known partway through it: when it started, which branch won, whether to
+// report at all, and how it ended.
 //
-// It is a true leaf. It imports nothing from agento11y, not even the
-// usagestats package it serves, so any package can become a writer without an
-// import-graph audit — and so recording a fact does not drag the HTTP exporter
-// into the importing package. Writers will eventually live in internal/entry,
-// internal/local, and internal/agents/*.
+// A deliberate leaf: it imports nothing from agento11y, so any package can
+// become a writer without an import-graph audit, and recording a fact does not
+// pull in the HTTP exporter.
 //
-// The state is process-global because the invocation is. There is exactly one
-// per process, it is written from whichever branch runs, and it is read once
-// at exit by a caller that has no way to receive a value threaded through
-// fifteen return paths.
+// State is process-global because the invocation is — one per process, written
+// from whichever branch runs, read once at exit.
 package capture
 
 import (
@@ -21,32 +16,27 @@ import (
 )
 
 // Invocation is the recorded shape of one CLI invocation. The zero value means
-// "nothing recorded yet", which the event builder must treat as an unknown
-// command rather than as a successful one.
+// "nothing recorded yet", never "succeeded".
 type Invocation struct {
-	// Start is when the process began, set as early as possible so Duration
-	// covers the whole invocation.
+	// Start is set as early as possible so Duration covers the whole run.
 	Start time.Time
-	// Command is the resolved command path, drawn from the help-page registry.
+	// Command is the resolved command path from the help-page registry.
 	Command string
-	// Surface names the dispatch branch: command, launcher, or help.
+	// Surface is the dispatch branch: command, launcher, or help.
 	Surface string
 	// Agent is the matched launcher or hook agent name.
 	Agent string
-	// Skill is a bundled skill name, already validated against skills.Names().
+	// Skill is a bundled skill name, already validated by the caller.
 	Skill string
 	// Flags is the sorted, comma-joined list of allowlisted flag names.
-	Flags string
-	// ExitCode is the process exit code, set on the paths that exit non-zero.
+	Flags    string
 	ExitCode int
-	// Completed records that the dispatcher returned without panicking. Its
-	// absence is how a panic is detected without calling recover() and
-	// changing what the runtime prints.
+	// Completed means the dispatcher returned; its absence detects a panic
+	// without calling recover().
 	Completed bool
-	// Launched records that the execve handoff was reached. The target CLI's
-	// own outcome is unknowable afterwards, so this is terminal.
+	// Launched means the execve handoff was reached, so it is terminal.
 	Launched bool
-	// Suppressed means this invocation reports nothing at all.
+	// Suppressed means this invocation reports nothing.
 	Suppressed bool
 }
 
@@ -62,11 +52,10 @@ func SetStart(t time.Time) {
 	cur.Start = t
 }
 
-// SetDispatch records which branch won and what it resolved from argv. Every
-// value here must already be a member of a closed vocabulary: this package
-// does no validation and no redaction, because it cannot — it does not know
-// what the vocabularies are. Callers are responsible for never passing a raw
-// argv token.
+// SetDispatch records which branch won and what it resolved from argv.
+//
+// This package does no validation or redaction — it cannot, it does not know
+// the vocabularies. Callers must never pass a raw argv token.
 func SetDispatch(surface, command, agent, flags string) {
 	mu.Lock()
 	defer mu.Unlock()
@@ -101,9 +90,8 @@ func SetLaunched() {
 	cur.Launched = true
 }
 
-// Suppress marks this invocation as reporting nothing. It is one-way: once
-// suppressed an invocation stays suppressed, so a later dispatch branch cannot
-// accidentally re-enable reporting for a hook that already opted out.
+// Suppress marks this invocation as reporting nothing. One-way, so a later
+// branch cannot re-enable reporting for a hook that already opted out.
 func Suppress() {
 	mu.Lock()
 	defer mu.Unlock()
@@ -117,17 +105,15 @@ func Snapshot() Invocation {
 	return cur
 }
 
-// Reset clears the state. It exists for tests: the state is process-global, so
-// without it one test's invocation leaks into the next.
+// Reset clears the state for tests; without it one test leaks into the next.
 func Reset() {
 	mu.Lock()
 	defer mu.Unlock()
 	cur = Invocation{}
 }
 
-// Duration returns how long the invocation has run, or 0 when no start time
-// was recorded. Zero is reported rather than a duration measured from the
-// zero time, which would be ~2000 years and would poison any aggregate.
+// Duration returns how long the invocation has run, or 0 with no recorded
+// start — measuring from the zero time would report ~2000 years.
 func (i Invocation) Duration(now time.Time) time.Duration {
 	if i.Start.IsZero() {
 		return 0

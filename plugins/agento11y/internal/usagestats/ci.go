@@ -9,14 +9,12 @@ import (
 // provider in the table matched.
 const CIProviderUnknown = "unknown"
 
-// ciProviders maps a CI provider label to the environment variable that
-// signals it. The table is ported verbatim from gcx, which took it from the
-// canonical ci-info list (github.com/watson/ci-info), so the two CLIs produce
-// comparable labels in the same dataset. Order matters: first match wins.
+// ciProviders maps a provider label to its signature variable. Ported
+// verbatim from gcx (originally github.com/watson/ci-info) so both CLIs
+// produce comparable labels. First match wins.
 //
-// These variables are read for PRESENCE ONLY. Their values are never emitted,
-// and must not be: CI environment variables carry repository names, branch
-// names, build URLs, and sometimes tokens.
+// Read for PRESENCE ONLY: these values carry repo names, URLs, and sometimes
+// tokens.
 var ciProviders = []struct{ name, envVar string }{
 	{"github_actions", "GITHUB_ACTIONS"},
 	{"gitlab", "GITLAB_CI"},
@@ -38,9 +36,8 @@ var ciProviders = []struct{ name, envVar string }{
 // genericCIVars signal CI without identifying the provider.
 var genericCIVars = []string{"CI", "CONTINUOUS_INTEGRATION", "BUILD_NUMBER"}
 
-// CIEnvVars returns every variable DetectCI reads. Tests use it to blank the
-// whole set, because otherwise the suite behaves differently on a developer
-// laptop than it does under GitHub Actions and every is_ci assertion flips.
+// CIEnvVars returns every variable DetectCI reads, so tests can blank the set
+// and behave the same on a laptop as under Actions.
 func CIEnvVars() []string {
 	out := make([]string, 0, len(ciProviders)+len(genericCIVars))
 	for _, p := range ciProviders {
@@ -49,10 +46,8 @@ func CIEnvVars() []string {
 	return append(out, genericCIVars...)
 }
 
-// DetectCI reports the CI provider label and whether this invocation is
-// running under CI. A recognised provider returns its fixed label; a generic
-// CI signal with no recognised provider returns CIProviderUnknown; no CI
-// returns "" and false.
+// DetectCI reports the provider label and whether this is CI. A generic
+// signal with no recognised provider returns CIProviderUnknown.
 func DetectCI() (provider string, isCI bool) {
 	return detectCI(os.Getenv)
 }
@@ -71,9 +66,8 @@ func detectCI(getenv func(string) string) (string, bool) {
 	return "", false
 }
 
-// isEnvSet treats a variable as set when non-empty and not explicitly falsy:
-// some environments export CI=false precisely to opt out of CI-specific
-// behaviour, and honouring that is the point.
+// isEnvSet ignores explicitly falsy values: some environments export CI=false
+// precisely to opt out.
 func isEnvSet(v string) bool {
 	switch strings.ToLower(strings.TrimSpace(v)) {
 	case "", "0", "false", "no":

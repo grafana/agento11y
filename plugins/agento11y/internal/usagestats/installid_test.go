@@ -47,11 +47,8 @@ func TestInstallIDFileIsOwnerOnly(t *testing.T) {
 	}
 }
 
-// TestInstallIDRejectsCorruptContent is the case worth having. A truncated or
-// hand-edited file must not become a permanent correlator shared by every
-// installation that suffered the same corruption — that would silently merge
-// unrelated machines into one apparent installation, which is worse than a
-// fresh id.
+// TestInstallIDRejectsCorruptContent: a truncated file must not become a
+// correlator shared by every install with the same corruption.
 func TestInstallIDRejectsCorruptContent(t *testing.T) {
 	for _, content := range []string{"", "   ", "not-a-uuid", "0", "6c1f0b6e-0d2a"} {
 		t.Run("content="+content, func(t *testing.T) {
@@ -83,10 +80,8 @@ func TestInstallIDTrimsStoredWhitespace(t *testing.T) {
 	}
 }
 
-// TestInstallIDUnwritableDirReportsEphemeral covers the case the receiver has
-// to be able to exclude: without persisted=false, a machine whose state
-// directory cannot be written counts as a brand-new installation on every
-// single invocation and swamps the installation count.
+// TestInstallIDUnwritableDirReportsEphemeral: without persisted=false an
+// unwritable state directory counts as a new install on every invocation.
 func TestInstallIDUnwritableDirReportsEphemeral(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("unix permission bits")
@@ -111,10 +106,9 @@ func TestInstallIDUnwritableDirReportsEphemeral(t *testing.T) {
 	}
 }
 
-// TestInstallIDWithoutDurableStateIsEphemeral is agento11y-specific and has no
-// gcx counterpart: xdg.StateRoot falls back to the OS temp directory rather
-// than failing, so without the durability check an id would be written to
-// TMPDIR, reset on reboot, and still be reported as persisted.
+// TestInstallIDWithoutDurableStateIsEphemeral: StateRoot falls back to TMPDIR
+// rather than failing, so without the durability check an id would reset on
+// reboot and still report as persisted.
 func TestInstallIDWithoutDurableStateIsEphemeral(t *testing.T) {
 	id, persisted := installID("")
 	if persisted {
@@ -130,9 +124,8 @@ func TestInstallIDWithoutDurableStateIsEphemeral(t *testing.T) {
 	}
 }
 
-// TestInstallIDPathIsEmptyWithoutDurableState ties InstallIDPath to the
-// durability verdict, which is what makes the case above reachable in
-// production rather than only in tests.
+// TestInstallIDPathIsEmptyWithoutDurableState makes the case above reachable
+// in production, not just in tests.
 func TestInstallIDPathIsEmptyWithoutDurableState(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", "")
 	t.Setenv("HOME", "")

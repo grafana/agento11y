@@ -40,24 +40,17 @@ func AppStateRoot() string {
 	return preferred
 }
 
-// AppStateRootDurable returns the launcher state root and whether it is
-// durable, meaning it survives a reboot.
+// AppStateRootDurable returns the state root and whether it survives a reboot.
 //
-// StateRoot falls back to the OS temp directory when no home directory can be
-// resolved, and never reports that it did. For logs and update stamps that is
-// the right behaviour — a stamp lost on reboot just re-runs a check — so
-// AppStateRoot keeps it. It is wrong for anything that must be stable for the
-// life of the installation: a value written under TMPDIR comes back empty
-// after a reboot while looking exactly like a value that was stored
-// successfully. Callers that care need to know the difference, which is why
-// this is a separate function rather than a change to AppStateRoot.
+// StateRoot silently falls back to the OS temp directory. That is fine for
+// logs and update stamps — a lost stamp just re-runs a check — so AppStateRoot
+// keeps it. It is wrong for anything that must be stable for the life of the
+// installation, hence a separate function rather than a change to that one.
 func AppStateRootDurable() (root string, durable bool) {
 	return AppStateRoot(), homeIsResolvable()
 }
 
-// homeIsResolvable reports whether StateRoot resolved to a real state
-// directory rather than its temp-directory fallback. It mirrors StateRoot's
-// own conditions; keep the two in step.
+// homeIsResolvable mirrors StateRoot's conditions; keep the two in step.
 func homeIsResolvable() bool {
 	if x := strings.TrimSpace(os.Getenv("XDG_STATE_HOME")); x != "" && filepath.IsAbs(x) {
 		return true

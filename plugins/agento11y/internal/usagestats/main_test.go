@@ -7,29 +7,16 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
 
-// unroutableEndpoint is a belt-and-braces default for the whole package: even
-// a bug that bypassed mode resolution entirely cannot then reach
-// stats.grafana.org from a developer laptop or from CI. Port 0 is not
-// connectable, so an accidental export fails immediately instead of hanging.
+// unroutableEndpoint means even a bug bypassing mode resolution cannot reach
+// the real receiver. Port 0 fails immediately rather than hanging.
 const unroutableEndpoint = "http://127.0.0.1:0/must-not-be-reached"
 
-// TestMain isolates the package from the ambient environment.
+// TestMain isolates the package. This package's job is to POST to a
+// Grafana-operated endpoint, so an un-isolated run would file real events from
+// a developer machine.
 //
-// The stakes here are higher than for a normal suite: this package's whole job
-// is to POST to a Grafana-operated endpoint, so an un-isolated run would file
-// real usage events from a developer's machine and pollute the dataset with
-// test traffic.
-//
-// Three groups are scrubbed:
-//
-//   - Both spellings of every alias family, so a developer shell exporting
-//     AGENTO11Y_ANONYMOUS_USAGE_STATS cannot decide the mode for a test that
-//     did not set it.
-//   - DO_NOT_TRACK, which is unbranded and so is not covered by the alias
-//     scrub, and which a privacy-minded developer plausibly has set.
-//   - Every CI variable DetectCI reads. Without this the suite behaves
-//     differently on a laptop than under GitHub Actions and every is_ci
-//     assertion flips depending on where it runs.
+// Scrubs both spellings of every alias family, DO_NOT_TRACK (unbranded, so not
+// covered by that scrub), and every CI variable DetectCI reads.
 func TestMain(m *testing.M) {
 	for _, suffix := range envconfig.AliasSuffixes {
 		_ = os.Unsetenv(envconfig.PreferredKey(suffix))
@@ -53,9 +40,8 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// TestPackageEnvIsScrubbed pins the TestMain guard. A regression here is not a
-// failing assertion somewhere else — it is test traffic reaching the real
-// receiver — so it gets its own test rather than being left implicit.
+// TestPackageEnvIsScrubbed pins the TestMain guard: a regression here is test
+// traffic reaching the real receiver, not just a failing assertion.
 func TestPackageEnvIsScrubbed(t *testing.T) {
 	for _, key := range append(CIEnvVars(), EnvDoNotTrack) {
 		if v := os.Getenv(key); v != "" {

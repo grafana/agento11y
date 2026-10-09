@@ -8,9 +8,7 @@ import (
 	"testing"
 )
 
-// TestExportPostsTheEventVerbatim pins the request shape the receiver's own
-// handler expects: a POST of one flat JSON document, with the content type and
-// User-Agent it keys on.
+// TestExportPostsTheEventVerbatim pins the request shape the receiver expects.
 func TestExportPostsTheEventVerbatim(t *testing.T) {
 	type captured struct {
 		method      string
@@ -60,8 +58,8 @@ func TestExportPostsTheEventVerbatim(t *testing.T) {
 	}
 }
 
-// TestExportCarriesNoTimestamp pins a receiver-side assumption: it stamps
-// receipt time itself, so a client clock cannot skew the dataset.
+// TestExportCarriesNoTimestamp: the receiver stamps receipt time, so a client
+// clock cannot skew the dataset.
 func TestExportCarriesNoTimestamp(t *testing.T) {
 	body, err := json.Marshal(fullyPopulatedEvent())
 	if err != nil {
@@ -78,9 +76,8 @@ func TestExportCarriesNoTimestamp(t *testing.T) {
 	}
 }
 
-// TestExportIsSilentOnFailure is the contract that matters most in production:
-// an unreachable or hostile endpoint must not panic, block, or otherwise
-// affect the command that is exiting.
+// TestExportIsSilentOnFailure: an unreachable or hostile endpoint must not
+// panic, block, or affect the exiting command.
 func TestExportIsSilentOnFailure(t *testing.T) {
 	t.Run("connection refused", func(t *testing.T) {
 		export(fullyPopulatedEvent(), "http://127.0.0.1:0/nope", "1.2.3")
@@ -99,8 +96,7 @@ func TestExportIsSilentOnFailure(t *testing.T) {
 	})
 }
 
-// TestEndpointOverride pins the dev-build escape hatch, and that the default
-// is the real receiver when nothing overrides it.
+// TestEndpointOverride pins the dev-build escape hatch.
 func TestEndpointOverride(t *testing.T) {
 	t.Setenv(EnvEndpoint, "http://localhost:9999/report")
 	if got := endpoint(); got != "http://localhost:9999/report" {

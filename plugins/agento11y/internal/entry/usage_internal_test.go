@@ -58,9 +58,8 @@ func TestBuildUsageEventFillsTheEnvelope(t *testing.T) {
 	}
 }
 
-// TestBuildUsageEventRecordsUnknownCommand pins that a dispatch which
-// resolved nothing reports the placeholder rather than an empty string, so a
-// query can tell "we did not recognise this" from "the field is missing".
+// TestBuildUsageEventRecordsUnknownCommand: the placeholder lets a query tell
+// "unrecognised" from "field missing".
 func TestBuildUsageEventRecordsUnknownCommand(t *testing.T) {
 	now := time.Now()
 	event := buildUsageEvent(capture.Invocation{Start: now, Completed: true, ExitCode: 2}, now)
@@ -100,9 +99,7 @@ func TestUsageOutcome(t *testing.T) {
 			wantErrorKind: usagestats.ErrorKindRuntime,
 		},
 		{
-			// Completed never set: the dispatcher did not return. This is how
-			// a panic is detected without calling recover() and changing what
-			// the runtime prints.
+			// Completed never set: detects a panic without recover().
 			name:          "panic",
 			inv:           capture.Invocation{},
 			wantOutcome:   usagestats.OutcomePanic,
@@ -114,8 +111,7 @@ func TestUsageOutcome(t *testing.T) {
 			wantOutcome: usagestats.OutcomeLaunched,
 		},
 		{
-			// Launched is terminal: the process image is replaced at the
-			// handoff, so a later exit code is not about this invocation.
+			// Launched is terminal: a later exit code is not about this run.
 			name:        "launched wins over a later exit code",
 			inv:         capture.Invocation{Launched: true, ExitCode: 1, Completed: true},
 			wantOutcome: usagestats.OutcomeLaunched,
@@ -137,12 +133,9 @@ func TestUsageOutcome(t *testing.T) {
 	}
 }
 
-// TestNoArgvValueReachesTheEvent is the test that would catch a real leak.
-//
-// It drives the builder with secrets in every argv position that has ever been
-// a plausible leak — a token, an endpoint, a tenant id, a tag value, a path
-// traversal, arguments forwarded past "--" — and asserts none of them appears
-// anywhere in the marshalled event. One test, every historical leak class.
+// TestNoArgvValueReachesTheEvent is the test that would catch a real leak: it
+// drives the builder with secrets in every argv position that has ever been a
+// plausible one and asserts none reaches the marshalled event.
 func TestNoArgvValueReachesTheEvent(t *testing.T) {
 	secrets := []string{
 		"sk-live-abcdef123456",
@@ -175,9 +168,8 @@ func TestNoArgvValueReachesTheEvent(t *testing.T) {
 	now := time.Now()
 	for _, args := range corpus {
 		t.Run(strings.Join(args, "_"), func(t *testing.T) {
-			// Build the event the way dispatch would: a resolved command path
-			// from the help registry, an allowlisted flag-name set, and a
-			// validated skill. Nothing else from argv is offered to it.
+			// Build it the way dispatch does: resolved path, allowlisted flag
+			// names, validated skill. Nothing else from argv is offered.
 			path, consumed, _ := resolveCommandPath(args)
 			rest := args
 			if consumed > 0 {
@@ -210,9 +202,8 @@ func TestNoArgvValueReachesTheEvent(t *testing.T) {
 	}
 }
 
-// TestUsageFlagNamesStopsAtDoubleDash pins the rule that keeps arguments
-// forwarded to the wrapped CLI out of the event. Those tokens are the user's
-// own prompt-adjacent arguments.
+// TestUsageFlagNamesStopsAtDoubleDash keeps arguments forwarded to the wrapped
+// CLI out of the event.
 func TestUsageFlagNamesStopsAtDoubleDash(t *testing.T) {
 	got := usageFlagNames([]string{"--local", "--", "--json", "--token"})
 	if strings.Contains(got, "json") || strings.Contains(got, "token") {
@@ -247,10 +238,8 @@ func TestUsageFlagNamesDropsValuesAndUnknowns(t *testing.T) {
 	}
 }
 
-// TestUsageFlagAllowlistCoversDefinedFlags pins the derivation. A hand-written
-// allowlist goes stale silently and records nothing for a newly added flag;
-// deriving it from the registry means a new flag is picked up as soon as it is
-// defined.
+// TestUsageFlagAllowlistCoversDefinedFlags pins the derivation: a hand-written
+// allowlist would silently record nothing for a newly added flag.
 func TestUsageFlagAllowlistCoversDefinedFlags(t *testing.T) {
 	allowed := usageFlagAllowlist()
 
@@ -266,8 +255,7 @@ func TestUsageFlagAllowlistCoversDefinedFlags(t *testing.T) {
 		})
 	}
 
-	// Spot-check that real flags survive and invented ones do not, so a
-	// trivially-true allowlist (everything, or nothing) fails here.
+	// Spot-check so a trivially-true allowlist fails here.
 	if !allowed["json"] {
 		t.Error("allowlist is missing --json")
 	}
@@ -276,9 +264,8 @@ func TestUsageFlagAllowlistCoversDefinedFlags(t *testing.T) {
 	}
 }
 
-// TestResolveUsageSkillOnlyAcceptsBundledSkills pins the one dimension
-// agento11y can carry that gcx cannot. The bundled set is embedded at build
-// time, so a member of it is safe to report; anything else is dropped.
+// TestResolveUsageSkillOnlyAcceptsBundledSkills: the bundled set is embedded
+// at build time, so a member is not user input. Anything else is dropped.
 func TestResolveUsageSkillOnlyAcceptsBundledSkills(t *testing.T) {
 	names := skills.Names()
 	if len(names) == 0 {
@@ -295,13 +282,9 @@ func TestResolveUsageSkillOnlyAcceptsBundledSkills(t *testing.T) {
 	}
 }
 
-// TestLogModeMatchesExportedBody is the test that keeps log mode honest.
-//
-// Log mode is the user's only way to inspect what would be sent, so it is
-// trusted; a preview that drifted from the payload would be worse than no
-// preview. The printer lives here and the POST lives in usagestats, so this
-// has to straddle both packages — which is exactly why it is easy to let them
-// drift without noticing.
+// TestLogModeMatchesExportedBody keeps log mode honest. It is the user's only
+// way to inspect what would be sent, and the printer and the POST live in
+// different packages, so they are easy to let drift.
 func TestLogModeMatchesExportedBody(t *testing.T) {
 	now := time.Now()
 	event := buildUsageEvent(sampleInvocation(now), now)
@@ -359,9 +342,8 @@ func TestEmitUsageEventRespectsMode(t *testing.T) {
 	})
 }
 
-// captureEmitted runs the emitter with the given mode and returns whatever it
-// wrote to stderr. The endpoint is pointed at an unroutable address so an
-// enabled mode cannot reach the real receiver even if the test is wrong.
+// captureEmitted runs the emitter and returns what it wrote to stderr. The
+// endpoint is unroutable so a wrong test cannot reach the real receiver.
 func captureEmitted(t *testing.T, inv capture.Invocation, mode string) string {
 	t.Helper()
 	envconfig.PinAliasEnvBlank(t)
@@ -384,14 +366,9 @@ func captureEmitted(t *testing.T, inv capture.Invocation, mode string) string {
 	return string(out)
 }
 
-// TestResolveModeIsStableAcrossApplyEnv pins the property that lets the
-// emitter resolve its mode without moving dotenv.ApplyEnv.
-//
-// ApplyEnv's call sites are per-branch on purpose: renderLocalBanner reports
-// which spelling the user set, and runDoctorCommand snapshots the environment
-// before the merge to attribute each value to the shell or config.env. So the
-// answer must not depend on whether the merge has already happened in the
-// branch that reached the emitter.
+// TestResolveModeIsStableAcrossApplyEnv lets the emitter resolve its mode
+// without moving dotenv.ApplyEnv, whose call sites are per-branch because
+// renderLocalBanner and runDoctorCommand both need the pre-merge environment.
 func TestResolveModeIsStableAcrossApplyEnv(t *testing.T) {
 	dir := isolateDotenvHome(t)
 	path := dotenv.FilePath()
@@ -431,9 +408,8 @@ func dirOf(path string) string {
 	return "."
 }
 
-// TestEmitUsageOnceIsNotWiredYet documents the deliberate state of this PR:
-// the emitter exists and is fully tested, but no dispatch path reaches it, so
-// merging this collects nothing. The lifecycle wiring lands separately.
+// TestEmitUsageOnceIsNotWiredYet documents the deliberate state: the emitter
+// exists and is tested, but no dispatch path reaches it.
 func TestEmitUsageOnceIsNotWiredYet(t *testing.T) {
 	capture.Reset()
 	resetUsageOnceForTest()
@@ -443,8 +419,8 @@ func TestEmitUsageOnceIsNotWiredYet(t *testing.T) {
 	emitUsage = func(capture.Invocation, time.Time) { calls++ }
 	t.Cleanup(func() { emitUsage = original })
 
-	// Called twice on purpose: the once-guard is what will make the wiring
-	// safe across the several exit paths that reach it.
+	// Twice on purpose: the guard is what makes the wiring safe across the
+	// several exit paths that will reach it.
 	emitUsageOnce()
 	emitUsageOnce()
 

@@ -9,15 +9,13 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/xdg"
 )
 
-// installIDFileName holds the random per-installation id. Deleting the file
-// resets the id, which is the documented way to opt out of correlation without
-// opting out of reporting.
+// installIDFileName holds the per-installation id. Deleting the file resets
+// it, which drops correlation without disabling reporting.
 const installIDFileName = "install-id"
 
-// InstallIDPath returns the file backing the installation id, or "" when no
-// durable state directory is known. See xdg.AppStateRootDurable: a path under
-// the OS temp directory is not durable, and an id stored there would reset on
-// reboot and inflate installation counts.
+// InstallIDPath returns the file backing the id, or "" when no durable state
+// directory is known — an id under TMPDIR resets on reboot and would inflate
+// installation counts.
 func InstallIDPath() string {
 	root, durable := xdg.AppStateRootDurable()
 	if !durable {
@@ -26,17 +24,11 @@ func InstallIDPath() string {
 	return filepath.Join(root, installIDFileName)
 }
 
-// InstallID returns the random per-installation id and whether it came from,
-// or was written to, durable storage.
+// InstallID returns the per-installation id and whether it is durable.
 //
-// It identifies an installation of agento11y, not a person: a fresh UUID with
-// nothing derived from the hardware, the account, the hostname, or the user.
-//
-// persisted=false means this invocation used a throwaway id — no durable state
-// directory, or a read or write that failed. The receiver needs to tell those
-// apart from real installations, because otherwise a machine with an
-// unwritable state directory counts as a new installation on every single
-// invocation and swamps the installation count.
+// It identifies an installation, not a person: a fresh UUID with nothing
+// derived from hardware, account, hostname, or user. persisted=false means a
+// throwaway id, which the receiver must exclude from installation counts.
 func InstallID() (id string, persisted bool) {
 	return installID(InstallIDPath())
 }
@@ -50,21 +42,18 @@ func installID(path string) (string, bool) {
 	}
 	fresh := uuid.NewString()
 	if err := writeInstallID(path, fresh); err != nil {
-		// Report the throwaway id rather than failing: usage statistics must
-		// never affect the command's outcome, and an id the receiver knows is
-		// throwaway is more useful than no event.
+		// Report the throwaway id rather than dropping the event.
 		return fresh, false
 	}
 	return fresh, true
 }
 
 // readInstallID returns a stored id, or ok=false when the file is missing,
-// unreadable, or does not hold a UUID.
+// unreadable, or not a UUID.
 //
-// The content is validated rather than trusted. A truncated or hand-edited
-// file would otherwise become a permanent correlator shared by every
-// installation that suffered the same corruption, which is worse than a fresh
-// id: it silently merges unrelated machines into one apparent installation.
+// Validated rather than trusted: a truncated file would otherwise become a
+// correlator shared by every install with the same corruption, silently
+// merging unrelated machines into one.
 func readInstallID(path string) (string, bool) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -77,9 +66,8 @@ func readInstallID(path string) (string, bool) {
 	return candidate, true
 }
 
-// writeInstallID stores id with owner-only permissions. The id is not a
-// secret, but it is the one correlator in the event, so it is not left
-// world-readable either.
+// writeInstallID stores id owner-only: not a secret, but the one correlator
+// in the event.
 func writeInstallID(path, id string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err

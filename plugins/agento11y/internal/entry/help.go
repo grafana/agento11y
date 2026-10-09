@@ -171,15 +171,12 @@ func helpFlags(path string) *flag.FlagSet {
 	return nil
 }
 
-// resolveCommandPath matches the longest prefix of args that names a public
-// help page, returning that path, how many argv tokens it consumed, and
-// whether anything matched at all.
+// resolveCommandPath matches the longest prefix of args naming a public help
+// page, returning the path, tokens consumed, and whether anything matched.
 //
-// The help-page registry is therefore the binary's command vocabulary, and
-// this is the only place that maps argv to it. usagestats relies on that:
-// because every recorded command path comes back from here, a command field
-// can never contain a token this binary does not define. Inlining a second
-// copy of this loop would quietly break that guarantee.
+// The only place argv is mapped to the help-page registry, which makes that
+// registry the command vocabulary. usagestats depends on it: a second inlined
+// copy of this loop would let an undefined token reach a recorded command.
 func resolveCommandPath(args []string) (path string, consumed int, ok bool) {
 	pages := publicHelpPages()
 	for i := 1; i <= len(args); i++ {

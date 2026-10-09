@@ -8,8 +8,8 @@ import (
 	"testing"
 )
 
-// fullyPopulatedEvent is an Event with every field set to a non-zero value, so
-// a field cannot slip past the inventory test by happening to marshal away.
+// fullyPopulatedEvent sets every field non-zero so none can slip past the
+// inventory test by marshalling away.
 func fullyPopulatedEvent() Event {
 	return Event{
 		Service:            ServiceName,
@@ -33,13 +33,10 @@ func fullyPopulatedEvent() Event {
 	}
 }
 
-// wantEventFields is the wire contract, written out by hand.
-//
-// Hand-written on purpose: deriving it from the struct would make the test
-// tautological. The point is that adding, renaming, or removing a field fails
-// here and forces whoever did it to notice that the receiver's BigQuery
-// schema, the published docs page, and the first-run notice all need the same
-// change — and that new collection needs the notice revision bumped.
+// wantEventFields is the wire contract. Hand-written on purpose: deriving it
+// from the struct would make the test tautological. A change here should
+// prompt the matching change to the receiver's columns, the docs page, and the
+// first-run notice.
 var wantEventFields = []string{
 	"service",
 	"version",
@@ -85,9 +82,8 @@ func TestEventFieldInventory(t *testing.T) {
 	}
 }
 
-// TestEventHasNoCredentialShapedFields is a cheap, durable guard on schema
-// growth. It cannot prove a field is safe, but it catches the obvious classes
-// of mistake by name before they reach a reviewer.
+// TestEventHasNoCredentialShapedFields cannot prove a field is safe, but it
+// catches the obvious mistakes by name.
 func TestEventHasNoCredentialShapedFields(t *testing.T) {
 	forbidden := []string{
 		"token", "secret", "password", "credential", "tenant", "endpoint",
@@ -107,8 +103,8 @@ func TestEventHasNoCredentialShapedFields(t *testing.T) {
 	}
 }
 
-// TestClosedVocabulariesAreNonEmpty guards against a constant being deleted
-// and its field silently becoming free-form.
+// TestClosedVocabulariesAreNonEmpty: a deleted constant would make its field
+// silently free-form.
 func TestClosedVocabulariesAreNonEmpty(t *testing.T) {
 	for name, value := range map[string]string{
 		"OutcomeOK":         OutcomeOK,

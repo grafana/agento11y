@@ -6,13 +6,9 @@ import (
 	"time"
 )
 
-// TestZeroValueRecordsNothing is the important one.
-//
-// The state is process-global, so its zero value is what a suppressed or
-// never-dispatched invocation reads. If any field defaulted to something
-// meaningful — Completed true, a non-empty Command — then an invocation that
-// recorded nothing would report a confident, wrong event. The zero value must
-// be indistinguishable from "nothing happened yet".
+// TestZeroValueRecordsNothing is the important one: the zero value is what a
+// suppressed or never-dispatched invocation reads, so a meaningful default
+// would make it report a confident, wrong event.
 func TestZeroValueRecordsNothing(t *testing.T) {
 	Reset()
 	got := Snapshot()
@@ -63,9 +59,8 @@ func TestSettersRecordWhatTheyAreGiven(t *testing.T) {
 	}
 }
 
-// TestSuppressIsOneWay pins the one-way rule. Hook dispatch suppresses early;
-// a later branch recording a fact must not be able to re-enable reporting for
-// an invocation that already opted out.
+// TestSuppressIsOneWay: hook dispatch suppresses early, and a later branch
+// must not re-enable reporting.
 func TestSuppressIsOneWay(t *testing.T) {
 	Reset()
 	Suppress()
@@ -80,8 +75,7 @@ func TestSuppressIsOneWay(t *testing.T) {
 func TestDurationIsZeroWithoutAStart(t *testing.T) {
 	Reset()
 
-	// Without the guard this would measure from the zero time: roughly two
-	// millennia, which would poison any aggregate it reached.
+	// Without the guard this measures from the zero time: ~2000 years.
 	if got := Snapshot().Duration(time.Now()); got != 0 {
 		t.Errorf("Duration() = %v with no recorded start, want 0", got)
 	}
@@ -97,9 +91,8 @@ func TestDurationMeasuresFromStart(t *testing.T) {
 	}
 }
 
-// TestConcurrentAccessIsSafe matters because hooks and launchers run inside a
-// process that also starts goroutines; the race detector is what makes this
-// test worth its runtime.
+// TestConcurrentAccessIsSafe: the process starts goroutines, so the race
+// detector is what makes this worth its runtime.
 func TestConcurrentAccessIsSafe(t *testing.T) {
 	Reset()
 

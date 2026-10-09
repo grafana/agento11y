@@ -20,15 +20,13 @@ func TestDetectCI(t *testing.T) {
 		{name: "continuous integration", env: map[string]string{"CONTINUOUS_INTEGRATION": "1"}, wantProvider: CIProviderUnknown, wantIsCI: true},
 		{name: "build number", env: map[string]string{"BUILD_NUMBER": "42"}, wantProvider: CIProviderUnknown, wantIsCI: true},
 
-		// Some environments export CI=false precisely to opt out, and
-		// honouring that is the point of isEnvSet.
+		// Some environments export CI=false precisely to opt out.
 		{name: "ci false opts out", env: map[string]string{"CI": "false"}, wantProvider: "", wantIsCI: false},
 		{name: "ci zero opts out", env: map[string]string{"CI": "0"}, wantProvider: "", wantIsCI: false},
 		{name: "ci no opts out", env: map[string]string{"CI": "no"}, wantProvider: "", wantIsCI: false},
 		{name: "ci blank opts out", env: map[string]string{"CI": "  "}, wantProvider: "", wantIsCI: false},
 
-		// A named provider wins over the generic signal, which both are
-		// usually set in real CI.
+		// Real CI usually sets both; the named provider wins.
 		{name: "provider beats generic", env: map[string]string{"CI": "true", "GITHUB_ACTIONS": "true"}, wantProvider: "github_actions", wantIsCI: true},
 
 		// First match wins, by table order.
@@ -46,10 +44,8 @@ func TestDetectCI(t *testing.T) {
 	}
 }
 
-// TestCIEnvVarsCoversTheTable keeps the test-isolation helper honest: a
-// provider added to the table but missing from CIEnvVars would not be scrubbed
-// by TestMain, and the suite would then behave differently under that CI
-// system than anywhere else.
+// TestCIEnvVarsCoversTheTable: a provider missing from CIEnvVars would not be
+// scrubbed, so the suite would behave differently under that CI system.
 func TestCIEnvVarsCoversTheTable(t *testing.T) {
 	covered := map[string]bool{}
 	for _, key := range CIEnvVars() {
@@ -67,9 +63,8 @@ func TestCIEnvVarsCoversTheTable(t *testing.T) {
 	}
 }
 
-// TestCIProviderLabelsAreStable pins the labels themselves. They are a closed
-// vocabulary shared with gcx in the same dataset, so renaming one silently
-// splits a provider's rows across two names.
+// TestCIProviderLabelsAreStable: the labels are shared with gcx in one
+// dataset, so a rename silently splits a provider's rows.
 func TestCIProviderLabelsAreStable(t *testing.T) {
 	want := []string{
 		"github_actions", "gitlab", "circleci", "jenkins", "buildkite",

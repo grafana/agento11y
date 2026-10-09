@@ -52,12 +52,10 @@ func TestMain(m *testing.M) {
 		_ = os.Unsetenv(envconfig.PreferredKey(suffix))
 		_ = os.Unsetenv(envconfig.LegacyKey(suffix))
 	}
-	// Usage statistics raise the stakes of an un-isolated run: the emitter
-	// POSTs to a Grafana-operated endpoint, so a leaked enabled mode would
-	// file real events from a developer laptop. The alias scrub above already
-	// covers AGENTO11Y_ANONYMOUS_USAGE_STATS; DO_NOT_TRACK is unbranded and
-	// the CI variables are read by DetectCI, and without blanking those the
-	// suite behaves differently here than under GitHub Actions.
+	// The alias scrub above covers AGENTO11Y_ANONYMOUS_USAGE_STATS, but
+	// DO_NOT_TRACK is unbranded and the CI variables decide is_ci. Without
+	// these the suite would behave differently under Actions — and a leaked
+	// enabled mode would file real events from a developer laptop.
 	_ = os.Unsetenv(usagestats.EnvDoNotTrack)
 	for _, key := range usagestats.CIEnvVars() {
 		_ = os.Unsetenv(key)
