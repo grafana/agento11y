@@ -171,6 +171,27 @@ func helpFlags(path string) *flag.FlagSet {
 	return nil
 }
 
+// resolveCommandPath matches the longest prefix of args that names a public
+// help page, returning that path, how many argv tokens it consumed, and
+// whether anything matched at all.
+//
+// The help-page registry is therefore the binary's command vocabulary, and
+// this is the only place that maps argv to it. usagestats relies on that:
+// because every recorded command path comes back from here, a command field
+// can never contain a token this binary does not define. Inlining a second
+// copy of this loop would quietly break that guarantee.
+func resolveCommandPath(args []string) (path string, consumed int, ok bool) {
+	pages := publicHelpPages()
+	for i := 1; i <= len(args); i++ {
+		candidate := strings.Join(args[:i], " ")
+		if _, found := pages[candidate]; !found {
+			break
+		}
+		path, consumed = candidate, i
+	}
+	return path, consumed, consumed > 0
+}
+
 func usageError(stderr io.Writer, path, message string) {
 	page, ok := helpPage(path)
 	if !ok {
@@ -217,16 +238,7 @@ func routeHelp(args []string, stdout, stderr io.Writer) bool {
 		}
 		return true
 	}
-	pages := publicHelpPages()
-	path := ""
-	consumed := 0
-	for i := 1; i <= len(args); i++ {
-		candidate := strings.Join(args[:i], " ")
-		if _, ok := pages[candidate]; !ok {
-			break
-		}
-		path, consumed = candidate, i
-	}
+	path, consumed, _ := resolveCommandPath(args)
 	if consumed == 0 {
 		if _, internal := agents[args[0]]; internal {
 			return false
