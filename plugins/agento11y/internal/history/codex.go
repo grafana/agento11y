@@ -18,6 +18,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/fragment"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/mapper"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/userid"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/redact"
 )
 
 func init() {
@@ -1053,7 +1054,10 @@ func appendText(existing, next string) string {
 }
 
 func codexTitleFromText(text string) string {
-	title := strings.Join(strings.Fields(text), " ")
+	// Redacted before the cut, the way the Sanitizer redacts: it only ever sees
+	// the title already cut, and a secret the cut splits no longer matches its
+	// pattern.
+	title := strings.Join(strings.Fields(redact.New().Redact(redact.TitleHead(text))), " ")
 	if title == "" {
 		return ""
 	}
@@ -1062,6 +1066,7 @@ func codexTitleFromText(text string) string {
 		for !utf8.ValidString(title) {
 			title = title[:len(title)-1]
 		}
+		title = redact.TrimPartialMarker(title)
 	}
 	return title
 }

@@ -398,14 +398,23 @@ func noteTitles(st *state.Session, t transcript.Titles) {
 // first prompt the user typed. These are the names Claude Code itself lists
 // the session under. Falls back to the session ID when none is available (e.g.
 // transcript with no user lines processed yet).
+//
+// The title is redacted before it is cut, because a secret the cut splits no
+// longer matches its pattern and its first part would be exported. With no
+// redactor, which is how history import calls Process so that its Sanitizer
+// redacts every field once, the title is redacted here the way the Sanitizer
+// would redact it: the Sanitizer only ever sees the title already cut.
 func conversationTitle(st *state.Session, sessionID string, r *redact.Redactor) string {
 	if st == nil {
 		return sessionID
 	}
-	t := strings.TrimSpace(cmp.Or(st.CustomTitle, st.AITitle, st.Title))
+	t := redact.TitleHead(cmp.Or(st.CustomTitle, st.AITitle, st.Title))
 	if r != nil {
 		t = r.Title(t)
+	} else {
+		t = redact.New().Redact(t)
 	}
+	t = strings.TrimSpace(t)
 	if t == "" {
 		return sessionID
 	}
@@ -415,6 +424,7 @@ func conversationTitle(st *state.Session, sessionID string, r *redact.Redactor) 
 		for !utf8.ValidString(t) {
 			t = t[:len(t)-1]
 		}
+		t = redact.TrimPartialMarker(t)
 	}
 	return t
 }

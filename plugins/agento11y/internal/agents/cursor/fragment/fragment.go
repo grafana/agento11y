@@ -107,36 +107,16 @@ const MaxSessionTitleLen = 100
 // importer uses it too, so a session both captured and imported carries one
 // title.
 func SessionTitle(prompt string) string {
-	head := strings.TrimSpace(prompt)
-	// Only the head can reach the title. A secret that starts in the first
-	// 100 bytes is far shorter than this, so it is still matched whole, and a
-	// large paste does not pay for redacting the rest.
-	if len(head) > titleRedactBytes {
-		head = head[:titleRedactBytes]
-	}
-	title := redact.New().Title(head)
+	title := redact.New().Title(redact.TitleHead(prompt))
 	if len(title) > MaxSessionTitleLen {
 		title = title[:MaxSessionTitleLen]
 		for !utf8.ValidString(title) {
 			title = title[:len(title)-1]
 		}
-		// A cut inside a redaction marker would leave "[REDACTED:gith" or
-		// "[REDAC"; drop the marker's start instead.
-		if at := strings.LastIndexByte(title, '['); at >= 0 {
-			tail := title[at:]
-			if !strings.Contains(tail, "]") && (strings.HasPrefix(tail, redactedMarker) || strings.HasPrefix(redactedMarker, tail)) {
-				title = title[:at]
-			}
-		}
+		title = redact.TrimPartialMarker(title)
 	}
 	return strings.TrimSpace(title)
 }
-
-// redactedMarker starts the text redaction puts in place of a secret.
-const redactedMarker = "[REDACTED:"
-
-// titleRedactBytes bounds how much of a prompt SessionTitle redacts.
-const titleRedactBytes = 64 << 10
 
 // Touch keeps the per-hook timestamps in sync. First arrival wins for
 // StartedAt; last arrival wins for LastEventAt.
