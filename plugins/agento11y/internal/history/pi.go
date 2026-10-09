@@ -893,13 +893,11 @@ func piTitle(log *piSession, conversationID string) string {
 			firstUserText = strings.TrimSpace(msg.Parts[0].Text)
 		}
 	}
-	// A title can come out empty when the text was only a redaction marker
-	// the cut left partial.
-	if title := piClipTitle(name); title != "" {
-		return title
+	if name != "" {
+		return piClipTitle(name)
 	}
-	if title := piClipTitle(firstUserText); title != "" {
-		return title
+	if firstUserText != "" {
+		return piClipTitle(firstUserText)
 	}
 	return conversationID
 }
@@ -908,7 +906,7 @@ func piTitle(log *piSession, conversationID string) string {
 // the Sanitizer redacts: it only ever sees the title already cut, and a secret
 // the cut splits no longer matches its pattern.
 func piClipTitle(text string) string {
-	return redact.CutTitleRunes(strings.TrimSpace(redact.New().Redact(redact.TitleHead(text))), piMaxTitleLen)
+	return redact.RedactTitleRunes(text, piMaxTitleLen)
 }
 
 // Fork metadata keys, matching what the live plugin writes

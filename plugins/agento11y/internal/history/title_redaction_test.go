@@ -6,13 +6,15 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/chatstore/chatstoretest"
 )
 
 // Regression: the Claude Code, Codex and Pi importers cut the conversation
 // title to 100 bytes before the Sanitizer redacted it, and Cursor's import
-// redacted only tier 1 before its cut. A secret the cut split no longer matched
-// its pattern, so its first part was exported in the title while the same
-// prompt's input was redacted.
+// redacted only tier 1 before its cut, for a prompt and for a chat name alike.
+// A secret the cut split no longer matched its pattern, so its first part was
+// exported in the title while the same prompt's input was redacted.
 func TestImportedTitlesRedactASecretTheCutSplits(t *testing.T) {
 	prompts := []struct {
 		name string
@@ -46,7 +48,9 @@ func TestImportedTitlesRedactASecretTheCutSplits(t *testing.T) {
 		{name: "claude-code", turns: claudeTurnsForPrompt},
 		{name: "codex", turns: codexTurnsForPrompt},
 		{name: "pi", turns: piTurnsForPrompt},
-		{name: "cursor", turns: cursorTurnsForPrompt},
+		{name: "cursor transcript", turns: cursorTurnsForPrompt},
+		{name: "cursor store", turns: cursorStoreTurnsForPrompt},
+		{name: "cursor store chat name", turns: cursorStoreTurnsForChatName},
 	}
 	for _, imp := range importers {
 		for _, p := range prompts {
@@ -59,6 +63,10 @@ func TestImportedTitlesRedactASecretTheCutSplits(t *testing.T) {
 				gen := turns[0]
 				Sanitizer{}.Sanitize(&gen)
 				title := gen.Gen.ConversationTitle
+				// Redacted as the Sanitizer redacts, the title leaves it nothing to do.
+				if before := turns[0].Gen.ConversationTitle; title != before {
+					t.Errorf("the Sanitizer changed the title from %q to %q", before, title)
+				}
 				if strings.Contains(title, p.leak) {
 					t.Errorf("title keeps part of the secret: %q", title)
 				}
@@ -70,6 +78,22 @@ func TestImportedTitlesRedactASecretTheCutSplits(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// Regression: Codex collapses a prompt's whitespace for its title, and it did
+// so after redacting. A separator the patterns do not take as space, such as \v
+// after "Bearer", collapsed into one they do, and the cut had already split the
+// token, so the Sanitizer could no longer match it either.
+func TestCodexTitleRedactsASecretCollapsingWhitespaceReveals(t *testing.T) {
+	turns := codexTurnsForPrompt(t, strings.Repeat("x", 80)+" Bearer\v"+strings.Repeat("A", 40)+" please")
+	if len(turns) == 0 {
+		t.Fatal("no turns imported")
+	}
+	gen := turns[0]
+	Sanitizer{}.Sanitize(&gen)
+	if title := gen.Gen.ConversationTitle; title != strings.Repeat("x", 80) {
+		t.Errorf("title = %q, want the prompt up to the token", title)
 	}
 }
 
@@ -134,6 +158,29 @@ func cursorTurnsForPrompt(t *testing.T, prompt string) []HistoricalGeneration {
 	path := writeCursorTranscriptLines(t, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 		line(map[string]any{"role": "user", "message": map[string]any{"content": []map[string]any{{"type": "text", "text": "<user_query>\n" + prompt + "\n</user_query>"}}}}),
 		line(map[string]any{"role": "assistant", "message": map[string]any{"content": []map[string]any{{"type": "text", "text": "ok"}}}}))
+	turns, _ := cursorWalk(t, imp, cursorPreview(t, imp, path))
+	return turns
+}
+
+func cursorStoreTurnsForPrompt(t *testing.T, prompt string) []HistoricalGeneration {
+	t.Helper()
+	imp, path := cursorBuild(t, "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", func(b *chatstoretest.Builder) {
+		b.AddPrompt("<user_query>" + prompt + "</user_query>")
+		b.AddAssistantText("ok")
+	})
+	turns, _ := cursorWalk(t, imp, cursorPreview(t, imp, path))
+	return turns
+}
+
+// cursorStoreTurnsForChatName names the store's chat with name. The session
+// types nothing beside an image, so the chat name is its title.
+func cursorStoreTurnsForChatName(t *testing.T, name string) []HistoricalGeneration {
+	t.Helper()
+	imp, path := cursorBuild(t, "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", func(b *chatstoretest.Builder) {
+		b.Meta.Name = name
+		b.AddPrompt("<image_files>\n1. /work/repo/a.png\n</image_files>\n<user_query>\n</user_query>")
+		b.AddAssistantText("ok")
+	})
 	turns, _ := cursorWalk(t, imp, cursorPreview(t, imp, path))
 	return turns
 }

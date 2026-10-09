@@ -102,9 +102,8 @@ const MaxSessionTitleLen = 100
 // prompt with secrets redacted, cut to MaxSessionTitleLen bytes on a rune
 // boundary, and trimmed. Redaction runs before the cut, because a secret the
 // cut splits no longer matches its pattern and its first part would be
-// exported. Live capture stamps it at beforeSubmitPrompt and the history
-// importer uses it too, so a session both captured and imported carries one
-// title.
+// exported. Live capture stamps it at beforeSubmitPrompt. The history importer
+// cuts the same way but redacts tier 2 too, as its Sanitizer does.
 func SessionTitle(prompt string) string {
 	title := redact.New().Title(redact.TitleHead(prompt))
 	return strings.TrimSpace(redact.CutTitle(title, MaxSessionTitleLen))

@@ -408,13 +408,14 @@ func conversationTitle(st *state.Session, sessionID string, r *redact.Redactor) 
 	if st == nil {
 		return sessionID
 	}
-	t := redact.TitleHead(cmp.Or(st.CustomTitle, st.AITitle, st.Title))
+	raw := cmp.Or(st.CustomTitle, st.AITitle, st.Title)
+	var t string
 	if r != nil {
-		t = r.Title(t)
+		t = redact.CutTitle(strings.TrimSpace(r.Title(redact.TitleHead(raw))), maxTitleLen)
 	} else {
-		t = redact.New().Redact(t)
+		t = redact.RedactTitle(raw, maxTitleLen)
 	}
-	if t = redact.CutTitle(strings.TrimSpace(t), maxTitleLen); t == "" {
+	if t == "" {
 		return sessionID
 	}
 	return t

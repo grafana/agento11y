@@ -1055,9 +1055,12 @@ func appendText(existing, next string) string {
 func codexTitleFromText(text string) string {
 	// Redacted before the cut, the way the Sanitizer redacts: it only ever sees
 	// the title already cut, and a secret the cut splits no longer matches its
-	// pattern.
+	// pattern. The prompt is redacted whole first, as its input is, so a secret
+	// across lines still matches. Then the collapsed text is redacted again,
+	// because it is what the Sanitizer sees: a separator a pattern does not
+	// take as space, such as \v after "Bearer", collapses into one it does.
 	title := strings.Join(strings.Fields(redact.New().Redact(redact.TitleHead(text))), " ")
-	return redact.CutTitle(title, codexMaxTitleLen)
+	return redact.RedactTitle(title, codexMaxTitleLen)
 }
 
 func firstNonEmptyString(values ...string) string {

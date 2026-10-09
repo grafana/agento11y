@@ -18,6 +18,10 @@ func TestTitleHead(t *testing.T) {
 	if !utf8.ValidString(got) || len(got) != TitleScanBytes-1 {
 		t.Errorf("TitleHead() = %d bytes, valid UTF-8 %v; want the é dropped", len(got), utf8.ValidString(got))
 	}
+	// An invalid byte earlier in the text does not shorten the head.
+	if got := TitleHead("hello \xff" + strings.Repeat("a", TitleScanBytes)); len(got) != TitleScanBytes {
+		t.Errorf("TitleHead() kept %d bytes, want %d", len(got), TitleScanBytes)
+	}
 }
 
 func TestCutTitle(t *testing.T) {
@@ -32,9 +36,9 @@ func TestCutTitle(t *testing.T) {
 		{name: "a whole marker stays", in: "token [REDACTED:github-pat] please", max: 27, want: "token [REDACTED:github-pat]"},
 		{name: "a marker cut after its id starts", in: "token [REDACTED:github-pat] please", max: 20, want: "token"},
 		{name: "a marker cut inside its prefix", in: "token [REDACTED:github-pat] please", max: 12, want: "token"},
-		{name: "a lone bracket a cut left", in: "token [REDACTED:github-pat]", max: 7, want: "token"},
-		{name: "a bracket that is not a marker", in: "check arr[i] now", max: 11, want: "check arr[i"},
-		{name: "a title that was only the marker", in: "[REDACTED: note] more", max: 5, want: ""},
+		{name: "a marker cut right after its bracket", in: "token [REDACTED:github-pat]", max: 7, want: "token"},
+		{name: "text that looks like a marker's start", in: "see [README and more", max: 8, want: "see [REA"},
+		{name: "a bracket the user typed", in: "check arr[i] now", max: 10, want: "check arr["},
 		{name: "keeps a rune whole", in: strings.Repeat("a", 4) + "é", max: 5, want: "aaaa"},
 	}
 	for _, tt := range tests {
@@ -51,6 +55,19 @@ func TestCutTitleRunes(t *testing.T) {
 		t.Errorf("CutTitleRunes() kept %d runes, want 100", utf8.RuneCountInString(got))
 	}
 	if got := CutTitleRunes("é token [REDACTED:github-pat]", 12); got != "é token" {
-		t.Errorf("CutTitleRunes() = %q, want the partial marker dropped", got)
+		t.Errorf("CutTitleRunes() = %q, want the split marker cut before", got)
+	}
+}
+
+func TestRedactTitle(t *testing.T) {
+	// Redacted before the cut, so neither a token nor a key-value secret the
+	// cut would split keeps its first part.
+	token := strings.Repeat("x", 70) + " ghp_" + strings.Repeat("A", 36) + " please"
+	if got := RedactTitle(token, 100); got != strings.Repeat("x", 70)+" [REDACTED:github-pat] please" {
+		t.Errorf("RedactTitle(token) = %q", got)
+	}
+	kv := strings.Repeat("x", 80) + ` "api_key": "supersecretvalue123" please`
+	if got := RedactTitle(kv, 100); strings.Contains(got, "superse") || strings.Contains(got, "[REDACT") {
+		t.Errorf("RedactTitle(key-value) = %q, want the value and its split marker gone", got)
 	}
 }

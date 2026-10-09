@@ -361,7 +361,7 @@ func (c *cursorImporter) Turns(ctx context.Context, sess SessionPreview) iter.Se
 			// give a session both captured and imported two titles. History
 			// import mostly reads sessions from before agento11y was
 			// installed, so a readable name beats the ID there.
-			untitled: firstNonEmptyString(meta.Name, sessionID),
+			untitled: firstNonEmptyString(cursorImportTitle(meta.Name), sessionID),
 			clock:    newCursorClock(meta.Created(), ids),
 			yield:    yield,
 		}
@@ -589,8 +589,8 @@ func cursorSplitPrompt(text string) (before, typed, after string, ok bool) {
 }
 
 // storeTitle is the session's title: the typed prompt of the first turn the
-// model answered, through fragment.SessionTitle, as live capture titles a
-// session from its first prompt. A prompt the model never answered names
+// model answered, through cursorImportTitle, as live capture titles a session
+// from its first prompt. A prompt the model never answered names
 // nothing, because the importer cannot tell it from one a guard blocked, and
 // live capture never titles a session with a blocked prompt. It is "" when no
 // answered turn typed anything, or when a read error stops it first; the walk
@@ -617,12 +617,12 @@ func (c *cursorImporter) storeTitle(ctx context.Context, store *chatstore.Store,
 }
 
 // cursorImportTitle is the title an imported Cursor session takes from its
-// first typed prompt: fragment.SessionTitle's cut of the prompt, redacted as
-// the import Sanitizer redacts. The Sanitizer only sees the title the mapper
-// has already cut, so redacting less here would leave the first part of a
-// key-value secret the cut splits.
-func cursorImportTitle(typed string) string {
-	return strings.TrimSpace(redact.CutTitle(redact.New().Redact(redact.TitleHead(typed)), fragment.MaxSessionTitleLen))
+// first typed prompt, or from the chat's name: fragment.SessionTitle's cut,
+// redacted as the import Sanitizer redacts. The Sanitizer only sees the title
+// the mapper has already cut, so redacting less here would leave the first
+// part of a key-value secret the cut splits.
+func cursorImportTitle(text string) string {
+	return strings.TrimSpace(redact.RedactTitle(text, fragment.MaxSessionTitleLen))
 }
 
 // discardTurn is the yield of a title probe. The probe returns before a turn
