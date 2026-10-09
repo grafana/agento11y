@@ -381,8 +381,18 @@ func TestTargetDestination(t *testing.T) {
 	if stack == localDestination || !strings.HasPrefix(stack, "cloud-") {
 		t.Fatalf("Cloud destination = %q", stack)
 	}
-	if same := cloud("https://Agento11y-Prod.grafana.net/", "123"); same != stack {
-		t.Errorf("one endpoint spelled two ways gave %q and %q", stack, same)
+	// One endpoint spelled another way is one destination: a new ledger would
+	// send every turn again.
+	for _, spelling := range []string{
+		"https://Agento11y-Prod.grafana.net/",
+		"HTTPS://agento11y-prod.grafana.net//",
+		"https://agento11y-prod.grafana.net:443",
+		"agento11y-prod.grafana.net",
+		"Agento11y-Prod.grafana.net/",
+	} {
+		if same := cloud(spelling, "123"); same != stack {
+			t.Errorf("%q gave %q, want %q", spelling, same, stack)
+		}
 	}
 	if other := cloud("https://agento11y-prod.grafana.net", "456"); other == stack {
 		t.Error("two tenants on one endpoint share a destination")

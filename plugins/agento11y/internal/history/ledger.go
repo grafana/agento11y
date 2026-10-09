@@ -54,9 +54,9 @@ type Entry struct {
 	UpdatedUnix   int64  `json:"updated_unix"`
 }
 
-// Ledger is the private, idempotent import record for one agent. It lives
-// under the application state root with 0700 directories and 0600 files, and
-// is safe for concurrent use.
+// Ledger is the private, idempotent import record for one agent's imports into
+// one destination. It lives under the application state root with 0700
+// directories and 0600 files, and is safe for concurrent use.
 //
 // The file is append-only JSONL: one status record per [Ledger.Mark], with the
 // latest status per key held in memory. Rewriting the whole file on every mark
@@ -79,17 +79,16 @@ func ledgerDir() string {
 
 // ledgerPath is the ledger for one agent's imports into one destination, under
 // a directory per agent.
-//
-// A ledger from before destinations, <agent>.jsonl beside those directories,
-// is not read. It did not record where its turns went, so a Grafana Cloud
-// import after a local one skipped every turn the local store already held.
-// Each destination's first import re-sends those turns once: Grafana Cloud
-// answers a generation ID it already holds as stored, and the local viewer
-// shows one turn per generation ID.
 func ledgerPath(agent AgentID, destination string) string {
 	// The registered agent IDs are already filename-safe; SafeComponent keeps
 	// that true if the set ever grows.
 	return filepath.Join(ledgerDir(), xdg.SafeComponent(string(agent)), xdg.SafeComponent(destination)+".jsonl")
+}
+
+// legacyLedgerPath is the one ledger an agent had before destinations, beside
+// the per-agent directories. It did not record where its turns went.
+func legacyLedgerPath(agent AgentID) string {
+	return filepath.Join(ledgerDir(), xdg.SafeComponent(string(agent))+".jsonl")
 }
 
 // localDestination is the local daemon's store, whatever port it listens on:
@@ -97,8 +96,9 @@ func ledgerPath(agent AgentID, destination string) string {
 const localDestination = "local"
 
 // destination names the store a target writes to, for its ledger. A loopback
-// endpoint is the local daemon. Any other is Grafana Cloud, one destination
-// per endpoint and tenant, hashed so a ledger's file name holds neither.
+// endpoint is local, because the exporter treats it as the local daemon. Any
+// other is Grafana Cloud, one destination per endpoint and tenant, hashed so a
+// ledger's file name holds neither.
 func (t Target) destination() string {
 	endpoint := t.endpoint()
 	if envconfig.IsLocalEndpoint(endpoint) {
@@ -109,15 +109,24 @@ func (t Target) destination() string {
 	return "cloud-" + hex.EncodeToString(sum[:8])
 }
 
-// normalizedEndpoint spells one endpoint one way: the scheme and host in lower
-// case, and no trailing slash.
+// normalizedEndpoint spells one endpoint one way, so a respelling does not
+// start a new ledger and send every turn again. Like the SDK, it reads an
+// endpoint without a scheme as https. It lowercases the scheme and host, and
+// drops the scheme's default port and any trailing slash.
 func normalizedEndpoint(endpoint string) string {
+	lower := strings.ToLower(endpoint)
+	if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
+		endpoint = "https://" + endpoint
+	}
 	u, err := url.Parse(endpoint)
 	if err != nil {
 		return endpoint
 	}
 	u.Scheme = strings.ToLower(u.Scheme)
 	u.Host = strings.ToLower(u.Host)
+	if port := u.Port(); (u.Scheme == "https" && port == "443") || (u.Scheme == "http" && port == "80") {
+		u.Host = u.Hostname()
+	}
 	u.Path = strings.TrimRight(u.Path, "/")
 	return u.String()
 }
@@ -137,7 +146,37 @@ func OpenLedger(agent AgentID, destination string) (*Ledger, error) {
 	if strings.TrimSpace(destination) == "" {
 		return nil, errors.New("history: open ledger for empty destination")
 	}
-	return openLedgerAt(ledgerPath(agent, destination))
+	path := ledgerPath(agent, destination)
+	if err := seedLedger(path, legacyLedgerPath(agent)); err != nil {
+		return nil, err
+	}
+	return openLedgerAt(path)
+}
+
+// seedLedger starts a destination's ledger from the agent's ledger from before
+// destinations, the first time the destination's ledger is opened. That
+// ledger does not say where its turns went, so each destination takes all of
+// them. Starting empty instead would send them all again, and Grafana Cloud
+// only recognises a generation ID it already holds for about a day: past that,
+// a repeat is stored, counted, and billed a second time. A turn the old ledger
+// holds that a destination never received still needs --force there once.
+func seedLedger(path, legacy string) error {
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("stat import ledger: %w", err)
+	}
+	entries, _, err := readLedger(legacy)
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create ledger dir: %w", err)
+	}
+	return (&Ledger{path: path, entries: entries}).compact()
 }
 
 func openLedgerAt(path string) (*Ledger, error) {

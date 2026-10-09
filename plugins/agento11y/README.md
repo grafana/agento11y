@@ -233,7 +233,7 @@ Imported sessions are thinner than live capture — host logs omit fields that l
 
 Without `--since`, an import covers the last 90 days. Pass `--since 365d` (or a timestamp) to widen the window, and `--until` to bound the other end. Other useful flags: `--workspace`, `--max-sessions`, `--max-turns`, `--all`, `--yes`, `--force`. Without a terminal, pass `--all --yes` to import from a script.
 
-Re-running an import is safe: a ledger per agent and destination under `~/.local/state/agento11y/history/ledger/` skips turns that destination already has, so an import into Grafana Cloud after one into the local viewer still sends every turn. `--force` re-exports turns under the same generation IDs.
+Re-running an import is safe: a ledger per agent and destination under `~/.local/state/agento11y/history/ledger/` skips turns that destination already has, so an import into Grafana Cloud after one into the local viewer still sends every turn. Turns imported before this ledger existed count as already sent to both destinations; to send them to the one that missed them, pass `--force` once. `--force` re-exports turns under the same generation IDs, and Grafana Cloud counts a turn it received more than about a day earlier a second time.
 
 ## Grafana Agent Observability
 

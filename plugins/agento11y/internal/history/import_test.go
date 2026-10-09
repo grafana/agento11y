@@ -12,7 +12,6 @@ import (
 
 	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
-	"github.com/grafana/agento11y/plugins/agento11y/internal/xdg"
 )
 
 // recordingExporter captures every turn handed to it and can fail on demand,
@@ -196,15 +195,19 @@ func TestRunImportIsIdempotent(t *testing.T) {
 	}
 }
 
-// twoTurnImport imports one session of two turns into endpoint, through the
-// ledger RunImport opens for it.
-func twoTurnImport(t *testing.T, endpoint string, ledger *Ledger) ImportResult {
+// importTurns imports one session of the given turns into endpoint, through
+// ledger, or the ledger RunImport opens for it when ledger is nil.
+func importTurns(t *testing.T, endpoint string, ledger *Ledger, ids ...string) ImportResult {
 	t.Helper()
+	turns := make([]HistoricalGeneration, len(ids))
+	for i, id := range ids {
+		turns[i] = turn(id)
+	}
 	got, err := RunImport(context.Background(), ImportOptions{
 		Agent: AgentClaudeCode,
 		Importer: &stubImporter{
 			turns: func(context.Context, SessionPreview) iter.Seq2[HistoricalGeneration, error] {
-				return turnSeq([]HistoricalGeneration{turn("t1"), turn("t2")}, nil)
+				return turnSeq(turns, nil)
 			},
 		},
 		Sessions: []SessionPreview{sessionAt("/a.jsonl")},
@@ -235,25 +238,29 @@ func TestRunImportKeepsALedgerPerDestination(t *testing.T) {
 		{name: "into the local store on another port", endpoint: "http://127.0.0.1:8768", skipped: 2},
 	}
 	for _, s := range steps {
-		got := twoTurnImport(t, s.endpoint, nil)
+		got := importTurns(t, s.endpoint, nil, "t1", "t2")
 		if got.Imported != s.imported || got.Skipped != s.skipped {
 			t.Errorf("%s: %+v, want %d imported and %d skipped", s.name, got, s.imported, s.skipped)
 		}
 	}
 }
 
-// A ledger from before destinations did not say where its turns went, so it is
-// not read: trusting it would skip turns a destination never received.
-func TestRunImportDoesNotReadTheLedgerFromBeforeDestinations(t *testing.T) {
+// The ledger from before destinations does not say where its turns went, so
+// each destination starts from all of them. Starting empty would send them all
+// again, and Grafana Cloud stores and bills a generation it received more than
+// about a day earlier a second time.
+func TestRunImportStartsEachDestinationFromTheLedgerBeforeDestinations(t *testing.T) {
 	pinStateHome(t)
 	envconfig.PinAliasEnvBlank(t)
 	t.Setenv("AGENTO11Y_AUTH_TENANT_ID", "123")
-	legacy := openTestLedger(t, filepath.Join(ledgerDir(), xdg.SafeComponent(string(AgentClaudeCode))+".jsonl"))
-	if got := twoTurnImport(t, "http://127.0.0.1:8765", legacy); got.Imported != 2 {
-		t.Fatalf("seeding the old ledger: %+v", got)
+	legacy := openTestLedger(t, legacyLedgerPath(AgentClaudeCode))
+	if got := importTurns(t, "https://agento11y-prod.grafana.net", legacy, "t1", "t2"); got.Imported != 2 {
+		t.Fatalf("filling the old ledger: %+v", got)
 	}
-	if got := twoTurnImport(t, "https://agento11y-prod.grafana.net", nil); got.Imported != 2 || got.Skipped != 0 {
-		t.Errorf("Grafana Cloud import after the old ledger: %+v, want 2 imported", got)
+	for _, endpoint := range []string{"https://agento11y-prod.grafana.net", "http://127.0.0.1:8765"} {
+		if got := importTurns(t, endpoint, nil, "t1", "t2", "t3"); got.Imported != 1 || got.Skipped != 2 {
+			t.Errorf("import into %s after the upgrade: %+v, want the new turn imported and the old two skipped", endpoint, got)
+		}
 	}
 }
 

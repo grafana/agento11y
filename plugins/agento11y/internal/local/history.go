@@ -17,8 +17,8 @@ import (
 
 // historyRunHistory is how many finished import runs the daemon keeps. Run
 // state is presentation only: the durable record of what was imported is the
-// per-agent ledger, so a rerun after a restart resumes from it rather than
-// from this list.
+// agent's ledger for the local store, so a rerun after a restart resumes from
+// it rather than from this list.
 const historyRunHistory = 10
 
 // Import run states. A run is terminal in every state but pending and running.
