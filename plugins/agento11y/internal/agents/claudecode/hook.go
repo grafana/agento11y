@@ -200,6 +200,7 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 		AgentName:           resolvedAgentName,
 		AgentVersion:        envconfig.ResolveAgentVersion(""),
 		SkipPromptRedaction: skipPromptRedaction,
+		TitleDropped:        contentMode == agento11y.ContentCaptureModeMetadataOnly,
 	}, r)
 
 	if len(gens) == 0 {

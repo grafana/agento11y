@@ -45,8 +45,8 @@ func TestCutTitleRunes(t *testing.T) {
 	if got := CutTitleRunes("é token", 7); got != "é token" {
 		t.Errorf("CutTitleRunes() = %q, want text within the cap unchanged", got)
 	}
-	// Regression: an invalid byte was counted as the three bytes of U+FFFD, so
-	// the cut ran past the text.
+	// An invalid byte counts as one byte, not as the three bytes of U+FFFD,
+	// which would run the cut past the text.
 	if got := CutTitleRunes(strings.Repeat("\xff", 150), 100); len(got) != 100 {
 		t.Errorf("CutTitleRunes() kept %d bytes, want 100", len(got))
 	}

@@ -106,9 +106,21 @@ const MaxSessionTitleLen = 100
 // redacts tier 2 too before the same cut, as its Sanitizer does, so its title
 // comes through here unchanged when the mapper titles each turn.
 func SessionTitle(prompt string) string {
-	title := redact.New().Title(strings.TrimSpace(prompt))
+	head := strings.TrimSpace(prompt)
+	if len(head) > titleRedactBytes {
+		head = redact.CutTitle(head, titleRedactBytes)
+	}
+	title := redact.New().Title(head)
 	return strings.TrimSpace(redact.CutTitle(title, MaxSessionTitleLen))
 }
+
+// titleRedactBytes bounds how much of a prompt SessionTitle redacts. Cursor
+// holds the prompt until beforeSubmitPrompt returns, which also holds the
+// session lock, and redaction costs about a third of a second per MB. A secret
+// that starts in the title and ends past the bound, such as a private key over
+// 64 KiB, keeps its start in a live title. The history importer, which no one
+// waits on, redacts the whole prompt.
+const titleRedactBytes = 64 << 10
 
 // Touch keeps the per-hook timestamps in sync. First arrival wins for
 // StartedAt; last arrival wins for LastEventAt.
