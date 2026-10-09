@@ -389,6 +389,8 @@ func TestTargetDestination(t *testing.T) {
 		"https://agento11y-prod.grafana.net:443",
 		"agento11y-prod.grafana.net",
 		"Agento11y-Prod.grafana.net/",
+		"https://agento11y-prod.grafana.net.",
+		"https://agento11y-prod.grafana.net.:443/",
 	} {
 		if same := cloud(spelling, "123"); same != stack {
 			t.Errorf("%q gave %q, want %q", spelling, same, stack)
@@ -396,6 +398,21 @@ func TestTargetDestination(t *testing.T) {
 	}
 	if other := cloud("https://agento11y-prod.grafana.net", "456"); other == stack {
 		t.Error("two tenants on one endpoint share a destination")
+	}
+	if a, b := cloud("https://[2001:db8::1]:443/", "1"), cloud("https://[2001:db8::1]", "1"); a != b {
+		t.Errorf("one IPv6 endpoint gave %q and %q", a, b)
+	}
+
+	// The SDK sends an endpoint without a scheme over http when
+	// AGENTO11Y_INSECURE is set, and over https otherwise.
+	selfHosted := cloud("http://sigil.internal:8080", "1")
+	t.Setenv("AGENTO11Y_INSECURE", "true")
+	if got := cloud("sigil.internal:8080", "1"); got != selfHosted {
+		t.Errorf("insecure endpoint without a scheme gave %q, want %q", got, selfHosted)
+	}
+	t.Setenv("AGENTO11Y_INSECURE", "")
+	if got := cloud("sigil.internal:8080", "1"); got == selfHosted {
+		t.Error("an endpoint without a scheme was read as http without AGENTO11Y_INSECURE")
 	}
 	if strings.Contains(stack, "grafana") || strings.Contains(stack, "123") {
 		t.Errorf("destination %q names its endpoint or tenant", stack)
@@ -409,6 +426,106 @@ func TestTargetDestination(t *testing.T) {
 	t.Setenv("AGENTO11Y_ENDPOINT", "http://127.0.0.1:8765")
 	if got := cloud("", "123"); got != localDestination {
 		t.Errorf("configured loopback endpoint gave %q, want %q", got, localDestination)
+	}
+}
+
+// writeLegacyLedger writes the ledger an agent had before destinations, with n
+// exported turns.
+func writeLegacyLedger(t *testing.T, n int) {
+	t.Helper()
+	l, err := openLedgerAt(legacyLedgerPath(AgentClaudeCode))
+	if err != nil {
+		t.Fatalf("open old ledger: %v", err)
+	}
+	for i := range n {
+		if err := l.Mark(identity(i), StatusExported, "", "", 1); err != nil {
+			t.Fatalf("mark: %v", err)
+		}
+	}
+	if err := l.Close(); err != nil {
+		t.Fatalf("close old ledger: %v", err)
+	}
+}
+
+func TestOpenLedgerSeedsOnlyCloudDestinations(t *testing.T) {
+	pinStateHome(t)
+	writeLegacyLedger(t, 2)
+	for _, tt := range []struct {
+		destination string
+		want        int
+	}{
+		{destination: "cloud-0123456789abcdef", want: 2},
+		{destination: localDestination, want: 0},
+	} {
+		l, err := OpenLedger(AgentClaudeCode, tt.destination)
+		if err != nil {
+			t.Fatalf("open %s: %v", tt.destination, err)
+		}
+		if l.Len() != tt.want {
+			t.Errorf("%s ledger holds %d turns, want %d", tt.destination, l.Len(), tt.want)
+		}
+		_ = l.Close()
+	}
+}
+
+// Regression: two imports opening a Cloud destination for the first time at
+// once both seeded it through one temporary file, and the ledger they left lost
+// some of the old turns, which the next import sent again.
+func TestOpenLedgerSeedsOnceUnderConcurrentFirstOpens(t *testing.T) {
+	pinStateHome(t)
+	const turns, openers = 5000, 8
+	writeLegacyLedger(t, turns)
+	const destination = "cloud-0123456789abcdef"
+
+	start := make(chan struct{})
+	errs := make(chan error, openers)
+	lens := make(chan int, openers)
+	for range openers {
+		go func() {
+			<-start
+			l, err := OpenLedger(AgentClaudeCode, destination)
+			if err != nil {
+				errs <- err
+				return
+			}
+			lens <- l.Len()
+			errs <- l.Close()
+		}()
+	}
+	close(start)
+	for range openers {
+		if err := <-errs; err != nil {
+			t.Errorf("open: %v", err)
+		}
+	}
+	close(lens)
+	for n := range lens {
+		if n != turns {
+			t.Errorf("an opener saw %d turns, want %d", n, turns)
+		}
+	}
+	if got := countLines(t, ledgerPath(AgentClaudeCode, destination)); got != turns {
+		t.Errorf("ledger file holds %d records, want %d", got, turns)
+	}
+	leftovers, _ := filepath.Glob(filepath.Join(filepath.Dir(ledgerPath(AgentClaudeCode, destination)), "*.tmp"))
+	if len(leftovers) != 0 {
+		t.Errorf("temporary files left behind: %v", leftovers)
+	}
+}
+
+// An old ledger that cannot be read must stop the import: treating it as empty
+// would send every turn to Grafana Cloud again.
+func TestOpenLedgerFailsOnAnUnreadableOldLedger(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("file modes do not deny reads here")
+	}
+	pinStateHome(t)
+	writeLegacyLedger(t, 1)
+	if err := os.Chmod(legacyLedgerPath(AgentClaudeCode), 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenLedger(AgentClaudeCode, "cloud-0123456789abcdef"); err == nil {
+		t.Fatal("OpenLedger returned nil error for an unreadable old ledger")
 	}
 }
 

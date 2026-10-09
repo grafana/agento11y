@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -71,9 +72,6 @@ type Ledger struct {
 	mu      sync.Mutex
 	file    *os.File
 	entries map[SourceIdentity]Entry
-	// seeded is set when this open started the ledger from the one from
-	// before destinations; see seedLedger.
-	seeded bool
 }
 
 func ledgerDir() string {
@@ -114,21 +112,35 @@ func (t Target) destination() string {
 
 // normalizedEndpoint spells one endpoint one way, so a respelling does not
 // start a new ledger and send every turn again. Like the SDK, it reads an
-// endpoint without a scheme as https. It lowercases the scheme and host, and
-// drops the scheme's default port and any trailing slash.
+// endpoint without a scheme as https, or as http when AGENTO11Y_INSECURE is
+// set. It lowercases the scheme and host, and drops a trailing dot from the
+// host, the scheme's default port, and any trailing slash.
 func normalizedEndpoint(endpoint string) string {
 	lower := strings.ToLower(endpoint)
 	if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
-		endpoint = "https://" + endpoint
+		scheme := "https://"
+		if envconfig.ParseBool(envconfig.Getenv("INSECURE")) {
+			scheme = "http://"
+		}
+		endpoint = scheme + endpoint
 	}
 	u, err := url.Parse(endpoint)
 	if err != nil {
 		return endpoint
 	}
 	u.Scheme = strings.ToLower(u.Scheme)
-	u.Host = strings.ToLower(u.Host)
-	if port := u.Port(); (u.Scheme == "https" && port == "443") || (u.Scheme == "http" && port == "80") {
-		u.Host = u.Hostname()
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	port := u.Port()
+	if (u.Scheme == "https" && port == "443") || (u.Scheme == "http" && port == "80") {
+		port = ""
+	}
+	switch {
+	case port != "":
+		u.Host = net.JoinHostPort(host, port)
+	case strings.Contains(host, ":"):
+		u.Host = "[" + host + "]"
+	default:
+		u.Host = host
 	}
 	u.Path = strings.TrimRight(u.Path, "/")
 	return u.String()
@@ -150,52 +162,54 @@ func OpenLedger(agent AgentID, destination string) (*Ledger, error) {
 		return nil, errors.New("history: open ledger for empty destination")
 	}
 	path := ledgerPath(agent, destination)
-	seeded, err := seedLedger(path, legacyLedgerPath(agent))
-	if err != nil {
-		return nil, err
+	// The local store is not seeded. It keeps one turn per generation ID
+	// however often a turn arrives, so its first import after the upgrade
+	// sends the old turns again at no cost but time, and the viewer gains the
+	// ones that only ever reached Grafana Cloud.
+	if destination != localDestination {
+		if err := seedLedger(path, legacyLedgerPath(agent)); err != nil {
+			return nil, err
+		}
 	}
-	l, err := openLedgerAt(path)
-	if err != nil {
-		return nil, err
-	}
-	l.seeded = seeded
-	return l, nil
+	return openLedgerAt(path)
 }
 
-// Seeded reports whether this open started the ledger from the one from before
-// destinations. Every turn it then skips counts as sent here, though some may
-// never have reached this destination.
-func (l *Ledger) Seeded() bool { return l.seeded }
-
-// seedLedger starts a destination's ledger from the agent's ledger from before
-// destinations, the first time the destination's ledger is opened. That
-// ledger does not say where its turns went, so each destination takes all of
-// them. Starting empty instead would send them all again, and Grafana Cloud
-// only recognises a generation ID it already holds for about a day: past that,
-// a repeat is stored, counted, and billed a second time. A turn the old ledger
-// holds that a destination never received still needs --force there once.
+// seedLedger starts a Grafana Cloud destination's ledger from the agent's
+// ledger from before destinations, the first time it is opened. That ledger
+// does not say where its turns went, so the destination takes all of them.
+// Starting empty would send them all again, and Grafana Cloud only recognises
+// a generation ID it already holds for about a day: past that, a repeat is
+// stored, counted, and billed a second time. A turn the old ledger holds that
+// this destination never received needs --force there once.
 //
-// It reports whether it seeded the ledger, which only the first open can.
-func seedLedger(path, legacy string) (bool, error) {
+// The seed is written to a file of its own and linked into place only if no
+// ledger is there yet, so two imports opening the destination at once cannot
+// replace each other's ledger; the one that loses keeps the one that won.
+func seedLedger(path, legacy string) error {
 	if _, err := os.Stat(path); err == nil {
-		return false, nil
+		return nil
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return false, fmt.Errorf("stat import ledger: %w", err)
+		return fmt.Errorf("stat import ledger: %w", err)
 	}
 	entries, _, err := readLedger(legacy)
 	if err != nil {
-		return false, err
+		return err
 	}
 	if len(entries) == 0 {
-		return false, nil
+		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return false, fmt.Errorf("create ledger dir: %w", err)
+		return fmt.Errorf("create ledger dir: %w", err)
 	}
-	if err := (&Ledger{path: path, entries: entries}).compact(); err != nil {
-		return false, err
+	tmp, err := writeLedgerTemp(path, entries)
+	if err != nil {
+		return fmt.Errorf("seed import ledger: %w", err)
 	}
-	return true, nil
+	defer func() { _ = os.Remove(tmp) }()
+	if err := os.Link(tmp, path); err != nil && !errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("seed import ledger: %w", err)
+	}
+	return nil
 }
 
 func openLedgerAt(path string) (*Ledger, error) {
@@ -266,33 +280,8 @@ const maxLedgerLineBytes = 64 * 1024
 // Callers must not hold l.mu; OpenLedger runs it before the append handle
 // exists.
 func (l *Ledger) compact() error {
-	tmp := l.path + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	tmp, err := writeLedgerTemp(l.path, l.entries)
 	if err != nil {
-		return fmt.Errorf("compact ledger: %w", err)
-	}
-	w := bufio.NewWriter(f)
-	for key, e := range l.entries {
-		e.Key = key
-		data, err := json.Marshal(e)
-		if err != nil {
-			_ = f.Close()
-			_ = os.Remove(tmp)
-			return fmt.Errorf("compact ledger: %w", err)
-		}
-		if _, err := w.Write(append(data, '\n')); err != nil {
-			_ = f.Close()
-			_ = os.Remove(tmp)
-			return fmt.Errorf("compact ledger: %w", err)
-		}
-	}
-	if err := w.Flush(); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmp)
-		return fmt.Errorf("compact ledger: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		_ = os.Remove(tmp)
 		return fmt.Errorf("compact ledger: %w", err)
 	}
 	if err := os.Rename(tmp, l.path); err != nil {
@@ -300,6 +289,45 @@ func (l *Ledger) compact() error {
 		return fmt.Errorf("compact ledger: %w", err)
 	}
 	return nil
+}
+
+// writeLedgerTemp writes one record per key to a new temporary file beside
+// path and returns its name. Each caller gets a file of its own, so two
+// processes writing at once never truncate each other's, and the data is on
+// disk before the caller puts the file in place.
+func writeLedgerTemp(path string, entries map[SourceIdentity]Entry) (string, error) {
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return "", err
+	}
+	tmp := f.Name()
+	fail := func(err error) (string, error) {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return "", err
+	}
+	w := bufio.NewWriter(f)
+	for key, e := range entries {
+		e.Key = key
+		data, err := json.Marshal(e)
+		if err != nil {
+			return fail(err)
+		}
+		if _, err := w.Write(append(data, '\n')); err != nil {
+			return fail(err)
+		}
+	}
+	if err := w.Flush(); err != nil {
+		return fail(err)
+	}
+	if err := f.Sync(); err != nil {
+		return fail(err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return "", err
+	}
+	return tmp, nil
 }
 
 // Close releases the append handle. It is safe to call more than once.

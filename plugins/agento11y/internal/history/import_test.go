@@ -245,11 +245,13 @@ func TestRunImportKeepsALedgerPerDestination(t *testing.T) {
 	}
 }
 
-// The ledger from before destinations does not say where its turns went, so
-// each destination starts from all of them. Starting empty would send them all
-// again, and Grafana Cloud stores and bills a generation it received more than
-// about a day earlier a second time.
-func TestRunImportStartsEachDestinationFromTheLedgerBeforeDestinations(t *testing.T) {
+// The ledger from before destinations does not say where its turns went.
+// Grafana Cloud starts from all of them: sending them again would store and
+// bill a second time each one it received more than about a day earlier. The
+// local store starts empty, because it keeps one turn per generation ID however
+// often a turn arrives, so sending the old turns again costs nothing but time
+// and fills in the ones that only ever reached Cloud.
+func TestRunImportStartsOnlyCloudFromTheLedgerBeforeDestinations(t *testing.T) {
 	pinStateHome(t)
 	envconfig.PinAliasEnvBlank(t)
 	t.Setenv("AGENTO11Y_AUTH_TENANT_ID", "123")
@@ -257,19 +259,11 @@ func TestRunImportStartsEachDestinationFromTheLedgerBeforeDestinations(t *testin
 	if got := importTurns(t, "https://agento11y-prod.grafana.net", legacy, "t1", "t2"); got.Imported != 2 {
 		t.Fatalf("filling the old ledger: %+v", got)
 	}
-	for _, endpoint := range []string{"https://agento11y-prod.grafana.net", "http://127.0.0.1:8765"} {
-		got := importTurns(t, endpoint, nil, "t1", "t2", "t3")
-		if got.Imported != 1 || got.Skipped != 2 {
-			t.Errorf("import into %s after the upgrade: %+v, want the new turn imported and the old two skipped", endpoint, got)
-		}
-		if !got.LedgerSeeded {
-			t.Errorf("import into %s after the upgrade did not report the ledger it started from", endpoint)
-		}
+	if got := importTurns(t, "https://agento11y-prod.grafana.net", nil, "t1", "t2", "t3"); got.Imported != 1 || got.Skipped != 2 {
+		t.Errorf("Grafana Cloud import after the upgrade: %+v, want the new turn imported and the old two skipped", got)
 	}
-	// Only the first import into a destination starts its ledger, so only that
-	// one says some skipped turns may never have arrived.
-	if got := importTurns(t, "https://agento11y-prod.grafana.net", nil, "t1", "t2", "t3"); got.LedgerSeeded || got.Skipped != 3 {
-		t.Errorf("second import into Grafana Cloud: %+v, want 3 skipped and no seeded ledger", got)
+	if got := importTurns(t, "http://127.0.0.1:8765", nil, "t1", "t2", "t3"); got.Imported != 3 || got.Skipped != 0 {
+		t.Errorf("local import after the upgrade: %+v, want all three imported", got)
 	}
 }
 
