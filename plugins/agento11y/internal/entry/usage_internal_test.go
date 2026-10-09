@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/grafana/agento11y/plugins/agento11y/internal/doctor"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/skills"
@@ -255,12 +256,65 @@ func TestUsageFlagAllowlistCoversDefinedFlags(t *testing.T) {
 		})
 	}
 
+	// doctor and `guards test` own their flag sets outside the help registry,
+	// so the loop above cannot see them. Checking them from their own
+	// constructors is the point: the first version of this test shared the
+	// allowlist's blind spot and passed while those flags went unrecorded.
+	var guardsOpts guardsTestOptions
+	newGuardsTestFlags(&guardsOpts).VisitAll(func(f *flag.Flag) {
+		if !allowed[f.Name] {
+			t.Errorf("guards test flag %q is defined but not allowlisted", f.Name)
+		}
+	})
+	for _, name := range doctor.FlagNames() {
+		if !allowed[name] {
+			t.Errorf("doctor flag %q is defined but not allowlisted", name)
+		}
+	}
+
 	// Spot-check so a trivially-true allowlist fails here.
 	if !allowed["json"] {
 		t.Error("allowlist is missing --json")
 	}
 	if allowed["definitely-not-a-flag"] {
 		t.Error("allowlist admits an undefined flag; it must not be permissive")
+	}
+}
+
+// TestUsageFlagNamesRecordsDoctorAndGuardsFlags is the regression test for the
+// gap above: these commands' flags were silently dropped.
+func TestUsageFlagNamesRecordsDoctorAndGuardsFlags(t *testing.T) {
+	if got := usageFlagNames([]string{"--require-cloud", "--no-color"}); got != "no-color,require-cloud" {
+		t.Errorf("doctor flags = %q, want %q", got, "no-color,require-cloud")
+	}
+	if got := usageFlagNames([]string{"--stdin", "--tool", "Bash"}); got != "stdin,tool" {
+		t.Errorf("guards flags = %q, want %q", got, "stdin,tool")
+	}
+}
+
+// TestStdoutIsTTYIsNotJustACharDevice pins the fix for a ModeCharDevice check,
+// which reports /dev/null as interactive.
+func TestStdoutIsTTYIsNotJustACharDevice(t *testing.T) {
+	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Skipf("cannot open %s: %v", os.DevNull, err)
+	}
+	t.Cleanup(func() { _ = devNull.Close() })
+
+	info, err := devNull.Stat()
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if info.Mode()&os.ModeCharDevice == 0 {
+		t.Skip("platform does not report the null device as a character device")
+	}
+
+	original := os.Stdout
+	os.Stdout = devNull
+	t.Cleanup(func() { os.Stdout = original })
+
+	if stdoutIsTTY() {
+		t.Error("stdoutIsTTY() = true for the null device; it must ask isatty, not the mode bit")
 	}
 }
 

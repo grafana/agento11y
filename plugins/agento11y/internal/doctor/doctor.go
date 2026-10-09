@@ -483,6 +483,16 @@ func Run(ctx context.Context, args []string, p Params) int {
 	return code
 }
 
+// FlagNames returns the flag names `agento11y doctor` accepts. Exported so
+// callers that need the binary's full flag vocabulary do not have to restate
+// it and drift from this list.
+func FlagNames() []string {
+	var opts Options
+	var names []string
+	doctorFlags(&opts).VisitAll(func(f *flag.Flag) { names = append(names, f.Name) })
+	return names
+}
+
 func doctorFlags(opts *Options) *flag.FlagSet {
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	// Entry parses before dotenv, so parsing must not print or collect anything.

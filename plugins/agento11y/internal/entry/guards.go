@@ -95,8 +95,9 @@ type guardsTestReport struct {
 	Notices       []string            `json:"notices"`
 }
 
-func parseGuardsTest(args []string) (guardsTestOptions, []string, error) {
-	var opts guardsTestOptions
+// newGuardsTestFlags builds the `guards test` flag set. Split out from
+// parseGuardsTest so the flag vocabulary is reachable without parsing.
+func newGuardsTestFlags(opts *guardsTestOptions) *flag.FlagSet {
 	fs := flag.NewFlagSet("guards test", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.BoolVar(&opts.jsonOutput, "json", false, "emit JSON")
@@ -104,6 +105,12 @@ func parseGuardsTest(args []string) (guardsTestOptions, []string, error) {
 	fs.StringVar(&opts.request.ToolName, "tool", "Bash", "tool name")
 	fs.StringVar(&opts.request.AgentName, "agent", "", "agent name")
 	fs.BoolVar(&opts.stdin, "stdin", false, "read command through EOF")
+	return fs
+}
+
+func parseGuardsTest(args []string) (guardsTestOptions, []string, error) {
+	var opts guardsTestOptions
+	fs := newGuardsTestFlags(&opts)
 	err := fs.Parse(args)
 	fs.Visit(func(f *flag.Flag) {
 		if f.Name == "rules" {

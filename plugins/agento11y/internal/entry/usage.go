@@ -12,6 +12,9 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/term"
+
+	"github.com/grafana/agento11y/plugins/agento11y/internal/doctor"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/skills"
@@ -139,12 +142,13 @@ func usageOutcome(inv capture.Invocation) (outcome, errorKind string) {
 	}
 }
 
+// stdoutIsTTY reports whether stdout is an interactive terminal.
+//
+// term.IsTerminal, not a ModeCharDevice check: /dev/null and Windows NUL are
+// character devices too, so the mode bit reports `>/dev/null` as interactive.
+// The rest of the binary already asks isatty (clihelp, history).
 func stdoutIsTTY() bool {
-	info, err := os.Stdout.Stat()
-	if err != nil {
-		return false
-	}
-	return info.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(int(os.Stdout.Fd()))
 }
 
 // resolveUsageSkill returns name when it is a bundled skill, else "".
@@ -201,17 +205,32 @@ func flagName(arg string) (string, bool) {
 }
 
 // usageFlagAllowlist is the union of every flag name the binary defines,
-// derived from the help-page registry so a new flag is covered as soon as it
+// derived from the flag sets themselves so a new flag is covered as soon as it
 // is defined rather than when someone remembers to list it.
+//
+// The help-page registry is not sufficient on its own: helpFlags returns nil
+// for doctor and `guards test`, which own their flag sets elsewhere, so those
+// are added from their own constructors.
 var usageFlagAllowlist = sync.OnceValue(func() map[string]bool {
 	allowed := map[string]bool{}
+	add := func(fs *flag.FlagSet) {
+		fs.VisitAll(func(f *flag.Flag) { allowed[f.Name] = true })
+	}
+
 	for path := range publicHelpPages() {
 		fs := helpFlags(path)
 		if fs == nil {
 			fs = newCommandFlags(path)
 		}
-		fs.VisitAll(func(f *flag.Flag) { allowed[f.Name] = true })
+		add(fs)
 	}
+
+	var guardsOpts guardsTestOptions
+	add(newGuardsTestFlags(&guardsOpts))
+	for _, name := range doctor.FlagNames() {
+		allowed[name] = true
+	}
+
 	// Answered before any command flag set is built, so not in the registry.
 	for _, name := range []string{"help", "h", "version"} {
 		allowed[name] = true
