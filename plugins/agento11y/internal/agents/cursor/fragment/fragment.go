@@ -18,7 +18,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/fragmentstore"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/redact"
@@ -103,39 +102,24 @@ const MaxSessionTitleLen = 100
 // prompt with secrets redacted, cut to MaxSessionTitleLen bytes on a rune
 // boundary, and trimmed. Redaction runs before the cut, because a secret the
 // cut splits no longer matches its pattern and its first part would be
-// exported. Live capture stamps it at beforeSubmitPrompt and the history
-// importer uses it too, so a session both captured and imported carries one
-// title.
+// exported. Live capture stamps it at beforeSubmitPrompt. The history importer
+// redacts tier 2 too before the same cut, as its Sanitizer does, so its title
+// comes through here unchanged when the mapper titles each turn.
 func SessionTitle(prompt string) string {
 	head := strings.TrimSpace(prompt)
-	// Only the head can reach the title. A secret that starts in the first
-	// 100 bytes is far shorter than this, so it is still matched whole, and a
-	// large paste does not pay for redacting the rest.
 	if len(head) > titleRedactBytes {
-		head = head[:titleRedactBytes]
+		head = redact.CutTitle(head, titleRedactBytes)
 	}
 	title := redact.New().Title(head)
-	if len(title) > MaxSessionTitleLen {
-		title = title[:MaxSessionTitleLen]
-		for !utf8.ValidString(title) {
-			title = title[:len(title)-1]
-		}
-		// A cut inside a redaction marker would leave "[REDACTED:gith" or
-		// "[REDAC"; drop the marker's start instead.
-		if at := strings.LastIndexByte(title, '['); at >= 0 {
-			tail := title[at:]
-			if !strings.Contains(tail, "]") && (strings.HasPrefix(tail, redactedMarker) || strings.HasPrefix(redactedMarker, tail)) {
-				title = title[:at]
-			}
-		}
-	}
-	return strings.TrimSpace(title)
+	return strings.TrimSpace(redact.CutTitle(title, MaxSessionTitleLen))
 }
 
-// redactedMarker starts the text redaction puts in place of a secret.
-const redactedMarker = "[REDACTED:"
-
-// titleRedactBytes bounds how much of a prompt SessionTitle redacts.
+// titleRedactBytes bounds how much of a prompt SessionTitle redacts. Cursor
+// holds the prompt until beforeSubmitPrompt returns, which also holds the
+// session lock, and redaction costs about a third of a second per MB. A secret
+// that starts in the title and ends past the bound, such as a private key over
+// 64 KiB, keeps its start in a live title. The history importer, which no one
+// waits on, redacts the whole prompt.
 const titleRedactBytes = 64 << 10
 
 // Touch keeps the per-hook timestamps in sync. First arrival wins for

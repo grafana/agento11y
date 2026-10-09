@@ -11,9 +11,10 @@ import (
 	"regexp"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/grafana/agento11y/go/agento11y"
+
+	"github.com/grafana/agento11y/plugins/agento11y/internal/redact"
 )
 
 func init() {
@@ -901,12 +902,11 @@ func piTitle(log *piSession, conversationID string) string {
 	return conversationID
 }
 
+// piClipTitle redacts text before cutting it to piMaxTitleLen runes, the way
+// the Sanitizer redacts: it only ever sees the title already cut, and a secret
+// the cut splits no longer matches its pattern.
 func piClipTitle(text string) string {
-	text = strings.TrimSpace(text)
-	if utf8.RuneCountInString(text) <= piMaxTitleLen {
-		return text
-	}
-	return string([]rune(text)[:piMaxTitleLen])
+	return redact.RedactTitleRunes(text, piMaxTitleLen)
 }
 
 // Fork metadata keys, matching what the live plugin writes

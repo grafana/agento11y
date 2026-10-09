@@ -7,7 +7,6 @@ import (
 	"maps"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/grafana/agento11y/go/agento11y"
@@ -52,6 +51,10 @@ type Options struct {
 	// them in the session state, where a newer one replaces an older one, so
 	// the session follows a rename.
 	Titles transcript.Titles
+	// TitleDropped says the export drops the conversation title, as
+	// metadata_only does, so Process titles every generation with the session
+	// ID instead of redacting a title no one sees. The zero value redacts.
+	TitleDropped bool
 }
 
 // agent is the base agent name for every generation this run produces: the
@@ -361,7 +364,10 @@ func Process(lines []transcript.Line, st *state.Session, opts Options, r *redact
 		}
 	}
 
-	title := conversationTitle(st, opts.SessionID, r)
+	title := opts.SessionID
+	if !opts.TitleDropped {
+		title = conversationTitle(st, opts.SessionID, r)
+	}
 	for i := range gens {
 		gens[i].ConversationTitle = title
 	}
@@ -398,23 +404,26 @@ func noteTitles(st *state.Session, t transcript.Titles) {
 // first prompt the user typed. These are the names Claude Code itself lists
 // the session under. Falls back to the session ID when none is available (e.g.
 // transcript with no user lines processed yet).
+//
+// The title is redacted before it is cut, because a secret the cut splits no
+// longer matches its pattern and its first part would be exported. History
+// import passes no redactor, leaving content to its Sanitizer, which only ever
+// sees the title already cut; the title is redacted here as the Sanitizer
+// redacts. Live capture in metadata_only passes none either, but sets
+// Options.TitleDropped, so this is not called.
 func conversationTitle(st *state.Session, sessionID string, r *redact.Redactor) string {
 	if st == nil {
 		return sessionID
 	}
-	t := strings.TrimSpace(cmp.Or(st.CustomTitle, st.AITitle, st.Title))
+	raw := cmp.Or(st.CustomTitle, st.AITitle, st.Title)
+	var t string
 	if r != nil {
-		t = r.Title(t)
+		t = redact.CutTitle(strings.TrimSpace(r.Title(strings.TrimSpace(raw))), maxTitleLen)
+	} else {
+		t = redact.RedactTitle(raw, maxTitleLen)
 	}
 	if t == "" {
 		return sessionID
-	}
-	if len(t) > maxTitleLen {
-		t = t[:maxTitleLen]
-		// Truncate to valid UTF-8 boundary
-		for !utf8.ValidString(t) {
-			t = t[:len(t)-1]
-		}
 	}
 	return t
 }

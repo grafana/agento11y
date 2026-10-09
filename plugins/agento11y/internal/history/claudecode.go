@@ -397,7 +397,8 @@ func claudeProcess(sess SessionPreview, sourcePath string, lines []transcript.Li
 		// the parent's one-line Agent summary.
 		SuppressSyntheticSubagentToolCallIDs: claudeSubagentToolCallIDs(lines, refs),
 		// nil redactor: Turns returns raw content and the framework Sanitizer
-		// redacts once before export.
+		// redacts once before export. The title is the exception: the mapper
+		// cuts it, so it redacts it first, as the Sanitizer would.
 	}, nil)
 	ids.unique(gens)
 	return claudeProcessedTranscript{sourcePath: sourcePath, lines: lines, gens: gens}

@@ -11,13 +11,13 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/codexlog"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/fragment"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/mapper"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/userid"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/redact"
 )
 
 func init() {
@@ -1053,17 +1053,14 @@ func appendText(existing, next string) string {
 }
 
 func codexTitleFromText(text string) string {
-	title := strings.Join(strings.Fields(text), " ")
-	if title == "" {
-		return ""
-	}
-	if len(title) > codexMaxTitleLen {
-		title = title[:codexMaxTitleLen]
-		for !utf8.ValidString(title) {
-			title = title[:len(title)-1]
-		}
-	}
-	return title
+	// Redacted before the cut, the way the Sanitizer redacts: it only ever sees
+	// the title already cut, and a secret the cut splits no longer matches its
+	// pattern. The prompt is redacted whole first, as its input is, so a secret
+	// across lines still matches. Then the collapsed text is redacted again,
+	// because it is what the Sanitizer sees: a separator a pattern does not
+	// take as space, such as \v after "Bearer", collapses into one it does.
+	title := strings.Join(strings.Fields(redact.New().Redact(text)), " ")
+	return redact.RedactTitle(title, codexMaxTitleLen)
 }
 
 func firstNonEmptyString(values ...string) string {

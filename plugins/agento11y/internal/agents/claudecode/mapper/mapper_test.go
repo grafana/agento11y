@@ -415,6 +415,28 @@ func TestProcess_ConversationTitle(t *testing.T) {
 	}
 }
 
+// A metadata_only export drops the title, so Process does not redact a prompt
+// for it. The session state still records the title.
+func TestProcess_TitleDroppedTitlesWithTheSessionID(t *testing.T) {
+	st := state.Session{}
+	lines := []transcript.Line{
+		makeUserLine("fix the auth bug"),
+		makeAssistantLine("claude-sonnet-4-20250514", 10, []transcript.ContentBlock{
+			{Type: "text", Text: "ok"},
+		}, "end_turn"),
+	}
+	gens, _ := Process(lines, &st, Options{SessionID: "sess-1", TitleDropped: true}, nil)
+	if len(gens) != 1 {
+		t.Fatalf("got %d generations, want 1", len(gens))
+	}
+	if gens[0].ConversationTitle != "sess-1" {
+		t.Errorf("ConversationTitle = %q, want the session ID", gens[0].ConversationTitle)
+	}
+	if st.Title != "fix the auth bug" {
+		t.Errorf("state.Title = %q, want the first prompt", st.Title)
+	}
+}
+
 func TestSlashCommandTitle(t *testing.T) {
 	tests := []struct {
 		name   string
