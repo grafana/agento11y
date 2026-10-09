@@ -86,12 +86,7 @@ func Launch(_ context.Context, args []string, localEnv *local.LaunchEnv, _ io.Re
 	// uninstall failure must not block the user's copilot session.
 	removeStalePlugin(bin, stderr, logger)
 
-	env := local.Environ(localEnv)
-	argv := append([]string{bin}, args...)
-	if err := execFn(bin, argv, env); err != nil {
-		return fmt.Errorf("exec copilot: %w", err)
-	}
-	return nil
+	return launcher.Exec(execFn, bin, "copilot", args, local.Environ(localEnv))
 }
 
 // Install writes the shared user-level Copilot hooks file without launching

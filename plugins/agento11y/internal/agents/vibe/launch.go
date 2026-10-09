@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"syscall"
 
+	"github.com/grafana/agento11y/plugins/agento11y/internal/launcher"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
 )
 
@@ -44,12 +45,7 @@ func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.
 
 	installHook(ctx, stderr, logger)
 
-	env := envWithExperimentalHooks(local.Environ(localEnv))
-	argv := append([]string{bin}, args...)
-	if err := execFn(bin, argv, env); err != nil {
-		return fmt.Errorf("exec vibe: %w", err)
-	}
-	return nil
+	return launcher.Exec(execFn, bin, "vibe", args, envWithExperimentalHooks(local.Environ(localEnv)))
 }
 
 // Status reports whether agento11y capture is configured for vibe. Capture is
