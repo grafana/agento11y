@@ -526,6 +526,26 @@ func TestPublishSeedKeepsALedgerThatIsAlreadyThere(t *testing.T) {
 	}
 }
 
+// A seed that cannot be put in place must leave no ledger behind: the next open
+// would trust a missing or partial one and send the turns it lacks again.
+func TestPublishSeedLeavesNoLedgerWhenItFails(t *testing.T) {
+	prev := linkFile
+	linkFile = func(string, string) error { return errors.New("operation not supported") }
+	t.Cleanup(func() { linkFile = prev })
+	dir := t.TempDir()
+	seed, err := writeLedgerTemp(filepath.Join(dir, "cloud.jsonl"), map[SourceIdentity]Entry{identity(0): {Status: StatusExported}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "missing", "cloud.jsonl")
+	if err := publishSeed(seed, path); err == nil {
+		t.Fatal("publishSeed returned nil error when neither a link nor a rename could place the seed")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("a failed seed left a ledger behind (stat err %v)", err)
+	}
+}
+
 // Regression: two imports opening a Cloud destination for the first time at
 // once both seeded it through one temporary file, and the ledger they left lost
 // some of the old turns, which the next import sent again.

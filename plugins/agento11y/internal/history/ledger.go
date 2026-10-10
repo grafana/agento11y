@@ -219,40 +219,21 @@ var linkFile = os.Link
 // already hold turns it exported.
 //
 // A hard link does that in one step. On a file system without hard links, the
-// ledger is created exclusively and the seed copied in, which also never
-// replaces another ledger.
+// seed is renamed into place after checking that no ledger has appeared. A
+// rename never leaves a ledger half written, but it can still replace one that
+// another first open placed between the check and the rename, and that
+// ledger's newest marks would be lost.
 func publishSeed(tmp, path string) error {
 	err := linkFile(tmp, path)
 	if err == nil || errors.Is(err, os.ErrExist) {
 		return nil
 	}
-	return copyExclusive(tmp, path)
-}
-
-// copyExclusive copies src to dst, creating dst only if it does not exist. An
-// existing dst is left as it is.
-func copyExclusive(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = in.Close() }()
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if errors.Is(err, os.ErrExist) {
+	if _, err := os.Lstat(path); err == nil {
 		return nil
-	}
-	if err != nil {
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if _, err := io.Copy(out, in); err != nil {
-		_ = out.Close()
-		return err
-	}
-	if err := out.Sync(); err != nil {
-		_ = out.Close()
-		return err
-	}
-	return out.Close()
+	return os.Rename(tmp, path)
 }
 
 func openLedgerAt(path string) (*Ledger, error) {
