@@ -113,8 +113,8 @@ func (t Target) destination() string {
 // normalizedEndpoint spells one endpoint one way, so a respelling does not
 // start a new ledger and send every turn again. Like the SDK, it reads an
 // endpoint without a scheme as https, or as http when AGENTO11Y_INSECURE is
-// set. It lowercases the scheme and host, and drops a trailing dot from the
-// host, the scheme's default port, and any trailing slash.
+// set. It lowercases the scheme and host, and drops credentials, a trailing
+// dot from the host, the scheme's default port, and any trailing slash.
 func normalizedEndpoint(endpoint string) string {
 	lower := strings.ToLower(endpoint)
 	if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
@@ -129,6 +129,8 @@ func normalizedEndpoint(endpoint string) string {
 		return endpoint
 	}
 	u.Scheme = strings.ToLower(u.Scheme)
+	// Credentials in the URL name who connects, not where to.
+	u.User = nil
 	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
 	port := u.Port()
 	if (u.Scheme == "https" && port == "443") || (u.Scheme == "http" && port == "80") {
@@ -150,10 +152,10 @@ func normalizedEndpoint(endpoint string) string {
 // destination. The caller must call [Ledger.Close].
 //
 // A record that cannot be decoded is skipped: a torn final line after a crash
-// costs one turn's status, and re-importing that turn is harmless because the
-// generation ID is deterministic. A read or permission error is returned
-// rather than swallowed, because degrading to an empty ledger would silently
-// re-export the whole history.
+// costs one turn's status, and that turn is imported again under the same
+// generation ID. A read or permission error is returned rather than swallowed,
+// because degrading to an empty ledger would silently re-export the whole
+// history.
 func OpenLedger(agent AgentID, destination string) (*Ledger, error) {
 	if strings.TrimSpace(string(agent)) == "" {
 		return nil, errors.New("history: open ledger for empty agent")
@@ -162,29 +164,24 @@ func OpenLedger(agent AgentID, destination string) (*Ledger, error) {
 		return nil, errors.New("history: open ledger for empty destination")
 	}
 	path := ledgerPath(agent, destination)
-	// The local store is not seeded. It keeps one turn per generation ID
-	// however often a turn arrives, so its first import after the upgrade
-	// sends the old turns again at no cost but time, and the viewer gains the
-	// ones that only ever reached Grafana Cloud.
-	if destination != localDestination {
-		if err := seedLedger(path, legacyLedgerPath(agent)); err != nil {
-			return nil, err
-		}
+	if err := seedLedger(path, legacyLedgerPath(agent)); err != nil {
+		return nil, err
 	}
 	return openLedgerAt(path)
 }
 
-// seedLedger starts a Grafana Cloud destination's ledger from the agent's
-// ledger from before destinations, the first time it is opened. That ledger
-// does not say where its turns went, so the destination takes all of them.
-// Starting empty would send them all again, and Grafana Cloud only recognises
-// a generation ID it already holds for about a day: past that, a repeat is
-// stored, counted, and billed a second time. A turn the old ledger holds that
-// this destination never received needs --force there once.
+// seedLedger starts a destination's ledger from the agent's ledger from before
+// destinations, the first time it is opened. That ledger does not say where
+// its turns went, so the destination takes all of them, because sending them
+// again is not harmless anywhere:
+//   - Grafana Cloud only recognises a generation ID it already holds for about
+//     a day. Past that, a repeat is stored, counted, and billed a second time.
+//   - The local store keeps one turn per generation ID within a conversation,
+//     but a session that a second file has claimed since its import now goes
+//     out under another conversation ID, so its turns would show twice.
 //
-// The seed is written to a file of its own and linked into place only if no
-// ledger is there yet, so two imports opening the destination at once cannot
-// replace each other's ledger; the one that loses keeps the one that won.
+// A turn the old ledger holds that this destination never received needs
+// --force there once.
 func seedLedger(path, legacy string) error {
 	if _, err := os.Stat(path); err == nil {
 		return nil
@@ -206,10 +203,56 @@ func seedLedger(path, legacy string) error {
 		return fmt.Errorf("seed import ledger: %w", err)
 	}
 	defer func() { _ = os.Remove(tmp) }()
-	if err := os.Link(tmp, path); err != nil && !errors.Is(err, os.ErrExist) {
+	if err := publishSeed(tmp, path); err != nil {
 		return fmt.Errorf("seed import ledger: %w", err)
 	}
 	return nil
+}
+
+// linkFile is os.Link, replaceable so a test can stand in for a file system
+// without hard links.
+var linkFile = os.Link
+
+// publishSeed puts a fully written seed at path only if no ledger is there
+// yet. Two imports opening a destination for the first time at once both
+// seed it, and the one that loses must keep the winner's ledger, which may
+// already hold turns it exported.
+//
+// A hard link does that in one step. On a file system without hard links, the
+// ledger is created exclusively and the seed copied in, which also never
+// replaces another ledger.
+func publishSeed(tmp, path string) error {
+	err := linkFile(tmp, path)
+	if err == nil || errors.Is(err, os.ErrExist) {
+		return nil
+	}
+	return copyExclusive(tmp, path)
+}
+
+// copyExclusive copies src to dst, creating dst only if it does not exist. An
+// existing dst is left as it is.
+func copyExclusive(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = in.Close() }()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if errors.Is(err, os.ErrExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return err
+	}
+	if err := out.Sync(); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 func openLedgerAt(path string) (*Ledger, error) {

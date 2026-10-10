@@ -482,7 +482,7 @@ skips that question; missing Cloud credentials still starts Cloud setup. That se
 asks. It imports only with both `--all` and `--yes`; otherwise it prints a dry-run plan and exits 0.
 
 Without `--since`, an import selects sessions active during the last 90 days. Each imported turn is recorded in a ledger per agent and destination, so an import into another destination sends the same turns without `--force`. If saved local mode would keep that import local, add `--no-local`.
-Turns imported before that ledger count as already sent to every Grafana Cloud stack; the local viewer gets them again on its next import, which is harmless. Pass `--no-local --force` once only after the user confirms they never imported those turns into Cloud: Cloud stores and counts a repeat of a turn it received more than about a day earlier.
+Turns imported before that ledger count as already sent to every destination. Pass `--force` for them only after the user confirms they never reached that destination; into Grafana Cloud, run it once, right after upgrading and before any other Cloud import, because `--force` re-sends every selected turn and Cloud stores and counts a repeat of a turn it received more than about a day earlier.
 A cancelled or failed run resumes from turns not marked exported.
 
 ### Auto-update

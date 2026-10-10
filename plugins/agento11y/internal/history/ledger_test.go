@@ -2,6 +2,7 @@ package history
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -391,6 +392,7 @@ func TestTargetDestination(t *testing.T) {
 		"Agento11y-Prod.grafana.net/",
 		"https://agento11y-prod.grafana.net.",
 		"https://agento11y-prod.grafana.net.:443/",
+		"https://user:secret@agento11y-prod.grafana.net",
 	} {
 		if same := cloud(spelling, "123"); same != stack {
 			t.Errorf("%q gave %q, want %q", spelling, same, stack)
@@ -447,24 +449,80 @@ func writeLegacyLedger(t *testing.T, n int) {
 	}
 }
 
-func TestOpenLedgerSeedsOnlyCloudDestinations(t *testing.T) {
+func TestOpenLedgerSeedsEveryDestination(t *testing.T) {
 	pinStateHome(t)
 	writeLegacyLedger(t, 2)
-	for _, tt := range []struct {
-		destination string
-		want        int
-	}{
-		{destination: "cloud-0123456789abcdef", want: 2},
-		{destination: localDestination, want: 0},
-	} {
-		l, err := OpenLedger(AgentClaudeCode, tt.destination)
+	for _, destination := range []string{"cloud-0123456789abcdef", localDestination} {
+		l, err := OpenLedger(AgentClaudeCode, destination)
 		if err != nil {
-			t.Fatalf("open %s: %v", tt.destination, err)
+			t.Fatalf("open %s: %v", destination, err)
 		}
-		if l.Len() != tt.want {
-			t.Errorf("%s ledger holds %d turns, want %d", tt.destination, l.Len(), tt.want)
+		if l.Len() != 2 {
+			t.Errorf("%s ledger holds %d turns, want 2", destination, l.Len())
 		}
 		_ = l.Close()
+	}
+}
+
+// A seed must never replace a ledger another import has already put in place:
+// that ledger may hold turns it exported since, and losing them would send
+// them again. This holds with a hard link and with the copy a file system
+// without hard links falls back to.
+func TestPublishSeedKeepsALedgerThatIsAlreadyThere(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		link func(oldname, newname string) error
+	}{
+		{name: "hard link", link: os.Link},
+		{name: "no hard links", link: func(string, string) error { return errors.New("operation not supported") }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			prev := linkFile
+			linkFile = tt.link
+			t.Cleanup(func() { linkFile = prev })
+			path := filepath.Join(t.TempDir(), "cloud.jsonl")
+			seed, err := writeLedgerTemp(path, map[SourceIdentity]Entry{identity(0): {Status: StatusExported}})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// No ledger yet: the seed goes in place.
+			if err := publishSeed(seed, path); err != nil {
+				t.Fatalf("publish into an empty place: %v", err)
+			}
+			if got := countLines(t, path); got != 1 {
+				t.Fatalf("published ledger holds %d records, want 1", got)
+			}
+
+			// A ledger with marks of its own is already there: it stays.
+			l, err := openLedgerAt(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i := 1; i <= 3; i++ {
+				if err := l.Mark(identity(i), StatusExported, "", "", 1); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_ = l.Close()
+			late, err := writeLedgerTemp(path, map[SourceIdentity]Entry{identity(9): {Status: StatusExported}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := publishSeed(late, path); err != nil {
+				t.Fatalf("publish over an existing ledger: %v", err)
+			}
+			entries, _, err := readLedger(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 4 {
+				t.Errorf("ledger holds %d turns after a late seed, want the 4 already there", len(entries))
+			}
+			if _, ok := entries[identity(9)]; ok {
+				t.Error("the late seed replaced the ledger that was already there")
+			}
+		})
 	}
 }
 

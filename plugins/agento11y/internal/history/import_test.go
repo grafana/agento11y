@@ -245,13 +245,12 @@ func TestRunImportKeepsALedgerPerDestination(t *testing.T) {
 	}
 }
 
-// The ledger from before destinations does not say where its turns went.
-// Grafana Cloud starts from all of them: sending them again would store and
-// bill a second time each one it received more than about a day earlier. The
-// local store starts empty, because it keeps one turn per generation ID however
-// often a turn arrives, so sending the old turns again costs nothing but time
-// and fills in the ones that only ever reached Cloud.
-func TestRunImportStartsOnlyCloudFromTheLedgerBeforeDestinations(t *testing.T) {
+// The ledger from before destinations does not say where its turns went, so
+// every destination starts from all of them. Sending them again would bill a
+// Grafana Cloud turn received more than about a day earlier a second time, and
+// would show a turn twice in the viewer when its session has since moved to
+// another conversation ID.
+func TestRunImportStartsEachDestinationFromTheLedgerBeforeDestinations(t *testing.T) {
 	pinStateHome(t)
 	envconfig.PinAliasEnvBlank(t)
 	t.Setenv("AGENTO11Y_AUTH_TENANT_ID", "123")
@@ -259,11 +258,20 @@ func TestRunImportStartsOnlyCloudFromTheLedgerBeforeDestinations(t *testing.T) {
 	if got := importTurns(t, "https://agento11y-prod.grafana.net", legacy, "t1", "t2"); got.Imported != 2 {
 		t.Fatalf("filling the old ledger: %+v", got)
 	}
-	if got := importTurns(t, "https://agento11y-prod.grafana.net", nil, "t1", "t2", "t3"); got.Imported != 1 || got.Skipped != 2 {
-		t.Errorf("Grafana Cloud import after the upgrade: %+v, want the new turn imported and the old two skipped", got)
+	steps := []struct {
+		name              string
+		endpoint          string
+		imported, skipped int
+	}{
+		{name: "into Grafana Cloud after the upgrade", endpoint: "https://agento11y-prod.grafana.net", imported: 1, skipped: 2},
+		{name: "into Grafana Cloud again", endpoint: "https://agento11y-prod.grafana.net", skipped: 3},
+		{name: "into the local store after the upgrade", endpoint: "http://127.0.0.1:8765", imported: 1, skipped: 2},
 	}
-	if got := importTurns(t, "http://127.0.0.1:8765", nil, "t1", "t2", "t3"); got.Imported != 3 || got.Skipped != 0 {
-		t.Errorf("local import after the upgrade: %+v, want all three imported", got)
+	for _, s := range steps {
+		got := importTurns(t, s.endpoint, nil, "t1", "t2", "t3")
+		if got.Imported != s.imported || got.Skipped != s.skipped {
+			t.Errorf("%s: %+v, want %d imported and %d skipped", s.name, got, s.imported, s.skipped)
+		}
 	}
 }
 
