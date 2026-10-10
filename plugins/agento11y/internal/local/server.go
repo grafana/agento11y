@@ -72,7 +72,7 @@ type Server struct {
 	warmOnce  sync.Once
 
 	// importMu guards the history-import fields below. One import runs at a
-	// time: two would write the same per-agent ledger and race on it.
+	// time: two would write the same ledger and race on it.
 	importMu sync.Mutex
 	// localEndpoint is this daemon's own address, which an import exports to.
 	// Serve sets it once the listener has a port.

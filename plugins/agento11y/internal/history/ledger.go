@@ -2,15 +2,20 @@ package history
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 
+	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/xdg"
 )
 
@@ -50,9 +55,9 @@ type Entry struct {
 	UpdatedUnix   int64  `json:"updated_unix"`
 }
 
-// Ledger is the private, idempotent import record for one agent. It lives
-// under the application state root with 0700 directories and 0600 files, and
-// is safe for concurrent use.
+// Ledger is the private, idempotent import record for one agent's imports into
+// one destination. It lives under the application state root with 0700
+// directories and 0600 files, and is safe for concurrent use.
 //
 // The file is append-only JSONL: one status record per [Ledger.Mark], with the
 // latest status per key held in memory. Rewriting the whole file on every mark
@@ -73,25 +78,163 @@ func ledgerDir() string {
 	return filepath.Join(xdg.AppStateRoot(), "history", "ledger")
 }
 
-func ledgerPath(agent AgentID) string {
+// ledgerPath is the ledger for one agent's imports into one destination, under
+// a directory per agent.
+func ledgerPath(agent AgentID, destination string) string {
 	// The registered agent IDs are already filename-safe; SafeComponent keeps
 	// that true if the set ever grows.
+	return filepath.Join(ledgerDir(), xdg.SafeComponent(string(agent)), xdg.SafeComponent(destination)+".jsonl")
+}
+
+// legacyLedgerPath is the one ledger an agent had before destinations, beside
+// the per-agent directories. It did not record where its turns went.
+func legacyLedgerPath(agent AgentID) string {
 	return filepath.Join(ledgerDir(), xdg.SafeComponent(string(agent))+".jsonl")
 }
 
-// OpenLedger loads (or creates) the ledger for an agent. The caller must call
-// [Ledger.Close].
+// localDestination is the local daemon's store, whatever port it listens on:
+// the port can change between runs, and the store behind it does not.
+const localDestination = "local"
+
+// destination names the store a target writes to, for its ledger. A loopback
+// endpoint is local, because the exporter treats it as the local daemon. Any
+// other is Grafana Cloud, one destination per endpoint and tenant, hashed so a
+// ledger's file name holds neither.
+func (t Target) destination() string {
+	endpoint := t.endpoint()
+	if envconfig.IsLocalEndpoint(endpoint) {
+		return localDestination
+	}
+	tenant := strings.TrimSpace(envconfig.Getenv("AUTH_TENANT_ID"))
+	sum := sha256.Sum256([]byte(normalizedEndpoint(endpoint) + "\n" + tenant))
+	return "cloud-" + hex.EncodeToString(sum[:8])
+}
+
+// normalizedEndpoint spells one endpoint one way, so a respelling does not
+// start a new ledger and send every turn again. Like the SDK, it reads an
+// endpoint without a scheme as https, or as http when AGENTO11Y_INSECURE is
+// set. It lowercases the scheme and host, and drops credentials, a trailing
+// dot from the host, the scheme's default port, and any trailing slash.
+func normalizedEndpoint(endpoint string) string {
+	lower := strings.ToLower(endpoint)
+	if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
+		scheme := "https://"
+		if envconfig.ParseBool(envconfig.Getenv("INSECURE")) {
+			scheme = "http://"
+		}
+		endpoint = scheme + endpoint
+	}
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return endpoint
+	}
+	u.Scheme = strings.ToLower(u.Scheme)
+	// Credentials in the URL name who connects, not where to.
+	u.User = nil
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	port := u.Port()
+	if (u.Scheme == "https" && port == "443") || (u.Scheme == "http" && port == "80") {
+		port = ""
+	}
+	switch {
+	case port != "":
+		u.Host = net.JoinHostPort(host, port)
+	case strings.Contains(host, ":"):
+		u.Host = "[" + host + "]"
+	default:
+		u.Host = host
+	}
+	u.Path = strings.TrimRight(u.Path, "/")
+	return u.String()
+}
+
+// OpenLedger loads (or creates) the ledger for an agent's imports into one
+// destination. The caller must call [Ledger.Close].
 //
 // A record that cannot be decoded is skipped: a torn final line after a crash
-// costs one turn's status, and re-importing that turn is harmless because the
-// generation ID is deterministic. A read or permission error is returned
-// rather than swallowed, because degrading to an empty ledger would silently
-// re-export the whole history.
-func OpenLedger(agent AgentID) (*Ledger, error) {
+// costs one turn's status, and that turn is imported again under the same
+// generation ID. A read or permission error is returned rather than swallowed,
+// because degrading to an empty ledger would silently re-export the whole
+// history.
+func OpenLedger(agent AgentID, destination string) (*Ledger, error) {
 	if strings.TrimSpace(string(agent)) == "" {
 		return nil, errors.New("history: open ledger for empty agent")
 	}
-	return openLedgerAt(ledgerPath(agent))
+	if strings.TrimSpace(destination) == "" {
+		return nil, errors.New("history: open ledger for empty destination")
+	}
+	path := ledgerPath(agent, destination)
+	if err := seedLedger(path, legacyLedgerPath(agent)); err != nil {
+		return nil, err
+	}
+	return openLedgerAt(path)
+}
+
+// seedLedger starts a destination's ledger from the agent's ledger from before
+// destinations, the first time it is opened. That ledger does not say where
+// its turns went, so the destination takes all of them, because sending them
+// again is not harmless anywhere:
+//   - Grafana Cloud only recognises a generation ID it already holds for about
+//     a day. Past that, a repeat is stored, counted, and billed a second time.
+//   - The local store keeps one turn per generation ID within a conversation,
+//     but a session that a second file has claimed since its import now goes
+//     out under another conversation ID, so its turns would show twice.
+//
+// A turn the old ledger holds that this destination never received needs
+// --force there once.
+func seedLedger(path, legacy string) error {
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("stat import ledger: %w", err)
+	}
+	entries, _, err := readLedger(legacy)
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create ledger dir: %w", err)
+	}
+	tmp, err := writeLedgerTemp(path, entries)
+	if err != nil {
+		return fmt.Errorf("seed import ledger: %w", err)
+	}
+	defer func() { _ = os.Remove(tmp) }()
+	if err := publishSeed(tmp, path); err != nil {
+		return fmt.Errorf("seed import ledger: %w", err)
+	}
+	return nil
+}
+
+// linkFile is os.Link, replaceable so a test can stand in for a file system
+// without hard links.
+var linkFile = os.Link
+
+// publishSeed puts a fully written seed at path only if no ledger is there
+// yet. Two imports opening a destination for the first time at once both
+// seed it, and the one that loses must keep the winner's ledger, which may
+// already hold turns it exported.
+//
+// A hard link does that in one step. On a file system without hard links, the
+// seed is renamed into place after checking that no ledger has appeared. A
+// rename never leaves a ledger half written, but it can still replace one that
+// another first open placed between the check and the rename. That import
+// keeps writing its marks to the replaced file, so the turns it exports are
+// sent again by the next run.
+func publishSeed(tmp, path string) error {
+	err := linkFile(tmp, path)
+	if err == nil || errors.Is(err, os.ErrExist) {
+		return nil
+	}
+	if _, err := os.Lstat(path); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func openLedgerAt(path string) (*Ledger, error) {
@@ -162,33 +305,8 @@ const maxLedgerLineBytes = 64 * 1024
 // Callers must not hold l.mu; OpenLedger runs it before the append handle
 // exists.
 func (l *Ledger) compact() error {
-	tmp := l.path + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	tmp, err := writeLedgerTemp(l.path, l.entries)
 	if err != nil {
-		return fmt.Errorf("compact ledger: %w", err)
-	}
-	w := bufio.NewWriter(f)
-	for key, e := range l.entries {
-		e.Key = key
-		data, err := json.Marshal(e)
-		if err != nil {
-			_ = f.Close()
-			_ = os.Remove(tmp)
-			return fmt.Errorf("compact ledger: %w", err)
-		}
-		if _, err := w.Write(append(data, '\n')); err != nil {
-			_ = f.Close()
-			_ = os.Remove(tmp)
-			return fmt.Errorf("compact ledger: %w", err)
-		}
-	}
-	if err := w.Flush(); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmp)
-		return fmt.Errorf("compact ledger: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		_ = os.Remove(tmp)
 		return fmt.Errorf("compact ledger: %w", err)
 	}
 	if err := os.Rename(tmp, l.path); err != nil {
@@ -196,6 +314,45 @@ func (l *Ledger) compact() error {
 		return fmt.Errorf("compact ledger: %w", err)
 	}
 	return nil
+}
+
+// writeLedgerTemp writes one record per key to a new temporary file beside
+// path and returns its name. Each caller gets a file of its own, so two
+// processes writing at once never truncate each other's, and the data is on
+// disk before the caller puts the file in place.
+func writeLedgerTemp(path string, entries map[SourceIdentity]Entry) (string, error) {
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return "", err
+	}
+	tmp := f.Name()
+	fail := func(err error) (string, error) {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return "", err
+	}
+	w := bufio.NewWriter(f)
+	for key, e := range entries {
+		e.Key = key
+		data, err := json.Marshal(e)
+		if err != nil {
+			return fail(err)
+		}
+		if _, err := w.Write(append(data, '\n')); err != nil {
+			return fail(err)
+		}
+	}
+	if err := w.Flush(); err != nil {
+		return fail(err)
+	}
+	if err := f.Sync(); err != nil {
+		return fail(err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return "", err
+	}
+	return tmp, nil
 }
 
 // Close releases the append handle. It is safe to call more than once.
