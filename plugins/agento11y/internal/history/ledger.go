@@ -221,8 +221,9 @@ var linkFile = os.Link
 // A hard link does that in one step. On a file system without hard links, the
 // seed is renamed into place after checking that no ledger has appeared. A
 // rename never leaves a ledger half written, but it can still replace one that
-// another first open placed between the check and the rename, and that
-// ledger's newest marks would be lost.
+// another first open placed between the check and the rename. That import
+// keeps writing its marks to the replaced file, so the turns it exports are
+// sent again by the next run.
 func publishSeed(tmp, path string) error {
 	err := linkFile(tmp, path)
 	if err == nil || errors.Is(err, os.ErrExist) {

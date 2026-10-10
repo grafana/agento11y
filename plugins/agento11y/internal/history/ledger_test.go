@@ -466,7 +466,7 @@ func TestOpenLedgerSeedsEveryDestination(t *testing.T) {
 
 // A seed must never replace a ledger another import has already put in place:
 // that ledger may hold turns it exported since, and losing them would send
-// them again. This holds with a hard link and with the copy a file system
+// them again. This holds with a hard link and with the rename a file system
 // without hard links falls back to.
 func TestPublishSeedKeepsALedgerThatIsAlreadyThere(t *testing.T) {
 	for _, tt := range []struct {
@@ -486,9 +486,22 @@ func TestPublishSeedKeepsALedgerThatIsAlreadyThere(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			// No ledger yet: the seed goes in place.
+			// No ledger yet: the seed goes in place, as the synced file itself.
+			// A copy into place could be left half written, and the next open
+			// would trust it.
+			before, err := os.Stat(seed)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if err := publishSeed(seed, path); err != nil {
 				t.Fatalf("publish into an empty place: %v", err)
+			}
+			after, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !os.SameFile(before, after) {
+				t.Error("the ledger in place is a copy of the seed, not the synced seed itself")
 			}
 			if got := countLines(t, path); got != 1 {
 				t.Fatalf("published ledger holds %d records, want 1", got)
