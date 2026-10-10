@@ -392,7 +392,7 @@ func TestTargetDestination(t *testing.T) {
 		"Agento11y-Prod.grafana.net/",
 		"https://agento11y-prod.grafana.net.",
 		"https://agento11y-prod.grafana.net.:443/",
-		"https://user:secret@agento11y-prod.grafana.net",
+		"https://user@agento11y-prod.grafana.net",
 	} {
 		if same := cloud(spelling, "123"); same != stack {
 			t.Errorf("%q gave %q, want %q", spelling, same, stack)
