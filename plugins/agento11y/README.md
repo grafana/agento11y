@@ -372,6 +372,27 @@ agento11y agents reconcile --agents all --json
 
 `AGENTO11Y_AUTO_UPDATE` does not apply to the other launchers. `agento11y copilot` rewrites its own `agento11y.json` hooks file, and `agento11y vibe` re-upserts its three entries into vibe's `hooks.toml`, so both always point at the installed binary. `agento11y pi` leaves upgrades to pi's own installer.
 
+### Usage statistics
+
+`agento11y` reports statistics about its own use to Grafana: which commands people run, which agents they launch, whether the command succeeded, and how long it took. This is separate from the agent sessions it captures, which go to your own Grafana Cloud stack or stay on your machine.
+
+What is reported: the resolved command path, the **names** of the flags you set, the agent, a bundled skill name, the outcome and exit code, the duration, the binary version, OS and architecture, whether the run was interactive or in CI, and a random per-installation ID.
+
+What is never reported: argument values, flag values, endpoints, tenant IDs, tokens, tags, user IDs, file paths, and error messages. Hook invocations are not reported at all, so nothing is sent while an agent session is running.
+
+Opt out with either of these, in the environment or in `config.env`:
+
+```sh
+AGENTO11Y_ANONYMOUS_USAGE_STATS=disabled
+DO_NOT_TRACK=1
+```
+
+An unrecognised value also disables reporting, so a typo in an opt-out cannot turn it back on.
+
+To see exactly what would be sent without sending anything, set `AGENTO11Y_ANONYMOUS_USAGE_STATS=log`. The event prints to stderr and no request is made.
+
+The per-installation ID is a random UUID at `$XDG_STATE_HOME/agento11y/install-id`. It identifies an installation, not a person, and deleting the file resets it.
+
 ## Troubleshooting
 
 `agento11y help` (or `--help`, or `-h`) prints the full command list on stdout and exits 0. An unknown subcommand, or a command given the wrong number of arguments, prints a one-line usage form on stderr and exits 2.

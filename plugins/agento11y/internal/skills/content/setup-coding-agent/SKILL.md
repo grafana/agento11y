@@ -388,13 +388,13 @@ All hosts read the resolved config path. The default is `~/.config/agento11y/con
 | `AGENTO11Y_THEME` | Local viewer theme: `dark`, `light`, or `system`; defaults to `dark` |
 | `AGENTO11Y_AUTO_UPDATE` | A false value opts out of host-plugin refresh |
 | `AGENTO11Y_DEBUG` | A true value writes the debug log |
+| `AGENTO11Y_ANONYMOUS_USAGE_STATS` | `disabled` stops reporting usage statistics about the CLI itself; `log` prints them instead of sending |
 
 All branded keys except `AGENTO11Y_STACK_URL` have an older `SIGIL_*` spelling.
 **Local only** writes `AGENTO11Y_LOCAL` and `SIGIL_LOCAL` as true, and both
 `LOCAL_FORWARD` spellings as false. **Local web UI = Yes** writes all four local
 keys as true. **Local web UI = No** writes all four as false. An explicit
-`agento11y login` still runs Cloud setup. Doctor reports provenance only for
-settings in its report.
+`agento11y login` still runs Cloud setup. Doctor reports provenance only for settings in its report.
 
 ### Tagging sessions
 
