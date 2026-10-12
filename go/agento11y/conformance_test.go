@@ -66,11 +66,11 @@ func TestConformance_FullGenerationRoundtrip(t *testing.T) {
 				Deferred:    true,
 			},
 		},
-		MaxTokens:       int64Ptr(1024),
-		Temperature:     float64Ptr(0.7),
-		TopP:            float64Ptr(0.9),
-		ToolChoice:      stringPtr("required"),
-		ThinkingEnabled: boolPtr(true),
+		MaxTokens:       new(int64(1024)),
+		Temperature:     new(0.7),
+		TopP:            new(0.9),
+		ToolChoice:      new("required"),
+		ThinkingEnabled: new(true),
 		Tags: map[string]string{
 			"env":       "prod",
 			"seed_only": "seed",
@@ -1080,7 +1080,7 @@ func TestConformance_Embedding(t *testing.T) {
 	_, recorder := env.Client.StartEmbedding(context.Background(), agento11y.EmbeddingStart{
 		Model:          agento11y.ModelRef{Provider: "openai", Name: "text-embedding-3-small"},
 		AgentName:      "agent-embed",
-		Dimensions:     int64Ptr(256),
+		Dimensions:     new(int64(256)),
 		EncodingFormat: "float",
 		StartedAt:      time.Date(2026, 3, 12, 14, 3, 0, 0, time.UTC),
 	})
@@ -1088,7 +1088,7 @@ func TestConformance_Embedding(t *testing.T) {
 		InputCount:    2,
 		InputTokens:   120,
 		ResponseModel: "text-embedding-3-small",
-		Dimensions:    int64Ptr(256),
+		Dimensions:    new(int64(256)),
 	})
 	recorder.End()
 	if err := recorder.Err(); err != nil {
@@ -1747,22 +1747,6 @@ func findGenerationByConversationID(t *testing.T, requests []*agento11yv1.Export
 	return nil
 }
 
-func int64Ptr(value int64) *int64 {
-	return &value
-}
-
-func float64Ptr(value float64) *float64 {
-	return &value
-}
-
-func stringPtr(value string) *string {
-	return &value
-}
-
-func boolPtr(value bool) *bool {
-	return &value
-}
-
 // modeExpect encodes the contract that every SDK is expected to honor for a
 // given content capture mode: which fields stay in the proto, what marker is
 // stamped, and what the OTel span sees.
@@ -2076,8 +2060,8 @@ func TestConformance_NoSDKOwnedLegacySigilNamespace(t *testing.T) {
 		AgentName:         "agent-legacy",
 		AgentVersion:      "1.0.0",
 		Model:             agento11y.ModelRef{Provider: "anthropic", Name: "claude-sonnet-4-5"},
-		ToolChoice:        stringPtr("auto"),
-		ThinkingEnabled:   boolPtr(true),
+		ToolChoice:        new("auto"),
+		ThinkingEnabled:   new(true),
 		Tags:              map[string]string{"sigil.caller_tag": "caller-tag"},
 		Metadata: map[string]any{
 			"sigil.caller_key":            "caller-value",

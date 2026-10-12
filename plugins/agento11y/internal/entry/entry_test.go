@@ -1451,13 +1451,13 @@ func TestRun_LocalSubcommand(t *testing.T) {
 	}{
 		{name: "status with no daemon prints friendly message", argv: []string{"local", "status"}, wantStdoutHas: []string{"not running"}},
 		{name: "json status with no daemon reports running false", argv: []string{"local", "status", "--json"}, wantStdoutHas: []string{`{"running":false}`}},
-		{name: "status rejects an unknown flag", argv: []string{"local", "status", "--nope"}, wantExit: intPtr(2), wantStderrHas: "usage: agento11y local status [--json]"},
-		{name: "status rejects a positional argument", argv: []string{"local", "status", "json"}, wantExit: intPtr(2), wantStderrHas: "usage: agento11y local status [--json]"},
+		{name: "status rejects an unknown flag", argv: []string{"local", "status", "--nope"}, wantExit: new(2), wantStderrHas: "usage: agento11y local status [--json]"},
+		{name: "status rejects a positional argument", argv: []string{"local", "status", "json"}, wantExit: new(2), wantStderrHas: "usage: agento11y local status [--json]"},
 		{name: "stop with no daemon prints friendly message", argv: []string{"local", "stop"}, wantStdoutHas: []string{"not running"}},
 		{name: "help", argv: []string{"local", "help"}, wantStdoutHas: localHelpRows, wantStdoutLacks: "serve", wantStderrEmpty: true, checkNoDotenv: true},
 		{name: "long help flag", argv: []string{"local", "--help"}, wantStdoutHas: localHelpRows, wantStdoutLacks: "serve", wantStderrEmpty: true, checkNoDotenv: true},
 		{name: "short help flag", argv: []string{"local", "-h"}, wantStdoutHas: localHelpRows, wantStdoutLacks: "serve", wantStderrEmpty: true, checkNoDotenv: true},
-		{name: "unknown verb exits 2", argv: []string{"local", "bogus"}, wantExit: intPtr(2), wantStderrHas: `unknown local verb "bogus"`},
+		{name: "unknown verb exits 2", argv: []string{"local", "bogus"}, wantExit: new(2), wantStderrHas: `unknown local verb "bogus"`},
 		{name: "no verb shows help", argv: []string{"local"}, wantStdoutHas: localHelpRows, wantStderrEmpty: true, checkNoDotenv: true},
 	}
 	for _, tc := range cases {
@@ -1514,7 +1514,7 @@ func TestRun_LocalOpen(t *testing.T) {
 	}{
 		{name: "starts stopped receiver and opens returned endpoint", wantOpen: true},
 		{name: "browser failure is best effort", openErr: openErr, wantStderr: openErr.Error(), wantOpen: true},
-		{name: "receiver startup failure", startErr: errors.New("receiver failed to start"), wantExit: intPtr(1), wantStderr: "receiver failed to start"},
+		{name: "receiver startup failure", startErr: errors.New("receiver failed to start"), wantExit: new(1), wantStderr: "receiver failed to start"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			isolateDotenvHome(t)
@@ -1625,15 +1625,15 @@ func TestRun_DoctorSubcommand(t *testing.T) {
 		wantStdoutHas string
 	}{
 		{name: "unconfigured is healthy and exits 0", argv: []string{"doctor"}, wantStdoutHas: "agento11y doctor"},
-		{name: "require Cloud fails when unconfigured", argv: []string{"doctor", "--require-cloud"}, wantExit: intPtr(1), wantStdoutHas: "Cloud requirement failed"},
+		{name: "require Cloud fails when unconfigured", argv: []string{"doctor", "--require-cloud"}, wantExit: new(1), wantStdoutHas: "Cloud requirement failed"},
 		{name: "json mode emits sections", argv: []string{"doctor", "--json"}, wantStdoutHas: `"conversations"`},
 		{
 			name:     "conversations set but no OTLP exits 1",
 			argv:     []string{"doctor"},
 			env:      map[string]string{"SIGIL_ENDPOINT": "https://x", "SIGIL_AUTH_TENANT_ID": "1", "SIGIL_AUTH_TOKEN": "glc_t"},
-			wantExit: intPtr(1),
+			wantExit: new(1),
 		},
-		{name: "bad flag exits 2", argv: []string{"doctor", "--nope"}, wantExit: intPtr(2)},
+		{name: "bad flag exits 2", argv: []string{"doctor", "--nope"}, wantExit: new(2)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1666,8 +1666,6 @@ func TestRun_DoctorSubcommand(t *testing.T) {
 		})
 	}
 }
-
-func intPtr(c int) *int { return &c }
 
 // inProcessDaemon swaps the local daemon for an httptest.Server so the
 // launcher tests can exercise the --local code path without forking a
@@ -2353,47 +2351,47 @@ func TestRun_LoginSubcommandFlags(t *testing.T) {
 			name:       "token from stdin spanning two lines",
 			args:       []string{"login", "--endpoint", "https://example.invalid", "--tenant", "123", "--token-stdin"},
 			stdin:      "first-line\nsecond-line\n",
-			wantExit:   intPtr(2),
+			wantExit:   new(2),
 			wantStderr: []string{"more than one line"},
 		},
 		{
 			name:       "token from stdin without the other required flags",
 			args:       []string{"login", "--token-stdin"},
 			stdin:      "secret-token\n",
-			wantExit:   intPtr(2),
+			wantExit:   new(2),
 			wantStderr: []string{"--token-stdin", "--endpoint", "--tenant"},
 		},
 		{
 			name:       "token from stdin without a tenant",
 			args:       []string{"login", "--endpoint", "https://example.invalid", "--token-stdin"},
 			stdin:      "secret-token\n",
-			wantExit:   intPtr(2),
+			wantExit:   new(2),
 			wantStderr: []string{"--tenant"},
 		},
 		{
 			name:       "two token sources",
 			args:       []string{"login", "--endpoint", "https://example.invalid", "--tenant", "123", "--token", "secret", "--token-stdin"},
 			stdin:      "other\n",
-			wantExit:   intPtr(2),
+			wantExit:   new(2),
 			wantStderr: []string{"mutually exclusive"},
 		},
 		{
 			name:       "empty stdin",
 			args:       []string{"login", "--endpoint", "https://example.invalid", "--tenant", "123", "--token-stdin"},
 			stdin:      "\n",
-			wantExit:   intPtr(2),
+			wantExit:   new(2),
 			wantStderr: []string{"no token"},
 		},
 		{
 			name:       "positional argument",
 			args:       []string{"login", "unexpected"},
-			wantExit:   intPtr(2),
+			wantExit:   new(2),
 			wantStderr: []string{"unexpected arguments", "usage: agento11y login"},
 		},
 		{
 			name:     "unknown flag",
 			args:     []string{"login", "--no-such-flag"},
-			wantExit: intPtr(2),
+			wantExit: new(2),
 		},
 		{
 			// The endpoint refused the credentials and the user did not
@@ -2402,7 +2400,7 @@ func TestRun_LoginSubcommandFlags(t *testing.T) {
 			name:       "credentials the endpoint refused",
 			args:       []string{"login"},
 			stubErr:    login.ErrNotVerified,
-			wantExit:   intPtr(1),
+			wantExit:   new(1),
 			wantOpts:   &login.RunOpts{ShowNextStep: true, OfferLocal: true, OfferLocalDaemon: true},
 			wantStderr: []string{"nothing was saved", "--yes"},
 		},

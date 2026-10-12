@@ -16,10 +16,6 @@ import (
 	"github.com/grafana/agento11y/go/agento11y"
 )
 
-func boolPtr(v bool) *bool {
-	return &v
-}
-
 func TestResolveConversationIDPrecedence(t *testing.T) {
 	conversationID, threadID := resolveConversationID(RunStartEvent{
 		RunID:          "run-1",
@@ -168,8 +164,8 @@ func TestAdapterRunAndToolLifecycle(t *testing.T) {
 	adapter := NewAgento11yAdapter(client, Options{
 		AgentName:      "adk-agent",
 		AgentVersion:   "1.0.0",
-		CaptureInputs:  boolPtr(true),
-		CaptureOutputs: boolPtr(true),
+		CaptureInputs:  new(true),
+		CaptureOutputs: new(true),
 	})
 
 	ctx := context.Background()
@@ -251,8 +247,8 @@ func TestOnRunEndDropsOutputsWhenCaptureDisabled(t *testing.T) {
 	})
 
 	adapter := NewAgento11yAdapter(client, Options{
-		CaptureInputs:  boolPtr(true),
-		CaptureOutputs: boolPtr(false),
+		CaptureInputs:  new(true),
+		CaptureOutputs: new(false),
 	})
 
 	ctx := context.Background()
@@ -317,8 +313,8 @@ func TestNewAgento11yAdapterCaptureDefaultsAndExplicitDisable(t *testing.T) {
 	}
 
 	explicitOff := NewAgento11yAdapter(client, Options{
-		CaptureInputs:  boolPtr(false),
-		CaptureOutputs: boolPtr(false),
+		CaptureInputs:  new(false),
+		CaptureOutputs: new(false),
 	})
 	if explicitOff.captureInputs {
 		t.Fatalf("expected explicit capture inputs=false to be preserved")
@@ -328,8 +324,8 @@ func TestNewAgento11yAdapterCaptureDefaultsAndExplicitDisable(t *testing.T) {
 	}
 
 	overrideOpts := NewAgento11yAdapter(client, Options{
-		CaptureInputs:  boolPtr(false),
-		CaptureOutputs: boolPtr(true),
+		CaptureInputs:  new(false),
+		CaptureOutputs: new(true),
 	})
 	if overrideOpts.captureInputs {
 		t.Fatalf("expected capture inputs override false to be preserved")
@@ -348,8 +344,8 @@ func TestOnToolStartDropsArgumentsWhenCaptureInputsDisabled(t *testing.T) {
 	})
 
 	adapter := NewAgento11yAdapter(client, Options{
-		CaptureInputs:  boolPtr(false),
-		CaptureOutputs: boolPtr(true),
+		CaptureInputs:  new(false),
+		CaptureOutputs: new(true),
 	})
 
 	if err := adapter.OnToolStart(context.Background(), ToolStartEvent{
@@ -676,8 +672,8 @@ func TestNewCallbacksProvidesOneTimeLifecycleWiring(t *testing.T) {
 
 	callbacks := NewCallbacks(client, Options{
 		AgentName:      "adk-agent",
-		CaptureInputs:  boolPtr(true),
-		CaptureOutputs: boolPtr(true),
+		CaptureInputs:  new(true),
+		CaptureOutputs: new(true),
 	})
 
 	ctx := context.Background()

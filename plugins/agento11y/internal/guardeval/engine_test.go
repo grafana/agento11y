@@ -16,8 +16,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func ptrBool(b bool) *bool { return &b }
-
 // rawRules is how a test writes a ruleset. The engine holds raw JSON because
 // that is the shape its real input has, whether the rules came out of the TOML
 // file or off the wire. A test that built Rule values directly would exercise a
@@ -154,7 +152,7 @@ func TestNewRulesEngine_Compile(t *testing.T) {
 			name: "a rule disabled in the file is dropped",
 			rules: rawRules(t,
 				toolFilterRule("on", 0, "", "Bash"),
-				Rule{RuleID: "off", Enabled: ptrBool(false), ToolFilter: &ToolFilterConfig{BlockedNames: []string{"Bash"}}},
+				Rule{RuleID: "off", Enabled: new(false), ToolFilter: &ToolFilterConfig{BlockedNames: []string{"Bash"}}},
 			),
 			wantIDs:       []string{"on"},
 			wantRules:     1,

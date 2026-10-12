@@ -139,8 +139,6 @@ func spanAttrs(span sdktrace.ReadOnlySpan) map[string]attribute.Value {
 	return out
 }
 
-func testPtr[T any](value T) *T { return &value }
-
 // chatInvocation is a completed non-streaming invocation with content in
 // every content-bearing field.
 func chatInvocation() *otelgenai.Invocation {
@@ -539,12 +537,12 @@ func TestSpanLifecycle(t *testing.T) {
 		{
 			name: "new request and response fields emit attributes",
 			mutate: func(inv *otelgenai.Invocation) {
-				inv.TopK = testPtr(int64(40))
-				inv.FrequencyPenalty = testPtr(0.1)
-				inv.PresencePenalty = testPtr(0.2)
+				inv.TopK = new(int64(40))
+				inv.FrequencyPenalty = new(0.1)
+				inv.PresencePenalty = new(0.2)
 				inv.StopSequences = []string{"stop", "done"}
-				inv.Seed = testPtr(int64(7))
-				inv.ChoiceCount = testPtr(int64(3))
+				inv.Seed = new(int64(7))
+				inv.ChoiceCount = new(int64(3))
 				inv.OutputType = "json"
 				inv.EncodingFormats = []string{"float", "base64"}
 				inv.AgentID = "agent-1"
@@ -553,7 +551,7 @@ func TestSpanLifecycle(t *testing.T) {
 				inv.WorkflowName = "nightly"
 				inv.StreamCursor = "cursor-1"
 				inv.ResponseStatus = "completed"
-				inv.DimensionCount = testPtr(int64(1536))
+				inv.DimensionCount = new(int64(1536))
 			},
 			checkStarted: func(t *testing.T, span sdktrace.ReadOnlySpan) {
 				attrs := spanAttrs(span)

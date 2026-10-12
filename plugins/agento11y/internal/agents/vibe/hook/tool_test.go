@@ -188,7 +188,7 @@ func TestPostTool_RecordsEventWhenOTelConfigured(t *testing.T) {
 		ToolCallIDValue: "tc-1",
 		ToolStatusValue: "failure",
 		ToolErrorValue:  json.RawMessage(`"exit 1"`),
-		DurationMsValue: ptr(1234.0),
+		DurationMsValue: new(1234.0),
 	}, discardLogger())
 
 	events := toolevents.Load("sess-after")
@@ -223,5 +223,3 @@ func TestPostTool_NoOpWithoutOTel(t *testing.T) {
 		t.Errorf("recorded %d events without an OTel exporter, want 0", len(events))
 	}
 }
-
-func ptr[T any](v T) *T { return &v }

@@ -364,9 +364,9 @@ func mapRequestControls(req osdk.ChatCompletionNewParams) (*int64, *float64, *fl
 
 	var thinkingEnabled *bool
 	if _, ok := payload["reasoning"]; ok {
-		thinkingEnabled = boolPtr(true)
+		thinkingEnabled = new(true)
 	} else if _, ok := payload["reasoning_effort"]; ok {
-		thinkingEnabled = boolPtr(true)
+		thinkingEnabled = new(true)
 	}
 
 	thinkingBudget := resolveThinkingBudget(payload["reasoning"])
@@ -435,10 +435,6 @@ func canonicalToolChoice(value any) *string {
 	}
 	normalized := string(raw)
 	return &normalized
-}
-
-func boolPtr(value bool) *bool {
-	return &value
 }
 
 func mergeThinkingBudgetMetadata(metadata map[string]any, thinkingBudget *int64) map[string]any {

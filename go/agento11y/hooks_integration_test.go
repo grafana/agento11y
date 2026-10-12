@@ -137,7 +137,7 @@ func newHookIntegrationClient(t *testing.T, endpoint string, options hookIntegra
 		GenerationExport: GenerationExportConfig{
 			Protocol:        GenerationExportProtocolHTTP,
 			Endpoint:        endpoint + "/api/v1/generations:export",
-			Insecure:        BoolPtr(true),
+			Insecure:        new(true),
 			Auth:            options.auth,
 			BatchSize:       1,
 			FlushInterval:   time.Hour,

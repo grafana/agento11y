@@ -220,8 +220,8 @@ var (
 
 func jsonFieldNames(structType reflect.Type) map[string]struct{} {
 	out := make(map[string]struct{}, structType.NumField())
-	for i := range structType.NumField() {
-		name, _, _ := strings.Cut(structType.Field(i).Tag.Get("json"), ",")
+	for field := range structType.Fields() {
+		name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
 		if name != "" && name != "-" {
 			out[name] = struct{}{}
 		}

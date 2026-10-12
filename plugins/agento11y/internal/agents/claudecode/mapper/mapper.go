@@ -695,7 +695,7 @@ func processAssistantLine(line transcript.Line, uctx *userContext, _ *state.Sess
 	}
 
 	if hasThinking {
-		gen.ThinkingEnabled = ptrBool(true)
+		gen.ThinkingEnabled = new(true)
 	}
 
 	gen.Input = buildInput(uctx, r, opts.SkipPromptRedaction)
@@ -845,8 +845,6 @@ func generationID(line transcript.Line) string {
 	name := line.SessionID + ":" + key
 	return uuid.NewSHA1(uuid.NameSpaceDNS, []byte(name)).String()
 }
-
-func ptrBool(b bool) *bool { return &b }
 
 // version returns the exported agent version: the override when one was
 // given, otherwise the version the transcript line reports.
