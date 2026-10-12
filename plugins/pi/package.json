@@ -35,7 +35,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@grpc/grpc-js": "^1.14.4",
+    "@grpc/grpc-js": "^1.14.6",
     "@grpc/proto-loader": "^0.8.0"
   },
   "peerDependencies": {
@@ -45,8 +45,8 @@
   },
   "devDependencies": {
     "@grafana/agento11y": "workspace:*",
-    "@mariozechner/pi-ai": "0.73.1",
-    "@mariozechner/pi-coding-agent": "0.73.1",
+    "@mariozechner/pi-ai": "npm:@earendil-works/pi-ai@0.87.1",
+    "@mariozechner/pi-coding-agent": "npm:@earendil-works/pi-coding-agent@0.87.1",
     "@opentelemetry/api": "1.9.1",
     "@opentelemetry/exporter-metrics-otlp-http": "0.214.0",
     "@opentelemetry/exporter-trace-otlp-http": "0.214.0",

@@ -8,24 +8,23 @@ overrides:
   lodash: 4.18.1
   lodash-es: 4.18.1
   '@mikro-orm/knex': 6.6.14
-  fast-uri: 3.1.6
+  fast-uri: 3.1.8
   hono: 4.13.7
   tar: 7.5.21
   ws: 8.21.0
   '@tootallnate/once': 2.0.1
-  undici: 7.29.0
   fast-xml-builder: 1.1.7
   '@hono/node-server': 2.0.10
-  ip-address: 10.3.1
+  ip-address: 10.7.3
   qs: 6.16.0
   'form-data@<2.5.6': 2.5.6
-  'brace-expansion@5': 5.0.9
+  'brace-expansion@5': 5.0.12
   'uuid@<11.1.1': 11.1.1
   'uuid@13.0.0': 13.0.2
   mysql2: 3.23.1
   nanoid: 3.3.18
-  postcss: 8.5.23
-  'brace-expansion@1': 1.1.18
+  postcss: 8.5.29
+  'brace-expansion@1': 1.1.21
   '@opentelemetry/core': 2.8.0
   'body-parser@2': 2.3.0
 
@@ -35,6 +34,7 @@ trustPolicy: no-downgrade
 blockExoticSubdeps: true
 strictDepBuilds: true
 allowBuilds:
+  '@google/genai': false
   esbuild: true
   koffi: true
   protobufjs: true
