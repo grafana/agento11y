@@ -374,7 +374,7 @@ agento11y agents reconcile --agents all --json
 
 ### Usage statistics
 
-`agento11y` reports statistics about its own use to Grafana: the command path, flag **names**, the agent, a bundled skill name, the outcome and exit code, the duration, the version, OS and architecture, whether the run was interactive or in CI, and a random per-installation ID. Never argument or flag values, endpoints, tenant IDs, tokens, tags, user IDs, paths, or error messages. Hook invocations are never reported, so nothing is sent while a session runs.
+`agento11y` reports statistics about its own use to Grafana: which subcommand ran (`doctor`, `skills show`), flag **names**, the agent, a bundled skill name, the outcome and exit code, the duration, the version, OS and architecture, whether the run was interactive or in CI, and a random per-installation ID. Never argument or flag values, endpoints, tenant IDs, tokens, tags, user IDs, hostnames, file paths, or error messages. Every one of those fields is matched against a fixed list built into the binary, so a value it does not recognise is reported as `unknown` rather than passed through. Hook invocations are never reported, so nothing is sent while a session runs.
 
 This is separate from the sessions it captures, which go to your own Grafana Cloud stack or stay on your machine.
 
