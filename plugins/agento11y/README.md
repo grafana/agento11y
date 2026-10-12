@@ -39,7 +39,7 @@ mise use -g aqua:grafana/agento11y@latest
 
 Make sure [mise is activated in your shell](https://mise.jdx.dev/cli/activate.html) so `agento11y` is on your `PATH`.
 
-**Go install (Windows, or any platform with Go 1.25+):**
+**Go install (Windows, or any platform with Go 1.26+):**
 
 ```sh
 go install github.com/grafana/agento11y/plugins/agento11y/cmd/agento11y@latest

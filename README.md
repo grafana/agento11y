@@ -19,7 +19,7 @@ For the other coding agents, install `agento11y`:
 curl -fsSL https://raw.githubusercontent.com/grafana/agento11y/main/plugins/agento11y/scripts/install.sh | sh
 # macOS with Homebrew
 brew install grafana/grafana/agento11y
-# Windows, or any platform with Go 1.25+
+# Windows, or any platform with Go 1.26+
 go install github.com/grafana/agento11y/plugins/agento11y/cmd/agento11y@latest
 ```
 

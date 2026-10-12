@@ -18,7 +18,7 @@ brew install grafana/grafana/agento11y
 agento11y claude
 ```
 
-**Go install (Windows, or any platform with Go 1.25+):**
+**Go install (Windows, or any platform with Go 1.26+):**
 
 ```sh
 go install github.com/grafana/agento11y/plugins/agento11y/cmd/agento11y@latest
