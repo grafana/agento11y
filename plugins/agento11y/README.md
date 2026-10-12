@@ -374,9 +374,9 @@ agento11y agents reconcile --agents all --json
 
 ### Usage statistics
 
-`agento11y` reports statistics about its own use to Grafana: which subcommand ran (`doctor`, `skills show`), flag **names**, the agent, a bundled skill name, the outcome and exit code, the duration, the version, OS and architecture, whether the run was interactive or in CI, and a random per-installation ID. Never argument or flag values, endpoints, tenant IDs, tokens, tags, user IDs, hostnames, file paths, or error messages. Every one of those fields is matched against a fixed list built into the binary, so a value it does not recognise is reported as `unknown` rather than passed through. Hook invocations are never reported, so nothing is sent while a session runs.
+`agento11y` reports statistics about its own use to Grafana: which subcommand ran (`doctor`, `skills show`), flag **names**, the agent, a skill name, outcome, exit code, duration, version, OS, architecture, whether the run was interactive or in CI, and a random per-installation ID. Each of those is matched against a fixed list in the binary, so anything it does not recognise becomes `unknown`. Never argument or flag values, endpoints, tenant IDs, tokens, tags, user IDs, hostnames, file paths, or error messages. Hooks are never reported, so nothing is sent while a session runs.
 
-This is separate from the sessions it captures, which go to your own Grafana Cloud stack or stay on your machine.
+Captured sessions are a separate path: they go to your own stack or stay on your machine.
 
 Opt out with either of these, in the environment or in `config.env`. An unrecognised value also disables reporting.
 
@@ -385,7 +385,7 @@ AGENTO11Y_ANONYMOUS_USAGE_STATS=disabled
 DO_NOT_TRACK=1
 ```
 
-`AGENTO11Y_ANONYMOUS_USAGE_STATS=log` prints the event to stderr and sends nothing. The ID is a random UUID at `$XDG_STATE_HOME/agento11y/install-id`; deleting the file resets it.
+`AGENTO11Y_ANONYMOUS_USAGE_STATS=log` prints the event to stderr and sends nothing. The ID is a random UUID at `$XDG_STATE_HOME/agento11y/install-id`; deleting it resets it.
 
 ## Troubleshooting
 
