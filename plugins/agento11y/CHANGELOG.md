@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.49.0] - 2026-10-13
+
+### Features
+
+- **plugins**: add CLI usage statistics library (#859)
+- **plugins**: add experimental Kiro CLI capture (#817)
+- **plugins**: import history across coding agents (#782)
+- **plugins**: require healthy Cloud export in doctor (#783)
+- **local**: add last 30 days time range (#785)
+- **plugins/agento11y**: move local guards to Security tab (#778)
+- **guards**: add local readiness controls (#777)
+
+### Bug Fixes
+
+- **plugins/agento11y**: only a local import answers the viewer's offer (#866)
+- **local**: wrap the history import banner and name the Cloud import (#857)
+- **plugins/agento11y**: keep a history import ledger per destination (#860)
+- **security**: resolve medium+ CVEs in Go and Python dependencies (#862)
+- **plugins/agento11y**: redact imported titles before cutting them (#856)
+- **plugins/agento11y**: give every imported Cursor turn the session's title (#834)
+- **plugins/agento11y**: title Claude Code sessions with Claude Code's own titles (#832)
+- **plugins/agento11y**: title Claude Code sessions from the typed prompt (#830)
+- **local**: price Cursor Grok slugs without the cursor- prefix (#818)
+- **local**: stop chart clicks from drawing a stretched focus oval (#800)
+- **local**: keep chart hover tooltips above KPI tiles (#798)
+
 ## [0.48.0] - 2026-09-17
 
 ### Bug Fixes
