@@ -111,6 +111,7 @@ def test_live_runner_registers_before_target_and_retains_siblings():
 
     result = run_deepeval(cases, target, [ExactMatchMetric()], experiment_name="live", client=client)
     assert result.trial_count == 3
+    assert client.experiments[0].metadata["execution_kind"] == "agent_run"
     assert [item.passed for item in client.scores] == [True, False]
     assert "provider unavailable" in client.trial_updates[0]["error"]
     assert all(case.actual_output == "" for case in cases)
@@ -142,6 +143,7 @@ def test_publishes_primary_and_diagnostic_metrics() -> None:
     )
 
     assert published.experiment_id == "deepeval-run-1"
+    assert "execution_kind" not in client.experiments[0].metadata
     assert published.trial_count == 1
     assert published.score_count == 2
     assert client.trials[0]["test_case_id"] == "capital-fr"
@@ -691,3 +693,85 @@ def test_reordering_results_preserves_derived_case_ids() -> None:
     publish_deepeval_results(Evaluation([second, first]), experiment_name="right", client=right)
 
     assert {trial["test_case_id"] for trial in left.trials} == {trial["test_case_id"] for trial in right.trials}
+
+
+def test_checkpoint_execution_preserves_exact_case_snapshot_and_flushes_actual_client():
+    from agento11y import conversation_id_from_context
+    from agento11y.experiments import AgentOutput, TestCase, TestSuite
+    from deepeval.metrics import ExactMatchMetric
+
+    client = FakeClient()
+    suite = TestSuite(
+        "reviewed",
+        version="v7",
+        test_cases=[
+            TestCase(
+                "stable",
+                name="Reviewed",
+                input={"prompt": "question"},
+                expected={"assistant_response": "answer", "rubric": "be correct"},
+                metadata={"source": "reviewed-conversation"},
+            )
+        ],
+    )
+    original = deepcopy(suite)
+    flushed = []
+
+    def target(case, trial):
+        assert conversation_id_from_context()
+        assert case.input == "question" and case.expected_output == "answer"
+        return AgentOutput("answer", "actual-conversation", flush=lambda: flushed.append("flushed"))
+
+    run_deepeval(suite, target, [ExactMatchMetric()], experiment_name="checkpoint", client=client)
+    snapshot = client.trials[0]["test_case"]
+    assert snapshot["test_case_id"] == "stable"
+    assert snapshot["input"] == suite.cases[0].input
+    assert snapshot["expected"] == suite.cases[0].expected
+    assert snapshot["metadata"] == suite.cases[0].metadata
+    assert client.experiments[0].suite_id == "reviewed"
+    assert client.experiments[0].suite_version == "v7"
+    assert client.trial_updates[-1]["conversation_id"] == "actual-conversation"
+    assert client.scores[0].passed is True
+    assert flushed == ["flushed"] and suite == original
+
+
+@pytest.mark.parametrize("case_input", [{"prompt": "q", "context": ["must not drop"]}, {"input": "q"}])
+def test_checkpoint_rejects_unsupported_mapping_before_run_or_target(case_input):
+    from agento11y.experiments import TestCase, TestSuite
+    from deepeval.metrics import ExactMatchMetric
+
+    client = FakeClient()
+    suite = TestSuite("reviewed", test_cases=[TestCase("case", input=case_input)])
+    with pytest.raises(ValueError, match="supports only input.prompt"):
+        run_deepeval(
+            suite,
+            lambda *_: pytest.fail("target must not run"),
+            [ExactMatchMetric()],
+            experiment_name="invalid",
+            client=client,
+        )
+    assert client.experiments == []
+
+
+def test_live_telemetry_failure_keeps_other_cases_and_emits_no_quality_verdict():
+    from agento11y.experiments import AgentOutput
+    from deepeval.metrics import ExactMatchMetric
+    from deepeval.test_case import LLMTestCase
+
+    client = FakeClient()
+    cases = [LLMTestCase(input=prompt, actual_output="", expected_output="answer") for prompt in ["bad", "good"]]
+
+    def broken_flush():
+        raise RuntimeError("export unavailable")
+
+    result = run_deepeval(
+        cases,
+        lambda case, _: AgentOutput("answer", flush=broken_flush if case.input == "bad" else lambda: None),
+        [ExactMatchMetric()],
+        experiment_name="partial",
+        client=client,
+    )
+    assert result.trial_count == 2 and result.score_count == 1
+    assert [item["status"] for item in client.trial_updates] == ["failed", "completed"]
+    assert "export unavailable" in client.trial_updates[0]["error"]
+    assert client.scores[0].passed is True
