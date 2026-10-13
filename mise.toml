@@ -768,6 +768,7 @@ for dir in "${PACKAGE_DIRS[@]}"; do
   fi
   echo "  updated ${file}"
 done
+(cd python && uv --no-config lock)
 (cd plugins/hermes && uv --no-config lock)
 
 echo "All Python package versions bumped to ${VERSION}"
