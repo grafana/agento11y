@@ -514,12 +514,13 @@ func mapUsage(usage asdk.BetaUsage) agento11y.TokenUsage {
 	// which is the inclusive contract this SDK emits.
 	inputTokens := usage.InputTokens + usage.CacheReadInputTokens + usage.CacheCreationInputTokens
 	return agento11y.TokenUsage{
-		InputTokens:           inputTokens,
-		OutputTokens:          usage.OutputTokens,
-		TotalTokens:           inputTokens + usage.OutputTokens,
-		CacheReadInputTokens:  usage.CacheReadInputTokens,
-		CacheWriteInputTokens: usage.CacheCreationInputTokens,
-		InputSemantics:        agento11y.TokenInputSemanticsInclusive,
+		InputTokens:             inputTokens,
+		OutputTokens:            usage.OutputTokens,
+		TotalTokens:             inputTokens + usage.OutputTokens,
+		CacheReadInputTokens:    usage.CacheReadInputTokens,
+		CacheWriteInputTokens:   usage.CacheCreationInputTokens,
+		CacheWrite1hInputTokens: usage.CacheCreation.Ephemeral1hInputTokens,
+		InputSemantics:          agento11y.TokenInputSemanticsInclusive,
 	}
 }
 

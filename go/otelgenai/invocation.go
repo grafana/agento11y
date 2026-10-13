@@ -152,7 +152,9 @@ type Usage struct {
 	CacheReadInputTokens int64
 	// CacheWriteInputTokens maps to gen_ai.usage.cache_creation.input_tokens.
 	CacheWriteInputTokens int64
-	ReasoningTokens       int64
+	// CacheWrite1hInputTokens is a subset of CacheWriteInputTokens.
+	CacheWrite1hInputTokens int64
+	ReasoningTokens         int64
 }
 
 // reported reports whether the invocation carries usage data. A non-zero
@@ -164,6 +166,7 @@ func (u Usage) reported() bool {
 		u.OutputTokens != 0 ||
 		u.CacheReadInputTokens != 0 ||
 		u.CacheWriteInputTokens != 0 ||
+		u.CacheWrite1hInputTokens != 0 ||
 		u.ReasoningTokens != 0
 }
 

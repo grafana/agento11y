@@ -619,6 +619,9 @@ func (h *Handler) responseAttributes(inv *Invocation) []attribute.KeyValue {
 		if inv.Usage.CacheWriteInputTokens != 0 {
 			attrs = append(attrs, semconv.GenAIUsageCacheCreationInputTokens(int(inv.Usage.CacheWriteInputTokens)))
 		}
+		if inv.Usage.CacheWrite1hInputTokens != 0 {
+			attrs = append(attrs, attribute.Int64("gen_ai.usage.cache_write1h_input_tokens", inv.Usage.CacheWrite1hInputTokens))
+		}
 		if inv.Usage.ReasoningTokens != 0 {
 			attrs = append(attrs, semconv.GenAIUsageReasoningOutputTokens(int(inv.Usage.ReasoningTokens)))
 		}

@@ -32,6 +32,7 @@ var tokenUsageBuckets = []float64{
 const (
 	TokenTypeCacheRead     = "cache_read"
 	TokenTypeCacheWrite    = "cache_write"
+	TokenTypeCacheWrite1h  = "cache_write1h"
 	TokenTypeCacheCreation = "cache_creation"
 	TokenTypeReasoning     = "reasoning"
 )
@@ -122,6 +123,7 @@ func (i instruments) record(ctx context.Context, inv *Invocation, extra []attrib
 		buckets = append(buckets,
 			tokenBucket{TokenTypeCacheRead, inv.Usage.CacheReadInputTokens},
 			tokenBucket{cacheWriteType, inv.Usage.CacheWriteInputTokens},
+			tokenBucket{TokenTypeCacheWrite1h, inv.Usage.CacheWrite1hInputTokens},
 			tokenBucket{TokenTypeReasoning, inv.Usage.ReasoningTokens},
 		)
 	}

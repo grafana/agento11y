@@ -18,3 +18,8 @@ class TestUsageMapping:
     def test_unspecified_semantics_stays_default(self):
         proto = generation_to_proto(Generation(usage=TokenUsage(input_tokens=10)))
         assert proto.usage.input_semantics == 0  # TOKEN_INPUT_SEMANTICS_UNSPECIFIED
+
+    def test_cache_write_1h_maps_to_proto(self):
+        proto = generation_to_proto(Generation(usage=TokenUsage(cache_write_input_tokens=10, cache_write_1h_input_tokens=4)))
+        assert proto.usage.cache_write_input_tokens == 10
+        assert proto.usage.cache_write1h_input_tokens == 4

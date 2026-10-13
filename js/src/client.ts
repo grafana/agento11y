@@ -131,6 +131,7 @@ const spanAttrEmbeddingDimCount = 'gen_ai.embeddings.dimension.count';
 const spanAttrRequestEncodingFormats = 'gen_ai.request.encoding_formats';
 const spanAttrCacheReadTokens = 'gen_ai.usage.cache_read_input_tokens';
 const spanAttrCacheWriteTokens = 'gen_ai.usage.cache_write_input_tokens';
+const spanAttrCacheWrite1hTokens = 'gen_ai.usage.cache_write1h_input_tokens';
 const spanAttrReasoningTokens = 'gen_ai.usage.reasoning_tokens';
 const spanAttrToolName = 'gen_ai.tool.name';
 const spanAttrToolCallID = 'gen_ai.tool.call.id';
@@ -161,6 +162,7 @@ const attrTokenSemantics = 'gen_ai.token.semantics';
 const tokenSemanticsInclusive = 'inclusive';
 const metricTokenTypeCacheRead = 'cache_read';
 const metricTokenTypeCacheWrite = 'cache_write';
+const metricTokenTypeCacheWrite1h = 'cache_write1h';
 const metricTokenTypeReasoning = 'reasoning';
 
 const durationBucketsSeconds: number[] = [
@@ -1062,6 +1064,7 @@ export class Agento11yClient {
       this.recordTokenUsage(generation, metricTokenTypeOutput, usage.outputTokens);
       this.recordTokenUsage(generation, metricTokenTypeCacheRead, usage.cacheReadInputTokens);
       this.recordTokenUsage(generation, metricTokenTypeCacheWrite, usage.cacheWriteInputTokens);
+      this.recordTokenUsage(generation, metricTokenTypeCacheWrite1h, usage.cacheWrite1hInputTokens);
       this.recordTokenUsage(generation, metricTokenTypeReasoning, usage.reasoningTokens);
     }
 
@@ -1986,6 +1989,7 @@ function setGenerationSpanAttributes(
       outputTokens?: number;
       cacheReadInputTokens?: number;
       cacheWriteInputTokens?: number;
+      cacheWrite1hInputTokens?: number;
       reasoningTokens?: number;
       inputSemantics?: TokenInputSemantics;
     };
@@ -2094,6 +2098,9 @@ function setGenerationSpanAttributes(
   }
   if ((usage.cacheWriteInputTokens ?? 0) !== 0) {
     span.setAttribute(spanAttrCacheWriteTokens, usage.cacheWriteInputTokens ?? 0);
+  }
+  if ((usage.cacheWrite1hInputTokens ?? 0) !== 0) {
+    span.setAttribute(spanAttrCacheWrite1hTokens, usage.cacheWrite1hInputTokens ?? 0);
   }
   if ((usage.reasoningTokens ?? 0) !== 0) {
     span.setAttribute(spanAttrReasoningTokens, usage.reasoningTokens ?? 0);

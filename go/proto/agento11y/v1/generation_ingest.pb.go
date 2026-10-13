@@ -976,6 +976,9 @@ type TokenUsage struct {
 	// Input tokens written to a provider-managed cache. Included in
 	// input_tokens under INCLUSIVE semantics.
 	CacheWriteInputTokens int64 `protobuf:"varint,5,opt,name=cache_write_input_tokens,json=cacheWriteInputTokens,proto3" json:"cache_write_input_tokens,omitempty"`
+	// One-hour cache writes, when the provider reports their TTL breakdown.
+	// This is a subset of cache_write_input_tokens, never an addition.
+	CacheWrite1HInputTokens int64 `protobuf:"varint,9,opt,name=cache_write1h_input_tokens,json=cacheWrite1hInputTokens,proto3" json:"cache_write1h_input_tokens,omitempty"`
 	// Provider-reported reasoning/thinking tokens; explanatory sub-bucket of
 	// output_tokens, never additive.
 	ReasoningTokens int64 `protobuf:"varint,6,opt,name=reasoning_tokens,json=reasoningTokens,proto3" json:"reasoning_tokens,omitempty"`
@@ -1048,6 +1051,13 @@ func (x *TokenUsage) GetCacheReadInputTokens() int64 {
 func (x *TokenUsage) GetCacheWriteInputTokens() int64 {
 	if x != nil {
 		return x.CacheWriteInputTokens
+	}
+	return 0
+}
+
+func (x *TokenUsage) GetCacheWrite1HInputTokens() int64 {
+	if x != nil {
+		return x.CacheWrite1HInputTokens
 	}
 	return 0
 }
@@ -1803,14 +1813,15 @@ const file_agento11y_v1_generation_ingest_proto_rawDesc = "" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12\x12\n" +
 	"\x04type\x18\x03 \x01(\tR\x04type\x12*\n" +
 	"\x11input_schema_json\x18\x04 \x01(\fR\x0finputSchemaJson\x12\x1a\n" +
-	"\bdeferred\x18\x05 \x01(\bR\bdeferred\"\x81\x03\n" +
+	"\bdeferred\x18\x05 \x01(\bR\bdeferred\"\xbe\x03\n" +
 	"\n" +
 	"TokenUsage\x12!\n" +
 	"\finput_tokens\x18\x01 \x01(\x03R\vinputTokens\x12#\n" +
 	"\routput_tokens\x18\x02 \x01(\x03R\foutputTokens\x12!\n" +
 	"\ftotal_tokens\x18\x03 \x01(\x03R\vtotalTokens\x125\n" +
 	"\x17cache_read_input_tokens\x18\x04 \x01(\x03R\x14cacheReadInputTokens\x127\n" +
-	"\x18cache_write_input_tokens\x18\x05 \x01(\x03R\x15cacheWriteInputTokens\x12)\n" +
+	"\x18cache_write_input_tokens\x18\x05 \x01(\x03R\x15cacheWriteInputTokens\x12;\n" +
+	"\x1acache_write1h_input_tokens\x18\t \x01(\x03R\x17cacheWrite1hInputTokens\x12)\n" +
 	"\x10reasoning_tokens\x18\x06 \x01(\x03R\x0freasoningTokens\x12J\n" +
 	"\x0finput_semantics\x18\b \x01(\x0e2!.agento11y.v1.TokenInputSemanticsR\x0einputSemanticsJ\x04\b\a\x10\bR\x1bcache_creation_input_tokens\"\xba\x01\n" +
 	"\bArtifact\x12.\n" +

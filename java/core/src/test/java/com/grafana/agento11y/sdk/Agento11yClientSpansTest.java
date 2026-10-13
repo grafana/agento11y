@@ -36,6 +36,7 @@ class Agento11yClientSpansTest {
             GenerationResult result = TestFixtures.resultFixture();
             result.getUsage().setReasoningTokens(5);
             result.getUsage().setCacheWriteInputTokens(3);
+            result.getUsage().setCacheWrite1hInputTokens(1);
             recorder.setResult(result);
             recorder.setCallError(new RuntimeException("provider exploded"));
             recorder.end();
@@ -59,6 +60,7 @@ class Agento11yClientSpansTest {
         assertThat(span.getAttributes().get(AttributeKey.stringKey(Agento11yClient.SPAN_ATTR_ERROR_CATEGORY))).isEqualTo("sdk_error");
         assertThat(span.getAttributes().get(AttributeKey.longKey(Agento11yClient.SPAN_ATTR_REASONING_TOKENS))).isEqualTo(5L);
         assertThat(span.getAttributes().get(AttributeKey.longKey(Agento11yClient.SPAN_ATTR_CACHE_WRITE_TOKENS))).isEqualTo(3L);
+        assertThat(span.getAttributes().get(AttributeKey.longKey(Agento11yClient.SPAN_ATTR_CACHE_WRITE_1H_TOKENS))).isEqualTo(1L);
         assertThat(span.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
 
         provider.shutdown();

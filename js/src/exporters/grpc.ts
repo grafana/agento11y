@@ -477,6 +477,7 @@ function mapUsageToProto(usage: TokenUsage | undefined): Record<string, unknown>
     totalTokens: toInt64String(totalTokens),
     cacheReadInputTokens: toInt64String(usage.cacheReadInputTokens),
     cacheWriteInputTokens: toInt64String(usage.cacheWriteInputTokens),
+    cacheWrite1hInputTokens: toInt64String(usage.cacheWrite1hInputTokens),
     reasoningTokens: toInt64String(usage.reasoningTokens),
     ...(usage.inputSemantics === 'inclusive' ? { inputSemantics: 'TOKEN_INPUT_SEMANTICS_INCLUSIVE' } : {}),
   };

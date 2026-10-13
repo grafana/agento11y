@@ -406,7 +406,13 @@ test('langchain backfills Bedrock inference-profile model from the response', as
         generations: [[{ text: 'world' }]],
         llm_output: {
           model_name: arnModel,
-          token_usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+          token_usage: {
+            prompt_tokens: 10,
+            completion_tokens: 5,
+            total_tokens: 15,
+            cache_creation_input_tokens: 6,
+            cache_creation: { ephemeral_1h_input_tokens: 4 },
+          },
         },
       },
       'run-bedrock',
@@ -416,6 +422,8 @@ test('langchain backfills Bedrock inference-profile model from the response', as
   assert.equal(generation.model.name, arnModel);
   assert.equal(generation.model.provider, 'anthropic');
   assert.equal(generation.responseModel, arnModel);
+  assert.equal(generation.usage.cacheWriteInputTokens, 6);
+  assert.equal(generation.usage.cacheWrite1hInputTokens, 4);
 });
 
 test('langchain backfills Bedrock plain inference-profile id from the response', async () => {

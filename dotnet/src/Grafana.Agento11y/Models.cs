@@ -108,6 +108,8 @@ public sealed class TokenUsage
     public long TotalTokens { get; set; }
     public long CacheReadInputTokens { get; set; }
     public long CacheWriteInputTokens { get; set; }
+    /// <summary>One-hour subset of <see cref="CacheWriteInputTokens" /> when the provider reports cache TTLs.</summary>
+    public long CacheWrite1hInputTokens { get; set; }
     /// <summary>
     /// Explanatory sub-bucket of <see cref="OutputTokens" /> when the provider
     /// reports it, never additive.
@@ -142,6 +144,7 @@ public sealed class TokenUsage
             TotalTokens = TotalTokens,
             CacheReadInputTokens = CacheReadInputTokens,
             CacheWriteInputTokens = CacheWriteInputTokens,
+            CacheWrite1hInputTokens = CacheWrite1hInputTokens,
             ReasoningTokens = ReasoningTokens,
             InputSemantics = InputSemantics,
         };
