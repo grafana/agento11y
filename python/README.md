@@ -1005,6 +1005,45 @@ one-call OTel setup without replacing application-owned providers. See the
 [evaluation-plan guide](docs/evaluation-plans.md) and
 [runnable mixed-judge example](../examples/experiments/grafana/judged.py).
 
+### Run a published suite version with your agent
+
+`run_checkpoint` runs your instrumented agent once per case of a published
+suite version and grades each case with the evaluators pinned to that version
+in Grafana Cloud. It requires `agento11y` 0.20.0 or later.
+
+```python
+from agento11y.experiments import AgentOutput, run_checkpoint
+
+run = run_checkpoint(
+    "dashboard-regression",
+    "3",
+    lambda prompt: AgentOutput(text=my_agent(prompt), flush=instrumentation_client.flush),
+    candidate={"agent_name": "dashboards", "agent_version": "1.4.0", "git_sha": "abc123"},
+)
+print(run.url)
+```
+
+Before calling your agent, it checks that the version is published, has a
+primary verdict binding, and can resolve every case's grading inputs. Return
+`AgentOutput` with the flush of the client that instruments your agent, so
+each conversation is stored before it's graded. A case whose agent call or
+grading fails is recorded as errored and the run continues. `timeout` (default
+one hour) bounds the whole run. It uses the same `AGENTO11Y_*` ingest and
+service-account credentials as `experiment_from_suite`.
+
+To gate CI on the result, compare a candidate run with a baseline run of the
+same version:
+
+```sh
+agento11y-checkpoint-gate --suite-id dashboard-regression --suite-version 3 \
+  --baseline <BASELINE_RUN_ID> --candidate <CANDIDATE_RUN_ID> \
+  --min-pass-rate 0.9 --max-drop 0.05
+```
+
+The gate prints a JSON verdict and exits `0` when the candidate passes, `1` on
+a regression, and `2` when either run can't support the comparison, for
+example an errored case or a score that doesn't match the pinned evaluators.
+
 ## Public API Overview
 
 Core client and lifecycle:

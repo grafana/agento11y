@@ -219,7 +219,7 @@ def test_experiment_lifecycle_and_score_wire_fields() -> None:
         "category": "",
         "input": {"value": "2+2"},
         "expected": {"value": "4"},
-        "metadata": {},
+        "metadata": {"agento11y.sdk.portability": {"version": 1, "wrapped_fields": ["input", "expected"]}},
     }
     assert client.trial_updates and client.trial_updates[0][2] == "completed"
 
@@ -430,6 +430,8 @@ def test_trial_span_emits_otel_eval_telemetry() -> None:
     assert len(spans) == 2
     span = next(item for item in spans if item.name.startswith("eval.trial"))
     suite_span = next(item for item in spans if item.name == "test_suite_run")
+    assert span.instrumentation_scope.name == otel.INSTRUMENTATION_NAME
+    assert suite_span.instrumentation_scope.name == otel.INSTRUMENTATION_NAME
     assert span.parent.span_id == suite_span.context.span_id
     assert suite_span.attributes["test.suite.run.id"] == "run-2"
     assert suite_span.attributes["test.suite.run.status"] == "success"
@@ -1139,7 +1141,7 @@ def test_trial_cloud_evaluation_defaults() -> None:
     "conversation_id,evaluator_id,timeout,poll_interval,error",
     [
         pytest.param("", "helpfulness", 300.0, 0.5, "bind a conversation first", id="missing conversation"),
-        pytest.param("conv-1", "", 300.0, 0.5, "evaluator_id is required", id="missing evaluator"),
+        pytest.param("conv-1", "", 300.0, 0.5, "evaluator_id or binding_id is required", id="missing evaluator"),
         pytest.param("conv-1", "helpfulness", 0.0, 0.5, "timeout must be greater", id="zero timeout"),
         pytest.param("conv-1", "helpfulness", float("inf"), 0.5, "timeout must be greater", id="infinite timeout"),
         pytest.param("conv-1", "helpfulness", 300.0, 0.0, "poll_interval must be greater", id="zero poll"),
@@ -1309,7 +1311,9 @@ def test_trial_cleanup_after_flush_failure() -> None:
         with Experiment(client, experiment_id="run-flush-fail", name="x", suite=suite) as exp:
             with exp.trial(suite.test_cases[0]) as trial:
                 trial.final_score(1.0, passed=True)
-    assert client.trial_updates and client.trial_updates[0][2] == "completed"
+    assert client.trial_updates and client.trial_updates[0][2] == "failed"
+    assert "trial export failed" in client.trial_updates[0][3]["error"]
+    assert client.finalized == [("run-flush-fail", "failed", None)]
     assert len(trial._buffer) == 1
     assert client.calls[:2] == ["flush_generations", "export_scores"]
 
@@ -1727,3 +1731,46 @@ def test_example_json_fallbacks_handle_malformed_slices(monkeypatch: pytest.Monk
         "explanation": "graded by LLM judge",
     }
     assert _parse_json("prefix {not json} suffix") == {}
+
+
+@pytest.mark.parametrize("explicit_pin", [False, True])
+def test_cloud_binding_round_trip_through_trial_client_and_transport(monkeypatch, explicit_pin) -> None:
+    from agento11y import _experiments_transport as transport
+    from agento11y.experiments import Client
+
+    requests = []
+
+    def request_json(method, url, headers, payload, *args):
+        requests.append(payload)
+        return {"evaluation_id": "eval-binding", "status": "success", **payload}
+
+    monkeypatch.setattr(transport, "_request_json", request_json)
+    transport_client = Client("https://example.invalid", ingest_token="test-token")
+    client = FakeClient()
+    monkeypatch.setattr(client, "trigger_trial_evaluation", transport_client.trigger_trial_evaluation)
+    with Experiment(client, experiment_id="run-binding", name="binding") as exp:
+        with exp.trial("case-binding") as trial:
+            trial.bind_conversation("conversation-binding")
+            kwargs = (
+                dict(evaluator_id="judge", evaluator_version="v4", report_role="primary_verdict")
+                if explicit_pin
+                else {}
+            )
+            evaluation = trial.evaluate(binding_id="quality", **kwargs)
+            assert evaluation.binding_id == "quality"
+    assert requests == [{"binding_id": "quality", **kwargs}]
+
+
+def test_failure_note_links_partial_results_and_retains_successful_sibling() -> None:
+    client = FakeClient()
+    with pytest.raises(RuntimeError, match="provider failed") as caught:
+        with Experiment(client, experiment_id="partial", name="partial", planned_trial_count=3) as exp:
+            with exp.trial("good") as trial:
+                trial.final_score(True)
+            with exp.trial("broken"):
+                raise RuntimeError("provider failed")
+    assert len(client.scores) == 1 and client.scores[0].passed is True
+    assert [update[2] for update in client.trial_updates] == ["completed", "failed"]
+    assert client.finalized == [("partial", "failed", None)]
+    if hasattr(caught.value, "add_note"):
+        assert any(exp.url in note for note in caught.value.__notes__)

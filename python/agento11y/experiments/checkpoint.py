@@ -1,0 +1,107 @@
+"""Run an actual agent against a published suite version and its pinned evaluators."""
+
+from __future__ import annotations
+
+import math
+import time
+from collections.abc import Callable
+from typing import Any
+
+from .client import Client
+from .evals import AgentOutput, _run_target, _validate_cases
+from .experiment import Experiment, experiment
+from .suites import TestSuitesClient
+from .types import Candidate
+
+
+def run_checkpoint(
+    suite_id: str,
+    version: str,
+    target: Callable[[Any], AgentOutput],
+    *,
+    candidate: Candidate | dict[str, str] | None = None,
+    name: str = "",
+    experiment_id: str = "",
+    expected_bindings: list[dict[str, Any]] | None = None,
+    input_selector: str = "input.prompt",
+    timeout: float = 3600.0,
+    evaluation_timeout: float = 300.0,
+    client: Client | None = None,
+    test_suites_client: TestSuitesClient | None = None,
+    use_experimental_otel: bool = True,
+) -> Experiment:
+    """Run ``target`` once per case of a published suite version and grade it in Grafana Cloud.
+
+    Pulls the exact published cases and the version's evaluator bindings, and
+    resolves every case's grading inputs before calling the target. Each case
+    is then graded with every binding, using the evaluators, mappings and
+    report roles reviewed in Grafana.
+
+    ``target`` receives the selected case input and returns ``AgentOutput``
+    with ``flush`` set to the flush of the client that instruments your agent,
+    so the conversation is stored before it's graded.
+
+    A case whose target, telemetry flush or grading fails is recorded as
+    errored, and the run continues with the next case. ``timeout`` bounds the
+    whole run, including grading. When it runs out, no further cases start and
+    a ``TimeoutError`` is raised after the experiment is finalized as failed.
+
+    Pass ``expected_bindings`` (for example, the bindings shown in Grafana when
+    you copied the runner) to refuse a version whose bindings have changed.
+    """
+
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("timeout must be greater than zero")
+    if not math.isfinite(evaluation_timeout) or evaluation_timeout <= 0:
+        raise ValueError("evaluation_timeout must be greater than zero")
+    deadline = time.monotonic() + timeout
+
+    control = test_suites_client or TestSuitesClient()
+    suite = control.pull_suite(suite_id, version, require_published=True)
+    _validate_cases(suite, input_selector)
+    bindings = control.get_bindings(suite.suite_id, suite.version)
+    if not any(binding.get("report_role") == "primary_verdict" for binding in bindings):
+        raise ValueError("publish at least one primary verdict binding before running this suite version")
+    if expected_bindings is not None and _by_id(expected_bindings) != _by_id(bindings):
+        raise ValueError("the suite version's bindings differ from expected_bindings; review the version again")
+    for case in suite.cases:
+        for binding in bindings:
+            control.preview_binding(suite.suite_id, suite.version, case.test_case_id, binding["binding_id"])
+
+    with experiment(
+        name or f"{suite.name or suite.suite_id} v{suite.version}",
+        experiment_id=experiment_id,
+        suite=suite,
+        client=client,
+        candidate=candidate,
+        planned_trial_count=len(suite.cases),
+        use_experimental_otel=use_experimental_otel,
+        metadata={"framework": "grafana", "execution_kind": "agent_run", "input_selector": input_selector},
+    ) as run:
+        for index, case in enumerate(suite.cases):
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"run timed out after {timeout:g}s with {index} of {len(suite.cases)} cases run")
+            with run.trial(case) as trial:
+                answer = _run_target(
+                    run, trial, case, target, input_selector=input_selector, keep_going=True, require_flush=True
+                )
+                if answer is None:
+                    continue
+                errors = []
+                for binding in bindings:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        errors.append(f"{binding['binding_id']}: run timed out before grading")
+                        continue
+                    try:
+                        trial.evaluate(binding_id=binding["binding_id"], timeout=min(evaluation_timeout, remaining))
+                    except Exception as error:
+                        errors.append(f"{binding['binding_id']}: {type(error).__name__}: {error}")
+                if errors:
+                    # Successful bindings keep their scores; the trial is not reported as fully graded.
+                    trial.mark_errored("grading: " + "; ".join(errors))
+    return run
+
+
+def _by_id(bindings: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {str(binding.get("binding_id")): dict(binding) for binding in bindings}

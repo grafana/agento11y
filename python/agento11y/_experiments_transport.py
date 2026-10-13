@@ -289,18 +289,24 @@ def trigger_trial_evaluation(
     headers: dict[str, str],
     experiment_id: str,
     trial_id: str,
-    evaluator_id: str,
+    evaluator_id: str = "",
     evaluator_version: str = "",
     report_role: ReportRole | None = None,
+    binding_id: str = "",
     retry: RetryPolicy | None = None,
 ) -> TrialEvaluation:
     """Queues a stored evaluator for a trial's bound conversation."""
 
     normalized_experiment_id, normalized_trial_id = _validate_trial_evaluation_path(experiment_id, trial_id)
     normalized_evaluator_id = (evaluator_id or "").strip()
-    if normalized_evaluator_id == "":
-        raise ValidationError("agento11y trial evaluation validation failed: evaluator_id is required")
-    payload = {"evaluator_id": normalized_evaluator_id}
+    normalized_binding_id = (binding_id or "").strip()
+    if normalized_evaluator_id == "" and not normalized_binding_id:
+        raise ValidationError("agento11y trial evaluation validation failed: evaluator_id or binding_id is required")
+    payload: dict[str, str] = {}
+    if normalized_evaluator_id:
+        payload["evaluator_id"] = normalized_evaluator_id
+    if normalized_binding_id:
+        payload["binding_id"] = normalized_binding_id
     normalized_role = _normalize_report_role(report_role)
     if normalized_role:
         payload["report_role"] = normalized_role
@@ -656,6 +662,7 @@ def _parse_trial_evaluation(payload: Any) -> TrialEvaluation:
         evaluator_id=_str(payload.get("evaluator_id")),
         evaluator_version=_str(payload.get("evaluator_version")),
         report_role=ReportRole(payload["report_role"]) if payload.get("report_role") else None,
+        binding_id=_str(payload.get("binding_id")),
         status=status,
         attempts=_int(payload.get("attempts")),
         scheduled_at=_parse_ts(payload.get("scheduled_at")),

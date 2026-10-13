@@ -23,6 +23,9 @@ dev = [
   "pytest>=8.2.0",
 ]
 
+[project.scripts]
+agento11y-checkpoint-gate = "agento11y.experiments.gate:main"
+
 [project.urls]
 Homepage = "https://github.com/grafana/agento11y"
 Repository = "https://github.com/grafana/agento11y"

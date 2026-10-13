@@ -12,6 +12,7 @@ from agento11y import (
     EmbeddingResult,
     EmbeddingStart,
     EnqueueError,
+    ExportFlushError,
     GenerationExportConfig,
     GenerationStart,
     Message,
@@ -668,3 +669,73 @@ def _wait_for(predicate, timeout_s: float = 1.0) -> None:
             return
         time.sleep(0.01)
     raise AssertionError("timed out waiting for condition")
+
+
+def test_explicit_flush_reports_background_export_failure_once() -> None:
+    import pytest
+
+    exporter = CapturingGenerationExporter(failures_before_success=1)
+    client = _new_client(exporter, max_retries=0)
+    try:
+        with client.start_generation(_seed_generation("background-failure")) as recorder:
+            recorder.set_result(output=_assistant_output("answer"))
+        # Run the actual background callback deterministically; its error is
+        # intentionally swallowed for instrumentation, but flush must expose it.
+        client._run_async_flush()
+        with pytest.raises(RuntimeError, match="forced export failure"):
+            client.flush()
+        client.flush()
+        assert exporter.attempts == 1  # The lost batch was not silently retried.
+    finally:
+        client.shutdown()
+
+
+def test_explicit_flush_reports_per_generation_rejection() -> None:
+    import pytest
+    from agento11y.models import ExportGenerationResult, ExportGenerationsResponse
+
+    class RejectingExporter(CapturingGenerationExporter):
+        def export_generations(self, request):
+            return ExportGenerationsResponse(
+                results=[
+                    ExportGenerationResult(
+                        generation_id=request.generations[0].id, accepted=False, error="rejected fixture"
+                    )
+                ]
+            )
+
+    client = _new_client(RejectingExporter())
+    try:
+        with client.start_generation(_seed_generation("rejection")) as recorder:
+            recorder.set_result(output=_assistant_output("answer"))
+        with pytest.raises(ExportFlushError, match="generation rejected"):
+            client.flush()
+        client.flush()  # The caller has already been told about this rejection.
+    finally:
+        client.shutdown()
+
+
+def test_explicit_flush_waits_for_inflight_background_failure() -> None:
+    import threading
+
+    import pytest
+
+    entered, release = threading.Event(), threading.Event()
+
+    class BlockingExporter(CapturingGenerationExporter):
+        def export_generations(self, request):
+            entered.set()
+            assert release.wait(5)
+            raise RuntimeError("inflight failure")
+
+    client = _new_client(BlockingExporter(), batch_size=1, max_retries=0)
+    try:
+        with client.start_generation(_seed_generation("inflight")) as recorder:
+            recorder.set_result(output=_assistant_output("answer"))
+        assert entered.wait(5)
+        release.set()
+        with pytest.raises(RuntimeError, match="inflight failure"):
+            client.flush()
+    finally:
+        release.set()
+        client.shutdown()

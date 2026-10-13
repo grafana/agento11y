@@ -28,9 +28,11 @@ class FlushNotVerifiableError(Agento11yError):
 
 
 class ExportFlushError(Agento11yError):
-    """Raised when the explicit tracer provider's force_flush() does not return True.
+    """Raised when a flush cannot confirm export.
 
-    Provider exceptions propagate unchanged.
+    Covers a native export the server rejected and an explicit tracer
+    provider whose force_flush() does not return True. Transport and provider
+    exceptions propagate unchanged.
     """
 
 

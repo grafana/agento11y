@@ -66,24 +66,13 @@ def run_evals(
     ``input_selector='input'`` passes structured context rather than just the
     prompt. AgentOutput supports explicit correlation and an export flush.
     """
-    if not suite.cases:
-        raise ValueError("the suite must contain at least one test case")
     if plan is not None and evaluate is not None:
         raise ValueError("choose plan or evaluate, not both")
-    if not (input_selector == "input" or input_selector.startswith("input.")):
-        raise ValueError("input_selector must select input, never expected values or metadata")
-    if len({case.test_case_id for case in suite.cases}) != len(suite.cases):
-        raise ValueError("suite contains duplicate case IDs")
-    for case in suite.cases:
-        selected_input = case_value(case, input_selector)
-        if input_selector == "input.prompt" and (not isinstance(selected_input, str) or not selected_input.strip()):
-            raise ValueError(f"{case.test_case_id}: input.prompt must be a nonempty string")
-        if (
-            evaluate is None
-            and plan is None
-            and (not isinstance(case.expected, dict) or not isinstance(case.expected.get("assistant_response"), str))
-        ):
-            raise ValueError(f"{case.test_case_id}: expected.assistant_response must be a reviewed string")
+    _validate_cases(suite, input_selector)
+    if evaluate is None and plan is None:
+        for case in suite.cases:
+            if not isinstance(case.expected, dict) or not isinstance(case.expected.get("assistant_response"), str):
+                raise ValueError(f"{case.test_case_id}: expected.assistant_response must be a reviewed string")
     if plan is not None:
         plan.validate(suite.cases)
         if any(isinstance(check.judge, StoredEvaluator) for check in plan.checks):
@@ -98,41 +87,17 @@ def run_evals(
         use_experimental_otel=use_experimental_otel,
         metadata={
             "framework": "grafana",
+            "execution_kind": "agent_run",
             "input_selector": input_selector,
             **({"evaluation_plan": plan.provenance()} if plan is not None else {}),
         },
     ) as run:
         for case in suite.cases:
             with run.trial(case) as trial:
-                trial.bind_conversation(stable_id("conv", run.experiment_id, case.test_case_id, trial.ref.attempt))
-                started = time.perf_counter()
-                try:
-                    with with_conversation_id(trial.conversation_id):
-                        result = target(deepcopy(case_value(case, input_selector)))
-                except Exception as error:
-                    if plan is None:
-                        raise
-                    trial.mark_errored(f"target: {type(error).__name__}: {error}")
-                    continue
-                finally:
-                    trial.set_duration(int((time.perf_counter() - started) * 1000))
-                answer = result.text if isinstance(result, AgentOutput) else result
-                if not isinstance(answer, str):
-                    if plan is not None:
-                        trial.mark_errored("target must return a string or AgentOutput with string text")
-                        continue
-                    raise TypeError("target must return a string")
-                try:
-                    if isinstance(result, AgentOutput):
-                        if result.conversation_id:
-                            trial.bind_conversation(result.conversation_id)
-                        if result.flush is not None:
-                            result.flush()
-                    run.client.flush_generations()
-                except Exception as error:
-                    if plan is None:
-                        raise
-                    trial.mark_errored(f"telemetry flush: {error}")
+                answer = _run_target(
+                    run, trial, case, target, input_selector=input_selector, keep_going=plan is not None
+                )
+                if answer is None:
                     continue
                 if record_io:
                     trial.record_io(input=case_value(case, input_selector), output=answer)
@@ -154,3 +119,71 @@ def run_evals(
                     else "Answer differs from the reviewed reference",
                 )
     return run
+
+
+def _validate_cases(suite: TestSuite, input_selector: str) -> None:
+    """Reject a suite the text-target runners cannot execute, before any run exists."""
+
+    if not suite.cases:
+        raise ValueError("the suite must contain at least one test case")
+    if not (input_selector == "input" or input_selector.startswith("input.")):
+        raise ValueError("input_selector must select input, never expected values or metadata")
+    if len({case.test_case_id for case in suite.cases}) != len(suite.cases):
+        raise ValueError("suite contains duplicate case IDs")
+    for case in suite.cases:
+        selected_input = case_value(case, input_selector)
+        if input_selector == "input.prompt" and (not isinstance(selected_input, str) or not selected_input.strip()):
+            raise ValueError(f"{case.test_case_id}: input.prompt must be a nonempty string")
+
+
+def _run_target(
+    run: Experiment,
+    trial: Trial,
+    case: TestCase,
+    target: Callable[[Any], str | AgentOutput],
+    *,
+    input_selector: str,
+    keep_going: bool,
+    require_flush: bool = False,
+) -> str | None:
+    """Run the target for one case and flush its telemetry.
+
+    Returns the answer, or ``None`` after marking the trial errored when
+    ``keep_going`` is set. Without ``keep_going`` the failure propagates.
+    ``require_flush`` raises for a target that can't flush its own client,
+    since every later case would fail the same way.
+    """
+
+    trial.bind_conversation(stable_id("conv", run.experiment_id, case.test_case_id, trial.ref.attempt))
+    started = time.perf_counter()
+    try:
+        with with_conversation_id(trial.conversation_id):
+            result = target(deepcopy(case_value(case, input_selector)))
+    except Exception as error:
+        if not keep_going:
+            raise
+        trial.mark_errored(f"target: {type(error).__name__}: {error}")
+        return None
+    finally:
+        trial.set_duration(int((time.perf_counter() - started) * 1000))
+    if require_flush and (not isinstance(result, AgentOutput) or result.flush is None):
+        raise TypeError("target must return AgentOutput with flush set to your instrumentation client's flush")
+    answer = result.text if isinstance(result, AgentOutput) else result
+    if not isinstance(answer, str):
+        if not keep_going:
+            raise TypeError("target must return a string")
+        trial.mark_errored("target must return a string or AgentOutput with string text")
+        return None
+    try:
+        if isinstance(result, AgentOutput):
+            if result.conversation_id:
+                trial.bind_conversation(result.conversation_id)
+            if result.flush is not None:
+                result.flush()
+        run.client.flush_generations()
+    except Exception as error:
+        if not keep_going:
+            raise
+        trial.mark_errored(f"telemetry flush: {error}")
+        return None
+    return answer

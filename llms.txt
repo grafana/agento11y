@@ -534,6 +534,16 @@ Publish a reviewed suite checkpoint and pin its version when comparing candidate
 Choose Grafana or Git as the authoring source of truth; SDK push/pull are explicit
 transfers, not automatic bidirectional synchronization.
 
+To run an actual agent against a published suite version with the evaluators
+pinned to it in Grafana Cloud, use Python
+`agento11y.experiments.run_checkpoint(suite_id, version, target)` (0.20.0 or
+later). The target returns `AgentOutput(text=..., flush=instrumentation_client.flush)`.
+It checks every case's grading inputs before calling the agent, records a
+failing case as errored and continues, and bounds the run with `timeout`. Gate
+CI with `agento11y-checkpoint-gate --suite-id ... --suite-version ... --baseline
+<RUN_ID> --candidate <RUN_ID> --min-pass-rate ... --max-drop ...`, which exits
+0 (passed), 1 (regression) or 2 (the runs can't be compared).
+
 The Grafana `run_evals` helper accepts an `evaluate(trial, case, answer)`
 callback for local scoring or stored evaluator invocation. Its recommended
 mixed-judge flow is `text_case(...)`,

@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import copy
 import urllib.parse
+from datetime import datetime
 from typing import Any
 
 from .. import _experiments_transport as _transport
@@ -215,10 +216,11 @@ class Client:
         self,
         experiment_id: str,
         trial_id: str,
-        evaluator_id: str,
+        evaluator_id: str = "",
         evaluator_version: str = "",
         *,
         report_role: ReportRole | None = None,
+        binding_id: str = "",
     ) -> TrialEvaluation:
         """Queues a stored evaluator for a trial's bound conversation."""
 
@@ -229,6 +231,7 @@ class Client:
             evaluator_id=evaluator_id,
             evaluator_version=evaluator_version,
             report_role=report_role,
+            binding_id=binding_id,
             retry=self._retry,
         )
 
@@ -288,6 +291,8 @@ class Client:
         input_tokens: int | None = None,
         output_tokens: int | None = None,
         usage: TokenUsage | None = None,
+        started_at: datetime | None = None,
+        completed_at: datetime | None = None,
         tags: dict[str, str] | None = None,
         metadata: dict[str, Any] | None = None,
         parent_generation_ids: list[str] | None = None,
@@ -318,6 +323,8 @@ class Client:
             input=normalized_input,
             output=normalized_output,
             usage=resolved_usage,
+            started_at=started_at,
+            completed_at=completed_at,
             tags=dict(tags or {}),
             metadata=normalized_metadata,
             parent_generation_ids=list(parent_generation_ids or []),
@@ -398,6 +405,8 @@ class Client:
         input_tokens: int | None = None,
         output_tokens: int | None = None,
         usage: TokenUsage | None = None,
+        started_at: datetime | None = None,
+        completed_at: datetime | None = None,
         tags: dict[str, str] | None = None,
         metadata: dict[str, Any] | None = None,
         parent_generation_ids: list[str] | None = None,
@@ -420,6 +429,8 @@ class Client:
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             usage=usage,
+            started_at=started_at,
+            completed_at=completed_at,
             tags=tags,
             metadata=metadata,
             parent_generation_ids=parent_generation_ids,

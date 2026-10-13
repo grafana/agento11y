@@ -587,6 +587,7 @@ class TrialEvaluation:
     updated_at: datetime | None = None
     error: str = ""
     report_role: ReportRole | None = None
+    binding_id: str = ""
 
 
 @dataclass(slots=True)
