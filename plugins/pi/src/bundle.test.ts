@@ -7,8 +7,10 @@ const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 describe("bundle", () => {
   it("loads from an ESM-only context", () => {
-    const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
-    const build = spawnSync(pnpm, ["run", "build"], {
+    // Run the build script directly: `pnpm run` first checks the whole
+    // workspace lockfile against its supply-chain policy, which can take
+    // longer than the test timeout.
+    const build = spawnSync(process.execPath, ["scripts/build.mjs"], {
       cwd: packageDir,
       encoding: "utf-8",
     });
