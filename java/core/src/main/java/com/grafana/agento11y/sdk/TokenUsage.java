@@ -20,6 +20,18 @@ public final class TokenUsage {
         INCLUSIVE,
     }
 
+    private ModalityTokenCounts inputByModality;
+    public ModalityTokenCounts getInputByModality() { return inputByModality; }
+    public TokenUsage setInputByModality(ModalityTokenCounts value) { inputByModality = value; return this; }
+    private ModalityTokenCounts outputByModality;
+    public ModalityTokenCounts getOutputByModality() { return outputByModality; }
+    public TokenUsage setOutputByModality(ModalityTokenCounts value) { outputByModality = value; return this; }
+    private ModalityTokenCounts cacheReadByModality;
+    public ModalityTokenCounts getCacheReadByModality() { return cacheReadByModality; }
+    public TokenUsage setCacheReadByModality(ModalityTokenCounts value) { cacheReadByModality = value; return this; }
+    private ModalityTokenCounts cacheWriteByModality;
+    public ModalityTokenCounts getCacheWriteByModality() { return cacheWriteByModality; }
+    public TokenUsage setCacheWriteByModality(ModalityTokenCounts value) { cacheWriteByModality = value; return this; }
     private long inputTokens;
     private long outputTokens;
     private long totalTokens;
@@ -112,6 +124,10 @@ public final class TokenUsage {
                 .setCacheReadInputTokens(cacheReadInputTokens)
                 .setCacheWriteInputTokens(cacheWriteInputTokens)
                 .setReasoningTokens(reasoningTokens)
-                .setInputSemantics(inputSemantics);
+                .setInputSemantics(inputSemantics)
+                .setInputByModality(inputByModality)
+                .setOutputByModality(outputByModality)
+                .setCacheReadByModality(cacheReadByModality)
+                .setCacheWriteByModality(cacheWriteByModality);
     }
 }

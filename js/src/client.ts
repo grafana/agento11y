@@ -81,6 +81,7 @@ import {
   cloneToolExecution,
   cloneToolExecutionResult,
   cloneToolExecutionStart,
+  cloneUsage,
   cloneWorkflowStep,
   defaultOperationNameForMode,
   defaultSleep,
@@ -1544,7 +1545,7 @@ class GenerationRecorderImpl implements GenerationRecorder {
       input: this.result?.input?.map(cloneMessage),
       output: this.result?.output?.map(cloneMessage),
       tools: this.result?.tools?.map(cloneToolDefinition) ?? this.seed.tools?.map(cloneToolDefinition),
-      usage: this.result?.usage ? { ...this.result.usage } : undefined,
+      usage: cloneUsage(this.result?.usage),
       stopReason: this.result?.stopReason,
       startedAt: new Date(this.startedAt),
       completedAt: new Date(this.result?.completedAt ?? this.client.internalNow()),
@@ -1988,6 +1989,10 @@ function setGenerationSpanAttributes(
       cacheWriteInputTokens?: number;
       reasoningTokens?: number;
       inputSemantics?: TokenInputSemantics;
+      inputByModality?: import('./types.js').ModalityTokenCounts;
+      outputByModality?: import('./types.js').ModalityTokenCounts;
+      cacheReadByModality?: import('./types.js').ModalityTokenCounts;
+      cacheWriteByModality?: import('./types.js').ModalityTokenCounts;
     };
   },
 ): void {
@@ -2097,6 +2102,15 @@ function setGenerationSpanAttributes(
   }
   if ((usage.reasoningTokens ?? 0) !== 0) {
     span.setAttribute(spanAttrReasoningTokens, usage.reasoningTokens ?? 0);
+  }
+  const modalityDetails = {
+    input_by_modality: usage.inputByModality,
+    output_by_modality: usage.outputByModality,
+    cache_read_by_modality: usage.cacheReadByModality,
+    cache_write_by_modality: usage.cacheWriteByModality,
+  };
+  if (Object.values(modalityDetails).some((v) => v !== undefined)) {
+    span.setAttribute('agento11y.usage.modality_details', JSON.stringify(modalityDetails));
   }
   if (usage.inputSemantics === 'inclusive') {
     span.setAttribute(attrTokenSemantics, tokenSemanticsInclusive);

@@ -9,6 +9,14 @@ namespace Grafana.Agento11y;
 
 internal static class ProtoMapping
 {
+    private static Proto.ModalityTokenCounts? ToProtoModality(ModalityTokenCounts? value)
+    {
+        if (value is null) { return null; }
+        var result = new Proto.ModalityTokenCounts { Complete = value.Complete };
+        foreach (var pair in value.Tokens) { result.Tokens.Add(pair.Key, pair.Value); }
+        return result;
+    }
+
     public static Proto.Generation ToProto(Generation model)
     {
         var proto = new Proto.Generation
@@ -38,6 +46,11 @@ internal static class ProtoMapping
                 CacheWriteInputTokens = model.Usage.CacheWriteInputTokens,
                 ReasoningTokens = model.Usage.ReasoningTokens,
                 InputSemantics = (Proto.TokenInputSemantics)model.Usage.InputSemantics,
+                InputByModality = ToProtoModality(model.Usage.InputByModality),
+                OutputByModality = ToProtoModality(model.Usage.OutputByModality),
+                CacheReadByModality = ToProtoModality(model.Usage.CacheReadByModality),
+                CacheWriteByModality = ToProtoModality(model.Usage.CacheWriteByModality),
+
             },
             StopReason = model.StopReason,
             CallError = model.CallError,

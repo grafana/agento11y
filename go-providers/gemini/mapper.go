@@ -330,16 +330,29 @@ func mapUsage(usage *genai.GenerateContentResponseUsageMetadata) agento11y.Token
 	// Gemini's promptTokenCount already includes cachedContentTokenCount,
 	// which is the inclusive contract as-is. tool_use_prompt tokens stay out
 	// of input pending the open contract decision (see the rollout plan).
-	return agento11y.TokenUsage{
+	mapped := agento11y.TokenUsage{
 		InputTokens:          int64(usage.PromptTokenCount),
-		OutputTokens:         int64(usage.CandidatesTokenCount),
+		OutputTokens:         int64(usage.CandidatesTokenCount) + reasoningTokens,
 		TotalTokens:          totalTokens,
 		CacheReadInputTokens: int64(usage.CachedContentTokenCount),
 		ReasoningTokens:      reasoningTokens,
 		InputSemantics:       agento11y.TokenInputSemanticsInclusive,
 	}
+	raw, err := json.Marshal(usage)
+	if err != nil {
+		return mapped
+	}
+	mapped = agento11y.ApplyModalityJSON(mapped, raw, "gemini")
+	if toolUsePromptTokens > 0 {
+		// Billing of tool-use prompts is not established by this response shape.
+		mapped.InputTokens += toolUsePromptTokens
+		if mapped.InputByModality == nil {
+			mapped.InputByModality = &agento11y.ModalityTokenCounts{Tokens: map[string]int64{}}
+		}
+		mapped.InputByModality.Tokens["tool_use"] = toolUsePromptTokens
+	}
+	return mapped
 }
-
 func mapRole(role string) agento11y.Role {
 	switch strings.ToLower(strings.TrimSpace(role)) {
 	case "model", "assistant":

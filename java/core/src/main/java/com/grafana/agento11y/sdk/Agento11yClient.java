@@ -1218,6 +1218,15 @@ public final class Agento11yClient implements AutoCloseable {
             span.setAttribute(SPAN_ATTR_CACHE_READ_TOKENS, usage.getCacheReadInputTokens());
             span.setAttribute(SPAN_ATTR_CACHE_WRITE_TOKENS, usage.getCacheWriteInputTokens());
             span.setAttribute(SPAN_ATTR_REASONING_TOKENS, usage.getReasoningTokens());
+            Map<String, Object> modalityDetails = new java.util.LinkedHashMap<>();
+            if (usage.getInputByModality() != null) { modalityDetails.put("input_by_modality", Map.of("tokens", usage.getInputByModality().tokens(), "complete", usage.getInputByModality().complete())); }
+            if (usage.getOutputByModality() != null) { modalityDetails.put("output_by_modality", Map.of("tokens", usage.getOutputByModality().tokens(), "complete", usage.getOutputByModality().complete())); }
+            if (usage.getCacheReadByModality() != null) { modalityDetails.put("cache_read_by_modality", Map.of("tokens", usage.getCacheReadByModality().tokens(), "complete", usage.getCacheReadByModality().complete())); }
+            if (usage.getCacheWriteByModality() != null) { modalityDetails.put("cache_write_by_modality", Map.of("tokens", usage.getCacheWriteByModality().tokens(), "complete", usage.getCacheWriteByModality().complete())); }
+            if (!modalityDetails.isEmpty()) {
+                try { span.setAttribute("agento11y.usage.modality_details", Json.MAPPER.writeValueAsString(modalityDetails)); }
+                catch (com.fasterxml.jackson.core.JsonProcessingException e) { throw new IllegalStateException(e); }
+            }
             if (usage.getInputSemantics() == TokenUsage.TokenInputSemantics.INCLUSIVE) {
                 span.setAttribute(ATTR_TOKEN_SEMANTICS, TOKEN_SEMANTICS_INCLUSIVE);
             }

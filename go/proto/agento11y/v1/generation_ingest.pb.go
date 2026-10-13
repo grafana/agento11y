@@ -959,6 +959,121 @@ func (x *ToolDefinition) GetDeferred() bool {
 	return false
 }
 
+// A reported partition of a token bucket. Omitted entries are zero only
+// when complete is true. Input partitions include cached tokens.
+type ModalityTokenCounts struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Tokens        map[string]int64       `protobuf:"bytes,1,rep,name=tokens,proto3" json:"tokens,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`
+	Complete      bool                   `protobuf:"varint,2,opt,name=complete,proto3" json:"complete,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ModalityTokenCounts) Reset() {
+	*x = ModalityTokenCounts{}
+	mi := &file_agento11y_v1_generation_ingest_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ModalityTokenCounts) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ModalityTokenCounts) ProtoMessage() {}
+
+func (x *ModalityTokenCounts) ProtoReflect() protoreflect.Message {
+	mi := &file_agento11y_v1_generation_ingest_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ModalityTokenCounts.ProtoReflect.Descriptor instead.
+func (*ModalityTokenCounts) Descriptor() ([]byte, []int) {
+	return file_agento11y_v1_generation_ingest_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *ModalityTokenCounts) GetTokens() map[string]int64 {
+	if x != nil {
+		return x.Tokens
+	}
+	return nil
+}
+
+func (x *ModalityTokenCounts) GetComplete() bool {
+	if x != nil {
+		return x.Complete
+	}
+	return false
+}
+
+// Server-computed, output-only pricing outcome. Ingest ignores client values.
+type GenerationPricing struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Status        string                 `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
+	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	CostUsdMicros *int64                 `protobuf:"varint,3,opt,name=cost_usd_micros,json=costUsdMicros,proto3,oneof" json:"cost_usd_micros,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GenerationPricing) Reset() {
+	*x = GenerationPricing{}
+	mi := &file_agento11y_v1_generation_ingest_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GenerationPricing) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GenerationPricing) ProtoMessage() {}
+
+func (x *GenerationPricing) ProtoReflect() protoreflect.Message {
+	mi := &file_agento11y_v1_generation_ingest_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GenerationPricing.ProtoReflect.Descriptor instead.
+func (*GenerationPricing) Descriptor() ([]byte, []int) {
+	return file_agento11y_v1_generation_ingest_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *GenerationPricing) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *GenerationPricing) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *GenerationPricing) GetCostUsdMicros() int64 {
+	if x != nil && x.CostUsdMicros != nil {
+		return *x.CostUsdMicros
+	}
+	return 0
+}
+
 type TokenUsage struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Input (prompt) tokens. When input_semantics is INCLUSIVE this covers all
@@ -982,14 +1097,18 @@ type TokenUsage struct {
 	// Self-describing semantics marker set by SDK adapters that positively
 	// identified the provider payload shape. Manual user-supplied usage and
 	// guessed shapes leave it UNSPECIFIED.
-	InputSemantics TokenInputSemantics `protobuf:"varint,8,opt,name=input_semantics,json=inputSemantics,proto3,enum=agento11y.v1.TokenInputSemantics" json:"input_semantics,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	InputSemantics       TokenInputSemantics  `protobuf:"varint,8,opt,name=input_semantics,json=inputSemantics,proto3,enum=agento11y.v1.TokenInputSemantics" json:"input_semantics,omitempty"`
+	InputByModality      *ModalityTokenCounts `protobuf:"bytes,9,opt,name=input_by_modality,json=inputByModality,proto3" json:"input_by_modality,omitempty"`
+	OutputByModality     *ModalityTokenCounts `protobuf:"bytes,10,opt,name=output_by_modality,json=outputByModality,proto3" json:"output_by_modality,omitempty"`
+	CacheReadByModality  *ModalityTokenCounts `protobuf:"bytes,11,opt,name=cache_read_by_modality,json=cacheReadByModality,proto3" json:"cache_read_by_modality,omitempty"`
+	CacheWriteByModality *ModalityTokenCounts `protobuf:"bytes,12,opt,name=cache_write_by_modality,json=cacheWriteByModality,proto3" json:"cache_write_by_modality,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *TokenUsage) Reset() {
 	*x = TokenUsage{}
-	mi := &file_agento11y_v1_generation_ingest_proto_msgTypes[11]
+	mi := &file_agento11y_v1_generation_ingest_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1001,7 +1120,7 @@ func (x *TokenUsage) String() string {
 func (*TokenUsage) ProtoMessage() {}
 
 func (x *TokenUsage) ProtoReflect() protoreflect.Message {
-	mi := &file_agento11y_v1_generation_ingest_proto_msgTypes[11]
+	mi := &file_agento11y_v1_generation_ingest_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1014,7 +1133,7 @@ func (x *TokenUsage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TokenUsage.ProtoReflect.Descriptor instead.
 func (*TokenUsage) Descriptor() ([]byte, []int) {
-	return file_agento11y_v1_generation_ingest_proto_rawDescGZIP(), []int{11}
+	return file_agento11y_v1_generation_ingest_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *TokenUsage) GetInputTokens() int64 {
@@ -1066,6 +1185,34 @@ func (x *TokenUsage) GetInputSemantics() TokenInputSemantics {
 	return TokenInputSemantics_TOKEN_INPUT_SEMANTICS_UNSPECIFIED
 }
 
+func (x *TokenUsage) GetInputByModality() *ModalityTokenCounts {
+	if x != nil {
+		return x.InputByModality
+	}
+	return nil
+}
+
+func (x *TokenUsage) GetOutputByModality() *ModalityTokenCounts {
+	if x != nil {
+		return x.OutputByModality
+	}
+	return nil
+}
+
+func (x *TokenUsage) GetCacheReadByModality() *ModalityTokenCounts {
+	if x != nil {
+		return x.CacheReadByModality
+	}
+	return nil
+}
+
+func (x *TokenUsage) GetCacheWriteByModality() *ModalityTokenCounts {
+	if x != nil {
+		return x.CacheWriteByModality
+	}
+	return nil
+}
+
 type Artifact struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Kind          ArtifactKind           `protobuf:"varint,1,opt,name=kind,proto3,enum=agento11y.v1.ArtifactKind" json:"kind,omitempty"`
@@ -1080,7 +1227,7 @@ type Artifact struct {
 
 func (x *Artifact) Reset() {
 	*x = Artifact{}
-	mi := &file_agento11y_v1_generation_ingest_proto_msgTypes[12]
+	mi := &file_agento11y_v1_generation_ingest_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1092,7 +1239,7 @@ func (x *Artifact) String() string {
 func (*Artifact) ProtoMessage() {}
 
 func (x *Artifact) ProtoReflect() protoreflect.Message {
-	mi := &file_agento11y_v1_generation_ingest_proto_msgTypes[12]
+	mi := &file_agento11y_v1_generation_ingest_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1105,7 +1252,7 @@ func (x *Artifact) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Artifact.ProtoReflect.Descriptor instead.
 func (*Artifact) Descriptor() ([]byte, []int) {
-	return file_agento11y_v1_generation_ingest_proto_rawDescGZIP(), []int{12}
+	return file_agento11y_v1_generation_ingest_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *Artifact) GetKind() ArtifactKind {
@@ -1184,14 +1331,15 @@ type Generation struct {
 	// Optional SDK-supplied catalog key. Must match `^sha256:[0-9a-f]{64}$`
 	// when set; ingest rejects any other shape. The backend falls back to a
 	// server-computed sha256 of (system_prompt + sorted tools) when omitted.
-	EffectiveVersion *string `protobuf:"bytes,30,opt,name=effective_version,json=effectiveVersion,proto3,oneof" json:"effective_version,omitempty"`
+	EffectiveVersion *string            `protobuf:"bytes,30,opt,name=effective_version,json=effectiveVersion,proto3,oneof" json:"effective_version,omitempty"`
+	Pricing          *GenerationPricing `protobuf:"bytes,31,opt,name=pricing,proto3" json:"pricing,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
 
 func (x *Generation) Reset() {
 	*x = Generation{}
-	mi := &file_agento11y_v1_generation_ingest_proto_msgTypes[13]
+	mi := &file_agento11y_v1_generation_ingest_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1203,7 +1351,7 @@ func (x *Generation) String() string {
 func (*Generation) ProtoMessage() {}
 
 func (x *Generation) ProtoReflect() protoreflect.Message {
-	mi := &file_agento11y_v1_generation_ingest_proto_msgTypes[13]
+	mi := &file_agento11y_v1_generation_ingest_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1216,7 +1364,7 @@ func (x *Generation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Generation.ProtoReflect.Descriptor instead.
 func (*Generation) Descriptor() ([]byte, []int) {
-	return file_agento11y_v1_generation_ingest_proto_rawDescGZIP(), []int{13}
+	return file_agento11y_v1_generation_ingest_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *Generation) GetId() string {
@@ -1429,6 +1577,13 @@ func (x *Generation) GetEffectiveVersion() string {
 	return ""
 }
 
+func (x *Generation) GetPricing() *GenerationPricing {
+	if x != nil {
+		return x.Pricing
+	}
+	return nil
+}
+
 type ExportWorkflowStepsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	WorkflowSteps []*WorkflowStep        `protobuf:"bytes,1,rep,name=workflow_steps,json=workflowSteps,proto3" json:"workflow_steps,omitempty"`
@@ -1438,7 +1593,7 @@ type ExportWorkflowStepsRequest struct {
 
 func (x *ExportWorkflowStepsRequest) Reset() {
 	*x = ExportWorkflowStepsRequest{}
-	mi := &file_agento11y_v1_generation_ingest_proto_msgTypes[14]
+	mi := &file_agento11y_v1_generation_ingest_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1450,7 +1605,7 @@ func (x *ExportWorkflowStepsRequest) String() string {
 func (*ExportWorkflowStepsRequest) ProtoMessage() {}
 
 func (x *ExportWorkflowStepsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agento11y_v1_generation_ingest_proto_msgTypes[14]
+	mi := &file_agento11y_v1_generation_ingest_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1463,7 +1618,7 @@ func (x *ExportWorkflowStepsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExportWorkflowStepsRequest.ProtoReflect.Descriptor instead.
 func (*ExportWorkflowStepsRequest) Descriptor() ([]byte, []int) {
-	return file_agento11y_v1_generation_ingest_proto_rawDescGZIP(), []int{14}
+	return file_agento11y_v1_generation_ingest_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *ExportWorkflowStepsRequest) GetWorkflowSteps() []*WorkflowStep {
@@ -1482,7 +1637,7 @@ type ExportWorkflowStepsResponse struct {
 
 func (x *ExportWorkflowStepsResponse) Reset() {
 	*x = ExportWorkflowStepsResponse{}
-	mi := &file_agento11y_v1_generation_ingest_proto_msgTypes[15]
+	mi := &file_agento11y_v1_generation_ingest_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1494,7 +1649,7 @@ func (x *ExportWorkflowStepsResponse) String() string {
 func (*ExportWorkflowStepsResponse) ProtoMessage() {}
 
 func (x *ExportWorkflowStepsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agento11y_v1_generation_ingest_proto_msgTypes[15]
+	mi := &file_agento11y_v1_generation_ingest_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1507,7 +1662,7 @@ func (x *ExportWorkflowStepsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExportWorkflowStepsResponse.ProtoReflect.Descriptor instead.
 func (*ExportWorkflowStepsResponse) Descriptor() ([]byte, []int) {
-	return file_agento11y_v1_generation_ingest_proto_rawDescGZIP(), []int{15}
+	return file_agento11y_v1_generation_ingest_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *ExportWorkflowStepsResponse) GetResults() []*ExportWorkflowStepResult {
@@ -1528,7 +1683,7 @@ type ExportWorkflowStepResult struct {
 
 func (x *ExportWorkflowStepResult) Reset() {
 	*x = ExportWorkflowStepResult{}
-	mi := &file_agento11y_v1_generation_ingest_proto_msgTypes[16]
+	mi := &file_agento11y_v1_generation_ingest_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1540,7 +1695,7 @@ func (x *ExportWorkflowStepResult) String() string {
 func (*ExportWorkflowStepResult) ProtoMessage() {}
 
 func (x *ExportWorkflowStepResult) ProtoReflect() protoreflect.Message {
-	mi := &file_agento11y_v1_generation_ingest_proto_msgTypes[16]
+	mi := &file_agento11y_v1_generation_ingest_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1553,7 +1708,7 @@ func (x *ExportWorkflowStepResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExportWorkflowStepResult.ProtoReflect.Descriptor instead.
 func (*ExportWorkflowStepResult) Descriptor() ([]byte, []int) {
-	return file_agento11y_v1_generation_ingest_proto_rawDescGZIP(), []int{16}
+	return file_agento11y_v1_generation_ingest_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *ExportWorkflowStepResult) GetStepId() string {
@@ -1602,7 +1757,7 @@ type WorkflowStep struct {
 
 func (x *WorkflowStep) Reset() {
 	*x = WorkflowStep{}
-	mi := &file_agento11y_v1_generation_ingest_proto_msgTypes[17]
+	mi := &file_agento11y_v1_generation_ingest_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1614,7 +1769,7 @@ func (x *WorkflowStep) String() string {
 func (*WorkflowStep) ProtoMessage() {}
 
 func (x *WorkflowStep) ProtoReflect() protoreflect.Message {
-	mi := &file_agento11y_v1_generation_ingest_proto_msgTypes[17]
+	mi := &file_agento11y_v1_generation_ingest_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1627,7 +1782,7 @@ func (x *WorkflowStep) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkflowStep.ProtoReflect.Descriptor instead.
 func (*WorkflowStep) Descriptor() ([]byte, []int) {
-	return file_agento11y_v1_generation_ingest_proto_rawDescGZIP(), []int{17}
+	return file_agento11y_v1_generation_ingest_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *WorkflowStep) GetId() string {
@@ -1803,7 +1958,18 @@ const file_agento11y_v1_generation_ingest_proto_rawDesc = "" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12\x12\n" +
 	"\x04type\x18\x03 \x01(\tR\x04type\x12*\n" +
 	"\x11input_schema_json\x18\x04 \x01(\fR\x0finputSchemaJson\x12\x1a\n" +
-	"\bdeferred\x18\x05 \x01(\bR\bdeferred\"\x81\x03\n" +
+	"\bdeferred\x18\x05 \x01(\bR\bdeferred\"\xb3\x01\n" +
+	"\x13ModalityTokenCounts\x12E\n" +
+	"\x06tokens\x18\x01 \x03(\v2-.agento11y.v1.ModalityTokenCounts.TokensEntryR\x06tokens\x12\x1a\n" +
+	"\bcomplete\x18\x02 \x01(\bR\bcomplete\x1a9\n" +
+	"\vTokensEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\x03R\x05value:\x028\x01\"\x84\x01\n" +
+	"\x11GenerationPricing\x12\x16\n" +
+	"\x06status\x18\x01 \x01(\tR\x06status\x12\x16\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\x12+\n" +
+	"\x0fcost_usd_micros\x18\x03 \x01(\x03H\x00R\rcostUsdMicros\x88\x01\x01B\x12\n" +
+	"\x10_cost_usd_micros\"\xd3\x05\n" +
 	"\n" +
 	"TokenUsage\x12!\n" +
 	"\finput_tokens\x18\x01 \x01(\x03R\vinputTokens\x12#\n" +
@@ -1812,14 +1978,19 @@ const file_agento11y_v1_generation_ingest_proto_rawDesc = "" +
 	"\x17cache_read_input_tokens\x18\x04 \x01(\x03R\x14cacheReadInputTokens\x127\n" +
 	"\x18cache_write_input_tokens\x18\x05 \x01(\x03R\x15cacheWriteInputTokens\x12)\n" +
 	"\x10reasoning_tokens\x18\x06 \x01(\x03R\x0freasoningTokens\x12J\n" +
-	"\x0finput_semantics\x18\b \x01(\x0e2!.agento11y.v1.TokenInputSemanticsR\x0einputSemanticsJ\x04\b\a\x10\bR\x1bcache_creation_input_tokens\"\xba\x01\n" +
+	"\x0finput_semantics\x18\b \x01(\x0e2!.agento11y.v1.TokenInputSemanticsR\x0einputSemantics\x12M\n" +
+	"\x11input_by_modality\x18\t \x01(\v2!.agento11y.v1.ModalityTokenCountsR\x0finputByModality\x12O\n" +
+	"\x12output_by_modality\x18\n" +
+	" \x01(\v2!.agento11y.v1.ModalityTokenCountsR\x10outputByModality\x12V\n" +
+	"\x16cache_read_by_modality\x18\v \x01(\v2!.agento11y.v1.ModalityTokenCountsR\x13cacheReadByModality\x12X\n" +
+	"\x17cache_write_by_modality\x18\f \x01(\v2!.agento11y.v1.ModalityTokenCountsR\x14cacheWriteByModalityJ\x04\b\a\x10\bR\x1bcache_creation_input_tokens\"\xba\x01\n" +
 	"\bArtifact\x12.\n" +
 	"\x04kind\x18\x01 \x01(\x0e2\x1a.agento11y.v1.ArtifactKindR\x04kind\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12!\n" +
 	"\fcontent_type\x18\x03 \x01(\tR\vcontentType\x12\x18\n" +
 	"\apayload\x18\x04 \x01(\fR\apayload\x12\x1b\n" +
 	"\trecord_id\x18\x05 \x01(\tR\brecordId\x12\x10\n" +
-	"\x03uri\x18\x06 \x01(\tR\x03uri\"\x93\v\n" +
+	"\x03uri\x18\x06 \x01(\tR\x03uri\"\xce\v\n" +
 	"\n" +
 	"Generation\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12'\n" +
@@ -1859,7 +2030,8 @@ const file_agento11y_v1_generation_ingest_proto_rawDesc = "" +
 	"toolChoice\x88\x01\x01\x12.\n" +
 	"\x10thinking_enabled\x18\x1c \x01(\bH\x04R\x0fthinkingEnabled\x88\x01\x01\x122\n" +
 	"\x15parent_generation_ids\x18\x1d \x03(\tR\x13parentGenerationIds\x120\n" +
-	"\x11effective_version\x18\x1e \x01(\tH\x05R\x10effectiveVersion\x88\x01\x01\x1a7\n" +
+	"\x11effective_version\x18\x1e \x01(\tH\x05R\x10effectiveVersion\x88\x01\x01\x129\n" +
+	"\apricing\x18\x1f \x01(\v2\x1f.agento11y.v1.GenerationPricingR\apricing\x1a7\n" +
 	"\tTagsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\r\n" +
@@ -1938,7 +2110,7 @@ func file_agento11y_v1_generation_ingest_proto_rawDescGZIP() []byte {
 }
 
 var file_agento11y_v1_generation_ingest_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_agento11y_v1_generation_ingest_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_agento11y_v1_generation_ingest_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
 var file_agento11y_v1_generation_ingest_proto_goTypes = []any{
 	(GenerationMode)(0),                 // 0: agento11y.v1.GenerationMode
 	(MessageRole)(0),                    // 1: agento11y.v1.MessageRole
@@ -1955,20 +2127,23 @@ var file_agento11y_v1_generation_ingest_proto_goTypes = []any{
 	(*Part)(nil),                        // 12: agento11y.v1.Part
 	(*Message)(nil),                     // 13: agento11y.v1.Message
 	(*ToolDefinition)(nil),              // 14: agento11y.v1.ToolDefinition
-	(*TokenUsage)(nil),                  // 15: agento11y.v1.TokenUsage
-	(*Artifact)(nil),                    // 16: agento11y.v1.Artifact
-	(*Generation)(nil),                  // 17: agento11y.v1.Generation
-	(*ExportWorkflowStepsRequest)(nil),  // 18: agento11y.v1.ExportWorkflowStepsRequest
-	(*ExportWorkflowStepsResponse)(nil), // 19: agento11y.v1.ExportWorkflowStepsResponse
-	(*ExportWorkflowStepResult)(nil),    // 20: agento11y.v1.ExportWorkflowStepResult
-	(*WorkflowStep)(nil),                // 21: agento11y.v1.WorkflowStep
-	nil,                                 // 22: agento11y.v1.Generation.TagsEntry
-	nil,                                 // 23: agento11y.v1.WorkflowStep.TagsEntry
-	(*timestamppb.Timestamp)(nil),       // 24: google.protobuf.Timestamp
-	(*structpb.Struct)(nil),             // 25: google.protobuf.Struct
+	(*ModalityTokenCounts)(nil),         // 15: agento11y.v1.ModalityTokenCounts
+	(*GenerationPricing)(nil),           // 16: agento11y.v1.GenerationPricing
+	(*TokenUsage)(nil),                  // 17: agento11y.v1.TokenUsage
+	(*Artifact)(nil),                    // 18: agento11y.v1.Artifact
+	(*Generation)(nil),                  // 19: agento11y.v1.Generation
+	(*ExportWorkflowStepsRequest)(nil),  // 20: agento11y.v1.ExportWorkflowStepsRequest
+	(*ExportWorkflowStepsResponse)(nil), // 21: agento11y.v1.ExportWorkflowStepsResponse
+	(*ExportWorkflowStepResult)(nil),    // 22: agento11y.v1.ExportWorkflowStepResult
+	(*WorkflowStep)(nil),                // 23: agento11y.v1.WorkflowStep
+	nil,                                 // 24: agento11y.v1.ModalityTokenCounts.TokensEntry
+	nil,                                 // 25: agento11y.v1.Generation.TagsEntry
+	nil,                                 // 26: agento11y.v1.WorkflowStep.TagsEntry
+	(*timestamppb.Timestamp)(nil),       // 27: google.protobuf.Timestamp
+	(*structpb.Struct)(nil),             // 28: google.protobuf.Struct
 }
 var file_agento11y_v1_generation_ingest_proto_depIdxs = []int32{
-	17, // 0: agento11y.v1.ExportGenerationsRequest.generations:type_name -> agento11y.v1.Generation
+	19, // 0: agento11y.v1.ExportGenerationsRequest.generations:type_name -> agento11y.v1.Generation
 	6,  // 1: agento11y.v1.ExportGenerationsResponse.results:type_name -> agento11y.v1.ExportGenerationResult
 	8,  // 2: agento11y.v1.Part.metadata:type_name -> agento11y.v1.PartMetadata
 	9,  // 3: agento11y.v1.Part.tool_call:type_name -> agento11y.v1.ToolCall
@@ -1976,36 +2151,42 @@ var file_agento11y_v1_generation_ingest_proto_depIdxs = []int32{
 	11, // 5: agento11y.v1.Part.media:type_name -> agento11y.v1.Media
 	1,  // 6: agento11y.v1.Message.role:type_name -> agento11y.v1.MessageRole
 	12, // 7: agento11y.v1.Message.parts:type_name -> agento11y.v1.Part
-	2,  // 8: agento11y.v1.TokenUsage.input_semantics:type_name -> agento11y.v1.TokenInputSemantics
-	3,  // 9: agento11y.v1.Artifact.kind:type_name -> agento11y.v1.ArtifactKind
-	0,  // 10: agento11y.v1.Generation.mode:type_name -> agento11y.v1.GenerationMode
-	7,  // 11: agento11y.v1.Generation.model:type_name -> agento11y.v1.ModelRef
-	13, // 12: agento11y.v1.Generation.input:type_name -> agento11y.v1.Message
-	13, // 13: agento11y.v1.Generation.output:type_name -> agento11y.v1.Message
-	14, // 14: agento11y.v1.Generation.tools:type_name -> agento11y.v1.ToolDefinition
-	15, // 15: agento11y.v1.Generation.usage:type_name -> agento11y.v1.TokenUsage
-	24, // 16: agento11y.v1.Generation.started_at:type_name -> google.protobuf.Timestamp
-	24, // 17: agento11y.v1.Generation.completed_at:type_name -> google.protobuf.Timestamp
-	22, // 18: agento11y.v1.Generation.tags:type_name -> agento11y.v1.Generation.TagsEntry
-	25, // 19: agento11y.v1.Generation.metadata:type_name -> google.protobuf.Struct
-	16, // 20: agento11y.v1.Generation.raw_artifacts:type_name -> agento11y.v1.Artifact
-	21, // 21: agento11y.v1.ExportWorkflowStepsRequest.workflow_steps:type_name -> agento11y.v1.WorkflowStep
-	20, // 22: agento11y.v1.ExportWorkflowStepsResponse.results:type_name -> agento11y.v1.ExportWorkflowStepResult
-	24, // 23: agento11y.v1.WorkflowStep.started_at:type_name -> google.protobuf.Timestamp
-	24, // 24: agento11y.v1.WorkflowStep.completed_at:type_name -> google.protobuf.Timestamp
-	25, // 25: agento11y.v1.WorkflowStep.input_state:type_name -> google.protobuf.Struct
-	25, // 26: agento11y.v1.WorkflowStep.output_state:type_name -> google.protobuf.Struct
-	23, // 27: agento11y.v1.WorkflowStep.tags:type_name -> agento11y.v1.WorkflowStep.TagsEntry
-	25, // 28: agento11y.v1.WorkflowStep.metadata:type_name -> google.protobuf.Struct
-	4,  // 29: agento11y.v1.GenerationIngestService.ExportGenerations:input_type -> agento11y.v1.ExportGenerationsRequest
-	18, // 30: agento11y.v1.WorkflowStepIngestService.ExportWorkflowSteps:input_type -> agento11y.v1.ExportWorkflowStepsRequest
-	5,  // 31: agento11y.v1.GenerationIngestService.ExportGenerations:output_type -> agento11y.v1.ExportGenerationsResponse
-	19, // 32: agento11y.v1.WorkflowStepIngestService.ExportWorkflowSteps:output_type -> agento11y.v1.ExportWorkflowStepsResponse
-	31, // [31:33] is the sub-list for method output_type
-	29, // [29:31] is the sub-list for method input_type
-	29, // [29:29] is the sub-list for extension type_name
-	29, // [29:29] is the sub-list for extension extendee
-	0,  // [0:29] is the sub-list for field type_name
+	24, // 8: agento11y.v1.ModalityTokenCounts.tokens:type_name -> agento11y.v1.ModalityTokenCounts.TokensEntry
+	2,  // 9: agento11y.v1.TokenUsage.input_semantics:type_name -> agento11y.v1.TokenInputSemantics
+	15, // 10: agento11y.v1.TokenUsage.input_by_modality:type_name -> agento11y.v1.ModalityTokenCounts
+	15, // 11: agento11y.v1.TokenUsage.output_by_modality:type_name -> agento11y.v1.ModalityTokenCounts
+	15, // 12: agento11y.v1.TokenUsage.cache_read_by_modality:type_name -> agento11y.v1.ModalityTokenCounts
+	15, // 13: agento11y.v1.TokenUsage.cache_write_by_modality:type_name -> agento11y.v1.ModalityTokenCounts
+	3,  // 14: agento11y.v1.Artifact.kind:type_name -> agento11y.v1.ArtifactKind
+	0,  // 15: agento11y.v1.Generation.mode:type_name -> agento11y.v1.GenerationMode
+	7,  // 16: agento11y.v1.Generation.model:type_name -> agento11y.v1.ModelRef
+	13, // 17: agento11y.v1.Generation.input:type_name -> agento11y.v1.Message
+	13, // 18: agento11y.v1.Generation.output:type_name -> agento11y.v1.Message
+	14, // 19: agento11y.v1.Generation.tools:type_name -> agento11y.v1.ToolDefinition
+	17, // 20: agento11y.v1.Generation.usage:type_name -> agento11y.v1.TokenUsage
+	27, // 21: agento11y.v1.Generation.started_at:type_name -> google.protobuf.Timestamp
+	27, // 22: agento11y.v1.Generation.completed_at:type_name -> google.protobuf.Timestamp
+	25, // 23: agento11y.v1.Generation.tags:type_name -> agento11y.v1.Generation.TagsEntry
+	28, // 24: agento11y.v1.Generation.metadata:type_name -> google.protobuf.Struct
+	18, // 25: agento11y.v1.Generation.raw_artifacts:type_name -> agento11y.v1.Artifact
+	16, // 26: agento11y.v1.Generation.pricing:type_name -> agento11y.v1.GenerationPricing
+	23, // 27: agento11y.v1.ExportWorkflowStepsRequest.workflow_steps:type_name -> agento11y.v1.WorkflowStep
+	22, // 28: agento11y.v1.ExportWorkflowStepsResponse.results:type_name -> agento11y.v1.ExportWorkflowStepResult
+	27, // 29: agento11y.v1.WorkflowStep.started_at:type_name -> google.protobuf.Timestamp
+	27, // 30: agento11y.v1.WorkflowStep.completed_at:type_name -> google.protobuf.Timestamp
+	28, // 31: agento11y.v1.WorkflowStep.input_state:type_name -> google.protobuf.Struct
+	28, // 32: agento11y.v1.WorkflowStep.output_state:type_name -> google.protobuf.Struct
+	26, // 33: agento11y.v1.WorkflowStep.tags:type_name -> agento11y.v1.WorkflowStep.TagsEntry
+	28, // 34: agento11y.v1.WorkflowStep.metadata:type_name -> google.protobuf.Struct
+	4,  // 35: agento11y.v1.GenerationIngestService.ExportGenerations:input_type -> agento11y.v1.ExportGenerationsRequest
+	20, // 36: agento11y.v1.WorkflowStepIngestService.ExportWorkflowSteps:input_type -> agento11y.v1.ExportWorkflowStepsRequest
+	5,  // 37: agento11y.v1.GenerationIngestService.ExportGenerations:output_type -> agento11y.v1.ExportGenerationsResponse
+	21, // 38: agento11y.v1.WorkflowStepIngestService.ExportWorkflowSteps:output_type -> agento11y.v1.ExportWorkflowStepsResponse
+	37, // [37:39] is the sub-list for method output_type
+	35, // [35:37] is the sub-list for method input_type
+	35, // [35:35] is the sub-list for extension type_name
+	35, // [35:35] is the sub-list for extension extendee
+	0,  // [0:35] is the sub-list for field type_name
 }
 
 func init() { file_agento11y_v1_generation_ingest_proto_init() }
@@ -2020,14 +2201,15 @@ func file_agento11y_v1_generation_ingest_proto_init() {
 		(*Part_ToolResult)(nil),
 		(*Part_Media)(nil),
 	}
-	file_agento11y_v1_generation_ingest_proto_msgTypes[13].OneofWrappers = []any{}
+	file_agento11y_v1_generation_ingest_proto_msgTypes[12].OneofWrappers = []any{}
+	file_agento11y_v1_generation_ingest_proto_msgTypes[15].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agento11y_v1_generation_ingest_proto_rawDesc), len(file_agento11y_v1_generation_ingest_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   20,
+			NumMessages:   23,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

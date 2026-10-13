@@ -311,7 +311,17 @@ export interface ToolDefinition {
 export type TokenInputSemantics = 'unspecified' | 'inclusive';
 
 /** Token usage counters. */
+export interface ModalityTokenCounts {
+  tokens: Record<string, number>;
+  complete: boolean;
+}
+
 export interface TokenUsage {
+  inputByModality?: ModalityTokenCounts;
+  outputByModality?: ModalityTokenCounts;
+  cacheReadByModality?: ModalityTokenCounts;
+  cacheWriteByModality?: ModalityTokenCounts;
+
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
