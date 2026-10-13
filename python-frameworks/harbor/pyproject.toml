@@ -1,0 +1,28 @@
+[project]
+name = "agento11y-harbor"
+version = "0.19.0"
+description = "Harbor live evaluation and job import for the Grafana Agent Observability Python SDK"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dependencies = ["agento11y>=0.20.0"]
+
+[project.scripts]
+agento11y-harbor = "agento11y_harbor.cli:console_main"
+
+[project.entry-points."harbor.plugins"]
+agento11y = "agento11y_harbor.plugin:Agento11yPlugin"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.2.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agento11y_harbor*"]
+
+[tool.setuptools.package-data]
+agento11y_harbor = ["py.typed"]
