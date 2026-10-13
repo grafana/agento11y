@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.20.0] - 2026-10-13
+
+### Features
+
+- **python**: run published suite versions and gate them in CI (#865)
+- **python**: add experimental OpenTelemetry generation export (#833)
+
+### Bug Fixes
+
+- **security**: resolve medium+ CVEs in Go and Python dependencies (#862)
+- **python**: record LangChain cache_creation as cache write tokens (#821)
+
 ## [0.19.0] - 2026-10-05
 
 ### Features
