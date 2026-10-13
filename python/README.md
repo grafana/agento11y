@@ -1023,13 +1023,15 @@ run = run_checkpoint(
 print(run.url)
 ```
 
-Before calling your agent, it checks that the version is published, has a
-primary verdict binding, and can resolve every case's grading inputs. Return
-`AgentOutput` with the flush of the client that instruments your agent, so
-each conversation is stored before it's graded. A case whose agent call or
-grading fails is recorded as errored and the run continues. `timeout` (default
-one hour) bounds the whole run. It uses the same `AGENTO11Y_*` ingest and
-service-account credentials as `experiment_from_suite`.
+Before calling your agent, it checks that the version is published, has
+exactly one primary verdict binding, and can resolve every case's grading
+inputs. Return `AgentOutput` with the flush of the client that instruments your
+agent, so each conversation is stored before it's graded. A case whose agent
+call or grading fails is recorded as errored and the run continues. `timeout`
+(default one hour) stops new cases and grading from starting, but it can't
+interrupt an agent call that is already running, so give your agent its own
+timeout. It uses the same `AGENTO11Y_*` ingest and service-account credentials
+as `experiment_from_suite`.
 
 To gate CI on the result, compare a candidate run with a baseline run of the
 same version:
@@ -1043,6 +1045,8 @@ agento11y-checkpoint-gate --suite-id dashboard-regression --suite-version 3 \
 The gate prints a JSON verdict and exits `0` when the candidate passes, `1` on
 a regression, and `2` when either run can't support the comparison, for
 example an errored case or a score that doesn't match the pinned evaluators.
+The gate needs every case to complete on its first attempt, so a single
+provider error makes the comparison invalid. Rerun that run and gate again.
 
 ## Public API Overview
 

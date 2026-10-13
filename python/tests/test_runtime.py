@@ -682,8 +682,9 @@ def test_explicit_flush_reports_background_export_failure_once() -> None:
         # Run the actual background callback deterministically; its error is
         # intentionally swallowed for instrumentation, but flush must expose it.
         client._run_async_flush()
-        with pytest.raises(RuntimeError, match="forced export failure"):
+        with pytest.raises(ExportFlushError, match="earlier background flush failed.*forced export failure") as raised:
             client.flush()
+        assert isinstance(raised.value.__cause__, RuntimeError)
         client.flush()
         assert exporter.attempts == 1  # The lost batch was not silently retried.
     finally:
@@ -734,8 +735,62 @@ def test_explicit_flush_waits_for_inflight_background_failure() -> None:
             recorder.set_result(output=_assistant_output("answer"))
         assert entered.wait(5)
         release.set()
-        with pytest.raises(RuntimeError, match="inflight failure"):
+        with pytest.raises(ExportFlushError, match="earlier background flush failed.*inflight failure"):
             client.flush()
     finally:
         release.set()
+        client.shutdown()
+
+
+def test_explicit_flush_treats_already_stored_generations_as_exported() -> None:
+    from agento11y.models import ExportGenerationResult, ExportGenerationsResponse
+
+    class DuplicateExporter(CapturingGenerationExporter):
+        def export_generations(self, request):
+            # The server reports a retried request that already landed as a rejection.
+            return ExportGenerationsResponse(
+                results=[
+                    ExportGenerationResult(generation_id=generation.id, accepted=False, error=error)
+                    for generation, error in zip(
+                        request.generations,
+                        ["generation already exists", "Error 1062: Duplicate entry 'x'"],
+                        strict=True,
+                    )
+                ]
+            )
+
+    client = _new_client(DuplicateExporter(), batch_size=2)
+    try:
+        for name in ("first", "second"):
+            with client.start_generation(_seed_generation(name)) as recorder:
+                recorder.set_result(output=_assistant_output("answer"))
+        client.flush()
+    finally:
+        client.shutdown()
+
+
+def test_explicit_flush_failure_keeps_the_earlier_background_failure() -> None:
+    import pytest
+
+    class FailingExporter(CapturingGenerationExporter):
+        def __init__(self) -> None:
+            super().__init__()
+            self.errors = iter(["background failure", "explicit failure"])
+
+        def export_generations(self, request):
+            raise RuntimeError(next(self.errors))
+
+    client = _new_client(FailingExporter(), max_retries=0)
+    try:
+        with client.start_generation(_seed_generation("background")) as recorder:
+            recorder.set_result(output=_assistant_output("answer"))
+        client._run_async_flush()
+        with client.start_generation(_seed_generation("explicit")) as recorder:
+            recorder.set_result(output=_assistant_output("answer"))
+        with pytest.raises(RuntimeError, match="explicit failure") as raised:
+            client.flush()
+        earlier = raised.value.__context__
+        assert isinstance(earlier, ExportFlushError)
+        assert "background failure" in str(earlier)
+    finally:
         client.shutdown()

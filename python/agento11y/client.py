@@ -883,10 +883,11 @@ class Client:
         """Flushes queued generations and raises export failures since the last flush.
 
         With native export, a rejected record or failed export raises
-        ``ExportFlushError`` (or the exporter's error). A failure from a
-        background flush is raised once by the next explicit flush, even though
-        that batch already left the queue; a later successful flush does not
-        restore lost records.
+        ``ExportFlushError`` (or the exporter's error). A generation the server
+        already stored, for example after a retry, is not a failure. A failure
+        from a background flush is raised once by the next explicit flush as an
+        ``ExportFlushError`` that says so, even though that batch already left
+        the queue; a later successful flush does not restore lost records.
 
         OTel requires an explicit tracer_provider with force_flush() and flushes
         traces only. Success confirms local processor completion, not backend acceptance.
@@ -1191,7 +1192,7 @@ class Client:
                             lambda req=gen_request: self._generation_exporter.export_generations(req)
                         )
                         for result in response.results:
-                            if not result.accepted:
+                            if not result.accepted and not _is_duplicate_generation_result(result):
                                 message = (
                                     f"agento11y generation rejected id={result.generation_id} error={result.error}"
                                 )
@@ -1221,7 +1222,12 @@ class Client:
             if first_error is not None and not report_background_errors:
                 self._unreported_export_error = self._unreported_export_error or first_error
 
+        if prior_error is not None:
+            prior_error = _earlier_background_flush_error(prior_error)
         if first_error is not None:
+            if prior_error is not None:
+                # Chain it so the earlier loss is shown with this failure instead of dropped.
+                first_error.__context__ = prior_error
             raise first_error
         if prior_error is not None:
             raise prior_error
@@ -2200,6 +2206,22 @@ class NoopToolExecutionRecorder:
 
     def err(self) -> Exception | None:
         return None
+
+
+def _is_duplicate_generation_result(result: Any) -> bool:
+    """An idempotent re-export of a stored generation (for example, after a retry) is not a loss."""
+
+    error = (result.error or "").strip().lower()
+    return "generation already exists" in error or "duplicate entry" in error
+
+
+def _earlier_background_flush_error(error: Exception) -> ExportFlushError:
+    wrapped = ExportFlushError(
+        f"agento11y: an earlier background flush failed and its records were not exported: "
+        f"{type(error).__name__}: {error}"
+    )
+    wrapped.__cause__ = error
+    return wrapped
 
 
 def _apply_trace_context_from_span(span: Span, generation: Generation) -> None:

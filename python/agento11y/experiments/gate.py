@@ -14,6 +14,7 @@ import argparse
 import json
 import math
 import sys
+import urllib.error
 from collections.abc import Sequence
 from typing import Any
 
@@ -32,28 +33,28 @@ class GateConfigError(Exception):
     """The gate's environment is incomplete."""
 
 
-def require(condition: bool, reason: str) -> None:
+def _require(condition: bool, reason: str) -> None:
     if not condition:
         raise EvidenceError(reason)
 
 
-def evidence(
+def _evidence(
     report: ExperimentReport, suite_id: str, version: str, case_ids: set[str], bindings: list[dict[str, Any]]
 ) -> tuple[float, dict[str, list[tuple[str, ...]]]]:
     run, summary = report.run, report.summary
-    require(run.status == "completed" and not run.error and not run.result_error, "run is not successfully completed")
-    require(run.metadata.get("execution_kind") == "agent_run", "actual-agent execution declaration is missing")
-    require((run.suite_id, run.suite_version) == (suite_id, version), "checkpoint identity differs")
-    require(bool(case_ids), "checkpoint has no cases")
-    require(run.planned_trial_count == len(case_ids), "planned trial count differs from checkpoint")
-    require(
+    _require(run.status == "completed" and not run.error and not run.result_error, "run is not successfully completed")
+    _require(run.metadata.get("execution_kind") == "agent_run", "actual-agent execution declaration is missing")
+    _require((run.suite_id, run.suite_version) == (suite_id, version), "checkpoint identity differs")
+    _require(bool(case_ids), "checkpoint has no cases")
+    _require(run.planned_trial_count == len(case_ids), "planned trial count differs from checkpoint")
+    _require(
         summary.trial_count == summary.completed_count == summary.test_case_count == len(case_ids)
         and summary.failed_count == summary.canceled_count == 0,
         "trial coverage is incomplete",
     )
     expected = {binding["binding_id"]: binding for binding in bindings}
-    require(bool(expected) and len(expected) == len(bindings), "checkpoint bindings are missing or duplicated")
-    require(
+    _require(bool(expected) and len(expected) == len(bindings), "checkpoint bindings are missing or duplicated")
+    _require(
         sum(binding.get("report_role") == "primary_verdict" for binding in bindings) == 1,
         "gate requires exactly one primary verdict binding",
     )
@@ -61,14 +62,14 @@ def evidence(
     passed = 0
     for row in report.rows:
         case_id = row.get("test_case_id")
-        require(
+        _require(
             case_id in case_ids and case_id not in identities, "case population is missing, duplicated or different"
         )
         trials = row.get("trials", [])
-        require(len(trials) == 1, "gate requires one attempt per case")
+        _require(len(trials) == 1, "gate requires one attempt per case")
         result = trials[0]
         trial = result.get("trial", {})
-        require(
+        _require(
             trial.get("status") == "completed"
             and trial.get("attempt") == 1
             and trial.get("test_case_id") == case_id
@@ -77,7 +78,7 @@ def evidence(
             "trial is incomplete or has incompatible identity",
         )
         snapshot = trial.get("test_case") or {}
-        require(
+        _require(
             snapshot.get("test_case_id") == case_id
             and snapshot.get("suite_id") == suite_id
             and snapshot.get("suite_version") == version
@@ -86,16 +87,16 @@ def evidence(
             "case snapshot has not been verified against the checkpoint",
         )
         scores = result.get("scores", [])
-        require(bool(scores), "grading evidence is missing")
+        _require(bool(scores), "grading evidence is missing")
         seen: set[str] = set()
         primary: list[dict[str, Any]] = []
         identity = []
         for score in scores:
             metadata = score.get("metadata") or {}
             binding_id = metadata.get("binding_id")
-            require(binding_id in expected, "score is not backed by a published binding")
+            _require(binding_id in expected, "score is not backed by a published binding")
             binding = expected[binding_id]
-            require(
+            _require(
                 score.get("evaluator_id") == binding.get("evaluator_id")
                 and bool(score.get("evaluator_id"))
                 and score.get("evaluator_version") == binding.get("evaluator_version")
@@ -108,7 +109,7 @@ def evidence(
                 and score.get("experiment_id") == run.experiment_id,
                 "score identity differs from pinned checkpoint grading",
             )
-            require(
+            _require(
                 all(
                     isinstance(metadata.get(key), str) and metadata[key]
                     for key in ("binding_digest", "case_digest", "resolved_inputs_digest")
@@ -137,16 +138,16 @@ def evidence(
             )
             if score.get("report_role") == "primary_verdict":
                 primary.append(score)
-        require(seen == set(expected), "checkpoint grader coverage is incomplete")
-        require(len(identity) == len(set(identity)), "grading evidence is duplicated")
-        require(
+        _require(seen == set(expected), "checkpoint grader coverage is incomplete")
+        _require(len(identity) == len(set(identity)), "grading evidence is duplicated")
+        _require(
             len(primary) == 1 and isinstance(primary[0].get("passed"), bool), "primary verdict is missing or ambiguous"
         )
         passed += int(primary[0]["passed"])
         identities[case_id] = sorted(identity)
-    require(set(identities) == case_ids, "checkpoint case coverage is incomplete")
+    _require(set(identities) == case_ids, "checkpoint case coverage is incomplete")
     rate = passed / len(case_ids)
-    require(
+    _require(
         summary.pass_denominator == len(case_ids)
         and summary.pass_count == passed
         and summary.pass_rate is not None
@@ -156,7 +157,7 @@ def evidence(
     return rate, identities
 
 
-def compare(
+def _compare(
     baseline: ExperimentReport,
     candidate: ExperimentReport,
     *,
@@ -167,13 +168,13 @@ def compare(
     min_pass_rate: float,
     max_drop: float,
 ) -> dict[str, Any]:
-    require(
+    _require(
         all(math.isfinite(value) and 0 <= value <= 1 for value in (min_pass_rate, max_drop)),
         "thresholds must be finite fractions in [0, 1]",
     )
-    baseline_rate, baseline_identity = evidence(baseline, suite_id, version, case_ids, bindings)
-    candidate_rate, candidate_identity = evidence(candidate, suite_id, version, case_ids, bindings)
-    require(baseline_identity == candidate_identity, "case or grading configuration differs between runs")
+    baseline_rate, baseline_identity = _evidence(baseline, suite_id, version, case_ids, bindings)
+    candidate_rate, candidate_identity = _evidence(candidate, suite_id, version, case_ids, bindings)
+    _require(baseline_identity == candidate_identity, "case or grading configuration differs between runs")
     drop = baseline_rate - candidate_rate
     reasons = []
     if candidate_rate < min_pass_rate:
@@ -206,23 +207,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         "candidate": args.candidate,
     }
     try:
-        require(
+        _require(
             args.suite_version not in ("latest", "latest_published", "draft"),
             "an exact published suite version is required",
         )
-        require(args.baseline != args.candidate, "baseline and candidate must be different runs")
+        _require(args.baseline != args.candidate, "baseline and candidate must be different runs")
         endpoint = _env_value("ENDPOINT").strip()
         if not endpoint:
             raise GateConfigError("set AGENTO11Y_ENDPOINT to your Grafana Cloud Agent Observability URL")
         if not _env_value("AUTH_TOKEN").strip():
             raise GateConfigError("set AGENTO11Y_AUTH_TOKEN to your Grafana Cloud ingestion API key")
+        try:
+            # Missing or invalid control-plane settings; the message names the variable to set.
+            control = TestSuitesClient()
+        except ValueError as error:
+            raise GateConfigError(str(error)) from error
         with Client(endpoint, tenant_id=_env_value("AUTH_TENANT_ID")) as client:
             if client.grafana_url:
                 result.update(
                     baseline_url=client.experiment_url(args.baseline),
                     candidate_url=client.experiment_url(args.candidate),
                 )
-            control = TestSuitesClient()
             try:
                 suite = control.pull_suite(args.suite_id, args.suite_version, require_published=True)
             except ValidationError as error:
@@ -230,12 +235,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             bindings = control.get_bindings(suite.suite_id, suite.version)
             baseline = client.get_report(args.baseline)
             candidate = client.get_report(args.candidate)
-        require(
+        _require(
             baseline.run.experiment_id == args.baseline and candidate.run.experiment_id == args.candidate,
             "report run identity differs",
         )
         result.update(
-            compare(
+            _compare(
                 baseline,
                 candidate,
                 suite_id=suite.suite_id,
@@ -251,13 +256,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     except GateConfigError as error:
         result.update(status="error", reasons=[str(error)])
     except Exception as error:
-        # Transport/provider exception text can contain request content or credentials.
-        result.update(
-            status="error",
-            reasons=[f"unable to read or validate the suite version or reports ({type(error).__name__})"],
-        )
+        # Transport/provider exception text can contain request content or credentials, so
+        # report only the exception type and, for an HTTP failure, its status code.
+        detail = type(error).__name__
+        status_code = _http_status(error)
+        if status_code is not None:
+            detail += f", HTTP {status_code}"
+        result.update(status="error", reasons=[f"unable to read or validate the suite version or reports ({detail})"])
     print(json.dumps(result, sort_keys=True))
     return {"passed": 0, "regression": 1}.get(result["status"], 2)
+
+
+def _http_status(error: BaseException) -> int | None:
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        if isinstance(current, urllib.error.HTTPError):
+            return current.code
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return None
 
 
 if __name__ == "__main__":

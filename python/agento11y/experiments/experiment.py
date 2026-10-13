@@ -1272,7 +1272,9 @@ class Experiment:
             if not self._auto_finalize:
                 return False
             if exc is not None:
-                _add_exception_note(exc, f"Inspect partial experiment results: {self.url}")
+                # Without a Grafana URL, experiment_url falls back to the API endpoint, which isn't a page to open.
+                if getattr(self._client, "grafana_url", ""):
+                    _add_exception_note(exc, f"Inspect partial experiment results: {self.url}")
                 try:
                     self.finalize(
                         ExperimentStatus.FAILED,

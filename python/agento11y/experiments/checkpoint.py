@@ -43,11 +43,14 @@ def run_checkpoint(
 
     A case whose target, telemetry flush or grading fails is recorded as
     errored, and the run continues with the next case. ``timeout`` bounds the
-    whole run, including grading. When it runs out, no further cases start and
-    a ``TimeoutError`` is raised after the experiment is finalized as failed.
+    whole run, including the grading-input checks and grading: when it runs
+    out, no further case or grading starts and a ``TimeoutError`` is raised
+    after the experiment is finalized as failed. It can't interrupt a target
+    call that is already running, so give your agent its own timeout.
 
     Pass ``expected_bindings`` (for example, the bindings shown in Grafana when
     you copied the runner) to refuse a version whose bindings have changed.
+    Their evaluator, version, input mappings and report role are compared.
     """
 
     if not math.isfinite(timeout) or timeout <= 0:
@@ -60,11 +63,17 @@ def run_checkpoint(
     suite = control.pull_suite(suite_id, version, require_published=True)
     _validate_cases(suite, input_selector)
     bindings = control.get_bindings(suite.suite_id, suite.version)
-    if not any(binding.get("report_role") == "primary_verdict" for binding in bindings):
-        raise ValueError("publish at least one primary verdict binding before running this suite version")
-    if expected_bindings is not None and _by_id(expected_bindings) != _by_id(bindings):
+    # The checkpoint gate compares exactly one primary verdict per case, so refuse anything else up front.
+    if sum(binding.get("report_role") == "primary_verdict" for binding in bindings) != 1:
+        raise ValueError("publish exactly one primary verdict binding before running this suite version")
+    if expected_bindings is not None and _binding_identities(expected_bindings) != _binding_identities(bindings):
         raise ValueError("the suite version's bindings differ from expected_bindings; review the version again")
-    for case in suite.cases:
+    for index, case in enumerate(suite.cases):
+        if time.monotonic() >= deadline:
+            raise TimeoutError(
+                f"run timed out after {timeout:g}s while checking grading inputs "
+                f"for {index} of {len(suite.cases)} cases"
+            )
         for binding in bindings:
             control.preview_binding(suite.suite_id, suite.version, case.test_case_id, binding["binding_id"])
 
@@ -103,5 +112,14 @@ def run_checkpoint(
     return run
 
 
-def _by_id(bindings: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    return {str(binding.get("binding_id")): dict(binding) for binding in bindings}
+def _binding_identities(bindings: list[dict[str, Any]]) -> dict[str, tuple[Any, ...]]:
+    # Compare only what decides grading, so new response fields or null vs {} mappings don't break pinned jobs.
+    return {
+        str(binding.get("binding_id")): (
+            binding.get("evaluator_id") or "",
+            binding.get("evaluator_version") or "",
+            dict(binding.get("input_mappings") or {}),
+            binding.get("report_role") or "",
+        )
+        for binding in bindings
+    }

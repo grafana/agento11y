@@ -51,6 +51,17 @@ def output(text: str) -> AgentOutput:
     return AgentOutput(text=text, flush=lambda: None)
 
 
+def fake_clock(monkeypatch, *readings: float) -> None:
+    """Return each reading in turn, then keep returning the last one."""
+
+    remaining = list(readings)
+
+    def monotonic() -> float:
+        return remaining.pop(0) if len(remaining) > 1 else remaining[0]
+
+    monkeypatch.setattr(checkpoint, "time", SimpleNamespace(monotonic=monotonic))
+
+
 def test_run_checkpoint_grades_every_case_and_keeps_going_past_case_errors():
     client = BindingClient(failing={("c", "tone")})
     suites = control("a", "b", "c")
@@ -78,8 +89,10 @@ def test_run_checkpoint_grades_every_case_and_keeps_going_past_case_errors():
 @pytest.mark.parametrize(
     ("bindings", "expected", "message"),
     [
-        ([BINDINGS[1]], None, "primary verdict"),
+        ([BINDINGS[1]], None, "exactly one primary verdict"),
+        ([BINDINGS[0], {**BINDINGS[1], "report_role": "primary_verdict"}], None, "exactly one primary verdict"),
         (BINDINGS, BINDINGS[:1], "differ from expected_bindings"),
+        (BINDINGS, [BINDINGS[0], {**BINDINGS[1], "evaluator_version": "v3"}], "differ from expected_bindings"),
     ],
 )
 def test_run_checkpoint_refuses_unusable_bindings_before_running(bindings, expected, message):
@@ -107,9 +120,37 @@ def test_run_checkpoint_stops_when_the_target_cannot_flush_its_telemetry():
     assert client.finalized[0][1] == "failed"
 
 
+def test_run_checkpoint_ignores_binding_fields_that_do_not_affect_grading():
+    client = BindingClient()
+    served = [{**binding, "input_mappings": None, "created_at": "2026-10-01T00:00:00Z"} for binding in BINDINGS]
+    expected = [{**binding, "input_mappings": {}} for binding in BINDINGS]
+    run_checkpoint(
+        "suite",
+        "3",
+        MagicMock(return_value=output("ok")),
+        expected_bindings=expected,
+        client=client,
+        test_suites_client=control("a", bindings=served),
+    )
+    assert client.finalized[0][1] == "completed"
+
+
+def test_run_checkpoint_timeout_during_input_checks_never_calls_the_target(monkeypatch):
+    # start, first case's check, second case's check (past the deadline)
+    fake_clock(monkeypatch, 0.0, 0.0, 11.0)
+    client = BindingClient()
+    target = MagicMock(return_value=output("ok"))
+    with pytest.raises(TimeoutError, match="checking grading inputs for 1 of 2 cases"):
+        run_checkpoint(
+            "suite", "3", target, timeout=10, client=client, test_suites_client=control("a", "b", bindings=BINDINGS[:1])
+        )
+    target.assert_not_called()
+    assert client.upserts == []
+
+
 def test_run_checkpoint_timeout_stops_starting_cases_and_fails_the_run(monkeypatch):
-    clock = iter([0.0, 0.0, 5.0, 11.0])
-    monkeypatch.setattr(checkpoint, "time", SimpleNamespace(monotonic=lambda: next(clock)))
+    # start, two input checks, first case start, its grading, second case start (past the deadline)
+    fake_clock(monkeypatch, 0.0, 0.0, 0.0, 0.0, 5.0, 11.0)
     client = BindingClient()
     target = MagicMock(return_value=output("ok"))
     with pytest.raises(TimeoutError, match="1 of 2 cases"):

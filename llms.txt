@@ -538,11 +538,14 @@ To run an actual agent against a published suite version with the evaluators
 pinned to it in Grafana Cloud, use Python
 `agento11y.experiments.run_checkpoint(suite_id, version, target)` (0.20.0 or
 later). The target returns `AgentOutput(text=..., flush=instrumentation_client.flush)`.
-It checks every case's grading inputs before calling the agent, records a
-failing case as errored and continues, and bounds the run with `timeout`. Gate
-CI with `agento11y-checkpoint-gate --suite-id ... --suite-version ... --baseline
-<RUN_ID> --candidate <RUN_ID> --min-pass-rate ... --max-drop ...`, which exits
-0 (passed), 1 (regression) or 2 (the runs can't be compared).
+The version needs exactly one primary verdict binding. It checks every case's
+grading inputs before calling the agent, records a failing case as errored and
+continues, and stops starting new cases or grading when `timeout` runs out (it
+can't interrupt a running agent call). Gate CI with `agento11y-checkpoint-gate
+--suite-id ... --suite-version ... --baseline <RUN_ID> --candidate <RUN_ID>
+--min-pass-rate ... --max-drop ...`, which exits 0 (passed), 1 (regression) or
+2 (the runs can't be compared; any errored case makes a run incomparable, so
+rerun it).
 
 The Grafana `run_evals` helper accepts an `evaluate(trial, case, answer)`
 callback for local scoring or stored evaluator invocation. Its recommended

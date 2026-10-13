@@ -1763,6 +1763,7 @@ def test_cloud_binding_round_trip_through_trial_client_and_transport(monkeypatch
 
 def test_failure_note_links_partial_results_and_retains_successful_sibling() -> None:
     client = FakeClient()
+    client.grafana_url = "https://example.grafana.net"
     with pytest.raises(RuntimeError, match="provider failed") as caught:
         with Experiment(client, experiment_id="partial", name="partial", planned_trial_count=3) as exp:
             with exp.trial("good") as trial:
@@ -1774,3 +1775,18 @@ def test_failure_note_links_partial_results_and_retains_successful_sibling() -> 
     assert client.finalized == [("partial", "failed", None)]
     if hasattr(caught.value, "add_note"):
         assert any(exp.url in note for note in caught.value.__notes__)
+
+
+@pytest.mark.parametrize(("grafana_url", "noted"), [("https://example.grafana.net", True), ("", False)])
+def test_failed_experiment_links_partial_results_only_with_a_grafana_url(grafana_url, noted) -> None:
+    if not hasattr(BaseException, "add_note"):
+        pytest.skip("exception notes need Python 3.11+")
+    client = FakeClient()
+    client.grafana_url = grafana_url
+
+    with pytest.raises(RuntimeError, match="agent crashed") as raised:
+        with Experiment(client, experiment_id="run-note", name="note"):
+            raise RuntimeError("agent crashed")
+
+    notes = getattr(raised.value, "__notes__", [])
+    assert notes == (["Inspect partial experiment results: http://ui/run-note"] if noted else [])

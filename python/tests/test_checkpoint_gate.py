@@ -2,10 +2,11 @@
 
 import copy
 import json
+import urllib.error
 from unittest.mock import MagicMock
 
 import pytest
-from agento11y.errors import ValidationError
+from agento11y.errors import ExperimentTransportError, ValidationError
 from agento11y.experiments import gate
 from agento11y.models import Experiment, ExperimentReport, ExperimentReportSummary
 
@@ -81,7 +82,7 @@ def report(passed=True):
 
 
 def compare(candidate, **kwargs):
-    return gate.compare(
+    return gate._compare(
         report(),
         candidate,
         suite_id="suite",
@@ -143,7 +144,7 @@ def test_changed_resolved_inputs_are_expected_between_candidates():
 
 def test_missing_diagnostic_binding_is_incomplete():
     with pytest.raises(gate.EvidenceError, match="coverage"):
-        gate.evidence(
+        gate._evidence(
             report(), "suite", "v1", {"case"}, BINDINGS + [{"binding_id": "safety", "report_role": "diagnostic"}]
         )
 
@@ -169,6 +170,9 @@ def gate_args(baseline="base /?", candidate="cand /?", version="v1"):
         "--max-drop",
         "0",
     ]
+
+
+gate_suite_client = gate.TestSuitesClient
 
 
 @pytest.fixture
@@ -244,6 +248,32 @@ def test_cli_names_missing_credentials(monkeypatch, capsys, gate_env, missing):
     assert output["status"] == "error" and missing in output["reasons"][0]
 
 
+@pytest.mark.parametrize("missing", ["AGENTO11Y_CONTROL_ENDPOINT", "AGENTO11Y_SERVICE_ACCOUNT_TOKEN"])
+def test_cli_names_missing_suite_credentials(monkeypatch, capsys, gate_env, missing):
+    monkeypatch.setattr(gate, "TestSuitesClient", gate_suite_client)
+    for name in ("GRAFANA_URL", "CONTROL_ENDPOINT", "SERVICE_ACCOUNT_TOKEN"):
+        monkeypatch.delenv(f"SIGIL_{name}", raising=False)
+    monkeypatch.delenv("AGENTO11Y_GRAFANA_URL", raising=False)
+    monkeypatch.setenv("AGENTO11Y_CONTROL_ENDPOINT", "https://example.grafana.net/api/plugins/x/resources")
+    monkeypatch.setenv("AGENTO11Y_SERVICE_ACCOUNT_TOKEN", "glsa_test")
+    monkeypatch.delenv(missing)
+    assert gate.main(gate_args()) == 2
+    output = json.loads(capsys.readouterr().out)
+    assert output["status"] == "error" and missing in output["reasons"][0]
+
+
+def test_cli_reports_http_status_without_the_response_body(capsys, gate_env):
+    error = ExperimentTransportError("agento11y test suite transport failed: status 503: secret body")
+    error.__cause__ = urllib.error.HTTPError("https://example", 503, "unavailable", {}, None)
+    gate_env.pull_suite.side_effect = error
+    assert gate.main(gate_args()) == 2
+    output = json.loads(capsys.readouterr().out)
+    assert output["status"] == "error"
+    assert output["reasons"] == [
+        "unable to read or validate the suite version or reports (ExperimentTransportError, HTTP 503)"
+    ]
+
+
 def test_diagnostic_failure_does_not_override_primary_verdict():
     baseline, candidate = report(), report()
     binding = {"binding_id": "safety", "evaluator_id": "safety", "evaluator_version": "v1", "report_role": "diagnostic"}
@@ -253,7 +283,7 @@ def test_diagnostic_failure_does_not_override_primary_verdict():
         score["metadata"].update(binding_id="safety", binding_digest="sha256:safety")
         item.rows[0]["trials"][0]["scores"].append(score)
     assert (
-        gate.compare(
+        gate._compare(
             baseline,
             candidate,
             suite_id="suite",
