@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from agento11y.errors import EvaluationTimeoutError
 from agento11y.experiments import AgentOutput, TestCase, TestSuite, checkpoint, run_checkpoint
 from test_experiments import FakeClient
 
@@ -12,10 +13,16 @@ BINDINGS = [
 
 
 class BindingClient(FakeClient):
-    def __init__(self, failing: set[tuple[str, str]] = frozenset()) -> None:
+    def __init__(self, failing: set[tuple[str, str]] = frozenset(), slow: set[tuple[str, str]] = frozenset()) -> None:
         super().__init__()
         self.failing = failing
+        self.slow = slow
         self.trial_cases: dict[str, str] = {}
+        self.finalize_errors: list[str] = []
+
+    def finalize(self, experiment_id, status="succeeded", *, score_count=None, error=""):
+        self.finalize_errors.append(error)
+        return super().finalize(experiment_id, status, score_count=score_count, error=error)
 
     def upsert_trial(self, experiment_id, *, trial_id, **kwargs):
         self.trial_cases[trial_id] = kwargs["test_case"]["test_case_id"]
@@ -25,6 +32,8 @@ class BindingClient(FakeClient):
         binding_id = kwargs["binding_id"]
         if (self.trial_cases[trial_id], binding_id) in self.failing:
             raise RuntimeError("judge unavailable")
+        if (self.trial_cases[trial_id], binding_id) in self.slow:
+            raise EvaluationTimeoutError("eval-slow", "still running")
         self.triggered_evaluations.append((experiment_id, trial_id, binding_id, evaluator_version))
         return self.evaluation_result
 
@@ -82,8 +91,46 @@ def test_run_checkpoint_grades_every_case_and_keeps_going_past_case_errors():
     assert [binding for _, _, binding, _ in client.triggered_evaluations] == ["quality", "tone", "quality"]
     assert client.upserts[0].metadata["execution_kind"] == "agent_run"
     assert client.upserts[0].planned_trial_count == 3
-    assert client.finalized[0][1] == "completed"
+    # Agent Observability won't complete a run with a failed binding evaluation, so it's finalized as failed.
+    assert client.finalized[0][1] == "failed"
+    assert client.finalize_errors == ["1 of 3 cases could not be fully graded"]
     assert run.experiment_id == client.upserts[0].experiment_id
+
+
+def test_run_checkpoint_completes_when_only_the_agent_fails():
+    client = BindingClient()
+
+    def target(prompt):
+        if prompt == "say b":
+            raise RuntimeError("provider overloaded")
+        return output("ok")
+
+    run_checkpoint("suite", "3", target, client=client, test_suites_client=control("a", "b"))
+    assert final_statuses(client) == {"a": "completed", "b": "failed"}
+    assert client.finalized[0][1] == "completed"
+
+
+def test_run_checkpoint_slow_judge_within_its_budget_does_not_end_the_run():
+    client = BindingClient(slow={("a", "quality")})
+    target = MagicMock(return_value=output("ok"))
+    run_checkpoint("suite", "3", target, client=client, test_suites_client=control("a", "b", bindings=BINDINGS[:1]))
+    assert target.call_count == 2
+    assert final_statuses(client) == {"a": "failed", "b": "completed"}
+    assert client.finalized[0][1] == "failed"
+
+
+def test_run_checkpoint_timeout_while_grading_the_last_case_fails_the_run(monkeypatch):
+    # start, the input check, the case start, then grading after the deadline
+    fake_clock(monkeypatch, 0.0, 0.0, 0.0, 11.0)
+    client = BindingClient()
+    target = MagicMock(return_value=output("ok"))
+    with pytest.raises(TimeoutError, match="1 of 1 cases"):
+        run_checkpoint(
+            "suite", "3", target, timeout=10, client=client, test_suites_client=control("a", bindings=BINDINGS[:1])
+        )
+    assert target.call_count == 1
+    assert final_statuses(client) == {"a": "failed"}
+    assert client.finalized[0][1] == "failed"
 
 
 @pytest.mark.parametrize(

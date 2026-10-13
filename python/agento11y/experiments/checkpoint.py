@@ -7,11 +7,12 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from ..errors import EvaluationTimeoutError
 from .client import Client
 from .evals import AgentOutput, _run_target, _validate_cases
 from .experiment import Experiment, experiment
 from .suites import TestSuitesClient
-from .types import Candidate
+from .types import Candidate, ExperimentStatus
 
 
 def run_checkpoint(
@@ -42,11 +43,15 @@ def run_checkpoint(
     so the conversation is stored before it's graded.
 
     A case whose target, telemetry flush or grading fails is recorded as
-    errored, and the run continues with the next case. ``timeout`` bounds the
-    whole run, including the grading-input checks and grading: when it runs
-    out, no further case or grading starts and a ``TimeoutError`` is raised
-    after the experiment is finalized as failed. It can't interrupt a target
-    call that is already running, so give your agent its own timeout.
+    errored, and the run continues with the next case. If any case could not
+    be fully graded, the experiment is finalized as failed, because Agent
+    Observability won't complete one with a failed or unfinished evaluation.
+
+    ``timeout`` bounds the whole run, including the grading-input checks and
+    grading: when it runs out, no further case or grading starts and a
+    ``TimeoutError`` is raised after the experiment is finalized as failed. It
+    can't interrupt a target call that is already running, so give your agent
+    its own timeout.
 
     Pass ``expected_bindings`` (for example, the bindings shown in Grafana when
     you copied the runner) to refuse a version whose bindings have changed.
@@ -87,8 +92,10 @@ def run_checkpoint(
         use_experimental_otel=use_experimental_otel,
         metadata={"framework": "grafana", "execution_kind": "agent_run", "input_selector": input_selector},
     ) as run:
+        ungraded = 0
+        timed_out = False
         for index, case in enumerate(suite.cases):
-            if time.monotonic() >= deadline:
+            if timed_out or time.monotonic() >= deadline:
                 raise TimeoutError(f"run timed out after {timeout:g}s with {index} of {len(suite.cases)} cases run")
             with run.trial(case) as trial:
                 answer = _run_target(
@@ -100,15 +107,30 @@ def run_checkpoint(
                 for binding in bindings:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
+                        timed_out = True
                         errors.append(f"{binding['binding_id']}: run timed out before grading")
                         continue
                     try:
                         trial.evaluate(binding_id=binding["binding_id"], timeout=min(evaluation_timeout, remaining))
+                    except EvaluationTimeoutError as error:
+                        # Only the run deadline, not a slow judge within evaluation_timeout, ends the run.
+                        timed_out = timed_out or remaining < evaluation_timeout
+                        errors.append(f"{binding['binding_id']}: {type(error).__name__}: {error}")
                     except Exception as error:
                         errors.append(f"{binding['binding_id']}: {type(error).__name__}: {error}")
                 if errors:
                     # Successful bindings keep their scores; the trial is not reported as fully graded.
+                    ungraded += 1
                     trial.mark_errored("grading: " + "; ".join(errors))
+        if timed_out:
+            raise TimeoutError(
+                f"run timed out after {timeout:g}s with {len(suite.cases)} of {len(suite.cases)} cases run"
+            )
+        if ungraded:
+            # Completing the experiment would be rejected while a binding evaluation is failed or unfinished.
+            run.finalize(
+                ExperimentStatus.FAILED, error=f"{ungraded} of {len(suite.cases)} cases could not be fully graded"
+            )
     return run
 
 

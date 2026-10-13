@@ -882,9 +882,10 @@ class Client:
     def flush(self) -> None:
         """Flushes queued generations and raises export failures since the last flush.
 
-        With native export, a rejected record or failed export raises
+        With native export, a rejected generation or failed export raises
         ``ExportFlushError`` (or the exporter's error). A generation the server
-        already stored, for example after a retry, is not a failure. A failure
+        already stored, for example after a retry, is not a failure; rejected
+        workflow steps are logged without failing the flush. A failure
         from a background flush is raised once by the next explicit flush as an
         ``ExportFlushError`` that says so, even though that batch already left
         the queue; a later successful flush does not restore lost records.
@@ -1210,9 +1211,11 @@ class Client:
                         )
                         for result in wf_response.results:
                             if not result.accepted:
-                                message = f"agento11y workflow step rejected id={result.step_id} error={result.error}"
-                                self._log_warn(message)
-                                first_error = first_error or ExportFlushError(message)
+                                # Logged only: grading doesn't read workflow steps, and the server reports
+                                # a retried step that already landed as an opaque internal error.
+                                self._log_warn(
+                                    f"agento11y workflow step rejected id={result.step_id} error={result.error}"
+                                )
                     except Exception as exc:  # noqa: BLE001
                         self._log_warn("agento11y workflow step export failed", exc)
                         first_error = first_error or exc

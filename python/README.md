@@ -1027,7 +1027,8 @@ Before calling your agent, it checks that the version is published, has
 exactly one primary verdict binding, and can resolve every case's grading
 inputs. Return `AgentOutput` with the flush of the client that instruments your
 agent, so each conversation is stored before it's graded. A case whose agent
-call or grading fails is recorded as errored and the run continues. `timeout`
+call or grading fails is recorded as errored and the run continues. If any
+case can't be fully graded, the run is finalized as failed. `timeout`
 (default one hour) stops new cases and grading from starting, but it can't
 interrupt an agent call that is already running, so give your agent its own
 timeout. It uses the same `AGENTO11Y_*` ingest and service-account credentials
