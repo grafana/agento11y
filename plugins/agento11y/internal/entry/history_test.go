@@ -903,6 +903,15 @@ func TestHistoryImportLoopbackEndpointSkipsSetup(t *testing.T) {
 	if exported != 1 {
 		t.Fatalf("exported %d turns to the configured endpoint, want 1", exported)
 	}
+	// The endpoint is the local daemon, so the import answers the viewer's
+	// offer although --local was not passed.
+	offer, err := history.ShouldOfferPrompt(history.AgentClaudeCode)
+	if err != nil {
+		t.Fatalf("ShouldOfferPrompt: %v", err)
+	}
+	if offer {
+		t.Error("an import into the daemon through AGENTO11Y_ENDPOINT left the viewer's import offer")
+	}
 }
 
 func TestHistoryLocalReceiverFailureNamesTheSetting(t *testing.T) {

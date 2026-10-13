@@ -109,8 +109,10 @@ func (t Target) destination() string {
 	return "cloud-" + hex.EncodeToString(sum[:8])
 }
 
-// Local reports whether the target writes to the local daemon's store: a
-// loopback endpoint, read as the exporter and the ledger read it.
+// Local reports whether the target's endpoint is a loopback address, read as
+// the exporter and the ledger read it. The exporter and the ledger treat any
+// loopback endpoint as the local daemon, so a local Sigil on loopback counts
+// as local too.
 func (t Target) Local() bool {
 	return envconfig.IsLocalEndpoint(t.endpoint())
 }
