@@ -101,13 +101,18 @@ const localDestination = "local"
 // other is Grafana Cloud, one destination per endpoint and tenant, hashed so a
 // ledger's file name holds neither.
 func (t Target) destination() string {
-	endpoint := t.endpoint()
-	if envconfig.IsLocalEndpoint(endpoint) {
+	if t.Local() {
 		return localDestination
 	}
 	tenant := strings.TrimSpace(envconfig.Getenv("AUTH_TENANT_ID"))
-	sum := sha256.Sum256([]byte(normalizedEndpoint(endpoint) + "\n" + tenant))
+	sum := sha256.Sum256([]byte(normalizedEndpoint(t.endpoint()) + "\n" + tenant))
 	return "cloud-" + hex.EncodeToString(sum[:8])
+}
+
+// Local reports whether the target writes to the local daemon's store: a
+// loopback endpoint, read as the exporter and the ledger read it.
+func (t Target) Local() bool {
+	return envconfig.IsLocalEndpoint(t.endpoint())
 }
 
 // normalizedEndpoint spells one endpoint one way, so a respelling does not

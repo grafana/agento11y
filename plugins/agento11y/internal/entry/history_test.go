@@ -1220,3 +1220,82 @@ func newCountingIngest(t *testing.T, exported *int) string {
 	t.Cleanup(srv.Close)
 	return srv.URL
 }
+
+// acceptingExporter takes every turn, so a test can run an import into Grafana
+// Cloud without a network.
+type acceptingExporter struct{ exported *int }
+
+func (e acceptingExporter) ExportHistoricalGeneration(context.Context, history.HistoricalGeneration) error {
+	*e.exported++
+	return nil
+}
+
+func (acceptingExporter) Flush(context.Context) error { return nil }
+
+// withStubCloudExporter replaces the export pipeline for an import into
+// Grafana Cloud, and fails the test if the import goes to the local store.
+func withStubCloudExporter(t *testing.T, exported *int) {
+	t.Helper()
+	prev := historyNewExporter
+	t.Cleanup(func() { historyNewExporter = prev })
+	historyNewExporter = func(_ context.Context, target history.Target, _ *log.Logger) (history.TurnExporter, func(context.Context) error, error) {
+		if target.Local() {
+			t.Error("the import went to the local store, want Grafana Cloud")
+		}
+		return acceptingExporter{exported: exported}, func(context.Context) error { return nil }, nil
+	}
+}
+
+// Regression: an import into Grafana Cloud answered the viewer's one-time
+// offer, so the banner stopped offering sessions the local store still lacked.
+func TestHistoryCloudImportLeavesTheViewerOffer(t *testing.T) {
+	for _, agent := range []string{"claude-code", "auto"} {
+		t.Run(agent, func(t *testing.T) {
+			withHistoryNow(t)
+			isolateDotenvHome(t)
+			writeClaudeHistory(t, "sess-recent", 24*time.Hour)
+			setHistoryCloudCredentials(t, "https://agento11y.example.com")
+			exported := 0
+			withStubCloudExporter(t, &exported)
+
+			_, stderr, code := runHistory(t, "history", "import", agent, "--all", "--yes")
+			if code != nil {
+				t.Fatalf("exit = %d (stderr=%q)", *code, stderr)
+			}
+			if exported != 1 {
+				t.Fatalf("exported %d turns to Grafana Cloud, want 1", exported)
+			}
+			offer, err := history.ShouldOfferPrompt(history.AgentClaudeCode)
+			if err != nil {
+				t.Fatalf("ShouldOfferPrompt: %v", err)
+			}
+			if !offer {
+				t.Error("an import into Grafana Cloud answered the viewer's import offer")
+			}
+		})
+	}
+}
+
+func TestHistoryLocalImportAnswersTheViewerOffer(t *testing.T) {
+	for _, agent := range []string{"claude-code", "auto"} {
+		t.Run(agent, func(t *testing.T) {
+			withHistoryNow(t)
+			isolateDotenvHome(t)
+			writeClaudeHistory(t, "sess-recent", 24*time.Hour)
+			exported := 0
+			withStubHistoryExporter(t, &exported)
+
+			_, stderr, code := runHistory(t, "history", "import", agent, "--local", "--all", "--yes")
+			if code != nil {
+				t.Fatalf("exit = %d (stderr=%q)", *code, stderr)
+			}
+			offer, err := history.ShouldOfferPrompt(history.AgentClaudeCode)
+			if err != nil {
+				t.Fatalf("ShouldOfferPrompt: %v", err)
+			}
+			if offer {
+				t.Error("a completed import into the local store left the viewer's import offer")
+			}
+		})
+	}
+}

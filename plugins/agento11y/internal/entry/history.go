@@ -106,6 +106,16 @@ var historyEnsureLocal = func(ctx context.Context) (string, error) {
 	return status.Endpoint, nil
 }
 
+// historyNewExporter builds the exporter for an import. It is a package var so
+// tests can run an import into Grafana Cloud without a network.
+var historyNewExporter = func(ctx context.Context, target history.Target, logger *log.Logger) (history.TurnExporter, func(context.Context) error, error) {
+	exporter, cleanup, err := history.NewTargetExporter(ctx, target, logger)
+	if err != nil {
+		return nil, nil, err
+	}
+	return exporter, cleanup, nil
+}
+
 // historySelect and historyConfirm are package vars so tests can drive the
 // interactive path without a TTY.
 var (
@@ -398,7 +408,7 @@ func historyImport(opts historyImportOptions, interactive bool, stdout, stderr i
 	if err != nil {
 		return err
 	}
-	exporter, cleanup, err := history.NewTargetExporter(ctx, target, logger)
+	exporter, cleanup, err := historyNewExporter(ctx, target, logger)
 	if err != nil {
 		return err
 	}
@@ -444,10 +454,13 @@ func historyImport(opts historyImportOptions, interactive bool, stdout, stderr i
 		// exit status. The ledger holds those failures for a rerun to retry.
 		return fmt.Errorf("%d turns failed to export; rerun to retry them", result.Failed)
 	}
-	// A completed import answers the viewer's one-time offer, whether it
-	// exported turns or found them all already imported.
-	if err := history.MarkPrompt(opts.Agent, history.PromptImported); err != nil {
-		logger.Printf("record import prompt state: %v", err)
+	// A completed import into the local store answers the viewer's one-time
+	// offer, whether it exported turns or found them all already imported.
+	// One into Grafana Cloud does not: the viewer still lacks those sessions.
+	if target.Local() {
+		if err := history.MarkPrompt(opts.Agent, history.PromptImported); err != nil {
+			logger.Printf("record import prompt state: %v", err)
+		}
 	}
 	return nil
 }
@@ -524,7 +537,7 @@ func historyImportAuto(opts historyImportOptions, interactive bool, stdout, stde
 	if err != nil {
 		return err
 	}
-	exporter, cleanup, err := history.NewTargetExporter(ctx, target, logger)
+	exporter, cleanup, err := historyNewExporter(ctx, target, logger)
 	if err != nil {
 		return err
 	}
@@ -561,9 +574,10 @@ func historyImportAuto(opts historyImportOptions, interactive bool, stdout, stde
 		for _, warning := range result.Warnings {
 			_, _ = fmt.Fprintf(stderr, "agento11y: warning: %s\n", warning)
 		}
-		// Match the single-agent path: a partial import leaves the viewer's
-		// one-time offer available so the user can retry the failed turns.
-		if result.Failed == 0 {
+		// Match the single-agent path: only a complete import into the local
+		// store answers the viewer's one-time offer, so a partial one leaves
+		// it for a retry and one into Grafana Cloud leaves it for the viewer.
+		if result.Failed == 0 && target.Local() {
 			if err := history.MarkPrompt(plan.Agent, history.PromptImported); err != nil {
 				logger.Printf("record import prompt state: %v", err)
 			}
