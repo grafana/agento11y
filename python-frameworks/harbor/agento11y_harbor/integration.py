@@ -32,6 +32,12 @@ logger = logging.getLogger("agento11y_harbor")
 
 ARTIFACT_MAX_BYTES = 10 * 1024 * 1024
 
+# The SDK refuses a generation over 4 MiB, so one large tool result would fail
+# the trial's whole trajectory import. Tool inputs share the agento11y plugin
+# mappers' bound; each prompt and response keeps its first 1 MiB.
+_TOOL_INPUT_MAX_BYTES = 4096
+_TEXT_MAX_BYTES = 1 << 20
+
 # Harbor still runs the verifier after these agent failures and counts its reward.
 _GRADED_AGENT_ERRORS = frozenset({"AgentTimeoutError", "NonZeroAgentExitCodeError"})
 
@@ -549,9 +555,9 @@ def _candidate_identity(result: Mapping[str, Any]) -> str:
 
 
 def _group_identity(result: Mapping[str, Any]) -> str:
-    # Harbor fills in the agent version only after agent setup, so the live
-    # plugin cannot see it when a trial starts. Leave it out so live and
-    # imported runs of the same job share experiment IDs.
+    # Harbor fills in the agent version only after agent setup, so a trial
+    # whose setup failed has none. Leave it out so every trial of a candidate,
+    # live or imported, shares one experiment ID.
     candidate = _candidate(result)
     return json.dumps(
         {
@@ -616,8 +622,11 @@ def _publish_trajectory(
             output = _content_text(step.get("message"))
             if step.get("reasoning_content"):
                 output += f"\n\nReasoning:\n{step['reasoning_content']}"
-            if step.get("tool_calls"):
-                output += "\n\nTool calls:\n" + json.dumps(step["tool_calls"], sort_keys=True, default=str)
+            if isinstance(step.get("tool_calls"), list):
+                output += "\n\nTool calls:\n" + "\n".join(
+                    _bound_text(json.dumps(call, sort_keys=True, default=str), _TOOL_INPUT_MAX_BYTES)
+                    for call in step["tool_calls"]
+                )
             if step.get("observation"):
                 output += "\n\nObservation:\n" + json.dumps(step["observation"], sort_keys=True, default=str)
             metrics = _mapping(step.get("metrics"))
@@ -638,8 +647,8 @@ def _publish_trajectory(
             client.record_generation(
                 generation_id,
                 conversation_id=conversation_id,
-                input_text="\n\n".join(pending),
-                output_text=output,
+                input_text=_bound_text("\n\n".join(pending), _TEXT_MAX_BYTES),
+                output_text=_bound_text(output, _TEXT_MAX_BYTES),
                 model_provider=provider,
                 model_name=str(step.get("model_name") or model_name),
                 agent_name=str(agent.get("name") or _mapping(result.get("agent_info")).get("name") or "harbor"),
@@ -797,6 +806,13 @@ def _model_identity(model_name: str, result: Mapping[str, Any]) -> tuple[str, st
         return provider, name
     model = _mapping(_mapping(result.get("agent_info")).get("model_info"))
     return str(model.get("provider") or ""), model_name or str(model.get("name") or "")
+
+
+def _bound_text(text: str, limit: int) -> str:
+    encoded = text.encode("utf-8")
+    if len(encoded) <= limit:
+        return text
+    return encoded[:limit].decode("utf-8", errors="ignore") + " [truncated]"
 
 
 def _content_text(value: Any) -> str:

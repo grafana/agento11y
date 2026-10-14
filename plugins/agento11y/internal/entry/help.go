@@ -47,6 +47,9 @@ func publicHelpPages() map[string]clihelp.Page {
 	add("skills get", "Print a bundled skill as raw Markdown. Alias for skills show.", "<name>")
 	add("claude eval", "Export Claude plugin eval results to Experiments.", "<command>")
 	add("claude eval import", "Export Claude plugin eval results. Use --dry-run to preview the redacted JSON without uploading.", "<results.json> [flags]")
+	add("harbor", "Run Harbor evaluations with live Agent Observability publishing.", "[run] -- <harbor run arguments>")
+	add("harbor run", "Run a Harbor job with the Agent Observability job plugin.", "-- <harbor run arguments>")
+	add("harbor export", "Export a completed Harbor job directory to Experiments.", "<job-directory> [flags]")
 	launcherNames := make([]string, 0, len(launchers))
 	for name := range launchers {
 		launcherNames = append(launcherNames, name)
@@ -76,7 +79,7 @@ func publicHelpPages() map[string]clihelp.Page {
 	}
 	children("", "Setup", "login", "doctor", "agents")
 	children("", "Launchers", launcherNames...)
-	children("", "Commands", "cursor", "guards", "local", "history", "skills", "help")
+	children("", "Commands", "cursor", "guards", "harbor", "local", "history", "skills", "help")
 	children("guards", "Commands", "test")
 	children("agents", "Commands", "reconcile")
 	children("cursor", "Commands", "install", "uninstall")
@@ -84,6 +87,7 @@ func publicHelpPages() map[string]clihelp.Page {
 	children("history", "Commands", "import")
 	children("skills", "Commands", "list", "show", "get")
 	children("claude eval", "Commands", "import")
+	children("harbor", "Commands", "run", "export")
 	for _, name := range []string{"claude", "copilot", "opencode", "pi", "kiro"} {
 		children(name, "Commands", "install")
 	}
@@ -245,10 +249,17 @@ func routeHelp(args []string, stdout, stderr io.Writer) bool {
 		return true
 	}
 	rest := args[consumed:]
-	group := path == "local" || path == "history" || path == "skills" || path == "agents" || path == "cursor" || path == "claude eval"
+	group := path == "local" || path == "history" || path == "skills" || path == "agents" || path == "cursor" || path == "claude eval" || path == "harbor"
 	if group && len(rest) == 0 {
 		printHelp(path, stdout)
 		return true
+	}
+	if path == "harbor" || strings.HasPrefix(path, "harbor ") {
+		if len(rest) == 1 && (rest[0] == "--help" || rest[0] == "-h") {
+			printHelp(path, stdout)
+			return true
+		}
+		return false
 	}
 	if _, launcher := launchers[path]; launcher {
 		_, err := parseLauncherOptions(path, rest)

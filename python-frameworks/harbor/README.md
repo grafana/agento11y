@@ -58,14 +58,18 @@ plugin options with `--plugin-kwarg`, for example
 `upload_artifacts` (default `true`).
 
 The plugin creates one experiment per agent, model, and dataset. Each trial
-appears when Harbor starts it. When the trial ends, the plugin attaches its
+appears when Harbor starts its agent, after the environment and agent setup,
+so the experiment records the agent version Harbor detects. A trial whose
+setup fails appears when it ends. When the trial ends, the plugin attaches its
 rewards, duration, tokens, cost, errors, and verifier artifacts. The main
 reward is the pass/fail verdict, and other rewards are diagnostics.
 
 If your agent publishes its own conversation, put its ID in
 `AgentContext.metadata["agento11y.conversation_id"]`, and the trial links to
 it. Otherwise, the plugin imports the trial's ATIF trajectory as a
-conversation. ATIF import creates generations, not traces.
+conversation. ATIF import creates generations, not traces. Each tool call's
+arguments keep their first 4 KiB, and each step's prompt and response keep
+their first 1 MiB, so one large tool result can't fail the import.
 
 ## Import a completed job
 
@@ -136,6 +140,13 @@ can't read and logs a warning. Each candidate is imported on its own, so one
 that fails to publish doesn't stop the others. The export command lists it and
 exits with status 1, and rerunning the command publishes only what's missing.
 
+If the plugin can't create an experiment, the candidate's next trial tries
+again. Once it exists, the experiment is finalized as failed, because it's
+missing the trials that started before then. If it never exists, the plugin logs
+how many trials it left out when the job ends. Either way, export the job
+directory to publish every trial, with a new `--experiment-id` if the
+experiment exists.
+
 If the Harbor process is interrupted, for example with Ctrl-C, the plugin marks
 trials without a result errored and finalizes the experiments as failed. To
 publish the finished trials, export the job directory with a new
@@ -145,8 +156,8 @@ Harbor retries a failed trial under the same trial name. The plugin keeps one
 trial per name and publishes only the final attempt, so a failure that passes
 on retry counts once, as a pass. The importer sees the same result, because
 Harbor deletes the files of superseded attempts. Separate attempts from
-`--n-attempts` are separate trials. Their attempt numbers follow start order
-live and trial-name order on import, so compare them by experiment, not by
+`--n-attempts` are separate trials. Their attempt numbers follow the order
+their agents start live and trial-name order on import, so compare them by experiment, not by
 attempt number.
 
 ## Run trials from Python

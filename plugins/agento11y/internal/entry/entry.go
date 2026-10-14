@@ -12,6 +12,8 @@
 //	agento11y vibe     [--local|--no-local] [--tag k=v] [-- args...]  — exec vibe after installing the sigil hook in vibe's hooks.toml
 //	agento11y cursor   install|uninstall                              — wire (or remove) the Cursor hook in ~/.cursor/hooks.json
 //	agento11y claude   install [--json]                               — register the Claude Code plugin without launching or prompting
+//	agento11y harbor   [run] -- <harbor run arguments>                — run Harbor with live experiment publishing
+//	agento11y harbor   export <job-directory> [flags]                 — publish a completed Harbor job
 //	agento11y agents   reconcile --agents all|name[,name...] --json   — reconcile registered noninteractive installers
 //	agento11y local start|open|status [--json]|stop|restart           — manage the local capture daemon
 //	agento11y history import <agent> [flags]                          — backfill an agent's existing local sessions
@@ -56,6 +58,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/copilot"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor"
 	cursorinstall "github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/install"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/harbor"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/kiro"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/opencode"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/pi"
@@ -274,6 +277,28 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 	// dispatch, so an agent named `skills` cannot shadow it.
 	if args[0] == skills.Command {
 		runSkillsCommand(args[1:], stdout, stderr)
+		return
+	}
+
+	if args[0] == "harbor" {
+		dotenv.ApplyEnv(nil)
+		if !dotenv.HasCredentials() {
+			_, err := loginRun(context.Background(), login.RunOpts{
+				Stderr:     stderr,
+				Logger:     cli.InitLogger("harbor"),
+				OfferLocal: false,
+			})
+			if err != nil && !errors.Is(err, login.ErrNotInteractive) {
+				_, _ = fmt.Fprintf(stderr, "agento11y: setup failed: %v\n", err)
+				exit(1)
+				return
+			}
+			dotenv.ApplyEnv(nil)
+		}
+		if err := harbor.Run(args[1:], stderr); err != nil {
+			_, _ = fmt.Fprintf(stderr, "agento11y: %v\n", err)
+			exit(1)
+		}
 		return
 	}
 

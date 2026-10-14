@@ -350,6 +350,7 @@ def test_job_plugin_publishes_live_trial(tmp_path, monkeypatch, mode):
         id="job-1",
         config=SimpleNamespace(job_name="terminal-bench"),
         on_trial_started=lambda callback: callbacks.setdefault("start", callback),
+        on_agent_started=lambda callback: callbacks.setdefault("agent_start", callback),
         on_trial_ended=lambda callback: callbacks.setdefault("end", callback),
     )
     result = {
@@ -395,6 +396,7 @@ def test_job_plugin_publishes_live_trial(tmp_path, monkeypatch, mode):
 
     asyncio.run(plugin.on_job_start(job))
     asyncio.run(callbacks["start"](event))
+    asyncio.run(callbacks["agent_start"](event))
     event.event.value = "end"
     if mode != "interrupted":
         # A failed export must not raise out of the hook: that would cancel sibling trials.

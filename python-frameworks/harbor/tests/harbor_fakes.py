@@ -183,10 +183,15 @@ class FakeJob:
             ),
         )
         self.started: list[Any] = []
+        self.agent_started: list[Any] = []
         self.ended: list[Any] = []
 
     def on_trial_started(self, callback):
         self.started.append(callback)
+        return self
+
+    def on_agent_started(self, callback):
+        self.agent_started.append(callback)
         return self
 
     def on_trial_ended(self, callback):
@@ -195,6 +200,10 @@ class FakeJob:
 
     async def start(self, event) -> None:
         for callback in self.started:
+            await callback(event)
+
+    async def agent_start(self, event) -> None:
+        for callback in self.agent_started:
             await callback(event)
 
     async def end(self, event) -> None:

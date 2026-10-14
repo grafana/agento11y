@@ -104,6 +104,29 @@ See the [example and CI workflow](../../examples/experiments/claude-plugin-evals
 for build instructions, scoring details, and verification with `gcx`. This is a
 new command in this checkout, not a promise about older installed releases.
 
+## Harbor evaluations
+
+Install `agento11y-harbor` in the same Python environment as Harbor, and set
+your Grafana Cloud credentials as described in the
+[Harbor integration guide](../../python-frameworks/harbor/README.md#configure-grafana-cloud).
+`agento11y harbor` also uses the credentials that `agento11y login` saved.
+
+Run a normal Harbor evaluation and publish it while it runs:
+
+```sh
+agento11y harbor -- --dataset terminal-bench@2.0 --agent codex --model openai/gpt-5
+```
+
+Publish a job that already finished:
+
+```sh
+agento11y harbor export jobs/<job-name>
+```
+
+The live command adds Harbor's `agento11y` job plugin and passes every other
+argument to `harbor run`. The [Harbor integration guide](../../python-frameworks/harbor/README.md)
+covers export flags, experiment IDs, errors, retries, and the Python APIs.
+
 ## Skills
 
 The binary carries agent skills: markdown workflows a coding agent reads and follows. They ship inside the binary, so there is nothing to fetch and no second CLI to install. Upgrading `agento11y` upgrades them.

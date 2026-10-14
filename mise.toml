@@ -436,6 +436,10 @@ run = "uv run --python \"$PYTHON_BIN\" --with './python[dev]' --with './python-f
 description = "Run Python DeepEval experiment adapter tests"
 run = "uv run --python \"$PYTHON_BIN\" --with-editable './python[dev]' --with-editable './python-frameworks/deepeval[dev]' pytest python-frameworks/deepeval/tests"
 
+[tasks."test:py:sdk-harbor"]
+description = "Run Python Harbor experiment importer tests"
+run = "uv run --python \"$PYTHON_BIN\" --with-editable './python[dev]' --with-editable './python-frameworks/harbor[dev]' pytest python-frameworks/harbor/tests"
+
 [tasks."test:py:sdk-provider-conformance"]
 description = "Run Python provider-wrapper conformance tests"
 run = """
@@ -460,6 +464,7 @@ mise run test:py:sdk-strands
 mise run test:py:sdk-claude-agent-sdk
 mise run test:py:sdk-litellm
 mise run test:py:sdk-deepeval
+mise run test:py:sdk-harbor
 """
 
 # --- .NET SDK tests ---
@@ -755,6 +760,7 @@ PACKAGE_DIRS=(
   python-frameworks/litellm
   python-frameworks/pydantic-ai
   python-frameworks/deepeval
+  python-frameworks/harbor
   python-frameworks/strands
   python-frameworks/claude-agent-sdk
   plugins/hermes

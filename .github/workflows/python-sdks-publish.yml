@@ -30,6 +30,7 @@ on:
           - agento11y-litellm
           - agento11y-pydantic-ai
           - agento11y-deepeval
+          - agento11y-harbor
           - agento11y-strands
           - agento11y-claude-agent-sdk
           - agento11y-hermes
@@ -107,6 +108,7 @@ jobs:
             python-frameworks/litellm
             python-frameworks/pydantic-ai
             python-frameworks/deepeval
+            python-frameworks/harbor
             python-frameworks/strands
             python-frameworks/claude-agent-sdk
             plugins/hermes
@@ -229,6 +231,7 @@ jobs:
             python-frameworks/litellm
             python-frameworks/pydantic-ai
             python-frameworks/deepeval
+            python-frameworks/harbor
             python-frameworks/strands
             python-frameworks/claude-agent-sdk
           )

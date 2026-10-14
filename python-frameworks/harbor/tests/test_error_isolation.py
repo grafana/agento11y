@@ -234,3 +234,39 @@ def test_one_failing_candidate_does_not_stop_the_others_and_a_rerun_fills_the_ga
     assert len(rerun.runs) == 1 and rerun.runs[0].experiment_id != done
     assert len(rerun.skipped) == 1 and done in rerun.skipped[0]
     assert rerun.failed == []
+
+
+def test_oversized_tool_payloads_are_bounded_so_the_trajectory_still_imports(tmp_path):
+    job = tmp_path / "job"
+    write_job(job, {"fix-bug__x": harbor_result()})
+    (job / "fix-bug__x" / "agent" / "trajectory.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "ATIF-v1.8",
+                "session_id": "session-big",
+                "agent": {"name": "terminus-2", "model_name": "anthropic/claude-haiku-4-5-20251001"},
+                "steps": [
+                    {"step_id": 1, "source": "user", "message": "Read the log"},
+                    {
+                        "step_id": 2,
+                        "source": "agent",
+                        "message": "Reading it",
+                        "tool_calls": [{"function_name": "cat", "arguments": {"path": "é" * 10_000}}],
+                        # One file read larger than the SDK's 4 MiB generation limit.
+                        "observation": {"results": [{"content": "x" * (3 << 20)}]},
+                    },
+                ],
+            }
+        )
+    )
+    client = FakeClient()
+
+    publish_harbor_job(job, client=client, upload_artifacts=False)
+
+    output = client.generations[0]["output_text"]
+    assert len(output.encode()) <= (1 << 20) + len(" [truncated]")
+    assert output.endswith(" [truncated]")
+    tool_calls = output.split("Tool calls:\n", 1)[1].split("\n\nObservation:", 1)[0]
+    assert len(tool_calls.encode()) <= 4096 + len(" [truncated]")
+    assert [update["status"] for update in client.trial_updates] == ["completed"]
+    assert client.finalized[0][1] == "completed"

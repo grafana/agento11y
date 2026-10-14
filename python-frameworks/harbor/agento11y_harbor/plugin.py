@@ -57,7 +57,9 @@ class Agento11yPlugin:
 
     Hooks never raise: an exception inside a Harbor hook cancels every sibling
     trial in the job. Publishing failures mark the affected trial errored, log
-    a warning, and finalize the experiment as failed. If the process exits
+    a warning, and finalize the experiment as failed. If an experiment can't
+    be opened, the next trial of that candidate tries again, and the trials
+    left out are reported when the job ends. If the process exits
     before Harbor ends the job (for example, on Ctrl-C), open trials are marked
     errored and the experiments are finalized as failed.
     """
@@ -84,6 +86,10 @@ class Agento11yPlugin:
         self._experiments: dict[str, _LiveExperiment] = {}
         # Keyed by Harbor trial name, which every retry of one attempt reuses.
         self._trials: dict[str, _LiveTrial] = {}
+        # Trials Harbor started whose agent hasn't started yet, by trial name.
+        self._started: dict[str, Any] = {}
+        # Trial names not published because their experiment could not be opened, by group identity.
+        self._unpublished: dict[str, set[str]] = defaultdict(set)
         self._attempts: dict[tuple[str, str], int] = defaultdict(int)
         # One worker keeps publishing in hook order without occupying the default
         # executor, which Harbor uses for its own blocking work.
@@ -92,6 +98,7 @@ class Agento11yPlugin:
     async def on_job_start(self, job: Any) -> None:
         self._job = job
         job.on_trial_started(self._on_trial_started)
+        job.on_agent_started(self._on_agent_started)
         job.on_trial_ended(self._on_trial_ended)
         atexit.register(self._finish_at_exit)
 
@@ -117,6 +124,9 @@ class Agento11yPlugin:
     async def _on_trial_started(self, event: Any) -> None:
         await self._run(self._start_trial, event)
 
+    async def _on_agent_started(self, event: Any) -> None:
+        await self._run(self._agent_started, event)
+
     async def _on_trial_ended(self, event: Any) -> None:
         await self._run(self._end_trial, event)
 
@@ -140,11 +150,24 @@ class Agento11yPlugin:
             open_trial.retries += 1
             open_trial.pending = None
             return
+        # Harbor fills in the agent version only after agent setup, and an
+        # experiment's candidate can't change once it exists. So the trial (and
+        # its experiment) opens when the agent starts, or at END if setup failed.
+        self._started[key] = event
+
+    def _agent_started(self, event: Any) -> None:
+        key = _trial_key(event)
+        # Each step of a multi-step task starts the agent again.
+        if key not in self._trials:
+            self._open_trial(key, event)
+
+    def _open_trial(self, key: str, event: Any) -> _LiveTrial | None:
+        self._started.pop(key, None)
         result = event.result.model_dump(mode="json")
-        live = self._live_experiment(result)
+        live = self._live_experiment(result, key)
         if live.unavailable:
             logger.warning("agento11y: Harbor trial %s is not published: %s", key, live.unavailable)
-            return
+            return None
         case = _test_case(result, live.suite.suite_id)
         attempt_key = (live.experiment.experiment_id, case.test_case_id)
         self._attempts[attempt_key] += 1
@@ -161,15 +184,17 @@ class Agento11yPlugin:
                 )
                 logger.warning("agento11y: %s", live.unavailable)
                 _close_quietly(trial)
-                return
+                return None
             _close_failed_trial(trial, error)
             live.errors.append(_trial_error(trial))
-            return
-        self._trials[key] = _LiveTrial(trial, live)
+            return None
+        open_trial = _LiveTrial(trial, live)
+        self._trials[key] = open_trial
+        return open_trial
 
     def _end_trial(self, event: Any) -> None:
         key = _trial_key(event)
-        open_trial = self._trials.get(key)
+        open_trial = self._trials.get(key) or self._open_trial(key, event)
         if open_trial is None:
             return
         if self._may_retry(event.result.model_dump(mode="json"), open_trial.retries):
@@ -221,7 +246,7 @@ class Agento11yPlugin:
         if trial.status == TrialStatus.ERRORED.value:
             live.errors.append(_trial_error(trial))
 
-    def _live_experiment(self, result: dict[str, Any]) -> _LiveExperiment:
+    def _live_experiment(self, result: dict[str, Any], trial_key: str) -> _LiveExperiment:
         identity = _group_identity(result)
         existing = self._experiments.get(identity)
         if existing is not None:
@@ -252,15 +277,28 @@ class Agento11yPlugin:
             )
             opened = context.__enter__()
         except Exception as error:
-            live = _LiveExperiment(None, None, suite, unavailable=f"cannot open experiment {run_id!r}: {error}")
-            logger.warning("agento11y: %s", live.unavailable)
-        else:
-            live = _LiveExperiment(context, opened, suite)
-            print(f"Agent Observability experiment: {opened.url}", flush=True)
+            # Not cached: the next trial of this candidate tries to open it again.
+            self._unpublished[identity].add(trial_key)
+            return _LiveExperiment(None, None, suite, unavailable=f"cannot open experiment {run_id!r}: {error}")
+        live = _LiveExperiment(context, opened, suite)
+        print(f"Agent Observability experiment: {opened.url}", flush=True)
+        # A trial that couldn't open its experiment at agent start is retried at END.
+        skipped = self._unpublished.pop(identity, set()) - {trial_key}
+        if skipped:
+            live.errors.append(
+                f"{len(skipped)} Harbor trial(s) were not published because the experiment could not be opened; "
+                "export the job directory with a new --experiment-id to publish every trial"
+            )
         self._experiments[identity] = live
         return live
 
     def _finish(self) -> None:
+        # Trials whose agent never started are reported as errored below.
+        for key, event in list(self._started.items()):
+            try:
+                self._open_trial(key, event)
+            except Exception:
+                logger.warning("agento11y: could not record a Harbor trial", exc_info=True)
         for open_trial in list(self._trials.values()):
             try:
                 if open_trial.pending is not None:
@@ -284,6 +322,14 @@ class Agento11yPlugin:
                     exc_info=not live.unavailable,
                 )
         self._experiments.clear()
+        for skipped in self._unpublished.values():
+            logger.warning(
+                "agento11y: %d Harbor trial(s) were not published because their experiment could not be opened; "
+                "publish them with `agento11y harbor export %s`",
+                len(skipped),
+                getattr(self._job, "job_dir", "<job-dir>"),
+            )
+        self._unpublished.clear()
 
 
 def _trial_key(event: Any) -> str:

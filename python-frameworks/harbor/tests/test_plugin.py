@@ -25,6 +25,7 @@ def _plugin(**kwargs) -> plugin_module.Agento11yPlugin:
 
 async def _run_trial(job: FakeJob, event) -> None:
     await job.start(event)
+    await job.agent_start(event)
     await job.end(event)
 
 
@@ -144,6 +145,7 @@ def test_concurrent_trials_publish_independently(tmp_path, client):
             _event(tmp_path, f"{task}__x", harbor_result(task, reward=index % 2)) for index, task in enumerate(tasks)
         ]
         await asyncio.gather(*(job.start(event) for event in events))
+        await asyncio.gather(*(job.agent_start(event) for event in events))
         await asyncio.gather(*(job.end(event) for event in reversed(events)))
         await plugin.on_job_end(None)
 
@@ -187,8 +189,10 @@ def test_one_bad_case_among_good_ones_does_not_stop_the_job(tmp_path, client):
         nonlocal bad_case
         await plugin.on_job_start(job)
         await job.start(bad)
+        await job.agent_start(bad)
         bad_case = client.trials[-1]["test_case_id"]
         await asyncio.gather(*(job.start(event) for event in good))
+        await asyncio.gather(*(job.agent_start(event) for event in good))
         await asyncio.gather(job.end(bad), *(job.end(event) for event in good))
         await plugin.on_job_end(None)
 
@@ -223,8 +227,9 @@ def test_trial_start_network_error_marks_only_that_trial_errored(tmp_path, clien
     assert "connection reset" in client.finalize_errors[client.finalized[0][0]]
 
 
-def test_experiment_open_failure_skips_its_trials_without_raising(tmp_path, client):
+def test_experiment_open_failure_skips_its_trials_without_raising(tmp_path, client, caplog):
     job = FakeJob()
+    job.job_dir = tmp_path / "jobs" / "job-1"
     plugin = _plugin()
     client.fail["upsert_experiment"] = lambda **_: ConnectionError("network down")
 
@@ -236,6 +241,86 @@ def test_experiment_open_failure_skips_its_trials_without_raising(tmp_path, clie
     asyncio.run(scenario())
     assert client.trials == []
     assert client.finalized == []
+    assert "1 Harbor trial(s) were not published" in caplog.text
+    assert f"agento11y harbor export {job.job_dir}" in caplog.text
+
+
+def test_experiment_open_failure_is_retried_by_the_next_trial(tmp_path, client):
+    job = FakeJob()
+    plugin = _plugin()
+    # Down for trial a's open attempts at agent start and at its end.
+    outage = [ConnectionError("network down")] * 2
+    client.fail["upsert_experiment"] = lambda **_: outage.pop() if outage else None
+
+    async def scenario():
+        await plugin.on_job_start(job)
+        await _run_trial(job, _event(tmp_path, "a__x", harbor_result("a")))
+        await _run_trial(job, _event(tmp_path, "b__x", harbor_result("b")))
+        await plugin.on_job_end(None)
+
+    asyncio.run(scenario())
+    assert [trial["test_case"]["name"] for trial in client.trials] == ["b"]
+    assert [update["status"] for update in client.trial_updates] == ["completed"]
+    # The experiment is missing a trial, so it can't be reported as complete.
+    assert client.finalized[0][1] == "failed"
+    assert "1 Harbor trial(s) were not published" in client.finalize_errors[client.finalized[0][0]]
+
+
+def test_experiment_records_the_agent_version_harbor_reports_after_setup(tmp_path, client):
+    job = FakeJob()
+    plugin = _plugin()
+    result = harbor_result(agent_version=None)
+    event = _event(tmp_path, "fix-bug__x", result)
+
+    async def scenario():
+        await plugin.on_job_start(job)
+        await job.start(event)
+        assert client.experiments == []
+        # Harbor sets agent_info after agent setup, before the agent starts.
+        result["agent_info"]["version"] = "2.0.1"
+        await job.agent_start(event)
+        await job.end(event)
+        await plugin.on_job_end(None)
+
+    asyncio.run(scenario())
+    assert client.experiments[0].candidate["agent_version"] == "2.0.1"
+    assert client.finalized[0][1] == "completed"
+
+
+def test_trial_whose_setup_failed_is_published_at_its_end(tmp_path, client):
+    job = FakeJob()
+    plugin = _plugin()
+    event = _event(tmp_path, "fix-bug__x", harbor_result(error="docker build failed", reward=None))
+
+    async def scenario():
+        await plugin.on_job_start(job)
+        # Setup failed, so Harbor never started the agent.
+        await job.start(event)
+        await job.end(event)
+        await plugin.on_job_end(None)
+
+    asyncio.run(scenario())
+    assert [update["status"] for update in client.trial_updates] == ["failed"]
+    assert "docker build failed" in client.trial_updates[0]["error"]
+    assert client.finalized[0][1] == "failed"
+
+
+def test_each_step_of_a_multi_step_task_reuses_one_trial(tmp_path, client):
+    job = FakeJob()
+    plugin = _plugin()
+    event = _event(tmp_path, "fix-bug__x", harbor_result())
+
+    async def scenario():
+        await plugin.on_job_start(job)
+        await job.start(event)
+        for _ in range(3):
+            await job.agent_start(event)
+        await job.end(event)
+        await plugin.on_job_end(None)
+
+    asyncio.run(scenario())
+    assert [trial["attempt"] for trial in client.trials] == [1]
+    assert [update["status"] for update in client.trial_updates] == ["completed"]
 
 
 def test_finish_closes_every_experiment_when_one_finalize_fails(tmp_path, client):
@@ -317,6 +402,7 @@ def test_live_experiment_id_matches_import_when_agent_version_arrives_late(tmp_p
         await plugin.on_job_start(job)
         await job.start(event)
         start.update(final)
+        await job.agent_start(event)
         await job.end(event)
         await plugin.on_job_end(None)
 
@@ -326,6 +412,7 @@ def test_live_experiment_id_matches_import_when_agent_version_arrives_late(tmp_p
     publish_harbor_job(jobs_dir, client=imported, upload_artifacts=False)
 
     assert imported.experiments[0].experiment_id == client.experiments[0].experiment_id
+    assert imported.experiments[0].candidate == client.experiments[0].candidate
     assert imported.experiments[0].name == client.experiments[0].name.replace("terminal-bench", "job-1")
     assert imported.scores[0].evaluator_version == client.scores[0].evaluator_version == "sha-fix-bug"
 
