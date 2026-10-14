@@ -41,6 +41,9 @@ class _LiveExperiment:
     errors: list[str] = field(default_factory=list)
     # Set when the experiment cannot accept trials; its trials are skipped.
     unavailable: str = ""
+    # Trial names that started before the experiment could be opened and
+    # haven't been published since.
+    skipped: set[str] = field(default_factory=set)
 
 
 @dataclass(slots=True)
@@ -168,6 +171,8 @@ class Agento11yPlugin:
         if live.unavailable:
             logger.warning("agento11y: Harbor trial %s is not published: %s", key, live.unavailable)
             return None
+        # A trial that couldn't open its experiment at agent start is retried at END.
+        live.skipped.discard(key)
         case = _test_case(result, live.suite.suite_id)
         attempt_key = (live.experiment.experiment_id, case.test_case_id)
         self._attempts[attempt_key] += 1
@@ -280,15 +285,8 @@ class Agento11yPlugin:
             # Not cached: the next trial of this candidate tries to open it again.
             self._unpublished[identity].add(trial_key)
             return _LiveExperiment(None, None, suite, unavailable=f"cannot open experiment {run_id!r}: {error}")
-        live = _LiveExperiment(context, opened, suite)
+        live = _LiveExperiment(context, opened, suite, skipped=self._unpublished.pop(identity, set()))
         print(f"Agent Observability experiment: {opened.url}", flush=True)
-        # A trial that couldn't open its experiment at agent start is retried at END.
-        skipped = self._unpublished.pop(identity, set()) - {trial_key}
-        if skipped:
-            live.errors.append(
-                f"{len(skipped)} Harbor trial(s) were not published because the experiment could not be opened; "
-                "export the job directory with a new --experiment-id to publish every trial"
-            )
         self._experiments[identity] = live
         return live
 
@@ -312,6 +310,11 @@ class Agento11yPlugin:
         for live in self._experiments.values():
             if live.context is None:
                 continue
+            if live.skipped:
+                live.errors.append(
+                    f"{len(live.skipped)} Harbor trial(s) were not published because the experiment could not be "
+                    "opened; export the job directory with a new --experiment-id to publish every trial"
+                )
             error = RuntimeError(_run_error(live.errors)) if live.errors else None
             try:
                 live.context.__exit__(type(error) if error else None, error, None)

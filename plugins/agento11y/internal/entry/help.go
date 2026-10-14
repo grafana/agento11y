@@ -201,6 +201,11 @@ func usageError(stderr io.Writer, path, message string) {
 	clihelp.UsageError(stderr, page, message)
 }
 
+// helpGroups are command groups that print their help when run without a subcommand.
+var helpGroups = map[string]bool{
+	"local": true, "history": true, "skills": true, "agents": true, "cursor": true, "claude eval": true, "harbor": true,
+}
+
 func routeHelp(args []string, stdout, stderr io.Writer) bool {
 	if len(args) == 0 {
 		printHelp("", stdout)
@@ -249,17 +254,12 @@ func routeHelp(args []string, stdout, stderr io.Writer) bool {
 		return true
 	}
 	rest := args[consumed:]
-	group := path == "local" || path == "history" || path == "skills" || path == "agents" || path == "cursor" || path == "claude eval" || path == "harbor"
-	if group && len(rest) == 0 {
+	if helpGroups[path] && len(rest) == 0 {
 		printHelp(path, stdout)
 		return true
 	}
-	if path == "harbor" || strings.HasPrefix(path, "harbor ") {
-		if len(rest) == 1 && (rest[0] == "--help" || rest[0] == "-h") {
-			printHelp(path, stdout)
-			return true
-		}
-		return false
+	if strings.HasPrefix(path+" ", "harbor ") {
+		return routeHarborHelp(path, rest, stdout)
 	}
 	if _, launcher := launchers[path]; launcher {
 		_, err := parseLauncherOptions(path, rest)
@@ -284,7 +284,7 @@ func routeHelp(args []string, stdout, stderr io.Writer) bool {
 	if err != nil {
 		return parsedHelp(path, err, stdout, stderr)
 	}
-	if group && fs.NArg() > 0 {
+	if helpGroups[path] && fs.NArg() > 0 {
 		usageError(stderr, path, fmt.Sprintf("unknown %s verb %q", path, fs.Arg(0)))
 		exit(2)
 		return true

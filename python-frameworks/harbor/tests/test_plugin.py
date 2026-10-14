@@ -266,6 +266,30 @@ def test_experiment_open_failure_is_retried_by_the_next_trial(tmp_path, client):
     assert "1 Harbor trial(s) were not published" in client.finalize_errors[client.finalized[0][0]]
 
 
+def test_skipped_trial_published_at_its_end_does_not_fail_the_experiment(tmp_path, client):
+    job = FakeJob()
+    plugin = _plugin()
+    outage = [ConnectionError("network down")]
+    client.fail["upsert_experiment"] = lambda **_: outage.pop() if outage else None
+    a = _event(tmp_path, "a__x", harbor_result("a"))
+    b = _event(tmp_path, "b__x", harbor_result("b"))
+
+    async def scenario():
+        await plugin.on_job_start(job)
+        await job.start(a)
+        await job.agent_start(a)  # the experiment can't be opened yet
+        await job.start(b)
+        await job.agent_start(b)  # opens it
+        await job.end(a)  # a is published after all
+        await job.end(b)
+        await plugin.on_job_end(None)
+
+    asyncio.run(scenario())
+    assert sorted(trial["test_case"]["name"] for trial in client.trials) == ["a", "b"]
+    assert client.finalized[0][1] == "completed"
+    assert client.finalize_errors[client.finalized[0][0]] == ""
+
+
 def test_experiment_records_the_agent_version_harbor_reports_after_setup(tmp_path, client):
     job = FakeJob()
     plugin = _plugin()

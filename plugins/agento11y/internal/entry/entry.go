@@ -58,7 +58,6 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/copilot"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor"
 	cursorinstall "github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/install"
-	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/harbor"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/kiro"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/opencode"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/pi"
@@ -281,24 +280,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 	}
 
 	if args[0] == "harbor" {
-		dotenv.ApplyEnv(nil)
-		if !dotenv.HasCredentials() {
-			_, err := loginRun(context.Background(), login.RunOpts{
-				Stderr:     stderr,
-				Logger:     cli.InitLogger("harbor"),
-				OfferLocal: false,
-			})
-			if err != nil && !errors.Is(err, login.ErrNotInteractive) {
-				_, _ = fmt.Fprintf(stderr, "agento11y: setup failed: %v\n", err)
-				exit(1)
-				return
-			}
-			dotenv.ApplyEnv(nil)
-		}
-		if err := harbor.Run(args[1:], stderr); err != nil {
-			_, _ = fmt.Fprintf(stderr, "agento11y: %v\n", err)
-			exit(1)
-		}
+		runHarborCommand(args[1:], stderr)
 		return
 	}
 
