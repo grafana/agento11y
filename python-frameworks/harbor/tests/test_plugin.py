@@ -290,6 +290,36 @@ def test_skipped_trial_published_at_its_end_does_not_fail_the_experiment(tmp_pat
     assert client.finalize_errors[client.finalized[0][0]] == ""
 
 
+def test_skipped_trial_that_then_fails_to_open_still_fails_the_experiment(tmp_path, client, monkeypatch):
+    job = FakeJob()
+    plugin = _plugin()
+    outage = [ConnectionError("network down")]
+    client.fail["upsert_experiment"] = lambda **_: outage.pop() if outage else None
+    real_test_case = plugin_module._test_case
+
+    def test_case(result, suite_id):
+        if result["task_name"] == "a":
+            raise ValueError("bad task id")
+        return real_test_case(result, suite_id)
+
+    monkeypatch.setattr(plugin_module, "_test_case", test_case)
+    a = _event(tmp_path, "a__x", harbor_result("a"))
+    b = _event(tmp_path, "b__x", harbor_result("b"))
+
+    async def scenario():
+        await plugin.on_job_start(job)
+        await job.start(a)
+        await job.agent_start(a)  # the experiment can't be opened yet
+        await _run_trial(job, b)  # opens it
+        await job.end(a)  # a's trial can't be created either
+        await plugin.on_job_end(None)
+
+    asyncio.run(scenario())
+    assert [trial["test_case"]["name"] for trial in client.trials] == ["b"]
+    assert client.finalized[0][1] == "failed"
+    assert "bad task id" in client.finalize_errors[client.finalized[0][0]]
+
+
 def test_experiment_records_the_agent_version_harbor_reports_after_setup(tmp_path, client):
     job = FakeJob()
     plugin = _plugin()

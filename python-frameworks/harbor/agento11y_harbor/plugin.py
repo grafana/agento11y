@@ -171,12 +171,15 @@ class Agento11yPlugin:
         if live.unavailable:
             logger.warning("agento11y: Harbor trial %s is not published: %s", key, live.unavailable)
             return None
-        # A trial that couldn't open its experiment at agent start is retried at END.
-        live.skipped.discard(key)
-        case = _test_case(result, live.suite.suite_id)
-        attempt_key = (live.experiment.experiment_id, case.test_case_id)
-        self._attempts[attempt_key] += 1
-        trial = live.experiment.trial(case, attempt=self._attempts[attempt_key])
+        try:
+            case = _test_case(result, live.suite.suite_id)
+            attempt_key = (live.experiment.experiment_id, case.test_case_id)
+            self._attempts[attempt_key] += 1
+            trial = live.experiment.trial(case, attempt=self._attempts[attempt_key])
+        except Exception as error:
+            live.skipped.discard(key)
+            live.errors.append(f"{key}: {type(error).__name__}: {error}")
+            return None
         try:
             # START and END run in different worker threads, so the trial opens
             # without OTel context (see _live_experiment) and closes explicitly.
@@ -190,9 +193,13 @@ class Agento11yPlugin:
                 logger.warning("agento11y: %s", live.unavailable)
                 _close_quietly(trial)
                 return None
+            live.skipped.discard(key)
             _close_failed_trial(trial, error)
             live.errors.append(_trial_error(trial))
             return None
+        # A trial that couldn't open its experiment at agent start is retried at END,
+        # so it only stops counting as skipped once it's published or recorded as errored.
+        live.skipped.discard(key)
         open_trial = _LiveTrial(trial, live)
         self._trials[key] = open_trial
         return open_trial
