@@ -18,6 +18,13 @@ import { asError, baseURLFromAPIEndpoint } from './utils.js';
 const hooksEvaluatePath = '/api/v1/hooks:evaluate';
 const hookTimeoutHeader = 'X-Agento11y-Hook-Timeout-Ms';
 
+export class HookTransformError extends Error {
+  constructor() {
+    super('agento11y hook transform is invalid or empty');
+    this.name = 'HookTransformError';
+  }
+}
+
 /**
  * Thrown by framework adapters when hook evaluation returns `action: 'deny'`.
  *
@@ -118,8 +125,11 @@ export async function evaluateHook(params: {
       );
     }
 
-    return parseEvaluateResponse(payload);
+    return parseEvaluateResponse(payload, params.hooks.strictTransforms === true);
   } catch (error) {
+    if (params.hooks.strictTransforms === true && error instanceof HookTransformError) {
+      throw error;
+    }
     return failOpenOrThrow(params.hooks.failOpen, hookTransportError(error), params.logger);
   } finally {
     clearTimeout(timer);
@@ -354,7 +364,7 @@ function base64FromUtf8(text: string): string {
   throw new Error('agento11y hook evaluation failed: no base64 encoder available');
 }
 
-function parseEvaluateResponse(payload: unknown): HookEvaluateResponse {
+function parseEvaluateResponse(payload: unknown, strictTransforms: boolean): HookEvaluateResponse {
   if (!isRecord(payload)) {
     throw new Error('agento11y hook evaluation failed: invalid response payload');
   }
@@ -379,9 +389,247 @@ function parseEvaluateResponse(payload: unknown): HookEvaluateResponse {
     });
   }
 
+  if (strictTransforms && Object.hasOwn(payload, 'transformed_input')) {
+    validateTransformedInput(payload.transformed_input);
+  }
   const transformedInput = parseTransformedInputPayload(payload);
 
   return { action, ruleId, reason, transformedInput, evaluations };
+}
+
+// Validate before decoding: permissive parsing can discard a required rewrite.
+function validateTransformedInput(raw: unknown): void {
+  requireTransform(isRecord(raw) && Object.keys(raw).length > 0);
+  validateTransformAliases(raw, ['system_prompt', 'systemPrompt']);
+  validateTransformAliases(raw, ['conversation_preview', 'conversationPreview']);
+  for (const [key, value] of Object.entries(raw)) {
+    switch (key) {
+      case 'messages':
+      case 'output':
+        requireTransform(Array.isArray(value) && value.length > 0);
+        for (const message of value) {
+          validateTransformMessage(message);
+        }
+        break;
+      case 'tools':
+        requireTransform(Array.isArray(value) && value.length > 0);
+        for (const tool of value) {
+          requireTransform(isRecord(tool));
+          validateTransformKeys(tool, [
+            'name',
+            'description',
+            'type',
+            'input_schema_json',
+            'inputSchemaJson',
+            'inputSchemaJSON',
+          ]);
+          requireTransform(typeof tool.name === 'string' && tool.name.length > 0);
+          validateTransformFields(tool, ['description', 'type'], isString);
+          validateTransformFields(tool, ['input_schema_json', 'inputSchemaJson', 'inputSchemaJSON'], isNonemptyString);
+          validateTransformAliases(
+            tool,
+            ['input_schema_json', 'inputSchemaJson', 'inputSchemaJSON'],
+            transformJSONValue,
+          );
+        }
+        break;
+      case 'system_prompt':
+      case 'systemPrompt':
+      case 'conversation_preview':
+      case 'conversationPreview':
+        requireTransform(isNonemptyString(value));
+        break;
+      default:
+        throw new HookTransformError();
+    }
+  }
+}
+
+function validateTransformMessage(raw: unknown): void {
+  requireTransform(isRecord(raw));
+  validateTransformKeys(raw, ['role', 'name', 'content', 'parts']);
+  requireTransform(isNonemptyString(raw.role) || raw.role === 1 || raw.role === 2 || raw.role === 3);
+  validateTransformFields(raw, ['name'], isString);
+  validateTransformFields(raw, ['content'], isNonemptyString);
+  if (Object.hasOwn(raw, 'parts')) {
+    requireTransform(Array.isArray(raw.parts) && raw.parts.length > 0);
+    for (const part of raw.parts) {
+      validateTransformPart(part);
+    }
+  } else {
+    requireTransform(isNonemptyString(raw.content));
+  }
+}
+
+function validateTransformPart(raw: unknown): void {
+  requireTransform(isRecord(raw));
+  validateTransformKeys(raw, [
+    'kind',
+    'type',
+    'text',
+    'thinking',
+    'tool_call',
+    'toolCall',
+    'tool_result',
+    'toolResult',
+    'Payload',
+    'payload',
+  ]);
+  validateTransformFields(raw, ['kind', 'type', 'text', 'thinking'], isNonemptyString);
+  validateTransformPartFields(raw, ['tool_call', 'toolCall'], ['tool_result', 'toolResult']);
+  const payloads: Record<string, unknown>[] = [];
+  for (const key of ['Payload', 'payload']) {
+    if (!Object.hasOwn(raw, key) || raw[key] === null) {
+      continue;
+    }
+    const nested = raw[key];
+    requireTransform(isRecord(nested));
+    validateTransformKeys(nested, ['Text', 'Thinking', 'ToolCall', 'ToolResult']);
+    validateTransformFields(nested, ['Text', 'Thinking'], isNonemptyString);
+    validateTransformPartFields(nested, ['ToolCall'], ['ToolResult']);
+    payloads.push(nested);
+  }
+  // Compare aliases of the same payload, not different kinds: discriminator precedence is intentional.
+  validateTransformAliasValues([raw.text, ...payloads.map((payload) => payload.Text)]);
+  validateTransformAliasValues([raw.thinking, ...payloads.map((payload) => payload.Thinking)]);
+  validateTransformAliasValues(
+    [raw.tool_call, raw.toolCall, ...payloads.map((payload) => payload.ToolCall)],
+    (value) => {
+      requireTransform(isRecord(value));
+      const call = parseWireToolCallPart(value);
+      requireTransform(call !== undefined);
+      return { ...call, inputJSON: call.inputJSON === undefined ? undefined : JSON.parse(call.inputJSON) };
+    },
+  );
+  validateTransformAliasValues(
+    [raw.tool_result, raw.toolResult, ...payloads.map((payload) => payload.ToolResult)],
+    (value) => {
+      requireTransform(isRecord(value));
+      const result = parseWireToolResultPart(value);
+      requireTransform(result !== undefined);
+      return { ...result, contentJSON: result.contentJSON === undefined ? undefined : JSON.parse(result.contentJSON) };
+    },
+  );
+  requireTransform(parseWireMessagePart(raw) !== undefined);
+}
+
+function validateTransformPartFields(raw: Record<string, unknown>, calls: string[], results: string[]): void {
+  for (const key of calls) {
+    if (!Object.hasOwn(raw, key)) {
+      continue;
+    }
+    const call = raw[key];
+    requireTransform(isRecord(call));
+    validateTransformKeys(call, ['id', 'name', 'input_json', 'inputJson', 'inputJSON']);
+    requireTransform(isNonemptyString(call.name));
+    validateTransformFields(call, ['id'], isString);
+    validateTransformFields(call, ['input_json', 'inputJson', 'inputJSON'], isTransformJSON);
+    validateTransformAliases(call, ['input_json', 'inputJson', 'inputJSON'], transformJSONValue);
+  }
+  for (const key of results) {
+    if (!Object.hasOwn(raw, key)) {
+      continue;
+    }
+    const result = raw[key];
+    requireTransform(isRecord(result));
+    validateTransformKeys(result, [
+      'tool_call_id',
+      'toolCallId',
+      'name',
+      'content',
+      'content_json',
+      'contentJson',
+      'contentJSON',
+      'is_error',
+      'isError',
+    ]);
+    validateTransformFields(result, ['tool_call_id', 'toolCallId', 'name', 'content'], isString);
+    validateTransformFields(result, ['content_json', 'contentJson', 'contentJSON'], isTransformJSON);
+    validateTransformFields(result, ['is_error', 'isError'], (value) => typeof value === 'boolean');
+    validateTransformAliases(result, ['tool_call_id', 'toolCallId']);
+    validateTransformAliases(result, ['content_json', 'contentJson', 'contentJSON'], transformJSONValue);
+    validateTransformAliases(result, ['is_error', 'isError']);
+    requireTransform(parseWireToolResultPart(result) !== undefined);
+  }
+}
+
+function validateTransformFields(
+  raw: Record<string, unknown>,
+  keys: string[],
+  accepts: (value: unknown) => boolean,
+): void {
+  for (const key of keys) {
+    if (Object.hasOwn(raw, key)) {
+      requireTransform(accepts(raw[key]));
+    }
+  }
+}
+
+function validateTransformKeys(raw: Record<string, unknown>, keys: string[]): void {
+  requireTransform(Object.keys(raw).every((key) => keys.includes(key)));
+}
+
+function validateTransformAliases(
+  raw: Record<string, unknown>,
+  keys: string[],
+  normalize?: (value: unknown) => unknown,
+): void {
+  validateTransformAliasValues(
+    keys.map((key) => raw[key]),
+    normalize,
+  );
+}
+
+function validateTransformAliasValues(
+  values: unknown[],
+  normalize: (value: unknown) => unknown = (value) => value,
+): void {
+  const supplied = values.filter((value) => value !== undefined);
+  if (supplied.length < 2) {
+    return;
+  }
+  const first = normalize(supplied[0]);
+  requireTransform(supplied.slice(1).every((value) => transformValuesEqual(first, normalize(value))));
+}
+
+function transformJSONValue(value: unknown): unknown {
+  return typeof value === 'string' ? JSON.parse(decodeWireJSONPayload(value)) : value;
+}
+
+function transformValuesEqual(left: unknown, right: unknown): boolean {
+  if (left === right) {
+    return true;
+  }
+  if (Array.isArray(left) && Array.isArray(right)) {
+    return left.length === right.length && left.every((value, index) => transformValuesEqual(value, right[index]));
+  }
+  if (isRecord(left) && isRecord(right)) {
+    const keys = Object.keys(left);
+    return (
+      keys.length === Object.keys(right).length &&
+      keys.every((key) => Object.hasOwn(right, key) && transformValuesEqual(left[key], right[key]))
+    );
+  }
+  return false;
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === 'string';
+}
+
+function isNonemptyString(value: unknown): value is string {
+  return isString(value) && value.length > 0;
+}
+
+function isTransformJSON(value: unknown): boolean {
+  return isNonemptyString(value) || isRecord(value) || Array.isArray(value);
+}
+
+function requireTransform(condition: unknown): asserts condition {
+  // Never attach evaluator content, source input, or request headers to this error.
+  if (!condition) {
+    throw new HookTransformError();
+  }
 }
 
 function parseTransformedInputPayload(payload: Record<string, unknown>): HookInput | undefined {

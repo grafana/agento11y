@@ -21,6 +21,7 @@ import (
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agentinstall"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/opencode"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/pi"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/launcher"
@@ -472,6 +473,19 @@ func TestRun_LauncherDispatch(t *testing.T) {
 		wantStderrContains string
 		wantStderrPrefix   string
 		wantStderr         *string
+
+		// Every row installs an opencode preflight that records its calls and
+		// returns preflightErr, or else a launch marked preflightDirect. Rows
+		// for other launchers pin that it never runs for them.
+		preflightErr    error
+		preflightDirect bool
+		env             map[string]string
+		wantPreflight   []string // forwarded args the preflight saw; nil = not asserted
+		// wantEvents is the order of "preflight", "login", "receiver", and
+		// "launch"; nil = not asserted.
+		wantEvents       []string
+		wantLocalEnv     bool // the launcher received a local environment
+		wantStderrAbsent string
 	}{
 		{name: "pi bare", agent: "pi", wantCalled: 1},
 		{name: "pi wrapper help", agent: "pi", argv: []string{"--help"}},
@@ -498,22 +512,183 @@ func TestRun_LauncherDispatch(t *testing.T) {
 		{name: "opencode missing separator exits 2", agent: "opencode", argv: []string{"run", "hi"}, wantExit: exitPtr(2), wantStderrContains: "use `agento11y opencode -- <args>`"},
 		{name: "opencode unknown options before separator exits 2", agent: "opencode", argv: []string{"--debug", "--", "x"}, wantExit: exitPtr(2), wantStderrContains: "unknown options before `--`: [--debug]"},
 		{name: "opencode launcher error exits 1", agent: "opencode", argv: []string{"--"}, launcherErr: boom, wantCalled: 1, wantExit: exitPtr(1), wantStderrPrefix: "agento11y:"},
+		{name: "opencode child exit is propagated", agent: "opencode", argv: []string{"--"}, launcherErr: &launcher.ExitError{Code: 3}, wantCalled: 1, wantExit: exitPtr(3), wantStderr: stringPtr("")},
+
+		// The opencode preflight runs before any launcher-side setup.
+		{
+			name:          "opencode preflight runs before login",
+			agent:         "opencode",
+			argv:          []string{"--tag", "team=obs", "--", "run", "hi"},
+			wantCalled:    1,
+			wantArgs:      []string{"run", "hi"},
+			wantPreflight: []string{"run", "hi"},
+			wantEvents:    []string{"preflight", "login", "launch"},
+		},
+		{
+			name:          "opencode preflight runs before the local receiver",
+			agent:         "opencode",
+			argv:          []string{"--local"},
+			wantExit:      exitPtr(1),
+			wantPreflight: []string{},
+			wantEvents:    []string{"preflight", "receiver"},
+		},
+		{
+			name:               "opencode unsupported host exits 1 before login",
+			agent:              "opencode",
+			argv:               []string{"--tag", "team=obs", "--", "run"},
+			preflightErr:       errors.New("OpenCode 2.0.10 is older than 2.0.22"),
+			wantExit:           exitPtr(1),
+			wantEvents:         []string{"preflight"},
+			wantStderrPrefix:   "agento11y: OpenCode 2.0.10 is older than 2.0.22",
+			wantStderrAbsent:   "Usage",
+			wantStderrContains: "2.0.22",
+		},
+		{
+			name:         "opencode unsupported host exits 1 before the flag-driven receiver",
+			agent:        "opencode",
+			argv:         []string{"--local"},
+			preflightErr: errors.New("cannot tell which OpenCode release is installed"),
+			wantExit:     exitPtr(1),
+			wantEvents:   []string{"preflight"},
+		},
+		{
+			name:         "opencode unsupported host exits 1 before the env-driven receiver",
+			agent:        "opencode",
+			env:          map[string]string{"AGENTO11Y_LOCAL": "true"},
+			preflightErr: errors.New("cannot tell which OpenCode release is installed"),
+			wantExit:     exitPtr(1),
+			wantEvents:   []string{"preflight"},
+		},
+		{
+			name:               "opencode refused args are a usage error",
+			agent:              "opencode",
+			argv:               []string{"--local", "--", "run", "--server", "http://x"},
+			preflightErr:       &opencode.ArgumentError{Reason: "--server would attach the session to another server"},
+			wantExit:           exitPtr(2),
+			wantPreflight:      []string{"run", "--server", "http://x"},
+			wantEvents:         []string{"preflight"},
+			wantStderrContains: "--server would attach the session to another server",
+		},
+		{
+			name:               "opencode wrapper misuse is reported before the preflight",
+			agent:              "opencode",
+			argv:               []string{"--local", "run"},
+			wantExit:           exitPtr(2),
+			wantEvents:         []string{},
+			wantStderrContains: "use `agento11y opencode -- <args>`",
+		},
+		{
+			name:            "opencode maintenance skips login",
+			agent:           "opencode",
+			argv:            []string{"--", "plugin", "list"},
+			preflightDirect: true,
+			wantCalled:      1,
+			wantArgs:        []string{"plugin", "list"},
+			wantEvents:      []string{"preflight", "launch"},
+			wantStderr:      stringPtr(""),
+		},
+		{
+			name:               "opencode maintenance skips the flag-driven receiver",
+			agent:              "opencode",
+			argv:               []string{"--local", "--tag", "a=b", "--", "--version"},
+			preflightDirect:    true,
+			wantCalled:         1,
+			wantArgs:           []string{"--version"},
+			wantEvents:         []string{"preflight", "launch"},
+			wantStderrContains: "--local and --tag only apply to opencode sessions",
+		},
+		{
+			name:            "opencode maintenance skips the env-driven receiver",
+			agent:           "opencode",
+			env:             map[string]string{"AGENTO11Y_LOCAL": "true"},
+			argv:            []string{"--", "serve"},
+			preflightDirect: true,
+			wantCalled:      1,
+			wantArgs:        []string{"serve"},
+			wantEvents:      []string{"preflight", "launch"},
+			wantStderr:      stringPtr(""),
+		},
+		{
+			name:            "opencode maintenance child exit is propagated",
+			agent:           "opencode",
+			argv:            []string{"--", "plugin", "update"},
+			preflightDirect: true,
+			launcherErr:     &launcher.ExitError{Code: 4},
+			wantCalled:      1,
+			wantArgs:        []string{"plugin", "update"},
+			wantExit:        exitPtr(4),
+			wantStderr:      stringPtr(""),
+		},
+
+		// The other launchers keep their order: setup, then the launcher, with
+		// no preflight.
+		{name: "claude has no preflight", agent: "claude", argv: []string{"--", "--version"}, wantCalled: 1, wantArgs: []string{"--version"}, wantEvents: []string{"login", "launch"}},
+		{name: "pi has no preflight", agent: "pi", argv: []string{"--", "--help"}, wantCalled: 1, wantArgs: []string{"--help"}, wantEvents: []string{"login", "launch"}},
+		{name: "codex has no preflight", agent: "codex", argv: []string{"--"}, wantCalled: 1, wantEvents: []string{"login", "launch"}},
+		{name: "copilot starts the receiver without a preflight", agent: "copilot", argv: []string{"--local"}, wantExit: exitPtr(1), wantEvents: []string{"receiver"}},
+		{name: "vibe error exits 1 without a preflight", agent: "vibe", argv: []string{"--"}, launcherErr: boom, wantCalled: 1, wantExit: exitPtr(1), wantEvents: []string{"login", "launch"}},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			isolateDotenvHome(t)
+			for key, value := range tc.env {
+				t.Setenv(key, value)
+			}
+			events := []string{}
+			withStubLoginRun(t, func(context.Context, login.RunOpts) (login.Result, error) {
+				events = append(events, "login")
+				return login.Result{}, login.ErrNotInteractive
+			})
+			t.Cleanup(local.SetStartDaemonForTesting(func(context.Context, string, *log.Logger) (*local.Status, error) {
+				events = append(events, "receiver")
+				return nil, errors.New("receiver stub")
+			}))
+
 			var gotArgs []string
+			var gotEnv *local.LaunchEnv
 			called := 0
-			withStubLauncher(t, tc.agent, func(_ context.Context, args []string, _ *local.LaunchEnv, _ io.Reader, _, _ io.Writer, _ *log.Logger, _ string) error {
+			launch := func(_ context.Context, args []string, env *local.LaunchEnv, _ io.Reader, _, _ io.Writer, _ *log.Logger, _ string) error {
 				called++
+				events = append(events, "launch")
 				gotArgs = append([]string{}, args...)
+				gotEnv = env
 				return tc.launcherErr
+			}
+			withStubLauncher(t, tc.agent, launch)
+			var preflightArgs []string
+			preflightCalls := 0
+			withStubPreflights(t, map[string]launcherPreflight{
+				"opencode": func(_ context.Context, forwarded []string) (preparedLaunch, error) {
+					preflightCalls++
+					events = append(events, "preflight")
+					preflightArgs = append([]string{}, forwarded...)
+					if tc.preflightErr != nil {
+						return preparedLaunch{}, tc.preflightErr
+					}
+					return preparedLaunch{launch: launch, direct: tc.preflightDirect}, nil
+				},
 			})
 
 			var stdout, stderr bytes.Buffer
 			gotExit := withExit(t, func() {
 				run(append([]string{tc.agent}, tc.argv...), strings.NewReader(""), &stdout, &stderr)
 			})
+			if tc.agent != "opencode" {
+				assert.Zero(t, preflightCalls, "the opencode preflight must not run for %s", tc.agent)
+			}
+			if tc.wantPreflight != nil {
+				assert.Equal(t, tc.wantPreflight, append([]string{}, preflightArgs...))
+			}
+			if tc.wantEvents != nil {
+				assert.Equal(t, tc.wantEvents, events)
+			}
+			if tc.wantCalled > 0 {
+				assert.Equal(t, tc.wantLocalEnv, gotEnv != nil, "local environment")
+			}
+			if tc.wantStderrAbsent != "" {
+				assert.NotContains(t, stderr.String(), tc.wantStderrAbsent)
+			}
 
 			switch {
 			case tc.wantExit == nil && gotExit != nil:
@@ -1132,11 +1307,22 @@ func withStubLauncher(t *testing.T, name string, fn agentLauncher) {
 	withStubLaunchers(t, map[string]agentLauncher{name: fn})
 }
 
+// withStubLaunchers also removes every launcher preflight, so a stub runs in
+// place of the real launcher and no preflight reaches a real host binary.
+// Tests of the preflight order install one with withStubPreflights.
 func withStubLaunchers(t *testing.T, stubs map[string]agentLauncher) {
 	t.Helper()
-	prev := launchers
-	t.Cleanup(func() { launchers = prev })
+	prev, prevPreflights := launchers, launcherPreflights
+	t.Cleanup(func() { launchers, launcherPreflights = prev, prevPreflights })
 	launchers = stubs
+	launcherPreflights = map[string]launcherPreflight{}
+}
+
+func withStubPreflights(t *testing.T, stubs map[string]launcherPreflight) {
+	t.Helper()
+	prev := launcherPreflights
+	t.Cleanup(func() { launcherPreflights = prev })
+	launcherPreflights = stubs
 }
 
 // withStubLoginRun replaces the package's loginRun seam for the duration of

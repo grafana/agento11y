@@ -1,11 +1,21 @@
-import type { HookEvaluateResponse, Message } from "@grafana/agento11y";
+import {
+  Agento11yClient,
+  type HookEvaluateResponse,
+  type HookInput,
+  HookTransformError,
+  type Message,
+} from "@grafana/agento11y";
 import { describe, expect, it, vi } from "vitest";
 import type {
   GuardResult,
   PreflightTransformArgs,
   PreflightTransformResult,
 } from "./guard.js";
-import { runPreflightTransform, runToolCallGuard } from "./guard.js";
+import {
+  runPreflightTransform,
+  runPromptGuard,
+  runToolCallGuard,
+} from "./guard.js";
 
 /** Narrow a GuardResult to a block result, failing the test otherwise. */
 function asBlock(res: GuardResult): { block: true; reason: string } {
@@ -794,6 +804,482 @@ function makePreflightArgs(
     ...overrides,
   };
 }
+
+describe("strict native opt-in", () => {
+  const secret = "PRIVATE_PAYLOAD Authorization: Bearer PRIVATE_TOKEN";
+  const output = (
+    id = "c1",
+    name = "bash",
+    inputJSON = '{"command":"safe"}',
+  ): HookInput => ({
+    output: [
+      {
+        role: "assistant",
+        parts: [{ type: "tool_call", toolCall: { id, name, inputJSON } }],
+      },
+    ],
+  });
+  const runners = [
+    { name: "prompt", run: runPromptGuard },
+    { name: "preflight", run: runPreflightTransform },
+    { name: "tool", run: runToolCallGuard },
+  ];
+  function args(
+    client: Agento11yClient,
+    overrides: Record<string, unknown> = {},
+  ) {
+    return {
+      ...makePreflightArgs({ client }),
+      toolCallId: "c1",
+      toolName: "bash",
+      input: { command: secret },
+      strictTransforms: true,
+      ...overrides,
+    };
+  }
+
+  describe.each(runners)("$name", ({ name, run }) => {
+    it.each([
+      undefined,
+      false,
+      true,
+    ])("only overrides strict validation when enabled: %s", async (strictTransforms) => {
+      const { client, calls } = makePreflightClient(async () => ({
+        action: "allow",
+        evaluations: [],
+      }));
+      expect(await run(args(client, { strictTransforms }))).toBeUndefined();
+      expect(calls[0]!.override).toEqual(
+        name === "tool"
+          ? {
+              enabled: true,
+              ...(strictTransforms
+                ? {
+                    strictTransforms: true,
+                    phases: ["postflight"],
+                    failOpen: false,
+                  }
+                : {}),
+            }
+          : {
+              enabled: true,
+              phases: ["preflight"],
+              failOpen: false,
+              ...(strictTransforms ? { strictTransforms: true } : {}),
+            },
+      );
+    });
+
+    it.each([
+      true,
+      false,
+    ])("refuses typed SDK validation errors before failOpen=%s", async (failOpen) => {
+      const error = new HookTransformError();
+      // Even a future SDK error with unsafe details must not be interpolated.
+      error.message = secret;
+      const { client } = makePreflightClient(async () => {
+        throw error;
+      });
+      const warn = vi.fn();
+      const result = await run(args(client, { failOpen, logger: { warn } }));
+      const warning =
+        "agento11y could not apply a required guard transform, so the operation was blocked as a safety measure.";
+      expect(result).toEqual(
+        name === "preflight"
+          ? { block: warning }
+          : { block: true, reason: warning },
+      );
+      expect(JSON.stringify([result, warn.mock.calls])).not.toContain(secret);
+      expect(warn.mock.calls).toEqual([[warning]]);
+    });
+
+    it.each([
+      true,
+      false,
+    ])("outages alone obey failOpen=%s without raw error details", async (failOpen) => {
+      const { client } = makePreflightClient(async () => {
+        throw new Error(secret);
+      });
+      const warn = vi.fn();
+      const result = await run(
+        args(client, {
+          failOpen,
+          logger: { warn },
+          agentName: secret,
+          agentVersion: secret,
+          conversationId: secret,
+          model: { provider: secret, name: secret },
+          messages: [{ role: "user", content: secret }],
+          toolCallId: secret,
+          toolName: secret,
+        }),
+      );
+      const warning = failOpen
+        ? "agento11y could not evaluate the guard; fail-open allowed the operation."
+        : "agento11y could not evaluate the guard, so the operation was blocked as a safety measure.";
+      expect(result).toEqual(
+        failOpen
+          ? undefined
+          : name === "preflight"
+            ? { block: warning }
+            : { block: true, reason: warning },
+      );
+      expect(warn.mock.calls).toEqual([[warning]]);
+      expect(JSON.stringify([result, warn.mock.calls])).not.toContain(secret);
+    });
+
+    it.each([
+      undefined,
+      false,
+    ])("preserves legacy warnings with strictTransforms=%s", async (strictTransforms) => {
+      for (const failOpen of [true, false]) {
+        const { client } = makePreflightClient(async () => {
+          throw new Error(secret);
+        });
+        const warn = vi.fn();
+        const result = await run(
+          args(client, { strictTransforms, failOpen, logger: { warn } }),
+        );
+        if (failOpen) expect(result).toBeUndefined();
+        else
+          expect(result).toMatchObject({
+            block: name === "preflight" ? expect.any(String) : true,
+          });
+        const label =
+          name === "tool"
+            ? "guard"
+            : name === "prompt"
+              ? "prompt guard"
+              : "preflight transform";
+        expect(warn.mock.calls).toEqual([
+          [`${label} eval failed: Error: ${secret}`],
+        ]);
+      }
+    });
+
+    it("preserves default fail-open handling of thrown errors", async () => {
+      const { client } = makePreflightClient(async () => {
+        throw new HookTransformError();
+      });
+      expect(
+        await run(args(client, { strictTransforms: false })),
+      ).toBeUndefined();
+    });
+
+    it.each([
+      true,
+      false,
+    ])("always enforces explicit denial, failOpen=%s", async (failOpen) => {
+      const { client } = makePreflightClient(async () => ({
+        action: "deny",
+        reason: "policy denial",
+        evaluations: [],
+      }));
+      expect(JSON.stringify(await run(args(client, { failOpen })))).toContain(
+        "policy denial",
+      );
+    });
+  });
+
+  it("keeps the stored prompt unchanged and ignores valid admission transforms", async () => {
+    const messages: Message[] = [
+      { role: "user", parts: [{ type: "text", text: secret }] },
+    ];
+    const before = structuredClone(messages);
+    const { client } = makePreflightClient(async () => ({
+      action: "allow",
+      evaluations: [],
+      transformedInput: { messages: [{ role: "user", content: "safe" }] },
+    }));
+    expect(await runPromptGuard(args(client, { messages }))).toBeUndefined();
+    expect(messages).toEqual(before);
+  });
+
+  const invalidTools: Array<[string, unknown]> = [
+    ["empty transform", {}],
+    ["null transform", null],
+    ["wrong field", { messages: [{ role: "user", content: secret }] }],
+    ["extra required field", { ...output(), systemPrompt: secret }],
+    ["empty output", { output: [] }],
+    ["conflicting ID", output("different-id")],
+    ["conflicting name despite matching ID", output("c1", "write")],
+    ["no identity", output("", "")],
+    ["invalid JSON", output("c1", "bash", secret)],
+    ["empty JSON", output("c1", "bash", "")],
+    ["array JSON", output("c1", "bash", "[]")],
+    ["null JSON", output("c1", "bash", "null")],
+    ["scalar JSON", output("c1", "bash", "42")],
+    ["string JSON", output("c1", "bash", JSON.stringify(secret))],
+    ["duplicate calls", { output: [...output().output!, ...output().output!] }],
+    [
+      "unrelated additional call",
+      { output: [...output().output!, ...output("other", "read").output!] },
+    ],
+    ["non-call output", { output: [{ role: "assistant", content: secret }] }],
+    [
+      "unsupported message field",
+      { output: [{ ...output().output![0], content: secret }] },
+    ],
+    [
+      "unsupported part alongside call",
+      {
+        output: [
+          {
+            role: "assistant",
+            parts: [
+              ...output().output![0]!.parts!,
+              { type: "text", text: secret },
+            ],
+          },
+        ],
+      },
+    ],
+    [
+      "wrong output role",
+      { output: [{ ...output().output![0], role: "user" }] },
+    ],
+  ];
+  it.each(
+    invalidTools,
+  )("refuses unapplyable required tool transform: %s", async (_name, transformedInput) => {
+    for (const failOpen of [true, false]) {
+      const { client } = makePreflightClient(async () => ({
+        action: "allow",
+        evaluations: [],
+        transformedInput: transformedInput as HookInput,
+      }));
+      const warn = vi.fn();
+      const result = asBlock(
+        await runToolCallGuard(args(client, { failOpen, logger: { warn } })),
+      );
+      expect(result.reason).toContain("required guard transform");
+      expect(JSON.stringify([result, warn.mock.calls])).not.toContain(secret);
+      expect(JSON.stringify([result, warn.mock.calls])).not.toContain(
+        "different-id",
+      );
+    }
+  });
+
+  it.each([
+    ["exact ID", output()],
+    ["trimmed identity", output(" c1 ", " Bash ")],
+    ["name fallback", output("", "BASH")],
+    ["empty argument object", output("c1", "bash", "{}")],
+  ])("applies a supported tool transform: %s", async (_name, transformedInput) => {
+    const { client } = makePreflightClient(async () => ({
+      action: "allow",
+      evaluations: [],
+      transformedInput: transformedInput as HookInput,
+    }));
+    expect(await runToolCallGuard(args(client))).toEqual({
+      transform: _name === "empty argument object" ? {} : { command: "safe" },
+    });
+  });
+
+  it("refuses local serialization failure even with fail-open, without evaluating", async () => {
+    const circular: any = { secret };
+    circular.self = circular;
+    const { client, calls } = makePreflightClient(async () => ({
+      action: "allow",
+      evaluations: [],
+    }));
+    const warn = vi.fn();
+    expect(
+      asBlock(
+        await runToolCallGuard(
+          args(client, { input: circular, logger: { warn } }),
+        ),
+      ).reason,
+    ).toContain("blocked");
+    expect(calls).toHaveLength(0);
+    expect(warn.mock.calls).toEqual([
+      [
+        "agento11y could not apply a required guard transform, so the operation was blocked as a safety measure.",
+      ],
+    ]);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(secret);
+  });
+
+  it.each([
+    "prompt",
+    "preflight",
+  ])("refuses local %s serialization failures before evaluation", async (name) => {
+    const messages: any[] = [{ role: "user", content: secret }];
+    messages[0].self = messages;
+    const { client, calls } = makePreflightClient(async () => ({
+      action: "allow",
+      evaluations: [],
+    }));
+    const run = runners.find((runner) => runner.name === name)!.run;
+    const warn = vi.fn();
+    const result = await run(args(client, { messages, logger: { warn } }));
+    expect(result).toMatchObject({
+      block: name === "preflight" ? expect.any(String) : true,
+    });
+    expect(calls).toHaveLength(0);
+    expect(warn.mock.calls).toEqual([
+      [
+        "agento11y could not apply a required guard transform, so the operation was blocked as a safety measure.",
+      ],
+    ]);
+    expect(JSON.stringify([result, warn.mock.calls])).not.toContain(secret);
+  });
+
+  it.each([
+    {},
+    { messages: [] },
+    { output: output().output },
+    { systemPrompt: secret },
+    { tools: [{ name: "bash" }] },
+    {
+      messages: [{ role: "user", content: "safe" }],
+      conversationPreview: secret,
+    },
+  ])("refuses preflight transforms it cannot apply: %j", async (transformedInput) => {
+    const { client } = makePreflightClient(async () => ({
+      action: "allow",
+      evaluations: [],
+      transformedInput,
+    }));
+    expect(await runPreflightTransform(args(client))).toEqual({
+      block: expect.stringContaining("required guard transform"),
+    });
+  });
+
+  it("returns valid preflight messages for the adapter to map to native source slots", async () => {
+    const messages: Message[] = [{ role: "user", content: "safe" }];
+    const { client } = makePreflightClient(async () => ({
+      action: "allow",
+      evaluations: [],
+      transformedInput: { messages },
+    }));
+    expect(await runPreflightTransform(args(client))).toEqual({ messages });
+  });
+
+  it.each([
+    ["malformed message list", "preflight", { messages: [null] }, true],
+    ["empty message list", "prompt", { messages: [] }, true],
+    ["malformed admission transform", "prompt", { messages: "invalid" }, true],
+    ["wrong preflight field", "preflight", { system_prompt: "safe" }, true],
+    [
+      "unmatched tool ID",
+      "tool",
+      {
+        output: [
+          {
+            role: "assistant",
+            parts: [
+              {
+                type: "tool_call",
+                tool_call: { id: "other", name: "bash", input_json: "e30=" },
+              },
+            ],
+          },
+        ],
+      },
+      true,
+    ],
+    [
+      "nonobject tool arguments",
+      "tool",
+      {
+        output: [
+          {
+            role: "assistant",
+            parts: [
+              {
+                type: "tool_call",
+                tool_call: { id: "c1", name: "bash", input_json: "W10=" },
+              },
+            ],
+          },
+        ],
+      },
+      true,
+    ],
+    ["SDK tool encoding", "tool", output(), false],
+    [
+      "proto base64 tool encoding",
+      "tool",
+      {
+        output: [
+          {
+            role: 2,
+            parts: [
+              {
+                kind: "tool_call",
+                Payload: {
+                  ToolCall: {
+                    id: "c1",
+                    name: "bash",
+                    input_json: "eyJjb21tYW5kIjoic2FmZSJ9",
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      },
+      false,
+    ],
+    [
+      "valid admission transform",
+      "prompt",
+      { messages: [{ role: "user", content: "safe" }] },
+      false,
+    ],
+  ])("uses the real SDK decoder: %s", async (_label, name, transformed_input, blocked) => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            action: "allow",
+            transformed_input,
+            evaluations: [],
+          }),
+          { status: 200 },
+        ),
+    );
+    const client = new Agento11yClient({
+      api: { endpoint: "http://127.0.0.1:1" },
+      generationExport: {
+        protocol: "http",
+        endpoint: "http://127.0.0.1:1/api/v1/generations:export",
+        insecure: true,
+      },
+      hooks: { enabled: true, phases: ["postflight"], failOpen: true },
+      generationExporter: {
+        async exportGenerations() {
+          return { results: [] };
+        },
+        async exportWorkflowSteps() {
+          return { results: [] };
+        },
+      },
+    });
+    try {
+      const run = runners.find((runner) => runner.name === name)!.run;
+      for (const strictTransforms of [true, false]) {
+        const warn = vi.fn();
+        const result = await run(
+          args(client, { strictTransforms, logger: { warn } }),
+        );
+        if (blocked && strictTransforms)
+          expect(result).toMatchObject({
+            block: name === "preflight" ? expect.any(String) : true,
+          });
+        else if (!blocked && name === "tool")
+          expect(result).toEqual({ transform: { command: "safe" } });
+        else expect(result).toBeUndefined();
+        expect(JSON.stringify([result, warn.mock.calls])).not.toContain(secret);
+      }
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      fetchSpy.mockRestore();
+      await client.shutdown();
+    }
+  });
+});
 
 describe("runPreflightTransform", () => {
   const ALLOW: HookEvaluateResponse = { action: "allow", evaluations: [] };

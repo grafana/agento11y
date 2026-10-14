@@ -239,7 +239,7 @@ rules in the Reference.
 | Claude Code | `agento11y claude` | shared Go binary, plugin `agento11y-claude-code` |
 | Codex | `agento11y codex` | shared Go binary, plugin `agento11y-codex` |
 | Copilot CLI | `agento11y copilot` | hooks shared with Copilot Chat in VS Code |
-| OpenCode | `agento11y opencode` | installs `@grafana/agento11y-opencode` |
+| OpenCode | `agento11y opencode` | installs `@grafana/agento11y-opencode`; OpenCode 1.3.13 to 1.x or 2.0.22 to 2.x, other releases are refused; OpenCode 2 sessions get `--standalone` so a private server inherits launcher settings |
 | pi | `agento11y pi` | installs `@grafana/agento11y-pi` |
 | Vibe | `agento11y vibe` | shared Go binary via `hooks.toml` |
 | Kiro CLI 3 (experimental) | `agento11y kiro -- chat` | current workspace hooks; prompts/tools only, no assistant text, model usage, cost, or guards |
@@ -466,7 +466,7 @@ For an offline dry run, use `agento11y guards test 'rm -rf ~/.ssh'`. It does not
 ### History import
 
 Until an import runs, the viewer and Grafana Cloud hold only sessions captured after installation.
-`agento11y history import` backfills sessions `claude-code`, `codex`, `cursor`, `opencode`, or `pi` already wrote to disk.
+`agento11y history import` backfills sessions `claude-code`, `codex`, `cursor`, `opencode`, or `pi` already wrote to disk. An OpenCode database with OpenCode 2 tables is skipped with a warning.
 
 ```sh
 agento11y history import claude-code --dry-run   # plan only; no setup or export
@@ -487,11 +487,11 @@ A cancelled or failed run resumes from turns not marked exported.
 
 ### Auto-update
 
-Claude, Codex, and OpenCode refresh after a binary version change and, after
+Claude, Codex, and OpenCode 1 refresh after a binary version change and, after
 the first post-install refresh, at most once a day. A relaunch inside that period
 does not pick up a plugin fix. `AGENTO11Y_AUTO_UPDATE=0|false|no|off` opts out.
 Copilot and Vibe reconcile hooks on each launch. Pi leaves upgrades to pi's
-installer.
+installer. OpenCode 2 is never refreshed; run `opencode plugin update @grafana/agento11y-opencode`.
 
 ## Further reading
 

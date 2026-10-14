@@ -6,6 +6,7 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { HookTransformError } from '../.test-dist/core.js';
 import { evaluateHook } from '../.test-dist/hooks.js';
 import {
   bashToolSchema,
@@ -20,7 +21,7 @@ import {
 const hooksConfig = { enabled: true, phases: ['preflight', 'postflight'], timeoutMs: 5_000, failOpen: false };
 
 /** Runs evaluateHook against a stub fetch, returning the serialized body and the parsed response. */
-async function runHook(request, responseBody, { status = 200 } = {}) {
+async function runHook(request, responseBody, { status = 200, ...overrides } = {}) {
   let capturedBody;
   const fetchImpl = async (_url, init) => {
     capturedBody = JSON.parse(init.body);
@@ -34,7 +35,7 @@ async function runHook(request, responseBody, { status = 200 } = {}) {
     apiEndpoint: 'http://127.0.0.1:9/agent-observability',
     insecure: true,
     extraHeaders: undefined,
-    hooks: hooksConfig,
+    hooks: { ...hooksConfig, ...overrides },
     request,
     fetchImpl,
   });
@@ -49,6 +50,292 @@ for (const [fixtureName, build, load] of [
     const { body } = await runHook(build(), { action: 'allow', evaluations: [] });
     const diffs = diffJson(body, load());
     assert.deepEqual(diffs, [], `request does not match conformance/hooks/${fixtureName}:\n${diffs.join('\n')}`);
+  });
+}
+
+for (const [name, payload] of Object.entries(loadResponses())) {
+  test(`strict decoding accepts fixture ${name}`, async () => {
+    const normal = await runHook(preflightRequest(), payload);
+    const strict = await runHook(preflightRequest(), payload, { strictTransforms: true });
+    assert.deepEqual(strict.response, normal.response);
+  });
+}
+
+for (const transformedInput of [
+  { messages: [{ role: 1, content: 'kept' }], systemPrompt: 'system', conversationPreview: 'preview' },
+  { output: [{ role: 2, parts: [{ payload: { Text: 'output' } }] }] },
+  { messages: [{ role: 3, parts: [{ tool_result: { content_json: { ok: true } } }] }] },
+  { messages: [{ role: 'assistant', parts: [{ toolCall: { name: 'Bash', inputJson: ['ls'] } }] }] },
+  { tools: [{ name: 'Bash', inputSchemaJson: '{"type":"object"}' }] },
+]) {
+  test(`strict decoding accepts alternate input ${JSON.stringify(transformedInput)}`, async () => {
+    const payload = { action: 'allow', transformed_input: transformedInput };
+    const normal = await runHook(preflightRequest(), payload);
+    const strict = await runHook(preflightRequest(), payload, { strictTransforms: true });
+    assert.deepEqual(strict.response, normal.response);
+  });
+}
+
+const callOutput = (part) => ({ output: [{ role: 'assistant', parts: [part] }] });
+const malformedJSON = '{"secret":"ORIGINAL_SECRET';
+const malformedBase64 = Buffer.from(malformedJSON).toString('base64');
+const originalCall = { id: 'call-1', name: 'Bash', input_json: { command: 'ORIGINAL_SECRET' } };
+const redactedCall = { id: 'call-1', name: 'Bash', inputJSON: '{"command":"REDACTED"}' };
+const conflictingTransforms = [
+  ['tool-call aliases', callOutput({ tool_call: originalCall, toolCall: redactedCall })],
+  ...['inputJson', 'inputJSON'].map((alias) => [
+    `argument alias ${alias}`,
+    callOutput({ tool_call: { ...originalCall, [alias]: redactedCall.inputJSON } }),
+  ]),
+  ['system aliases', { system_prompt: 'ORIGINAL_SECRET', systemPrompt: 'REDACTED' }],
+  ['preview aliases', { conversation_preview: 'ORIGINAL_SECRET', conversationPreview: 'REDACTED' }],
+  ['schema aliases', { tools: [{ name: 'Bash', input_schema_json: '{"a":1}', inputSchemaJSON: '{"a":2}' }] }],
+  ['result aliases', callOutput({ tool_result: { content: 'original' }, toolResult: { content: 'redacted' } })],
+  ['result content aliases', callOutput({ toolResult: { content_json: { a: 1 }, contentJSON: '{"a":2}' } })],
+  ['result ID aliases', callOutput({ toolResult: { tool_call_id: 'one', toolCallId: 'two' } })],
+  ['result error aliases', callOutput({ toolResult: { is_error: false, isError: true } })],
+  [
+    'malformed argument aliases',
+    callOutput({ toolCall: { name: 'Bash', input_json: malformedJSON, inputJSON: '{}' } }),
+  ],
+  [
+    'malformed tool-call aliases',
+    callOutput({ tool_call: { name: 'Bash', input_json: malformedJSON }, toolCall: { name: 'Bash', inputJSON: '{}' } }),
+  ],
+  ['malformed result content aliases', callOutput({ toolResult: { content_json: malformedJSON, contentJSON: '{}' } })],
+  [
+    'malformed result aliases',
+    callOutput({ tool_result: { content_json: malformedJSON }, toolResult: { contentJSON: '{}' } }),
+  ],
+  ['malformed schema aliases', { tools: [{ name: 'Bash', input_schema_json: malformedJSON, inputSchemaJSON: '{}' }] }],
+  ['nested and top-level calls', callOutput({ Payload: { ToolCall: originalCall }, toolCall: redactedCall })],
+  ['payload aliases', callOutput({ Payload: { ToolCall: originalCall }, payload: { ToolCall: redactedCall } })],
+  ['nested and top-level text', callOutput({ Payload: { Text: 'original' }, text: 'redacted' })],
+  ['nested and top-level thinking', callOutput({ Payload: { Thinking: 'original' }, thinking: 'redacted' })],
+];
+
+const equivalentTransforms = [
+  ['system aliases', { system_prompt: 'redacted', systemPrompt: 'redacted' }],
+  ['preview aliases', { conversation_preview: 'redacted', conversationPreview: 'redacted' }],
+  [
+    'argument aliases',
+    callOutput({
+      tool_call: {
+        name: 'Bash',
+        input_json: Buffer.from('{"a":1,"b":2}').toString('base64'),
+        inputJson: '{ "b": 2, "a": 1 }',
+        inputJSON: { a: 1, b: 2 },
+      },
+    }),
+  ],
+  [
+    'tool-call aliases',
+    callOutput({ tool_call: { name: 'Bash', input_json: { a: 1 } }, toolCall: { name: 'Bash', inputJSON: '{"a":1}' } }),
+  ],
+  [
+    'Go and SDK call aliases',
+    callOutput({
+      Payload: { ToolCall: { name: 'Bash', input_json: { a: 1 } } },
+      toolCall: { name: 'Bash', inputJSON: '{"a":1}' },
+    }),
+  ],
+  ['payload aliases', callOutput({ Payload: { Text: 'kept' }, payload: { Text: 'kept' }, text: 'kept' })],
+  [
+    'result aliases',
+    callOutput({
+      tool_result: { tool_call_id: 'one', content_json: { a: 1 }, is_error: true },
+      toolResult: { toolCallId: 'one', contentJSON: '{"a":1}', isError: true },
+    }),
+  ],
+  [
+    'result field aliases',
+    callOutput({
+      toolResult: {
+        tool_call_id: 'one',
+        toolCallId: 'one',
+        content_json: { a: 1 },
+        contentJson: '{"a":1}',
+        contentJSON: Buffer.from('{"a":1}').toString('base64'),
+        is_error: true,
+        isError: true,
+      },
+    }),
+  ],
+  [
+    'schema aliases',
+    {
+      tools: [
+        {
+          name: 'Bash',
+          input_schema_json: '{"a":1,"b":2}',
+          inputSchemaJson: '{ "b":2,"a":1 }',
+          inputSchemaJSON: Buffer.from('{"a":1,"b":2}').toString('base64'),
+        },
+      ],
+    },
+  ],
+  [
+    'opaque arguments',
+    callOutput({
+      toolCall: {
+        name: 'Bash',
+        inputJSON: { unknown: { tool_call: 'argument data', systemPrompt: 'not a transform alias' } },
+      },
+    }),
+  ],
+  ['opaque result', callOutput({ toolResult: { contentJSON: { unknown: { a: 1 } } } })],
+  [
+    'malformed JSON call aliases',
+    callOutput({
+      tool_call: { name: 'Bash', input_json: malformedJSON, inputJson: malformedBase64 },
+      toolCall: { name: 'Bash', inputJSON: malformedBase64 },
+      Payload: { ToolCall: { name: 'Bash', input_json: malformedJSON } },
+    }),
+  ],
+  [
+    'malformed JSON result aliases',
+    callOutput({
+      tool_result: { content_json: malformedJSON, contentJson: malformedBase64 },
+      toolResult: { contentJSON: malformedBase64 },
+      payload: { ToolResult: { content_json: malformedJSON } },
+    }),
+  ],
+  [
+    'malformed JSON schema aliases',
+    {
+      tools: [
+        {
+          name: 'Bash',
+          input_schema_json: malformedJSON,
+          inputSchemaJson: malformedBase64,
+          inputSchemaJSON: malformedJSON,
+        },
+      ],
+    },
+  ],
+];
+
+for (const [name, transformedInput] of equivalentTransforms) {
+  for (const failOpen of [true, false]) {
+    test(`strict decoding preserves unambiguous ${name}, failOpen=${failOpen}`, async () => {
+      const payload = { action: 'allow', transformed_input: transformedInput };
+      const normal = await runHook(preflightRequest(), payload, { failOpen });
+      const strict = await runHook(preflightRequest(), payload, { strictTransforms: true, failOpen });
+      assert.deepEqual(strict.response, normal.response);
+      assert.ok(strict.response.transformedInput);
+    });
+  }
+}
+
+const unknownNestedTransforms = [
+  ['message', { messages: [{ role: 'user', content: 'kept', unknown: 'rewrite' }] }],
+  ['tool definition', { tools: [{ name: 'Bash', unknown: 'rewrite' }] }],
+  ['part', callOutput({ text: 'kept', unknown: 'rewrite' })],
+  ['Go payload', callOutput({ Payload: { Text: 'kept', Unknown: 'rewrite' } })],
+  ['lowercase payload', callOutput({ payload: { Text: 'kept', Unknown: 'rewrite' } })],
+  ['tool call', callOutput({ toolCall: { ...redactedCall, unknown: 'rewrite' } })],
+  ['tool result', callOutput({ toolResult: { content: 'kept', unknown: 'rewrite' } })],
+  ['nested call', callOutput({ Payload: { ToolCall: { ...originalCall, unknown: 'rewrite' } } })],
+  ['nested result', callOutput({ Payload: { ToolResult: { content: 'kept', unknown: 'rewrite' } } })],
+];
+
+for (const [name, transformedInput] of [...conflictingTransforms, ...unknownNestedTransforms]) {
+  for (const failOpen of [true, false]) {
+    test(`strict decoding refuses lossy ${name}, failOpen=${failOpen}`, async () => {
+      const payload = { action: 'allow', transformed_input: transformedInput };
+      await assert.rejects(
+        runHook(preflightRequest(), payload, { strictTransforms: true, failOpen }),
+        HookTransformError,
+      );
+      const implicit = await runHook(preflightRequest(), payload, { failOpen });
+      const explicit = await runHook(preflightRequest(), payload, { strictTransforms: false, failOpen });
+      assert.deepEqual(implicit.response, explicit.response);
+      assert.equal(implicit.response.action, 'allow');
+    });
+  }
+}
+
+const malformedTransforms = [
+  null,
+  false,
+  'required rewrite',
+  [],
+  {},
+  { unknown_field: 'required rewrite' },
+  { system_prompt: '' },
+  { systemPrompt: 1 },
+  { conversation_preview: null },
+  { conversationPreview: '' },
+  { messages: {} },
+  { messages: [] },
+  { messages: [null] },
+  { messages: [{ parts: [{ text: 'kept' }] }] },
+  { messages: [{ role: 99, content: 'kept' }] },
+  { messages: [{ role: '', content: 'kept' }] },
+  { messages: [{ role: 'user' }] },
+  { messages: [{ role: 'user', content: '' }] },
+  { messages: [{ role: 'user', content: 4 }] },
+  { messages: [{ role: 'user', parts: [] }] },
+  { messages: [{ role: 'user', parts: 'required rewrite' }] },
+  { messages: [{ role: 'user', parts: [null] }] },
+  { messages: [{ role: 'user', parts: [{ text: 'kept' }, {}] }] },
+  { messages: [{ role: 'user', parts: [{ kind: 4, text: 'kept' }] }] },
+  { messages: [{ role: 'user', parts: [{ Payload: { Text: 4 } }] }] },
+  { messages: [{ role: 'user', parts: [{ payload: [] }] }] },
+  { messages: [{ role: 'assistant', parts: [{ toolCall: { name: 'Bash', inputJSON: '' } }] }] },
+  { messages: [{ role: 'assistant', parts: [{ toolCall: { name: 'Bash', inputJSON: 4 } }] }] },
+  callOutput({ toolCall: { name: 'Bash', input_json: false } }),
+  callOutput({ toolCall: { name: 'Bash', inputJson: null } }),
+  callOutput({ toolResult: { content_json: 4 } }),
+  callOutput({ toolResult: { contentJson: '' } }),
+  { messages: [{ role: 'tool', parts: [{ toolResult: {} }] }] },
+  { messages: [{ role: 'tool', parts: [{ toolResult: { contentJSON: null } }] }] },
+  { messages: [{ role: 'tool', parts: [{ toolResult: { content: 'ok', isError: 'true' } }] }] },
+  { tools: [] },
+  { tools: {} },
+  { tools: [null] },
+  { tools: [{}] },
+  { tools: [{ name: '' }] },
+  { tools: [{ name: 'Bash', description: 4 }] },
+  { tools: [{ name: 'Bash', input_schema_json: {} }] },
+  { tools: [{ name: 'Bash', inputSchemaJSON: '' }] },
+  { tools: [{ name: 'Bash', input_schema_json: null }] },
+  { tools: [{ name: 'Bash', inputSchemaJson: 4 }] },
+  { tools: [{ name: 'Bash' }, false] },
+  { output: [] },
+  { output: [null] },
+  { system_prompt: 'kept', messages: [] },
+];
+
+for (const [index, transformedInput] of malformedTransforms.entries()) {
+  for (const failOpen of [true, false]) {
+    test(`strict decoding refuses malformed transform ${index}, failOpen=${failOpen}`, async () => {
+      const payload = { action: 'allow', transformed_input: transformedInput };
+      await assert.rejects(
+        runHook(preflightRequest(), payload, { strictTransforms: true, failOpen }),
+        HookTransformError,
+      );
+      const { response } = await runHook(preflightRequest(), payload, { failOpen });
+      assert.equal(response.action, 'allow');
+    });
+  }
+}
+
+for (const failOpen of [true, false]) {
+  test(`evaluateHook preserves HookTransformError identity, failOpen=${failOpen}`, async () => {
+    const error = new HookTransformError();
+    await assert.rejects(
+      evaluateHook({
+        apiEndpoint: 'http://127.0.0.1:9',
+        insecure: true,
+        hooks: { ...hooksConfig, strictTransforms: true, failOpen },
+        request: preflightRequest(),
+        fetchImpl: async () => {
+          throw error;
+        },
+      }),
+      (caught) => caught === error,
+    );
   });
 }
 
@@ -242,28 +529,46 @@ const payloadDecodingCases = [
   },
   { name: 'embedded JSON text', value: '{"command":"ls /tmp"}', want: '{"command":"ls /tmp"}' },
   { name: 'neither base64 nor JSON', value: 'not base64 either', want: '"not base64 either"' },
+  { name: 'malformed JSON text', value: malformedJSON, want: JSON.stringify(malformedJSON) },
+  { name: 'base64 of malformed JSON', value: malformedBase64, want: JSON.stringify(malformedJSON) },
 ];
 
 for (const testCase of payloadDecodingCases) {
-  test(`a transformed tool payload stays JSON: ${testCase.name}`, async () => {
-    const { response } = await runHook(preflightRequest(), {
-      action: 'allow',
-      transformed_input: {
-        messages: [
+  for (const strictTransforms of [false, true]) {
+    for (const failOpen of [true, false]) {
+      test(`payloads stay JSON: ${testCase.name}, strict=${strictTransforms}, failOpen=${failOpen}`, async () => {
+        const { response } = await runHook(
+          preflightRequest(),
           {
-            role: 'assistant',
-            parts: [{ kind: 'tool_call', tool_call: { id: 'call-1', name: 'Bash', input_json: testCase.value } }],
+            action: 'allow',
+            transformed_input: {
+              messages: [
+                {
+                  role: 'assistant',
+                  parts: [{ kind: 'tool_call', tool_call: { id: 'call-1', name: 'Bash', input_json: testCase.value } }],
+                },
+                { role: 'tool', parts: [{ tool_result: { content_json: testCase.value } }] },
+              ],
+              tools: [{ name: 'Bash', input_schema_json: testCase.value }],
+            },
+            evaluations: [],
           },
-        ],
-      },
-      evaluations: [],
-    });
+          { strictTransforms, failOpen },
+        );
 
-    const call = response.transformedInput?.messages?.[0]?.parts?.[0]?.toolCall;
-    assert.ok(call, 'tool call part was dropped');
-    assert.equal(call.inputJSON, testCase.want);
-    JSON.parse(call.inputJSON);
-  });
+        const input = response.transformedInput;
+        assert.ok(input, 'transformed input was dropped');
+        for (const value of [
+          input.messages[0].parts[0].toolCall.inputJSON,
+          input.messages[1].parts[0].toolResult.contentJSON,
+          input.tools[0].inputSchemaJSON,
+        ]) {
+          assert.equal(value, testCase.want);
+          JSON.parse(value);
+        }
+      });
+    }
+  }
 }
 
 for (const schema of [{ type: 'object' }, 'eyJhIjoxfQ', 'not base64 either']) {
@@ -346,6 +651,17 @@ test('an empty transformed_input is no transform', async () => {
 // Go and Python resolve every case here the same way.
 const responsePartCases = [
   ['text', { kind: 'text', text: 'kept' }, { type: 'text', text: 'kept' }],
+  [
+    'kind precedes type',
+    { kind: 'text', type: 'thinking', text: 'kept', thinking: 'ignored' },
+    { type: 'text', text: 'kept' },
+  ],
+  [
+    'text precedes leftover thinking',
+    { kind: 'text', text: 'kept', thinking: 'ignored' },
+    { type: 'text', text: 'kept' },
+  ],
+  ['inferred thinking precedes text', { text: 'ignored', thinking: 'kept' }, { type: 'thinking', thinking: 'kept' }],
   ['text without text', { kind: 'text', text: '' }, undefined],
   // The shape the server emits for an empty text part: its encoder omits the field
   // rather than sending ''.
@@ -394,16 +710,26 @@ const responsePartCases = [
 ];
 
 for (const [name, part, want] of responsePartCases) {
-  test(`a response part is parsed by its kind: ${name}`, async () => {
-    const { response } = await runHook(preflightRequest(), {
-      action: 'allow',
-      transformed_input: { messages: [{ role: 'assistant', parts: [part] }] },
-      evaluations: [],
+  for (const strictTransforms of [false, true]) {
+    test(`a response part is parsed by its kind: ${name}, strict=${strictTransforms}`, async () => {
+      const pending = runHook(
+        preflightRequest(),
+        {
+          action: 'allow',
+          transformed_input: { messages: [{ role: 'assistant', parts: [part] }] },
+          evaluations: [],
+        },
+        { strictTransforms },
+      );
+      if (strictTransforms && want === undefined) {
+        await assert.rejects(pending, HookTransformError);
+        return;
+      }
+      const { response } = await pending;
+      const parts = response.transformedInput?.messages?.[0]?.parts ?? [];
+      assert.deepEqual(parts, want === undefined ? [] : [want]);
     });
-
-    const parts = response.transformedInput?.messages?.[0]?.parts ?? [];
-    assert.deepEqual(parts, want === undefined ? [] : [want]);
-  });
+  }
 }
 
 // The three shapes only the JS parser has to tolerate. The server sends a
@@ -436,14 +762,24 @@ const responsePartEncodingCases = [
 ];
 
 for (const [name, part, want] of responsePartEncodingCases) {
-  test(`a response part in an alternate encoding is parsed: ${name}`, async () => {
-    const { response } = await runHook(preflightRequest(), {
-      action: 'allow',
-      transformed_input: { messages: [{ role: 'assistant', parts: [part] }] },
-      evaluations: [],
+  for (const strictTransforms of [false, true]) {
+    test(`a response part in an alternate encoding is parsed: ${name}, strict=${strictTransforms}`, async () => {
+      const pending = runHook(
+        preflightRequest(),
+        {
+          action: 'allow',
+          transformed_input: { messages: [{ role: 'assistant', parts: [part] }] },
+          evaluations: [],
+        },
+        { strictTransforms },
+      );
+      if (strictTransforms && want === undefined) {
+        await assert.rejects(pending, HookTransformError);
+        return;
+      }
+      const { response } = await pending;
+      const parts = response.transformedInput?.messages?.[0]?.parts ?? [];
+      assert.deepEqual(parts, want === undefined ? [] : [want]);
     });
-
-    const parts = response.transformedInput?.messages?.[0]?.parts ?? [];
-    assert.deepEqual(parts, want === undefined ? [] : [want]);
-  });
+  }
 }

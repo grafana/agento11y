@@ -35,6 +35,33 @@ export function createTelemetryProviders(
   otlp: OtlpConfig,
   instanceId: string,
 ): TelemetryProviders {
+  return buildTelemetryProviders(otlp, instanceId, () => {});
+}
+
+export async function createOwnedTelemetryProviders(
+  otlp: OtlpConfig,
+  instanceId: string,
+): Promise<TelemetryProviders> {
+  const owners = new Map<string, { shutdown: () => Promise<void> }>();
+  try {
+    return buildTelemetryProviders(otlp, instanceId, (channel, owner) => {
+      owners.set(channel, owner);
+    });
+  } catch (error) {
+    await Promise.allSettled(
+      [...owners.values()].map((owner) =>
+        Promise.resolve().then(() => owner.shutdown()),
+      ),
+    );
+    throw error;
+  }
+}
+
+function buildTelemetryProviders(
+  otlp: OtlpConfig,
+  instanceId: string,
+  own: (channel: string, owner: { shutdown: () => Promise<void> }) => void,
+): TelemetryProviders {
   const base = otlp.endpoint.replace(/\/+$/, "");
   // service.instance.id MUST disambiguate concurrent opencode processes on the
   // same host. Unlike pi, opencode runs many sessions per process, so the id
@@ -50,24 +77,31 @@ export function createTelemetryProviders(
     url: `${base}/v1/metrics`,
     headers: otlp.headers,
   });
+  own("metrics", metricExporter);
   const metricReader = new PeriodicExportingMetricReader({
     exporter: metricExporter,
     exportIntervalMillis: 15_000,
     exportTimeoutMillis: 15_000,
   });
+  own("metrics", metricReader);
   const meterProvider = new MeterProvider({
     resource,
     readers: [metricReader],
   });
 
+  own("metrics", meterProvider);
   const traceExporter = new OTLPTraceExporter({
     url: `${base}/v1/traces`,
     headers: otlp.headers,
   });
+  own("traces", traceExporter);
+  const processor = new BatchSpanProcessor(traceExporter);
+  own("traces", processor);
   const tracerProvider = new BasicTracerProvider({
     resource,
-    spanProcessors: [new BatchSpanProcessor(traceExporter)],
+    spanProcessors: [processor],
   });
+  own("traces", tracerProvider);
 
   return {
     tracer: tracerProvider.getTracer(INSTRUMENTATION_SCOPE),

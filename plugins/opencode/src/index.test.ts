@@ -47,6 +47,12 @@ describe("Agento11yPlugin", () => {
     _setGuardToastDelayMs(0);
   });
 
+  it("keeps the legacy root limited to its v1 plugin function", async () => {
+    const entry = await import("./index.js");
+    expect(Object.keys(entry)).toEqual(["Agento11yPlugin"]);
+    expect(entry.Agento11yPlugin).toBe(Agento11yPlugin);
+  });
+
   it("wires opencode's dispose hook to the plugin shutdown path", async () => {
     const { sigil } = makeAgento11yMock();
     createAgento11yClientMock.mockReturnValue(sigil);

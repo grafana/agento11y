@@ -29,13 +29,16 @@ agento11y opencode
 
 The script installs `agento11y` to `~/.local/bin`; `go install` uses `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`. See the [`agento11y` binary README](../agento11y/README.md#install) for all install options. The command was renamed from `sigil`; the old name still works but will be removed in a future release.
 
-On first run, `agento11y opencode` asks where sessions go, saves the answer to `~/.config/agento11y/config.env`, then installs `@grafana/agento11y-opencode` and launches OpenCode. **Grafana Cloud** asks for the credentials below. **Local only** sets `AGENTO11Y_LOCAL=true` and starts the local receiver for that launch. The question needs macOS or Linux and a terminal; see [Configure](../agento11y/README.md#configure) for the full rules. Pass arguments to OpenCode after `--`, for example, `agento11y opencode -- run "say hi"`.
+On first run, `agento11y opencode` asks where sessions go, saves the answer to `~/.config/agento11y/config.env`, then installs `@grafana/agento11y-opencode` and launches OpenCode. **Grafana Cloud** asks for the credentials below. **Local only** sets `AGENTO11Y_LOCAL=true` and starts the local receiver for that launch. The question needs macOS or Linux and a terminal; see [Configure](../agento11y/README.md#configure) for the full rules. Pass arguments to OpenCode after `--`, for example, `agento11y opencode -- run "say hi"`. For supported releases and OpenCode 2 behavior, see [OpenCode 2](#opencode-2).
 
 <details>
 <summary>Manual plugin registration</summary>
 
 ```sh
+# OpenCode 1
 opencode plugin @grafana/agento11y-opencode --global
+# OpenCode 2
+opencode plugin add @grafana/agento11y-opencode
 agento11y login
 ```
 
@@ -92,6 +95,24 @@ Run one OpenCode turn, then open **Agent Observability → Conversations** in Gr
 
 If nothing shows up, set `AGENTO11Y_DEBUG=true` in `~/.config/agento11y/config.env`, run another turn, and check OpenCode stderr.
 
+## OpenCode 2
+
+`agento11y opencode` supports OpenCode 1.3.13 or a later 1.x release, and 2.0.22 or a later 2.x release. It runs `opencode --version` before anything else. For any other release, it prints an error and changes nothing; run `opencode` directly to use that release without capture. The plugin package also loads on OpenCode 1.2.16 when you register it by hand.
+
+On OpenCode 2, `agento11y opencode`:
+
+- Installs the plugin with `opencode plugin add @grafana/agento11y-opencode`.
+- Adds `--standalone` to sessions: the TUI, `run`, and `mini`. OpenCode 2 normally attaches a session to a shared background service. That service keeps the environment it started with, so it does not get the launcher's endpoint, local mode, capture, guard, or tag settings. A standalone session runs a private server that does. `--server` and `--no-standalone` are refused.
+- Runs every other command as typed, for example `agento11y opencode -- plugin list` or `agento11y opencode -- --version`. It skips the login prompt, the local receiver, the plugin install, and `--standalone`.
+- Does not refresh the plugin, because `opencode plugin update` starts or contacts the background service. Run `opencode plugin update @grafana/agento11y-opencode` yourself.
+- Leaves the plugin off when your OpenCode config turns it off with `-grafana.agento11y`.
+
+Local mode runs on macOS and Linux only; Windows has no local receiver.
+
+Sessions started with plain `opencode` use the background service. The plugin still reads `~/.config/agento11y/config.env` there, but launcher flags such as `--tag` and `--local` do not reach it.
+
+`agento11y history import opencode` reads only OpenCode 1 databases. See [History import](../agento11y/README.md#history-import).
+
 ## Tagging sessions
 
 Launch with `--tag key=value` (repeatable) to attach tags to every generation the plugin exports:
@@ -137,7 +158,14 @@ With guards on, a rule can:
 
 - **Refuse a turn.** A `preflight` deny stops the turn before it reaches the model, so nothing is sent and no tokens are spent. The reason appears in the session and in OpenCode's log.
 - **Redact what the model sees.** A `preflight` redact rule replaces matching text in the conversation on its way to the provider. Your own message is not rewritten.
-- **Block or rewrite a tool call.** A `postflight` deny stops the call and tells the model why. A redact rule rewrites the arguments the tool receives. OpenCode's permission prompts count as tool calls, and its permission API has no field for a reason, so a denied prompt reports none.
+- **Block or rewrite a tool call.** A `postflight` deny stops the call and tells the model why. A redact rule rewrites the arguments the tool receives. OpenCode's permission prompts count as tool calls. On OpenCode 1, its permission API has no field for a reason, so a denied prompt reports none.
+
+On OpenCode 2:
+
+- Checks run when a prompt is submitted, before each model request (including compaction, title, and `session.generate` requests), before a tool runs, and when OpenCode evaluates a permission. A denied permission reports the rule's reason.
+- Compaction is checked a second time, on the request OpenCode actually sends, because OpenCode rebuilds the compaction text from stored history after the first check. This check reads OpenAI Chat Completions, OpenAI Responses (HTTP and WebSocket), Anthropic Messages, Gemini, and Bedrock Converse requests. With guards on, compaction through any other protocol fails. A redact rule can rewrite only an unsigned HTTP request that carries no server-side state or signed reasoning. In every other case, compaction fails instead of sending the unredacted text.
+- Automatic session titles stop while guards are on, unless you set `agent.title.model` in your OpenCode config. Without a title model, OpenCode's GitHub Copilot provider sends the conversation for a title before any plugin can check it, so the plugin removes OpenCode's title agent.
+- Guards do not cover requests other plugins send themselves, OpenCode's global `generate` API, request changes made by plugins that run after this one, or raw provider body overrides on requests other than compaction.
 
 ## All options
 
@@ -161,7 +189,7 @@ With guards on, a rule can:
 | `AGENTO11Y_AUTO_CODING_AGENT_TAGS` | `false` | Opt in to client tags resolved for the session: the user, the repository, and the branch. These reach OTel metrics as `agento11y_tag_*` labels, unlike the per-generation built-ins. The plugin builds one client per session, so the values freeze at session start. See [Tags and Metadata](../../docs/concepts/tags-and-metadata.md#opt-in-automatic-tags-agento11y_auto_coding_agent_tags) for the cardinality and personal-data trade-offs. |
 | `AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES` | all names | Narrows the switch above to a comma-separated subset of `user`, `repo`, `branch` (`all` is also accepted). Does nothing while the switch is off. |
 | `AGENTO11Y_DEBUG` | `false` | Log lifecycle events to stderr. |
-| `AGENTO11Y_AUTO_UPDATE` | `true` | Refresh the `@grafana/agento11y-opencode` plugin automatically. Set `false` to pin the installed version. |
+| `AGENTO11Y_AUTO_UPDATE` | `true` | Refresh the `@grafana/agento11y-opencode` plugin automatically on OpenCode 1. Set `false` to pin the installed version. OpenCode 2 is never refreshed automatically; see [OpenCode 2](#opencode-2). |
 
 File format: one `KEY=value` per line, `#` line comments, optional `export ` prefix, optional matching single or double quotes around the value. Only `AGENTO11Y_*` and `SIGIL_*` keys plus `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_INSECURE`, and `OTEL_SERVICE_NAME` are honored — anything else (including stray `PATH=…` lines) is ignored.
 

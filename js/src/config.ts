@@ -84,6 +84,7 @@ export const defaultHooksConfig: HooksConfig = {
   phases: ['preflight'],
   timeoutMs: 15_000,
   failOpen: true,
+  strictTransforms: false,
 };
 
 export const defaultLogger: Agento11yLogger = {
@@ -414,6 +415,7 @@ function mergeHooksConfig(config: Partial<HooksConfig> | undefined): HooksConfig
       Array.isArray(config?.phases) && config.phases.length > 0 ? [...config.phases] : [...defaultHooksConfig.phases],
     timeoutMs: config?.timeoutMs ?? defaultHooksConfig.timeoutMs,
     failOpen: config?.failOpen ?? defaultHooksConfig.failOpen,
+    strictTransforms: config?.strictTransforms ?? defaultHooksConfig.strictTransforms,
   };
 }
 

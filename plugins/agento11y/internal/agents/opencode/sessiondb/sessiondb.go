@@ -5,8 +5,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"iter"
+	"strings"
 	"time"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/chatstore"
@@ -170,15 +172,147 @@ type ToolMetadata struct {
 	Exit      *int   `json:"exit"`
 }
 
-// Open opens path read-only. SQLite connects lazily, so schema errors surface
-// on the first query. The mode reads a live write-ahead log; it may create the
-// missing shared-memory sidecar SQLite needs to index that log.
-func Open(path string) (*Store, error) {
+// ErrUnsupportedSchema is matched by every [*SchemaError].
+var ErrUnsupportedSchema = errors.New("unsupported OpenCode database schema")
+
+// Layout classifies a database whose schema Open rejected.
+type Layout int
+
+const (
+	// LayoutUnknown is neither a complete v1 schema nor a recognizable v2 one.
+	LayoutUnknown Layout = iota
+	// LayoutV2 keeps sessions in OpenCode v2's session_v2 table.
+	LayoutV2
+	// LayoutMixed is LayoutV2 with legacy v1 tables retained beside it.
+	LayoutMixed
+)
+
+// SchemaError reports why Open rejected a database. Reason names tables and
+// columns only, never row content.
+type SchemaError struct {
+	Path   string
+	Layout Layout
+	Reason string
+}
+
+func (e *SchemaError) Error() string {
+	return fmt.Sprintf("sessiondb: %v in %s: %s", ErrUnsupportedSchema, e.Path, e.Reason)
+}
+
+func (e *SchemaError) Unwrap() error { return ErrUnsupportedSchema }
+
+type tableColumns struct {
+	table   string
+	columns []string
+}
+
+// v1Tables lists every column the queries below read.
+var v1Tables = []tableColumns{
+	{table: "session", columns: []string{"id", "parent_id", "directory", "title", "time_created", "time_updated"}},
+	{table: "message", columns: []string{"id", "session_id", "time_created", "time_updated", "data"}},
+	{table: "part", columns: []string{"id", "message_id", "session_id", "time_updated", "data"}},
+}
+
+// v2Session is the NOT NULL, default-free subset of session_v2 in OpenCode's
+// packages/core/src/database/schema.gen.ts. session_message cannot mark v2:
+// OpenCode v1.18.29 already creates it beside the v1 tables.
+var v2Session = tableColumns{
+	table:   "session_v2",
+	columns: []string{"id", "project_id", "slug", "directory", "version", "time_created", "time_updated"},
+}
+
+// Open opens path read-only and returns a [*SchemaError] unless it holds the
+// v1 tables and columns this package reads. The mode reads a live write-ahead
+// log; it may create the missing shared-memory sidecar SQLite needs to index
+// that log.
+func Open(ctx context.Context, path string) (*Store, error) {
 	db, err := sql.Open("sqlite", chatstore.URI(path)+"?mode=ro")
 	if err != nil {
 		return nil, fmt.Errorf("sessiondb: open %s: %w", path, err)
 	}
-	return &Store{db: db, path: path}, nil
+	store := &Store{db: db, path: path}
+	if err := store.checkSchema(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return store, nil
+}
+
+func (s *Store) checkSchema(ctx context.Context) error {
+	const query = `select m.name, c.name
+		from sqlite_master m, pragma_table_info(m.name) c
+		where m.type = 'table' and m.name in ('session', 'message', 'part', 'session_v2')`
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("sessiondb: read schema of %s: %w", s.path, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	tables := map[string]map[string]bool{}
+	for rows.Next() {
+		var table, column string
+		if err := rows.Scan(&table, &column); err != nil {
+			return fmt.Errorf("sessiondb: read schema of %s: %w", s.path, err)
+		}
+		if tables[table] == nil {
+			tables[table] = map[string]bool{}
+		}
+		tables[table][column] = true
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("sessiondb: read schema of %s: %w", s.path, err)
+	}
+	if schemaErr := classifySchema(tables); schemaErr != nil {
+		schemaErr.Path = s.path
+		return schemaErr
+	}
+	return nil
+}
+
+func classifySchema(tables map[string]map[string]bool) *SchemaError {
+	if columns, ok := tables[v2Session.table]; ok {
+		if missing := missingColumns(columns, v2Session.columns); len(missing) > 0 {
+			return &SchemaError{Layout: LayoutUnknown, Reason: "table session_v2 does not match OpenCode v2: missing " + named("column", missing)}
+		}
+		for _, v1 := range v1Tables {
+			if _, ok := tables[v1.table]; ok {
+				return &SchemaError{Layout: LayoutMixed, Reason: "found OpenCode v2 table session_v2 beside legacy v1 tables"}
+			}
+		}
+		return &SchemaError{Layout: LayoutV2, Reason: "found OpenCode v2 table session_v2"}
+	}
+	var absent []string
+	for _, v1 := range v1Tables {
+		if _, ok := tables[v1.table]; !ok {
+			absent = append(absent, v1.table)
+		}
+	}
+	if len(absent) > 0 {
+		return &SchemaError{Layout: LayoutUnknown, Reason: "missing OpenCode v1 " + named("table", absent)}
+	}
+	for _, v1 := range v1Tables {
+		if missing := missingColumns(tables[v1.table], v1.columns); len(missing) > 0 {
+			return &SchemaError{Layout: LayoutUnknown, Reason: fmt.Sprintf("table %s is missing %s", v1.table, named("column", missing))}
+		}
+	}
+	return nil
+}
+
+func missingColumns(have map[string]bool, want []string) []string {
+	var missing []string
+	for _, column := range want {
+		if !have[column] {
+			missing = append(missing, column)
+		}
+	}
+	return missing
+}
+
+func named(noun string, names []string) string {
+	if len(names) == 1 {
+		return noun + " " + names[0]
+	}
+	return noun + "s " + strings.Join(names, ", ")
 }
 
 // Close releases the database.

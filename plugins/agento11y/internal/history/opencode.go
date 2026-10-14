@@ -2,6 +2,8 @@ package history
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"iter"
 	"os"
 	"path/filepath"
@@ -130,8 +132,18 @@ func openCodeConversationIDs(rows []sessiondb.Session) map[string]string {
 	return out
 }
 
+// openOpenCodeStore states the consequence of a rejected schema: a mixed
+// v1 and v2 database would otherwise look like a complete, older history.
+func openOpenCodeStore(ctx context.Context, path string) (*sessiondb.Store, error) {
+	store, err := sessiondb.Open(ctx, path)
+	if errors.Is(err, sessiondb.ErrUnsupportedSchema) {
+		return nil, fmt.Errorf("%w; history import reads only OpenCode v1 session tables, so no sessions were read from this database", err)
+	}
+	return store, err
+}
+
 func (o *opencodeImporter) Previews(ctx context.Context, path string) ([]SessionPreview, error) {
-	store, err := sessiondb.Open(path)
+	store, err := openOpenCodeStore(ctx, path)
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +177,7 @@ func (o *opencodeImporter) Previews(ctx context.Context, path string) ([]Session
 
 func (o *opencodeImporter) Turns(ctx context.Context, sess SessionPreview) iter.Seq2[HistoricalGeneration, error] {
 	return func(yield func(HistoricalGeneration, error) bool) {
-		store, err := sessiondb.Open(sess.SourcePath)
+		store, err := openOpenCodeStore(ctx, sess.SourcePath)
 		if err != nil {
 			yield(HistoricalGeneration{}, err)
 			return
