@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import pytest
 from agento11y import (
+    ContentCaptureMode,
     EmbeddingResult,
     EmbeddingStart,
     Generation,
+    Media,
     Message,
     MessageRole,
     ModelRef,
@@ -14,10 +16,12 @@ from agento11y import (
     PartKind,
     ToolCall,
     ToolResult,
+    media_part,
     validate_embedding_result,
     validate_embedding_start,
     validate_generation,
 )
+from agento11y.models import _metadata_key_content_capture_mode
 
 
 def _base_generation() -> Generation:
@@ -78,6 +82,69 @@ def test_validate_generation_rejects_thinking_for_non_assistant_role_output_path
         ValueError, match=r"generation\.output\[0\].parts\[0\].thinking only allowed for assistant role"
     ):
         validate_generation(generation)
+
+
+def test_validate_generation_rejects_media_without_a_url() -> None:
+    generation = _base_generation()
+    generation.input.append(
+        Message(
+            role=MessageRole.USER,
+            parts=[media_part(Media(kind="image", url="", mime_type="image/png", name="prompt.png"))],
+        )
+    )
+
+    with pytest.raises(ValueError, match=r"generation\.input\[1\].parts\[0\].media\.url is required"):
+        validate_generation(generation)
+
+
+def test_validate_generation_rejects_media_without_a_payload() -> None:
+    generation = _base_generation()
+    generation.input.append(
+        Message(
+            role=MessageRole.USER,
+            parts=[Part(kind=PartKind.MEDIA, media=None)],
+        )
+    )
+
+    with pytest.raises(ValueError, match=r"generation\.input\[1\].parts\[0\] must set exactly one payload field"):
+        validate_generation(generation)
+
+
+@pytest.mark.parametrize("role", [MessageRole.USER, MessageRole.ASSISTANT, MessageRole.TOOL])
+def test_validate_generation_accepts_media_on_every_role(role: MessageRole) -> None:
+    # Media is allowed on every role, unlike thinking and tool_call (assistant only)
+    # and tool_result (tool only).
+    generation = _base_generation()
+    generation.input.append(
+        Message(
+            role=role,
+            parts=[
+                media_part(
+                    Media(
+                        kind="image",
+                        url="data:image/png;base64,abc123",
+                        mime_type="image/png",
+                        name="prompt.png",
+                    )
+                )
+            ],
+        )
+    )
+
+    validate_generation(generation)
+
+
+def test_validate_generation_accepts_stripped_media_without_a_url() -> None:
+    generation = _base_generation()
+    generation.metadata[_metadata_key_content_capture_mode] = ContentCaptureMode.METADATA_ONLY.value
+    generation.input.append(
+        Message(
+            role=MessageRole.USER,
+            parts=[media_part(Media(kind="image", url="", mime_type="image/png", name="prompt.png"))],
+        )
+    )
+
+    validate_generation(generation)
 
 
 def test_validate_generation_accepts_conversation_and_response_fields() -> None:

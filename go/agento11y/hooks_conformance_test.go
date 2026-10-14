@@ -493,10 +493,11 @@ func TestHooksRequestKeepsAnUnparsablePayload(t *testing.T) {
 }
 
 func TestHooksRequestDropsPartsTheServerCannotRead(t *testing.T) {
-	// Only Go's model.Part can hold a media part or a kind-less part. The server
-	// has no media kind, and its default branch would decode one as an empty text
-	// part. The hook serializer therefore drops any part without a payload the
-	// server can read, which is what Python and JS do. A message left with no parts
+	// The server has no media kind, and its default branch would decode a media part
+	// as an empty text part. The hook serializer therefore drops any part without a
+	// payload the server can read, which is what Python and JS do. Go and Python can
+	// both hold a media part; the JS MessagePart union has no media member, so JS has
+	// none to drop. A kind-less part is Go-only. A message left with no parts
 	// serializes as [] in all three SDKs.
 	payload, err := json.Marshal(newHookWireRequest(HookEvaluateRequest{
 		Phase: HookPhasePreflight,
