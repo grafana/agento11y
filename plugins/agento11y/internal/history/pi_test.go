@@ -469,7 +469,7 @@ func TestPiTurnsMapOneGenerationPerAssistantEntry(t *testing.T) {
 		t.Fatalf("Usage = %+v, want the mapPiUsage mapping", usage)
 	}
 	if usage.ReasoningTokens != 0 {
-		t.Fatalf("ReasoningTokens = %d, want 0: live does not forward reasoning", usage.ReasoningTokens)
+		t.Fatalf("ReasoningTokens = %d, want 0: the entry omits reasoning", usage.ReasoningTokens)
 	}
 	if got := first.Gen.Metadata["cost_usd"]; got != 0.006 {
 		t.Fatalf("metadata cost_usd = %v, want 0.006", got)

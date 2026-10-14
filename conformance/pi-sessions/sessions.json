@@ -182,6 +182,7 @@
               "usage": {
                 "input": 12,
                 "output": 34,
+                "reasoning": 7,
                 "cacheRead": 5,
                 "cacheWrite": 6,
                 "totalTokens": 57,
@@ -254,6 +255,7 @@
               "usage": {
                 "input": 40,
                 "output": 8,
+                "reasoning": 0,
                 "cacheRead": 0,
                 "cacheWrite": 0,
                 "totalTokens": 48,

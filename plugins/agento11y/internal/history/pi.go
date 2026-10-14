@@ -332,6 +332,7 @@ type piMessage struct {
 type piUsage struct {
 	Input       int64   `json:"input"`
 	Output      int64   `json:"output"`
+	Reasoning   int64   `json:"reasoning"`
 	CacheRead   int64   `json:"cacheRead"`
 	CacheWrite  int64   `json:"cacheWrite"`
 	TotalTokens int64   `json:"totalTokens"`
@@ -615,7 +616,7 @@ func piQuality(gen agento11y.Generation) QualityReport {
 
 // piMapUsage ports mapPiUsage (plugins/pi/src/mappers.ts).
 //
-// The field set is narrower than pi's Usage: reasoning and cacheWrite1h are not
+// The field set is narrower than pi's Usage: cacheWrite1h is not
 // forwarded, and totalTokens is passed through as pi computes it
 // (input + output + cacheRead + cacheWrite) rather than recomputed to the Go
 // launchers' input + output. Both choices are live behavior and moving either
@@ -630,6 +631,7 @@ func piMapUsage(usage *piUsage) agento11y.TokenUsage {
 		TotalTokens:           usage.TotalTokens,
 		CacheReadInputTokens:  usage.CacheRead,
 		CacheWriteInputTokens: usage.CacheWrite,
+		ReasoningTokens:       usage.Reasoning,
 	}
 }
 

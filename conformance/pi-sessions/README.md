@@ -103,7 +103,7 @@ so comparing it would fail for a reason that is not drift.
 |------|--------------|
 | `full-turn` | The base mapping: model, response ID, stop reason, usage, cost, one prompt in, one answer out. |
 | `thinking-turn` | Thinking text, which pi persists and Claude Code does not, plus a redacted thinking block both sides drop. `usage.total_tokens` here is pi's own `input + output + cacheRead + cacheWrite`, deliberately not the Go launchers' `input + output`. |
-| `tool-call-turn` | Two tool calls, both results matched to their call by ID, an error result, name-only tool definitions, and a second turn whose parent is the first one reached through the tool-result entries. The error result holds two text blocks, the first empty, which both sides drop before joining the rest with a newline. |
+| `tool-call-turn` | Two tool calls, both results matched to their call by ID, an error result, name-only tool definitions, and a second turn whose parent is the first one reached through the tool-result entries. The error result holds two text blocks, the first empty, which both sides drop before joining the rest with a newline. The first turn reports 7 reasoning tokens; the second reports an explicit zero. Output, total tokens, cache counts, and cost stay unchanged. |
 | `missing-usage` | A usage block with a cost and no token counts. Both sides map every count to zero rather than inventing one. |
 | `fork` | A fork whose header names a trunk: the copied parent turn ships as `pi.fork.parent_session_id` metadata and no parent edge, because an edge would name a generation that does not exist under the fork's conversation ID. |
 
