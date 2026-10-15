@@ -7,6 +7,7 @@ package envconfig
 import (
 	"log"
 	"maps"
+	"net"
 	"net/url"
 	"os"
 	"slices"
@@ -208,6 +209,13 @@ func EnvOr(key, fallback string) string {
 // IsLocalEndpoint reports whether endpoint points at the local receiver.
 // Local URLs never need real Cloud credentials. The check uses URL parsing
 // so attacker-controlled hostnames like localhost.attacker.com do not match.
+//
+// Every spelling a client resolves to the receiver counts, because callers
+// decide by it whether an import carries the forward marker that keeps the
+// daemon from relaying it to Cloud: localhost in any case and with the
+// trailing dot of a fully qualified name, and 127.0.0.1 or ::1 in any form an
+// IP address can take. An https URL never does, because the receiver serves
+// plain HTTP.
 func IsLocalEndpoint(endpoint string) bool {
 	e := strings.TrimSpace(endpoint)
 	if e == "" {
@@ -217,12 +225,12 @@ func IsLocalEndpoint(endpoint string) bool {
 	if err != nil || u.Scheme != "http" {
 		return false
 	}
-	switch u.Hostname() {
-	case "127.0.0.1", "::1", "localhost":
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	if host == "localhost" {
 		return true
-	default:
-		return false
 	}
+	ip := net.ParseIP(host)
+	return ip != nil && (ip.Equal(net.IPv4(127, 0, 0, 1)) || ip.Equal(net.IPv6loopback))
 }
 
 // LocalAuthPlaceholder is the stand-in credential used for local endpoints,

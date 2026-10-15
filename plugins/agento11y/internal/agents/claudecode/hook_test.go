@@ -1470,10 +1470,20 @@ func TestIsLocalEndpoint(t *testing.T) {
 		"http://localhost:9000":        true,
 		"http://localhost:9000/custom": true,
 		"http://[::1]:9000":            true,
-		"https://cloud.example.com":    false,
-		"https://127.0.0.1":            false, // https → not the local receiver
-		"":                             false,
-		"http://example.com":           false,
+		// Spellings a client still resolves to the receiver.
+		"http://LOCALHOST:9000":          true,
+		"http://localhost.:9000":         true,
+		"HTTP://127.0.0.1:9000":          true,
+		"http://[0:0:0:0:0:0:0:1]:9000":  true,
+		"http://[::ffff:127.0.0.1]:9000": true,
+		"https://LOCALHOST:9000":         false, // https, whatever the host's case
+		"http://localhost..:9000":        false,
+		"http://127.0.0.2:9000":          false,
+		"http://localhost.attacker.com.": false,
+		"https://cloud.example.com":      false,
+		"https://127.0.0.1":              false, // https → not the local receiver
+		"":                               false,
+		"http://example.com":             false,
 		// Hostname-confusion attacks: HasPrefix matched these; URL parse
 		// rejects them.
 		"http://localhost.attacker.com": false,

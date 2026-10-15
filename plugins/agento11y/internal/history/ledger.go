@@ -118,19 +118,11 @@ func (t Target) Local() bool {
 }
 
 // normalizedEndpoint spells one endpoint one way, so a respelling does not
-// start a new ledger and send every turn again. Like the SDK, it reads an
-// endpoint without a scheme as https, or as http when AGENTO11Y_INSECURE is
-// set. It lowercases the scheme and host, and drops credentials, a trailing
-// dot from the host, the scheme's default port, and any trailing slash.
+// start a new ledger and send every turn again. It takes an endpoint with a
+// scheme, as Target.endpoint gives it. It lowercases the scheme and host, and
+// drops credentials, a trailing dot from the host, the scheme's default port,
+// and any trailing slash.
 func normalizedEndpoint(endpoint string) string {
-	lower := strings.ToLower(endpoint)
-	if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
-		scheme := "https://"
-		if envconfig.ParseBool(envconfig.Getenv("INSECURE")) {
-			scheme = "http://"
-		}
-		endpoint = scheme + endpoint
-	}
 	u, err := url.Parse(endpoint)
 	if err != nil {
 		return endpoint

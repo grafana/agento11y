@@ -105,13 +105,27 @@ func NewExporter(client *agento11y.Client) *Exporter {
 }
 
 // endpoint is the generation-export endpoint the target writes to: its own, or
-// the configured AGENTO11Y_ENDPOINT. The ledger keys its records by the same
-// resolution, so the two cannot disagree on where an import went.
+// the configured AGENTO11Y_ENDPOINT. An endpoint without a scheme gets the one
+// the SDK would give it, http when AGENTO11Y_INSECURE is set and https
+// otherwise, so the forward marker, the ledger and the viewer's offer all
+// judge the URL the SDK sends to.
 func (t Target) endpoint() string {
-	if endpoint := strings.TrimSpace(t.Endpoint); endpoint != "" {
-		return endpoint
+	endpoint := strings.TrimSpace(t.Endpoint)
+	if endpoint == "" {
+		endpoint = strings.TrimSpace(envconfig.Getenv("ENDPOINT"))
 	}
-	return strings.TrimSpace(envconfig.Getenv("ENDPOINT"))
+	if endpoint == "" {
+		return ""
+	}
+	lower := strings.ToLower(endpoint)
+	if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
+		scheme := "https://"
+		if envconfig.ParseBool(envconfig.Getenv("INSECURE")) {
+			scheme = "http://"
+		}
+		endpoint = scheme + endpoint
+	}
+	return endpoint
 }
 
 // NewTargetExporter builds the production exporter for an import target.
