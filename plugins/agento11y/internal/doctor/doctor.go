@@ -37,6 +37,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/guardeval"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/updatecheck"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/usagestats"
 )
 
 // Health is the per-section verdict. error is the only level that drives a
@@ -116,10 +117,11 @@ type Options struct {
 // Params carry the per-invocation inputs Run needs. OSEnv is the OS
 // environment snapshot taken before dotenv was applied (see SnapshotEnv).
 type Params struct {
-	Version string
-	OSEnv   map[string]string
-	Stdout  io.Writer
-	Stderr  io.Writer
+	Version        string
+	OSEnv          map[string]string
+	Stdout         io.Writer
+	Stderr         io.Writer
+	UsageStatsMode string
 }
 
 // Report is the full diagnostic. Field names and the `status` strings are the
@@ -129,6 +131,7 @@ type Report struct {
 	Config        ConfigSection        `json:"config"`
 	Conversations ConversationsSection `json:"conversations"`
 	Analytics     AnalyticsSection     `json:"analytics"`
+	UsageStats    UsageStatsSection    `json:"cli_usage_statistics"`
 	Agents        []AgentStatus        `json:"agents"`
 	// AutoUpdate is the resolved AUTO_UPDATE family. It carries provenance only:
 	// updatecheck.Disabled() owns the verdict below, so the rule that decides
@@ -144,6 +147,12 @@ type Report struct {
 // BinarySection reports the binary's build version.
 type BinarySection struct {
 	Version string `json:"version"`
+}
+
+// UsageStatsSection describes reporting by this CLI, separate from session export.
+type UsageStatsSection struct {
+	Mode     string `json:"mode"`
+	Endpoint string `json:"endpoint"`
 }
 
 // envValue is a non-secret resolved env var: endpoints and tenant IDs are safe
@@ -550,6 +559,10 @@ func Collect(ctx context.Context, opts Options, p Params) *Report {
 	r.Binary = BinarySection{Version: normalizeVersion(p.Version)}
 	r.Conversations = collectConversations(osEnv, fileEnv)
 	r.Analytics = collectAnalytics(osEnv, fileEnv, r.Conversations.configured())
+	r.UsageStats = UsageStatsSection{Mode: p.UsageStatsMode, Endpoint: usagestats.DefaultEndpoint}
+	if endpoint := strings.TrimSpace(os.Getenv(usagestats.EnvEndpoint)); endpoint != "" {
+		r.UsageStats.Endpoint = endpoint
+	}
 	r.Config = collectConfig(osEnv, fileEnv)
 	forward := daemonFamily("LOCAL_FORWARD", osEnv, fileEnv)
 	r.localCaptureConfigured = receiverSupported() &&

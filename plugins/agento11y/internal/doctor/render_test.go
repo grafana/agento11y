@@ -167,6 +167,18 @@ func TestRenderHuman_NoColorIsPlain(t *testing.T) {
 	}
 }
 
+func TestRenderHumanShowsSeparateCLIUsageStatistics(t *testing.T) {
+	r := sampleReport()
+	r.UsageStats = UsageStatsSection{Mode: "disabled", Endpoint: "https://stats.grafana.org/agento11y-usage-report"}
+	var out bytes.Buffer
+	renderHuman(&out, r, false)
+	for _, want := range []string{"CLI usage statistics", "reporting:        disabled", "AGENTO11Y_ANONYMOUS_USAGE_STATS=disabled"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("doctor missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
 // The binary version is printed exactly as the build stamped it, in the
 // heading and in cursor's line, which reports the same string. The `v` prefix
 // lives in the release ldflags (-X main.version=v{{ .Version }}) and nowhere

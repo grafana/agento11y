@@ -2,12 +2,15 @@ package entry
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +18,8 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/doctor"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/launcher"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/skills"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/usagestats"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/usagestats/capture"
@@ -29,6 +34,88 @@ func sampleInvocation(now time.Time) capture.Invocation {
 		Skill:     "setup-coding-agent",
 		Flags:     "json",
 		Completed: true,
+	}
+}
+
+func TestStartUsageRecordsOnlyResolvedFields(t *testing.T) {
+	for _, tc := range []struct {
+		name, surface, command, agent, skill, flags string
+		suppressed                                  bool
+		args                                        []string
+	}{
+		{name: "skills list", args: []string{"skills", "list"}, surface: usagestats.SurfaceCommand, command: "skills list"},
+		{name: "known skill", args: []string{"skills", "show", "setup-coding-agent"}, surface: usagestats.SurfaceCommand, command: "skills show", skill: "setup-coding-agent"},
+		{name: "unknown skill", args: []string{"skills", "show", "private-value"}, surface: usagestats.SurfaceCommand, command: "skills show"},
+		{name: "launcher", args: []string{"codex", "--local", "--", "private-value"}, surface: usagestats.SurfaceLauncher, command: "codex", agent: "codex", flags: "local"},
+		{name: "help flag", args: []string{"skills", "list", "--help"}, surface: usagestats.SurfaceHelp, command: "skills list", flags: "help"},
+		{name: "hook", args: []string{"codex", "hook"}, suppressed: true},
+		{name: "daemon", args: []string{"local", "serve"}, suppressed: true},
+		{name: "version", args: []string{"--version"}, suppressed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			capture.Reset()
+			startUsage(tc.args)
+			got := capture.Snapshot()
+			if got.Start.IsZero() || got.Surface != tc.surface || got.Command != tc.command || got.Agent != tc.agent || got.Skill != tc.skill || got.Flags != tc.flags || got.Suppressed != tc.suppressed {
+				t.Errorf("capture = %+v", got)
+			}
+		})
+	}
+	capture.Reset()
+}
+
+func TestUsageNoticeAppearsOncePerRevision(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	capture.Reset()
+	startUsage([]string{"skills", "list"})
+	oldShell := usageStatsShell
+	usageStatsShell = usagestats.ShellEnv{Mode: "enabled"}
+	t.Cleanup(func() { usageStatsShell = oldShell; capture.Reset() })
+
+	var first bytes.Buffer
+	showUsageNotice(&first)
+	if !strings.Contains(first.String(), "anonymous CLI usage statistics") ||
+		!strings.Contains(first.String(), "AGENTO11Y_ANONYMOUS_USAGE_STATS=disabled") ||
+		!strings.Contains(first.String(), usageNoticeURL) {
+		t.Fatalf("first-run notice incomplete: %q", first.String())
+	}
+	var second bytes.Buffer
+	showUsageNotice(&second)
+	if second.Len() != 0 {
+		t.Errorf("notice repeated for same revision: %q", second.String())
+	}
+
+	marker := filepath.Join(filepath.Dir(usagestats.InstallIDPath()), "usage-stats-notice")
+	if err := os.WriteFile(marker, []byte("0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var revised bytes.Buffer
+	showUsageNotice(&revised)
+	if revised.Len() == 0 {
+		t.Error("new notice revision was not shown")
+	}
+}
+
+func TestUsageNoticeSkipsSuppressedAndDisabledInvocations(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	oldShell := usageStatsShell
+	t.Cleanup(func() { usageStatsShell = oldShell; capture.Reset() })
+	for _, tc := range []struct {
+		args []string
+		mode string
+	}{
+		{args: []string{"--version"}, mode: "enabled"},
+		{args: []string{"codex", "hook"}, mode: "enabled"},
+		{args: []string{"skills", "list"}, mode: "disabled"},
+	} {
+		capture.Reset()
+		startUsage(tc.args)
+		usageStatsShell = usagestats.ShellEnv{Mode: tc.mode}
+		var out bytes.Buffer
+		showUsageNotice(&out)
+		if out.Len() != 0 {
+			t.Errorf("args=%v mode=%s: unexpected notice %q", tc.args, tc.mode, out.String())
+		}
 	}
 }
 
@@ -521,7 +608,7 @@ func dirOf(path string) string {
 
 // TestEmitUsageOnceIsNotWiredYet: the emitter exists and is tested, but no
 // dispatch path reaches it yet.
-func TestEmitUsageOnceIsNotWiredYet(t *testing.T) {
+func TestEmitUsageOnce(t *testing.T) {
 	capture.Reset()
 	resetUsageOnceForTest()
 
@@ -537,5 +624,54 @@ func TestEmitUsageOnceIsNotWiredYet(t *testing.T) {
 
 	if calls != 1 {
 		t.Errorf("emitUsageOnce() fired %d times, want exactly 1", calls)
+	}
+}
+
+func TestMainReportsHelpAndLauncherOnceAndSuppressesVersion(t *testing.T) {
+	oldArgs, oldShell, oldEmit := os.Args, usageStatsShell, emitUsage
+	oldLauncher, oldBeforeExec := launchers["codex"], launcher.BeforeExec
+	t.Cleanup(func() {
+		os.Args, usageStatsShell, emitUsage = oldArgs, oldShell, oldEmit
+		launchers["codex"], launcher.BeforeExec = oldLauncher, oldBeforeExec
+		capture.Reset()
+		resetUsageOnceForTest()
+	})
+	usageStatsShell = usagestats.ShellEnv{Mode: "disabled"}
+	launchers["codex"] = func(context.Context, []string, *local.LaunchEnv, io.Reader, io.Writer, io.Writer, *log.Logger, string) error {
+		launcher.BeforeExec()
+		return nil
+	}
+
+	for _, tc := range []struct {
+		args    []string
+		want    string
+		outcome string
+		blocked bool
+	}{
+		{args: []string{"help"}, want: "help", outcome: usagestats.OutcomeHelp},
+		{args: []string{"codex"}, want: "codex", outcome: usagestats.OutcomeLaunched},
+		{args: []string{"--version"}, blocked: true},
+	} {
+		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
+			capture.Reset()
+			resetUsageOnceForTest()
+			os.Args = append([]string{"agento11y"}, tc.args...)
+			var events []capture.Invocation
+			emitUsage = func(inv capture.Invocation, _ time.Time) { events = append(events, inv) }
+			Main("dev")
+			if len(events) != 1 {
+				t.Fatalf("emission calls = %d, want one lifecycle call", len(events))
+			}
+			inv := events[0]
+			if inv.Suppressed != tc.blocked {
+				t.Fatalf("suppressed = %v, want %v", inv.Suppressed, tc.blocked)
+			}
+			if !tc.blocked {
+				outcome, _ := usageOutcome(inv)
+				if inv.Command != tc.want || outcome != tc.outcome {
+					t.Errorf("command/outcome = %q/%q, want %q/%q", inv.Command, outcome, tc.want, tc.outcome)
+				}
+			}
+		})
 	}
 }

@@ -150,6 +150,14 @@ func renderHuman(w io.Writer, r *Report, color bool) {
 	writeMessages(&b, p, r.Analytics.Messages)
 	b.textf("\n")
 
+	if r.UsageStats.Mode != "" {
+		writeSection(&b, p, "CLI usage statistics", HealthOK)
+		b.kv("reporting", r.UsageStats.Mode)
+		b.kv("endpoint", r.UsageStats.Endpoint)
+		b.kv("turn off", "AGENTO11Y_ANONYMOUS_USAGE_STATS=disabled or DO_NOT_TRACK=1")
+		b.textf("\n")
+	}
+
 	// Config.
 	writeSection(&b, p, "Config", r.Config.Health)
 	exists := "missing"

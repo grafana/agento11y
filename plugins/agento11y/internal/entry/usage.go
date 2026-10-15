@@ -22,6 +22,64 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/usagestats/capture"
 )
 
+// startUsage records only resolved command names and allowlisted flag names.
+func startUsage(args []string) {
+	capture.SetStart(time.Now())
+	if len(args) >= 2 && args[1] == "hook" {
+		if _, ok := agents[args[0]]; ok {
+			capture.Suppress()
+			return
+		}
+	}
+	if len(args) >= 2 && args[0] == "local" && args[1] == "serve" {
+		capture.Suppress()
+		return
+	}
+	if len(args) == 1 && (args[0] == "--version" || args[0] == "-version") {
+		capture.Suppress()
+		return
+	}
+
+	path, consumed, _ := resolveCommandPath(args)
+	surface := usagestats.SurfaceCommand
+	agent := ""
+	if len(args) == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
+		surface = usagestats.SurfaceHelp
+	}
+	for _, arg := range args {
+		if arg == "--" {
+			break
+		}
+		if arg == "--help" || arg == "-h" {
+			surface = usagestats.SurfaceHelp
+			break
+		}
+	}
+	if len(args) > 0 && path == args[0] {
+		if _, ok := launchers[args[0]]; ok {
+			if surface != usagestats.SurfaceHelp {
+				surface = usagestats.SurfaceLauncher
+			}
+			agent = args[0]
+		}
+	}
+	rest := args
+	if consumed > 0 {
+		rest = args[consumed:]
+	}
+	capture.SetDispatch(surface, path, agent, usageFlagNames(rest))
+	if (path == "skills show" || path == "skills get") && len(rest) > 0 {
+		capture.SetSkill(resolveUsageSkill(rest[0]))
+	}
+}
+
+func usageExit(code int) {
+	capture.SetExit(code)
+	capture.SetCompleted()
+	emitUsageOnce()
+	os.Exit(code)
+}
+
 // usageStatsConfigValue reads the reporting mode from config.env.
 //
 // It reads the file directly and never calls dotenv.ApplyEnv: those call sites
