@@ -672,6 +672,11 @@ func TestLoopbackEndpointAlwaysCarriesTheForwardMarker(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			envconfig.PinAliasEnvBlank(t)
+			// Go only skips a proxy for a lower-case localhost, so a proxy in
+			// the environment would carry the LOCALHOST case away.
+			for _, key := range []string{"HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"} {
+				t.Setenv(key, "")
+			}
 			mu.Lock()
 			marker = ""
 			mu.Unlock()
