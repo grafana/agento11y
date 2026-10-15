@@ -2,6 +2,7 @@
 
 import json
 import shlex
+import sys
 import uuid
 
 from agent import CASES, HERE, client, run_agent
@@ -48,7 +49,10 @@ class LedgerAgent(BaseAgent):
                 "agento11y.conversation_id": result["conversation_id"],
                 "cost_basis": result["cost_basis"],
             }
-            (self.logs_dir / "provider-responses.json").write_text(json.dumps(result, indent=2))
+            try:
+                (self.logs_dir / "provider-responses.json").write_text(json.dumps(result, indent=2))
+            except OSError as exc:
+                print(f"could not write provider-responses.json: {exc}", file=sys.stderr, flush=True)
 
         try:
             await run_agent(instruction, self.model_name, run_id, case_id, sdk, tool=tool, on_result=record)

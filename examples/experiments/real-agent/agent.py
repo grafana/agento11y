@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import json
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -73,6 +74,19 @@ class AgentRunFailed(RuntimeError):
     """A run that did not finish. ``on_result`` has already received its completed turns."""
 
 
+def write_result_file(run_id, case_id, result):
+    """Keep a copy for inspection. Best effort: it never changes the run's outcome."""
+    results_dir = os.environ.get("REAL_AGENT_RESULTS")
+    if not results_dir:
+        return
+    try:
+        folder = Path(results_dir) / run_id
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / f"{case_id}.json").write_text(json.dumps(result, indent=2))
+    except OSError as exc:
+        print(f"{run_id}/{case_id}: could not write the result file: {exc}", file=sys.stderr, flush=True)
+
+
 async def run_agent(question, model, run_id, case_id, sdk, *, tool=None, on_result=None):
     """Tool callbacks read/write actual sandbox files for Harbor, local files otherwise.
 
@@ -128,9 +142,7 @@ async def run_agent(question, model, run_id, case_id, sdk, *, tool=None, on_resu
             result["error"] = error or f"Generation export failed: {type(exc).__name__}: {exc}"
         if on_result:
             on_result(result)
-        folder = Path(os.environ["REAL_AGENT_RESULTS"]) / run_id
-        folder.mkdir(parents=True, exist_ok=True)
-        (folder / f"{case_id}.json").write_text(json.dumps(result, indent=2))
+        write_result_file(run_id, case_id, result)
         return result
 
     error = None
