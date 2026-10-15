@@ -2456,17 +2456,17 @@ function SettingsLocalTab({ form, set, setTag, addTag, removeTag, onOpenSecurity
           <Toggle checked={form.autoUpdate} onChange={(v) => set({ autoUpdate: v })} label="Automatic updates" />
         </SettingRow>
         <SettingRow
-          full
           label="CLI usage statistics"
           help={
             <>
-              The <Mono>agento11y</Mono> CLI sends anonymous usage statistics about its own commands, never operations
-              performed by a coding agent. To turn reporting off, set <Mono>AGENTO11Y_ANONYMOUS_USAGE_STATS=disabled</Mono>{' '}
-              in your shell or <Mono>~/.config/agento11y/config.env</Mono>, or set <Mono>DO_NOT_TRACK=1</Mono> in your shell.{' '}
+              <Mono>agento11y</Mono> sends anonymous usage statistics about its commands, never operations performed by
+              a coding agent. Disable with <Mono>AGENTO11Y_ANONYMOUS_USAGE_STATS=disabled</Mono> (shell or{' '}
+              <Mono>~/.config/agento11y/config.env</Mono>) or <Mono>DO_NOT_TRACK=1</Mono> (shell).{' '}
               <a
                 href="https://grafana.com/docs/grafana-cloud/observe-and-act/agent-observability/guides/instrument-coding-agents/"
                 target="_blank"
                 rel="noreferrer"
+                style={{ color: 'var(--fg-link)' }}
               >
                 Learn more
               </a>
