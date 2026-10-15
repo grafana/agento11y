@@ -55,6 +55,9 @@ func startUsage(args []string) {
 			break
 		}
 	}
+	if path == "" && (len(args) == 0 || args[0] == "--help" || args[0] == "-h") {
+		path = "help"
+	}
 	if len(args) > 0 && path == args[0] {
 		if _, ok := launchers[args[0]]; ok {
 			if surface != usagestats.SurfaceHelp {
