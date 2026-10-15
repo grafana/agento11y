@@ -606,8 +606,6 @@ func dirOf(path string) string {
 	return "."
 }
 
-// TestEmitUsageOnceIsNotWiredYet: the emitter exists and is tested, but no
-// dispatch path reaches it yet.
 func TestEmitUsageOnce(t *testing.T) {
 	capture.Reset()
 	resetUsageOnceForTest()

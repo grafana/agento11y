@@ -28,8 +28,7 @@ import (
 // here so tests can substitute a recording stub.
 type ExecFunc func(argv0 string, argv []string, envv []string) error
 
-// BeforeExec is set by the CLI entrypoint to report launcher handoff.
-// Package tests and other callers leave it as a no-op.
+// BeforeExec reports launcher handoff before process replacement.
 var BeforeExec = func() {}
 
 // Exec replaces the current process with bin, prepending bin as argv[0] and
@@ -40,7 +39,6 @@ var BeforeExec = func() {}
 // returned error means the execve syscall itself failed.
 func Exec(execFn ExecFunc, bin, name string, args, env []string) error {
 	argv := append([]string{bin}, args...)
-	// shortcut: execve can fail after reporting handoff; revisit if those failures appear in practice.
 	BeforeExec()
 	if err := execFn(bin, argv, env); err != nil {
 		return fmt.Errorf("exec %s: %w", name, err)
