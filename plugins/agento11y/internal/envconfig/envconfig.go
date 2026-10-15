@@ -210,12 +210,14 @@ func EnvOr(key, fallback string) string {
 // Local URLs never need real Cloud credentials. The check uses URL parsing
 // so attacker-controlled hostnames like localhost.attacker.com do not match.
 //
-// Every spelling a client resolves to the receiver counts, because callers
-// decide by it whether an import carries the forward marker that keeps the
-// daemon from relaying it to Cloud: localhost in any case and with the
-// trailing dot of a fully qualified name, and 127.0.0.1 or ::1 in any form an
-// IP address can take. An https URL never does, because the receiver serves
-// plain HTTP.
+// Callers decide by it whether an import carries the forward marker that keeps
+// the daemon from relaying it to Cloud, so it matches the receiver's address
+// however it is spelled: localhost in any letter case, and 127.0.0.1 or ::1 in
+// any notation net.ParseIP reads, such as [0:0:0:0:0:0:0:1] or
+// [::ffff:127.0.0.1]. A fully qualified localhost. does not count: Go's own
+// resolver, which release builds use on Linux, sends it to DNS rather than to
+// the hosts file. An https URL never counts, because the receiver serves plain
+// HTTP.
 func IsLocalEndpoint(endpoint string) bool {
 	e := strings.TrimSpace(endpoint)
 	if e == "" {
@@ -225,8 +227,8 @@ func IsLocalEndpoint(endpoint string) bool {
 	if err != nil || u.Scheme != "http" {
 		return false
 	}
-	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
-	if host == "localhost" {
+	host := u.Hostname()
+	if strings.EqualFold(host, "localhost") {
 		return true
 	}
 	ip := net.ParseIP(host)

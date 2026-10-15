@@ -1470,15 +1470,22 @@ func TestIsLocalEndpoint(t *testing.T) {
 		"http://localhost:9000":        true,
 		"http://localhost:9000/custom": true,
 		"http://[::1]:9000":            true,
-		// Spellings a client still resolves to the receiver.
+		"HTTP://127.0.0.1:9000":        true,
+		// Spellings of the receiver's address that only matched exactly before.
 		"http://LOCALHOST:9000":          true,
-		"http://localhost.:9000":         true,
-		"HTTP://127.0.0.1:9000":          true,
 		"http://[0:0:0:0:0:0:0:1]:9000":  true,
 		"http://[::ffff:127.0.0.1]:9000": true,
+		"http://attacker.com@localhost":  true, // userinfo is not the host
+		// Not the receiver, or not certainly: a fully qualified name goes to
+		// DNS with Go's own resolver.
+		"http://localhost.:9000":         false,
+		"http://127.0.0.1.:9000":         false,
 		"https://LOCALHOST:9000":         false, // https, whatever the host's case
 		"http://localhost..:9000":        false,
 		"http://127.0.0.2:9000":          false,
+		"http://[::ffff:127.0.0.2]:9000": false,
+		"http://[::127.0.0.1]:9000":      false,
+		"http://[::1%25lo0]:9000":        false,
 		"http://localhost.attacker.com.": false,
 		"https://cloud.example.com":      false,
 		"https://127.0.0.1":              false, // https → not the local receiver

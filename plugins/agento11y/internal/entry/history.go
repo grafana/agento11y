@@ -333,7 +333,7 @@ func historyResolveDestination(ctx context.Context, opts *historyImportOptions, 
 // historyDestinationConfigured reports whether first-run setup has anything to
 // ask. Cloud needs complete credentials, while a loopback endpoint needs none.
 func historyDestinationConfigured() bool {
-	return dotenv.HasCredentials() || envconfig.IsLocalEndpoint(envconfig.Getenv("ENDPOINT"))
+	return dotenv.HasCredentials() || history.Target{}.Local()
 }
 
 func historyImport(opts historyImportOptions, interactive bool, stdout, stderr io.Writer) error {

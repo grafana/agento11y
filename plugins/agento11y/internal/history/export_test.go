@@ -647,8 +647,8 @@ func TestGenerationStartCarriesRequestFields(t *testing.T) {
 // endpoint rather than the caller's intent.
 //
 // Regression: an endpoint that reached the daemon under another spelling,
-// LOCALHOST, a fully qualified localhost., or a scheme left to
-// AGENTO11Y_INSECURE, was taken for Cloud, and its import went out unmarked.
+// LOCALHOST or a scheme left to AGENTO11Y_INSECURE, was taken for Cloud, and a
+// user with Cloud credentials sent its import out unmarked.
 func TestLoopbackEndpointAlwaysCarriesTheForwardMarker(t *testing.T) {
 	var mu sync.Mutex
 	var marker string
@@ -668,7 +668,6 @@ func TestLoopbackEndpointAlwaysCarriesTheForwardMarker(t *testing.T) {
 	}{
 		{name: "127.0.0.1", endpoint: srv.URL},
 		{name: "upper-case localhost", endpoint: "http://LOCALHOST:" + port},
-		{name: "fully qualified localhost", endpoint: "http://localhost.:" + port},
 		{name: "no scheme, insecure", endpoint: "127.0.0.1:" + port, insecure: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -677,9 +676,12 @@ func TestLoopbackEndpointAlwaysCarriesTheForwardMarker(t *testing.T) {
 			marker = ""
 			mu.Unlock()
 
-			// The Cloud path: no endpoint on the target, no headers, no
-			// credentials. AGENTO11Y_ENDPOINT happens to be the local daemon.
+			// The Cloud path: no endpoint on the target and no headers, with
+			// Cloud credentials saved. AGENTO11Y_ENDPOINT happens to be the
+			// local daemon.
 			t.Setenv("AGENTO11Y_ENDPOINT", tt.endpoint)
+			t.Setenv("AGENTO11Y_AUTH_TENANT_ID", "123")
+			t.Setenv("AGENTO11Y_AUTH_TOKEN", "token")
 			if tt.insecure {
 				t.Setenv("AGENTO11Y_INSECURE", "true")
 			}

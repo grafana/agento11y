@@ -1308,3 +1308,20 @@ func TestHistoryLocalImportAnswersTheViewerOffer(t *testing.T) {
 		})
 	}
 }
+
+// Regression: the first-run setup check read AGENTO11Y_ENDPOINT raw, so a
+// daemon address without a scheme and AGENTO11Y_INSECURE asked for Cloud
+// credentials although the import goes to the local daemon and needs none.
+func TestHistoryDestinationConfiguredReadsTheEndpointAsTheImportDoes(t *testing.T) {
+	isolateDotenvHome(t)
+	envconfig.PinAliasEnvBlank(t)
+	t.Setenv(envconfig.PreferredKey("ENDPOINT"), "127.0.0.1:8765")
+	t.Setenv(envconfig.PreferredKey("INSECURE"), "true")
+	if !historyDestinationConfigured() {
+		t.Error("a daemon address without a scheme, with AGENTO11Y_INSECURE, still asks for setup")
+	}
+	t.Setenv(envconfig.PreferredKey("INSECURE"), "")
+	if historyDestinationConfigured() {
+		t.Error("an https endpoint without credentials skipped setup")
+	}
+}
