@@ -41,6 +41,11 @@ excludes grading. `record_io=False` avoids extra anchor generations by default.
 Native batch scheduling, caching, and pytest can continue using the
 completed-result importers below.
 
+Pass `metadata` and `tags` to record CI context on the run, such as a commit SHA
+or pull request number. The adapter owns the `framework`, `execution_mode`,
+`execution_kind`, `suite_id`, and `suite_version` keys, and passing one raises
+`ValueError`. This requires the next `agento11y-deepeval` release after 0.20.0.
+
 For `ConversationalTestCase`, the same target receives a private copy of the
 case and must return the completed ordered `Sequence[Turn]`. The single-turn
 `target(case, trial) -> str` contract is unchanged. Returning turns instead of

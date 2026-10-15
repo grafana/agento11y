@@ -1,0 +1,12 @@
+[
+  {"id":"paid-revenue","question":"What is total revenue in cents from paid orders?","expected":"8700"},
+  {"id":"paid-count","question":"How many orders have status paid?","expected":"5"},
+  {"id":"west-revenue","question":"What is paid revenue in cents in the west region?","expected":"4500"},
+  {"id":"east-items","question":"How many units were sold in paid orders in the east region?","expected":"6"},
+  {"id":"largest-order","question":"What is the largest single paid order total in cents?","expected":"3600"},
+  {"id":"refunded-revenue","question":"What is the total value in cents of refunded orders?","expected":"2400"},
+  {"id":"paid-average","question":"What is the mean paid order total in cents?","expected":"1740"},
+  {"id":"net-revenue","question":"What is paid revenue minus refunded value, in cents?","expected":"6300"},
+  {"id":"paid-units","question":"How many total units were sold in paid orders?","expected":"12"},
+  {"id":"high-value-count","question":"How many paid orders have a total of at least 1500 cents?","expected":"3"}
+]

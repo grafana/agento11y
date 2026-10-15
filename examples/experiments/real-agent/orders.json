@@ -1,0 +1,9 @@
+[
+  {"id":"A","region":"east","status":"paid","quantity":2,"unit_price_cents":600},
+  {"id":"B","region":"west","status":"paid","quantity":3,"unit_price_cents":1200},
+  {"id":"C","region":"east","status":"refunded","quantity":2,"unit_price_cents":1200},
+  {"id":"D","region":"east","status":"paid","quantity":1,"unit_price_cents":1500},
+  {"id":"E","region":"west","status":"pending","quantity":4,"unit_price_cents":800},
+  {"id":"F","region":"west","status":"paid","quantity":3,"unit_price_cents":300},
+  {"id":"G","region":"east","status":"paid","quantity":3,"unit_price_cents":500}
+]

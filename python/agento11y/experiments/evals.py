@@ -8,7 +8,7 @@ judges when correctness cannot be expressed as an exact reference answer.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
@@ -19,7 +19,13 @@ from .client import Client
 from .control import EvaluatorsClient, StoredEvaluator
 from .experiment import Experiment, Trial, experiment, stable_id
 from .plan import EvaluationPlan
-from .types import Candidate, Evaluator, TestCase, TestSuite
+from .types import Candidate, Evaluator, TestCase, TestSuite, _env_value
+
+# Provenance the one-call helpers own. A caller can't override these through
+# ``metadata``, so a gate reading them can trust they describe how the run executed.
+_RESERVED_METADATA_KEYS = frozenset(
+    {"execution_kind", "framework", "input_selector", "evaluation_plan", "suite_id", "suite_version"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +51,8 @@ def run_evals(
     plan: EvaluationPlan | None = None,
     evaluators_client: EvaluatorsClient | None = None,
     input_selector: str = "input.prompt",
+    metadata: Mapping[str, Any] | None = None,
+    tags: Sequence[str] | None = None,
 ) -> Experiment:
     """Run a published suite against a text target and publish exact-match verdicts.
 
@@ -65,9 +73,19 @@ def run_evals(
     failures remain inspectable and successful sibling cases are retained.
     ``input_selector='input'`` passes structured context rather than just the
     prompt. AgentOutput supports explicit correlation and an export flush.
+
+    ``metadata`` and ``tags`` are added to the run, for example CI provenance
+    such as a commit SHA or PR number. The SDK's own provenance keys
+    (``execution_kind``, ``framework``, ``input_selector``, ``evaluation_plan``,
+    ``suite_id``, ``suite_version``) are reserved, and passing one raises
+    ``ValueError``. Without ``experiment_id``, the run uses
+    ``AGENTO11Y_EXPERIMENT_ID`` when it is set, so a CI wrapper can allocate
+    the run ID; with it set, run one helper per process.
     """
     if plan is not None and evaluate is not None:
         raise ValueError("choose plan or evaluate, not both")
+    user_metadata = _caller_metadata(metadata)
+    run_tags = _caller_tags(tags)
     _validate_cases(suite, input_selector)
     if evaluate is None and plan is None:
         for case in suite.cases:
@@ -79,13 +97,15 @@ def run_evals(
             plan.provision(evaluators_client or EvaluatorsClient())
     with experiment(
         name,
-        experiment_id=experiment_id,
+        experiment_id=_experiment_id_or_env(experiment_id),
         suite=suite,
         client=client,
         candidate=candidate,
         planned_trial_count=len(suite.cases),
         use_experimental_otel=use_experimental_otel,
+        tags=run_tags,
         metadata={
+            **user_metadata,
             "framework": "grafana",
             "execution_kind": "agent_run",
             "input_selector": input_selector,
@@ -119,6 +139,38 @@ def run_evals(
                     else "Answer differs from the reviewed reference",
                 )
     return run
+
+
+def _caller_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Copy caller metadata, refusing keys the helpers set themselves."""
+
+    if metadata is None:
+        return {}
+    if not isinstance(metadata, Mapping):
+        raise TypeError("metadata must be a mapping")
+    reserved = sorted(str(key) for key in metadata if key in _RESERVED_METADATA_KEYS)
+    if reserved:
+        raise ValueError(f"metadata keys are reserved for the SDK's provenance: {', '.join(reserved)}")
+    return dict(metadata)
+
+
+def _caller_tags(tags: Sequence[str] | None) -> list[str]:
+    if tags is None:
+        return []
+    # A bare string is a Sequence[str] too, and would otherwise become one tag per character.
+    if isinstance(tags, str) or not all(isinstance(tag, str) for tag in tags):
+        raise TypeError("tags must be a sequence of strings")
+    return list(tags)
+
+
+def _experiment_id_or_env(experiment_id: str) -> str:
+    """Use the explicit ID, else a run ID allocated through ``AGENTO11Y_EXPERIMENT_ID``.
+
+    Only the one-call helpers read the variable: ``experiment()`` keeps
+    generating a fresh ID, so a process that opens several runs can't collide.
+    """
+
+    return experiment_id or _env_value("EXPERIMENT_ID")
 
 
 def _validate_cases(suite: TestSuite, input_selector: str) -> None:

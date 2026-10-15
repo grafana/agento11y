@@ -549,6 +549,16 @@ can't interrupt a running agent call). Gate CI with `agento11y-checkpoint-gate
 2 (the runs can't be compared; any errored case makes a run incomparable, so
 rerun it).
 
+To record CI context, pass `metadata={...}` (for example commit SHA, PR number,
+run URL) and `tags=[...]` to `run_checkpoint` or `run_evals` (the next release
+after 0.20.0), e.g. `metadata=json.loads(os.environ.get("AGENTO11Y_CI_METADATA", "{}"))`
+when your CI provides JSON; the SDK never reads that variable itself. The keys
+`execution_kind`, `framework`, `input_selector`, `evaluation_plan`, `suite_id`
+and `suite_version` are reserved and raise `ValueError`. Without
+`experiment_id`, both helpers use `AGENTO11Y_EXPERIMENT_ID` when set, so a CI
+wrapper can pre-allocate the run ID; `experiment()` does not read it, and with
+it set you call one helper per process or pass `experiment_id` explicitly.
+
 The Grafana `run_evals` helper accepts an `evaluate(trial, case, answer)`
 callback for local scoring or stored evaluator invocation. Its recommended
 mixed-judge flow is `text_case(...)`,

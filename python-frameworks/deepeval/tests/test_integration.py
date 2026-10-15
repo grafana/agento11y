@@ -775,3 +775,62 @@ def test_live_telemetry_failure_keeps_other_cases_and_emits_no_quality_verdict()
     assert [item["status"] for item in client.trial_updates] == ["failed", "completed"]
     assert "export unavailable" in client.trial_updates[0]["error"]
     assert client.scores[0].passed is True
+
+
+def test_live_runner_adds_caller_metadata_and_tags_without_overriding_provenance():
+    from deepeval.metrics import ExactMatchMetric
+    from deepeval.test_case import LLMTestCase
+
+    client = FakeClient()
+    ci = {"ci.provider": "github_actions", "git.commit_sha": "abc123"}
+    cases = [LLMTestCase(input="hi", actual_output="", expected_output="ok")]
+
+    run_deepeval(
+        cases,
+        lambda case, trial: "ok",
+        [ExactMatchMetric()],
+        experiment_name="ci",
+        client=client,
+        metadata=ci,
+        tags=["ci"],
+    )
+
+    request = client.experiments[0]
+    assert request.metadata["git.commit_sha"] == "abc123"
+    assert request.metadata["framework"] == "deepeval"
+    assert request.metadata["execution_kind"] == "agent_run"
+    assert request.tags == ["ci"]
+    assert ci == {"ci.provider": "github_actions", "git.commit_sha": "abc123"}
+
+
+@pytest.mark.parametrize("key", ["framework", "execution_mode", "execution_kind", "suite_id", "suite_version"])
+def test_live_runner_refuses_metadata_that_overrides_adapter_provenance(key):
+    from deepeval.metrics import ExactMatchMetric
+    from deepeval.test_case import LLMTestCase
+
+    client = FakeClient()
+    with pytest.raises(ValueError, match=f"reserved for the adapter's provenance: {key}"):
+        run_deepeval(
+            [LLMTestCase(input="hi", actual_output="", expected_output="ok")],
+            lambda case, trial: "ok",
+            [ExactMatchMetric()],
+            experiment_name="ci",
+            client=client,
+            metadata={key: "x"},
+        )
+    assert client.experiments == []
+
+
+def test_live_runner_refuses_a_bare_string_as_tags():
+    from deepeval.metrics import ExactMatchMetric
+    from deepeval.test_case import LLMTestCase
+
+    with pytest.raises(TypeError, match="tags must be a sequence of strings"):
+        run_deepeval(
+            [LLMTestCase(input="hi", actual_output="", expected_output="ok")],
+            lambda case, trial: "ok",
+            [ExactMatchMetric()],
+            experiment_name="ci",
+            client=FakeClient(),
+            tags="ci",
+        )

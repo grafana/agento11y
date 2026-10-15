@@ -27,6 +27,9 @@ from agento11y.experiments import (
     stable_id,
 )
 
+# Provenance run_deepeval owns; caller metadata can't override it.
+_RESERVED_RUN_METADATA_KEYS = frozenset({"framework", "execution_mode", "execution_kind", "suite_id", "suite_version"})
+
 
 @dataclass(frozen=True, slots=True)
 class PublishedDeepEvalRun:
@@ -59,6 +62,8 @@ def run_deepeval(
     client: Client | None = None,
     candidate: Candidate | Mapping[str, Any] | None = None,
     record_io: bool = False,
+    metadata: Mapping[str, Any] | None = None,
+    tags: Sequence[str] | None = None,
 ) -> PublishedDeepEvalRun:
     """Invoke target(native_case, trial) and DeepEval metrics inside live trials.
 
@@ -70,8 +75,16 @@ def run_deepeval(
     the supported checkpoint input is a text-only input.prompt. Native metrics
     supplied here determine grading; stored suite bindings are not executed. Cases and
     metrics are copied per attempt; caller-owned objects are not mutated.
+
+    ``metadata`` and ``tags`` are added to the run, for example CI provenance.
+    The adapter's own keys (``framework``, ``execution_mode``,
+    ``execution_kind``, ``suite_id``, ``suite_version``) are reserved, and
+    passing one raises ``ValueError``.
     """
     from deepeval.metrics.utils import copy_metrics
+
+    user_metadata = _caller_metadata(metadata)
+    run_tags = _caller_tags(tags)
 
     checkpoint = test_cases if isinstance(test_cases, TestSuite) else None
     if checkpoint is not None:
@@ -106,7 +119,8 @@ def run_deepeval(
         candidate=dict(candidate) if isinstance(candidate, Mapping) else candidate,
         planned_trial_count=len(cases),
         use_experimental_otel=True,
-        metadata={"framework": "deepeval", "execution_mode": "live", "execution_kind": "agent_run"},
+        tags=run_tags,
+        metadata={**user_metadata, "framework": "deepeval", "execution_mode": "live", "execution_kind": "agent_run"},
     ) as exp:
         for native, case in zip(test_cases, cases, strict=True):
             attempts[case.test_case_id] = attempts.get(case.test_case_id, 0) + 1
@@ -784,6 +798,26 @@ def _case_digest(case: TestCase) -> str:
 def _score_key(name: str) -> str:
     normalized = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
     return normalized or "deepeval"
+
+
+def _caller_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
+    if metadata is None:
+        return {}
+    if not isinstance(metadata, Mapping):
+        raise TypeError("metadata must be a mapping")
+    reserved = sorted(str(key) for key in metadata if key in _RESERVED_RUN_METADATA_KEYS)
+    if reserved:
+        raise ValueError(f"metadata keys are reserved for the adapter's provenance: {', '.join(reserved)}")
+    return dict(metadata)
+
+
+def _caller_tags(tags: Sequence[str] | None) -> list[str]:
+    if tags is None:
+        return []
+    # A bare string is a Sequence[str] too, and would otherwise become one tag per character.
+    if isinstance(tags, str) or not all(isinstance(tag, str) for tag in tags):
+        raise TypeError("tags must be a sequence of strings")
+    return list(tags)
 
 
 def _mapping(value: Any) -> dict[str, Any]:

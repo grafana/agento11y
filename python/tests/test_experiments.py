@@ -28,6 +28,7 @@ from agento11y.experiments import (
     TrialEvaluation,
     TrialEvaluationStatus,
     TrialRef,
+    experiment,
     otel,
     score,
 )
@@ -264,6 +265,20 @@ def test_experiment_omits_online_evaluation_policy_by_default() -> None:
         pass
 
     assert client.upserts[0].online_evaluations_enabled is None
+
+
+def test_experiment_does_not_reuse_the_ci_allocated_experiment_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Only the one-call helpers read AGENTO11Y_EXPERIMENT_ID. A process that opens
+    # several experiments must still get one fresh ID per run.
+    monkeypatch.setenv("AGENTO11Y_EXPERIMENT_ID", "ci-run-1")
+    client = FakeClient()
+
+    with experiment("first", client=client), experiment("second", client=client):
+        pass
+
+    ids = [request.experiment_id for request in client.upserts]
+    assert "ci-run-1" not in ids
+    assert len(set(ids)) == 2
 
 
 def test_experiment_rejects_negative_planned_trial_count() -> None:

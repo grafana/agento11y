@@ -3,7 +3,7 @@
 A minimal, runnable set of Agent Observability **experiment** examples using the core
 `agento11y` only — **no framework adapter**.
 
-There are eight entry points:
+There are nine entry points:
 
 | Example | Command | What it demonstrates |
 | --- | --- | --- |
@@ -15,6 +15,7 @@ There are eight entry points:
 | Push stored suite | `uv run python -m app.push_suite` | Upload local YAML cases into Agent Observability test suites, optionally publish |
 | Pull stored suite | `uv run python -m app.pull_suite` | Download an Agent Observability suite as portable YAML |
 | Run pulled suite | `uv run python -m app.run_pulled_suite_experiment` | Pull suite cases before running and preserve stored-suite provenance |
+| Published suite version | `uv run python -m app.run_checkpoint_experiment` | Runs your agent on a published suite version and grades it with the version's pinned evaluators |
 
 Use this shape when your agent is *not* built on a supported framework
 (LangGraph, LangChain, OpenAI Agents, ...). For those, prefer the matching
@@ -69,7 +70,7 @@ export AGENTO11Y_AUTH_TENANT_ID=<your-stack-id>
 export AGENTO11Y_AUTH_TOKEN=<your-grafana-cloud-access-policy-token>
 export AGENTO11Y_GRAFANA_URL=https://<your-stack>.grafana.net
 
-# Required only for stored-suite push/pull through the Grafana plugin proxy.
+# Required only for stored suites (push, pull, and published suite versions).
 # AGENTO11Y_CONTROL_ENDPOINT accepts the stack URL or app URL.
 export AGENTO11Y_CONTROL_ENDPOINT=https://<your-stack>.grafana.net/a/grafana-agento11y-app
 export AGENTO11Y_SERVICE_ACCOUNT_TOKEN=<your-grafana-service-account-token>
@@ -167,3 +168,47 @@ View in Agent Observability: https://<your-stack>.grafana.net/a/grafana-agento11
   publishing the report. The language-neutral [CI recipe](../ci/README.md)
   includes the safe ordering, GitHub Actions template, and equivalent Go and
   TypeScript patterns.
+
+## Run a published suite version with your agent
+
+[`app/run_checkpoint_experiment.py`](app/run_checkpoint_experiment.py) calls
+[`run_checkpoint`](../../../python/README.md#run-a-published-suite-version-with-your-agent).
+It runs your agent once per case of a suite version published in Grafana Cloud
+and grades each case with the evaluators pinned to that version. It requires
+`agento11y` 0.20.0 or later.
+
+Point `AGENTO11Y_AGENT_MODULE` at a module that exports `run_agent(prompt)`.
+Return `AgentOutput` with the flush of the client that instruments your agent:
+
+```python
+from agento11y.experiments import AgentOutput
+from my_agent import invoke, instrumentation_client
+
+
+def run_agent(prompt):
+    result = invoke(prompt)
+    return AgentOutput(
+        text=result.answer,
+        conversation_id=result.conversation_id,
+        flush=instrumentation_client.flush,
+    )
+```
+
+Set the credentials from [Run it](#run-it), then run the script with your agent
+package added to the environment:
+
+```bash
+export AGENTO11Y_SUITE_ID=<SUITE_ID>
+export AGENTO11Y_SUITE_VERSION=<PUBLISHED_VERSION>
+export AGENTO11Y_AGENT_MODULE=my_agent.evals
+export AGENTO11Y_AGENT_NAME=my-agent
+export AGENTO11Y_AGENT_VERSION=<AGENT_VERSION>
+export AGENTO11Y_EXPERIMENT_ID=ci-${GIT_SHA:-manual}
+uv run --with-editable <PATH_TO_YOUR_AGENT> python -m app.run_checkpoint_experiment
+```
+
+You can also copy the script into your own project. Each run needs a new
+`AGENTO11Y_EXPERIMENT_ID`, because a finalized run can't be overwritten. A case
+whose agent call or grading fails is recorded as errored and the run continues.
+To fail CI on a regression, compare the run with a baseline run using the
+[checkpoint gate](../ci/README.md#gate-a-published-suite-version).

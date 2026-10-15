@@ -991,7 +991,8 @@ uses strict exact matching, and records explicit primary verdicts. Your target
 receives and returns strings; existing instrumentation binds conversations.
 Set `record_io=True` only to capture input/output for an uninstrumented target.
 Use a rubric or native framework metric for open-ended answers rather than
-assuming exact matching measures general quality. The
+assuming exact matching measures general quality. To record CI context on the
+run, refer to [Add CI context to a run](#add-ci-context-to-a-run). The
 [local demo](../examples/experiments/grafana/README.md) publishes a suite and
 compares a deliberately failing candidate with its correction.
 
@@ -1048,6 +1049,40 @@ a regression, and `2` when either run can't support the comparison, for
 example an errored case or a score that doesn't match the pinned evaluators.
 The gate needs every case to complete on its first attempt, so a single
 provider error makes the comparison invalid. Rerun that run and gate again.
+
+#### Add CI context to a run
+
+`run_checkpoint` and `run_evals` accept `metadata` and `tags` for the run, such
+as the commit SHA, pull request number, or CI run URL. When you don't pass
+`experiment_id`, they use `AGENTO11Y_EXPERIMENT_ID` if it's set, so a CI wrapper
+can allocate the run ID before your command starts and find the run afterwards.
+Both require the next `agento11y` release after 0.20.0.
+
+```python
+import json
+import os
+
+from agento11y.experiments import AgentOutput, run_checkpoint
+
+run = run_checkpoint(
+    "dashboard-regression",
+    "3",
+    lambda prompt: AgentOutput(text=my_agent(prompt), flush=instrumentation_client.flush),
+    # Your CI passes this context however it likes; the SDK doesn't read AGENTO11Y_CI_METADATA.
+    metadata=json.loads(os.environ.get("AGENTO11Y_CI_METADATA", "{}")),
+    tags=["ci"],
+)
+```
+
+The SDK owns the `execution_kind`, `framework`, `input_selector`,
+`evaluation_plan`, `suite_id`, and `suite_version` keys, so a gate can trust
+them. Passing any of them in `metadata` raises `ValueError` before the run is
+created. Your `metadata` is copied, not changed.
+
+Only these two helpers read `AGENTO11Y_EXPERIMENT_ID`. `experiment()` and the
+framework adapters still create a new ID for every run. Because every helper
+call in one process gets the same ID, call one helper per process while the
+variable is set, or pass `experiment_id` to each call.
 
 ## Public API Overview
 

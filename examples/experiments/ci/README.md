@@ -20,7 +20,7 @@ read its report, and return a non-zero exit code when the policy fails.
   different candidates into one run.
 - Set `candidate.git_sha`, a model or prompt version where applicable, and a
   `ci` tag. Those fields make the resulting run comparable and searchable.
-- Use an Agent Observability ingestion credential in your CI secret store:
+- Use your Grafana Cloud Agent Observability ingestion credentials in CI secrets:
   `AGENTO11Y_ENDPOINT`, `AGENTO11Y_AUTH_TOKEN`, and, when required,
   `AGENTO11Y_AUTH_TENANT_ID`. A service-account token is needed only when the
   job reads, updates, or publishes a stored test suite.
@@ -47,6 +47,51 @@ runner should wait with a bounded timeout for the expected final scores before
 evaluating a gate. Treat a missing primary verdict or an incomplete report as a
 CI error, not as a passing quality result.
 
+## Gate a published suite version
+
+For a suite version published in Grafana Cloud with pinned evaluators, the
+Python SDK (0.20.0 or later) runs and gates it end to end:
+
+1. Run the baseline agent once, and the candidate agent for each change, with
+   [`run_checkpoint`](../python/README.md#run-a-published-suite-version-with-your-agent).
+   Give each run its own ID with `experiment_id`, such as `ci-known-good` and
+   `ci-$GITHUB_SHA`.
+2. Compare the two runs:
+
+```sh
+agento11y-checkpoint-gate \
+  --suite-id support-regression --suite-version 3 \
+  --baseline ci-known-good --candidate "ci-$GITHUB_SHA" \
+  --min-pass-rate 0.95 --max-drop 0.02
+```
+
+The gate needs the ingestion credentials, your stack URL in
+`AGENTO11Y_GRAFANA_URL`, and a Grafana service-account token in
+`AGENTO11Y_SERVICE_ACCOUNT_TOKEN`. Thresholds are
+fractions from 0 to 1, and equality passes. Here the candidate must pass at
+least 95% of cases and lose at most two percentage points against the baseline.
+
+| Exit | Meaning |
+| --- | --- |
+| `0` | The candidate meets both thresholds. |
+| `1` | The candidate fails a threshold. |
+| `2` | The runs can't be compared, or the gate couldn't read them. |
+
+Stdout is a JSON object with the run IDs, pass rates, thresholds and reasons,
+plus report links when `AGENTO11Y_GRAFANA_URL` is set. It never includes case
+content or error details from the transport. Configure CI to fail on any
+non-zero exit.
+
+The gate exits `2` unless both runs:
+
+- ran every case of the exact published version once, with no errored case;
+- were declared as actual-agent runs, not simulations or imports;
+- have case snapshots the server verified against the published version;
+- have one score from every pinned evaluator, with the same evaluators in both.
+
+The gate doesn't wait for grading. `run_checkpoint` returns after every case is
+graded, so run the gate after it.
+
 ## Gate one primary verdict
 
 The gate must be based on one explicit primary verdict or legacy `final` score
@@ -56,10 +101,11 @@ their own score key and leave aggregate `pass_rate` unset; either configure a
 primary verdict or implement a deliberate policy over the evaluator's score
 key.
 
-The snippets below show the final step after an experiment has completed. They
-intentionally use a minimum pass rate, the smallest policy that is both
-explainable and safe to copy. A baseline comparison should reject mismatched
-suite versions and missing values before calculating a delta.
+The snippets below illustrate only a threshold expression, after your runner
+has separately verified completed execution and full verdict coverage. They
+are not complete CI gates: a partial report can have a high pass rate. Prefer
+the checkpoint gate above for pinned cloud grading. Other runner policies must
+reject incomplete and mismatched evidence before applying a threshold.
 
 ### Python
 

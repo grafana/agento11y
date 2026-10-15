@@ -4,12 +4,19 @@ from __future__ import annotations
 
 import math
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from ..errors import EvaluationTimeoutError
 from .client import Client
-from .evals import AgentOutput, _run_target, _validate_cases
+from .evals import (
+    AgentOutput,
+    _caller_metadata,
+    _caller_tags,
+    _experiment_id_or_env,
+    _run_target,
+    _validate_cases,
+)
 from .experiment import Experiment, experiment
 from .suites import TestSuitesClient
 from .types import Candidate, ExperimentStatus
@@ -30,6 +37,8 @@ def run_checkpoint(
     client: Client | None = None,
     test_suites_client: TestSuitesClient | None = None,
     use_experimental_otel: bool = True,
+    metadata: Mapping[str, Any] | None = None,
+    tags: Sequence[str] | None = None,
 ) -> Experiment:
     """Run ``target`` once per case of a published suite version and grade it in Grafana Cloud.
 
@@ -56,12 +65,22 @@ def run_checkpoint(
     Pass ``expected_bindings`` (for example, the bindings shown in Grafana when
     you copied the runner) to refuse a version whose bindings have changed.
     Their evaluator, version, input mappings and report role are compared.
+
+    ``metadata`` and ``tags`` are added to the run, for example CI provenance
+    such as a commit SHA or PR number. The SDK's own provenance keys
+    (``execution_kind``, ``framework``, ``input_selector``, ``evaluation_plan``,
+    ``suite_id``, ``suite_version``) are reserved, and passing one raises
+    ``ValueError``. Without ``experiment_id``, the run uses
+    ``AGENTO11Y_EXPERIMENT_ID`` when it is set, so a CI wrapper can allocate
+    the run ID; with it set, run one helper per process.
     """
 
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("timeout must be greater than zero")
     if not math.isfinite(evaluation_timeout) or evaluation_timeout <= 0:
         raise ValueError("evaluation_timeout must be greater than zero")
+    user_metadata = _caller_metadata(metadata)
+    run_tags = _caller_tags(tags)
     deadline = time.monotonic() + timeout
 
     control = test_suites_client or TestSuitesClient()
@@ -84,13 +103,19 @@ def run_checkpoint(
 
     with experiment(
         name or f"{suite.name or suite.suite_id} v{suite.version}",
-        experiment_id=experiment_id,
+        experiment_id=_experiment_id_or_env(experiment_id),
         suite=suite,
         client=client,
         candidate=candidate,
         planned_trial_count=len(suite.cases),
         use_experimental_otel=use_experimental_otel,
-        metadata={"framework": "grafana", "execution_kind": "agent_run", "input_selector": input_selector},
+        tags=run_tags,
+        metadata={
+            **user_metadata,
+            "framework": "grafana",
+            "execution_kind": "agent_run",
+            "input_selector": input_selector,
+        },
     ) as run:
         ungraded = 0
         timed_out = False

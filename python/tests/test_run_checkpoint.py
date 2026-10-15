@@ -211,3 +211,95 @@ def test_run_checkpoint_timeout_stops_starting_cases_and_fails_the_run(monkeypat
         )
     assert target.call_count == 1
     assert client.finalized[0][1] == "failed"
+
+
+def test_run_checkpoint_adds_caller_metadata_and_tags_without_overriding_provenance():
+    client = BindingClient()
+    ci = {"ci.provider": "github_actions", "git.commit_sha": "abc123", "ci.pull_request": "42"}
+    tags = ("ci", "pr")
+
+    run_checkpoint(
+        "suite",
+        "3",
+        lambda prompt: output("ok"),
+        client=client,
+        test_suites_client=control("a", bindings=BINDINGS[:1]),
+        metadata=ci,
+        tags=tags,
+    )
+
+    request = client.upserts[0]
+    assert request.metadata == {
+        **ci,
+        "framework": "grafana",
+        "execution_kind": "agent_run",
+        "input_selector": "input.prompt",
+        "suite_id": "suite",
+        "suite_version": "3",
+    }
+    assert request.tags == ["ci", "pr"]
+    # The caller's mapping is copied, never mutated.
+    assert ci == {"ci.provider": "github_actions", "git.commit_sha": "abc123", "ci.pull_request": "42"}
+
+
+@pytest.mark.parametrize(
+    "key", ["execution_kind", "framework", "input_selector", "evaluation_plan", "suite_id", "suite_version"]
+)
+def test_run_checkpoint_refuses_metadata_that_overrides_sdk_provenance(key):
+    client = BindingClient()
+    suites = control("a", bindings=BINDINGS[:1])
+    target = MagicMock(return_value=output("ok"))
+
+    with pytest.raises(ValueError, match=f"reserved for the SDK's provenance: {key}"):
+        run_checkpoint(
+            "suite", "3", target, client=client, test_suites_client=suites, metadata={key: "x", "git.sha": "abc"}
+        )
+
+    # Refused before the suite is pulled or a run exists.
+    suites.pull_suite.assert_not_called()
+    target.assert_not_called()
+    assert client.upserts == []
+
+
+def test_run_checkpoint_refuses_a_bare_string_as_tags():
+    with pytest.raises(TypeError, match="tags must be a sequence of strings"):
+        run_checkpoint(
+            "suite",
+            "3",
+            lambda prompt: output("ok"),
+            client=BindingClient(),
+            test_suites_client=control("a"),
+            tags="ci",
+        )
+
+
+@pytest.mark.parametrize(
+    ("env", "explicit", "expected"),
+    [
+        pytest.param({"AGENTO11Y_EXPERIMENT_ID": "ci-run-1"}, "", "ci-run-1", id="env allocates the run ID"),
+        pytest.param({"SIGIL_EXPERIMENT_ID": "ci-run-old"}, "", "ci-run-old", id="legacy alias"),
+        pytest.param(
+            {"AGENTO11Y_EXPERIMENT_ID": "ci-run-1", "SIGIL_EXPERIMENT_ID": "ci-run-old"},
+            "",
+            "ci-run-1",
+            id="canonical beats legacy",
+        ),
+        pytest.param({"AGENTO11Y_EXPERIMENT_ID": "ci-run-1"}, "explicit-run", "explicit-run", id="explicit beats env"),
+    ],
+)
+def test_run_checkpoint_defaults_the_experiment_id_from_the_environment(monkeypatch, env, explicit, expected):
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    client = BindingClient()
+
+    run = run_checkpoint(
+        "suite",
+        "3",
+        lambda prompt: output("ok"),
+        client=client,
+        test_suites_client=control("a", bindings=BINDINGS[:1]),
+        experiment_id=explicit,
+    )
+
+    assert client.upserts[0].experiment_id == expected
+    assert run.experiment_id == expected
