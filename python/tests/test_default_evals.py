@@ -86,6 +86,21 @@ def test_run_evals_adds_caller_metadata_and_tags_without_overriding_provenance()
     assert ci == {"ci.provider": "github_actions", "git.commit_sha": "abc123"}
 
 
+def test_run_evals_keeps_tags_passed_as_an_iterator():
+    client = FakeClient()
+
+    run_evals(_reference_suite(), lambda prompt: "4", client=client, tags=iter(["ci", "pr"]))
+
+    assert client.upserts[0].tags == ["ci", "pr"]
+
+
+def test_run_evals_refuses_tags_that_are_not_strings():
+    client = FakeClient()
+    with pytest.raises(TypeError, match="tags must be a sequence of strings"):
+        run_evals(_reference_suite(), lambda prompt: "4", client=client, tags=iter(["ci", 1]))
+    assert client.upserts == []
+
+
 @pytest.mark.parametrize(
     "key", ["execution_kind", "framework", "input_selector", "evaluation_plan", "suite_id", "suite_version"]
 )

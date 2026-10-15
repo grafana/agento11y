@@ -38,8 +38,8 @@ class LedgerAgent(BaseAgent):
                 raise RuntimeError(response.stderr)
             return response.stdout or "Answer saved"
 
-        try:
-            result = await run_agent(instruction, self.model_name, run_id, case_id, sdk, tool=tool)
+        def record(result):
+            # Called on failure and timeout too, so Harbor keeps the completed turns.
             context.n_input_tokens = result["input_tokens"]
             context.n_output_tokens = result["output_tokens"]
             context.n_cache_tokens = 0
@@ -49,6 +49,9 @@ class LedgerAgent(BaseAgent):
                 "cost_basis": result["cost_basis"],
             }
             (self.logs_dir / "provider-responses.json").write_text(json.dumps(result, indent=2))
+
+        try:
+            await run_agent(instruction, self.model_name, run_id, case_id, sdk, tool=tool, on_result=record)
         finally:
             sdk.shutdown()
 

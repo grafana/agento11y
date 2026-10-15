@@ -158,9 +158,13 @@ def _caller_tags(tags: Sequence[str] | None) -> list[str]:
     if tags is None:
         return []
     # A bare string is a Sequence[str] too, and would otherwise become one tag per character.
-    if isinstance(tags, str) or not all(isinstance(tag, str) for tag in tags):
+    if isinstance(tags, str):
         raise TypeError("tags must be a sequence of strings")
-    return list(tags)
+    # Copy before validating, so an iterator isn't consumed by the check.
+    values = list(tags)
+    if not all(isinstance(tag, str) for tag in values):
+        raise TypeError("tags must be a sequence of strings")
+    return values
 
 
 def _experiment_id_or_env(experiment_id: str) -> str:

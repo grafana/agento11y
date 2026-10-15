@@ -834,3 +834,20 @@ def test_live_runner_refuses_a_bare_string_as_tags():
             client=FakeClient(),
             tags="ci",
         )
+
+
+def test_live_runner_keeps_tags_passed_as_an_iterator():
+    from deepeval.metrics import ExactMatchMetric
+    from deepeval.test_case import LLMTestCase
+
+    client = FakeClient()
+    run_deepeval(
+        [LLMTestCase(input="hi", actual_output="", expected_output="ok")],
+        lambda case, trial: "ok",
+        [ExactMatchMetric()],
+        experiment_name="ci",
+        client=client,
+        tags=iter(["ci", "pr"]),
+    )
+
+    assert client.experiments[0].tags == ["ci", "pr"]

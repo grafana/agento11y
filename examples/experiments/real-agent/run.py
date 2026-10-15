@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 
-from agent import CASES, MODELS, client, run_agent, setup
+from agent import CASES, MODELS, client, conversation_id, run_agent, setup
 from agento11y.experiments import Candidate, TestCase, TestSuite, TestSuitesClient, experiment
 
 
@@ -29,16 +29,17 @@ def main():
     candidate = Candidate(
         agent_name="order-ledger-agent", agent_version="1", model_provider="anthropic", model_name=model
     )
-    results = {}
 
-    def execute(question, case_id):
-        result = asyncio.run(run_agent(question, model, run_id, case_id, sdk))
-        results[case_id] = result
-        return result["output"]
+    def execute(question, case_id, trial):
+        # Bind before running: a case that fails midway has still exported generations.
+        trial.bind_conversation(conversation_id(run_id, case_id))
 
-    def bind(trial, result):
-        trial.bind_conversation(result["conversation_id"])
-        trial.set_usage(input_tokens=result["input_tokens"], output_tokens=result["output_tokens"], cost=result["cost"])
+        def record_usage(result):
+            trial.set_usage(
+                input_tokens=result["input_tokens"], output_tokens=result["output_tokens"], cost=result["cost"]
+            )
+
+        return asyncio.run(run_agent(question, model, run_id, case_id, sdk, on_result=record_usage))["output"]
 
     try:
         if args.framework == "deepeval":
@@ -58,9 +59,7 @@ def main():
             ]
 
             def target(case, trial):
-                answer = execute(case.input, case.name)
-                bind(trial, results[case.name])
-                return answer
+                return execute(case.input, case.name, trial)
 
             run = run_deepeval(
                 native,
@@ -113,11 +112,10 @@ def main():
                     for case in suite.cases:
                         with run.trial(case) as trial:
                             try:
-                                answer = execute(case.input["prompt"], case.test_case_id)
+                                answer = execute(case.input["prompt"], case.test_case_id, trial)
                             except Exception as error:
                                 trial.mark_errored(f"{type(error).__name__}: {error}")
                                 continue
-                            bind(trial, results[case.test_case_id])
                             passed = answer == case.expected["assistant_response"]
                             trial.score("exact_match", passed, passed=passed, report_role="primary_verdict")
             else:
