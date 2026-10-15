@@ -75,8 +75,8 @@ func TestUsageNoticeAppearsOncePerRevision(t *testing.T) {
 	var first bytes.Buffer
 	showUsageNotice(&first)
 	want := "The `agento11y` CLI sends anonymous usage statistics about its own commands, never operations performed by a coding agent. " +
-		"To turn reporting off, set `AGENTO11Y_ANONYMOUS_USAGE_STATS=disabled` in your shell or `~/.config/agento11y/config.env`, " +
-		"or set `DO_NOT_TRACK=1` in your shell.\nLearn more: " + usageNoticeURL + "\n"
+		"To turn reporting off, set `AGENTO11Y_ANONYMOUS_USAGE_STATS=disabled` " +
+		"or `DO_NOT_TRACK=1` in your shell.\n"
 	if first.String() != want {
 		t.Fatalf("first-run notice = %q, want %q", first.String(), want)
 	}
