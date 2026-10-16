@@ -230,6 +230,12 @@ messages = response.transformedInput?.messages ?? messages;
 
 With `failOpen: true`, hook transport errors resolve to allow so an unavailable evaluator does not block production traffic. Set `failOpen: false` for strict paths that should fail closed.
 
+Set `hooks.strictTransforms: true` to reject malformed or empty `transformed_input` before the decoder discards data. The default is `false`, which preserves permissive decoding. Strict mode accepts the same valid SDK, snake_case, and Go/protobuf encodings. A supplied null or empty transform, empty collections, and unsupported transform fields throw `HookTransformError`. Omitting `transformed_input` remains valid.
+
+Import `HookTransformError` from `@grafana/agento11y` or `@grafana/agento11y-core`. The error contains no response payload, source input, or authentication headers. The SDK throws the error even with `failOpen: true`; callers must not treat it as an evaluator outage or forward the original input. Strict decoding validates shape, not whether your integration can safely apply a rewrite. Refuse transforms your integration cannot apply.
+
+Override strict mode for one evaluation with `client.evaluateHook(request, { strictTransforms: true })`. The override does not change the client configuration.
+
 Set `context.conversationId` to the same ID used by `startGeneration(...)`. The SDK also reads `withConversationId(...)` and the active OpenTelemetry span when explicit correlation fields are omitted. This lets Agent Observability retain denied preflight attempts even though no LLM generation is created.
 
 If you use transformed input, pass the transformed messages/system prompt to the provider and record those same values in `startGeneration(...)`. If you use the Vercel AI SDK adapter, see `docs/frameworks/vercel-ai-sdk.md` for automatic preflight hook wiring.

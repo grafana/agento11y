@@ -646,6 +646,8 @@ export interface HooksConfig {
    * caller can proceed with the LLM call. Defaults to true.
    */
   failOpen: boolean;
+  /** Invalid transforms must throw even when evaluator failures are allowed. Defaults to false. */
+  strictTransforms?: boolean;
 }
 
 /** Identifies the upstream LLM call for hook rule matching. */

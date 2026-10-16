@@ -239,8 +239,8 @@ func TestRepairStoreModTimes_ExcludesConcurrentAppend(t *testing.T) {
 	}()
 
 	select {
-	case <-appendDone:
-		t.Fatal("append ran while the pass held the file lock")
+	case err := <-appendDone:
+		t.Fatalf("append ran while the pass held the file lock (err %v)", err)
 	case <-time.After(100 * time.Millisecond):
 	}
 	close(release)

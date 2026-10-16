@@ -1,8 +1,19 @@
-import type {
-  Agento11yClient,
-  HookEvaluateRequest,
-  Message,
+import {
+  type Agento11yClient,
+  type HookEvaluateRequest,
+  type HookInput,
+  HookTransformError,
+  type Message,
 } from "@grafana/agento11y";
+
+// Strict diagnostics omit payloads, identities and exception details: SDK
+// transport errors may contain response bodies or credentials.
+const STRICT_TRANSFORM_FAILURE =
+  "agento11y could not apply a required guard transform, so the operation was blocked as a safety measure.";
+const STRICT_EVALUATION_FAILURE =
+  "agento11y could not evaluate the guard, so the operation was blocked as a safety measure.";
+const STRICT_EVALUATION_FAIL_OPEN =
+  "agento11y could not evaluate the guard; fail-open allowed the operation.";
 
 export interface GuardArgs {
   client: Agento11yClient;
@@ -14,6 +25,8 @@ export interface GuardArgs {
   toolName: string;
   input: unknown;
   failOpen: boolean;
+  /** Native opt-in; omitted/false preserves legacy behavior. */
+  strictTransforms?: boolean;
   logger?: { warn: (msg: string) => void };
 }
 
@@ -116,6 +129,8 @@ function formatPromptEvalFailure(detail: string | undefined): string {
 }
 
 export interface PromptGuardArgs {
+  /** Native opt-in; omitted/false preserves legacy behavior. */
+  strictTransforms?: boolean;
   client: Agento11yClient;
   agentName: string;
   agentVersion?: string;
@@ -132,7 +147,8 @@ export type PromptGuardResult = { block: true; reason: string } | undefined;
  * Evaluates the prompt the user just submitted against the Agent Observability
  * preflight hook, and reports whether the turn must be refused.
  *
- * This is the only point where opencode lets a plugin refuse a turn cleanly.
+ * For OpenCode v1, this is the only point where a plugin can refuse a turn
+ * cleanly.
  * `chat.message` fires before the user message and its parts are persisted and
  * before the step loop starts (`session/prompt.ts`), so throwing from it stops
  * the turn without a provider call and without leaving a half-written assistant
@@ -151,6 +167,7 @@ export type PromptGuardResult = { block: true; reason: string } | undefined;
 export async function runPromptGuard(
   args: PromptGuardArgs,
 ): Promise<PromptGuardResult> {
+  let evaluating = false;
   try {
     const conversationId = args.conversationId?.trim();
     const req: HookEvaluateRequest = {
@@ -173,23 +190,44 @@ export async function runPromptGuard(
     // reasons as in `runPreflightTransform`: the client pins `hooks.phases` to
     // `["postflight"]`, and the SDK's own fail-open would return a synthetic
     // `allow` that cannot be told from a real one. Errors are routed to the
-    // catch below, where `args.failOpen` decides.
+    // catch below, where `args.failOpen` decides. Strict mode also refuses
+    // local serialization failures rather than treating them as outages.
+    if (args.strictTransforms) JSON.stringify(req);
+    evaluating = true;
     const resp = await args.client.evaluateHook(req, {
       enabled: true,
       phases: ["preflight"],
       failOpen: false,
+      ...(args.strictTransforms ? { strictTransforms: true } : {}),
     });
+    evaluating = false;
     if (resp.action !== "deny") return undefined;
 
     // The local daemon's own fail-closed deny already explains itself.
     if (resp.ruleId === EVALUATION_FAILURE_RULE_ID) {
       return {
         block: true,
-        reason: resp.reason ?? formatPromptEvalFailure(undefined),
+        reason: args.strictTransforms
+          ? STRICT_EVALUATION_FAILURE
+          : (resp.reason ?? formatPromptEvalFailure(undefined)),
       };
     }
     return { block: true, reason: formatPromptDeny(resp.reason) };
   } catch (err) {
+    if (args.strictTransforms) {
+      const invalid = err instanceof HookTransformError || !evaluating;
+      if (!invalid && args.failOpen) {
+        args.logger?.warn(STRICT_EVALUATION_FAIL_OPEN);
+        return undefined;
+      }
+      args.logger?.warn(
+        invalid ? STRICT_TRANSFORM_FAILURE : STRICT_EVALUATION_FAILURE,
+      );
+      return {
+        block: true,
+        reason: invalid ? STRICT_TRANSFORM_FAILURE : STRICT_EVALUATION_FAILURE,
+      };
+    }
     args.logger?.warn(`prompt guard eval failed: ${err}`);
     if (args.failOpen) return undefined;
     return { block: true, reason: formatPromptEvalFailure(String(err)) };
@@ -219,6 +257,8 @@ function formatConversationEvalFailure(detail: string | undefined): string {
 }
 
 export interface PreflightTransformArgs {
+  /** Native opt-in; omitted/false preserves legacy behavior. */
+  strictTransforms?: boolean;
   client: Agento11yClient;
   agentName: string;
   agentVersion?: string;
@@ -240,16 +280,17 @@ export type PreflightTransformResult =
  * there is nothing to do.
  *
  * A deny blocks, and so does an evaluation that could not run when `failOpen` is
- * false. Refusing here is not free: opencode has already written the assistant
- * message row by the time it dispatches this hook (`session/prompt.ts`), and it
- * finalizes that row through `Effect.onInterrupt`, which a thrown error does not
- * trigger. The caller asks opencode to abort the session so that finalizer runs,
- * then throws so the turn stops whether the abort arrived or not.
+ * false. For OpenCode v1, refusing here is not free: opencode has already written
+ * the assistant message row by the time it dispatches this hook
+ * (`session/prompt.ts`), and it finalizes that row through `Effect.onInterrupt`,
+ * which a thrown error does not trigger. The caller asks opencode to abort the
+ * session so that finalizer runs, then throws so the turn stops whether the abort
+ * arrived or not.
  *
- * `runPromptGuard` covers the same rules at `chat.message`, where nothing is
- * written yet, so most denies never reach this point. What reaches it is a deny
- * on text the user did not just type: conversation history, an assistant string
- * generated during the turn, or a compaction dispatch.
+ * For OpenCode v1, `runPromptGuard` covers the same rules at `chat.message`, where
+ * nothing is written yet, so most denies never reach this point. What reaches it
+ * is a deny on text the user did not just type: conversation history, an assistant
+ * string generated during the turn, or a compaction dispatch.
  *
  * Mirrors `runPreflightTransform` in `plugins/pi/src/guard.ts`; keep the two
  * request shapes aligned.
@@ -257,6 +298,7 @@ export type PreflightTransformResult =
 export async function runPreflightTransform(
   args: PreflightTransformArgs,
 ): Promise<PreflightTransformResult> {
+  let evaluating = false;
   try {
     const conversationId = args.conversationId?.trim();
     const req: HookEvaluateRequest = {
@@ -282,29 +324,59 @@ export async function runPreflightTransform(
     // `failOpen: false` makes a failure visible, not fatal. The SDK default
     // turns every error and timeout into a synthetic `allow`, which this
     // function cannot tell from a real one. Throwing routes them to the catch
-    // below, which logs and returns `undefined`, so preflight still fails open.
+    // below, which applies the caller's fail-open policy. Strict mode always
+    // blocks invalid transforms and local serialization failures.
+    if (args.strictTransforms) JSON.stringify(req);
+    evaluating = true;
     const resp = await args.client.evaluateHook(req, {
       enabled: true,
       phases: ["preflight"],
       failOpen: false,
+      ...(args.strictTransforms ? { strictTransforms: true } : {}),
     });
+    evaluating = false;
 
     if (resp.action === "deny") {
       // The local daemon's own fail-closed deny already explains itself.
       if (resp.ruleId === EVALUATION_FAILURE_RULE_ID) {
         return {
-          block: resp.reason ?? formatConversationEvalFailure(undefined),
+          block: args.strictTransforms
+            ? STRICT_EVALUATION_FAILURE
+            : (resp.reason ?? formatConversationEvalFailure(undefined)),
         };
       }
       return { block: formatConversationDeny(resp.reason) };
     }
 
     const transformed = resp.transformedInput?.messages;
+    if (
+      args.strictTransforms &&
+      resp.transformedInput !== undefined &&
+      (!onlyFields(resp.transformedInput, ["messages"]) ||
+        !Array.isArray(transformed) ||
+        transformed.length === 0)
+    ) {
+      args.logger?.warn(STRICT_TRANSFORM_FAILURE);
+      return { block: STRICT_TRANSFORM_FAILURE };
+    }
     if (!transformed || transformed.length === 0) {
       return undefined;
     }
     return { messages: transformed };
   } catch (err) {
+    if (args.strictTransforms) {
+      const invalid = err instanceof HookTransformError || !evaluating;
+      if (!invalid && args.failOpen) {
+        args.logger?.warn(STRICT_EVALUATION_FAIL_OPEN);
+        return undefined;
+      }
+      args.logger?.warn(
+        invalid ? STRICT_TRANSFORM_FAILURE : STRICT_EVALUATION_FAILURE,
+      );
+      return {
+        block: invalid ? STRICT_TRANSFORM_FAILURE : STRICT_EVALUATION_FAILURE,
+      };
+    }
     args.logger?.warn(`preflight transform eval failed: ${err}`);
     if (args.failOpen) return undefined;
     return { block: formatConversationEvalFailure(String(err)) };
@@ -335,11 +407,14 @@ export function formatTransformFailure(
 /**
  * Evaluates the Agent Observability postflight hook for a tool call. Returns a block result
  * when the server denies the call, or a transform result when the server
- * redacted/sanitized the call's arguments. On transport/timeout/serialization
+ * redacted/sanitized the call's arguments. On transport/timeout
  * errors, returns `undefined` (allow) when `failOpen` is true and a block
  * result when `failOpen` is false.
+ * Local serialization errors follow `failOpen` unless `strictTransforms` is true;
+ * strict mode blocks them.
  */
 export async function runToolCallGuard(args: GuardArgs): Promise<GuardResult> {
+  let evaluating = false;
   try {
     const conversationId = args.conversationId?.trim();
     const req: HookEvaluateRequest = {
@@ -372,19 +447,39 @@ export async function runToolCallGuard(args: GuardArgs): Promise<GuardResult> {
       },
     };
 
-    const resp = await args.client.evaluateHook(req, { enabled: true });
+    if (args.strictTransforms) JSON.stringify(req);
+    evaluating = true;
+    const resp = await args.client.evaluateHook(req, {
+      enabled: true,
+      ...(args.strictTransforms
+        ? { strictTransforms: true, phases: ["postflight"], failOpen: false }
+        : {}),
+    });
+    evaluating = false;
     if (resp.action === "deny") {
       // No rule produced this deny, and its reason already says so.
       if (resp.ruleId === EVALUATION_FAILURE_RULE_ID) {
         return {
           block: true,
-          reason: resp.reason ?? formatEvalFailure(args.toolName, undefined),
+          reason: args.strictTransforms
+            ? STRICT_EVALUATION_FAILURE
+            : (resp.reason ?? formatEvalFailure(args.toolName, undefined)),
         };
       }
       return {
         block: true,
         reason: formatPolicyDeny(args.toolName, resp.reason),
       };
+    }
+    if (args.strictTransforms && resp.transformedInput !== undefined) {
+      const transform = strictToolCallTransform(
+        resp.transformedInput,
+        args.toolCallId,
+        args.toolName,
+      );
+      if (transform) return { transform };
+      args.logger?.warn(STRICT_TRANSFORM_FAILURE);
+      return { block: true, reason: STRICT_TRANSFORM_FAILURE };
     }
     const transform = extractToolCallTransform(
       resp.transformedInput?.output,
@@ -397,6 +492,20 @@ export async function runToolCallGuard(args: GuardArgs): Promise<GuardResult> {
     }
     return undefined;
   } catch (err) {
+    if (args.strictTransforms) {
+      const invalid = err instanceof HookTransformError || !evaluating;
+      if (!invalid && args.failOpen) {
+        args.logger?.warn(STRICT_EVALUATION_FAIL_OPEN);
+        return undefined;
+      }
+      args.logger?.warn(
+        invalid ? STRICT_TRANSFORM_FAILURE : STRICT_EVALUATION_FAILURE,
+      );
+      return {
+        block: true,
+        reason: invalid ? STRICT_TRANSFORM_FAILURE : STRICT_EVALUATION_FAILURE,
+      };
+    }
     args.logger?.warn(`guard eval failed: ${err}`);
     if (!args.failOpen) {
       return {
@@ -406,6 +515,58 @@ export async function runToolCallGuard(args: GuardArgs): Promise<GuardResult> {
     }
     return undefined;
   }
+}
+
+function strictToolCallTransform(
+  input: HookInput,
+  toolCallId: string | undefined,
+  toolName: string,
+): Record<string, unknown> | undefined {
+  if (
+    !onlyFields(input, ["output"]) ||
+    !Array.isArray(input.output) ||
+    input.output.length !== 1
+  )
+    return undefined;
+  const message = input.output[0];
+  if (
+    !message ||
+    !onlyFields(message, ["role", "parts"]) ||
+    message.role !== "assistant" ||
+    message.parts?.length !== 1
+  )
+    return undefined;
+  const part = message.parts[0];
+  if (
+    !part ||
+    !onlyFields(part, ["type", "toolCall"]) ||
+    part.type !== "tool_call"
+  )
+    return undefined;
+  const call = part.toolCall;
+  if (!onlyFields(call, ["id", "name", "inputJSON"])) return undefined;
+  const id = toolCallId?.trim();
+  const name = toolName.trim();
+  const candidateID = call.id?.trim();
+  const candidateName = call.name?.trim();
+  if (id && candidateID && id !== candidateID) return undefined;
+  if (name && candidateName && !toolNamesEqual(candidateName, name))
+    return undefined;
+  if (
+    !(id && candidateID === id) &&
+    !(name && candidateName && toolNamesEqual(candidateName, name))
+  )
+    return undefined;
+  return parseTransformArgs(call.inputJSON, "tool");
+}
+
+function onlyFields(value: unknown, fields: string[]): boolean {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.keys(value).every((key) => fields.includes(key))
+  );
 }
 
 /**

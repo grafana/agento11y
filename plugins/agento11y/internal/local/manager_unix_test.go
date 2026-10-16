@@ -111,7 +111,7 @@ func TestStop_EndpointDeadButProcessAlive(t *testing.T) {
 					return
 				}
 				_ = cmd.Process.Kill()
-				<-done
+				_ = <-done
 			})
 
 			withProcessCommandLine(t, func(pid int) (string, error) {
@@ -140,7 +140,8 @@ func TestStop_EndpointDeadButProcessAlive(t *testing.T) {
 				assert.True(t, pidAlive(cmd.Process.Pid))
 			} else {
 				select {
-				case <-done:
+				// Stop killed the process, so Wait reports the signal.
+				case _ = <-done:
 					waited = true
 				case <-time.After(time.Second):
 					t.Fatal("daemon process still running after Stop returned")
@@ -221,7 +222,7 @@ func TestStop_WaitsPastTheDrain(t *testing.T) {
 			return
 		}
 		_ = cmd.Process.Kill()
-		<-done
+		_ = <-done
 	})
 	withProcessCommandLine(t, func(pid int) (string, error) {
 		require.Equal(t, cmd.Process.Pid, pid)
@@ -233,7 +234,8 @@ func TestStop_WaitsPastTheDrain(t *testing.T) {
 	require.NoError(t, err, "a daemon still draining after SIGTERM is within the stop wait")
 	assert.True(t, stopped)
 	select {
-	case <-done:
+	// Stop killed the process, so Wait reports the signal.
+	case _ = <-done:
 		waited = true
 	case <-time.After(time.Second):
 		t.Fatal("process still running after Stop returned")

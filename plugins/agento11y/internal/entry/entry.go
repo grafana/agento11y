@@ -188,6 +188,106 @@ var launchers = map[string]agentLauncher{
 	"kiro":     kiro.Launch,
 }
 
+// launcherPreflight validates one launcher invocation from its forwarded args
+// before entry runs any launcher-side setup: the login prompt, the local
+// receiver, and SIGIL_TAGS. It must not change any file or start anything the
+// user would have to undo; a returned error ends the invocation.
+type launcherPreflight func(ctx context.Context, forwarded []string) (preparedLaunch, error)
+
+// preparedLaunch is an invocation a preflight accepted.
+type preparedLaunch struct {
+	// launch replaces the registered launcher for this invocation. It is bound
+	// to what the preflight resolved, so nothing is probed twice.
+	launch agentLauncher
+	// direct marks a host command that is not an agent session (help,
+	// version, plugin maintenance). It runs without the login prompt, the
+	// local receiver, or session tags.
+	direct bool
+}
+
+// launcherPreflights maps a launcher name to its preflight. Launchers without
+// one keep their original order: setup first, then the launcher. A package var
+// so tests can substitute stubs.
+var launcherPreflights = map[string]launcherPreflight{
+	"opencode": prepareOpenCode,
+}
+
+// prepareOpenCode checks the OpenCode release and the forwarded args. It runs
+// `opencode --version` and nothing else.
+func prepareOpenCode(ctx context.Context, forwarded []string) (preparedLaunch, error) {
+	inv, err := opencode.Prepare(ctx, forwarded)
+	if err != nil {
+		return preparedLaunch{}, err
+	}
+	return preparedLaunch{
+		launch: func(ctx context.Context, _ []string, localEnv *local.LaunchEnv, _ io.Reader, _, stderr io.Writer, logger *log.Logger, binaryVersion string) error {
+			return inv.Launch(ctx, localEnv, stderr, logger, binaryVersion)
+		},
+		direct: inv.Direct(),
+	}, nil
+}
+
+// preflightLauncher runs name's preflight, when it has one, and returns the
+// launcher the session should use. It parses the launcher-side args without
+// side effects first. Misused launcher flags, and forwarded args the
+// preflight rejects as usage errors, exit 2; any other preflight error, such
+// as an unsupported host release, exits 1. A direct (non-session) host command
+// runs right here, without login, the local receiver, or tags. The returned
+// bool is false when the invocation is already over.
+func preflightLauncher(name string, rest []string, launcher agentLauncher, stdin io.Reader, stdout, stderr io.Writer) (agentLauncher, bool) {
+	preflight, has := launcherPreflights[name]
+	if !has {
+		return launcher, true
+	}
+	opts, err := parseLauncherOptions(name, rest)
+	if err != nil {
+		usageError(stderr, name, err.Error())
+		exit(2)
+		return nil, false
+	}
+	prepared, err := preflight(context.Background(), opts.forwarded)
+	if err != nil {
+		if _, usage := errors.AsType[*opencode.ArgumentError](err); usage {
+			usageError(stderr, name, err.Error())
+			exit(2)
+			return nil, false
+		}
+		_, _ = fmt.Fprintf(stderr, "agento11y: %v\n", err)
+		exit(1)
+		return nil, false
+	}
+	if !prepared.direct {
+		return prepared.launch, true
+	}
+	if opts.local || len(opts.tags) > 0 {
+		_, _ = fmt.Fprintf(stderr, "agento11y: --local and --tag only apply to %s sessions; running this %[1]s command without agento11y setup\n", name)
+	}
+	logger, closeLog := cli.InitLogger(name)
+	defer closeLog()
+	runLauncher(name, prepared.launch, opts.forwarded, nil, stdin, stdout, stderr, logger)
+	return nil, false
+}
+
+// runLauncher preserves the target agent's exit code when it ran as a child
+// process on Windows.
+func runLauncher(name string, launch agentLauncher, args []string, localEnv *local.LaunchEnv, stdin io.Reader, stdout, stderr io.Writer, logger *log.Logger) {
+	// Launcher panics must surface to the user (non-zero exit, message on
+	// stderr) — log to the debug file, then re-panic so the Go runtime
+	// reports it. cli.RecoverAndLog would silently swallow the panic and
+	// exit 0, which is the hook-agent contract, not the launcher one.
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Printf("launch %s: panic: %v", name, r)
+			panic(r)
+		}
+	}()
+
+	if err := launch(context.Background(), args, localEnv, stdin, stdout, stderr, logger, version); err != nil {
+		logger.Printf("launch %s: %v", name, err)
+		exitAfterLaunchError(stderr, err)
+	}
+}
+
 // exit is a package var so tests can intercept termination.
 var exit = usageExit
 
@@ -357,6 +457,14 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 		shellLocal, shellLocalValid := envconfig.ParseBoolValue(localValue)
 		shellCloudOverride := inShell && shellLocalValid && !shellLocal
 
+		// A launcher with a preflight validates its host and forwarded args
+		// before any setup below can prompt, start the local receiver, or export
+		// --tag values, so a refused launch leaves nothing behind.
+		var proceed bool
+		if launcher, proceed = preflightLauncher(args[0], args[1:], launcher, stdin, stdout, stderr); !proceed {
+			return
+		}
+
 		launcherArgs, localEnv, noLocalOverride, ok := parseLauncherArgs(args[0], args[1:], stderr, envLocal)
 		if !ok {
 			return
@@ -408,22 +516,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 				}
 			}
 		}
-		// Launcher panics must surface to the user (non-zero exit, message on
-		// stderr) — log to the debug file, then re-panic so the Go runtime
-		// reports it. cli.RecoverAndLog would silently swallow the panic and
-		// exit 0, which is the hook-agent contract, not the launcher one.
-		defer func() {
-			if r := recover(); r != nil {
-				logger.Printf("launch %s: panic: %v", args[0], r)
-				panic(r)
-			}
-		}()
-
-		if err := launcher(context.Background(), launcherArgs, localEnv, stdin, stdout, stderr, logger, version); err != nil {
-			logger.Printf("launch %s: %v", args[0], err)
-			exitAfterLaunchError(stderr, err)
-			return
-		}
+		runLauncher(args[0], launcher, launcherArgs, localEnv, stdin, stdout, stderr, logger)
 		return
 	}
 

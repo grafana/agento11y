@@ -1,9 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Agento11yClient, ContentCaptureMode } from "@grafana/agento11y";
-import {
-  redactSecretText,
-  redactSecretTextLightweight,
-} from "@grafana/agento11y-core";
+import type { Agento11yClient } from "@grafana/agento11y";
 import type { PluginInput } from "@opencode-ai/plugin";
 import type {
   AssistantMessage,
@@ -35,11 +31,16 @@ import {
   partTextKey,
   type Redactor,
 } from "./mappers.js";
+import { createRedactor } from "./redaction.js";
 import { buildBuiltinTags } from "./tags.js";
 import {
   createTelemetryProviders,
   type TelemetryProviders,
 } from "./telemetry.js";
+import { emitToolSpans, type ToolExecutionRecord } from "./toolSpans.js";
+
+export { createRedactor } from "./redaction.js";
+export { emitToolSpans, type ToolExecutionRecord } from "./toolSpans.js";
 
 type OpencodeClient = PluginInput["client"];
 
@@ -55,27 +56,6 @@ export type OpencodeEvent = {
   type: OpencodeEventType;
   properties: unknown;
 };
-
-/**
- * Builds the redactor the mappers and hooks share.
- *
- * opencode redacts inside its own mappers rather than through the SDK's
- * generation sanitizer, so it calls the shared string helpers from
- * `@grafana/agento11y-core`, which carry the patterns generated from
- * `redaction/patterns.json`.
- *
- * Email redaction is off: agent transcripts routinely carry commit authors and
- * reviewer addresses, and redacting them costs more context than it protects.
- * See `redaction/README.md`.
- */
-export function createRedactor(): Redactor {
-  return {
-    redact: (text: string) =>
-      redactSecretText(text, { redactEmailAddresses: false }),
-    redactLightweight: (text: string) =>
-      redactSecretTextLightweight(text, { redactEmailAddresses: false }),
-  };
-}
 
 // Track recorded messages per session for dedup and cleanup
 const recordedMessages = new Map<string, Set<string>>();
@@ -211,18 +191,6 @@ type SessionContext = {
   model: { provider: string; name: string } | undefined;
 };
 const sessionContexts = new Map<string, SessionContext>();
-
-export type ToolExecutionRecord = {
-  sessionID: string;
-  toolName: string;
-  toolCallId: string;
-  startedAt: number;
-  completedAt: number;
-  input?: unknown;
-  output?: unknown;
-  isError?: boolean;
-  error?: string;
-};
 
 const activeToolExecutions = new Map<string, ToolExecutionRecord>();
 const completedToolExecutions = new Map<string, ToolExecutionRecord[]>();
@@ -1643,74 +1611,6 @@ export function mergeToolSpanRecords(
     merged.push(rec);
   }
   return merged;
-}
-
-/**
- * Emit agento11y tool execution spans for a set of completed tool records.
- * Errors thrown by the SDK are swallowed so a span failure cannot break
- * the plugin.
- *
- * @internal Exported for testing.
- */
-export function emitToolSpans(
-  client: Agento11yClient,
-  records: ToolExecutionRecord[],
-  opts: {
-    conversationId: string;
-    conversationTitle?: string;
-    agentName: string;
-    agentVersion?: string;
-    requestProvider: string;
-    requestModel: string;
-    contentCapture: ContentCaptureMode;
-    redactor: Redactor;
-    debugLog: (msg: string, ...args: unknown[]) => void;
-  },
-): void {
-  if (records.length === 0) return;
-  const includeContent = opts.contentCapture === "full";
-
-  for (const record of records) {
-    try {
-      const rec = client.startToolExecution({
-        toolName: record.toolName,
-        toolCallId: record.toolCallId,
-        toolType: "function",
-        conversationId: opts.conversationId,
-        conversationTitle: opts.conversationTitle,
-        agentName: opts.agentName,
-        agentVersion: opts.agentVersion,
-        requestProvider: opts.requestProvider,
-        requestModel: opts.requestModel,
-        startedAt: new Date(record.startedAt),
-        contentCapture: opts.contentCapture,
-      });
-
-      if (record.isError) {
-        rec.setCallError(new Error(record.error || "tool returned error"));
-      }
-
-      const end: {
-        arguments?: unknown;
-        result?: unknown;
-        completedAt: Date;
-      } = {
-        completedAt: new Date(record.completedAt),
-      };
-
-      if (includeContent && record.input !== undefined) {
-        end.arguments = opts.redactor.redact(JSON.stringify(record.input));
-      }
-      if (includeContent && record.output !== undefined) {
-        end.result = opts.redactor.redact(String(record.output));
-      }
-
-      rec.setResult(end);
-      rec.end();
-    } catch (err) {
-      opts.debugLog(`tool span export failed for ${record.toolName}`, err);
-    }
-  }
 }
 
 export type Agento11yHooks = {

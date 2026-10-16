@@ -1,0 +1,136 @@
+[
+  {
+    "path": "/api/v1/generations:export",
+    "generations": [
+      {
+        "id": "opencode-9955fb786feb97efb3c922ff",
+        "conversation_id": "native-session-1",
+        "operation_name": "streamText",
+        "mode": "GENERATION_MODE_STREAM",
+        "trace_id": "<DYNAMIC-ID>",
+        "span_id": "<DYNAMIC-ID>",
+        "model": {
+          "provider": "anthropic",
+          "name": "claude-sonnet-4-opencode"
+        },
+        "response_id": "",
+        "response_model": "claude-sonnet-4-opencode",
+        "system_prompt": "Prefer concise answers; token: [REDACTED:grafana-cloud-token]\n\nUse the observed repository context; DATABASE_PASSWORD=[REDACTED:env-secret-value]",
+        "input": [
+          {
+            "role": "MESSAGE_ROLE_USER",
+            "name": "",
+            "parts": [
+              {
+                "text": "Earlier summary; token: [REDACTED:grafana-cloud-token]"
+              }
+            ]
+          },
+          {
+            "role": "MESSAGE_ROLE_USER",
+            "name": "",
+            "parts": [
+              {
+                "text": "Recent context: inspect Go files; DATABASE_PASSWORD=[REDACTED:env-secret-value]"
+              }
+            ]
+          },
+          {
+            "role": "MESSAGE_ROLE_USER",
+            "name": "",
+            "parts": [
+              {
+                "text": "list go files; token: [REDACTED:grafana-cloud-token]; DATABASE_PASSWORD=[REDACTED:env-secret-value]"
+              }
+            ]
+          }
+        ],
+        "output": [
+          {
+            "role": "MESSAGE_ROLE_ASSISTANT",
+            "name": "",
+            "parts": [
+              {
+                "thinking": "I should inspect the repo; token: [REDACTED:grafana-cloud-token]"
+              }
+            ]
+          },
+          {
+            "role": "MESSAGE_ROLE_ASSISTANT",
+            "name": "",
+            "parts": [
+              {
+                "text": "I will list the Go files; token: [REDACTED:grafana-cloud-token]"
+              }
+            ]
+          },
+          {
+            "role": "MESSAGE_ROLE_ASSISTANT",
+            "name": "",
+            "parts": [
+              {
+                "tool_call": {
+                  "id": "native-call-1",
+                  "name": "bash",
+                  "input_json": "eyJjb21tYW5kIjoibHMgKi5nbzsgZWNobyBbUkVEQUNURUQ6Z3JhZmFuYS1jbG91ZC10b2tlbl0ifQ=="
+                }
+              }
+            ]
+          },
+          {
+            "role": "MESSAGE_ROLE_TOOL",
+            "name": "",
+            "parts": [
+              {
+                "tool_result": {
+                  "tool_call_id": "native-call-1",
+                  "name": "bash",
+                  "content": "main.go\nutil.go\ntoken: [REDACTED:grafana-cloud-token]\nDATABASE_PASSWORD=[REDACTED:env-secret-value]",
+                  "content_json": "",
+                  "is_error": false
+                }
+              }
+            ]
+          }
+        ],
+        "tools": [
+          {
+            "name": "bash",
+            "description": "",
+            "type": "function",
+            "input_schema_json": ""
+          }
+        ],
+        "usage": {
+          "input_tokens": "250",
+          "output_tokens": "60",
+          "total_tokens": "310",
+          "cache_read_input_tokens": "30",
+          "cache_write_input_tokens": "20",
+          "reasoning_tokens": "10",
+          "input_semantics": "TOKEN_INPUT_SEMANTICS_INCLUSIVE"
+        },
+        "stop_reason": "stop",
+        "started_at": "2023-11-14T22:13:21.000Z",
+        "completed_at": "2023-11-14T22:13:22.000Z",
+        "tags": {
+          "cwd": "/repo/oc-native"
+        },
+        "metadata": {
+          "opencode.input_source": "first_observed_prefix",
+          "opencode.completion_time_approximate": false,
+          "opencode.settlement": "step.ended",
+          "cost_usd": 0.005,
+          "agento11y.conversation.title": "List the Go files in the repo",
+          "agento11y.sdk.name": "sdk-js",
+          "agento11y.sdk.content_capture_mode": "full"
+        },
+        "raw_artifacts": [],
+        "call_error": "",
+        "agent_name": "opencode:build",
+        "agent_version": "native-fixture-v1",
+        "effective_version": "sha256:63f8dac37d36f2249fad09c82fd32eeed552ea0563a8b0e990091a6e7404787f"
+      }
+    ]
+  }
+]

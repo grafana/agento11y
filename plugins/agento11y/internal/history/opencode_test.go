@@ -198,6 +198,99 @@ func TestOpenCodePreviewWarnsOnMalformedMessage(t *testing.T) {
 	}
 }
 
+func TestOpenCodeUnsupportedSchemaWarnsAndExportsNothing(t *testing.T) {
+	tests := []struct {
+		name   string
+		opts   []sessiondbtest.Option
+		v1Rows bool
+		v2Rows bool
+		// reason is empty when the database is importable.
+		reason string
+	}{
+		{name: "v1", v1Rows: true},
+		{
+			name:   "v1 with v1.18.29 session_message",
+			opts:   []sessiondbtest.Option{sessiondbtest.WithSessionMessage()},
+			v1Rows: true,
+		},
+		{
+			name:   "v2",
+			opts:   []sessiondbtest.Option{sessiondbtest.WithoutV1(), sessiondbtest.WithSessionV2()},
+			v2Rows: true,
+			reason: "found OpenCode v2 table session_v2",
+		},
+		{
+			name:   "mixed v1 and v2",
+			opts:   []sessiondbtest.Option{sessiondbtest.WithSessionV2()},
+			v1Rows: true,
+			v2Rows: true,
+			reason: "found OpenCode v2 table session_v2 beside legacy v1 tables",
+		},
+		{
+			name:   "v1 table missing a column",
+			opts:   []sessiondbtest.Option{sessiondbtest.WithoutColumn("part", "data")},
+			v1Rows: true,
+			reason: "table part is missing column data",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := sessiondbtest.New(t, tt.opts...)
+			if tt.v1Rows {
+				db.AddSession("legacy", "", "secret v1 title", "/work/secret-v1", 1, 2)
+				db.AddMessage("legacy-assistant", "legacy", 1, 2, `{"role":"assistant","time":{"created":1,"completed":2}}`)
+			}
+			if tt.v2Rows {
+				db.AddSessionV2("current", "secret v2 title", "/work/secret-v2", 3, 4)
+			}
+			imp := &opencodeImporter{roots: []string{db.Path}}
+			schemaErr := "sessiondb: unsupported OpenCode database schema in " + db.Path + ": " + tt.reason +
+				"; history import reads only OpenCode v1 session tables, so no sessions were read from this database"
+
+			plan, err := BuildPlan(context.Background(), PlanOptions{Agent: AgentOpenCode, Importer: imp})
+			if err != nil {
+				t.Fatalf("BuildPlan: %v", err)
+			}
+			var wantWarnings []string
+			wantSessions := 1
+			if tt.reason != "" {
+				wantWarnings = []string{"read " + db.Path + ": " + schemaErr}
+				wantSessions = 0
+			}
+			if len(plan.Sessions) != wantSessions || !slices.Equal(plan.Warnings, wantWarnings) {
+				t.Fatalf("plan sessions = %+v, warnings = %q; want %d sessions, warnings %q", plan.Sessions, plan.Warnings, wantSessions, wantWarnings)
+			}
+
+			// A preview taken before OpenCode migrated the database must not
+			// export the legacy rows it left behind.
+			stale := SessionPreview{Agent: AgentOpenCode, SessionID: "legacy", SourcePath: db.Path}
+			exporter := &recordingExporter{}
+			result, err := RunImport(context.Background(), ImportOptions{
+				Agent: AgentOpenCode, Importer: imp, Sessions: []SessionPreview{stale},
+				Exporter: exporter, Ledger: testLedger(t),
+			})
+			if err != nil {
+				t.Fatalf("RunImport: %v", err)
+			}
+			if tt.reason == "" {
+				if result.Imported != 1 || len(exporter.got) != 1 {
+					t.Fatalf("RunImport = %+v, exported %d turns; want 1", result, len(exporter.got))
+				}
+				return
+			}
+			if len(exporter.got) != 0 || result.Imported != 0 || result.Failed != 1 {
+				t.Fatalf("RunImport = %+v, exported %d turns; want none", result, len(exporter.got))
+			}
+			if want := []string{"session legacy: " + schemaErr}; !slices.Equal(result.Warnings, want) {
+				t.Fatalf("RunImport warnings = %q, want %q", result.Warnings, want)
+			}
+			if strings.Contains(fmt.Sprint(plan.Warnings, result.Warnings), "secret") {
+				t.Fatal("warning contains session content")
+			}
+		})
+	}
+}
+
 func TestOpenCodeCollisionsKeepChildrenWithTheirRoot(t *testing.T) {
 	tests := []struct {
 		name      string

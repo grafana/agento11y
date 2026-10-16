@@ -363,7 +363,7 @@ func TestOpenCodeLineageWalksToTheRootAndGuardsCycles(t *testing.T) {
 	db.AddSession("cycle-a", "cycle-b", "a", "/work", 1, 1)
 	db.AddSession("cycle-b", "cycle-a", "b", "/work", 1, 1)
 
-	store, err := sessiondb.Open(db.Path)
+	store, err := sessiondb.Open(context.Background(), db.Path)
 	if err != nil {
 		t.Fatal(err)
 	}

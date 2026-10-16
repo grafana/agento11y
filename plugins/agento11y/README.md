@@ -88,6 +88,8 @@ Kiro capture is workspace-scoped and captures prompts and tools only; assistant 
 
 On Windows, `agento11y` starts the agent as a child process and exits with the agent's exit code. An agent installed with npm starts through a `.cmd` file, and `cmd.exe` cannot receive an argument that contains a line break. Pass a multiline prompt in a file or on stdin instead.
 
+`agento11y opencode` supports OpenCode 1.3.13 or a later 1.x release, and 2.0.22 or a later 2.x release. It reads `opencode --version` first and refuses any other release before it changes a file, prompts, or starts the local receiver. On OpenCode 2, it adds `--standalone` to sessions (the TUI, `run`, and `mini`), so the session's private server gets the launcher's settings instead of an already-running background service. See the [OpenCode README](../opencode/README.md#opencode-2) for details.
+
 ## Claude plugin evals
 
 Export `claude plugin eval` results, conversations, traces, and usage without
@@ -255,6 +257,7 @@ Imported sessions are thinner than live capture — host logs omit fields that l
   History cannot recover the system prompt, host version, configured agent-name prefix, capture-time Git branch, time to first token, or separate tool spans.
   An assistant message is imported when it has a completion timestamp or an error. Messages with neither are skipped.
   OpenCode forks copy all messages before the fork point into a new session with new IDs. If you import both sessions, those copied assistant turns are imported twice.
+  Only OpenCode 1.x databases are read. A database with OpenCode 2 tables (`session_v2`), including one that still holds 1.x rows, is skipped with a warning, and none of its sessions are imported.
 
 Without `--since`, an import covers the last 90 days. Pass `--since 365d` (or a timestamp) to widen the window, and `--until` to bound the other end. Other useful flags: `--workspace`, `--max-sessions`, `--max-turns`, `--all`, `--yes`, `--force`. Without a terminal, pass `--all --yes` to import from a script.
 
@@ -377,7 +380,7 @@ agento11y opencode install --json
 agento11y pi install --json
 ```
 
-Each command prints one secret-free result with `installed`, `already_installed`, `missing_host`, or `error`. Copilot writes its shared user hook file and does not require the Copilot CLI on `PATH`; that file is also read by Copilot Chat in VS Code. OpenCode and pi require their respective CLI to be on the current user's `PATH`; `missing_host` is a successful deferral, so a later run can configure a host installed after the script.
+Each command prints one secret-free result with `installed`, `already_installed`, `missing_host`, or `error`. OpenCode reports `error` and changes nothing for a release outside 1.3.13 to 1.x or 2.0.22 to 2.x. Copilot writes its shared user hook file and does not require the Copilot CLI on `PATH`; that file is also read by Copilot Chat in VS Code. OpenCode and pi require their respective CLI to be on the current user's `PATH`; `missing_host` is a successful deferral, so a later run can configure a host installed after the script.
 
 Claude Code provides the same command as `agento11y claude install --json`.
 
@@ -393,7 +396,7 @@ agento11y agents reconcile --agents all --json
 
 ### Auto-update
 
-`agento11y claude`, `agento11y codex`, and `agento11y opencode` refresh the installed host plugin automatically. Set `AGENTO11Y_AUTO_UPDATE=false` to opt out.
+`agento11y claude`, `agento11y codex`, and `agento11y opencode` refresh the installed host plugin automatically. Set `AGENTO11Y_AUTO_UPDATE=false` to opt out. On OpenCode 2, `agento11y opencode` does not refresh the plugin, because `opencode plugin update` starts or contacts OpenCode's background service. Run `opencode plugin update @grafana/agento11y-opencode` yourself.
 
 `AGENTO11Y_AUTO_UPDATE` does not apply to the other launchers. `agento11y copilot` rewrites its own `agento11y.json` hooks file, and `agento11y vibe` re-upserts its three entries into vibe's `hooks.toml`, so both always point at the installed binary. `agento11y pi` leaves upgrades to pi's own installer.
 

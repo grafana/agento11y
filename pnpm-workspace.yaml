@@ -37,6 +37,7 @@ allowBuilds:
   '@google/genai': false
   esbuild: true
   koffi: true
+  msgpackr-extract: false
   protobufjs: true
   sqlite3: true
   tree-sitter: true

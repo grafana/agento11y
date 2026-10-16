@@ -138,7 +138,7 @@ func TestLocalDaemonLifecycle(t *testing.T) {
 					return
 				}
 				_ = cmd.Process.Kill()
-				<-done
+				_ = <-done
 			})
 
 			var first *Status
