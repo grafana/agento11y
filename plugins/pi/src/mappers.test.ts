@@ -1,4 +1,11 @@
-import { type Message, redactSecretTextLightweight } from "@grafana/agento11y";
+import {
+  Agento11yClient,
+  createSecretRedactionSanitizer,
+  type ExportGenerationsRequest,
+  type GenerationExporter,
+  type Message,
+  redactSecretTextLightweight,
+} from "@grafana/agento11y";
 import { describe, expect, it } from "vitest";
 import {
   applyRedactedText,
@@ -866,6 +873,54 @@ describe("resolveConversationTitle", () => {
       expect(exported(title)).not.toContain("ghp_");
       expect(exported(title)).toContain("[REDACTED:github-pat]");
     });
+  });
+
+  // Regression: the SDK sends the title twice, as conversationTitle and as the
+  // agento11y.conversation.title metadata mirror, and its sanitizer redacts
+  // only the first. A whole token in the first prompt went out unredacted in
+  // the mirror. Pi now hands the SDK a title that is already redacted.
+  it("exports no secret in the title or its metadata mirror", async () => {
+    const token = `ghp_${"A".repeat(36)}`;
+    for (const prompt of [
+      `deploy ${token} now`,
+      `${"x".repeat(70)} ${token} please`,
+    ]) {
+      const requests: ExportGenerationsRequest[] = [];
+      const exporter: GenerationExporter = {
+        exportGenerations: async (request) => {
+          requests.push(structuredClone(request));
+          return {
+            results: request.generations.map((g) => ({
+              generationId: g.id,
+              accepted: true,
+            })),
+          };
+        },
+        exportWorkflowSteps: async () => ({ results: [] }),
+      };
+      // As createAgento11yClient configures it, with the export captured.
+      const client = new Agento11yClient({
+        generationExporter: exporter,
+        contentCapture: "full",
+        generationSanitizer: createSecretRedactionSanitizer({
+          redactInputMessages: true,
+        }),
+      });
+      const recorder = client.startGeneration({
+        conversationId: "pi-conv-1",
+        conversationTitle: resolveConversationTitle({
+          firstUserText: prompt,
+          contentCapture: "full",
+        }),
+        model: { provider: "anthropic", name: "claude" },
+      });
+      recorder.end();
+      await client.shutdown();
+
+      const generation = requests[0]?.generations[0];
+      expect(generation?.conversationTitle).toContain("[REDACTED:github-pat]");
+      expect(JSON.stringify(generation)).not.toContain("ghp_");
+    }
   });
 
   it("keeps text that only looks like the start of a marker", () => {
