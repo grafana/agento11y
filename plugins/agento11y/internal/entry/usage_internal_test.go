@@ -70,6 +70,9 @@ func TestStartUsageRecordsOnlyResolvedFields(t *testing.T) {
 
 func TestUsageNoticeAppearsOncePerRevision(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	oldVersion := version
+	version = "v0.1.0"
+	t.Cleanup(func() { version = oldVersion })
 	capture.Reset()
 	startUsage([]string{"skills", "list"})
 	oldShell := usageStatsShell
@@ -485,6 +488,39 @@ func TestEmitUsageEventRespectsMode(t *testing.T) {
 			t.Errorf("logged command = %q", decoded.Command)
 		}
 	})
+}
+
+func TestUsageStatsOnlySendFromVersionedBuilds(t *testing.T) {
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	t.Setenv(usagestats.EnvEndpoint, server.URL)
+
+	oldVersion, oldShell := version, usageStatsShell
+	t.Cleanup(func() { version, usageStatsShell = oldVersion, oldShell })
+	usageStatsShell = usagestats.ShellEnv{Mode: "enabled"}
+	inv := sampleInvocation(time.Now())
+	for _, candidate := range []string{"dev", "dev-60b2ab8", "dev-60b2ab8-dirty", ""} {
+		version = candidate
+		if mode := usageStatsMode(); mode != usagestats.ModeDisabled {
+			t.Errorf("version %q: mode = %q, want disabled", candidate, mode)
+		}
+		emitUsageEvent(inv, time.Now())
+	}
+	if requests != 0 {
+		t.Fatalf("development builds sent %d events", requests)
+	}
+	version = "v0.1.0"
+	if mode := usageStatsMode(); mode != usagestats.ModeEnabled {
+		t.Fatalf("release mode = %q, want enabled", mode)
+	}
+	emitUsageEvent(inv, time.Now())
+	if requests != 1 {
+		t.Errorf("versioned build sent %d events, want 1", requests)
+	}
 }
 
 // captureEmitted runs the emitter and returns what it wrote to stderr. The

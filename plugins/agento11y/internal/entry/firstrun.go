@@ -14,7 +14,7 @@ const usageNoticeRevision = "4"
 
 // showUsageNotice prints once per revision before the first enabled report.
 func showUsageNotice(w io.Writer) {
-	if capture.Snapshot().Suppressed || usagestats.ResolveMode(usageStatsShell, usageStatsConfigValue) != usagestats.ModeEnabled {
+	if capture.Snapshot().Suppressed || usageStatsMode() != usagestats.ModeEnabled {
 		return
 	}
 	path := usagestats.InstallIDPath()
