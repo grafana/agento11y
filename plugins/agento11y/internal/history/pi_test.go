@@ -965,7 +965,10 @@ func TestPiTurnsStopWhenTheConsumerStops(t *testing.T) {
 
 	imp := piImporterAt(root)
 	seen := 0
-	for range imp.Turns(context.Background(), piPreview(t, imp, path)) {
+	for _, err := range imp.Turns(context.Background(), piPreview(t, imp, path)) {
+		if err != nil {
+			t.Fatal(err)
+		}
 		seen++
 		if seen == 3 {
 			break

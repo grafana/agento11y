@@ -401,7 +401,10 @@ func TestCodexTurnsStopWhenTheConsumerStops(t *testing.T) {
 
 	imp := codexImporterAt(root)
 	seen := 0
-	for range imp.Turns(context.Background(), codexPreview(t, imp, path)) {
+	for _, err := range imp.Turns(context.Background(), codexPreview(t, imp, path)) {
+		if err != nil {
+			t.Fatal(err)
+		}
 		seen++
 		if seen == 3 {
 			break

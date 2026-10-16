@@ -1429,7 +1429,10 @@ func TestCursorTurnWindows(t *testing.T) {
 func TestCursorTurnsStopWhenTheConsumerStops(t *testing.T) {
 	imp, sess := cursorSession(t, "tool-call.json")
 	seen := 0
-	for range imp.Turns(context.Background(), sess) {
+	for _, err := range imp.Turns(context.Background(), sess) {
+		if err != nil {
+			t.Fatal(err)
+		}
 		seen++
 		break
 	}

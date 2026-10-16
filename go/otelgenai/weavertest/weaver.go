@@ -222,7 +222,7 @@ func startWeaver(ctx context.Context, binary string, assets Assets) (*Weaver, er
 	}
 	if !exited {
 		_ = weaver.command.Process.Kill()
-		<-weaver.wait
+		_ = <-weaver.wait
 	}
 	return nil, fmt.Errorf("%w\nstdout:\n%s\nstderr:\n%s", readyErr, weaver.stdout.String(), weaver.stderr.String())
 }

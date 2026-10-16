@@ -654,7 +654,10 @@ func TestMessagesStopWhenTheConsumerStops(t *testing.T) {
 
 	root := rootOf(t, store)
 	seen := 0
-	for range store.Messages(context.Background(), root.MessageIDs) {
+	for _, err := range store.Messages(context.Background(), root.MessageIDs) {
+		if err != nil {
+			t.Fatal(err)
+		}
 		seen++
 		if seen == 3 {
 			break
