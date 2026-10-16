@@ -182,6 +182,13 @@ func MCPCall(h Header, callID, name string, args map[string]any) []byte {
 	return toolCall(h, callID, 12, body)
 }
 
+// MCPCallRawArgs encodes a call_mcp_tool tool call whose args field holds raw
+// bytes, such as a payload that is not a valid google.protobuf.Struct.
+func MCPCallRawArgs(h Header, callID, name string, args []byte) []byte {
+	body := appendMessage(appendString(nil, 1, name), 2, args)
+	return toolCall(h, callID, 12, body)
+}
+
 // OtherCall encodes a tool call for the given ToolCall.tool oneof field with
 // an empty body.
 func OtherCall(h Header, callID string, field protowire.Number) []byte {
@@ -239,6 +246,8 @@ type Usage struct {
 	CacheWrite uint64
 	InputCost  float32 // cents
 	OutputCost float32 // cents
+	// PlatformCost is the category's platform charge in cents.
+	PlatformCost float32
 }
 
 // Outcome values match Message.RequestMetadata.Outcome.
@@ -268,6 +277,9 @@ func RequestMetadata(h Header, started, ended time.Time, outcome uint64, usage .
 			source = 2
 		}
 		chargedUsage := appendMessage(nil, source, mapEntry(u.Model, inference))
+		if u.PlatformCost != 0 {
+			chargedUsage = appendFloat(chargedUsage, 4, u.PlatformCost)
+		}
 		charges = appendMessage(charges, 1, mapEntry(u.Category, chargedUsage))
 	}
 

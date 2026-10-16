@@ -30,7 +30,7 @@ func TestDecodeTaskReadsEveryMappedVariant(t *testing.T) {
 		wt.AgentOutput(hdr("m8", "r1", 4*time.Second), "running tests"),
 		wt.RequestMetadata(hdr("m9", "r1", 5*time.Second), t0, t0.Add(5*time.Second), wt.OutcomeCompleted,
 			wt.Usage{Category: "primary_agent", Model: "claude-4-6-sonnet-high", Input: 100, Output: 20, CacheRead: 300, CacheWrite: 7, InputCost: 1.5, OutputCost: 0.5},
-			wt.Usage{Category: "compaction", Model: "claude-4-6-sonnet-high", BYOK: true, Input: 10, Output: 2, InputCost: 0.25},
+			wt.Usage{Category: "compaction", Model: "claude-4-6-sonnet-high", BYOK: true, Input: 10, Output: 2, InputCost: 0.25, PlatformCost: 0.5},
 			wt.Usage{Category: "primary_agent", Model: "gemini-3.5-flash", Input: 5, Output: 1},
 		),
 		wt.ShellResult(hdr("m10", "r2", 6*time.Second), "call-1", "FAIL", 1),
@@ -86,6 +86,9 @@ func TestDecodeTaskReadsEveryMappedVariant(t *testing.T) {
 	if !slices.Equal(meta.Usage, wantUsage) {
 		t.Fatalf("usage = %+v, want %+v", meta.Usage, wantUsage)
 	}
+	if meta.PlatformCents != 0.5 {
+		t.Fatalf("platform cents = %v, want 0.5", meta.PlatformCents)
+	}
 
 	wantResults := []warpdb.ToolResult{
 		{CallID: "call-1", Name: "run_shell_command", Content: "FAIL", IsError: true},
@@ -114,6 +117,52 @@ func TestDecodeTaskSkipsUnknownFields(t *testing.T) {
 	}
 	if len(task.Messages) != 1 || task.Messages[0].Text != "hello" {
 		t.Fatalf("task = %+v", task)
+	}
+}
+
+func TestDecodeTaskKeepsMCPCallWithUndecodableArgs(t *testing.T) {
+	// 0x0a 0xff is a fields entry whose length runs past the payload.
+	payload := wt.Task("root", "", "", wt.MCPCallRawArgs(hdr("m1", "r1", 0), "call-1", "search_issues", []byte{0x0a, 0xff}))
+	task, err := warpdb.DecodeTask(payload)
+	if err != nil {
+		t.Fatalf("DecodeTask: %v", err)
+	}
+	call := task.Messages[0].ToolCall
+	if call.Name != "search_issues" || !jsonEqual(t, call.Input, `{"name":"search_issues"}`) {
+		t.Fatalf("tool call = %+v (%s)", call, call.Input)
+	}
+}
+
+func TestStoreSkipsOversizedConversation(t *testing.T) {
+	old := warpdb.MaxTaskBytes
+	t.Cleanup(func() { warpdb.MaxTaskBytes = old })
+
+	db := wt.New(t)
+	db.AddConversation("small", t0)
+	db.AddConversation("large", t0)
+	db.AddTask("small", "root", wt.Task("root", "", "", wt.UserQuery(hdr("m1", "r1", 0), "a")), t0)
+	large := wt.Task("root", "", "", wt.UserQuery(hdr("m2", "r2", 0), "a much longer query than the limit allows"))
+	db.AddTask("large", "root", large, t0)
+	warpdb.MaxTaskBytes = len(large) - 1
+
+	store, err := warpdb.Open(db.Path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	convs, err := store.Conversations(context.Background())
+	if err != nil {
+		t.Fatalf("Conversations: %v", err)
+	}
+	byID := map[string]warpdb.Conversation{}
+	for _, conv := range convs {
+		byID[conv.ID] = conv
+	}
+	if byID["small"].Oversized || !byID["large"].Oversized {
+		t.Fatalf("conversations = %+v", convs)
+	}
+	if _, err := store.Tasks(context.Background(), "large"); err == nil {
+		t.Fatal("Tasks accepted an oversized task")
 	}
 }
 

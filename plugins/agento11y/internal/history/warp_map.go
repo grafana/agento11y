@@ -91,17 +91,23 @@ type warpConversation struct {
 	// modelIDs maps a lowercased model display name to its model ID. Billing
 	// records name models by display name, ModelUsed records by ID.
 	modelIDs map[string]string
+	// callNames maps a tool call ID to the call's tool name. A result usually
+	// arrives in the request after its call, so the lookup spans requests.
+	callNames map[string]string
 }
 
 func newWarpConversation(tasks []warpdb.Task) warpConversation {
-	conv := warpConversation{modelIDs: map[string]string{}}
+	conv := warpConversation{modelIDs: map[string]string{}, callNames: map[string]string{}}
 	for _, task := range warpTasksParentFirst(tasks) {
 		if conv.title == "" {
 			conv.title = strings.TrimSpace(task.Description)
 		}
 		for _, msg := range task.Messages {
-			if msg.Kind == warpdb.KindModelUsed && msg.Model.ID != "" && msg.Model.DisplayName != "" {
+			switch {
+			case msg.Kind == warpdb.KindModelUsed && msg.Model.ID != "" && msg.Model.DisplayName != "":
 				conv.modelIDs[strings.ToLower(msg.Model.DisplayName)] = msg.Model.ID
+			case msg.Kind == warpdb.KindToolCall && msg.ToolCall.ID != "" && msg.ToolCall.Name != "":
+				conv.callNames[msg.ToolCall.ID] = msg.ToolCall.Name
 			}
 		}
 	}
@@ -125,7 +131,6 @@ func warpGeneration(sess SessionPreview, req warpRequest, source SourceRef, conv
 		meta          *warpdb.RequestMetadata
 		first, last   time.Time
 	)
-	callNames := map[string]string{}
 	responding := false
 	for _, msg := range req.messages {
 		if !msg.Timestamp.IsZero() {
@@ -142,7 +147,7 @@ func warpGeneration(sess SessionPreview, req warpRequest, source SourceRef, conv
 				input = append(input, warpText(agento11y.RoleUser, msg.Text))
 			}
 		case warpdb.KindToolResult:
-			result := warpToolResult(msg.ToolResult, callNames)
+			result := warpToolResult(msg.ToolResult, conv.callNames)
 			if responding {
 				output = append(output, result)
 			} else {
@@ -172,7 +177,6 @@ func warpGeneration(sess SessionPreview, req warpRequest, source SourceRef, conv
 			if call.Name == "" {
 				continue
 			}
-			callNames[call.ID] = call.Name
 			toolNames = append(toolNames, call.Name)
 			output = append(output, agento11y.Message{
 				Role: agento11y.RoleAssistant,
@@ -282,7 +286,7 @@ func warpUsage(meta *warpdb.RequestMetadata) (agento11y.TokenUsage, float64, boo
 		return agento11y.TokenUsage{}, 0, false
 	}
 	var input, output, cacheRead, cacheWrite int64
-	var cents float64
+	cents := meta.PlatformCents
 	for _, u := range meta.Usage {
 		input += u.Input
 		output += u.Output

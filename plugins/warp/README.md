@@ -61,6 +61,9 @@ Windows is not supported yet.
   commands, file reads, grep, file globs, codebase search, file edits (paths
   only), and MCP calls. Tool results are decoded for shell commands and MCP
   calls; other results carry only their name and error state.
+- Platform charges, such as cloud agent hours, are included in `cost_usd`.
+- A conversation with a single task larger than 128 MiB is left out of
+  discovery.
 - The conversation title is the root task's description. The `cwd` tag is the
   most recent working directory Warp recorded for the conversation.
 

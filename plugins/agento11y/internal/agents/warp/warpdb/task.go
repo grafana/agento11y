@@ -100,8 +100,10 @@ type RequestMetadata struct {
 	EndedAt      time.Time
 	FirstTokenAt time.Time
 	Usage        []ModelUsage
-	Incomplete   bool
-	Outcome      Outcome
+	// PlatformCents is the non-inference charge, such as cloud agent hours.
+	PlatformCents float64
+	Incomplete    bool
+	Outcome       Outcome
 }
 
 // ModelUsage is the usage charged to one model within a request, summed across
@@ -131,7 +133,7 @@ const (
 )
 
 // toolCallNames maps Message.ToolCall.tool oneof field numbers to tool names.
-var toolCallNames = map[protowire.Number]string{
+var toolCallNames = map[int]string{
 	2: "run_shell_command", 3: "search_codebase", 4: "server", 5: "read_files",
 	6: "apply_file_diffs", 7: "suggest_plan", 8: "suggest_create_plan", 9: "grep",
 	10: "file_glob", 11: "read_mcp_resource", 12: "call_mcp_tool",
@@ -147,7 +149,7 @@ var toolCallNames = map[protowire.Number]string{
 
 // toolResultNames maps Message.ToolCallResult.result oneof field numbers to
 // tool names. Field 14 is the cancel variant.
-var toolResultNames = map[protowire.Number]string{
+var toolResultNames = map[int]string{
 	2: "run_shell_command", 3: "search_codebase", 4: "server", 5: "read_files",
 	6: "apply_file_diffs", 7: "suggest_plan", 8: "suggest_create_plan", 9: "grep",
 	10: "file_glob", 15: "read_mcp_resource", 16: "call_mcp_tool",
@@ -166,7 +168,7 @@ const toolResultCancel = 14
 // field is one decoded wire field. Bytes is set for length-delimited fields and
 // Uint for varint and fixed-width fields.
 type field struct {
-	Num   protowire.Number
+	Num   int
 	Type  protowire.Type
 	Bytes []byte
 	Uint  uint64
@@ -192,7 +194,7 @@ func eachField(b []byte, fn func(field) error) error {
 			return protowire.ParseError(n)
 		}
 		b = b[n:]
-		f := field{Num: num, Type: typ}
+		f := field{Num: int(num), Type: typ}
 		switch typ {
 		case protowire.VarintType:
 			f.Uint, n = protowire.ConsumeVarint(b)
@@ -243,7 +245,6 @@ func DecodeTask(b []byte) (Task, error) {
 				return err
 			}
 			task.Messages = append(task.Messages, msg)
-		default:
 		}
 		return nil
 	})
@@ -315,14 +316,13 @@ func decodeMessage(b []byte) (Message, error) {
 		case msgFieldRequestMetadata:
 			msg.Kind = KindRequestMetadata
 			msg.Request, err = decodeRequestMetadata(f.Bytes)
-		default:
 		}
 		return err
 	})
 	return msg, err
 }
 
-func stringField(b []byte, num protowire.Number) (string, error) {
+func stringField(b []byte, num int) (string, error) {
 	var out string
 	err := eachField(b, func(f field) error {
 		if f.Num == num && f.isBytes() {
@@ -344,7 +344,6 @@ func decodeTimestamp(b []byte) (time.Time, error) {
 			seconds = int64(f.Uint)
 		case 2:
 			nanos = int64(int32(f.Uint))
-		default:
 		}
 		return nil
 	})
@@ -390,11 +389,9 @@ func decodeToolCall(b []byte) (ToolCall, error) {
 			return err
 		}
 		if input != nil {
-			raw, err := json.Marshal(input)
-			if err != nil {
-				return err
+			if raw, err := json.Marshal(input); err == nil {
+				call.Input = raw
 			}
-			call.Input = raw
 		}
 		if f.Num == 12 {
 			if mcpName, _ := input["name"].(string); mcpName != "" {
@@ -408,30 +405,13 @@ func decodeToolCall(b []byte) (ToolCall, error) {
 
 // toolCallInput returns a JSON-ready view of the arguments for the common
 // tools. It returns nil for tools whose arguments are not decoded.
-func toolCallInput(num protowire.Number, b []byte) (map[string]any, error) {
+func toolCallInput(num int, b []byte) (map[string]any, error) {
 	switch toolCallNames[num] {
 	case "run_shell_command":
 		command, err := stringField(b, 1)
 		return map[string]any{"command": command}, err
-	case "search_codebase":
-		in := map[string]any{}
-		err := eachField(b, func(f field) error {
-			if !f.isBytes() {
-				return nil
-			}
-			switch f.Num {
-			case 1:
-				in["query"] = f.str()
-			case 2:
-				filters, _ := in["path_filters"].([]string)
-				in["path_filters"] = append(filters, f.str())
-			case 3:
-				in["codebase_path"] = f.str()
-			default:
-			}
-			return nil
-		})
-		return in, err
+	case "search_codebase", "grep", "file_glob_v2":
+		return stringArgs(b, stringArgFields[toolCallNames[num]])
 	case "read_files":
 		var paths []string
 		err := eachField(b, func(f field) error {
@@ -445,40 +425,6 @@ func toolCallInput(num protowire.Number, b []byte) (map[string]any, error) {
 			return err
 		})
 		return map[string]any{"files": paths}, err
-	case "grep":
-		in := map[string]any{}
-		err := eachField(b, func(f field) error {
-			if !f.isBytes() {
-				return nil
-			}
-			switch f.Num {
-			case 1:
-				queries, _ := in["queries"].([]string)
-				in["queries"] = append(queries, f.str())
-			case 2:
-				in["path"] = f.str()
-			default:
-			}
-			return nil
-		})
-		return in, err
-	case "file_glob_v2":
-		in := map[string]any{}
-		err := eachField(b, func(f field) error {
-			if !f.isBytes() {
-				return nil
-			}
-			switch f.Num {
-			case 1:
-				patterns, _ := in["patterns"].([]string)
-				in["patterns"] = append(patterns, f.str())
-			case 2:
-				in["search_dir"] = f.str()
-			default:
-			}
-			return nil
-		})
-		return in, err
 	case "apply_file_diffs":
 		var files []string
 		err := eachField(b, func(f field) error {
@@ -502,20 +448,55 @@ func toolCallInput(num protowire.Number, b []byte) (map[string]any, error) {
 			case 1:
 				in["name"] = f.str()
 			case 2:
+				// Arguments that do not decode (for example invalid UTF-8)
+				// are dropped so the rest of the conversation still imports.
 				var args structpb.Struct
-				if err := proto.Unmarshal(f.Bytes, &args); err != nil {
-					return fmt.Errorf("decode mcp args: %w", err)
+				if proto.Unmarshal(f.Bytes, &args) == nil {
+					in["args"] = args.AsMap()
 				}
-				in["args"] = args.AsMap()
 			case 3:
 				in["server_id"] = f.str()
-			default:
 			}
 			return nil
 		})
 		return in, err
 	}
 	return nil, nil
+}
+
+// stringArg maps one string field of a tool's arguments to a JSON key.
+type stringArg struct {
+	num      int
+	key      string
+	repeated bool
+}
+
+var stringArgFields = map[string][]stringArg{
+	"search_codebase": {{1, "query", false}, {2, "path_filters", true}, {3, "codebase_path", false}},
+	"grep":            {{1, "queries", true}, {2, "path", false}},
+	"file_glob_v2":    {{1, "patterns", true}, {2, "search_dir", false}},
+}
+
+func stringArgs(b []byte, specs []stringArg) (map[string]any, error) {
+	in := map[string]any{}
+	err := eachField(b, func(f field) error {
+		if !f.isBytes() {
+			return nil
+		}
+		for _, spec := range specs {
+			if spec.num != f.Num {
+				continue
+			}
+			if spec.repeated {
+				values, _ := in[spec.key].([]string)
+				in[spec.key] = append(values, f.str())
+			} else {
+				in[spec.key] = f.str()
+			}
+		}
+		return nil
+	})
+	return in, err
 }
 
 func decodeToolResult(b []byte) (ToolResult, error) {
@@ -611,7 +592,6 @@ func decodeMCPResult(b []byte, result *ToolResult) error {
 			message, err := stringField(f.Bytes, 1)
 			result.Content = message
 			return err
-		default:
 		}
 		return nil
 	})
@@ -624,8 +604,8 @@ func decodeRequestMetadata(b []byte) (RequestMetadata, error) {
 		case f.Num == 1 && f.isBytes():
 			return decodeRequestTiming(f.Bytes, &meta)
 		case f.Num == 2 && f.isBytes():
-			usage, err := decodeRequestCharges(f.Bytes)
-			meta.Usage = usage
+			var err error
+			meta.Usage, meta.PlatformCents, err = decodeRequestCharges(f.Bytes)
 			return err
 		case f.Num == 3 && f.isVarint():
 			meta.Incomplete = f.Uint != 0
@@ -655,22 +635,21 @@ func decodeRequestTiming(b []byte, meta *RequestMetadata) error {
 					meta.StartedAt, err = decodeTimestamp(span.Bytes)
 				case 2:
 					meta.EndedAt, err = decodeTimestamp(span.Bytes)
-				default:
 				}
 				return err
 			})
 		case 2:
 			meta.FirstTokenAt, err = decodeTimestamp(f.Bytes)
-		default:
 		}
 		return err
 	})
 }
 
 // decodeRequestCharges sums RequestCharges.usage_by_category into one entry per
-// model, in first-seen order.
-func decodeRequestCharges(b []byte) ([]ModelUsage, error) {
+// model, in first-seen order, plus the request's platform charge in cents.
+func decodeRequestCharges(b []byte) ([]ModelUsage, float64, error) {
 	var usage []ModelUsage
+	var platformCents float64
 	index := map[string]int{}
 	add := func(model string, u ModelUsage) {
 		i, ok := index[model]
@@ -694,6 +673,10 @@ func decodeRequestCharges(b []byte) ([]ModelUsage, error) {
 			return err
 		}
 		return eachField(charged, func(source field) error {
+			if source.Num == 4 {
+				platformCents += source.float32()
+				return nil
+			}
 			if source.Num < 1 || source.Num > 3 || !source.isBytes() {
 				return nil
 			}
@@ -709,7 +692,7 @@ func decodeRequestCharges(b []byte) ([]ModelUsage, error) {
 			return nil
 		})
 	})
-	return usage, err
+	return usage, platformCents, err
 }
 
 func mapEntry(b []byte) (key string, value []byte, err error) {
@@ -722,7 +705,6 @@ func mapEntry(b []byte) (key string, value []byte, err error) {
 			key = f.str()
 		case 2:
 			value = f.Bytes
-		default:
 		}
 		return nil
 	})
@@ -752,7 +734,6 @@ func decodeInferenceUsage(b []byte) (ModelUsage, error) {
 					u.CacheRead = int64(count.Uint)
 				case 4:
 					u.CacheWrite = int64(count.Uint)
-				default:
 				}
 				return nil
 			})

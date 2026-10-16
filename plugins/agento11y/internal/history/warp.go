@@ -95,7 +95,7 @@ func (w *warpImporter) Previews(ctx context.Context, path string) ([]SessionPrev
 	}
 	previews := make([]SessionPreview, 0, len(convs))
 	for _, conv := range convs {
-		if conv.Requests == 0 {
+		if conv.Requests == 0 || conv.Oversized {
 			continue
 		}
 		previews = append(previews, SessionPreview{

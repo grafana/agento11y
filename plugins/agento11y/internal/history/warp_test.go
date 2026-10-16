@@ -249,6 +249,36 @@ func TestWarpBilledModelResolvesToModelID(t *testing.T) {
 	}
 }
 
+func TestWarpToolResultsTakeTheirCallNameAcrossRequests(t *testing.T) {
+	db := wt.New(t)
+	db.AddConversation("conv", warpT0)
+	db.AddTask("conv", "root", wt.Task("root", "", "",
+		wt.MCPCall(warpHdr("m1", "root", "r1", 0), "call-mcp", "search_issues", map[string]any{"q": "flaky"}),
+		wt.ShellCall(warpHdr("m2", "root", "r1", time.Second), "call-shell", "sleep 100"),
+		wt.MCPResult(warpHdr("m3", "root", "r2", 2*time.Second), "call-mcp", "issue 1"),
+		wt.CancelResult(warpHdr("m4", "root", "r2", 2*time.Second), "call-shell"),
+		wt.RequestMetadata(warpHdr("m5", "root", "r2", 3*time.Second), warpT0.Add(2*time.Second), warpT0.Add(3*time.Second), wt.OutcomeCompleted,
+			wt.Usage{Category: "primary_agent", Model: "m", Input: 1, Output: 1, InputCost: 100, PlatformCost: 50}),
+	), warpT0)
+
+	imp := &warpImporter{}
+	turns := collectTurns(t, imp, warpFixtureSession(t, imp, db.Path))
+	if len(turns) != 2 || len(turns[1].Gen.Input) != 2 {
+		t.Fatalf("turns = %+v", turns)
+	}
+	mcp := turns[1].Gen.Input[0].Parts[0].ToolResult
+	cancel := turns[1].Gen.Input[1].Parts[0].ToolResult
+	if mcp.Name != "search_issues" || mcp.Content != "issue 1" {
+		t.Fatalf("mcp result = %+v", mcp)
+	}
+	if cancel.Name != "run_shell_command" || !cancel.IsError {
+		t.Fatalf("cancel result = %+v", cancel)
+	}
+	if got := turns[1].Gen.Metadata["cost_usd"]; got != 1.5 {
+		t.Fatalf("cost_usd = %v, want 1.5 including the platform charge", got)
+	}
+}
+
 func TestWarpRunImportSanitizesAndIsIdempotent(t *testing.T) {
 	db := newWarpFixture(t)
 	imp := &warpImporter{}

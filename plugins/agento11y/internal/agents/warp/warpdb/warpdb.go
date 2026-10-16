@@ -16,8 +16,9 @@ import (
 )
 
 // MaxTaskBytes is the largest agent_tasks.task value decoded. Long-running
-// conversations reach tens of megabytes.
-const MaxTaskBytes = 128 * 1024 * 1024
+// conversations reach tens of megabytes. A conversation with a larger task is
+// left out of discovery. It is a variable so tests can lower it.
+var MaxTaskBytes = 128 * 1024 * 1024
 
 // Store is an open read-only Warp database.
 type Store struct {
@@ -33,6 +34,8 @@ type Conversation struct {
 	UpdatedAt time.Time
 	SizeBytes int64
 	Requests  int // distinct agent requests across the conversation's tasks
+	// Oversized is set when a task exceeds MaxTaskBytes; Tasks refuses it.
+	Oversized bool
 }
 
 // Open opens path read-only. The mode reads a live write-ahead log; it may
@@ -110,7 +113,12 @@ func (s *Store) countRequests(ctx context.Context, convs []Conversation, byID ma
 			return fmt.Errorf("warpdb: scan tasks in %s: %w", s.path, err)
 		}
 		i, ok := byID[convID]
-		if !ok || len(blob) > MaxTaskBytes {
+		if !ok {
+			continue
+		}
+		if len(blob) > MaxTaskBytes {
+			// Tasks refuses the conversation, so discovery must not plan it.
+			convs[i].Oversized = true
 			continue
 		}
 		ids, err := RequestIDs(blob)
