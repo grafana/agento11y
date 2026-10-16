@@ -1,11 +1,11 @@
 [project]
 name = "agento11y-harbor"
-version = "0.19.0"
+version = "0.20.0"
 description = "Harbor live evaluation and job import for the Grafana Agent Observability Python SDK"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
-dependencies = ["agento11y>=0.20.0"]
+dependencies = ["agento11y>=0.21.0"]
 
 [project.scripts]
 agento11y-harbor = "agento11y_harbor.cli:console_main"

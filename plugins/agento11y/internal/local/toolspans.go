@@ -209,6 +209,16 @@ func (s *Storage) appendToolSpans(records []toolSpanRecord) ([]string, error) {
 
 func (s *Storage) toolSpanFiles() ([]toolSpanFile, error) {
 	dir := filepath.Join(s.dir, ToolSpansDir)
+	// Windows can list a regular file as an empty directory, which would hide
+	// the broken store and let an append run without the delivery order.
+	if info, err := os.Stat(dir); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	} else if !info.IsDir() {
+		return nil, fmt.Errorf("%s is not a directory", dir)
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {

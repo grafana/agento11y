@@ -134,16 +134,7 @@ func TestServer_GenerationsExport_RejectsMissingAndUnsafeConversationID(t *testi
 	]}`
 	resp := post(t, s, "/api/v1/generations:export", "application/json", body)
 	defer resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-
-	var out generationsResponse
-	decodeJSON(t, resp.Body, &out)
-	require.Len(t, out.Results, 2)
-	for _, r := range out.Results {
-		assert.False(t, r.Accepted)
-		assert.NotEmpty(t, r.Error)
-	}
-
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 	assertConversationDirEmpty(t, &Storage{dir: dir})
 }
 
@@ -654,6 +645,85 @@ func TestServer_SkillsToolsMetricsAndSessionDrilldown(t *testing.T) {
 			assert.Equal(t, http.StatusBadRequest, rr.Code, path)
 		}
 	})
+}
+
+func TestServe_ShutdownEndpoint(t *testing.T) {
+	dir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan error, 1)
+	go func() { served <- Serve(ctx, dir, 0, nil) }()
+	stopped := false
+	t.Cleanup(func() {
+		if stopped {
+			return
+		}
+		cancel()
+		select {
+		case err := <-served:
+			require.NoError(t, err)
+		case <-time.After(3 * time.Second):
+			t.Error("Serve did not return during cleanup")
+		}
+	})
+
+	var status *Status
+	require.Eventually(t, func() bool {
+		var err error
+		status, err = IsRunning(dir)
+		return err == nil && status != nil
+	}, 5*time.Second, 20*time.Millisecond, "daemon published a healthy endpoint")
+
+	req, err := http.NewRequest(http.MethodPost, status.Endpoint+"/api/v1/shutdown", strings.NewReader("{}"))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusAccepted, resp.StatusCode)
+
+	select {
+	case err := <-served:
+		require.NoError(t, err)
+		stopped = true
+	case <-time.After(3 * time.Second):
+		t.Fatal("Serve did not return after shutdown request")
+	}
+	_, err = os.Stat(filepath.Join(dir, StatusFile))
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestServer_Shutdown(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		fetchSite    string
+		wantStatus   int
+		wantShutdown bool
+	}{
+		{name: "loopback request accepted", wantStatus: http.StatusAccepted, wantShutdown: true},
+		{name: "cross-site request refused", fetchSite: "cross-site", wantStatus: http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := newTestServer(t)
+			shutdown := make(chan struct{}, 1)
+			s.SetShutdown(func() { shutdown <- struct{}{} })
+			req := newLocalRequest(http.MethodPost, "/api/v1/shutdown", strings.NewReader("{}"))
+			req.Header.Set("Content-Type", "application/json")
+			if tc.fetchSite != "" {
+				req.Header.Set("Sec-Fetch-Site", tc.fetchSite)
+			}
+			rr := httptest.NewRecorder()
+
+			s.ServeHTTP(rr, req)
+
+			require.Equal(t, tc.wantStatus, rr.Code)
+			select {
+			case <-shutdown:
+				require.True(t, tc.wantShutdown, "shutdown called for refused request")
+			case <-time.After(100 * time.Millisecond):
+				require.False(t, tc.wantShutdown, "shutdown was not called")
+			}
+		})
+	}
 }
 
 func assertFixedSecurityHeaders(t *testing.T, header http.Header) {

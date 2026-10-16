@@ -164,7 +164,7 @@ func TestPiRootsResolveFromTheAgentDir(t *testing.T) {
 	}
 
 	t.Setenv("PI_CODING_AGENT_DIR", "")
-	t.Setenv("HOME", "/home/tester")
+	setHomeDir(t, "/home/tester")
 	want := []string{filepath.Join("/home/tester", ".pi", "agent", "sessions")}
 	if got := imp.Roots(); !slices.Equal(got, want) {
 		t.Fatalf("Roots() = %v, want the home fallback %v", got, want)

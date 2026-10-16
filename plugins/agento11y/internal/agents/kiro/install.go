@@ -15,7 +15,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/execpath"
@@ -25,7 +24,7 @@ import (
 )
 
 var lookPath = exec.LookPath
-var execFn = syscall.Exec
+var execFn = launcher.DefaultExec
 var versionOutput = func(ctx context.Context, bin string) ([]byte, error) { return launcher.Output(ctx, bin, "--version") }
 var versionPattern = regexp.MustCompile(`(?:^|\s)v?([0-9]+)\.[0-9]+`)
 
@@ -164,7 +163,7 @@ func Status(context.Context) (bool, string, error) {
 	return owned(raw) && bytes.Equal(want, actual), "", nil
 }
 
-// Launch installs workspace hooks and replaces the process with kiro-cli.
+// Launch installs workspace hooks and hands off to kiro-cli.
 // CLI 2.x uses a different hook schema; callers must use CLI 3 or newer.
 func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.Reader, _, stderr io.Writer, _ *log.Logger, _ string) error {
 	bin, err := lookPath("kiro-cli")

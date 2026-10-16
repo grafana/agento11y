@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.50.0] - 2026-10-15
+
+### Features
+
+- **plugins/agento11y**: support Windows launcher and local mode (#634)
+- **python**: add Harbor live publishing and job import (#870)
+
+### Bug Fixes
+
+- **plugins/agento11y**: recognize more spellings of the local daemon (#875)
+- **plugins/pi**: preserve reasoning token counts (#872)
+
+### Documentation
+
+- **plugins**: document CLI usage statistics and the opt-out (#864)
+
 ## [0.49.0] - 2026-10-13
 
 ### Features

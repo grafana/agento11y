@@ -464,6 +464,23 @@ func TestOpenLedgerSeedsEveryDestination(t *testing.T) {
 	}
 }
 
+// statOpen stats path through an open file. On Windows os.Stat leaves the file
+// ID to be read from the path by the first os.SameFile call, which fails once
+// the file has been renamed away; a handle reads the ID at once.
+func statOpen(t *testing.T, path string) os.FileInfo {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info
+}
+
 // A seed must never replace a ledger another import has already put in place:
 // that ledger may hold turns it exported since, and losing them would send
 // them again. This holds with a hard link and with the rename a file system
@@ -489,10 +506,7 @@ func TestPublishSeedKeepsALedgerThatIsAlreadyThere(t *testing.T) {
 			// No ledger yet: the seed goes in place, as the synced file itself.
 			// A copy into place could be left half written, and the next open
 			// would trust it.
-			before, err := os.Stat(seed)
-			if err != nil {
-				t.Fatal(err)
-			}
+			before := statOpen(t, seed)
 			if err := publishSeed(seed, path); err != nil {
 				t.Fatalf("publish into an empty place: %v", err)
 			}

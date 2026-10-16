@@ -397,7 +397,7 @@ func assertValidUserHooks(t *testing.T, path, wantCommand string) {
 // before surfacing the not-found error.
 func TestLaunch_MissingBinaryInstallsUserHooks(t *testing.T) {
 	t.Setenv("COPILOT_HOME", t.TempDir())
-	withExecutable(t, "/usr/local/bin/agento11y")
+	withExecutable(t, hookExecPath)
 	withLookPath(t, func(string) (string, error) { return "", exec.ErrNotFound })
 
 	var stderr bytes.Buffer
@@ -405,19 +405,19 @@ func TestLaunch_MissingBinaryInstallsUserHooks(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "copilot CLI not found")
 
-	assertValidUserHooks(t, userHooksPath(t), "/usr/local/bin/agento11y copilot hook")
+	assertValidUserHooks(t, userHooksPath(t), hookCommandLine)
 	assert.Contains(t, stderr.String(), "installed Copilot hooks at")
 }
 
 func TestInstall_WritesHooksWithoutCopilotCLI(t *testing.T) {
 	t.Setenv("COPILOT_HOME", t.TempDir())
-	withExecutable(t, "/usr/local/bin/agento11y")
+	withExecutable(t, hookExecPath)
 	withLookPath(t, func(string) (string, error) { return "", exec.ErrNotFound })
 
 	changed, err := Install()
 	require.NoError(t, err)
 	assert.True(t, changed)
-	assertValidUserHooks(t, userHooksPath(t), "/usr/local/bin/agento11y copilot hook")
+	assertValidUserHooks(t, userHooksPath(t), hookCommandLine)
 
 	changed, err = Install()
 	require.NoError(t, err)
@@ -426,7 +426,7 @@ func TestInstall_WritesHooksWithoutCopilotCLI(t *testing.T) {
 
 func TestInstall_RemovesStalePluginWhenCopilotCLIIsAvailable(t *testing.T) {
 	t.Setenv("COPILOT_HOME", t.TempDir())
-	withExecutable(t, "/usr/local/bin/agento11y")
+	withExecutable(t, hookExecPath)
 	withLookPath(t, func(string) (string, error) { return "/usr/local/bin/copilot", nil })
 	withPluginList(t, func(context.Context, string) ([]byte, error) {
 		return []byte("Installed plugins:\n  • sigil-copilot (v0.2.0)\n"), nil
@@ -441,12 +441,12 @@ func TestInstall_RemovesStalePluginWhenCopilotCLIIsAvailable(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, changed)
 	assert.Equal(t, 1, removed)
-	assertValidUserHooks(t, userHooksPath(t), "/usr/local/bin/agento11y copilot hook")
+	assertValidUserHooks(t, userHooksPath(t), hookCommandLine)
 }
 
 func TestInstall_ReportsStalePluginCleanupFailure(t *testing.T) {
 	t.Setenv("COPILOT_HOME", t.TempDir())
-	withExecutable(t, "/usr/local/bin/agento11y")
+	withExecutable(t, hookExecPath)
 	withLookPath(t, func(string) (string, error) { return "/usr/local/bin/copilot", nil })
 	withPluginList(t, func(context.Context, string) ([]byte, error) {
 		return []byte("Installed plugins:\n  • sigil-copilot (v0.2.0)\n"), nil
@@ -466,7 +466,7 @@ func TestInstall_ReportsStalePluginCleanupFailure(t *testing.T) {
 // the same file, so it is the single source of truth.
 func TestLaunch_InstallsAndKeepsUserHooks(t *testing.T) {
 	t.Setenv("COPILOT_HOME", t.TempDir())
-	withExecutable(t, "/usr/local/bin/agento11y")
+	withExecutable(t, hookExecPath)
 	withLookPath(t, func(string) (string, error) { return "/usr/local/bin/copilot", nil })
 	withPluginList(t, func(context.Context, string) ([]byte, error) {
 		return []byte("Installed plugins:\n  • sigil-copilot (v0.2.0)\n"), nil
@@ -486,7 +486,7 @@ func TestLaunch_InstallsAndKeepsUserHooks(t *testing.T) {
 	assert.True(t, execCalled, "should exec copilot")
 	assert.True(t, uninstalled, "stale plugin should be uninstalled")
 	// The shared file must remain after the run.
-	assertValidUserHooks(t, userHooksPath(t), "/usr/local/bin/agento11y copilot hook")
+	assertValidUserHooks(t, userHooksPath(t), hookCommandLine)
 }
 
 // A legacy sigil.json hooks file written by an older version must be removed
@@ -494,7 +494,7 @@ func TestLaunch_InstallsAndKeepsUserHooks(t *testing.T) {
 // does not run both files and fire every hook twice.
 func TestLaunch_ReplacesLegacyLiteralHookCommand(t *testing.T) {
 	t.Setenv("COPILOT_HOME", t.TempDir())
-	withExecutable(t, "/usr/local/bin/agento11y")
+	withExecutable(t, hookExecPath)
 	legacy, err := renderUserHooks("sigil copilot hook")
 	require.NoError(t, err)
 	dir := filepath.Join(os.Getenv("COPILOT_HOME"), "hooks")
@@ -505,7 +505,7 @@ func TestLaunch_ReplacesLegacyLiteralHookCommand(t *testing.T) {
 	err = launchWithLogger(t, nil, io.Discard, nopLogger())
 	require.Error(t, err, "copilot binary is absent; hooks must still be refreshed")
 
-	assertValidUserHooks(t, userHooksPath(t), "/usr/local/bin/agento11y copilot hook")
+	assertValidUserHooks(t, userHooksPath(t), hookCommandLine)
 	data, err := os.ReadFile(userHooksPath(t))
 	require.NoError(t, err)
 	assert.NotContains(t, string(data), `"sigil copilot hook"`)
@@ -536,7 +536,7 @@ func TestWriteUserHooks_KeepsLegacyFileOnFailure(t *testing.T) {
 // leftover legacy sigil.json must still be removed or every hook fires twice.
 func TestWriteUserHooks_RemovesLegacyFileWhenUpToDate(t *testing.T) {
 	t.Setenv("COPILOT_HOME", t.TempDir())
-	withExecutable(t, "/usr/local/bin/agento11y")
+	withExecutable(t, hookExecPath)
 
 	_, wrote, err := writeUserHooks()
 	require.NoError(t, err)
@@ -549,18 +549,6 @@ func TestWriteUserHooks_RemovesLegacyFileWhenUpToDate(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, wrote, "content already matches, no rewrite expected")
 	assert.NoFileExists(t, legacyPath)
-}
-
-// The generated hook command must shell-quote executable paths a shell would
-// otherwise split or interpret.
-func TestWriteUserHooks_QuotesExecutablePath(t *testing.T) {
-	t.Setenv("COPILOT_HOME", t.TempDir())
-	withExecutable(t, "/Users/Jane Doe/bin/agento11y")
-
-	path, wrote, err := writeUserHooks()
-	require.NoError(t, err)
-	assert.True(t, wrote)
-	assertValidUserHooks(t, path, "'/Users/Jane Doe/bin/agento11y' copilot hook")
 }
 
 func TestRenderUserHooks_IsStableAndValid(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http/httptest"
@@ -22,6 +23,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/pi"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/launcher"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/login"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/usagestats"
@@ -66,7 +68,9 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
+	// os.UserHomeDir reads USERPROFILE on Windows.
 	_ = os.Setenv("HOME", tmp)
+	_ = os.Setenv("USERPROFILE", tmp)
 	_ = os.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, "config"))
 	_ = os.Setenv("XDG_STATE_HOME", filepath.Join(tmp, "state"))
 	code := m.Run()
@@ -455,6 +459,7 @@ func TestRun_HookErrorIsSwallowedAfterDispatch(t *testing.T) {
 func TestRun_LauncherDispatch(t *testing.T) {
 	boom := errors.New("boom")
 	exitPtr := func(c int) *int { return &c }
+	stringPtr := func(s string) *string { return &s }
 
 	cases := []struct {
 		name               string
@@ -466,6 +471,7 @@ func TestRun_LauncherDispatch(t *testing.T) {
 		wantExit           *int     // nil → run must not call exit
 		wantStderrContains string
 		wantStderrPrefix   string
+		wantStderr         *string
 	}{
 		{name: "pi bare", agent: "pi", wantCalled: 1},
 		{name: "pi wrapper help", agent: "pi", argv: []string{"--help"}},
@@ -482,6 +488,9 @@ func TestRun_LauncherDispatch(t *testing.T) {
 		{name: "claude missing separator exits 2", agent: "claude", argv: []string{"foo"}, wantExit: exitPtr(2), wantStderrContains: "use `agento11y claude -- <args>`"},
 		{name: "claude unknown options before separator exits 2", agent: "claude", argv: []string{"--foo", "--", "args"}, wantExit: exitPtr(2), wantStderrContains: "unknown options before `--`: [--foo]"},
 		{name: "claude launcher error exits 1", agent: "claude", argv: []string{"--"}, launcherErr: boom, wantCalled: 1, wantExit: exitPtr(1), wantStderrPrefix: "agento11y:"},
+		{name: "claude child exit is propagated", agent: "claude", argv: []string{"--"}, launcherErr: &launcher.ExitError{Code: 42}, wantCalled: 1, wantExit: exitPtr(42), wantStderr: stringPtr("")},
+		// A child's exit 2 is the agent's own status, not a wrapper usage error.
+		{name: "claude wrapped child exit 2 prints nothing", agent: "claude", argv: []string{"--"}, launcherErr: fmt.Errorf("exec claude: %w", &launcher.ExitError{Code: 2}), wantCalled: 1, wantExit: exitPtr(2), wantStderr: stringPtr("")},
 
 		{name: "opencode bare", agent: "opencode", wantCalled: 1},
 		{name: "opencode separator only", agent: "opencode", argv: []string{"--"}, wantCalled: 1},
@@ -529,6 +538,9 @@ func TestRun_LauncherDispatch(t *testing.T) {
 			}
 			if tc.wantStderrPrefix != "" && !strings.HasPrefix(stderr.String(), tc.wantStderrPrefix) {
 				t.Fatalf("stderr does not start with %q: %q", tc.wantStderrPrefix, stderr.String())
+			}
+			if tc.wantStderr != nil && stderr.String() != *tc.wantStderr {
+				t.Fatalf("stderr = %q, want %q", stderr.String(), *tc.wantStderr)
 			}
 		})
 	}
@@ -1143,6 +1155,7 @@ func isolateDotenvHome(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 	// Pin both spellings of every alias family blank: the developer's shell

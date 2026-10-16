@@ -511,7 +511,7 @@ func guardsSnapshotTree(t *testing.T, root string) map[string]guardsFileSnapshot
 		if err != nil {
 			return err
 		}
-		info, err := entry.Info()
+		info, err := statByHandle(path)
 		if err != nil {
 			return err
 		}
@@ -531,6 +531,19 @@ func guardsSnapshotTree(t *testing.T, root string) map[string]guardsFileSnapshot
 		return nil
 	}))
 	return result
+}
+
+// statByHandle reads attributes through an open handle. On NTFS the directory
+// listing behind DirEntry.Info can report a directory's modification time late,
+// so two snapshots differ with no write in between. See the note in
+// https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-findfirstfilew
+func statByHandle(path string) (fs.FileInfo, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	return f.Stat()
 }
 
 // No parallelism: entry seams, DefaultTransport, and process env are global.

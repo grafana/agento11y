@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"syscall"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/launcher"
 )
@@ -16,10 +15,10 @@ const bridgeBin = "agento11y-harbor"
 // Test seams.
 var (
 	lookPath = exec.LookPath
-	execFn   = syscall.Exec
+	execFn   = launcher.DefaultExec
 )
 
-// Run replaces the current process with the installed agento11y-harbor bridge.
+// Run hands off to the installed agento11y-harbor bridge.
 func Run(args []string, _ io.Writer) error {
 	bin, err := lookPath(bridgeBin)
 	if err != nil {

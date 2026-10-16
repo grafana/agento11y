@@ -1,10 +1,9 @@
 // Package pi implements the pi launcher adapter for the consolidated sigil
 // binary. The dispatcher in cmd/agento11y routes `sigil pi [-- args...]` here.
 //
-// Unlike the hook adapters, this adapter owns the user's terminal: it
+// Unlike the hook adapters, this adapter owns the user's terminal. It
 // bootstraps the @grafana/agento11y-pi extension in pi's settings file on first
-// use, then replaces the current process with the pi binary via execve so
-// signals, exit codes, and TTY behaviour pass through cleanly.
+// use, then hands the terminal to the pi process.
 package pi
 
 import (
@@ -18,7 +17,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agentinstall"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/launcher"
@@ -61,7 +59,7 @@ func init() {
 // Test seams.
 var (
 	lookPath   = exec.LookPath
-	execFn     = syscall.Exec
+	execFn     = launcher.DefaultExec
 	runInstall = defaultRunInstall
 	runPi      = defaultRunPi
 )

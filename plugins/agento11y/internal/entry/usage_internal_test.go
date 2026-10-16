@@ -585,7 +585,7 @@ func writeUsageStatsConfig(t *testing.T, contents string) {
 	t.Helper()
 	isolateDotenvHome(t)
 	path := dotenv.FilePath()
-	if err := os.MkdirAll(dirOf(path), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
@@ -602,13 +602,6 @@ func freshUsageStatsConfigValue(t *testing.T) func() string {
 	usageStatsConfigValue = newUsageStatsConfigValue()
 	t.Cleanup(func() { usageStatsConfigValue = original })
 	return usageStatsConfigValue
-}
-
-func dirOf(path string) string {
-	if i := strings.LastIndexByte(path, '/'); i > 0 {
-		return path[:i]
-	}
-	return "."
 }
 
 func TestEmitUsageOnce(t *testing.T) {

@@ -19,6 +19,22 @@ func withExecutable(t *testing.T, path string) {
 	execpath.Executable = func() (string, error) { return path, nil }
 }
 
+// installedHookCommand installs into an empty VIBE_HOME with exe pinned as
+// the running binary and returns the command written for the post-agent hook.
+func installedHookCommand(t *testing.T, exe string) string {
+	t.Helper()
+	t.Setenv("VIBE_HOME", t.TempDir())
+	withExecutable(t, exe)
+
+	path, _, err := ensureHookInstalled(currentHookTypes)
+	if err != nil {
+		t.Fatalf("ensureHookInstalled: %v", err)
+	}
+	hooks, _ := readTOML(t, path)["hooks"].([]any)
+	command, _ := hooksByName(hooks)["agento11y"]["command"].(string)
+	return command
+}
+
 func TestEnsureHookInstalled_FreshWrite(t *testing.T) {
 	// The three entry names never change; only the types do, and which set
 	// gets written follows the installed vibe.
@@ -50,8 +66,7 @@ func TestEnsureHookInstalled_FreshWrite(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
 			t.Setenv("VIBE_HOME", dir)
-			withExecutable(t, "/usr/local/bin/agento11y")
-			const wantCommand = "/usr/local/bin/agento11y vibe hook"
+			withExecutable(t, fixtureExecutable)
 
 			path, wrote, err := ensureHookInstalled(tt.types)
 			if err != nil {
@@ -77,8 +92,8 @@ func TestEnsureHookInstalled_FreshWrite(t *testing.T) {
 				if entry["type"] != wantType {
 					t.Errorf("%s type = %v, want %q", name, entry["type"], wantType)
 				}
-				if entry["command"] != wantCommand {
-					t.Errorf("%s command = %v, want %q", name, entry["command"], wantCommand)
+				if entry["command"] != fixtureHookCommand {
+					t.Errorf("%s command = %v, want %q", name, entry["command"], fixtureHookCommand)
 				}
 			}
 			// match is forbidden on the post-agent hook and required on the two
@@ -156,8 +171,7 @@ func TestEnsureHookInstalled_ReplacesLegacySigilEntries(t *testing.T) {
 	// vibe does not fire every hook twice.
 	dir := t.TempDir()
 	t.Setenv("VIBE_HOME", dir)
-	withExecutable(t, "/usr/local/bin/agento11y")
-	const wantCommand = "/usr/local/bin/agento11y vibe hook"
+	withExecutable(t, fixtureExecutable)
 	pre := `[[hooks]]
 name = "sigil"
 type = "post_agent_turn"
@@ -189,8 +203,8 @@ match = "*"
 			t.Errorf("legacy hook %q still present; got %v", legacy, keys(byName))
 		}
 	}
-	if byName["agento11y"]["command"] != wantCommand {
-		t.Errorf("command = %v, want refreshed %q", byName["agento11y"]["command"], wantCommand)
+	if byName["agento11y"]["command"] != fixtureHookCommand {
+		t.Errorf("command = %v, want refreshed %q", byName["agento11y"]["command"], fixtureHookCommand)
 	}
 }
 
@@ -255,24 +269,6 @@ func TestEnsureHookInstalled_ConvertsTypesInPlace(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestEnsureHookInstalled_QuotesExecutablePath(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("VIBE_HOME", dir)
-	withExecutable(t, "/Users/Jane Doe/bin/agento11y")
-
-	path, _, err := ensureHookInstalled(currentHookTypes)
-	if err != nil {
-		t.Fatalf("ensureHookInstalled: %v", err)
-	}
-	got := readTOML(t, path)
-	hooks, _ := got["hooks"].([]any)
-	byName := hooksByName(hooks)
-	want := "'/Users/Jane Doe/bin/agento11y' vibe hook"
-	if byName["agento11y"]["command"] != want {
-		t.Errorf("command = %v, want %q", byName["agento11y"]["command"], want)
 	}
 }
 

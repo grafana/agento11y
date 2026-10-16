@@ -616,10 +616,9 @@ func TestLaunch_MigrationRestoresRefresh(t *testing.T) {
 	assert.Equal(t, 1, updateCalls, "refresh must run once migration replaced the legacy entry")
 }
 
-// When the config cannot be rewritten (read-only directory), the migration
-// fails without blocking the launch: the error is logged, a recovery hint
-// reaches stderr, and the legacy refresh-skip stays active so the plugin is
-// not registered twice.
+// When the config cannot be rewritten, the migration fails without blocking
+// the launch: the error is logged, a recovery hint reaches stderr, and the
+// legacy refresh-skip stays active so the plugin is not registered twice.
 func TestLaunch_MigrationFailureFallsBackToLegacySkip(t *testing.T) {
 	const binPath = "/usr/local/bin/opencode"
 	state := t.TempDir()
@@ -627,8 +626,7 @@ func TestLaunch_MigrationFailureFallsBackToLegacySkip(t *testing.T) {
 	t.Setenv("SIGIL_AUTO_UPDATE", "")
 
 	dir := withConfig(t, `{"plugin":["@grafana/sigil-opencode"]}`)
-	require.NoError(t, os.Chmod(dir, 0o555))
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	withWriteConfig(t, func(string, []byte) error { return errors.New("permission denied") })
 
 	withLookPath(t, func(string) (string, error) { return binPath, nil })
 	withRunInstall(t, func(context.Context, string, io.Writer) error {
@@ -681,16 +679,16 @@ func TestLaunch_SkipsRefreshWhenUpdateDisabled(t *testing.T) {
 }
 
 func TestDefaultConfigDir(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", "/custom/config")
+	t.Setenv("XDG_CONFIG_HOME", testXDGConfigHome)
 	got, err := defaultConfigDir()
 	require.NoError(t, err)
-	assert.Equal(t, "/custom/config/opencode", got)
+	assert.Equal(t, wantXDGConfigDir, got)
 
 	t.Setenv("XDG_CONFIG_HOME", "")
-	t.Setenv("HOME", "/home/user")
+	t.Setenv(homeEnvVar, testHome)
 	got, err = defaultConfigDir()
 	require.NoError(t, err)
-	assert.Equal(t, "/home/user/.config/opencode", got)
+	assert.Equal(t, wantHomeConfigDir, got)
 }
 
 // withConfig points configDirFn at a temp directory, optionally
@@ -941,16 +939,16 @@ func TestStatus(t *testing.T) {
 }
 
 func TestDefaultCacheDir(t *testing.T) {
-	t.Setenv("XDG_CACHE_HOME", "/custom/cache")
+	t.Setenv("XDG_CACHE_HOME", testXDGCacheHome)
 	got, err := defaultCacheDir()
 	require.NoError(t, err)
-	assert.Equal(t, "/custom/cache/opencode", got)
+	assert.Equal(t, wantXDGCacheDir, got)
 
 	t.Setenv("XDG_CACHE_HOME", "")
-	t.Setenv("HOME", "/home/user")
+	t.Setenv(homeEnvVar, testHome)
 	got, err = defaultCacheDir()
 	require.NoError(t, err)
-	assert.Equal(t, "/home/user/.cache/opencode", got)
+	assert.Equal(t, wantHomeCacheDir, got)
 }
 
 func TestCachedPackageSpec(t *testing.T) {

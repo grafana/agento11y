@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.8.0] - 2026-10-15
+
+### Bug Fixes
+
+- **security/high/java/gradle**: update dependency com.fasterxml.jackson.core:jackson-core to v2.21.7 [security] (#820)
+
 ## [0.7.1] - 2026-09-22
 
 ### Bug Fixes

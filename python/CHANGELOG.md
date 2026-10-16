@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.21.0] - 2026-10-15
+
+### Features
+
+- **experiments**: improve CI support and examples (#873)
+
 ## [0.20.0] - 2026-10-13
 
 ### Features
