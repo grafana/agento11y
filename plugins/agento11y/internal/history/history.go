@@ -41,6 +41,7 @@ const (
 	AgentCursor     AgentID = "cursor"
 	AgentOpenCode   AgentID = "opencode"
 	AgentPi         AgentID = "pi"
+	AgentWarp       AgentID = "warp"
 )
 
 // SourceRef locates a single historical turn on disk. It is content-free: it

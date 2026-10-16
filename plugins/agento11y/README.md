@@ -81,10 +81,13 @@ agento11y claude
 | [Pi](https://github.com/earendil-works/pi) | `agento11y pi` |
 | [Vibe](https://github.com/mistralai/vibe) | `agento11y vibe` |
 | [Kiro CLI 3 (experimental)](../kiro/README.md) | `agento11y kiro -- chat` |
+| [Warp](../warp/README.md) | `agento11y history import warp` (no live capture) |
 
 Cursor has no launcher. Run `agento11y cursor install` once, then start Cursor normally. Remove its hooks with `agento11y cursor uninstall`. See also [`cursor/README.md`](../cursor/README.md). Per-agent notes and glue live under [`plugins/`](../).
 
 Kiro capture is workspace-scoped and captures prompts and tools only; assistant text, model usage, and cost are unavailable. See the [Kiro limitations](../kiro/README.md#captured-data-and-limits).
+
+Warp has no hook API, so its conversations are imported from Warp's local database. A scheduled import keeps them in sync. See [`warp/README.md`](../warp/README.md).
 
 On Windows, `agento11y` starts the agent as a child process and exits with the agent's exit code. An agent installed with npm starts through a `.cmd` file, and `cmd.exe` cannot receive an argument that contains a line break. Pass a multiline prompt in a file or on stdin instead.
 
@@ -230,7 +233,7 @@ Errors take precedence over allow or deny. When some rules compile, their partia
 
 The local Agent Observability app starts empty: it only has sessions captured after you installed agento11y. To backfill earlier sessions, prefer the app — a banner on the Sessions page, or Settings → History. Imports run in the background with live progress; you can cancel them, and a cancelled run keeps what it already imported.
 
-You can also use the CLI. Supported agents are `claude-code`, `codex`, `cursor`, `opencode`, and `pi`. Use `auto` to discover and select sessions across all of them in one import:
+You can also use the CLI. Supported agents are `claude-code`, `codex`, `cursor`, `opencode`, `pi`, and `warp`. Use `auto` to discover and select sessions across all of them in one import:
 
 ```sh
 # Discover history from every supported agent, choose sessions once, then import.
@@ -255,6 +258,7 @@ Imported sessions are thinner than live capture — host logs omit fields that l
   History cannot recover the system prompt, host version, configured agent-name prefix, capture-time Git branch, time to first token, or separate tool spans.
   An assistant message is imported when it has a completion timestamp or an error. Messages with neither are skipped.
   OpenCode forks copy all messages before the fork point into a new session with new IDs. If you import both sessions, those copied assistant turns are imported twice.
+- **warp** — reads `warp.sqlite` for the Warp app and the Warp Agent CLI (Stable and Preview, macOS and Linux). One generation per agent request. Missing vs live: there is no live capture; history cannot recover the system prompt, agent profile, time to first token, or separate tool spans, and older Warp versions recorded no per-request usage (turns are marked approximate). See [`warp/README.md`](../warp/README.md).
 
 Without `--since`, an import covers the last 90 days. Pass `--since 365d` (or a timestamp) to widen the window, and `--until` to bound the other end. Other useful flags: `--workspace`, `--max-sessions`, `--max-turns`, `--all`, `--yes`, `--force`. Without a terminal, pass `--all --yes` to import from a script.
 

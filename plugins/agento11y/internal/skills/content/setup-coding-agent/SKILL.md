@@ -466,7 +466,7 @@ For an offline dry run, use `agento11y guards test 'rm -rf ~/.ssh'`. It does not
 ### History import
 
 Until an import runs, the viewer and Grafana Cloud hold only sessions captured after installation.
-`agento11y history import` backfills sessions `claude-code`, `codex`, `cursor`, `opencode`, or `pi` already wrote to disk.
+`agento11y history import` backfills sessions `claude-code`, `codex`, `cursor`, `opencode`, `pi`, or `warp` already wrote to disk. Warp has no live capture, so re-run its import (for example on a schedule) to keep it in sync.
 
 ```sh
 agento11y history import claude-code --dry-run   # plan only; no setup or export

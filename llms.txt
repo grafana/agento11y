@@ -4,7 +4,7 @@ You are a coding agent. The user wants help with [Grafana Agent observability](h
 
 There are two distinct things this file covers. Pick the path that matches the request before doing anything else.
 
-- Path A, [Monitor a coding agent](#path-a-monitor-a-coding-agent): the user wants telemetry from Claude Code, Codex, Copilot CLI, Cursor, OpenCode, Pi, Vibe, or experimental Kiro CLI sent to Grafana Agent observability. They are not changing application code.
+- Path A, [Monitor a coding agent](#path-a-monitor-a-coding-agent): the user wants telemetry from Claude Code, Codex, Copilot CLI, Cursor, OpenCode, Pi, Vibe, experimental Kiro CLI, or Warp (history import) sent to Grafana Agent observability. They are not changing application code.
 - Path B, [Instrument an LLM app or agent](#path-b-instrument-an-llm-app-or-agent): the user wants their own code (an app, agent, framework pipeline) to send generations to Grafana Agent observability.
 
 If you cannot tell, ask one clarifying question and stop.
@@ -87,6 +87,7 @@ A binary older than that command prints `agento11y: unknown agent "skills"` and 
 | [Pi](https://github.com/earendil-works/pi) | [`plugins/pi/`](https://github.com/grafana/agento11y/tree/main/plugins/pi) | Independent npm package `@grafana/agento11y-pi` |
 | [Kiro CLI 3 (experimental)](https://kiro.dev/cli/) | [`plugins/kiro/`](https://github.com/grafana/agento11y/tree/main/plugins/kiro) | Workspace hooks; prompts/tools only, no assistant text, model usage, or cost |
 | [Vibe](https://github.com/mistralai/mistral-vibe) | [`plugins/vibe/`](https://github.com/grafana/agento11y/tree/main/plugins/vibe) | Shared `agento11y` Go binary via `hooks.toml` |
+| [Warp](https://www.warp.dev) | [`plugins/warp/`](https://github.com/grafana/agento11y/tree/main/plugins/warp) | `agento11y history import warp` from Warp's local database; no live capture, re-run to sync |
 | [Hermes](https://github.com/NousResearch/hermes-agent) | [`plugins/hermes/`](https://github.com/grafana/agento11y/tree/main/plugins/hermes) | Independent Python package `agento11y-hermes`; use its separate setup guide |
 
 ## Fast path
