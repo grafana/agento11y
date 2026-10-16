@@ -4,7 +4,7 @@
 
 ### Features
 
-- **plugins**: wire CLI usage statistics (#877)
+- **plugins**: wire anonymous CLI usage statistics (#877)
 
 ## [0.50.0] - 2026-10-15
 
