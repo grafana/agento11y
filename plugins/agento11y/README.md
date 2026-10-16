@@ -402,7 +402,7 @@ agento11y agents reconcile --agents all --json
 
 ### Usage statistics
 
-`agento11y` reports statistics about its own use to Grafana: which subcommand ran (`doctor`, `skills show`), flag **names**, the agent, a skill name, outcome, exit code, duration, version, OS, architecture, whether the run was interactive or in CI, and a random per-installation ID. Each of those is matched against a fixed list in the binary, so anything it does not recognise becomes `unknown`. Never argument or flag values, endpoints, tenant IDs, tokens, tags, user IDs, hostnames, file paths, or error messages. Hooks are never reported, so nothing is sent while a session runs.
+Versioned builds of `agento11y` report statistics about their own use to Grafana: which subcommand ran (`doctor`, `skills show`), flag **names**, the agent, a skill name, outcome, exit code, duration, version, OS, architecture, whether the run was interactive or in CI, and a random per-installation ID. Local development builds do not send usage statistics. Each field is matched against a fixed list in the binary, so anything it does not recognise becomes `unknown`. Never argument or flag values, endpoints, tenant IDs, tokens, tags, user IDs, hostnames, file paths, or error messages. Hooks are never reported, so nothing is sent while a session runs.
 
 Captured sessions are a separate path: they go to your own stack or stay on your machine.
 

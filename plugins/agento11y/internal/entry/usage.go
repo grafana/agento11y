@@ -113,6 +113,16 @@ func newUsageStatsConfigValue() func() string {
 // value pass for a shell one and override DO_NOT_TRACK.
 var usageStatsShell = usagestats.CaptureShellEnv()
 
+// usageStatsMode reports remotely only for versioned builds. Unstamped local
+// builds resolve to dev or dev-<revision> and may still use log mode.
+func usageStatsMode() usagestats.Mode {
+	mode := usagestats.ResolveMode(usageStatsShell, usageStatsConfigValue)
+	if mode == usagestats.ModeEnabled && !strings.HasPrefix(version, "v") {
+		return usagestats.ModeDisabled
+	}
+	return mode
+}
+
 // emitUsage is the test seam. Production points at emitUsageEvent.
 var emitUsage = emitUsageEvent
 
@@ -137,7 +147,7 @@ func emitUsageEvent(inv capture.Invocation, now time.Time) {
 	if inv.Suppressed {
 		return
 	}
-	mode := usagestats.ResolveMode(usageStatsShell, usageStatsConfigValue)
+	mode := usageStatsMode()
 	if mode == usagestats.ModeDisabled {
 		return
 	}

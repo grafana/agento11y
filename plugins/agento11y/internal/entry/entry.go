@@ -93,7 +93,7 @@ func renderLocalBanner(w io.Writer, uiURL string, posture local.ForwardPosture, 
 	for _, line := range privacy {
 		lines = append(lines, renderer.Detail(line))
 	}
-	switch usagestats.ResolveMode(usageStatsShell, usageStatsConfigValue) {
+	switch usageStatsMode() {
 	case usagestats.ModeEnabled:
 		lines = append(lines, renderer.Detail("The CLI sends anonymous usage statistics to Grafana separately, even in local mode."))
 	case usagestats.ModeLog:
@@ -1139,7 +1139,7 @@ func runDoctorCommand(args []string, stdout, stderr io.Writer) {
 		OSEnv:          osEnv,
 		Stdout:         stdout,
 		Stderr:         stderr,
-		UsageStatsMode: string(usagestats.ResolveMode(usageStatsShell, usageStatsConfigValue)),
+		UsageStatsMode: string(usageStatsMode()),
 	})
 	if code != 0 {
 		exit(code)
