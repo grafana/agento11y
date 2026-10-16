@@ -199,6 +199,14 @@ jobs:
         env:
           GOWORK: "off"
 
+      - name: Test installer (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./plugins/agento11y/scripts/install.test.ps1
+
+      - name: Test installer (PowerShell 7)
+        shell: pwsh
+        run: ./plugins/agento11y/scripts/install.test.ps1
+
   go:
     name: Go SDK
     runs-on: ubuntu-latest
