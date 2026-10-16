@@ -40,6 +40,8 @@ const MODEL = "packed-harness";
 const PROMPT =
   "packed-package-compatibility-turn: reply with PACKED_HOST_OK, no tools.";
 const REPLY = "PACKED_HOST_OK";
+const SUMMARY =
+  "## Objective\n- Complete packed-package-compatibility-turn using the requested reply; no tools.";
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
 function options(args) {
@@ -48,6 +50,7 @@ function options(args) {
     versions: [],
     keep: false,
     timeout: 120_000,
+    scenario: "basic",
   };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -60,6 +63,12 @@ function options(args) {
         `${arg} needs exact versions`,
       );
       result.versions.push(...args[++i].split(","));
+    } else if (arg === "--scenario") {
+      result.scenario = args[++i];
+      assert(
+        ["basic", "compaction"].includes(result.scenario),
+        "--scenario must be basic or compaction",
+      );
     } else if (arg === "--timeout-ms") {
       result.timeout = Number(args[++i]);
       assert(
@@ -78,8 +87,23 @@ function options(args) {
     !result.imports || !result.versions.length,
     "--imports does not run hosts. Omit --version and --versions.",
   );
+  assert(
+    !result.imports || result.scenario === "basic",
+    "--scenario compaction requires real v2 hosts, not --imports",
+  );
+  assert(
+    result.scenario !== "compaction" ||
+      result.versions.every((version) => version.startsWith("2.")),
+    "--scenario compaction supports v2 hosts only",
+  );
   result.versions = [
-    ...new Set(result.versions.length ? result.versions : VERSIONS),
+    ...new Set(
+      result.versions.length
+        ? result.versions
+        : result.scenario === "compaction"
+          ? VERSIONS.filter((version) => version.startsWith("2."))
+          : VERSIONS,
+    ),
   ];
   return result;
 }
@@ -577,7 +601,14 @@ async function officialBinary(version, root, env) {
   }
 }
 
-async function loopback() {
+function matchesVersion(reported, version) {
+  return reported
+    .trim()
+    .split(/\s+/)
+    .some((part) => part.replace(/^v/, "") === version);
+}
+
+async function loopback(scenario = "basic") {
   const state = {
     models: [],
     generations: [],
@@ -642,23 +673,56 @@ async function loopback() {
           MODEL,
           "Unexpected loopback model selection",
         );
+        const request = state.models.length + 1;
+        const summary = scenario === "compaction" && request === 2;
+        assert(
+          request <= (scenario === "compaction" ? 3 : 1),
+          "Unexpected extra model request",
+        );
         assert(
           JSON.stringify(payload.messages).includes(
-            "packed-package-compatibility-turn",
+            summary ? "## Objective" : "packed-package-compatibility-turn",
           ),
-          "Unexpected auxiliary/title model call; this test requires a single user turn",
+          summary
+            ? "Expected compaction summary request"
+            : "Unexpected auxiliary/title model call",
         );
+        if (scenario === "compaction" && request === 3) {
+          assert(
+            JSON.stringify(payload.messages).includes("## Objective"),
+            "Retried primary request must include the compaction checkpoint",
+          );
+        }
         state.models.push(payload);
+        if (scenario === "compaction" && request === 1) {
+          res.statusCode = 400;
+          reply({
+            error: {
+              type: "invalid_request_error",
+              code: "context_length_exceeded",
+              message:
+                "This request exceeds the model's maximum context length of 8192 tokens",
+            },
+          });
+          return;
+        }
+        const content = summary ? SUMMARY : REPLY;
         const common = {
           id: "chatcmpl-packed",
           created: 1700000000,
           model: MODEL,
         };
-        const usage = {
-          prompt_tokens: 7,
-          completion_tokens: 3,
-          total_tokens: 10,
-        };
+        const usage = summary
+          ? {
+              prompt_tokens: 100,
+              completion_tokens: 20,
+              total_tokens: 120,
+            }
+          : {
+              prompt_tokens: 7,
+              completion_tokens: 3,
+              total_tokens: 10,
+            };
         if (!payload.stream) {
           reply({
             ...common,
@@ -666,7 +730,7 @@ async function loopback() {
             choices: [
               {
                 index: 0,
-                message: { role: "assistant", content: REPLY },
+                message: { role: "assistant", content },
                 finish_reason: "stop",
               },
             ],
@@ -680,7 +744,7 @@ async function loopback() {
               choices: [
                 {
                   index: 0,
-                  delta: { role: "assistant", content: REPLY },
+                  delta: { role: "assistant", content },
                   finish_reason: null,
                 },
               ],
@@ -779,8 +843,16 @@ function hostConfig(version, packageDir, tarball, url, rootEntry) {
   };
 }
 
-async function realHost(version, binary, root, artifact, sandbox, timeout) {
-  const base = join(root, `runtime-${version}`);
+async function realHost(
+  version,
+  binary,
+  root,
+  artifact,
+  sandbox,
+  timeout,
+  scenario,
+) {
+  const base = join(root, `runtime-${version}-${scenario}`);
   const env = await environment(base);
   const work = join(base, "consumer");
   const packageDir = await consumer(work, artifact.tarball, env);
@@ -792,7 +864,7 @@ async function realHost(version, binary, root, artifact, sandbox, timeout) {
     "Packed plugin needs a root import entry",
   );
   assert(!entry.split("/").includes(".."), "Root entry escapes package");
-  const capture = await loopback();
+  const capture = await loopback(scenario);
   try {
     const config = join(env.OPENCODE_CONFIG_DIR, "opencode.json");
     await put(
@@ -842,7 +914,7 @@ async function realHost(version, binary, root, artifact, sandbox, timeout) {
       label: `Official binary ${version} --version`,
     });
     assert(
-      reported.trim().split(/\s+/).includes(version),
+      matchesVersion(reported, version),
       `Binary reported ${reported.trim()}, expected ${version}`,
     );
     const args = [
@@ -873,6 +945,7 @@ async function realHost(version, binary, root, artifact, sandbox, timeout) {
     await sleep(500);
     await put(join(base, "result.json"), {
       version,
+      scenario,
       output,
       failure: failure?.message,
       ...capture.state,
@@ -885,19 +958,74 @@ async function realHost(version, binary, root, artifact, sandbox, timeout) {
     );
     assert.equal(
       capture.state.models.length,
-      1,
-      `Host ${version}: expected exactly one actual loopback model turn`,
+      scenario === "compaction" ? 3 : 1,
+      `Host ${version}: unexpected loopback model request count for ${scenario}`,
     );
     assert(
       output.includes(REPLY),
       `Host ${version}: CLI did not complete the loopback assistant reply\n${output}`,
     );
-    assert.equal(
-      capture.state.generations.length,
-      1,
-      `Host ${version}: expected exactly ONE adapter to export ONE generation, got ${capture.state.generations.length}. Check loading, flushing, or duplicate adapters; imports alone do not prove runtime compatibility.`,
-    );
-    const [generation] = capture.state.generations;
+    let generation;
+    if (scenario === "compaction") {
+      const compactions = capture.state.generations.filter(
+        (item) => item.tags?.["opencode.call_kind"] === "compaction",
+      );
+      assert.equal(compactions.length, 1, "Expected one compaction generation");
+      const [compaction] = compactions;
+      assert.equal(compaction.mode, "GENERATION_MODE_SYNC");
+      assert.equal(compaction.operation_name, "generateText");
+      assert.equal(String(compaction.usage?.input_tokens), "100");
+      assert.equal(String(compaction.usage?.output_tokens), "20");
+      assert.equal(String(compaction.usage?.total_tokens), "120");
+      assert.equal(
+        compaction.metadata?.["opencode.usage_scope"],
+        "logical_compaction",
+      );
+      assert.equal(compaction.metadata?.["opencode.compaction.reason"], "auto");
+      assert.equal(
+        compaction.metadata?.["opencode.settlement"],
+        "compaction.ended",
+      );
+      assert.equal(compaction.model?.name, MODEL);
+      assert.equal(compaction.model?.provider, "packed");
+      assert(
+        compaction.output
+          .flatMap((message) => message.parts ?? [])
+          .some((part) => part.text === SUMMARY),
+        "Compaction summary missing",
+      );
+      // Hosts may publish a primary start before rejecting overflow, or only after recovery.
+      const completed = capture.state.generations.filter(
+        (item) =>
+          item.tags?.["opencode.call_kind"] !== "compaction" &&
+          JSON.stringify(item.output).includes(REPLY),
+      );
+      assert.equal(completed.length, 1, "Expected one final reply generation");
+      [generation] = completed;
+      assert.equal(generation.operation_name, "streamText");
+      assert.equal(generation.mode, "GENERATION_MODE_STREAM");
+      assert.equal(compaction.conversation_id, generation.conversation_id);
+      for (const item of capture.state.generations) {
+        if (item !== compaction && item !== generation)
+          assert.equal(
+            item.usage,
+            undefined,
+            "Abandoned turn must have no usage",
+          );
+      }
+      assert.equal(
+        new Set(capture.state.generations.map((item) => item.id)).size,
+        capture.state.generations.length,
+        "Duplicate generation export",
+      );
+    } else {
+      assert.equal(
+        capture.state.generations.length,
+        1,
+        `Host ${version}: expected exactly ONE adapter to export ONE generation, got ${capture.state.generations.length}. Check loading, flushing, or duplicate adapters; imports alone do not prove runtime compatibility.`,
+      );
+      [generation] = capture.state.generations;
+    }
     assert(
       generation.id && generation.conversation_id,
       "Generation identity/session missing",
@@ -916,13 +1044,20 @@ async function realHost(version, binary, root, artifact, sandbox, timeout) {
     );
     assert.equal(String(generation.usage?.input_tokens), "7");
     assert.equal(String(generation.usage?.output_tokens), "3");
+    assert.equal(String(generation.usage?.total_tokens), "10");
     assert(
       capture.state.guards.length > 0,
       "Allow-only loopback guard was not consulted",
     );
+    for (const path of ["/v1/traces", "/v1/metrics"]) {
+      assert(
+        capture.state.otlp.some((item) => item.path === path && item.bytes > 0),
+        `Missing OTLP ${path}`,
+      );
+    }
     await noHostDependencies(work);
     console.log(
-      `PASS REAL HOST ${version}: one model turn, one exported generation, one active adapter (${version === "1.2.16" ? "manual root config" : version.startsWith("2.") ? "--standalone, package /server loader" : "host package loader"}); OTLP requests=${capture.state.otlp.length}`,
+      `PASS REAL HOST ${version} ${scenario}: ${capture.state.models.length} model requests, ${capture.state.generations.length} generations, one active adapter (${version === "1.2.16" ? "manual root config" : version.startsWith("2.") ? "--standalone, package /server loader" : "host package loader"}); OTLP requests=${capture.state.otlp.length}`,
     );
   } finally {
     await capture.close();
@@ -933,7 +1068,7 @@ async function main() {
   const opts = options(process.argv.slice(2));
   if (opts.help) {
     console.log(
-      `Usage: node plugins/opencode/scripts/test-hosts.mjs [--imports | --versions ${VERSIONS.join(",")}] [--keep-temp] [--timeout-ms 120000]\nRequires a built dist and pnpm/npm/Node; hosts require macOS sandbox-exec, imports require Node >=26 or macOS sandbox-exec.\n--imports checks actual packed JS imports + tsc declarations only, NEVER runtime capture.\nDefault: test every listed official host. v2 always uses --standalone. All failures are fatal.\nGuards cover allow only, not deny/transform/tool/permission scenarios. The checkout and personal config are unchanged. Temporary configs are written under TEMP.`,
+      `Usage: node plugins/opencode/scripts/test-hosts.mjs [--imports | --versions ${VERSIONS.join(",")}] [--scenario basic|compaction] [--keep-temp] [--timeout-ms 120000]\nRequires a built dist and pnpm/npm/Node; hosts require macOS sandbox-exec, imports require Node >=26 or macOS sandbox-exec.\n--imports checks actual packed JS imports + tsc declarations only, NEVER runtime capture.\nDefault: test every listed official host. Compaction tests v2 only with overflow, summary, then retry. v2 always uses --standalone. All failures are fatal.\nGuards cover allow only, not deny/transform/tool/permission scenarios. The checkout and personal config are unchanged. Temporary configs are written under TEMP.`,
     );
     return;
   }
@@ -987,6 +1122,7 @@ async function main() {
             artifact,
             sandbox,
             opts.timeout,
+            opts.scenario,
           );
         } catch (error) {
           if (error.signal) throw error;
@@ -1009,7 +1145,7 @@ async function main() {
   }
 }
 
-export { command, options, sandboxPolicy };
+export { command, loopback, matchesVersion, options, sandboxPolicy };
 
 if (
   process.argv[1] &&

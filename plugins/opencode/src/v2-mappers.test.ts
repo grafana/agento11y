@@ -1,15 +1,22 @@
 import type { ContentCaptureMode, Message } from "@grafana/agento11y";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { Agento11yOpencodeConfig } from "./config.js";
+import { stableOpencodeCompactionGenerationId } from "./lineage.js";
 import { createRedactor } from "./redaction.js";
 import {
+  mapNativeCompactionGeneration,
   mapNativeGeneration,
   mapNativeMessages,
   mapNativeUsage,
   type NativeBlock,
+  type NativeCompactionStart,
+  type NativeCompactionTerminal,
+  type NativeEventOf,
   type NativeTokens,
   nativeOutput,
   nativeToolRecords,
 } from "./v2-mappers.js";
+import { nativeFixture } from "./v2-testdata.js";
 
 const redactor = createRedactor();
 const tokens: NativeTokens = {
@@ -31,6 +38,333 @@ const blocks: NativeBlock[] = [
     output: "hello",
   },
 ];
+
+describe("native compaction generation mapping", () => {
+  const config: Agento11yOpencodeConfig = {
+    endpoint: "http://127.0.0.1:1",
+    auth: { mode: "none" },
+    agentName: "custom-opencode",
+    agentVersion: "not-mapped-by-compaction",
+    contentCapture: "full",
+    redactInputMessages: true,
+    debug: false,
+  };
+  const start: NativeCompactionStart = {
+    startedAt: 100,
+    input: [
+      { role: "user", parts: [{ type: "text", text: "observed prompt" }] },
+      ...nativeOutput(blocks),
+    ],
+    parent: "frozen-parent-for-capture",
+  };
+  function ended(
+    data: Partial<NativeEventOf<"session.compaction.ended">["data"]> = {},
+  ): NativeEventOf<"session.compaction.ended"> {
+    return {
+      id: "compaction-terminal-1",
+      type: "session.compaction.ended",
+      created: 200,
+      durable: { aggregateID: "s", seq: 2, version: 1 },
+      location: nativeFixture.location,
+      data: {
+        sessionID: "s",
+        reason: "auto",
+        model: nativeFixture.model,
+        text: "  observed summary\n",
+        recent: "RECENT_CONTEXT_NOT_OUTPUT",
+        ...data,
+      },
+    };
+  }
+  function failed(
+    data: Partial<NativeEventOf<"session.compaction.failed">["data"]> = {},
+  ): NativeEventOf<"session.compaction.failed"> {
+    return {
+      id: "compaction-failure-1",
+      type: "session.compaction.failed",
+      created: 200,
+      durable: { aggregateID: "s", seq: 2, version: 1 },
+      location: nativeFixture.location,
+      data: {
+        sessionID: "s",
+        reason: "manual",
+        error: { type: "compaction.failed", message: nativeFixture.secret },
+        ...data,
+      },
+    };
+  }
+
+  it("returns only pure SYNC fields; capture adds identity/lineage/version/directory tags", () => {
+    const terminal = ended();
+    const before = JSON.stringify({ terminal, start });
+    const mapped = mapNativeCompactionGeneration(
+      terminal,
+      start,
+      config,
+      redactor,
+    );
+    expect(mapped.seed).toEqual({
+      id: stableOpencodeCompactionGenerationId("s", terminal.id),
+      mode: "SYNC",
+      operationName: "generateText",
+      agentName: "custom-opencode",
+      model: {
+        provider: nativeFixture.model.providerID,
+        name: nativeFixture.model.id,
+      },
+      startedAt: new Date(100),
+      contentCapture: "full",
+      tags: { "opencode.call_kind": "compaction" },
+    });
+    expect(mapped.result).toMatchObject({
+      responseModel: nativeFixture.model.id,
+      stopReason: "end_turn",
+      completedAt: new Date(200),
+      metadata: {
+        "opencode.usage_scope": "logical_compaction",
+        "opencode.compaction.reason": "auto",
+        "opencode.settlement": "compaction.ended",
+        "opencode.model_source": "event",
+        "opencode.input_source": "first_observed_prefix",
+        "opencode.start_time_approximate": false,
+        "opencode.completion_time_approximate": true,
+      },
+    });
+    expect(mapped).not.toHaveProperty("error");
+    expect(JSON.stringify(mapped)).not.toContain("RECENT_CONTEXT_NOT_OUTPUT");
+    expect(JSON.stringify({ terminal, start })).toBe(before);
+    expect(
+      mapNativeCompactionGeneration(terminal, start, config, redactor),
+    ).toEqual(mapped);
+  });
+
+  it.each([
+    ["full", true, true],
+    ["no_tool_content", true, false],
+    ["metadata_only", false, false],
+    ["full_with_metadata_spans", true, true],
+  ] as const)("applies capture mode %s to compaction input and summary", (contentCapture, bodies, tools) => {
+    const mapped = mapNativeCompactionGeneration(
+      ended({ tokens, cost: 0.001 }),
+      start,
+      { ...config, contentCapture },
+      redactor,
+    );
+    expect(mapped.seed.contentCapture).toBe(contentCapture);
+    expect(mapped.seed.tags).toEqual({ "opencode.call_kind": "compaction" });
+    expect(mapped.result.input).toEqual(
+      bodies ? mapNativeMessages(start.input, redactor, contentCapture) : [],
+    );
+    expect(JSON.stringify(mapped.result.input).includes("echo hello")).toBe(
+      tools,
+    );
+    expect(mapped.result.output).toEqual(
+      bodies
+        ? [
+            {
+              role: "assistant",
+              parts: [{ type: "text", text: "  observed summary\n" }],
+            },
+          ]
+        : [],
+    );
+    expect(mapped.result.usage).toEqual(mapNativeUsage(tokens));
+    expect(mapped.result.metadata).toMatchObject({
+      cost_usd: 0.001,
+      "opencode.usage_scope": "logical_compaction",
+      "opencode.compaction.reason": "auto",
+      "opencode.settlement": "compaction.ended",
+      "opencode.model_source": "event",
+      "opencode.input_source": "first_observed_prefix",
+      "opencode.start_time_approximate": false,
+      "opencode.completion_time_approximate": true,
+    });
+  });
+
+  const zeroTokens: NativeTokens = {
+    input: 0,
+    output: 0,
+    reasoning: 0,
+    cache: { read: 0, write: 0 },
+  };
+  for (const terminal of [ended, failed]) {
+    it.each([
+      { name: "present", tokens, cost: 0.001 },
+      { name: "explicit zero", tokens: zeroTokens, cost: 0 },
+      { name: "absent", tokens: undefined, cost: undefined },
+      { name: "tokens only", tokens, cost: undefined },
+      { name: "cost only", tokens: undefined, cost: 0 },
+    ])(`preserves $name usage and cost for ${terminal().type}`, ({
+      tokens: usage,
+      cost,
+    }) => {
+      const mapped = mapNativeCompactionGeneration(
+        terminal({ tokens: usage, cost }),
+        start,
+        config,
+        redactor,
+      );
+      expect(mapped.result.usage).toEqual(mapNativeUsage(usage));
+      expect(Object.hasOwn(mapped.result, "usage")).toBe(usage !== undefined);
+      expect(Object.hasOwn(mapped.result.metadata ?? {}, "cost_usd")).toBe(
+        cost !== undefined,
+      );
+      if (cost !== undefined)
+        expect(mapped.result.metadata?.cost_usd).toBe(cost);
+    });
+  }
+
+  it.each([
+    [true, true],
+    [true, false],
+    [false, true],
+    [false, false],
+  ])("maps observed start=%s and model=%s without fallbacks", (hasStart, hasModel) => {
+    const mapped = mapNativeCompactionGeneration(
+      ended({ model: hasModel ? nativeFixture.model : undefined }),
+      hasStart ? start : undefined,
+      config,
+      redactor,
+    );
+    expect(mapped.seed.model).toEqual(
+      hasModel
+        ? {
+            provider: nativeFixture.model.providerID,
+            name: nativeFixture.model.id,
+          }
+        : { provider: "unknown", name: "unknown" },
+    );
+    expect(mapped.result.responseModel).toBe(
+      hasModel ? nativeFixture.model.id : "unknown",
+    );
+    expect(mapped.seed.id).toBe(
+      stableOpencodeCompactionGenerationId("s", "compaction-terminal-1"),
+    );
+    expect(mapped.seed.startedAt).toEqual(new Date(hasStart ? 100 : 200));
+    expect(mapped.result.completedAt).toEqual(new Date(200));
+    if (!hasStart) {
+      expect(mapped.result.input).toEqual([]);
+      expect(mapped.seed).not.toHaveProperty("parentGenerationIds");
+    }
+    expect(mapped.result.metadata).toMatchObject({
+      "opencode.model_source": hasModel ? "event" : "unavailable",
+      "opencode.input_source": hasStart
+        ? "first_observed_prefix"
+        : "unavailable",
+      "opencode.start_time_approximate": !hasStart,
+      "opencode.completion_time_approximate": true,
+    });
+  });
+
+  it.each([
+    true,
+    false,
+  ])("exports only the failure error type (observed start=%s)", (hasStart) => {
+    const mapped = mapNativeCompactionGeneration(
+      failed({ tokens, cost: 0.001 }),
+      hasStart ? start : undefined,
+      config,
+      redactor,
+    );
+    expect(mapped.error).toBe("compaction.failed");
+    expect(mapped.seed.model).toEqual({ provider: "unknown", name: "unknown" });
+    expect(mapped.result.output).toEqual([]);
+    expect(mapped.result.stopReason).toBe("error");
+    expect(mapped.result.usage).toEqual(mapNativeUsage(tokens));
+    expect(mapped.result.metadata).toMatchObject({
+      cost_usd: 0.001,
+      "opencode.compaction.reason": "manual",
+      "opencode.settlement": "compaction.failed",
+      "opencode.model_source": "unavailable",
+    });
+    expect(JSON.stringify(mapped)).not.toContain(nativeFixture.secret);
+    expect(JSON.stringify(mapped)).not.toContain("message");
+  });
+
+  it.each([
+    ["", ""],
+    [" \n\t", "RECENT_CONTEXT_NOT_OUTPUT"],
+    ["summary", "RECENT_CONTEXT_NOT_OUTPUT"],
+  ])("excludes recent and opaque native fields with summary=%j, recent=%j", (text, recent) => {
+    const terminal = ended({ text, recent, tokens });
+    Object.assign(terminal.data, {
+      providerState: { secret: "OPAQUE_PROVIDER_STATE" },
+      providerContext: { secret: "OPAQUE_PROVIDER_CONTEXT" },
+    });
+    const mapped = mapNativeCompactionGeneration(
+      terminal,
+      undefined,
+      config,
+      redactor,
+    );
+    expect(mapped.result.output).toEqual(
+      text.trim()
+        ? [{ role: "assistant", parts: [{ type: "text", text }] }]
+        : [],
+    );
+    expect(mapped.result.usage).toEqual(mapNativeUsage(tokens));
+    expect(JSON.stringify(mapped)).not.toMatch(
+      /OPAQUE_PROVIDER|RECENT_CONTEXT_NOT_OUTPUT|providerState|providerContext/,
+    );
+  });
+
+  it.each([
+    true,
+    false,
+  ])("always fully redacts the summary (redactInputMessages=%s)", (redactInputMessages) => {
+    const text = `Summary ${nativeFixture.secret}; DATABASE_PASSWORD=${nativeFixture.envSecret}`;
+    const fullRedactor = {
+      redact: vi.fn(redactor.redact),
+      redactLightweight: vi.fn(redactor.redactLightweight),
+    };
+    const mapped = mapNativeCompactionGeneration(
+      ended({ text }),
+      {
+        startedAt: 100,
+        input: [
+          {
+            role: "user",
+            parts: [{ type: "text", text: nativeFixture.secret }],
+          },
+        ],
+      },
+      { ...config, redactInputMessages },
+      fullRedactor,
+    );
+    expect(mapped.result.output).toEqual([
+      {
+        role: "assistant",
+        parts: [{ type: "text", text: redactor.redact(text) }],
+      },
+    ]);
+    expect(fullRedactor.redact).toHaveBeenCalledWith(text);
+    expect(fullRedactor.redactLightweight).not.toHaveBeenCalled();
+    expect(JSON.stringify(mapped.result.output)).not.toContain(
+      nativeFixture.secret,
+    );
+    expect(JSON.stringify(mapped.result.output)).not.toContain(
+      nativeFixture.envSecret,
+    );
+    expect(
+      JSON.stringify(mapped.result.input).includes(nativeFixture.secret),
+    ).toBe(!redactInputMessages);
+  });
+
+  it.each([
+    "",
+    "named-agent",
+  ])("uses the native base identity for prefix=%j", (agentName) => {
+    const terminal: NativeCompactionTerminal = ended();
+    expect(
+      mapNativeCompactionGeneration(
+        terminal,
+        undefined,
+        { ...config, agentName },
+        redactor,
+      ).seed.agentName,
+    ).toBe(agentName || "opencode");
+  });
+});
 
 describe("native Promise payload mapping", () => {
   it.each([

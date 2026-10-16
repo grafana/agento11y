@@ -3,6 +3,68 @@
     "path": "/api/v1/generations:export",
     "generations": [
       {
+        "id": "opencode-1c9b6353ca713137f903be00",
+        "conversation_id": "native-session-1",
+        "operation_name": "generateText",
+        "mode": "GENERATION_MODE_SYNC",
+        "trace_id": "<DYNAMIC-ID>",
+        "span_id": "<DYNAMIC-ID>",
+        "model": {
+          "provider": "anthropic",
+          "name": "claude-sonnet-4-opencode"
+        },
+        "response_id": "",
+        "response_model": "claude-sonnet-4-opencode",
+        "system_prompt": "",
+        "input": [],
+        "output": [
+          {
+            "role": "MESSAGE_ROLE_ASSISTANT",
+            "name": "",
+            "parts": [
+              {
+                "text": "Earlier summary; token: [REDACTED:grafana-cloud-token]"
+              }
+            ]
+          }
+        ],
+        "tools": [],
+        "usage": {
+          "input_tokens": "100",
+          "output_tokens": "20",
+          "total_tokens": "120",
+          "cache_read_input_tokens": "0",
+          "cache_write_input_tokens": "0",
+          "reasoning_tokens": "0",
+          "input_semantics": "TOKEN_INPUT_SEMANTICS_INCLUSIVE"
+        },
+        "stop_reason": "end_turn",
+        "started_at": "2023-11-14T22:13:20.050Z",
+        "completed_at": "2023-11-14T22:13:20.050Z",
+        "tags": {
+          "cwd": "/repo/oc-native",
+          "opencode.call_kind": "compaction"
+        },
+        "metadata": {
+          "opencode.usage_scope": "logical_compaction",
+          "opencode.compaction.reason": "auto",
+          "opencode.settlement": "compaction.ended",
+          "opencode.model_source": "event",
+          "opencode.input_source": "unavailable",
+          "opencode.start_time_approximate": true,
+          "opencode.completion_time_approximate": true,
+          "cost_usd": 0.001,
+          "agento11y.conversation.title": "List the Go files in the repo",
+          "agento11y.sdk.name": "sdk-js",
+          "agento11y.sdk.content_capture_mode": "full"
+        },
+        "raw_artifacts": [],
+        "call_error": "",
+        "agent_name": "opencode",
+        "agent_version": "native-fixture-v1",
+        "effective_version": "sha256:63f8dac37d36f2249fad09c82fd32eeed552ea0563a8b0e990091a6e7404787f"
+      },
+      {
         "id": "opencode-9955fb786feb97efb3c922ff",
         "conversation_id": "native-session-1",
         "operation_name": "streamText",

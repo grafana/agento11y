@@ -6,7 +6,95 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
-import { command, options, sandboxPolicy } from "./test-hosts.mjs";
+import {
+  command,
+  loopback,
+  matchesVersion,
+  options,
+  sandboxPolicy,
+} from "./test-hosts.mjs";
+
+for (const [reported, version, expected] of [
+  ["2.0.22\n", "2.0.22", true],
+  ["opencode v2.0.22\n", "2.0.22", true],
+  ["opencode v2.0.29\n", "2.0.29", true],
+  ["1.18.29\n", "1.18.29", true],
+  ["opencode v2.0.29", "2.0.22", false],
+  ["2.0.220", "2.0.22", false],
+]) {
+  test(`matches reported version ${JSON.stringify(reported)} against ${version}`, () => {
+    assert.equal(matchesVersion(reported, version), expected);
+  });
+}
+
+for (const [args, versions] of [
+  [[], ["1.2.16", "1.3.13", "1.18.29", "2.0.22", "2.0.29"]],
+  [
+    ["--scenario", "compaction"],
+    ["2.0.22", "2.0.29"],
+  ],
+  [["--scenario", "compaction", "--version", "2.0.29"], ["2.0.29"]],
+]) {
+  test(`selects hosts for ${JSON.stringify(args)}`, () => {
+    assert.deepEqual(options(args).versions, versions);
+  });
+}
+for (const [args, error] of [
+  [["--scenario", "invalid"], /--scenario must be basic or compaction/],
+  [["--scenario"], /--scenario must be basic or compaction/],
+  [["--scenario", "compaction", "--version", "1.18.29"], /v2 hosts only/],
+  [["--scenario", "compaction", "--imports"], /requires real v2 hosts/],
+]) {
+  test(`rejects incompatible scenario ${JSON.stringify(args)}`, () => {
+    assert.throws(() => options(args), error);
+  });
+}
+
+for (const stream of [false, true]) {
+  test(`compaction provider sends overflow, summary usage and final reply (stream=${stream})`, async () => {
+    const receiver = await loopback("compaction");
+    try {
+      const request = async (text) => {
+        const response = await fetch(
+          `${receiver.url}/model/v1/chat/completions`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              model: "packed-harness",
+              stream,
+              messages: [{ role: "user", content: text }],
+            }),
+          },
+        );
+        return { status: response.status, text: await response.text() };
+      };
+      const overflow = await request("packed-package-compatibility-turn");
+      assert.equal(overflow.status, 400);
+      assert.equal(
+        JSON.parse(overflow.text).error.code,
+        "context_length_exceeded",
+      );
+      const summary = await request("## Objective");
+      assert.equal(summary.status, 200);
+      assert(summary.text.includes("## Objective"));
+      assert(!summary.text.includes("PACKED_HOST_OK"));
+      assert(summary.text.includes('"prompt_tokens":100'));
+      assert(summary.text.includes('"completion_tokens":20'));
+      const final = await request(
+        "## Objective\n- Complete packed-package-compatibility-turn using the requested reply; no tools.",
+      );
+      assert.equal(final.status, 200);
+      assert(final.text.includes("PACKED_HOST_OK"));
+      assert(final.text.includes('"prompt_tokens":7'));
+      assert(final.text.includes('"completion_tokens":3'));
+      assert.equal(receiver.state.models.length, 3);
+      assert.deepEqual(receiver.state.errors, []);
+    } finally {
+      await receiver.close();
+    }
+  });
+}
 
 for (const value of ["999", "1000.5", "NaN", "Infinity", "-1", undefined]) {
   test(`rejects timeout ${value}`, () => {

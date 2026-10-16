@@ -22,3 +22,11 @@ export function stableOpencodeGenerationId(
     .digest("hex");
   return `opencode-${hex.slice(0, 24)}`;
 }
+
+// OpenCode has no compaction ID; terminal event IDs survive replay without an observed start.
+export function stableOpencodeCompactionGenerationId(
+  sessionID: string,
+  eventID: string,
+): string {
+  return stableOpencodeGenerationId(sessionID, `compaction:${eventID}`);
+}
