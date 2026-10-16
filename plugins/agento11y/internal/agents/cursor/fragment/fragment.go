@@ -17,8 +17,10 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/fragmentstore"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/redact"
 )
 
 // ToolRecord captures one tool invocation observed via postToolUse(Failure).
@@ -92,6 +94,33 @@ type Session struct {
 	ConversationTitle string   `json:"conversationTitle,omitempty"`
 	StartedAt         string   `json:"startedAt,omitempty"`
 }
+
+// MaxSessionTitleLen caps a conversation title in bytes.
+const MaxSessionTitleLen = 100
+
+// SessionTitle is the title a session takes from its first typed prompt: the
+// prompt with secrets redacted, cut to MaxSessionTitleLen bytes on a rune
+// boundary, and trimmed. Redaction runs before the cut, because a secret the
+// cut splits no longer matches its pattern and its first part would be
+// exported. Live capture stamps it at beforeSubmitPrompt. The history importer
+// redacts tier 2 too before the same cut, as its Sanitizer does, so its title
+// comes through here unchanged when the mapper titles each turn.
+func SessionTitle(prompt string) string {
+	head := strings.TrimSpace(prompt)
+	if len(head) > titleRedactBytes {
+		head = redact.CutTitle(head, titleRedactBytes)
+	}
+	title := redact.New().Title(head)
+	return strings.TrimSpace(redact.CutTitle(title, MaxSessionTitleLen))
+}
+
+// titleRedactBytes bounds how much of a prompt SessionTitle redacts. Cursor
+// holds the prompt until beforeSubmitPrompt returns, which also holds the
+// session lock, and redaction costs about a third of a second per MB. A secret
+// that starts in the title and ends past the bound, such as a private key over
+// 64 KiB, keeps its start in a live title. The history importer, which no one
+// waits on, redacts the whole prompt.
+const titleRedactBytes = 64 << 10
 
 // Touch keeps the per-hook timestamps in sync. First arrival wins for
 // StartedAt; last arrival wins for LastEventAt.

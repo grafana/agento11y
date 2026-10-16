@@ -367,6 +367,34 @@ func TestRead_FileNotFound(t *testing.T) {
 	}
 }
 
+func TestReadWithTitles(t *testing.T) {
+	// Title lines in the shape Claude Code 2.1 writes them. It writes an
+	// ai-title before the first answer and again as the session goes on, and a
+	// custom-title when the user renames the session.
+	content := `{"type":"ai-title","aiTitle":"Fix flaky test","sessionId":"sess1"}
+{"type":"user","sessionId":"sess1","message":{"role":"user","content":"the login test fails"}}
+{"type":"ai-title","aiTitle":"Flaky login test","sessionId":"sess1"}
+{"type":"assistant","sessionId":"sess1","message":{"model":"test","content":[],"stop_reason":"end_turn","usage":{"output_tokens":5}}}
+{"type":"custom-title","sessionId":"sess1","customTitle":"login flake"}
+{"type":"ai-title","aiTitle":"  ","sessionId":"sess1"}
+`
+	path := writeTempFile(t, content)
+
+	lines, _, titles, err := ReadWithTitles(path, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Titles{AI: "Flaky login test", Custom: "login flake"}
+	if titles != want {
+		t.Errorf("titles = %+v, want %+v", titles, want)
+	}
+	// Title lines stay out of the lines, so one never sits at the tail of a
+	// read where the Stop settle read would wait for it.
+	if len(lines) != 2 || lines[0].Type != "user" || lines[1].Type != "assistant" {
+		t.Errorf("got %d lines, want the user and assistant lines only", len(lines))
+	}
+}
+
 func writeTempFile(t *testing.T, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "transcript.jsonl")

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/state"
@@ -131,6 +132,146 @@ func TestIntegration_ConversationTitlePersistence(t *testing.T) {
 	st2 := state.Load(sessionID)
 	if st2.Title != "explain generics" {
 		t.Errorf("Title not persisted: got %q", st2.Title)
+	}
+}
+
+// The user lines below are copied from real Claude Code 2.1 transcripts, with
+// paths and prompts shortened. Each one is text Claude Code writes ahead of, or
+// instead of, the prompt the user typed.
+const (
+	localCommandCaveatJSONL = `{"type":"user","isMeta":true,"sessionId":"sess-title","timestamp":"2025-06-01T12:00:00Z","message":{"role":"user","content":"<local-command-caveat>The command below was run directly in Claude Code, not sent to you as a request, and its output goes straight to the user. It's recorded here as context for later messages.</local-command-caveat>"}}`
+	modelCommandJSONL       = `{"type":"user","sessionId":"sess-title","timestamp":"2025-06-01T12:00:01Z","message":{"role":"user","content":"<command-name>/model</command-name>\n            <command-message>model</command-message>\n            <command-args>opus</command-args>"}}`
+	modelCommandStdoutJSONL = `{"type":"user","sessionId":"sess-title","timestamp":"2025-06-01T12:00:02Z","message":{"role":"user","content":"<local-command-stdout>Set model to Opus 5.5 and saved as your default for new sessions</local-command-stdout>"}}`
+	doctorCommandJSONL      = `{"type":"user","sessionId":"sess-title","timestamp":"2025-06-01T12:00:00Z","message":{"role":"user","content":"<command-message>doctor</command-message>\n<command-name>/doctor</command-name>"}}`
+	doctorExpansionJSONL    = `{"type":"user","isMeta":true,"sessionId":"sess-title","timestamp":"2025-06-01T12:00:01Z","message":{"role":"user","content":[{"type":"text","text":"# Claude Code Doctor\n\nHealth-check my Claude Code setup and fix what's wrong."}]}}`
+	ideOpenedFileJSONL      = `{"type":"user","sessionId":"sess-title","timestamp":"2025-06-01T12:00:00Z","message":{"role":"user","content":[{"type":"text","text":"<ide_opened_file>The user opened the file /projects/test/main.go in the IDE. This may or may not be related to the current task.</ide_opened_file>"},{"type":"text","text":"explain this file"}]}}`
+	ideSelectionJSONL       = `{"type":"user","sessionId":"sess-title","timestamp":"2025-06-01T12:00:00Z","message":{"role":"user","content":[{"type":"text","text":"<ide_selection>The user selected the lines 31 to 31 from /projects/test/main.go:\nreturn nil\n\nThis may or may not be related to the current task.</ide_selection>"},{"type":"text","text":"why does this return nil?"}]}}`
+	sidechainPromptJSONL    = `{"type":"user","isSidechain":true,"agentId":"a18f9a9d9f1f3d28e","sessionId":"sess-title","timestamp":"2025-06-01T12:00:00Z","message":{"role":"user","content":"list every package under internal/"}}`
+)
+
+// Regression: the title was the first user text in the transcript, so a
+// session opened with /model, a slash command, or an IDE file or selection was
+// listed under Claude Code's own markup instead of the prompt.
+func TestIntegration_ConversationTitleSkipsClaudeCodeText(t *testing.T) {
+	answer := buildAssistantJSONL("sess-title", "req-1", "claude-sonnet-4-20250514", 10, "ok")
+	tests := []struct {
+		name  string
+		lines []string
+		want  string
+	}{
+		{
+			name:  "local command before the first prompt",
+			lines: []string{localCommandCaveatJSONL, modelCommandJSONL, modelCommandStdoutJSONL, buildUserJSONL("sess-title", "hello"), answer},
+			want:  "hello",
+		},
+		{
+			name:  "slash command the model answers",
+			lines: []string{doctorCommandJSONL, doctorExpansionJSONL, answer},
+			want:  "/doctor",
+		},
+		{
+			name:  "IDE opened file ahead of the prompt",
+			lines: []string{ideOpenedFileJSONL, answer},
+			want:  "explain this file",
+		},
+		{
+			name:  "IDE selection ahead of the prompt",
+			lines: []string{ideSelectionJSONL, answer},
+			want:  "why does this return nil?",
+		},
+		{
+			name:  "whitespace-only text before the prompt",
+			lines: []string{buildUserJSONL("sess-title", " \n"), buildUserJSONL("sess-title", "fix the bug"), answer},
+			want:  "fix the bug",
+		},
+		{
+			// Older transcripts keep a subagent's lines inline, marked as
+			// sidechain; its prompt is the task it was given.
+			name:  "subagent prompt before the session's prompt",
+			lines: []string{sidechainPromptJSONL, buildUserJSONL("sess-title", "explain the repo"), answer},
+			want:  "explain the repo",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			jsonlPath := filepath.Join(t.TempDir(), "title.jsonl")
+			if err := os.WriteFile(jsonlPath, []byte(strings.Join(tt.lines, "\n")+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			lines, _, err := transcript.Read(jsonlPath, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			coalesced, _ := Coalesce(lines)
+			st := state.Session{}
+			gens, _ := Process(coalesced, &st, Options{SessionID: "sess-title"}, nil)
+			if len(gens) != 1 {
+				t.Fatalf("got %d generations, want 1", len(gens))
+			}
+			if gens[0].ConversationTitle != tt.want {
+				t.Errorf("ConversationTitle = %q, want %q", gens[0].ConversationTitle, tt.want)
+			}
+		})
+	}
+}
+
+// Live capture across two Stop events: the title Claude Code writes before the
+// first answer names the first batch, and a rename between turns names the
+// next one. The state file carries the titles from one hook run to the next.
+func TestIntegration_ConversationTitleFollowsClaudeCodeTitles(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	const sessionID = "sess-title"
+	jsonlPath := filepath.Join(dir, "title.jsonl")
+
+	exportBatch := func(body string) string {
+		t.Helper()
+		f, err := os.OpenFile(jsonlPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.WriteString(body); err != nil {
+			t.Fatal(err)
+		}
+		_ = f.Close()
+
+		st := state.Load(sessionID)
+		lines, _, titles, err := transcript.ReadWithTitles(jsonlPath, st.Offset)
+		if err != nil {
+			t.Fatal(err)
+		}
+		coalesced, offset := Coalesce(lines)
+		gens, _ := Process(coalesced, &st, Options{SessionID: sessionID, Titles: titles}, nil)
+		if len(gens) != 1 {
+			t.Fatalf("got %d generations, want 1", len(gens))
+		}
+		st.Offset = offset
+		if err := state.Save(sessionID, st); err != nil {
+			t.Fatal(err)
+		}
+		return gens[0].ConversationTitle
+	}
+
+	first := exportBatch(`{"type":"ai-title","aiTitle":"Flaky login test","sessionId":"sess-title"}` + "\n" +
+		buildUserJSONL(sessionID, "the login test fails") + "\n" +
+		buildAssistantJSONL(sessionID, "req-1", "claude-sonnet-4-20250514", 10, "It races the token refresh.") + "\n")
+	if first != "Flaky login test" {
+		t.Errorf("first batch title = %q, want the ai-title", first)
+	}
+
+	second := exportBatch(`{"type":"custom-title","sessionId":"sess-title","customTitle":"login flake"}` + "\n" +
+		`{"type":"ai-title","aiTitle":"Flaky login test","sessionId":"sess-title"}` + "\n" +
+		buildUserJSONL(sessionID, "fix it") + "\n" +
+		buildAssistantJSONL(sessionID, "req-2", "claude-sonnet-4-20250514", 10, "Done.") + "\n")
+	if second != "login flake" {
+		t.Errorf("second batch title = %q, want the custom-title", second)
+	}
+
+	// No title line in this range: only the state file remembers the rename.
+	third := exportBatch(buildUserJSONL(sessionID, "and the docs") + "\n" +
+		buildAssistantJSONL(sessionID, "req-3", "claude-sonnet-4-20250514", 10, "Updated.") + "\n")
+	if third != "login flake" {
+		t.Errorf("third batch title = %q, want the custom-title kept in state", third)
 	}
 }
 

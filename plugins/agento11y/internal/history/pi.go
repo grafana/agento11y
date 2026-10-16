@@ -11,9 +11,10 @@ import (
 	"regexp"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/grafana/agento11y/go/agento11y"
+
+	"github.com/grafana/agento11y/plugins/agento11y/internal/redact"
 )
 
 func init() {
@@ -331,6 +332,7 @@ type piMessage struct {
 type piUsage struct {
 	Input       int64   `json:"input"`
 	Output      int64   `json:"output"`
+	Reasoning   int64   `json:"reasoning"`
 	CacheRead   int64   `json:"cacheRead"`
 	CacheWrite  int64   `json:"cacheWrite"`
 	TotalTokens int64   `json:"totalTokens"`
@@ -557,7 +559,7 @@ func piGeneration(
 		Tags:          piTags(log.header.CWD),
 	}
 	if piHasThinking(blocks) {
-		gen.ThinkingEnabled = piBoolPtr(true)
+		gen.ThinkingEnabled = new(true)
 	}
 	if msg.Usage != nil && msg.Usage.Cost != nil && msg.Usage.Cost.Total != nil {
 		gen.Metadata = map[string]any{"cost_usd": *msg.Usage.Cost.Total}
@@ -614,7 +616,7 @@ func piQuality(gen agento11y.Generation) QualityReport {
 
 // piMapUsage ports mapPiUsage (plugins/pi/src/mappers.ts).
 //
-// The field set is narrower than pi's Usage: reasoning and cacheWrite1h are not
+// The field set is narrower than pi's Usage: cacheWrite1h is not
 // forwarded, and totalTokens is passed through as pi computes it
 // (input + output + cacheRead + cacheWrite) rather than recomputed to the Go
 // launchers' input + output. Both choices are live behavior and moving either
@@ -629,6 +631,7 @@ func piMapUsage(usage *piUsage) agento11y.TokenUsage {
 		TotalTokens:           usage.TotalTokens,
 		CacheReadInputTokens:  usage.CacheRead,
 		CacheWriteInputTokens: usage.CacheWrite,
+		ReasoningTokens:       usage.Reasoning,
 	}
 }
 
@@ -901,12 +904,11 @@ func piTitle(log *piSession, conversationID string) string {
 	return conversationID
 }
 
+// piClipTitle redacts text before cutting it to piMaxTitleLen runes, the way
+// the Sanitizer redacts: it only ever sees the title already cut, and a secret
+// the cut splits no longer matches its pattern.
 func piClipTitle(text string) string {
-	text = strings.TrimSpace(text)
-	if utf8.RuneCountInString(text) <= piMaxTitleLen {
-		return text
-	}
-	return string([]rune(text)[:piMaxTitleLen])
+	return redact.RedactTitleRunes(text, piMaxTitleLen)
 }
 
 // Fork metadata keys, matching what the live plugin writes
@@ -1118,5 +1120,3 @@ func piSetMetadata(gen *agento11y.Generation, key, value string) {
 	}
 	gen.Metadata[key] = value
 }
-
-func piBoolPtr(v bool) *bool { return &v }

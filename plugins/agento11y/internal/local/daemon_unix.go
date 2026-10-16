@@ -4,12 +4,8 @@ package local
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"log"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -17,108 +13,23 @@ import (
 )
 
 // ReceiverSupported reports whether this platform can run the local
-// capture daemon. Windows returns false so hook dispatch leaves Cloud
-// credentials in place instead of rewriting to a dead loopback URL.
+// capture daemon. Unix does, so hook dispatch may point agents at the
+// loopback endpoint instead of leaving Cloud credentials in place.
 func ReceiverSupported() bool { return true }
 
-type daemonLock struct {
-	f *os.File
+// daemonSysProcAttr detaches the daemon from the process that spawns it by
+// giving it its own session, so it survives the parent exiting.
+func daemonSysProcAttr() *syscall.SysProcAttr {
+	return &syscall.SysProcAttr{Setsid: true}
 }
 
-func acquireDaemonLock(dir string) (*daemonLock, error) {
-	return acquireFileLock(filepath.Join(dir, LockFile), true)
-}
-
-// acquireFileLock takes an exclusive flock on path, creating the file when
-// it is missing. wait blocks until the lock is free; without it a lock
-// another process holds returns errLockBusy straight away.
-func acquireFileLock(path string, wait bool) (*daemonLock, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("open lockfile: %w", err)
-	}
-	how := syscall.LOCK_EX
-	if !wait {
-		how |= syscall.LOCK_NB
-	}
-	if err := syscall.Flock(int(f.Fd()), how); err != nil {
-		_ = f.Close()
-		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, errLockBusy
-		}
-		return nil, fmt.Errorf("flock: %w", err)
-	}
-	return &daemonLock{f: f}, nil
-}
-
-func (l *daemonLock) release() {
-	_ = syscall.Flock(int(l.f.Fd()), syscall.LOCK_UN)
-	_ = l.f.Close()
-}
-
-// startDaemon launches `agento11y local serve` as a detached child process.
-// The parent waits for the child to write its status file, then returns
-// the recorded endpoint. The child detaches by setting its own session
-// (SysProcAttr.Setsid) so it survives the parent exiting.
-func startDaemon(ctx context.Context, dir string, logger *log.Logger) (*Status, error) {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, fmt.Errorf("mkdir: %w", err)
-	}
-	bin, err := os.Executable()
-	if err != nil {
-		return nil, fmt.Errorf("resolve agento11y binary: %w", err)
-	}
-	// os.Executable() is the test binary when a test reaches this function. A
-	// test binary ignores the "local serve" arguments and runs its whole suite
-	// again, and that suite starts another daemon, so the processes multiply.
-	// Tests must install a stub with SetStartDaemonForTesting.
-	if looksLikeTestBinary(bin) {
-		return nil, fmt.Errorf("refusing to start the daemon from test binary %s: stub it with local.SetStartDaemonForTesting", filepath.Base(bin))
-	}
-
-	logPath := filepath.Join(dir, "server.log")
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("open log: %w", err)
-	}
-
-	cmd := exec.Command(bin, "local", "serve")
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	// Inherit env so SIGIL_DEBUG and XDG_* flow through.
-	cmd.Env = os.Environ()
-	if err := cmd.Start(); err != nil {
-		_ = logFile.Close()
-		return nil, fmt.Errorf("start daemon: %w", err)
-	}
-	// Close the log handle in this process; the child has its own copy.
-	_ = logFile.Close()
-
-	// Wait up to ~5s for the child to write its status file.
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if ctx.Err() != nil {
-			_ = cmd.Process.Kill()
-			return nil, ctx.Err()
-		}
-		if s, err := IsRunning(dir); err == nil && s != nil {
-			if logger != nil {
-				logger.Printf("local: daemon started pid=%d port=%d", s.PID, s.Port)
-			}
-			return s, nil
-		}
-		// Check the child exited prematurely so we don't block forever.
-		var ws syscall.WaitStatus
-		pid, _ := syscall.Wait4(cmd.Process.Pid, &ws, syscall.WNOHANG, nil)
-		if pid == cmd.Process.Pid {
-			body, _ := os.ReadFile(logPath)
-			return nil, fmt.Errorf("daemon exited prematurely: %s", strings.TrimSpace(string(body)))
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	_ = cmd.Process.Kill()
-	return nil, fmt.Errorf("daemon did not become ready within 5s")
+// childExited reports whether the daemon this process spawned has already
+// exited, and reaps it when it has. Only the parent may call it: Wait4
+// answers for its own children.
+func childExited(pid int) bool {
+	var ws syscall.WaitStatus
+	reaped, err := syscall.Wait4(pid, &ws, syscall.WNOHANG, nil)
+	return err == nil && reaped == pid
 }
 
 // pidAlive reports whether a process with the given PID exists by
@@ -144,6 +55,49 @@ func terminateProcess(pid int) error {
 	return proc.Signal(syscall.SIGTERM)
 }
 
+type unixDaemonProcess struct {
+	status Status
+}
+
+func openDaemonProcess(status Status) (daemonProcess, error) {
+	if !pidAlive(status.PID) {
+		return nil, nil
+	}
+	matches, err := processMatchesDaemon(status)
+	if err != nil {
+		return nil, err
+	}
+	if !matches {
+		return nil, nil
+	}
+	return &unixDaemonProcess{status: status}, nil
+}
+
+func (p *unixDaemonProcess) alive() bool { return pidAlive(p.status.PID) }
+
+func (p *unixDaemonProcess) terminate() error {
+	if !p.alive() {
+		return nil
+	}
+	matches, err := processMatchesDaemon(p.status)
+	if err != nil {
+		if !p.alive() {
+			return nil
+		}
+		return err
+	}
+	if !matches {
+		return nil
+	}
+	return terminateProcess(p.status.PID)
+}
+
+func (p *unixDaemonProcess) close() {}
+
+// processCommandLineFn is a test seam for reading a live process's command
+// line.
+var processCommandLineFn = processCommandLine
+
 func processCommandLine(pid int) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
@@ -154,4 +108,25 @@ func processCommandLine(pid int) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// processMatchesDaemon reports whether the live process behind s.PID is the
+// daemon s describes. Unix reads the process command line, which names the
+// binary and the "local serve" arguments it was started with, so the
+// recorded start time adds nothing here.
+func processMatchesDaemon(s Status) (bool, error) {
+	cmdline, err := processCommandLineFn(s.PID)
+	if err != nil {
+		return false, err
+	}
+	cmdline = strings.TrimSpace(cmdline)
+	const daemonArgs = " local serve"
+	if !strings.HasSuffix(cmdline, daemonArgs) {
+		return false, nil
+	}
+	exe := strings.TrimSpace(strings.TrimSuffix(cmdline, daemonArgs))
+	if exe == "" {
+		return false, nil
+	}
+	return imageIsDaemon(exe), nil
 }

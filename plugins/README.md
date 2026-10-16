@@ -8,7 +8,7 @@ The [Hermes plugin](hermes/README.md) is installed separately in Hermes's Python
 
 ## Install
 
-On macOS use Homebrew; on Linux and Windows (or any platform with Go 1.25+) use `go install`.
+On macOS use Homebrew; on Linux and Windows (or any platform with Go 1.26.9+) use `go install`.
 
 **macOS** — Homebrew:
 

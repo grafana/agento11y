@@ -1,0 +1,23 @@
+[project]
+name = "agento11y-real-agent-example"
+version = "0.1.0"
+description = "Run an instrumented Anthropic tool agent through Grafana Evals, DeepEval, or Harbor."
+requires-python = ">=3.12"
+dependencies = [
+  "agento11y>=0.20.0",
+  "agento11y-anthropic>=0.20.0",
+  "anthropic>=0.79.0,<2",
+  "opentelemetry-exporter-otlp-proto-http>=1.27.0",
+  "opentelemetry-sdk>=1.27.0",
+]
+
+[project.optional-dependencies]
+deepeval = ["agento11y-deepeval"]
+harbor = ["agento11y-harbor", "harbor>=0.24.0"]
+
+[tool.uv.sources]
+# Point at the packages in this checkout. Remove these entries to use PyPI releases.
+agento11y = { path = "../../../python", editable = true }
+agento11y-anthropic = { path = "../../../python-providers/anthropic", editable = true }
+agento11y-deepeval = { path = "../../../python-frameworks/deepeval", editable = true }
+agento11y-harbor = { path = "../../../python-frameworks/harbor", editable = true }

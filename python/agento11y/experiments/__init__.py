@@ -53,6 +53,7 @@ from ..errors import EvaluationExecutionError, EvaluationTimeoutError, Experimen
 from ..models import ReportRole, TrialEvaluation, TrialEvaluationStatus
 from . import otel, score
 from .cases import case_value, text_case
+from .checkpoint import run_checkpoint
 from .client import Client
 from .control import EvaluatorsClient, StoredEvaluator
 from .evals import AgentOutput, run_evals
@@ -120,6 +121,7 @@ __all__ = [
     "experiment",
     "experiment_from_suite",
     "run_evals",
+    "run_checkpoint",
     "stable_id",
     "score",
     "otel",

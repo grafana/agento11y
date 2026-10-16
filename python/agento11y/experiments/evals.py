@@ -8,7 +8,7 @@ judges when correctness cannot be expressed as an exact reference answer.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
@@ -19,7 +19,13 @@ from .client import Client
 from .control import EvaluatorsClient, StoredEvaluator
 from .experiment import Experiment, Trial, experiment, stable_id
 from .plan import EvaluationPlan
-from .types import Candidate, Evaluator, TestCase, TestSuite
+from .types import Candidate, Evaluator, TestCase, TestSuite, _env_value
+
+# Provenance the one-call helpers own. A caller can't override these through
+# ``metadata``, so a gate reading them can trust they describe how the run executed.
+_RESERVED_METADATA_KEYS = frozenset(
+    {"execution_kind", "framework", "input_selector", "evaluation_plan", "suite_id", "suite_version"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +51,8 @@ def run_evals(
     plan: EvaluationPlan | None = None,
     evaluators_client: EvaluatorsClient | None = None,
     input_selector: str = "input.prompt",
+    metadata: Mapping[str, Any] | None = None,
+    tags: Sequence[str] | None = None,
 ) -> Experiment:
     """Run a published suite against a text target and publish exact-match verdicts.
 
@@ -65,74 +73,51 @@ def run_evals(
     failures remain inspectable and successful sibling cases are retained.
     ``input_selector='input'`` passes structured context rather than just the
     prompt. AgentOutput supports explicit correlation and an export flush.
+
+    ``metadata`` and ``tags`` are added to the run, for example CI provenance
+    such as a commit SHA or PR number. The SDK's own provenance keys
+    (``execution_kind``, ``framework``, ``input_selector``, ``evaluation_plan``,
+    ``suite_id``, ``suite_version``) are reserved, and passing one raises
+    ``ValueError``. Without ``experiment_id``, the run uses
+    ``AGENTO11Y_EXPERIMENT_ID`` when it is set, so a CI wrapper can allocate
+    the run ID; with it set, run one helper per process.
     """
-    if not suite.cases:
-        raise ValueError("the suite must contain at least one test case")
     if plan is not None and evaluate is not None:
         raise ValueError("choose plan or evaluate, not both")
-    if not (input_selector == "input" or input_selector.startswith("input.")):
-        raise ValueError("input_selector must select input, never expected values or metadata")
-    if len({case.test_case_id for case in suite.cases}) != len(suite.cases):
-        raise ValueError("suite contains duplicate case IDs")
-    for case in suite.cases:
-        selected_input = case_value(case, input_selector)
-        if input_selector == "input.prompt" and (not isinstance(selected_input, str) or not selected_input.strip()):
-            raise ValueError(f"{case.test_case_id}: input.prompt must be a nonempty string")
-        if (
-            evaluate is None
-            and plan is None
-            and (not isinstance(case.expected, dict) or not isinstance(case.expected.get("assistant_response"), str))
-        ):
-            raise ValueError(f"{case.test_case_id}: expected.assistant_response must be a reviewed string")
+    user_metadata = _caller_metadata(metadata)
+    run_tags = _caller_tags(tags)
+    _validate_cases(suite, input_selector)
+    if evaluate is None and plan is None:
+        for case in suite.cases:
+            if not isinstance(case.expected, dict) or not isinstance(case.expected.get("assistant_response"), str):
+                raise ValueError(f"{case.test_case_id}: expected.assistant_response must be a reviewed string")
     if plan is not None:
         plan.validate(suite.cases)
         if any(isinstance(check.judge, StoredEvaluator) for check in plan.checks):
             plan.provision(evaluators_client or EvaluatorsClient())
     with experiment(
         name,
-        experiment_id=experiment_id,
+        experiment_id=_experiment_id_or_env(experiment_id),
         suite=suite,
         client=client,
         candidate=candidate,
         planned_trial_count=len(suite.cases),
         use_experimental_otel=use_experimental_otel,
+        tags=run_tags,
         metadata={
+            **user_metadata,
             "framework": "grafana",
+            "execution_kind": "agent_run",
             "input_selector": input_selector,
             **({"evaluation_plan": plan.provenance()} if plan is not None else {}),
         },
     ) as run:
         for case in suite.cases:
             with run.trial(case) as trial:
-                trial.bind_conversation(stable_id("conv", run.experiment_id, case.test_case_id, trial.ref.attempt))
-                started = time.perf_counter()
-                try:
-                    with with_conversation_id(trial.conversation_id):
-                        result = target(deepcopy(case_value(case, input_selector)))
-                except Exception as error:
-                    if plan is None:
-                        raise
-                    trial.mark_errored(f"target: {type(error).__name__}: {error}")
-                    continue
-                finally:
-                    trial.set_duration(int((time.perf_counter() - started) * 1000))
-                answer = result.text if isinstance(result, AgentOutput) else result
-                if not isinstance(answer, str):
-                    if plan is not None:
-                        trial.mark_errored("target must return a string or AgentOutput with string text")
-                        continue
-                    raise TypeError("target must return a string")
-                try:
-                    if isinstance(result, AgentOutput):
-                        if result.conversation_id:
-                            trial.bind_conversation(result.conversation_id)
-                        if result.flush is not None:
-                            result.flush()
-                    run.client.flush_generations()
-                except Exception as error:
-                    if plan is None:
-                        raise
-                    trial.mark_errored(f"telemetry flush: {error}")
+                answer = _run_target(
+                    run, trial, case, target, input_selector=input_selector, keep_going=plan is not None
+                )
+                if answer is None:
                     continue
                 if record_io:
                     trial.record_io(input=case_value(case, input_selector), output=answer)
@@ -154,3 +139,107 @@ def run_evals(
                     else "Answer differs from the reviewed reference",
                 )
     return run
+
+
+def _caller_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Copy caller metadata, refusing keys the helpers set themselves."""
+
+    if metadata is None:
+        return {}
+    if not isinstance(metadata, Mapping):
+        raise TypeError("metadata must be a mapping")
+    reserved = sorted(str(key) for key in metadata if key in _RESERVED_METADATA_KEYS)
+    if reserved:
+        raise ValueError(f"metadata keys are reserved for the SDK's provenance: {', '.join(reserved)}")
+    return dict(metadata)
+
+
+def _caller_tags(tags: Sequence[str] | None) -> list[str]:
+    if tags is None:
+        return []
+    # A bare string is a Sequence[str] too, and would otherwise become one tag per character.
+    if isinstance(tags, str):
+        raise TypeError("tags must be a sequence of strings")
+    # Copy before validating, so an iterator isn't consumed by the check.
+    values = list(tags)
+    if not all(isinstance(tag, str) for tag in values):
+        raise TypeError("tags must be a sequence of strings")
+    return values
+
+
+def _experiment_id_or_env(experiment_id: str) -> str:
+    """Use the explicit ID, else a run ID allocated through ``AGENTO11Y_EXPERIMENT_ID``.
+
+    Only the one-call helpers read the variable: ``experiment()`` keeps
+    generating a fresh ID, so a process that opens several runs can't collide.
+    """
+
+    return experiment_id or _env_value("EXPERIMENT_ID")
+
+
+def _validate_cases(suite: TestSuite, input_selector: str) -> None:
+    """Reject a suite the text-target runners cannot execute, before any run exists."""
+
+    if not suite.cases:
+        raise ValueError("the suite must contain at least one test case")
+    if not (input_selector == "input" or input_selector.startswith("input.")):
+        raise ValueError("input_selector must select input, never expected values or metadata")
+    if len({case.test_case_id for case in suite.cases}) != len(suite.cases):
+        raise ValueError("suite contains duplicate case IDs")
+    for case in suite.cases:
+        selected_input = case_value(case, input_selector)
+        if input_selector == "input.prompt" and (not isinstance(selected_input, str) or not selected_input.strip()):
+            raise ValueError(f"{case.test_case_id}: input.prompt must be a nonempty string")
+
+
+def _run_target(
+    run: Experiment,
+    trial: Trial,
+    case: TestCase,
+    target: Callable[[Any], str | AgentOutput],
+    *,
+    input_selector: str,
+    keep_going: bool,
+    require_flush: bool = False,
+) -> str | None:
+    """Run the target for one case and flush its telemetry.
+
+    Returns the answer, or ``None`` after marking the trial errored when
+    ``keep_going`` is set. Without ``keep_going`` the failure propagates.
+    ``require_flush`` raises for a target that can't flush its own client,
+    since every later case would fail the same way.
+    """
+
+    trial.bind_conversation(stable_id("conv", run.experiment_id, case.test_case_id, trial.ref.attempt))
+    started = time.perf_counter()
+    try:
+        with with_conversation_id(trial.conversation_id):
+            result = target(deepcopy(case_value(case, input_selector)))
+    except Exception as error:
+        if not keep_going:
+            raise
+        trial.mark_errored(f"target: {type(error).__name__}: {error}")
+        return None
+    finally:
+        trial.set_duration(int((time.perf_counter() - started) * 1000))
+    if require_flush and (not isinstance(result, AgentOutput) or result.flush is None):
+        raise TypeError("target must return AgentOutput with flush set to your instrumentation client's flush")
+    answer = result.text if isinstance(result, AgentOutput) else result
+    if not isinstance(answer, str):
+        if not keep_going:
+            raise TypeError("target must return a string")
+        trial.mark_errored("target must return a string or AgentOutput with string text")
+        return None
+    try:
+        if isinstance(result, AgentOutput):
+            if result.conversation_id:
+                trial.bind_conversation(result.conversation_id)
+            if result.flush is not None:
+                result.flush()
+        run.client.flush_generations()
+    except Exception as error:
+        if not keep_going:
+            raise
+        trial.mark_errored(f"telemetry flush: {error}")
+        return None
+    return answer

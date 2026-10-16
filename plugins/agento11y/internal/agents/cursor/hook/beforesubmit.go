@@ -6,7 +6,6 @@ import (
 	"io"
 	"log"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/grafana/agento11y/go/agento11y"
 
@@ -15,9 +14,6 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/guard"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
-
-// maxTitleLen caps the conversation title derived from the first user prompt.
-const maxTitleLen = 100
 
 // beforeSubmitDeny is Cursor's response for blocking a submitted prompt.
 // UserMessage is shown to the user; the model is not called.
@@ -94,29 +90,23 @@ func capturePrompt(p Payload, cfg config.Config, logger *log.Logger) {
 	logger.Printf("beforeSubmitPrompt: captured gen=%s promptLen=%d", p.GenerationID, len(p.Prompt))
 }
 
-// setConversationTitle sets the session's ConversationTitle to a truncated
-// version of prompt, but only when the title is not already set (first
-// prompt wins). A missing session file is created so a beforeSubmit that
-// races ahead of sessionStart still leaves a title for stop to load.
-// UpdateSession holds the session lock so this write cannot replace a
-// sessionStart that landed between load and save.
+// setConversationTitle sets the session's ConversationTitle to
+// fragment.SessionTitle of prompt, but only when the title is not already set
+// (first prompt wins). The title is built only then, so a later prompt with a
+// large paste does not pay for its redaction. A missing session file is
+// created so a beforeSubmit that races ahead of sessionStart still leaves a
+// title for stop to load. UpdateSession holds the session lock so this write
+// cannot replace a sessionStart that landed between load and save.
 func setConversationTitle(conversationID, prompt string, logger *log.Logger) {
-	title := strings.TrimSpace(prompt)
-	if title == "" {
+	if strings.TrimSpace(prompt) == "" {
 		return
-	}
-	if len(title) > maxTitleLen {
-		title = title[:maxTitleLen]
-		for !utf8.ValidString(title) {
-			title = title[:len(title)-1]
-		}
 	}
 	err := fragment.UpdateSession(conversationID, logger, func(s *fragment.Session) bool {
 		if s.ConversationTitle != "" {
 			return false
 		}
-		s.ConversationTitle = title
-		return true
+		s.ConversationTitle = fragment.SessionTitle(prompt)
+		return s.ConversationTitle != ""
 	})
 	if err != nil {
 		logger.Printf("beforeSubmitPrompt: save session title: %v", err)

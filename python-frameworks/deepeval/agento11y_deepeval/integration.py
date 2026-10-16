@@ -13,7 +13,9 @@ from enum import Enum
 from typing import Any
 
 from agento11y import Message, assistant_text_message, user_text_message
+from agento11y.context import with_conversation_id
 from agento11y.experiments import (
+    AgentOutput,
     Candidate,
     Client,
     Evaluator,
@@ -24,6 +26,9 @@ from agento11y.experiments import (
     experiment,
     stable_id,
 )
+
+# Provenance run_deepeval owns; caller metadata can't override it.
+_RESERVED_RUN_METADATA_KEYS = frozenset({"framework", "execution_mode", "execution_kind", "suite_id", "suite_version"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,8 +50,8 @@ class DeepEvalRun:
 
 
 def run_deepeval(
-    test_cases: Sequence[Any],
-    target: Callable[[Any, Any], str | Sequence[Any]],
+    test_cases: Sequence[Any] | TestSuite,
+    target: Callable[[Any, Any], str | AgentOutput | Sequence[Any]],
     metrics: Sequence[Any],
     *,
     experiment_name: str,
@@ -57,25 +62,53 @@ def run_deepeval(
     client: Client | None = None,
     candidate: Candidate | Mapping[str, Any] | None = None,
     record_io: bool = False,
+    metadata: Mapping[str, Any] | None = None,
+    tags: Sequence[str] | None = None,
 ) -> PublishedDeepEvalRun:
     """Invoke target(native_case, trial) and DeepEval metrics inside live trials.
 
     A single-turn target returns its output string. A conversational target returns
     the completed ordered sequence of public DeepEval ``Turn`` objects. The target
-    owns its instrumentation and may bind a conversation on ``trial``. Cases and
+    owns its instrumentation and may bind a conversation on ``trial``. A single-turn
+    target may return AgentOutput with its actual instrumentation client flush.
+    Passing a TestSuite executes its exact cases and preserves their snapshots;
+    the supported checkpoint input is a text-only input.prompt. Native metrics
+    supplied here determine grading; stored suite bindings are not executed. Cases and
     metrics are copied per attempt; caller-owned objects are not mutated.
+
+    ``metadata`` and ``tags`` are added to the run, for example CI provenance.
+    The adapter's own keys (``framework``, ``execution_mode``,
+    ``execution_kind``, ``suite_id``, ``suite_version``) are reserved, and
+    passing one raises ``ValueError``.
     """
     from deepeval.metrics.utils import copy_metrics
 
+    user_metadata = _caller_metadata(metadata)
+    run_tags = _caller_tags(tags)
+
+    checkpoint = test_cases if isinstance(test_cases, TestSuite) else None
+    if checkpoint is not None:
+        if suite_id not in {"deepeval", checkpoint.suite_id} or suite_version not in {"1", checkpoint.version}:
+            raise ValueError("suite_id and suite_version must match the supplied checkpoint")
+        test_cases = _native_checkpoint_cases(checkpoint)
+        suite_id, suite_version = checkpoint.suite_id, checkpoint.version
     if not test_cases or not metrics:
         raise ValueError("test_cases and metrics must not be empty")
     names = [str(metric.__name__) for metric in metrics]
     selected = primary_metric or (names[0] if len(names) == 1 else None)
     if selected not in names or len(set(names)) != len(names):
         raise ValueError("select a primary_metric from unique metric names")
-    cases = [_test_case(case, index, suite_id) for index, case in enumerate(test_cases)]
+    cases = (
+        deepcopy(checkpoint.cases)
+        if checkpoint is not None
+        else [_test_case(case, index, suite_id) for index, case in enumerate(test_cases)]
+    )
     _validate_case_definitions(cases)
-    suite = TestSuite(suite_id=suite_id, version=suite_version, test_cases=cases, tags=["framework:deepeval"])
+    suite = (
+        deepcopy(checkpoint)
+        if checkpoint is not None
+        else TestSuite(suite_id=suite_id, version=suite_version, test_cases=cases, tags=["framework:deepeval"])
+    )
     attempts: dict[str, int] = {}
     score_count = 0
     with experiment(
@@ -86,15 +119,23 @@ def run_deepeval(
         candidate=dict(candidate) if isinstance(candidate, Mapping) else candidate,
         planned_trial_count=len(cases),
         use_experimental_otel=True,
-        metadata={"framework": "deepeval", "execution_mode": "live"},
+        tags=run_tags,
+        metadata={**user_metadata, "framework": "deepeval", "execution_mode": "live", "execution_kind": "agent_run"},
     ) as exp:
         for native, case in zip(test_cases, cases, strict=True):
             attempts[case.test_case_id] = attempts.get(case.test_case_id, 0) + 1
             with exp.trial(case, attempt=attempts[case.test_case_id]) as trial:
                 current = deepcopy(native)
+                context_conversation_id = stable_id("conv", exp.experiment_id, case.test_case_id, trial.ref.attempt)
+                agent_output = None
                 started = time.perf_counter()
                 try:
-                    target_result = target(current, trial)
+                    with with_conversation_id(context_conversation_id):
+                        target_result = target(current, trial)
+                    if isinstance(target_result, AgentOutput):
+                        trial.bind_conversation(target_result.conversation_id or context_conversation_id)
+                        agent_output = target_result
+                        target_result = target_result.text
                     if _is_conversational(current):
                         if isinstance(target_result, (str, bytes)) or not isinstance(target_result, Sequence):
                             raise TypeError("conversational target must return an ordered sequence of DeepEval turns")
@@ -109,6 +150,12 @@ def run_deepeval(
                     continue
                 finally:
                     trial.set_duration(int((time.perf_counter() - started) * 1000))
+                if agent_output is not None and agent_output.flush is not None:
+                    try:
+                        agent_output.flush()
+                    except Exception as error:
+                        trial.mark_errored(f"telemetry flush: {error}")
+                        continue
                 if record_io and _is_conversational(current):
                     _bind_or_publish_conversation(
                         exp.client,
@@ -145,6 +192,39 @@ def run_deepeval(
                     )
                     score_count += 1
     return PublishedDeepEvalRun(exp.experiment_id, exp.url, len(cases), score_count)
+
+
+def _native_checkpoint_cases(suite: TestSuite) -> list[Any]:
+    """Explicit text mapping; reject extra target inputs before any agent calls."""
+    from deepeval.test_case import LLMTestCase
+
+    if len({case.test_case_id for case in suite.cases}) != len(suite.cases):
+        raise ValueError("checkpoint contains duplicate case IDs")
+    native = []
+    for case in suite.cases:
+        if (
+            not isinstance(case.input, dict)
+            or set(case.input) != {"prompt"}
+            or not isinstance(case.input["prompt"], str)
+            or not case.input["prompt"].strip()
+        ):
+            raise ValueError(f"{case.test_case_id}: DeepEval checkpoint execution supports only input.prompt text")
+        expected = case.expected
+        if expected is not None and not isinstance(expected, dict):
+            raise ValueError(f"{case.test_case_id}: checkpoint expected must be an object")
+        reference = (expected or {}).get("assistant_response")
+        if reference is not None and not isinstance(reference, str):
+            raise ValueError(f"{case.test_case_id}: expected.assistant_response must be a string")
+        native.append(
+            LLMTestCase(
+                name=case.name or case.test_case_id,
+                input=case.input["prompt"],
+                actual_output="",
+                expected_output=reference,
+                metadata={"agento11y.test_case_id": case.test_case_id},
+            )
+        )
+    return native
 
 
 def evaluate_with_agento11y(
@@ -718,6 +798,30 @@ def _case_digest(case: TestCase) -> str:
 def _score_key(name: str) -> str:
     normalized = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
     return normalized or "deepeval"
+
+
+def _caller_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
+    if metadata is None:
+        return {}
+    if not isinstance(metadata, Mapping):
+        raise TypeError("metadata must be a mapping")
+    reserved = sorted(str(key) for key in metadata if key in _RESERVED_RUN_METADATA_KEYS)
+    if reserved:
+        raise ValueError(f"metadata keys are reserved for the adapter's provenance: {', '.join(reserved)}")
+    return dict(metadata)
+
+
+def _caller_tags(tags: Sequence[str] | None) -> list[str]:
+    if tags is None:
+        return []
+    # A bare string is a Sequence[str] too, and would otherwise become one tag per character.
+    if isinstance(tags, str):
+        raise TypeError("tags must be a sequence of strings")
+    # Copy before validating, so an iterator isn't consumed by the check.
+    values = list(tags)
+    if not all(isinstance(tag, str) for tag in values):
+        raise TypeError("tags must be a sequence of strings")
+    return values
 
 
 def _mapping(value: Any) -> dict[str, Any]:

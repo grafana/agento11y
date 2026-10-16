@@ -230,7 +230,11 @@ describe("extension lifecycle", () => {
     loggerMock.error.mockReset();
   });
 
-  it("uses assistant message_end timestamp as completedAt, not msg.timestamp", async () => {
+  it.each([
+    undefined,
+    0,
+    7,
+  ])("uses assistant message_end timestamp and preserves reasoning=%s", async (reasoning) => {
     // `msg.timestamp` is set by pi providers when constructing the
     // AssistantMessage object — i.e. before the HTTP request — so it sits
     // near turn_start, not at stream completion. The plugin must instead
@@ -269,6 +273,7 @@ describe("extension lifecycle", () => {
     registerExtension(pi as any);
 
     const msg = assistantMessage();
+    if (reasoning !== undefined) Object.assign(msg.usage, { reasoning });
     // Deliberately ancient timestamp; if the plugin still uses
     // msg.timestamp, the assertion below will catch it.
     msg.timestamp = 1700000000000;
@@ -285,7 +290,21 @@ describe("extension lifecycle", () => {
     expect(recorder.setResult).toHaveBeenCalledTimes(1);
     const result = recorder.setResult.mock.calls[0]![0] as {
       completedAt: Date;
+      usage: Record<string, number>;
+      metadata: Record<string, unknown>;
     };
+    expect(result.usage).toEqual({
+      inputTokens: 10,
+      outputTokens: 20,
+      totalTokens: 30,
+      cacheReadInputTokens: 0,
+      cacheWriteInputTokens: 0,
+      ...(reasoning !== undefined ? { reasoningTokens: reasoning } : {}),
+    });
+    expect(Object.hasOwn(result.usage, "reasoningTokens")).toBe(
+      reasoning !== undefined,
+    );
+    expect(result.metadata.cost_usd).toBe(0);
     const completedAt = result.completedAt.getTime();
     expect(completedAt).toBeGreaterThanOrEqual(beforeMessageEnd);
     expect(completedAt).toBeLessThanOrEqual(afterMessageEnd);
@@ -3056,10 +3075,15 @@ describe("extension lifecycle", () => {
       ];
     }
 
-    it("exports one generation for a threshold auto-compaction", async () => {
+    it.each([
+      undefined,
+      0,
+      7,
+    ])("exports one generation for a threshold auto-compaction with reasoning=%s", async (reasoning) => {
       const { sigil, seeds, results } = setupClient();
       useConfig(sigil);
       const entry = compactionEntry();
+      if (reasoning !== undefined) Object.assign(entry.usage!, { reasoning });
       const ctx = ctxWithBranch("pi-conv-1", branchWith(entry));
 
       const pi = new FakePi();
@@ -3102,7 +3126,9 @@ describe("extension lifecycle", () => {
         totalTokens: 128000,
         cacheReadInputTokens: 0,
         cacheWriteInputTokens: 0,
+        ...(reasoning !== undefined ? { reasoningTokens: reasoning } : {}),
       });
+      expect(results[0]!.metadata?.cost_usd).toBe(2.5);
       expect(results[0]!.stopReason).toBe("end_turn");
       expect(results[0]!.completedAt).toEqual(new Date(COMPACTION_AT));
       expect(loggerMock.error).not.toHaveBeenCalled();
@@ -3238,7 +3264,11 @@ describe("extension lifecycle", () => {
       ).not.toContainEqual(expect.stringContaining("branch_summary"));
     });
 
-    it("exports a branch_summary generation for a summarizing tree navigation", async () => {
+    it.each([
+      undefined,
+      0,
+      7,
+    ])("exports a branch_summary generation with reasoning=%s", async (reasoning) => {
       const { sigil, seeds, results } = setupClient();
       useConfig(sigil);
       const entry: FakeBranchEntry = {
@@ -3254,6 +3284,7 @@ describe("extension lifecycle", () => {
           cacheWrite: 0,
           totalTokens: 40900,
           cost: { total: 0.4 },
+          ...(reasoning !== undefined ? { reasoning } : {}),
         },
       };
       const ctx = ctxWithBranch("pi-conv-1", branchWith(entry));
@@ -3271,6 +3302,15 @@ describe("extension lifecycle", () => {
       expect(seeds).toHaveLength(1);
       expect(seeds[0]!.operationName).toBeUndefined();
       expect(seeds[0]!.tags?.["pi.call_kind"]).toBe("branch_summary");
+      expect(results).toHaveLength(1);
+      expect(results[0]!.usage).toEqual({
+        inputTokens: 40000,
+        outputTokens: 900,
+        totalTokens: 40900,
+        cacheReadInputTokens: 0,
+        cacheWriteInputTokens: 0,
+        ...(reasoning !== undefined ? { reasoningTokens: reasoning } : {}),
+      });
       expect(seeds[0]!.id).toBe(stablePiGenerationId("pi-conv-1", "b1"));
       expect(seeds[0]!.parentGenerationIds).toEqual([
         stablePiGenerationId("pi-conv-1", "a1"),
@@ -3599,9 +3639,26 @@ describe("extension lifecycle", () => {
         usage: { input: "lots", cost: { total: "free" } },
         cost: undefined,
       },
-    ])("omits the usage block for $name", async ({ usage, cost }) => {
-      // Zeros would read as "this call used no tokens"; the truth is that
-      // the host did not report any. A cost still survives on its own.
+      ...[0, 7].map((reasoning) => ({
+        name: `reasoning-only usage with ${reasoning} tokens`,
+        usage: { reasoning },
+        cost: undefined,
+        wantUsage: {
+          inputTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+          cacheReadInputTokens: 0,
+          cacheWriteInputTokens: 0,
+          reasoningTokens: reasoning,
+        },
+      })),
+      ...["7", NaN, Infinity].map((reasoning) => ({
+        name: `invalid reasoning ${String(reasoning)} (type: ${typeof reasoning})`,
+        usage: { reasoning, cost: { total: 0.5 } },
+        cost: 0.5,
+      })),
+    ])("maps summary usage for $name", async (testCase) => {
+      const { usage, cost } = testCase;
       const { sigil, results } = setupClient();
       useConfig(sigil);
       const entry = compactionEntry({ usage });
@@ -3617,7 +3674,9 @@ describe("extension lifecycle", () => {
       );
 
       expect(results).toHaveLength(1);
-      expect(results[0]!.usage).toBeUndefined();
+      expect(results[0]!.usage).toEqual(
+        "wantUsage" in testCase ? testCase.wantUsage : undefined,
+      );
       expect(results[0]!.metadata?.cost_usd).toBe(cost);
       expect(loggerMock.error).not.toHaveBeenCalled();
     });

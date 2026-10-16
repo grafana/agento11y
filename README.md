@@ -19,7 +19,7 @@ For the other coding agents, install `agento11y`:
 curl -fsSL https://raw.githubusercontent.com/grafana/agento11y/main/plugins/agento11y/scripts/install.sh | sh
 # macOS with Homebrew
 brew install grafana/grafana/agento11y
-# Windows, or any platform with Go 1.25+
+# Windows, or any platform with Go 1.26.9+
 go install github.com/grafana/agento11y/plugins/agento11y/cmd/agento11y@latest
 ```
 
@@ -178,6 +178,7 @@ The experiments are offline evals: run an agent over a dataset, grade it, and pu
 | TypeScript (evaluator stored in your tenant) | [`examples/experiments/typescript/`](examples/experiments/typescript/) |
 | Promptfoo | [`examples/experiments/promptfoo/`](examples/experiments/promptfoo/) |
 | DeepEval | [`examples/experiments/deepeval/`](examples/experiments/deepeval/) |
+| Harbor | [`examples/experiments/harbor/`](examples/experiments/harbor/) |
 | CI quality gate (Python, Go, or TypeScript) | [`examples/experiments/ci/`](examples/experiments/ci/) |
 
 The reference app is a fuller FastAPI service with framework callbacks and manual instrumentation side by side.

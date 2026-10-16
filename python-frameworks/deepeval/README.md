@@ -41,6 +41,11 @@ excludes grading. `record_io=False` avoids extra anchor generations by default.
 Native batch scheduling, caching, and pytest can continue using the
 completed-result importers below.
 
+Pass `metadata` and `tags` to record CI context on the run, such as a commit SHA
+or pull request number. The adapter owns the `framework`, `execution_mode`,
+`execution_kind`, `suite_id`, and `suite_version` keys, and passing one raises
+`ValueError`. This requires the next `agento11y-deepeval` release after 0.20.0.
+
 For `ConversationalTestCase`, the same target receives a private copy of the
 case and must return the completed ordered `Sequence[Turn]`. The single-turn
 `target(case, trial) -> str` contract is unchanged. Returning turns instead of
@@ -69,6 +74,47 @@ all preceding turns as structured input. Assistant generations share one stable
 conversation id and form a parent chain. A final user turn is retained as a
 chained input-only generation awaiting a response. If the target already emitted
 its own telemetry, bind that conversation on `trial` and leave `record_io=False`.
+
+## Run a published suite version with native metrics
+
+Pass a pulled `TestSuite` to `run_deepeval` to run your agent on a published
+suite version and grade it with DeepEval metrics. `require_published=True`
+needs `agento11y` 0.20.0 or later.
+
+```python
+from agento11y.experiments import AgentOutput, TestSuitesClient
+from agento11y_deepeval import run_deepeval
+from deepeval.metrics import ExactMatchMetric
+
+suite = TestSuitesClient().pull_suite("checkout", "3", require_published=True)
+
+
+def target(case, trial):
+    result = instrumented_agent(case.input)
+    return AgentOutput(result.answer, result.conversation_id, instrumentation_client.flush)
+
+
+run = run_deepeval(
+    suite,
+    target,
+    [ExactMatchMetric()],
+    experiment_name="Checkout v3 / candidate v2",
+    candidate={"agent_name": "checkout", "agent_version": "v2", "git_sha": "your-commit"},
+)
+print(run.url)
+```
+
+Each case keeps its ID and published snapshot. `input.prompt` becomes the
+DeepEval input and `expected.assistant_response` its expected output; a case
+with any other input field is rejected before the run starts. Your DeepEval
+metrics decide the verdict, and the evaluators pinned to the version in
+Grafana aren't run. To grade with those instead, for example to gate CI with
+`agento11y-checkpoint-gate`, use
+[`run_checkpoint`](../../python/README.md#run-a-published-suite-version-with-your-agent).
+
+Return `AgentOutput` with your instrumentation client's flush, so the
+conversation is exported before metrics run. If the flush fails, that case is
+recorded as errored and the other cases still run.
 
 ## Evaluate existing outputs and publish afterward
 

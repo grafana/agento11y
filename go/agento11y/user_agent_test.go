@@ -175,7 +175,7 @@ func exportAndCaptureGRPCUserAgent(t *testing.T, headers map[string]string) stri
 	cfg := userAgentTestConfig(headers)
 	cfg.GenerationExport.Protocol = GenerationExportProtocolGRPC
 	cfg.GenerationExport.Endpoint = listener.Addr().String()
-	cfg.GenerationExport.Insecure = BoolPtr(true)
+	cfg.GenerationExport.Insecure = new(true)
 	runOneExport(t, NewClient(cfg))
 
 	return ingest.singleUserAgent(t)

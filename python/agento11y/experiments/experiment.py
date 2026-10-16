@@ -62,6 +62,7 @@ from ..models import (
 from ..redaction import redact_secret_text
 from . import otel
 from .evaluators import EvaluationResult, OutputEvaluator
+from .suites import _local_case_to_remote
 from .types import (
     Candidate,
     Evaluator,
@@ -295,6 +296,10 @@ class Trial:
                 self.status = TrialStatus.PASSED.value if verdict_passed else TrialStatus.FAILED.value
         try:
             self.flush()
+        except BaseException as flush_error:
+            self.status = TrialStatus.ERRORED.value
+            self.error = "; ".join(part for part in (self.error, f"trial export failed: {flush_error}") if part)
+            raise
         finally:
             try:
                 self._finalize_trial()
@@ -408,8 +413,15 @@ class Trial:
             "metadata": dict(case.metadata),
         }
         if case.input is not None:
-            snapshot["input"] = object_value(case.input)
-        if case.expected is not None:
+            # Use the same portability encoding as suite publication, including
+            # scalar wrapping and weight. Otherwise a pulled case cannot match
+            # the exact published snapshot during bound grading.
+            encoded = _local_case_to_remote(case)
+            snapshot["input"] = encoded["input"]
+            snapshot["metadata"] = encoded.get("metadata", {})
+            if "expected" in encoded:
+                snapshot["expected"] = encoded["expected"]
+        elif case.expected is not None:
             snapshot["expected"] = object_value(case.expected)
         if artifact_refs:
             snapshot["artifact_refs"] = artifact_refs
@@ -483,14 +495,23 @@ class Trial:
 
     def evaluate(
         self,
-        evaluator_id: str,
+        evaluator_id: str = "",
         evaluator_version: str = "",
         timeout: float = 300.0,
         poll_interval: float = 0.5,
         *,
         report_role: ReportRole | None = None,
+        binding_id: str = "",
     ) -> TrialEvaluation:
         """Runs a stored evaluator against this trial's bound conversation.
+
+        Pass ``binding_id`` to apply the experiment checkpoint's pinned evaluator,
+        input mappings and report role. Optional evaluator/version/role arguments
+        must agree with that published binding. This requires a server supporting
+        bound trial evaluation; older servers reject the request.
+
+        Flush the actual agent's instrumentation client before calling this method.
+        This experiment client cannot flush a separately owned instrumentation client.
 
         Grades the conversation Agent Observability already stored, using an
         evaluator defined in your tenant. For an in-process judge, see
@@ -531,8 +552,10 @@ class Trial:
 
         if not self.conversation_id:
             raise ValidationError("agento11y trial evaluation validation failed: bind a conversation first")
-        if not (evaluator_id or "").strip():
-            raise ValidationError("agento11y trial evaluation validation failed: evaluator_id is required")
+        if not (evaluator_id or "").strip() and not (binding_id or "").strip():
+            raise ValidationError(
+                "agento11y trial evaluation validation failed: evaluator_id or binding_id is required"
+            )
         if not math.isfinite(timeout) or timeout <= 0:
             raise ValidationError("agento11y trial evaluation validation failed: timeout must be greater than zero")
         if not math.isfinite(poll_interval) or poll_interval <= 0:
@@ -565,6 +588,7 @@ class Trial:
             evaluator_id,
             evaluator_version,
             **({"report_role": report_role} if report_role is not None else {}),
+            **({"binding_id": binding_id} if binding_id else {}),
         )
         interval = poll_interval
         max_interval = max(poll_interval, _MAX_EVALUATION_POLL_INTERVAL)
@@ -1248,6 +1272,9 @@ class Experiment:
             if not self._auto_finalize:
                 return False
             if exc is not None:
+                # Without a Grafana URL, experiment_url falls back to the API endpoint, which isn't a page to open.
+                if getattr(self._client, "grafana_url", ""):
+                    _add_exception_note(exc, f"Inspect partial experiment results: {self.url}")
                 try:
                     self.finalize(
                         ExperimentStatus.FAILED,

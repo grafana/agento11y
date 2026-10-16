@@ -96,11 +96,11 @@ Install the `agento11y` binary (renamed from `sigil`; the old name still works b
 - **Quick install (Linux/macOS):** `curl -fsSL https://raw.githubusercontent.com/grafana/agento11y/main/plugins/agento11y/scripts/install.sh | sh` (downloads the latest release, verifies the checksum, installs to `~/.local/bin`)
 - **Homebrew (macOS):** `brew install grafana/grafana/agento11y`
 - **mise:** `mise use -g aqua:grafana/agento11y@latest` (requires [mise shell activation](https://mise.jdx.dev/cli/activate.html) so `agento11y` is on your `PATH`)
-- **Go install (Windows, or any platform with Go 1.25+):** `go install github.com/grafana/agento11y/plugins/agento11y/cmd/agento11y@latest`
+- **Go install (Windows, or any platform with Go 1.26.9+):** `go install github.com/grafana/agento11y/plugins/agento11y/cmd/agento11y@latest`
 
 The script installs to `~/.local/bin`; `go install` puts the binary in `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`.
 
-Launch your agent with `agento11y <agent>`, where `<agent>` is `claude`, `codex`, `copilot`, `opencode`, `pi`, `vibe`, or `kiro`. A first launch asks where sessions go, with two options: **Local only**, and **Grafana Cloud**. **Local only** needs no Cloud credentials, starts the local receiver, and does not forward sessions. **Grafana Cloud** continues to the credential questions. Its interactive preferences on macOS and Linux include **Local web UI**. The question starts on **Yes** by default and remembers an earlier answer. **Yes** keeps a full local copy and forwards a Cloud copy. **No** sends directly to Cloud without a local copy. The launcher asks nothing when local mode is already on (`--local` or `AGENTO11Y_LOCAL=true`) or when stdin is not a terminal. Windows has no local receiver, so it shows neither local choice.
+Launch your agent with `agento11y <agent>`, where `<agent>` is `claude`, `codex`, `copilot`, `opencode`, `pi`, `vibe`, or `kiro`. A first launch asks where sessions go, with two options: **Local only**, and **Grafana Cloud**. **Local only** needs no Cloud credentials, starts the local receiver, and does not forward sessions. **Grafana Cloud** continues to the credential questions. Its interactive preferences include **Local web UI**. The question starts on **Yes** by default and remembers an earlier answer. **Yes** keeps a full local copy and forwards a Cloud copy. **No** sends directly to Cloud without a local copy. The launcher asks nothing when local mode is already on (`--local` or `AGENTO11Y_LOCAL=true`) or when stdin is not a terminal. The same destination and local web UI choices are available on every supported platform.
 
 Cursor has no launcher because it is a GUI app. After installing the binary, wire its hooks once with `agento11y cursor install`. The command merges into `~/.cursor/hooks.json`, and asks the same first-run destination question under the same conditions. **Local only** there takes effect on the next Cursor hook, because the install does not start the receiver itself. `agento11y cursor uninstall` removes the hooks. See [`plugins/cursor/`](https://github.com/grafana/agento11y/tree/main/plugins/cursor) for details.
 
@@ -125,9 +125,11 @@ To re-enter credentials later, run `agento11y login`. It asks where sessions go 
 
 ## Local mode
 
-`agento11y <agent> --local`, **Local only**, or **Local web UI = Yes** records full session content to a JSONL store on this machine and serves a local viewer. The launcher prints the viewer URL: it tries `http://127.0.0.1:8765` first and moves to a higher port when that one is taken. Manage the daemon with `agento11y local start|open|status|stop|restart`. Use `agento11y local open` to start the receiver if needed, print its address, and try to open the viewer. Local mode runs on macOS and Linux only; Windows has no local receiver.
+`agento11y <agent> --local`, **Local only**, or **Local web UI = Yes** records full session content to a JSONL store on this machine and serves a local viewer. The launcher prints the viewer URL: it tries `http://127.0.0.1:8765` first and moves to a higher port when that one is taken. Manage the daemon with `agento11y local start|open|status|stop|restart`. Use `agento11y local open` to start the receiver if needed, print its address, and try to open the viewer. Local mode is available on every supported platform.
 
 **Local only** writes `AGENTO11Y_LOCAL` and `SIGIL_LOCAL` as true, and writes `AGENTO11Y_LOCAL_FORWARD` and `SIGIL_LOCAL_FORWARD` as false. Sessions then stay on the machine. **Local web UI = Yes** writes all four keys as true and forwards with valid Cloud credentials. **Local web UI = No** writes all four keys as false and sends directly to Cloud. `--no-local` sends one launcher session to Cloud without changing those keys.
+
+Separately from captured sessions, the binary reports statistics about its own use (which subcommand ran, flag names, outcome, duration, a random per-installation ID) and never argument values, endpoints, tenant IDs, tokens, tags, hostnames, or file paths. `AGENTO11Y_ANONYMOUS_USAGE_STATS=disabled` or `DO_NOT_TRACK=1` turns it off; `=log` prints the event instead of sending it.
 
 The daemon always stores full generation content locally. It forwards full generation content only when `AGENTO11Y_CONTENT_CAPTURE_MODE=full`. Every other selected mode is reduced to `metadata_only` for the forwarded Cloud copy.
 
@@ -533,6 +535,29 @@ answers or reference-free grading; an observed answer is not automatically corre
 Publish a reviewed suite checkpoint and pin its version when comparing candidates.
 Choose Grafana or Git as the authoring source of truth; SDK push/pull are explicit
 transfers, not automatic bidirectional synchronization.
+
+To run an actual agent against a published suite version with the evaluators
+pinned to it in Grafana Cloud, use Python
+`agento11y.experiments.run_checkpoint(suite_id, version, target)` (0.20.0 or
+later). The target returns `AgentOutput(text=..., flush=instrumentation_client.flush)`.
+The version needs exactly one primary verdict binding. It checks every case's
+grading inputs before calling the agent, records a failing case as errored and
+continues, and stops starting new cases or grading when `timeout` runs out (it
+can't interrupt a running agent call). Gate CI with `agento11y-checkpoint-gate
+--suite-id ... --suite-version ... --baseline <RUN_ID> --candidate <RUN_ID>
+--min-pass-rate ... --max-drop ...`, which exits 0 (passed), 1 (regression) or
+2 (the runs can't be compared; any errored case makes a run incomparable, so
+rerun it).
+
+To record CI context, pass `metadata={...}` (for example commit SHA, PR number,
+run URL) and `tags=[...]` to `run_checkpoint` or `run_evals` (the next release
+after 0.20.0), e.g. `metadata=json.loads(os.environ.get("AGENTO11Y_CI_METADATA", "{}"))`
+when your CI provides JSON; the SDK never reads that variable itself. The keys
+`execution_kind`, `framework`, `input_selector`, `evaluation_plan`, `suite_id`
+and `suite_version` are reserved and raise `ValueError`. Without
+`experiment_id`, both helpers use `AGENTO11Y_EXPERIMENT_ID` when set, so a CI
+wrapper can pre-allocate the run ID; `experiment()` does not read it, and with
+it set you call one helper per process or pass `experiment_id` explicitly.
 
 The Grafana `run_evals` helper accepts an `evaluate(trial, case, answer)`
 callback for local scoring or stored evaluator invocation. Its recommended

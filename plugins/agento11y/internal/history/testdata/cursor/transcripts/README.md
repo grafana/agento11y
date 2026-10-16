@@ -9,3 +9,4 @@ No bytes from a real conversation are in these files.
 | `two-turn.jsonl` | Two prompts with `<timestamp>` and `<user_query>`, successful `turn_ended` |
 | `tool-use.jsonl` | Assistant `tool_use` with no tool result |
 | `turn-ended-error.jsonl` | `turn_ended` with `status: error` |
+| `context-blocks.jsonl` | Context Cursor attaches outside `<user_query>` (`<image_files>`, `<plugin_info>`, `<external_links>`), and a first turn that typed nothing beside its image |

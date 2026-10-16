@@ -78,14 +78,12 @@ def classify_message(
             agent_version="1.0.0",
             model=ModelRef(provider="anthropic", name=model_name),
             max_tokens=8,
-            temperature=0,
         )
     ) as rec:
         try:
             response = anthropic.messages.create(
                 model=model_name,
                 max_tokens=8,
-                temperature=0,
                 messages=[{"role": "user", "content": prompt}],
             )
         except Exception as exc:

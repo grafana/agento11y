@@ -16,8 +16,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func ptrBool(b bool) *bool { return &b }
-
 // rawRules is how a test writes a ruleset. The engine holds raw JSON because
 // that is the shape its real input has, whether the rules came out of the TOML
 // file or off the wire. A test that built Rule values directly would exercise a
@@ -154,7 +152,7 @@ func TestNewRulesEngine_Compile(t *testing.T) {
 			name: "a rule disabled in the file is dropped",
 			rules: rawRules(t,
 				toolFilterRule("on", 0, "", "Bash"),
-				Rule{RuleID: "off", Enabled: ptrBool(false), ToolFilter: &ToolFilterConfig{BlockedNames: []string{"Bash"}}},
+				Rule{RuleID: "off", Enabled: new(false), ToolFilter: &ToolFilterConfig{BlockedNames: []string{"Bash"}}},
 			),
 			wantIDs:       []string{"on"},
 			wantRules:     1,
@@ -518,16 +516,15 @@ tool_filter.blocked_names = ["Bash"]
 	})
 
 	t.Run("an unreadable file is reported", func(t *testing.T) {
-		if os.Geteuid() == 0 {
-			t.Skip("root reads a mode-000 file")
-		}
 		dir := t.TempDir()
 		path := filepath.Join(dir, ConfigFile)
 		require.NoError(t, os.WriteFile(path, []byte(oneRule), 0o600))
-		require.NoError(t, os.Chmod(path, 0o000))
+		makeUnreadable(t, path)
+		_, readErr := os.ReadFile(path)
+		require.Error(t, readErr)
 
 		engine := NewEngine(Config{ConfigDir: dir})
-		assert.Contains(t, joinStrings(engine.Status().Errors), "permission denied")
+		assert.Contains(t, joinStrings(engine.Status().Errors), readErr.Error())
 	})
 }
 

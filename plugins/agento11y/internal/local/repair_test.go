@@ -1,5 +1,3 @@
-//go:build !windows
-
 package local
 
 import (
@@ -51,6 +49,7 @@ func TestRepairStoreModTimes(t *testing.T) {
 	}
 	stamps := countStamps(s)
 
+	passStarted := time.Now()
 	repaired, err := repairStoreModTimes(context.Background(), s)
 	require.NoError(t, err)
 	assert.True(t, repaired)
@@ -58,7 +57,13 @@ func TestRepairStoreModTimes(t *testing.T) {
 	for _, f := range fixtures {
 		info, err := os.Stat(filepath.Join(s.Dir(), ConversationsDir, f.id+".jsonl"))
 		require.NoError(t, err)
-		assert.WithinDuration(t, now.Add(f.want), info.ModTime(), stampTolerance, f.id)
+		want := now.Add(f.want)
+		if f.want == 0 {
+			// The pass stamps a future file with its own clock, which can be
+			// most of a second past the truncated now.
+			want = passStarted
+		}
+		assert.WithinDuration(t, want, info.ModTime(), stampTolerance, f.id)
 	}
 	assert.Equal(t, int32(2), stamps.Load(), "only the files that disagreed are rewritten")
 
@@ -113,8 +118,6 @@ func TestRepairStoreModTimes_Outcomes(t *testing.T) {
 			wantStamps: 2,
 		},
 		{
-			// The lock is held on a second file descriptor, which flock
-			// treats as another process holding it.
 			name: "another daemon holding the lock skips this pass",
 			arrange: func(t *testing.T, s *Storage) {
 				held, err := acquireFileLock(filepath.Join(s.Dir(), RepairLockFile), false)
@@ -154,6 +157,45 @@ func TestRepairStoreModTimes_Outcomes(t *testing.T) {
 			meta, err := readStoreMeta(s.Dir())
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantMarker, meta.MtimeStamped)
+		})
+	}
+}
+
+// Both platform locks make two handles in one process contend, so this test
+// does not need a helper process.
+func TestAcquireFileLock(t *testing.T) {
+	cases := []struct {
+		name         string
+		hold         bool
+		releaseFirst bool
+		wantErr      error
+	}{
+		{name: "a free lock is taken"},
+		{name: "a held lock reports the holder", hold: true, wantErr: errLockBusy},
+		{name: "a released lock is free again", hold: true, releaseFirst: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), RepairLockFile)
+			if tc.hold {
+				held, err := acquireFileLock(path, false)
+				require.NoError(t, err)
+				if tc.releaseFirst {
+					held.release()
+				} else {
+					t.Cleanup(held.release)
+				}
+			}
+
+			lock, err := acquireFileLock(path, false)
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+				assert.Nil(t, lock, "a refused lock hands back nothing to release")
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, lock)
+			lock.release()
 		})
 	}
 }

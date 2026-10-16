@@ -83,6 +83,7 @@ func piReadFixture(t *testing.T, name string, into any) {
 // without the fixture carrying a machine-specific path.
 func materializePiFixtureCase(t *testing.T, dir string, fixture piFixtureCase) string {
 	t.Helper()
+	dirLiteral := piJSONStringBody(t, dir)
 	for name, entries := range fixture.Files {
 		var body strings.Builder
 		for _, entry := range entries {
@@ -90,7 +91,7 @@ func materializePiFixtureCase(t *testing.T, dir string, fixture piFixtureCase) s
 			if err := json.Compact(&compact, entry); err != nil {
 				t.Fatalf("case %s: compact entry: %v", fixture.ID, err)
 			}
-			body.WriteString(strings.ReplaceAll(compact.String(), "${DIR}", dir))
+			body.WriteString(strings.ReplaceAll(compact.String(), "${DIR}", dirLiteral))
 			body.WriteString("\n")
 		}
 		writeFile(t, filepath.Join(dir, name), body.String())
@@ -100,6 +101,18 @@ func materializePiFixtureCase(t *testing.T, dir string, fixture piFixtureCase) s
 		t.Fatalf("case %s: session_file %q is not one of the case's files", fixture.ID, fixture.SessionFile)
 	}
 	return path
+}
+
+// piJSONStringBody encodes s as the inside of a JSON string, so a substitution
+// into already-encoded JSON stays valid: a Windows path's backslashes would
+// otherwise be read back as escape sequences.
+func piJSONStringBody(t *testing.T, s string) string {
+	t.Helper()
+	quoted, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("encode %q as JSON: %v", s, err)
+	}
+	return string(quoted[1 : len(quoted)-1])
 }
 
 // The normalized generation shape both languages produce. It holds what the

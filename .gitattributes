@@ -1,0 +1,8 @@
+# Check every text file out with LF, including on Windows. Golden files and
+# embedded skill markdown are compared byte for byte, so a CRLF checkout
+# fails those tests.
+* text=auto eol=lf
+
+# Batch files need CRLF to run reliably under cmd.exe.
+*.bat text eol=crlf
+*.cmd text eol=crlf

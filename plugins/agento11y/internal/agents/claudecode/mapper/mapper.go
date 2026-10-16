@@ -1,12 +1,12 @@
 package mapper
 
 import (
+	"cmp"
 	"encoding/json"
 	"log"
 	"maps"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/grafana/agento11y/go/agento11y"
@@ -20,7 +20,7 @@ import (
 const (
 	agentName       = "claude-code"
 	maxToolInputLen = mapperutil.MaxToolInputBytes
-	// maxTitleLen caps the conversation title derived from the first user prompt.
+	// maxTitleLen caps the conversation title.
 	maxTitleLen = 100
 )
 
@@ -47,6 +47,14 @@ type Options struct {
 	// separately. Live capture leaves it nil, so it keeps recording summaries
 	// when the parent transcript is the only record of the subagent run.
 	SuppressSyntheticSubagentToolCallIDs map[string]bool
+	// Titles are the title lines the transcript read returned. Process records
+	// them in the session state, where a newer one replaces an older one, so
+	// the session follows a rename.
+	Titles transcript.Titles
+	// TitleDropped says the export drops the conversation title, as
+	// metadata_only does, so Process titles every generation with the session
+	// ID instead of redacting a title no one sees. The zero value redacts.
+	TitleDropped bool
 }
 
 // agent is the base agent name for every generation this run produces: the
@@ -67,6 +75,10 @@ func (o Options) logf(format string, args ...any) {
 type userContext struct {
 	prompt      string
 	toolResults []agento11y.Message
+	// commandTitle is a slash command seen before the conversation has a
+	// title. It becomes the title when the model answers it; a local command
+	// such as /model answers itself instead and is dropped.
+	commandTitle string
 }
 
 // Coalesce merges consecutive assistant lines sharing the same RequestID
@@ -286,7 +298,8 @@ type agentCall struct {
 // span has no width, because a tool call and its result live on separate lines.
 // A tool call ID is present in that map only when its result line carried a
 // parseable timestamp, so a present key always means a usable end time.
-// Process updates st.Title with the conversation title if discovered.
+// Process records opts.Titles in st, and updates st.Title with the first
+// prompt if discovered.
 //
 // Claude Code subagents do not produce their own lines in the main transcript —
 // the only evidence of their execution is the Agent tool_use (spawn) and the
@@ -310,6 +323,7 @@ func Process(lines []transcript.Line, st *state.Session, opts Options, r *redact
 		// current format only the main-chain key is ever set.
 		prevAt = map[bool]time.Time{}
 	)
+	noteTitles(st, opts.Titles)
 
 	for _, line := range lines {
 		switch line.Type {
@@ -319,6 +333,9 @@ func Process(lines []transcript.Line, st *state.Session, opts Options, r *redact
 			gens = append(gens, synthesiseSubagentGens(line, &uctx, agentCalls, opts)...)
 
 		case "assistant":
+			if st.Title == "" && uctx.commandTitle != "" {
+				st.Title = uctx.commandTitle
+			}
 			if gen, ok := processAssistantLine(line, &uctx, st, opts, r, prevAt[line.IsSidechain]); ok {
 				// Index Agent tool calls from this generation's output.
 				for _, msg := range gen.Output {
@@ -347,7 +364,10 @@ func Process(lines []transcript.Line, st *state.Session, opts Options, r *redact
 		}
 	}
 
-	title := conversationTitle(st, opts.SessionID, r)
+	title := opts.SessionID
+	if !opts.TitleDropped {
+		title = conversationTitle(st, opts.SessionID, r)
+	}
 	for i := range gens {
 		gens[i].ConversationTitle = title
 	}
@@ -368,28 +388,102 @@ func clampSpanStart(derivedStart, completedAt time.Time) time.Time {
 	return derivedStart
 }
 
-// conversationTitle returns a truncated version of the session title derived
-// from the first user prompt. Falls back to the session ID when no title is
-// available (e.g. transcript with no user lines processed yet).
+// noteTitles records the title lines a transcript read returned. A newer title
+// replaces an older one, so the session follows a rename.
+func noteTitles(st *state.Session, t transcript.Titles) {
+	if t.AI != "" {
+		st.AITitle = t.AI
+	}
+	if t.Custom != "" {
+		st.CustomTitle = t.Custom
+	}
+}
+
+// conversationTitle returns the session title, truncated: the name the user
+// gave the session, else the title Claude Code generated for it, else the
+// first prompt the user typed. These are the names Claude Code itself lists
+// the session under. Falls back to the session ID when none is available (e.g.
+// transcript with no user lines processed yet).
+//
+// The title is redacted before it is cut, because a secret the cut splits no
+// longer matches its pattern and its first part would be exported. History
+// import passes no redactor, leaving content to its Sanitizer, which only ever
+// sees the title already cut; the title is redacted here as the Sanitizer
+// redacts. Live capture in metadata_only passes none either, but sets
+// Options.TitleDropped, so this is not called.
 func conversationTitle(st *state.Session, sessionID string, r *redact.Redactor) string {
-	if st == nil || st.Title == "" {
+	if st == nil {
 		return sessionID
 	}
-	t := strings.TrimSpace(st.Title)
+	raw := cmp.Or(st.CustomTitle, st.AITitle, st.Title)
+	var t string
 	if r != nil {
-		t = r.Title(t)
+		t = redact.CutTitle(strings.TrimSpace(r.Title(strings.TrimSpace(raw))), maxTitleLen)
+	} else {
+		t = redact.RedactTitle(raw, maxTitleLen)
 	}
 	if t == "" {
 		return sessionID
 	}
-	if len(t) > maxTitleLen {
-		t = t[:maxTitleLen]
-		// Truncate to valid UTF-8 boundary
-		for !utf8.ValidString(t) {
-			t = t[:len(t)-1]
-		}
-	}
 	return t
+}
+
+// noteTitle records the conversation title from the first user text that is a
+// prompt the user typed. Claude Code writes other user text into the
+// transcript too, and none of it makes a title:
+//
+//   - meta lines: the caveat in front of a local command, and the expanded
+//     body of a slash command or skill;
+//   - sidechain lines: a subagent's prompts, the first of which is the task it
+//     was given, not what the session is about;
+//   - a slash command's record (<command-name>…). It is held as a candidate,
+//     because a command the model answers, such as /doctor or a skill, is what
+//     the conversation is about. A local command such as /model writes its
+//     <local-command-stdout> next and the candidate is dropped;
+//   - the context block the IDE extensions send ahead of the typed prompt,
+//     naming the open file (<ide_opened_file>) or selection (<ide_selection>).
+func noteTitle(line transcript.Line, text string, uctx *userContext, st *state.Session) {
+	if st.Title != "" || line.IsMeta || line.IsSidechain {
+		return
+	}
+	t := strings.TrimSpace(text)
+	switch {
+	case t == "":
+		// A whitespace-only block; taking it would block every later prompt.
+	case strings.HasPrefix(t, "<local-command-"):
+		uctx.commandTitle = ""
+	case strings.HasPrefix(t, "<command-name>"), strings.HasPrefix(t, "<command-message>"):
+		uctx.commandTitle = slashCommandTitle(t)
+	case strings.HasPrefix(t, "<ide_"):
+		// IDE context; the typed prompt follows in the next block.
+	default:
+		st.Title = text
+	}
+}
+
+// slashCommandTitle renders a slash command record as the user typed it, for
+// example "/model opus" from <command-name>/model</command-name> and
+// <command-args>opus</command-args>.
+func slashCommandTitle(record string) string {
+	name := tagText(record, "command-name")
+	if args := tagText(record, "command-args"); name != "" && args != "" {
+		return name + " " + args
+	}
+	return name
+}
+
+// tagText returns the trimmed text between <tag> and </tag> in s, or "" when s
+// has no such element or it is not closed.
+func tagText(s, tag string) string {
+	_, rest, ok := strings.Cut(s, "<"+tag+">")
+	if !ok {
+		return ""
+	}
+	inner, _, ok := strings.Cut(rest, "</"+tag+">")
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(inner)
 }
 
 // synthesiseSubagentGens creates a generation for each Agent tool result in
@@ -479,9 +573,7 @@ func processUserLine(line transcript.Line, uctx *userContext, st *state.Session,
 	if text != "" {
 		uctx.prompt = text
 		uctx.toolResults = nil
-		if st.Title == "" {
-			st.Title = text
-		}
+		noteTitle(line, text, uctx, st)
 		return
 	}
 
@@ -493,9 +585,7 @@ func processUserLine(line transcript.Line, uctx *userContext, st *state.Session,
 		if b.Type == "text" && b.Text != "" {
 			uctx.prompt = b.Text
 			uctx.toolResults = nil
-			if st.Title == "" {
-				st.Title = b.Text
-			}
+			noteTitle(line, b.Text, uctx, st)
 		}
 		if b.Type == "tool_result" {
 			if b.ToolUseID != "" && !resultAt.IsZero() {
@@ -605,7 +695,7 @@ func processAssistantLine(line transcript.Line, uctx *userContext, _ *state.Sess
 	}
 
 	if hasThinking {
-		gen.ThinkingEnabled = ptrBool(true)
+		gen.ThinkingEnabled = new(true)
 	}
 
 	gen.Input = buildInput(uctx, r, opts.SkipPromptRedaction)
@@ -755,8 +845,6 @@ func generationID(line transcript.Line) string {
 	name := line.SessionID + ":" + key
 	return uuid.NewSHA1(uuid.NameSpaceDNS, []byte(name)).String()
 }
-
-func ptrBool(b bool) *bool { return &b }
 
 // version returns the exported agent version: the override when one was
 // given, otherwise the version the transcript line reports.

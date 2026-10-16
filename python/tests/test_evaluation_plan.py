@@ -67,6 +67,7 @@ def test_mixed_local_plan_has_one_primary_and_separate_grader_evidence():
     assert len(client.generations) == 2  # Judge evidence only; no invented agent generations.
     assert all("Candidate: yes" in prompt for prompt in seen)
     assert client.upserts[0].planned_trial_count == 2
+    assert client.upserts[0].metadata["execution_kind"] == "agent_run"
     assert len(client.upserts[0].metadata["evaluation_plan"]) == 3
 
 

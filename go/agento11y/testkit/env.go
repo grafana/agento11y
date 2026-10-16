@@ -88,7 +88,7 @@ func NewEnv(t testing.TB, opts ...func(*agento11y.Config)) *Env {
 	cfg.GenerationExport = agento11y.GenerationExportConfig{
 		Protocol:        agento11y.GenerationExportProtocolGRPC,
 		Endpoint:        listener.Addr().String(),
-		Insecure:        agento11y.BoolPtr(true),
+		Insecure:        new(true),
 		BatchSize:       1,
 		FlushInterval:   time.Hour,
 		QueueSize:       8,

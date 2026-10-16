@@ -588,7 +588,7 @@ func forwardDisabledReason(endpoint, tenant, token string) string {
 	if endpoint == "" {
 		return envconfig.PreferredKey("ENDPOINT") + " is empty"
 	}
-	// A local receiver (http://127.0.0.1, ::1, localhost) is a valid forward
+	// A local receiver (see envconfig.IsLocalEndpoint) is a valid forward
 	// target — e.g. a separate daemon — and does not validate auth, so empty
 	// or placeholder credentials must not pause forwarding to it. The
 	// ForwardMarkerHeader on the outbound request is what stops a daemon

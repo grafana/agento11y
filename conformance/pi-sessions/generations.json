@@ -138,7 +138,7 @@
           "total_tokens": 57,
           "cache_read_input_tokens": 5,
           "cache_write_input_tokens": 6,
-          "reasoning_tokens": 0
+          "reasoning_tokens": 7
         },
         "started_at": "${STARTED_AT}",
         "completed_at": "${COMPLETED_AT}",

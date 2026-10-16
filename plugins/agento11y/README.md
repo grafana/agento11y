@@ -39,7 +39,7 @@ mise use -g aqua:grafana/agento11y@latest
 
 Make sure [mise is activated in your shell](https://mise.jdx.dev/cli/activate.html) so `agento11y` is on your `PATH`.
 
-**Go install (Windows, or any platform with Go 1.25+):**
+**Go install (Windows, or any platform with Go 1.26.9+):**
 
 ```sh
 go install github.com/grafana/agento11y/plugins/agento11y/cmd/agento11y@latest
@@ -57,7 +57,7 @@ Verify with `agento11y --version`.
 
 Run `agento11y login` to configure capture. On first run it asks where sessions go: **Local only**, or **Grafana Cloud**. **Local only** needs no Cloud credentials and does not forward sessions. **Grafana Cloud** prints your stack's coding-agent setup page and asks you to paste the connection block from that page.
 
-Interactive Cloud setup on macOS and Linux also asks for **Local web UI** in the preferences. The question starts on **Yes** by default and remembers an earlier answer. **Yes** keeps a full local copy and forwards a copy to Grafana Cloud. **No** sends directly to Grafana Cloud without a local copy. Windows has no local receiver, so it does not show either local choice. Complete credential flags also skip the preferences and keep direct Cloud behavior.
+Interactive Cloud setup also asks for **Local web UI** in the preferences. The question starts on **Yes** by default and remembers an earlier answer. **Yes** keeps a full local copy and forwards a copy to Grafana Cloud. **No** sends directly to Grafana Cloud without a local copy. Complete credential flags also skip the preferences and keep direct Cloud behavior.
 
 Run `agento11y login` again to change the Cloud connection, local web UI, content capture, tags, or guard settings. With a complete saved Cloud connection, a rerun shows its Grafana stack first. **Keep this connection** jumps to preferences without changing the connection. **Change connection** opens the stack and credential questions. A rerun asks where sessions go only when neither a destination nor credentials are saved.
 
@@ -86,6 +86,8 @@ Cursor has no launcher. Run `agento11y cursor install` once, then start Cursor n
 
 Kiro capture is workspace-scoped and captures prompts and tools only; assistant text, model usage, and cost are unavailable. See the [Kiro limitations](../kiro/README.md#captured-data-and-limits).
 
+On Windows, `agento11y` starts the agent as a child process and exits with the agent's exit code. An agent installed with npm starts through a `.cmd` file, and `cmd.exe` cannot receive an argument that contains a line break. Pass a multiline prompt in a file or on stdin instead.
+
 ## Claude plugin evals
 
 Export `claude plugin eval` results, conversations, traces, and usage without
@@ -103,6 +105,29 @@ The command imports both baseline arms and reuses the saved Cloud/OTLP connectio
 See the [example and CI workflow](../../examples/experiments/claude-plugin-evals/)
 for build instructions, scoring details, and verification with `gcx`. This is a
 new command in this checkout, not a promise about older installed releases.
+
+## Harbor evaluations
+
+Install `agento11y-harbor` in the same Python environment as Harbor, and set
+your Grafana Cloud credentials as described in the
+[Harbor integration guide](../../python-frameworks/harbor/README.md#configure-grafana-cloud).
+`agento11y harbor` also uses the credentials that `agento11y login` saved.
+
+Run a normal Harbor evaluation and publish it while it runs:
+
+```sh
+agento11y harbor -- --dataset terminal-bench@2.0 --agent codex --model openai/gpt-5
+```
+
+Publish a job that already finished:
+
+```sh
+agento11y harbor export jobs/<job-name>
+```
+
+The live command adds Harbor's `agento11y` job plugin and passes every other
+argument to `harbor run`. The [Harbor integration guide](../../python-frameworks/harbor/README.md)
+covers export flags, experiment IDs, errors, retries, and the Python APIs.
 
 ## Skills
 
@@ -137,7 +162,7 @@ The skills for instrumenting your own application code are separate and ship wit
 
 `AGENTO11Y_LOCAL=true` in the shell or `config.env` enables local mode for every launch and installed hook. **Local only** writes `AGENTO11Y_LOCAL` and `SIGIL_LOCAL` as true, and writes `AGENTO11Y_LOCAL_FORWARD` and `SIGIL_LOCAL_FORWARD` as false. Sessions then stay on the machine. **Local web UI = Yes** writes all four keys as true, so the daemon keeps a full local copy and also forwards to Grafana Cloud. **Local web UI = No** writes all four keys as false and sends directly to Cloud. Use `--no-local` to override a saved local destination for one launcher session without changing those keys.
 
-The daemon always stores full session content locally. It forwards full generation content only when `AGENTO11Y_CONTENT_CAPTURE_MODE=full`. Every other selected capture mode is reduced to `metadata_only` for the forwarded copy. Local mode is available on macOS and Linux only; Windows has no local receiver.
+The daemon always stores full session content locally. It forwards full generation content only when `AGENTO11Y_CONTENT_CAPTURE_MODE=full`. Every other selected capture mode is reduced to `metadata_only` for the forwarded copy. Local mode is available on every supported platform.
 
 Manage the app with `agento11y local start|open|status|stop|restart`. `agento11y local open` starts the receiver if needed, prints its address, and tries to open the app.
 
@@ -233,7 +258,7 @@ Imported sessions are thinner than live capture — host logs omit fields that l
 
 Without `--since`, an import covers the last 90 days. Pass `--since 365d` (or a timestamp) to widen the window, and `--until` to bound the other end. Other useful flags: `--workspace`, `--max-sessions`, `--max-turns`, `--all`, `--yes`, `--force`. Without a terminal, pass `--all --yes` to import from a script.
 
-Re-running an import is safe: a per-agent ledger under `~/.local/state/agento11y/history/ledger/` skips turns already recorded. `--force` re-exports those turns under the same generation IDs.
+Re-running an import is safe: a ledger per agent and destination under `~/.local/state/agento11y/history/ledger/` skips turns that destination already has, so an import into Grafana Cloud after one into the local viewer still sends every turn. Turns imported before this ledger existed count as already sent to every destination. If you only ever imported them into the local viewer, run `agento11y history import <agent> --no-local --force` once, right after upgrading and before any other import into Grafana Cloud, with a `--since` that reaches back to your first import (a timestamp is safest). If you only ever imported them into Grafana Cloud, `--local --force` with that `--since` sends them to the viewer. `--force` re-exports every selected turn under the same generation IDs, and Grafana Cloud stores and counts a turn it received more than about a day earlier a second time, so do not repeat it into Cloud.
 
 ## Grafana Agent Observability
 
@@ -371,6 +396,21 @@ agento11y agents reconcile --agents all --json
 `agento11y claude`, `agento11y codex`, and `agento11y opencode` refresh the installed host plugin automatically. Set `AGENTO11Y_AUTO_UPDATE=false` to opt out.
 
 `AGENTO11Y_AUTO_UPDATE` does not apply to the other launchers. `agento11y copilot` rewrites its own `agento11y.json` hooks file, and `agento11y vibe` re-upserts its three entries into vibe's `hooks.toml`, so both always point at the installed binary. `agento11y pi` leaves upgrades to pi's own installer.
+
+### Usage statistics
+
+`agento11y` reports statistics about its own use to Grafana: which subcommand ran (`doctor`, `skills show`), flag **names**, the agent, a skill name, outcome, exit code, duration, version, OS, architecture, whether the run was interactive or in CI, and a random per-installation ID. Each of those is matched against a fixed list in the binary, so anything it does not recognise becomes `unknown`. Never argument or flag values, endpoints, tenant IDs, tokens, tags, user IDs, hostnames, file paths, or error messages. Hooks are never reported, so nothing is sent while a session runs.
+
+Captured sessions are a separate path: they go to your own stack or stay on your machine.
+
+Opt out with either of these, in the environment or in `config.env`. An unrecognised value also disables reporting.
+
+```sh
+AGENTO11Y_ANONYMOUS_USAGE_STATS=disabled
+DO_NOT_TRACK=1
+```
+
+`AGENTO11Y_ANONYMOUS_USAGE_STATS=log` prints the event to stderr and sends nothing. The ID is a random UUID at `$XDG_STATE_HOME/agento11y/install-id`; deleting it resets it.
 
 ## Troubleshooting
 

@@ -15,8 +15,6 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/execpath"
 )
 
-const testBin = "/opt/homebrew/bin/sigil"
-
 func TestRun(t *testing.T) {
 	const (
 		superconductor = "/Users/me/.superconductor/hooks/cursor-notify.sh"
@@ -25,7 +23,6 @@ func TestRun(t *testing.T) {
 		legacyRunSh    = "/Users/me/projects/sigil-sdk/plugins/cursor/scripts/run.sh"
 		stalePath      = "/old/bin/sigil cursor hook"
 	)
-	wantCmd := testBin + " cursor hook"
 
 	cases := []struct {
 		name string
@@ -152,7 +149,7 @@ func TestRun(t *testing.T) {
 				require.NotEmpty(t, cmds, "event %q missing", ev)
 				ours := oursCommands(cmds)
 				require.Len(t, ours, 1, "event %q must have one agento11y entry, got %v", ev, cmds)
-				assert.Equal(t, wantCmd, ours[0], "event %q", ev)
+				assert.Equal(t, wantHookCmd, ours[0], "event %q", ev)
 			}
 
 			for ev, want := range tc.preserved {
@@ -165,8 +162,9 @@ func TestRun(t *testing.T) {
 	}
 }
 
-// Fresh install records the running binary's path verbatim (no symlink
-// resolution) and defaults version to 1.
+// Fresh install records the hook command execpath renders for the running
+// binary (its path verbatim, with no symlink resolution, on Unix) and
+// defaults version to 1.
 func TestRun_FreshFileShape(t *testing.T) {
 	home := t.TempDir()
 	withHome(t, home)
@@ -185,7 +183,7 @@ func TestRun_FreshFileShape(t *testing.T) {
 	require.Len(t, doc.Hooks, len(cursorEvents))
 	for _, ev := range cursorEvents {
 		require.Len(t, doc.Hooks[ev], 1, "event %q", ev)
-		assert.Equal(t, testBin+" cursor hook", doc.Hooks[ev][0]["command"])
+		assert.Equal(t, wantHookCmd, doc.Hooks[ev][0]["command"])
 	}
 }
 
@@ -431,6 +429,8 @@ func TestIsOursHook(t *testing.T) {
 		{"/Users/me/.local/bin/sigil cursor hook", true},
 		{"'/Users/me/with space/bin/sigil' cursor hook", true},
 		{"/Users/me/projects/sigil-sdk/plugins/cursor/scripts/run.sh", true},
+		{`C:\Users\me\projects\sigil-sdk\plugins\cursor\scripts\run.sh`, true},
+		{`C:\Users\me\projects\sigil-sdk\plugins\cursor/scripts/run.sh`, true},
 		{"${CURSOR_PLUGIN_ROOT}/scripts/run.sh", true},
 		{"/opt/homebrew/bin/sigil.exe cursor hook", true},
 		{"  /opt/homebrew/bin/sigil cursor hook  ", true},

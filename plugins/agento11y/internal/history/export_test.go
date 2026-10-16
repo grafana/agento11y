@@ -645,9 +645,11 @@ func TestGenerationStartCarriesRequestFields(t *testing.T) {
 // whose configured endpoint is the local daemon. Without the marker the daemon
 // relays the whole backfill to Cloud, so the rule follows the resolved
 // endpoint rather than the caller's intent.
+//
+// Regression: an endpoint that reached the daemon under another spelling,
+// LOCALHOST or a scheme left to AGENTO11Y_INSECURE, was taken for Cloud, and a
+// user with Cloud credentials sent its import out unmarked.
 func TestLoopbackEndpointAlwaysCarriesTheForwardMarker(t *testing.T) {
-	envconfig.PinAliasEnvBlank(t)
-
 	var mu sync.Mutex
 	var marker string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -657,40 +659,72 @@ func TestLoopbackEndpointAlwaysCarriesTheForwardMarker(t *testing.T) {
 		_, _ = io.WriteString(w, acceptAllGenerations(r))
 	}))
 	defer srv.Close()
+	port := strings.TrimPrefix(srv.URL, "http://127.0.0.1:")
 
-	// The Cloud path: no endpoint on the target, no headers, no credentials.
-	// AGENTO11Y_ENDPOINT happens to be the local daemon.
-	t.Setenv("AGENTO11Y_ENDPOINT", srv.URL)
-	exp, cleanup, err := NewTargetExporter(context.Background(), Target{}, log.New(io.Discard, "", 0))
-	if err != nil {
-		t.Fatalf("NewTargetExporter: %v", err)
-	}
-	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		_ = cleanup(ctx)
-	}()
+	for _, tt := range []struct {
+		name     string
+		endpoint string
+		insecure bool
+	}{
+		{name: "127.0.0.1", endpoint: srv.URL},
+		{name: "upper-case localhost", endpoint: "http://LOCALHOST:" + port},
+		{name: "no scheme, insecure", endpoint: "127.0.0.1:" + port, insecure: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			envconfig.PinAliasEnvBlank(t)
+			// Go only skips a proxy for a lower-case localhost, so a proxy in
+			// the environment would carry the LOCALHOST case away.
+			for _, key := range []string{"HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"} {
+				t.Setenv(key, "")
+			}
+			mu.Lock()
+			marker = ""
+			mu.Unlock()
 
-	err = exp.ExportHistoricalGeneration(context.Background(), HistoricalGeneration{
-		Source: SourceRef{Agent: AgentClaudeCode, SessionID: "s1", SourcePath: "/a.jsonl"},
-		Gen: agento11y.Generation{
-			ConversationID: "s1",
-			Model:          agento11y.ModelRef{Provider: "anthropic", Name: "claude"},
-			Input:          []agento11y.Message{agento11y.UserTextMessage("hello")},
-			StartedAt:      time.Now().Add(-time.Minute),
-			CompletedAt:    time.Now(),
-		},
-	})
-	if err != nil {
-		t.Fatalf("ExportHistoricalGeneration: %v", err)
-	}
-	if err := exp.Flush(context.Background()); err != nil {
-		t.Fatalf("Flush: %v", err)
-	}
+			// The Cloud path: no endpoint on the target and no headers, with
+			// Cloud credentials saved. AGENTO11Y_ENDPOINT happens to be the
+			// local daemon.
+			t.Setenv("AGENTO11Y_ENDPOINT", tt.endpoint)
+			t.Setenv("AGENTO11Y_AUTH_TENANT_ID", "123")
+			t.Setenv("AGENTO11Y_AUTH_TOKEN", "token")
+			if tt.insecure {
+				t.Setenv("AGENTO11Y_INSECURE", "true")
+			}
+			if !(Target{}).Local() {
+				t.Errorf("Target.Local() = false for %q, which reaches the local daemon", tt.endpoint)
+			}
+			exp, cleanup, err := NewTargetExporter(context.Background(), Target{}, log.New(io.Discard, "", 0))
+			if err != nil {
+				t.Fatalf("NewTargetExporter: %v", err)
+			}
+			defer func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				_ = cleanup(ctx)
+			}()
 
-	mu.Lock()
-	defer mu.Unlock()
-	if marker == "" {
-		t.Fatal("an import that reached the local daemon carried no forward marker, so the daemon would relay it to Cloud")
+			err = exp.ExportHistoricalGeneration(context.Background(), HistoricalGeneration{
+				Source: SourceRef{Agent: AgentClaudeCode, SessionID: "s1", SourcePath: "/a.jsonl"},
+				Gen: agento11y.Generation{
+					ConversationID: "s1",
+					Model:          agento11y.ModelRef{Provider: "anthropic", Name: "claude"},
+					Input:          []agento11y.Message{agento11y.UserTextMessage("hello")},
+					StartedAt:      time.Now().Add(-time.Minute),
+					CompletedAt:    time.Now(),
+				},
+			})
+			if err != nil {
+				t.Fatalf("ExportHistoricalGeneration: %v", err)
+			}
+			if err := exp.Flush(context.Background()); err != nil {
+				t.Fatalf("Flush: %v", err)
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+			if marker == "" {
+				t.Fatal("an import that reached the local daemon carried no forward marker, so the daemon would relay it to Cloud")
+			}
+		})
 	}
 }

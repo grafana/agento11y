@@ -102,7 +102,7 @@ Upgrade with `brew upgrade grafana/grafana/agento11y`.
 
 **mise:** `mise use -g aqua:grafana/agento11y@latest` (requires [mise shell activation](https://mise.jdx.dev/cli/activate.html) so `agento11y` is on `PATH`).
 
-**Go install (any platform with Go 1.25.7+):**
+**Go install (any platform with Go 1.26.9+):**
 
 ```sh
 go install github.com/grafana/agento11y/plugins/agento11y/cmd/agento11y@latest
@@ -129,17 +129,17 @@ against `sigil`.
 A first `agento11y login` asks where sessions go: **Local only**, or **Grafana
 Cloud**. **Local only** needs no Cloud credentials and never forwards sessions.
 **Grafana Cloud** continues to the credential flow. Its interactive preferences
-on macOS and Linux include **Local web UI**. It starts on **Yes** by default and
+include **Local web UI**. It starts on **Yes** by default and
 remembers an earlier answer. **Yes** keeps a full local copy and forwards a Cloud
 copy. **No** sends directly
-to Cloud. Windows has no local receiver, so it shows neither local choice.
+to Cloud.
 
 ### The paste flow
 
 Tell the user to run `agento11y login` in their own terminal, then wait. You
 cannot drive it yourself: it needs a terminal, and the block it asks for holds a
 live token that must not pass through this conversation. The destination question
-appears only on macOS and Linux when no destination or credentials are saved. A
+appears only when no destination or credentials are saved. A
 saved Cloud connection starts at step 2.
 
 1. **Where should sessions go?**: a two-option list. **Local only** saves local
@@ -388,13 +388,13 @@ All hosts read the resolved config path. The default is `~/.config/agento11y/con
 | `AGENTO11Y_THEME` | Local viewer theme: `dark`, `light`, or `system`; defaults to `dark` |
 | `AGENTO11Y_AUTO_UPDATE` | A false value opts out of host-plugin refresh |
 | `AGENTO11Y_DEBUG` | A true value writes the debug log |
+| `AGENTO11Y_ANONYMOUS_USAGE_STATS` | `disabled` stops reporting usage statistics about the CLI itself; `log` prints them instead of sending |
 
 All branded keys except `AGENTO11Y_STACK_URL` have an older `SIGIL_*` spelling.
 **Local only** writes `AGENTO11Y_LOCAL` and `SIGIL_LOCAL` as true, and both
 `LOCAL_FORWARD` spellings as false. **Local web UI = Yes** writes all four local
 keys as true. **Local web UI = No** writes all four as false. An explicit
-`agento11y login` still runs Cloud setup. Doctor reports provenance only for
-settings in its report.
+`agento11y login` still runs Cloud setup. Doctor reports provenance only for settings in its report.
 
 ### Tagging sessions
 
@@ -453,7 +453,7 @@ chooses which fields ship, not whether the shipped fields are clean. Treat
 
 `agento11y <agent> --local`, **Local only**, or **Local web UI = Yes** routes launcher runs and agento11y hooks through the local daemon. The daemon stores full generation content in its JSONL store. It forwards full content only when `AGENTO11Y_CONTENT_CAPTURE_MODE=full`; every other selected mode becomes `metadata_only` for Cloud.
 **Local only** does not forward. **Local web UI = No** sends directly to Cloud without a local copy. `--no-local` uses Cloud once without changing either saved alias family. The launcher prints the viewer URL. Manage the daemon with `agento11y local start|open|status|stop|restart`.
-Local mode runs on macOS and Linux only. A launcher starts the receiver in the same invocation; a saved choice from Cursor install applies to the next hook.
+Local mode is available on every supported platform. A launcher starts the receiver in the same invocation; a saved choice from Cursor install applies to the next hook.
 With `AGENTO11Y_GUARDS_ENABLED=true`, evaluate `guards.toml` next to `config.env`. `reject = true` blocks on match; `shell_command` is for shell policies. Fail-open is Cloud-only. For pack selection, configuration, and testing, follow `agento11y skills show setup-local-guards`.
 
 For an offline dry run, use `agento11y guards test 'rm -rf ~/.ssh'`. It does not execute input, check Cloud rules, contact endpoints, start a daemon, or write files. It tests saved policy even when host guard requests are disabled, without predicting host enforcement. Disabled rules and absent packs stay unchanged.
@@ -481,8 +481,8 @@ skips that question; missing Cloud credentials still starts Cloud setup. That se
 **Local web UI** because locally forwarded imports never relay to Cloud. A noninteractive run never
 asks. It imports only with both `--all` and `--yes`; otherwise it prints a dry-run plan and exits 0.
 
-Without `--since`, an import selects sessions active during the last 90 days. Each imported turn goes into a per-agent ledger that omits the destination.
-To send the same turns to another destination, add `--force` to the second import. If saved local mode would keep that import local, add `--no-local` too.
+Without `--since`, an import selects sessions active during the last 90 days. Each imported turn is recorded in a ledger per agent and destination, so an import into another destination sends the same turns without `--force`. If saved local mode would keep that import local, add `--no-local`.
+Turns imported before that ledger count as already sent to every destination. Pass `--force` for them only after the user confirms they never reached that destination, with a `--since` that reaches back to the first import (a timestamp is safest); into Grafana Cloud, run it once, right after upgrading and before any other Cloud import, because `--force` re-sends every selected turn and Cloud stores and counts a repeat of a turn it received more than about a day earlier.
 A cancelled or failed run resumes from turns not marked exported.
 
 ### Auto-update

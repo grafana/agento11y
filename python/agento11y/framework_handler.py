@@ -1744,6 +1744,10 @@ def _map_framework_usage(raw_usage: Any):
     if cache_read > 0 and usage.cache_read_input_tokens == 0:
         usage.cache_read_input_tokens = cache_read
 
+    cache_write = _as_int(_read(input_token_details, "cache_creation"))
+    if cache_write > 0 and usage.cache_write_input_tokens == 0:
+        usage.cache_write_input_tokens = cache_write
+
     reasoning = _as_int(_read(output_token_details, "reasoning"))
     if reasoning > 0 and usage.reasoning_tokens == 0:
         usage.reasoning_tokens = reasoning

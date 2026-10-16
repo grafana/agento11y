@@ -122,7 +122,7 @@ func TestSecretRedactionSanitizerEmailToggle(t *testing.T) {
 		wantPreserve bool
 	}{
 		{name: "default redacts email", opts: SecretRedactionOptions{}, wantMarker: true},
-		{name: "disable preserves email", opts: SecretRedactionOptions{RedactEmailAddresses: boolPtr(false)}, wantPreserve: true},
+		{name: "disable preserves email", opts: SecretRedactionOptions{RedactEmailAddresses: new(false)}, wantPreserve: true},
 	}
 
 	for _, tc := range cases {
@@ -189,9 +189,9 @@ func TestSecretRedactionSanitizerInputRedactionByRole(t *testing.T) {
 		wantUserRedacted bool
 	}{
 		{name: "default preserves user only", opts: SecretRedactionOptions{}, wantUserRedacted: false},
-		{name: "opt-in redacts user too", opts: SecretRedactionOptions{RedactInputMessages: boolPtr(true)}, wantUserRedacted: true},
+		{name: "opt-in redacts user too", opts: SecretRedactionOptions{RedactInputMessages: new(true)}, wantUserRedacted: true},
 		{name: "env enables when option nil", env: map[string]string{"SIGIL_REDACT_INPUT_MESSAGES": "true"}, wantUserRedacted: true},
-		{name: "explicit false beats env true", opts: SecretRedactionOptions{RedactInputMessages: boolPtr(false)}, env: map[string]string{"SIGIL_REDACT_INPUT_MESSAGES": "true"}, wantUserRedacted: false},
+		{name: "explicit false beats env true", opts: SecretRedactionOptions{RedactInputMessages: new(false)}, env: map[string]string{"SIGIL_REDACT_INPUT_MESSAGES": "true"}, wantUserRedacted: false},
 	}
 
 	for _, tc := range cases {
@@ -558,9 +558,9 @@ func TestResolveRedactInputMessages(t *testing.T) {
 		want     bool
 	}{
 		{name: "nil and unset defaults to false", want: false},
-		{name: "explicit true wins over unset env", explicit: boolPtr(true), want: true},
-		{name: "explicit false wins over env true", explicit: boolPtr(false), env: map[string]string{"SIGIL_REDACT_INPUT_MESSAGES": "true"}, want: false},
-		{name: "explicit true wins over env false", explicit: boolPtr(true), env: map[string]string{"SIGIL_REDACT_INPUT_MESSAGES": "false"}, want: true},
+		{name: "explicit true wins over unset env", explicit: new(true), want: true},
+		{name: "explicit false wins over env true", explicit: new(false), env: map[string]string{"SIGIL_REDACT_INPUT_MESSAGES": "true"}, want: false},
+		{name: "explicit true wins over env false", explicit: new(true), env: map[string]string{"SIGIL_REDACT_INPUT_MESSAGES": "false"}, want: true},
 		{name: "env true when option nil", env: map[string]string{"SIGIL_REDACT_INPUT_MESSAGES": "true"}, want: true},
 		{name: "env false when option nil", env: map[string]string{"SIGIL_REDACT_INPUT_MESSAGES": "false"}, want: false},
 		{name: "env 1 parses true", env: map[string]string{"SIGIL_REDACT_INPUT_MESSAGES": "1"}, want: true},
@@ -573,7 +573,7 @@ func TestResolveRedactInputMessages(t *testing.T) {
 		{name: "preferred false wins over legacy true", env: map[string]string{"AGENTO11Y_REDACT_INPUT_MESSAGES": "false", "SIGIL_REDACT_INPUT_MESSAGES": "true"}, want: false},
 		{name: "blank preferred falls through to legacy true", env: map[string]string{"AGENTO11Y_REDACT_INPUT_MESSAGES": "   ", "SIGIL_REDACT_INPUT_MESSAGES": "true"}, want: true},
 		{name: "invalid preferred blocks valid legacy fallback", env: map[string]string{"AGENTO11Y_REDACT_INPUT_MESSAGES": "maybe", "SIGIL_REDACT_INPUT_MESSAGES": "true"}, want: false},
-		{name: "explicit false wins over preferred true", explicit: boolPtr(false), env: map[string]string{"AGENTO11Y_REDACT_INPUT_MESSAGES": "true"}, want: false},
+		{name: "explicit false wins over preferred true", explicit: new(false), env: map[string]string{"AGENTO11Y_REDACT_INPUT_MESSAGES": "true"}, want: false},
 	}
 
 	for _, tc := range cases {

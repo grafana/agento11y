@@ -130,6 +130,29 @@ func TestBeforeSubmit_StampsTitleWithoutGenerationID(t *testing.T) {
 	}
 }
 
+// Regression: the title was cut to 100 bytes before the mapper redacted it, so
+// a secret the cut split no longer matched its pattern and its first part was
+// exported as the conversation title.
+func TestBeforeSubmit_TitleRedactsASecretTheCutSplits(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeFull}
+
+	BeforeSubmit(context.Background(), io.Discard, Payload{
+		HookEventName:  "beforeSubmitPrompt",
+		ConversationID: "conv",
+		Prompt:         strings.Repeat("x", 70) + " ghp_" + strings.Repeat("A", 36) + " please",
+	}, cfg, logger)
+
+	sess := fragment.LoadSession("conv", logger)
+	if sess == nil {
+		t.Fatal("expected a session")
+	}
+	if strings.Contains(sess.ConversationTitle, "ghp_") || !strings.Contains(sess.ConversationTitle, "[REDACTED") {
+		t.Errorf("ConversationTitle = %q; want the token redacted", sess.ConversationTitle)
+	}
+}
+
 func TestBeforeSubmit_FirstPromptWinsTitle(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	logger := log.New(&bytes.Buffer{}, "", 0)

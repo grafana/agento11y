@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import threading
-from datetime import timezone
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
@@ -571,7 +571,7 @@ def test_upload_trial_artifact_applies_the_same_503_rule(
             lambda args: transport.trigger_trial_evaluation(
                 **args, experiment_id="run_1", trial_id="trial_1", evaluator_id=" "
             ),
-            "evaluator_id is required",
+            "evaluator_id or binding_id is required",
             id="trigger without evaluator",
         ),
         pytest.param(
@@ -745,12 +745,16 @@ def test_experiment_client_generation_uses_lightweight_transport_and_redacts() -
             output_text="done",
             input_tokens=4,
             output_tokens=2,
+            started_at=datetime(2026, 9, 17, 0, 0, 1, tzinfo=timezone.utc),
+            completed_at=datetime(2026, 9, 17, 0, 0, 2, tzinfo=timezone.utc),
         )
 
         generation = recorder.requests[0]["payload"]["generations"][0]
         assert generation["mode"] == "GENERATION_MODE_SYNC"
         assert generation["input"][0]["parts"][0]["text"] == "token [REDACTED:grafana-cloud-token]"
         assert generation["usage"]["total_tokens"] == 6
+        assert generation["started_at"] == "2026-09-17T00:00:01Z"
+        assert generation["completed_at"] == "2026-09-17T00:00:02Z"
     finally:
         server.shutdown()
         server.server_close()

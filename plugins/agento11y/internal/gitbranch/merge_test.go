@@ -1,13 +1,75 @@
 package gitbranch
 
 import (
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
+	"runtime"
+	"slices"
 	"testing"
 	"time"
 )
+
+// fakeGitRealEnv names the real git for a copy of this test binary installed
+// as git on PATH. The copy fails every for-each-ref and runs the real git for
+// everything else. A Go binary works on every platform, where a shell script
+// named git is not found on Windows.
+const fakeGitRealEnv = "AGENTO11Y_TEST_FAKE_GIT_REAL"
+
+func TestMain(m *testing.M) {
+	if realGit := os.Getenv(fakeGitRealEnv); realGit != "" {
+		os.Exit(runFakeGit(realGit, os.Args[1:]))
+	}
+	os.Exit(m.Run())
+}
+
+func runFakeGit(realGit string, args []string) int {
+	if slices.Contains(args, "for-each-ref") {
+		return 128
+	}
+	cmd := exec.Command(realGit, args...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
+			return exitErr.ExitCode()
+		}
+		_, _ = fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	return 0
+}
+
+// installFakeGit puts a copy of this test binary first on PATH as git.
+func installFakeGit(t *testing.T, realGit string) {
+	t.Helper()
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	name := "git"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	src, err := os.Open(self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = src.Close() }()
+	dst, err := os.OpenFile(filepath.Join(bin, name), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, copyErr := io.Copy(dst, src)
+	if closeErr := dst.Close(); copyErr != nil || closeErr != nil {
+		t.Fatalf("copy test binary: copy=%v close=%v", copyErr, closeErr)
+	}
+	t.Setenv(fakeGitRealEnv, realGit)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
 
 func requireGit(t *testing.T) {
 	t.Helper()
@@ -220,15 +282,7 @@ func TestInspectMergesForEachRefFailureStaysUnknown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bin := t.TempDir()
-	wrapper := filepath.Join(bin, "git")
-	script := "#!/bin/sh\nfor arg in \"$@\"; do\n  if [ \"$arg\" = \"for-each-ref\" ]; then\n    exit 128\n  fi\ndone\nexec '" +
-		strings.ReplaceAll(realGit, "'", `'\''`) +
-		"' \"$@\"\n"
-	if err := os.WriteFile(wrapper, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	installFakeGit(t, realGit)
 
 	got := InspectMerges(dir)
 	if got.Default != "" {

@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.19.0] - 2026-10-15
+
+### Features
+
+- **experiments**: add report roles and importer foundations (#815)
+
+### Bug Fixes
+
+- **otelgenai**: correct GenAI telemetry and conformance (#723)
+- **security**: resolve medium+ CVEs in Go and Python dependencies (#862)
+- **security/unknown/go**: update module google.golang.org/grpc to v1.83.2 [security] (#731)
+- **security/unknown/go-frameworks/google-adk**: update module google.golang.org/grpc to v1.83.2 [security] (#727)
+- **security/unknown/go-providers/anthropic**: update module google.golang.org/grpc to v1.83.2 [security] (#728)
+- **security/unknown/go-providers/gemini**: update module google.golang.org/grpc to v1.83.2 [security] (#729)
+- **security/unknown/go-providers/openai**: update module google.golang.org/grpc to v1.83.2 [security] (#730)
+- **security**: resolve 75 CVEs across the npm, Python and Go dependency trees (#718)
+- **security/high/go**: update module google.golang.org/grpc to v1.83.1 [security] (#709)
+- **security/high/go-frameworks/google-adk**: update module google.golang.org/grpc to v1.83.1 [security] (#705)
+- **security/high/go-providers/anthropic**: update module google.golang.org/grpc to v1.83.1 [security] (#706)
+- **security/high/go-providers/gemini**: update module google.golang.org/grpc to v1.83.1 [security] (#707)
+- **security/high/go-providers/openai**: update module google.golang.org/grpc to v1.83.1 [security] (#708)
+- **otelgenai**: emit gen_ai.request.top_k as integer (#680)
+
 ## [0.18.0] - 2026-08-25
 
 ### Features

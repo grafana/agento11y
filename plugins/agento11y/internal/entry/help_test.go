@@ -14,7 +14,7 @@ import (
 )
 
 func TestPublicHelpPages(t *testing.T) {
-	paths := []string{"", "help", "login", "doctor", "guards", "guards test", "agents", "agents reconcile", "cursor", "cursor install", "cursor uninstall", "local", "local start", "local open", "local status", "local stop", "local restart", "history", "history import", "skills", "skills list", "skills show", "skills get", "claude eval", "claude eval import", "claude install", "copilot install", "opencode install", "pi install"}
+	paths := []string{"", "help", "login", "doctor", "guards", "guards test", "agents", "agents reconcile", "cursor", "cursor install", "cursor uninstall", "local", "local start", "local open", "local status", "local stop", "local restart", "history", "history import", "skills", "skills list", "skills show", "skills get", "claude eval", "claude eval import", "claude install", "copilot install", "opencode install", "pi install", "harbor", "harbor run", "harbor export"}
 	for name := range launchers {
 		paths = append(paths, name)
 	}
@@ -131,7 +131,7 @@ func TestHelpArgumentOwnership(t *testing.T) {
 }
 
 func TestUsageAndEmptyGroups(t *testing.T) {
-	for _, path := range []string{"", "local", "history", "skills", "agents", "cursor", "claude eval"} {
+	for _, path := range []string{"", "local", "history", "skills", "agents", "cursor", "claude eval", "harbor"} {
 		t.Run("empty/"+path, func(t *testing.T) {
 			var out, errOut bytes.Buffer
 			code := withExit(t, func() { run(strings.Fields(path), unreadableHelpInput{}, &out, &errOut) })

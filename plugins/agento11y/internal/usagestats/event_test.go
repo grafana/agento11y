@@ -91,8 +91,7 @@ func TestEventHasNoCredentialShapedFields(t *testing.T) {
 	}
 
 	typ := reflect.TypeFor[Event]()
-	for i := range typ.NumField() {
-		field := typ.Field(i)
+	for field := range typ.Fields() {
 		tag, _, _ := strings.Cut(field.Tag.Get("json"), ",")
 		for _, bad := range forbidden {
 			if strings.Contains(strings.ToLower(field.Name), bad) || strings.Contains(strings.ToLower(tag), bad) {

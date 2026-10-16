@@ -1,0 +1,9 @@
+{"role":"user","message":{"content":[{"type":"text","text":"[Image]\n<image_files>\nThe following images were provdied by the user and saved to the workspace for future use:\n1. /work/repo/assets/panel.png\n</image_files>\n<user_query>\n</user_query>"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"The screenshot shows an empty dashboard panel."}]}}
+{"type":"turn_ended","status":"success"}
+{"role":"user","message":{"content":[{"type":"text","text":"<plugin_info kind=\"matched_installed\">\ndisplay_name: Example plugin\ndescription: Skills for the example app.\n</plugin_info>\n<user_query>\nwhy is the panel empty?\n</user_query>"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"Its query returns no data in the selected range."}]}}
+{"type":"turn_ended","status":"success"}
+{"role":"user","message":{"content":[{"type":"text","text":"<external_links>\n### Potentially Relevant Websearch Results\n\nNone.\n</external_links>\n<user_query>\nhow do I widen the range?\n</user_query>"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"Pick a longer range in the time picker."}]}}
+{"type":"turn_ended","status":"success"}

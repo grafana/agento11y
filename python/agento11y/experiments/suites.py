@@ -124,11 +124,15 @@ class TestSuitesClient:
                 return out
         raise ExperimentTransportError("agento11y test case list transport failed: pagination did not terminate")
 
-    def pull_suite(self, suite_id: str, version: str = "latest_published") -> TestSuite:
+    def pull_suite(
+        self, suite_id: str, version: str = "latest_published", *, require_published: bool = False
+    ) -> TestSuite:
         """Pulls a stored suite version into the SDK's portable ``TestSuite`` shape."""
 
         remote = self.get_suite(suite_id)
         resolved = self.resolve_version(remote, version)
+        if require_published and not _version_record(remote, resolved).get("published"):
+            raise ValidationError("agento11y test suite validation failed: a published checkpoint is required")
         cases = self.list_cases(suite_id, resolved)
         return TestSuite(
             suite_id=str(remote.get("suite_id") or suite_id),
@@ -139,6 +143,34 @@ class TestSuitesClient:
             changelog=str(_version_record(remote, resolved).get("changelog") or ""),
             test_cases=cases,
         )
+
+    def get_bindings(self, suite_id: str, version: str) -> list[dict[str, Any]]:
+        """Read the pinned evaluator bindings for an exact stored suite version."""
+
+        suite_id = _required_id(suite_id, "suite_id")
+        version = _required_id(version, "version")
+        return _items(self._request("GET", f"/test-suites/{_quote(suite_id)}/versions/{_quote(version)}/bindings"))
+
+    def preview_binding(self, suite_id: str, version: str, test_case_id: str, binding_id: str) -> dict[str, Any]:
+        """Resolve a case's grading inputs without invoking a model.
+
+        Call for every case/binding before target execution to reject missing or
+        unsupported inputs. The server owns selector and template semantics.
+        Returned inputs are sanitized but may still contain customer content.
+        """
+
+        values = {
+            key: _required_id(value, key)
+            for key, value in dict(
+                suite_id=suite_id, version=version, test_case_id=test_case_id, binding_id=binding_id
+            ).items()
+        }
+        path = (
+            f"/test-suites/{_quote(values['suite_id'])}/versions/{_quote(values['version'])}"
+            f"/test-cases/{_quote(values['test_case_id'])}/bindings/{_quote(values['binding_id'])}:preview"
+        )
+        body = self._request("POST", path, payload={})
+        return dict(body) if isinstance(body, dict) else {}
 
     def push_suite(
         self,
@@ -153,6 +185,10 @@ class TestSuitesClient:
 
         Local cases are upserted into the draft. Set ``prune=True`` to delete
         remote-only cases and make the draft exactly match the local suite.
+        ``publish=True`` uses legacy publication and can conflict on a draft with
+        evaluator bindings or unresolved sanitization. For reviewed checkpoints,
+        save without publishing, review the canonical draft, then call
+        :meth:`publish_reviewed` with its explicit binding snapshot.
         """
 
         if not isinstance(suite, TestSuite):
@@ -209,6 +245,30 @@ class TestSuitesClient:
                 if local.input != stored.input or local.expected != stored.expected
             ],
         )
+
+    def publish_reviewed(self, suite: TestSuite, *, bindings: list[dict[str, Any]]) -> dict[str, Any]:
+        """Publish exactly the cases and bindings the caller reviewed.
+
+        Pass a complete canonical draft pulled from the server after reviewing
+        its content and bindings. Stale content, changed membership/bindings, or
+        unresolved sanitization review causes a conflict; this method never
+        fetches newer content and silently approves it. Use the Grafana case
+        review flow to acknowledge sanitization changes before publication.
+        """
+
+        suite_id = _required_id(suite.suite_id, "suite_id")
+        version = _required_id(suite.version, "version")
+        body = self._request(
+            "POST",
+            f"/test-suites/{_quote(suite_id)}/versions/{_quote(version)}:publish",
+            payload={
+                "reviewed_publication": {
+                    "cases": [_local_case_to_remote(case) for case in suite.cases],
+                    "bindings": bindings,
+                }
+            },
+        )
+        return dict(body) if isinstance(body, dict) else {}
 
     def resolve_version(self, suite: dict[str, Any], version: str) -> str:
         """Resolves exact versions and aliases: latest_published, latest, draft."""

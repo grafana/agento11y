@@ -23,7 +23,7 @@ import (
 func TestInstallLifecycle(t *testing.T) {
 	t.Chdir(t.TempDir())
 	old := execpath.Executable
-	execpath.Executable = func() (string, error) { return "/path with spaces/agento11y", nil }
+	execpath.Executable = func() (string, error) { return fixtureExecutable, nil }
 	t.Cleanup(func() { execpath.Executable = old })
 	if changed, err := Install(); err != nil || !changed {
 		t.Fatalf("first install: %v %v", changed, err)
@@ -36,8 +36,8 @@ func TestInstallLifecycle(t *testing.T) {
 	}
 	path, _ := configPath()
 	raw, _ := os.ReadFile(path)
-	if !strings.Contains(string(raw), "'/path with spaces/agento11y' kiro hook") {
-		t.Fatal("unquoted executable")
+	if !strings.Contains(string(raw), fixtureHookCommand) {
+		t.Fatalf("hooks file does not run %q:\n%s", fixtureHookCommand, raw)
 	}
 	other := filepath.Join(filepath.Dir(path), "personal.json")
 	if err := os.WriteFile(other, []byte("personal"), 0600); err != nil {

@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.14.0] - 2026-10-15
+
+### Features
+
+- **experiments**: add promptfoo export support (#819)
+- **experiments**: add report roles and importer foundations (#815)
+
+### Bug Fixes
+
+- **security**: resolve medium+ CVEs in npm dependencies (#863)
+
 ## [0.13.0] - 2026-08-25
 
 ### Features

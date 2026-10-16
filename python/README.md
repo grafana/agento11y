@@ -991,7 +991,8 @@ uses strict exact matching, and records explicit primary verdicts. Your target
 receives and returns strings; existing instrumentation binds conversations.
 Set `record_io=True` only to capture input/output for an uninstrumented target.
 Use a rubric or native framework metric for open-ended answers rather than
-assuming exact matching measures general quality. The
+assuming exact matching measures general quality. To record CI context on the
+run, refer to [Add CI context to a run](#add-ci-context-to-a-run). The
 [local demo](../examples/experiments/grafana/README.md) publishes a suite and
 compares a deliberately failing candidate with its correction.
 
@@ -1004,6 +1005,84 @@ affect it, and required judge errors remain unrated. `setup_evals()` provides
 one-call OTel setup without replacing application-owned providers. See the
 [evaluation-plan guide](docs/evaluation-plans.md) and
 [runnable mixed-judge example](../examples/experiments/grafana/judged.py).
+
+### Run a published suite version with your agent
+
+`run_checkpoint` runs your instrumented agent once per case of a published
+suite version and grades each case with the evaluators pinned to that version
+in Grafana Cloud. It requires `agento11y` 0.20.0 or later.
+
+```python
+from agento11y.experiments import AgentOutput, run_checkpoint
+
+run = run_checkpoint(
+    "dashboard-regression",
+    "3",
+    lambda prompt: AgentOutput(text=my_agent(prompt), flush=instrumentation_client.flush),
+    candidate={"agent_name": "dashboards", "agent_version": "1.4.0", "git_sha": "abc123"},
+)
+print(run.url)
+```
+
+Before calling your agent, it checks that the version is published, has
+exactly one primary verdict binding, and can resolve every case's grading
+inputs. Return `AgentOutput` with the flush of the client that instruments your
+agent, so each conversation is stored before it's graded. A case whose agent
+call or grading fails is recorded as errored and the run continues. If any
+case can't be fully graded, the run is finalized as failed. `timeout`
+(default one hour) stops new cases and grading from starting, but it can't
+interrupt an agent call that is already running, so give your agent its own
+timeout. It uses the same `AGENTO11Y_*` ingest and service-account credentials
+as `experiment_from_suite`.
+
+To gate CI on the result, compare a candidate run with a baseline run of the
+same version:
+
+```sh
+agento11y-checkpoint-gate --suite-id dashboard-regression --suite-version 3 \
+  --baseline <BASELINE_RUN_ID> --candidate <CANDIDATE_RUN_ID> \
+  --min-pass-rate 0.9 --max-drop 0.05
+```
+
+The gate prints a JSON verdict and exits `0` when the candidate passes, `1` on
+a regression, and `2` when either run can't support the comparison, for
+example an errored case or a score that doesn't match the pinned evaluators.
+The gate needs every case to complete on its first attempt, so a single
+provider error makes the comparison invalid. Rerun that run and gate again.
+
+#### Add CI context to a run
+
+`run_checkpoint` and `run_evals` accept `metadata` and `tags` for the run, such
+as the commit SHA, pull request number, or CI run URL. When you don't pass
+`experiment_id`, they use `AGENTO11Y_EXPERIMENT_ID` if it's set, so a CI wrapper
+can allocate the run ID before your command starts and find the run afterwards.
+Both require the next `agento11y` release after 0.20.0.
+
+```python
+import json
+import os
+
+from agento11y.experiments import AgentOutput, run_checkpoint
+
+run = run_checkpoint(
+    "dashboard-regression",
+    "3",
+    lambda prompt: AgentOutput(text=my_agent(prompt), flush=instrumentation_client.flush),
+    # Your CI passes this context however it likes; the SDK doesn't read AGENTO11Y_CI_METADATA.
+    metadata=json.loads(os.environ.get("AGENTO11Y_CI_METADATA", "{}")),
+    tags=["ci"],
+)
+```
+
+The SDK owns the `execution_kind`, `framework`, `input_selector`,
+`evaluation_plan`, `suite_id`, and `suite_version` keys, so a gate can trust
+them. Passing any of them in `metadata` raises `ValueError` before the run is
+created. Your `metadata` is copied, not changed.
+
+Only these two helpers read `AGENTO11Y_EXPERIMENT_ID`. `experiment()` and the
+framework adapters still create a new ID for every run. Because every helper
+call in one process gets the same ID, call one helper per process while the
+variable is set, or pass `experiment_id` to each call.
 
 ## Public API Overview
 

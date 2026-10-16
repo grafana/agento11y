@@ -660,3 +660,96 @@ def test_experiment_from_suite_pulls_then_builds_linked_experiment() -> None:
     assert exp.suite is suite
     assert exp.name == "Stored experiment"
     assert exp.planned_trial_count == 3
+
+
+def test_pull_checkpoint_rejects_draft_before_reading_cases() -> None:
+    from agento11y.errors import ValidationError
+
+    recorder = _Recorder()
+    recorder.push(200, _suite_body())
+    server = _serve(recorder)
+    try:
+        with pytest.raises(ValidationError, match="published checkpoint"):
+            _client(server).pull_suite("dashboard", "v3", require_published=True)
+        assert len(recorder.requests) == 1
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_binding_reads_and_preflight_use_exact_checkpoint_and_encoded_ids() -> None:
+    binding = {
+        "binding_id": "quality/primary",
+        "evaluator_id": "quality",
+        "evaluator_version": "v4",
+        "report_role": "primary_verdict",
+        "input_mappings": {"reference": "test_case.expected.answer"},
+    }
+    recorder = _Recorder()
+    recorder.push(200, {"items": [binding]})
+    recorder.push(200, {"binding": binding, "resolved_inputs": {"reference": "reviewed"}})
+    server = _serve(recorder)
+    try:
+        control = _client(server)
+        assert control.get_bindings("suite/one", "v2") == [binding]
+        result = control.preview_binding("suite/one", "v2", "case/one", binding["binding_id"])
+        assert result["binding"] == binding
+        assert recorder.requests[0]["path"].endswith("/test-suites/suite%2Fone/versions/v2/bindings")
+        assert recorder.requests[1]["path"].endswith(
+            "/versions/v2/test-cases/case%2Fone/bindings/quality%2Fprimary:preview"
+        )
+        assert recorder.requests[1]["method"] == "POST"
+        assert recorder.requests[1]["payload"] == {}
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_pulled_portable_case_uses_same_wire_snapshot_when_executed() -> None:
+    from agento11y.experiments.suites import _remote_case_to_local
+
+    stored = {
+        "test_case_id": "scalar",
+        "input": {"value": "question"},
+        "expected": {"value": "answer"},
+        "metadata": {
+            "source": "reviewed",
+            "agento11y.sdk.portability": {"version": 1, "weight": 2.0, "wrapped_fields": ["input", "expected"]},
+        },
+    }
+    suite = TestSuite("stored", version="v2", test_cases=[_remote_case_to_local(stored)])
+    client = _FakeExperimentClient()
+    with Experiment(client, experiment_id="portable-run", suite=suite) as run:
+        with run.trial(suite.cases[0]) as trial:
+            trial.final_score(True)
+    snapshot = client.trials[0][2]["test_case"]
+    for field in ("input", "expected", "metadata"):
+        assert snapshot[field] == stored[field]
+
+
+def test_reviewed_publication_uses_reviewed_content_without_refetch_and_surfaces_conflict():
+    recorder = _Recorder()
+    recorder.push(409, {"error": "reviewed content changed"})
+    server = _serve(recorder)
+    try:
+        suite = TestSuite("reviewed", version="v2", test_cases=[TestCase("case", input={"prompt": "reviewed"})])
+        binding = dict(
+            binding_id="quality",
+            evaluator_id="judge",
+            evaluator_version="v1",
+            report_role="primary_verdict",
+            input_mappings={},
+        )
+        with pytest.raises(ConflictError):
+            _client(server).publish_reviewed(suite, bindings=[binding])
+        assert len(recorder.requests) == 1
+        assert recorder.requests[0]["payload"] == {
+            "reviewed_publication": {
+                "cases": [{"test_case_id": "case", "input": {"prompt": "reviewed"}}],
+                "bindings": [binding],
+            }
+        }
+        assert recorder.requests[0]["path"].endswith("/versions/v2:publish")
+    finally:
+        server.shutdown()
+        server.server_close()

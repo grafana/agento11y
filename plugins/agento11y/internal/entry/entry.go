@@ -12,6 +12,8 @@
 //	agento11y vibe     [--local|--no-local] [--tag k=v] [-- args...]  — exec vibe after installing the sigil hook in vibe's hooks.toml
 //	agento11y cursor   install|uninstall                              — wire (or remove) the Cursor hook in ~/.cursor/hooks.json
 //	agento11y claude   install [--json]                               — register the Claude Code plugin without launching or prompting
+//	agento11y harbor   [run] -- <harbor run arguments>                — run Harbor with live experiment publishing
+//	agento11y harbor   export <job-directory> [flags]                 — publish a completed Harbor job
 //	agento11y agents   reconcile --agents all|name[,name...] --json   — reconcile registered noninteractive installers
 //	agento11y local start|open|status [--json]|stop|restart           — manage the local capture daemon
 //	agento11y history import <agent> [flags]                          — backfill an agent's existing local sessions
@@ -67,6 +69,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/doctor"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
+	launcherpkg "github.com/grafana/agento11y/plugins/agento11y/internal/launcher"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/login"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/skills"
@@ -178,6 +181,18 @@ var launchers = map[string]agentLauncher{
 // exit is a package var so tests can intercept termination.
 var exit = os.Exit
 
+// exitAfterLaunchError exits with the agent's own code when the agent ran and
+// failed. The agent has already reported that failure itself, so only an error
+// from starting it gets a message here.
+func exitAfterLaunchError(stderr io.Writer, err error) {
+	if exitErr, ok := errors.AsType[*launcherpkg.ExitError](err); ok {
+		exit(exitErr.ExitCode())
+		return
+	}
+	_, _ = fmt.Fprintf(stderr, "agento11y: %v\n", err)
+	exit(1)
+}
+
 // loginRun is a package var so tests can stub the interactive login flow
 // without driving the huh TTY. Production code points at login.Run.
 var loginRun = login.Run
@@ -277,6 +292,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 		return
 	}
 
+	if args[0] == "harbor" {
+		runHarborCommand(args[1:], stderr)
+		return
+	}
+
 	if len(args) >= 2 && args[0] == "claude" && args[1] == "eval" {
 		runClaudeEvalCommand(args[2:], stdout, stderr)
 		return
@@ -319,7 +339,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 		destinationSet := localDestinationSet()
 		keepLocalSetting := noLocalOverride || shellCloudOverride
 
-		logger := cli.InitLogger(args[0])
+		logger, closeLog := cli.InitLogger(args[0])
+		defer closeLog()
 
 		// Run first-time setup before launching. login.Run asks where sessions go
 		// before it asks for Cloud credentials. It returns ErrNotInteractive when
@@ -375,8 +396,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 
 		if err := launcher(context.Background(), launcherArgs, localEnv, stdin, stdout, stderr, logger, version); err != nil {
 			logger.Printf("launch %s: %v", args[0], err)
-			_, _ = fmt.Fprintf(stderr, "agento11y: %v\n", err)
-			exit(1)
+			exitAfterLaunchError(stderr, err)
 			return
 		}
 		return
@@ -425,7 +445,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 	// Cursor (and Codex headless) launch hooks under a stripped environment
 	// where the dotenv is the only place SIGIL_DEBUG could come from.
 	dotenv.ApplyEnv(nil)
-	logger := cli.InitLogger(agent)
+	logger, closeLog := cli.InitLogger(agent)
+	defer closeLog()
 	defer cli.RecoverAndLog(logger)
 	applyLocalHookEnv(logger)
 
@@ -454,9 +475,8 @@ const (
 var (
 	localHookStartMu     sync.Mutex
 	localHookStartFailed bool
-	// hookLocalReceiverSupported is a test seam for the Windows path,
-	// where the local receiver cannot start and hooks must keep Cloud
-	// credentials instead of rewriting to loopback.
+	// hookLocalReceiverSupported is a test seam for the path taken when
+	// local.ReceiverSupported reports false. Every current build target reports true.
 	hookLocalReceiverSupported = local.ReceiverSupported
 )
 
@@ -472,8 +492,8 @@ var (
 // daemon is logged and the env still points at loopback so a down receiver
 // cannot leak the turn to Cloud. A later hook in this process, or a later
 // process within hookStartFailTTL, skips the start attempt unless a
-// receiver is already healthy. On platforms where the receiver cannot
-// run (Windows), the Cloud endpoint is left in place.
+// receiver is already healthy. When local.ReceiverSupported reports false,
+// the configured endpoint is left in place.
 func applyLocalHookEnv(logger *log.Logger) {
 	if !envconfig.ParseBool(envconfig.Getenv("LOCAL")) {
 		return
@@ -589,7 +609,8 @@ func runLoginCommand(args []string, stdin io.Reader, stderr io.Writer) {
 
 	dotenv.ApplyEnv(nil)
 	destinationSet := localDestinationSet()
-	logger := cli.InitLogger("login")
+	logger, closeLog := cli.InitLogger("login")
+	defer closeLog()
 
 	result, err := loginRun(context.Background(), login.RunOpts{
 		// Only the explicit `agento11y login` shows the “Try sigil claude/pi”
@@ -690,7 +711,8 @@ func runCursorInstall(verb string, stdout, stderr io.Writer) {
 	// $XDG_CONFIG_HOME/agento11y/config.env still enables file logging, and
 	// before HasCredentials so dotenv-supplied credentials are visible.
 	dotenv.ApplyEnv(nil)
-	logger := cli.InitLogger("cursor")
+	logger, closeLog := cli.InitLogger("cursor")
+	defer closeLog()
 
 	if verb == "uninstall" {
 		if err := cursorUninstall(stdout, stderr, logger); err != nil {
@@ -785,9 +807,13 @@ func runAgentInstall(agent string, args []string, stdout, stderr io.Writer) {
 	case "copilot":
 		changed, err = copilotInstall()
 	case "opencode":
-		changed, err = opencodeInstall(context.Background(), writer, cli.InitLogger("opencode"))
+		logger, closeLog := cli.InitLogger("opencode")
+		changed, err = opencodeInstall(context.Background(), writer, logger)
+		closeLog()
 	case "pi":
-		changed, err = piInstall(context.Background(), writer, cli.InitLogger("pi"))
+		logger, closeLog := cli.InitLogger("pi")
+		changed, err = piInstall(context.Background(), writer, logger)
+		closeLog()
 	}
 	switch {
 	case errors.Is(err, claudecode.ErrCLINotFound), errors.Is(err, opencode.ErrCLINotFound), errors.Is(err, pi.ErrCLINotFound):
@@ -900,7 +926,9 @@ func runAgentsReconcile(args []string, stdout, stderr io.Writer) {
 	failed := false
 	missingHost := false
 	for _, spec := range selected {
-		changed, err := spec.Install(context.Background(), io.Discard, cli.InitLogger("reconcile-"+spec.Name))
+		logger, closeLog := cli.InitLogger("reconcile-" + spec.Name)
+		changed, err := spec.Install(context.Background(), io.Discard, logger)
+		closeLog()
 		result := agentInstallResult{Agent: spec.Name}
 		switch {
 		case err != nil && spec.IsMissingHost != nil && spec.IsMissingHost(err):
@@ -1353,7 +1381,8 @@ func runLocalCommand(args []string, stdout, stderr io.Writer) {
 		_, _ = fmt.Fprintln(stdout, clihelp.New(stdout).Success(fmt.Sprintf("agento11y local receiver running at %s (pid %d)", status.Endpoint, status.PID)))
 	case "serve":
 		// Internal: invoked by the daemon child. Blocks until SIGTERM.
-		logger := cli.InitLogger("local")
+		logger, closeLog := cli.InitLogger("local")
+		defer closeLog()
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 		defer cancel()
 		if err := local.Serve(ctx, dir, local.DefaultPort, logger); err != nil {

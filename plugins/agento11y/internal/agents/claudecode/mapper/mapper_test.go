@@ -415,6 +415,61 @@ func TestProcess_ConversationTitle(t *testing.T) {
 	}
 }
 
+// A metadata_only export drops the title, so Process does not redact a prompt
+// for it. The session state still records the title.
+func TestProcess_TitleDroppedTitlesWithTheSessionID(t *testing.T) {
+	st := state.Session{}
+	lines := []transcript.Line{
+		makeUserLine("fix the auth bug"),
+		makeAssistantLine("claude-sonnet-4-20250514", 10, []transcript.ContentBlock{
+			{Type: "text", Text: "ok"},
+		}, "end_turn"),
+	}
+	gens, _ := Process(lines, &st, Options{SessionID: "sess-1", TitleDropped: true}, nil)
+	if len(gens) != 1 {
+		t.Fatalf("got %d generations, want 1", len(gens))
+	}
+	if gens[0].ConversationTitle != "sess-1" {
+		t.Errorf("ConversationTitle = %q, want the session ID", gens[0].ConversationTitle)
+	}
+	if st.Title != "fix the auth bug" {
+		t.Errorf("state.Title = %q, want the first prompt", st.Title)
+	}
+}
+
+func TestSlashCommandTitle(t *testing.T) {
+	tests := []struct {
+		name   string
+		record string
+		want   string
+	}{
+		{
+			name:   "name and args",
+			record: "<command-name>/model</command-name>\n            <command-message>model</command-message>\n            <command-args>opus</command-args>",
+			want:   "/model opus",
+		},
+		{
+			name:   "message before name, no args",
+			record: "<command-message>doctor</command-message>\n<command-name>/doctor</command-name>",
+			want:   "/doctor",
+		},
+		{
+			// Regression: an unclosed tag returned the rest of the record, so
+			// the sibling tags leaked into the title.
+			name:   "name not closed",
+			record: "<command-name>/foo\n<command-args>bar baz</command-args>",
+			want:   "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := slashCommandTitle(tt.record); got != tt.want {
+				t.Errorf("slashCommandTitle = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestProcess_ToolUses(t *testing.T) {
 	lines := []transcript.Line{
 		makeUserLine("read file.go"),

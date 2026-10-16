@@ -374,21 +374,21 @@ func TestMergeGenerationExportConfigInsecure(t *testing.T) {
 	}{
 		{
 			name:             "override unset preserves base",
-			baseInsecure:     BoolPtr(true),
+			baseInsecure:     new(true),
 			overrideInsecure: nil,
-			wantInsecure:     BoolPtr(true),
+			wantInsecure:     new(true),
 		},
 		{
 			name:             "override false replaces base true",
-			baseInsecure:     BoolPtr(true),
-			overrideInsecure: BoolPtr(false),
-			wantInsecure:     BoolPtr(false),
+			baseInsecure:     new(true),
+			overrideInsecure: new(false),
+			wantInsecure:     new(false),
 		},
 		{
 			name:             "override true replaces base false",
-			baseInsecure:     BoolPtr(false),
-			overrideInsecure: BoolPtr(true),
-			wantInsecure:     BoolPtr(true),
+			baseInsecure:     new(false),
+			overrideInsecure: new(true),
+			wantInsecure:     new(true),
 		},
 		{
 			name:             "both nil remains nil",
@@ -605,7 +605,7 @@ func TestNewHTTPGenerationExporterTimeout(t *testing.T) {
 			cfg := testCase.cfg
 			cfg.Protocol = GenerationExportProtocolHTTP
 			cfg.Endpoint = "http://localhost:8080"
-			cfg.Insecure = BoolPtr(true)
+			cfg.Insecure = new(true)
 
 			exporter, err := newGenerationExporter(cfg)
 			if err != nil {
@@ -794,7 +794,7 @@ func TestNewHTTPGenerationExporterUsesEndpointScheme(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			exporter, err := newHTTPGenerationExporter(GenerationExportConfig{
 				Endpoint: testCase.endpoint,
-				Insecure: BoolPtr(testCase.insecure),
+				Insecure: new(testCase.insecure),
 			})
 			if err != nil {
 				t.Fatalf("newHTTPGenerationExporter failed: %v", err)

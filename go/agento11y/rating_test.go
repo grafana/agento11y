@@ -230,7 +230,7 @@ func newRatingTestClient(t *testing.T, options ratingTestClientOptions) *Client 
 			Protocol:        options.generationProtocol,
 			Endpoint:        options.generationEndpoint,
 			Auth:            options.auth,
-			Insecure:        BoolPtr(true),
+			Insecure:        new(true),
 			BatchSize:       1,
 			FlushInterval:   time.Hour,
 			QueueSize:       1,

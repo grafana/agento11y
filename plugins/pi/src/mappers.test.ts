@@ -1450,10 +1450,11 @@ describe("applyRedactedText", () => {
 describe("mapPiUsage", () => {
   it.each([
     {
-      name: "full usage block",
+      name: "full usage block with positive reasoning",
       usage: {
         input: 120000,
         output: 8000,
+        reasoning: 7,
         cacheRead: 40,
         cacheWrite: 12,
         totalTokens: 128052,
@@ -1465,6 +1466,7 @@ describe("mapPiUsage", () => {
         totalTokens: 128052,
         cacheReadInputTokens: 40,
         cacheWriteInputTokens: 12,
+        reasoningTokens: 7,
       },
     },
     {
@@ -1479,10 +1481,11 @@ describe("mapPiUsage", () => {
       },
     },
     {
-      name: "absent cost is not part of the token mapping",
+      name: "explicit zero reasoning without cost",
       usage: {
         input: 1,
         output: 2,
+        reasoning: 0,
         cacheRead: 0,
         cacheWrite: 0,
         totalTokens: 3,
@@ -1493,6 +1496,7 @@ describe("mapPiUsage", () => {
         totalTokens: 3,
         cacheReadInputTokens: 0,
         cacheWriteInputTokens: 0,
+        reasoningTokens: 0,
       },
     },
     {
@@ -1510,12 +1514,20 @@ describe("mapPiUsage", () => {
     expect(mapPiUsage(usage)).toEqual(want);
   });
 
-  it("produces the same fields the turn path exports", () => {
+  it.each([
+    undefined,
+    0,
+    7,
+  ])("matches the turn path with reasoning=%s", (reasoning) => {
     // Guard against drift: mapGenerationResult must stay byte-identical to
     // mapPiUsage so turn and summary generations report tokens the same way.
     const msg = makeMsg();
-    expect(mapGenerationResult(msg, [], "metadata_only").usage).toEqual(
-      mapPiUsage(msg.usage),
+    if (reasoning !== undefined) Object.assign(msg.usage, { reasoning });
+    const usage = mapGenerationResult(msg, [], "metadata_only").usage;
+    expect(usage).toEqual(mapPiUsage(msg.usage));
+    expect(usage?.reasoningTokens).toBe(reasoning);
+    expect(Object.hasOwn(usage!, "reasoningTokens")).toBe(
+      reasoning !== undefined,
     );
   });
 });

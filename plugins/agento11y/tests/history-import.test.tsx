@@ -106,6 +106,15 @@ describe('HistoryImportBanner', () => {
     expect(text).toContain('sends nothing to Grafana Cloud');
   });
 
+  // Regression: the text was cut with an ellipsis, so its end, that the import
+  // sends nothing to Grafana Cloud, could not be read.
+  it('wraps its text instead of cutting it', () => {
+    render(<HistoryImportBanner history={historyImport()} />);
+    const style = (screen.getByText(/wrote 12 sessions/) as HTMLElement).style;
+    expect(style.whiteSpace).not.toBe('nowrap');
+    expect(style.textOverflow).not.toBe('ellipsis');
+  });
+
   it('marks an estimated turn count as approximate', () => {
     render(<HistoryImportBanner history={historyImport({ offers: [offer({ approx_turns: true })] })} />);
     expect(screen.getByText(/about 480 turns/)).toBeTruthy();
@@ -208,6 +217,12 @@ describe('SettingsHistoryTab', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Import 2 sessions' }));
     expect(history.start).toHaveBeenNthCalledWith(2, 'claude-code', { since: selectedSince });
+  });
+
+  it('names the command that imports the selected agent into Grafana Cloud', () => {
+    vi.stubGlobal('fetch', vi.fn().mockReturnValue(deferred<Response>().promise));
+    render(<SettingsHistoryTab history={settingsHistory()} />);
+    expect(screen.getByText('agento11y history import claude-code --no-local')).toBeTruthy();
   });
 
   it('waits for the effective default date before opening the calendar', async () => {

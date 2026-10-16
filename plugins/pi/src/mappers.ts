@@ -65,6 +65,7 @@ export interface PiAssistantMessage {
   usage: {
     input: number;
     output: number;
+    reasoning?: number;
     cacheRead: number;
     cacheWrite: number;
     totalTokens: number;
@@ -334,6 +335,7 @@ export function mapGenerationResult(
 export interface PiUsageLike {
   input?: number;
   output?: number;
+  reasoning?: number;
   cacheRead?: number;
   cacheWrite?: number;
   totalTokens?: number;
@@ -344,8 +346,8 @@ export interface PiUsageLike {
  * Map pi usage to the SDK's `TokenUsage`. Shared by the turn path and the
  * summary path so the two cannot drift.
  *
- * The field set is narrower than pi's `Usage`. `reasoning` and `cacheWrite1h`
- * are not forwarded, and `totalTokens` is passed through as pi computes it
+ * The field set is narrower than pi's `Usage`. `cacheWrite1h` is not
+ * forwarded, and `totalTokens` is passed through as pi computes it
  * (`input + output + cacheRead + cacheWrite`) instead of being recomputed to
  * the Go launchers' `input + output`. Either change would move existing golden
  * fixtures, so both stay as they are.
@@ -357,6 +359,9 @@ export function mapPiUsage(usage: PiUsageLike): TokenUsage {
     totalTokens: usage.totalTokens ?? 0,
     cacheReadInputTokens: usage.cacheRead ?? 0,
     cacheWriteInputTokens: usage.cacheWrite ?? 0,
+    ...(usage.reasoning !== undefined
+      ? { reasoningTokens: usage.reasoning }
+      : {}),
   };
 }
 
@@ -364,6 +369,7 @@ export function mapPiUsage(usage: PiUsageLike): TokenUsage {
 export const PI_USAGE_TOKEN_FIELDS = [
   "input",
   "output",
+  "reasoning",
   "cacheRead",
   "cacheWrite",
   "totalTokens",

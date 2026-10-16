@@ -11,8 +11,14 @@ import (
 
 // Session holds the persisted state for a single session.
 type Session struct {
-	Offset int64  `json:"offset"`
-	Title  string `json:"title,omitempty"`
+	Offset int64 `json:"offset"`
+	// Title is the first prompt the user typed, the fallback when Claude Code
+	// has written no title of its own.
+	Title string `json:"title,omitempty"`
+	// AITitle and CustomTitle are the newest titles Claude Code wrote for the
+	// session: the one it generates, and the name the user gave it.
+	AITitle     string `json:"ai_title,omitempty"`
+	CustomTitle string `json:"custom_title,omitempty"`
 	// Model is captured from SessionStart so tool hooks can include model context
 	// when calling agento11y guards (PreToolUse events do not include model fields).
 	Model string `json:"model,omitempty"`

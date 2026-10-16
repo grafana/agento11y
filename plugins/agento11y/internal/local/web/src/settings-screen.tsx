@@ -257,11 +257,9 @@ export function HistoryImportBanner({ history, onOpenSettings }: HistoryImportBa
       <span
         style={{
           fontSize: 12.5,
+          lineHeight: 1.4,
           color: 'var(--fg2)',
           minWidth: 0,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
         }}
       >
         {offer.display_name} wrote {offer.sessions} session
@@ -2558,7 +2556,12 @@ export function SettingsHistoryTab({ history }: SettingsHistoryTabProps) {
       >
         Backfill sessions an agent recorded before agento11y was installed. The import writes to the local store on this
         machine. The daemon never relays it to Grafana Cloud, whatever{' '}
-        <b style={{ fontWeight: 500, color: 'var(--fg2)' }}>Cloud forwarding</b> on the Cloud tab is set to.
+        <b style={{ fontWeight: 500, color: 'var(--fg2)' }}>Cloud forwarding</b> on the Cloud tab is set to. To send
+        past sessions to Grafana Cloud, run{' '}
+        <code style={{ fontFamily: 'var(--fontFamilyMonospace)', color: 'var(--fg2)' }}>
+          agento11y history import {selected || '<agent>'} --no-local
+        </code>{' '}
+        in a terminal.
       </div>
       <SettingRow label="Agent" help={<>Only agents with an importer are listed.</>}>
         <Select

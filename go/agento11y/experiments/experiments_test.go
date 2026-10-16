@@ -22,8 +22,6 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-func boolPointer(value bool) *bool { return &value }
-
 func TestWithExperimentParentsTrialAndAgentSpans(t *testing.T) {
 	recorder := tracetest.NewSpanRecorder()
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
@@ -42,7 +40,7 @@ func TestWithExperimentParentsTrialAndAgentSpans(t *testing.T) {
 		_, _ = w.Write([]byte(`{}`))
 	}))
 	defer server.Close()
-	client, err := NewClient(ClientOptions{Endpoint: server.URL, IngestToken: "token", UseExperimentalOTel: boolPointer(true)})
+	client, err := NewClient(ClientOptions{Endpoint: server.URL, IngestToken: "token", UseExperimentalOTel: new(true)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +185,7 @@ func TestWithTrialEnterFailureReleasesClaimForRetry(t *testing.T) {
 
 	client, err := NewClient(ClientOptions{
 		Endpoint: server.URL, IngestToken: "token",
-		UseExperimentalOTel: boolPointer(false),
+		UseExperimentalOTel: new(false),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -271,7 +269,7 @@ func TestExperimentLifecycleContractAndStableOccurrences(t *testing.T) {
 
 	client, err := NewClient(ClientOptions{
 		Endpoint: server.URL, TenantID: "123", IngestToken: "token",
-		UseExperimentalOTel: boolPointer(false),
+		UseExperimentalOTel: new(false),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -783,7 +781,7 @@ func (s *trialEvaluationServer) newClient(t *testing.T, enableExperimentalFeatur
 	}
 	client, err := NewClient(ClientOptions{
 		Endpoint: s.server.URL, TenantID: "123", IngestToken: "token",
-		UseExperimentalOTel:        boolPointer(false),
+		UseExperimentalOTel:        new(false),
 		EnableExperimentalFeatures: experimentalOverride,
 	})
 	if err != nil {
@@ -796,7 +794,7 @@ func (s *trialEvaluationServer) newClient(t *testing.T, enableExperimentalFeatur
 func TestClientForwardsTrialEvaluationCalls(t *testing.T) {
 	clearExperimentalGate(t)
 	server := newTrialEvaluationServer(t, "queued")
-	client := server.newClient(t, boolPointer(true))
+	client := server.newClient(t, new(true))
 
 	evaluation, err := client.TriggerTrialEvaluation(context.Background(), "exp-1", "trial-1", TriggerTrialEvaluationRequest{
 		EvaluatorID: "helpfulness", EvaluatorVersion: "v3",
@@ -879,7 +877,7 @@ func indexOfRequest(requests []capturedRequest, match func(capturedRequest) bool
 func TestTrialEvaluatePersistsConversationAndClosesCompleted(t *testing.T) {
 	clearExperimentalGate(t)
 	server := newTrialEvaluationServer(t, "queued", "claimed", "success")
-	_, trial := newCloudEvaluatedTrial(t, server, boolPointer(true))
+	_, trial := newCloudEvaluatedTrial(t, server, new(true))
 	trial.BindConversation("conv-1").RecordIO(RecordIOOptions{Input: "2+2", Output: "4"})
 
 	evaluation, err := trial.Evaluate(context.Background(), "helpfulness", EvaluateOptions{
@@ -1179,9 +1177,9 @@ func clearExperimentalGate(t *testing.T) {
 func TestCloudTrialEvaluationBlockedWithoutTheGate(t *testing.T) {
 	t.Setenv(agento11y.EnvEnableExperimentalFeatures, "true")
 	server := newTrialEvaluationServer(t, "success")
-	_, trial := newCloudEvaluatedTrial(t, server, boolPointer(false))
+	_, trial := newCloudEvaluatedTrial(t, server, new(false))
 	trial.BindConversation("conv-1")
-	client := server.newClient(t, boolPointer(false))
+	client := server.newClient(t, new(false))
 	before := len(server.captured())
 
 	if _, err := trial.Evaluate(context.Background(), "helpfulness"); !errors.Is(err, agento11y.ErrExperimentalFeatureDisabled) {

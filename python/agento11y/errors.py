@@ -23,6 +23,19 @@ class ClientShutdownError(EnqueueError):
     """Raised when enqueue happens while shutdown is in progress."""
 
 
+class FlushNotVerifiableError(Agento11yError):
+    """Raised when no explicit provider can report local trace flush completion."""
+
+
+class ExportFlushError(Agento11yError):
+    """Raised when a flush cannot confirm export.
+
+    Covers a native export the server rejected and an explicit tracer
+    provider whose force_flush() does not return True. Transport and provider
+    exceptions propagate unchanged.
+    """
+
+
 class MappingError(Agento11yError):
     """Raised when provider mapper logic fails."""
 

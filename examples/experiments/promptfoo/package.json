@@ -9,6 +9,6 @@
   },
   "dependencies": {
     "@grafana/agento11y": "link:../../../js",
-    "promptfoo": "0.123.0"
+    "promptfoo": "0.124.1"
   }
 }

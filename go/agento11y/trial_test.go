@@ -33,7 +33,7 @@ func TestTrialLifecycleCreatesTypedTrialAndFinalScore(t *testing.T) {
 	}
 	verifier := Evaluator{EvaluatorID: "exact", Version: "1", Kind: EvaluatorKindDeterministic}
 	trial.FinalScore(NumberScoreValue(1), ScoreOptions{
-		Passed:      BoolPtr(true),
+		Passed:      new(true),
 		Explanation: "matched",
 		Evaluator:   &verifier,
 		Metadata: map[string]any{

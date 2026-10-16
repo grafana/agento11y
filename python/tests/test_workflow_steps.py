@@ -259,6 +259,27 @@ def test_client_retries_workflow_step_export() -> None:
     assert exporter.wf_batches[0][0].id == "wfs_b"
 
 
+def test_rejected_workflow_step_is_logged_without_failing_flush() -> None:
+    class RejectingExporter(_RecordingExporter):
+        def export_workflow_steps(self, request):
+            # A retried step that already landed comes back as an opaque internal error.
+            return ExportWorkflowStepsResponse(
+                results=[
+                    ExportWorkflowStepResult(
+                        step_id=step.id, accepted=False, error="internal server error; error_id=abc"
+                    )
+                    for step in request.workflow_steps
+                ]
+            )
+
+    client = _client_with_exporter(RejectingExporter())
+    try:
+        client.enqueue_workflow_step(WorkflowStep(id="wfs_dup", conversation_id="c1", step_name="route"))
+        client.flush()
+    finally:
+        client.shutdown()
+
+
 def test_enqueue_workflow_step_defaults_timestamps_and_merges_tags() -> None:
     now = datetime(2026, 3, 12, 12, 0, 0, tzinfo=timezone.utc)
     exporter = _RecordingExporter()

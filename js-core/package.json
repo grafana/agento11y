@@ -1,6 +1,6 @@
 {
   "name": "@grafana/agento11y-core",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -46,7 +46,7 @@
     }
   },
   "devDependencies": {
-    "@grpc/grpc-js": "1.14.4",
+    "@grpc/grpc-js": "1.14.6",
     "@grpc/proto-loader": "0.8.0",
     "@types/node": "24.12.0",
     "typescript": "6.0.2"

@@ -45,7 +45,7 @@ agento11y claude eval import --help
 <details>
 <summary>If your installed release doesn't include the exporter yet</summary>
 
-Install the CLI from `main` with Go 1.25+ and put it first on your `PATH`:
+Install the CLI from `main` with Go 1.26.9+ and put it first on your `PATH`:
 
 ```bash
 GOBIN="$HOME/.local/bin" GOWORK=off go install github.com/grafana/agento11y/plugins/agento11y/cmd/agento11y@main

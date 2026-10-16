@@ -38,8 +38,8 @@ func promptStatePath(agent AgentID) string {
 }
 
 // ShouldOfferPrompt reports whether the viewer should offer to import an
-// agent's history. Once the user dismisses the offer or completes an import,
-// it stops asking.
+// agent's history. Once the user dismisses the offer or completes an import
+// into the local store, it stops asking.
 func ShouldOfferPrompt(agent AgentID) (bool, error) {
 	if _, ok := Spec(agent); !ok {
 		return false, fmt.Errorf("history: unknown agent %q", agent)

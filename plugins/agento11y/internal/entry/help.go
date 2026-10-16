@@ -47,6 +47,9 @@ func publicHelpPages() map[string]clihelp.Page {
 	add("skills get", "Print a bundled skill as raw Markdown. Alias for skills show.", "<name>")
 	add("claude eval", "Export Claude plugin eval results to Experiments.", "<command>")
 	add("claude eval import", "Export Claude plugin eval results. Use --dry-run to preview the redacted JSON without uploading.", "<results.json> [flags]")
+	add("harbor", "Run Harbor evaluations with live Agent Observability publishing.", "[run] -- <harbor run arguments>")
+	add("harbor run", "Run a Harbor job with the Agent Observability job plugin.", "-- <harbor run arguments>")
+	add("harbor export", "Export a completed Harbor job directory to Experiments.", "<job-directory> [flags]")
 	launcherNames := make([]string, 0, len(launchers))
 	for name := range launchers {
 		launcherNames = append(launcherNames, name)
@@ -76,7 +79,7 @@ func publicHelpPages() map[string]clihelp.Page {
 	}
 	children("", "Setup", "login", "doctor", "agents")
 	children("", "Launchers", launcherNames...)
-	children("", "Commands", "cursor", "guards", "local", "history", "skills", "help")
+	children("", "Commands", "cursor", "guards", "harbor", "local", "history", "skills", "help")
 	children("guards", "Commands", "test")
 	children("agents", "Commands", "reconcile")
 	children("cursor", "Commands", "install", "uninstall")
@@ -84,6 +87,7 @@ func publicHelpPages() map[string]clihelp.Page {
 	children("history", "Commands", "import")
 	children("skills", "Commands", "list", "show", "get")
 	children("claude eval", "Commands", "import")
+	children("harbor", "Commands", "run", "export")
 	for _, name := range []string{"claude", "copilot", "opencode", "pi", "kiro"} {
 		children(name, "Commands", "install")
 	}
@@ -197,6 +201,11 @@ func usageError(stderr io.Writer, path, message string) {
 	clihelp.UsageError(stderr, page, message)
 }
 
+// helpGroups are command groups that print their help when run without a subcommand.
+var helpGroups = map[string]bool{
+	"local": true, "history": true, "skills": true, "agents": true, "cursor": true, "claude eval": true, "harbor": true,
+}
+
 func routeHelp(args []string, stdout, stderr io.Writer) bool {
 	if len(args) == 0 {
 		printHelp("", stdout)
@@ -245,10 +254,12 @@ func routeHelp(args []string, stdout, stderr io.Writer) bool {
 		return true
 	}
 	rest := args[consumed:]
-	group := path == "local" || path == "history" || path == "skills" || path == "agents" || path == "cursor" || path == "claude eval"
-	if group && len(rest) == 0 {
+	if helpGroups[path] && len(rest) == 0 {
 		printHelp(path, stdout)
 		return true
+	}
+	if strings.HasPrefix(path+" ", "harbor ") {
+		return routeHarborHelp(path, rest, stdout)
 	}
 	if _, launcher := launchers[path]; launcher {
 		_, err := parseLauncherOptions(path, rest)
@@ -273,7 +284,7 @@ func routeHelp(args []string, stdout, stderr io.Writer) bool {
 	if err != nil {
 		return parsedHelp(path, err, stdout, stderr)
 	}
-	if group && fs.NArg() > 0 {
+	if helpGroups[path] && fs.NArg() > 0 {
 		usageError(stderr, path, fmt.Sprintf("unknown %s verb %q", path, fs.Arg(0)))
 		exit(2)
 		return true
