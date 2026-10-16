@@ -11,6 +11,10 @@ type BuiltinInputs struct {
 	Entrypoint        string
 	GitBranch         string
 	IsBackgroundAgent bool
+	// ModelParams is Cursor's `model_params`, id -> value. Each becomes a
+	// `model_param.<id>` tag, so Auto turns — which all report the same
+	// auto-smart slug — stay distinguishable by their routing mode.
+	ModelParams map[string]string
 }
 
 // Build returns the per-generation built-in tags. SIGIL_TAGS-supplied values
@@ -34,6 +38,12 @@ func Build(in BuiltinInputs) map[string]string {
 	}
 	if in.IsBackgroundAgent {
 		out["subagent"] = "true"
+	}
+	for id, value := range in.ModelParams {
+		if id == "" || value == "" {
+			continue
+		}
+		out["model_param."+id] = value
 	}
 	if len(out) == 0 {
 		return nil

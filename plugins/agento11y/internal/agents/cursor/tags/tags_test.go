@@ -34,6 +34,33 @@ func TestBuild(t *testing.T) {
 			},
 		},
 		{
+			name: "model params become model_param tags",
+			in: BuiltinInputs{
+				WorkspaceRoot: "/ws",
+				ModelParams:   map[string]string{"optimize_for": "balanced", "thinking": "high"},
+			},
+			check: func(t *testing.T, got map[string]string) {
+				if got["model_param.optimize_for"] != "balanced" {
+					t.Errorf("model_param.optimize_for = %q; want balanced", got["model_param.optimize_for"])
+				}
+				if got["model_param.thinking"] != "high" {
+					t.Errorf("model_param.thinking = %q; want high", got["model_param.thinking"])
+				}
+			},
+		},
+		{
+			name: "empty model param values are skipped",
+			in: BuiltinInputs{
+				WorkspaceRoot: "/ws",
+				ModelParams:   map[string]string{"optimize_for": ""},
+			},
+			check: func(t *testing.T, got map[string]string) {
+				if _, ok := got["model_param.optimize_for"]; ok {
+					t.Error("empty model param value should not produce a tag")
+				}
+			},
+		},
+		{
 			name: "no inputs returns nil",
 			in:   BuiltinInputs{},
 			check: func(t *testing.T, got map[string]string) {

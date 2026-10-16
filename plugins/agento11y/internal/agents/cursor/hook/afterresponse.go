@@ -41,6 +41,7 @@ func AfterAgentResponse(p Payload, cfg config.Config, logger *log.Logger) {
 		if provider := strings.TrimSpace(p.Provider); provider != "" {
 			f.Provider = provider
 		}
+		applyModelParams(f, p)
 		if keepText && p.Text != "" {
 			f.Assistant = append(f.Assistant, fragment.AssistantSegment{Text: p.Text, Timestamp: ts})
 		}
