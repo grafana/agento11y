@@ -1015,6 +1015,9 @@ func TestForwardLoader_StatusReportsFailures(t *testing.T) {
 	assert.Equal(t, failures[0].At, failedLeg.LastFailureAt)
 	assert.Equal(t, failures[0].Detail, failedLeg.LastFailureDetail)
 	assert.Empty(t, failedLeg.LastSuccessAt)
+	failureAt, err := time.Parse(time.RFC3339Nano, failedLeg.LastFailureAt)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { return time.Now().After(failureAt) }, time.Second, time.Millisecond)
 
 	// A success clears the ring but keeps the earlier failure in the leg record.
 	status = http.StatusOK
@@ -1023,8 +1026,6 @@ func TestForwardLoader_StatusReportsFailures(t *testing.T) {
 	assert.Empty(t, recovered.Failures)
 	generationLeg := recovered.Legs[forwardLabelGenerations]
 	assert.NotEmpty(t, generationLeg.LastSuccessAt)
-	failureAt, err := time.Parse(time.RFC3339Nano, generationLeg.LastFailureAt)
-	require.NoError(t, err)
 	successAt, err := time.Parse(time.RFC3339Nano, generationLeg.LastSuccessAt)
 	require.NoError(t, err)
 	assert.True(t, successAt.After(failureAt), "sub-second recovery order must be preserved")
