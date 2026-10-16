@@ -141,7 +141,7 @@ func previewAll(ctx context.Context, agent AgentID, imp Importer, paths []string
 					for j := range previews {
 						previews[j].Agent = agent
 						previews[j].SourcePath = path
-						previews[j].Active = isActiveMod(previews[j].LastActivityAt, at, window)
+						previews[j].Active = previews[j].Active || isActiveMod(previews[j].LastActivityAt, at, window)
 					}
 					slots[i] = slot{previews: previews}
 					continue

@@ -118,7 +118,7 @@ func openCodeConversationIDs(rows []sessiondb.Session) map[string]string {
 		seen := map[string]bool{current: true}
 		for {
 			currentRow, found := byID[current]
-			if !found || currentRow.ParentID == "" {
+			if !found || currentRow.ParentID == "" || currentRow.ForkSessionID != "" {
 				break
 			}
 			if seen[currentRow.ParentID] {
@@ -132,12 +132,10 @@ func openCodeConversationIDs(rows []sessiondb.Session) map[string]string {
 	return out
 }
 
-// openOpenCodeStore states the consequence of a rejected schema: a mixed
-// v1 and v2 database would otherwise look like a complete, older history.
 func openOpenCodeStore(ctx context.Context, path string) (*sessiondb.Store, error) {
 	store, err := sessiondb.Open(ctx, path)
 	if errors.Is(err, sessiondb.ErrUnsupportedSchema) {
-		return nil, fmt.Errorf("%w; history import reads only OpenCode v1 session tables, so no sessions were read from this database", err)
+		return nil, fmt.Errorf("%w; no sessions were read from this database", err)
 	}
 	return store, err
 }
@@ -170,6 +168,7 @@ func (o *opencodeImporter) Previews(ctx context.Context, path string) ([]Session
 			SizeBytes:      row.LogicalSizeBytes,
 			StartedAt:      row.CreatedAt,
 			LastActivityAt: row.UpdatedAt,
+			Active:         row.Active,
 		})
 	}
 	return previews, nil
@@ -183,6 +182,15 @@ func (o *opencodeImporter) Turns(ctx context.Context, sess SessionPreview) iter.
 			return
 		}
 		defer func() { _ = store.Close() }()
+
+		if store.Layout() == sessiondb.LayoutV2 {
+			for gen, err := range opencodeV2Turns(ctx, store, sess) {
+				if !yield(gen, err) {
+					return
+				}
+			}
+			return
+		}
 
 		lineage, err := resolveOpenCodeLineage(ctx, store, sess.SessionID, sess.SourcePath)
 		if err != nil {

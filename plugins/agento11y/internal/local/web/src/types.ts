@@ -433,6 +433,7 @@ export interface ImportRun {
   started_at: string;
   finished_at?: string;
   error?: string;
+  warnings?: string[];
 }
 
 /**

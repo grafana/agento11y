@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -30,22 +31,28 @@ const (
 	importStatusCancelled = "cancelled"
 )
 
-// ImportRun is one import run as the viewer sees it. Every field is a counter,
-// a status, or an agent ID: nothing here carries session content.
+// ImportRun is one import run as the viewer sees it. Warnings contain source
+// identities and failure reasons, never session content.
 type ImportRun struct {
-	RunID      string `json:"run_id"`
-	Agent      string `json:"agent"`
-	Status     string `json:"status"`
-	Discovered int    `json:"discovered"`
-	Selected   int    `json:"selected"`
-	Sessions   int    `json:"sessions"`
-	Imported   int    `json:"imported"`
-	Skipped    int    `json:"skipped"`
-	Failed     int    `json:"failed"`
-	Missing    int    `json:"missing"`
-	StartedAt  string `json:"started_at"`
-	FinishedAt string `json:"finished_at,omitempty"`
-	Error      string `json:"error,omitempty"`
+	RunID      string   `json:"run_id"`
+	Agent      string   `json:"agent"`
+	Status     string   `json:"status"`
+	Discovered int      `json:"discovered"`
+	Selected   int      `json:"selected"`
+	Sessions   int      `json:"sessions"`
+	Imported   int      `json:"imported"`
+	Skipped    int      `json:"skipped"`
+	Failed     int      `json:"failed"`
+	Missing    int      `json:"missing"`
+	StartedAt  string   `json:"started_at"`
+	FinishedAt string   `json:"finished_at,omitempty"`
+	Error      string   `json:"error,omitempty"`
+	Warnings   []string `json:"warnings,omitempty"`
+}
+
+func (r ImportRun) snapshot() ImportRun {
+	r.Warnings = slices.Clone(r.Warnings)
+	return r
 }
 
 func (r ImportRun) terminal() bool {
@@ -332,7 +339,7 @@ func (s *Server) startImportRun(run ImportRun, cancel context.CancelFunc) bool {
 		return false
 	}
 	s.activeImport = run.RunID
-	s.importRuns = append(s.importRuns, &importRun{state: run, cancel: cancel})
+	s.importRuns = append(s.importRuns, &importRun{state: run.snapshot(), cancel: cancel})
 	if len(s.importRuns) > historyRunHistory {
 		s.importRuns = s.importRuns[len(s.importRuns)-historyRunHistory:]
 	}
@@ -361,7 +368,7 @@ func (s *Server) applyImportRun(runID string, mutate func(*ImportRun)) (ImportRu
 		if run.state.terminal() && s.activeImport == runID {
 			s.activeImport = ""
 		}
-		return run.state, true
+		return run.state.snapshot(), true
 	}
 	return ImportRun{}, false
 }
@@ -378,7 +385,7 @@ func (s *Server) importRunState(runID string) (ImportRun, bool) {
 	defer s.importMu.Unlock()
 	for _, run := range s.importRuns {
 		if run.state.RunID == runID {
-			return run.state, true
+			return run.state.snapshot(), true
 		}
 	}
 	return ImportRun{}, false
@@ -418,11 +425,31 @@ func (s *Server) runImport(
 		return
 	}
 	selected, missing := selectHistorySessions(plan.Sessions, sourcePaths)
+	warnings := slices.Clone(plan.Warnings)
+	if missing > 0 {
+		warnings = append(warnings, fmt.Sprintf("%d selected sources are no longer available or eligible for import", missing))
+	}
 	s.updateImportRun(runID, func(run *ImportRun) {
 		run.Discovered = len(plan.Sessions)
 		run.Selected = len(selected)
 		run.Missing = missing
+		run.Warnings = slices.Clone(warnings)
 	})
+	for _, warning := range warnings {
+		s.logger.Printf("local: history import %s: %s", runID, warning)
+	}
+	if err := ctx.Err(); err != nil {
+		s.terminateImport(ctx, runID, finish, err)
+		return
+	}
+	if len(selected) == 0 {
+		if len(warnings) > 0 {
+			finish(importStatusFailed, "no sessions selected; sources are unavailable or ineligible (see warnings)")
+		} else {
+			finish(importStatusCompleted, "")
+		}
+		return
+	}
 
 	exporter, cleanup, err := history.NewTargetExporter(ctx, target, s.logger)
 	if err != nil {
@@ -468,6 +495,7 @@ func (s *Server) runImport(
 		run.Imported = result.Imported
 		run.Skipped = result.Skipped
 		run.Failed = result.Failed
+		run.Warnings = append(run.Warnings, result.Warnings...)
 	})
 	for _, warning := range result.Warnings {
 		s.logger.Printf("local: history import %s: %s", runID, warning)
@@ -483,14 +511,9 @@ func (s *Server) runImport(
 		return
 	}
 	// A completed import answers the offer, whether it exported turns or found
-	// them all already imported. A run that selected no session answers nothing:
-	// the filter or the request's source paths matched none, and recording a
-	// decision would hide the banner for good. The CLI returns without recording
-	// one in the same case.
-	if len(selected) > 0 {
-		if err := history.MarkPrompt(agent, history.PromptImported); err != nil {
-			s.logger.Printf("local: record import prompt state %s: %v", agent, err)
-		}
+	// them all already imported.
+	if err := history.MarkPrompt(agent, history.PromptImported); err != nil {
+		s.logger.Printf("local: record import prompt state %s: %v", agent, err)
 	}
 	finish(importStatusCompleted, "")
 }

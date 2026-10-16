@@ -111,7 +111,7 @@ Local mode runs on macOS and Linux only; Windows has no local receiver.
 
 Sessions started with plain `opencode` use the background service. The plugin still reads `~/.config/agento11y/config.env` there, but launcher flags such as `--tag` and `--local` do not reach it.
 
-`agento11y history import opencode` reads only OpenCode 1 databases. See [History import](../agento11y/README.md#history-import).
+`agento11y history import opencode` reads v1 and released v2 databases. See [History import](../agento11y/README.md#history-import) for limitations.
 
 ## Tagging sessions
 

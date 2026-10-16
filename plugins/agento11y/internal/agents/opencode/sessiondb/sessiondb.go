@@ -20,8 +20,9 @@ const MaxPayloadBytes = 4 * 1024 * 1024
 
 // Store is an open read-only OpenCode session database.
 type Store struct {
-	db   *sql.DB
-	path string
+	db     *sql.DB
+	path   string
+	layout Layout
 }
 
 // Session is one row from the session table with discovery aggregates.
@@ -30,6 +31,8 @@ type Session struct {
 	Title                string
 	Directory            string
 	ParentID             string
+	ForkSessionID        string
+	Active               bool
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
 	MessageCount         int
@@ -175,7 +178,7 @@ type ToolMetadata struct {
 // ErrUnsupportedSchema is matched by every [*SchemaError].
 var ErrUnsupportedSchema = errors.New("unsupported OpenCode database schema")
 
-// Layout classifies a database whose schema Open rejected.
+// Layout identifies the supported storage selected for the whole database.
 type Layout int
 
 const (
@@ -183,12 +186,14 @@ const (
 	LayoutUnknown Layout = iota
 	// LayoutV2 keeps sessions in OpenCode v2's session_v2 table.
 	LayoutV2
-	// LayoutMixed is LayoutV2 with legacy v1 tables retained beside it.
+	// LayoutMixed is retained for callers that classify older schema errors.
+	// Completed mixed databases select LayoutV2, never a union of both layouts.
 	LayoutMixed
+	LayoutV1
 )
 
-// SchemaError reports why Open rejected a database. Reason names tables and
-// columns only, never row content.
+// SchemaError reports why database validation failed. Reason describes schema
+// or migration failures, never row content.
 type SchemaError struct {
 	Path   string
 	Layout Layout
@@ -213,38 +218,49 @@ var v1Tables = []tableColumns{
 	{table: "part", columns: []string{"id", "message_id", "session_id", "time_updated", "data"}},
 }
 
-// v2Session is the NOT NULL, default-free subset of session_v2 in OpenCode's
-// packages/core/src/database/schema.gen.ts. session_message cannot mark v2:
-// OpenCode v1.18.29 already creates it beside the v1 tables.
-var v2Session = tableColumns{
-	table:   "session_v2",
-	columns: []string{"id", "project_id", "slug", "directory", "version", "time_created", "time_updated"},
+// session_message alone cannot mark v2: OpenCode v1.18.29 creates it too.
+var v2Tables = []tableColumns{
+	{table: "session_v2", columns: []string{"id", "project_id", "slug", "directory", "version", "time_created", "time_updated", "title", "parent_id", "fork_session_id", "time_suspended"}},
+	{table: "session_message", columns: []string{"id", "session_id", "type", "seq", "time_created", "time_updated", "data"}},
 }
 
-// Open opens path read-only and returns a [*SchemaError] unless it holds the
-// v1 tables and columns this package reads. The mode reads a live write-ahead
-// log; it may create the missing shared-memory sidecar SQLite needs to index
-// that log.
+// Open opens path read-only and validates the authoritative layout. The mode
+// reads a live write-ahead log; it may create the missing shared-memory sidecar
+// SQLite needs to index that log.
 func Open(ctx context.Context, path string) (*Store, error) {
 	db, err := sql.Open("sqlite", chatstore.URI(path)+"?mode=ro")
 	if err != nil {
 		return nil, fmt.Errorf("sessiondb: open %s: %w", path, err)
 	}
 	store := &Store{db: db, path: path}
-	if err := store.checkSchema(ctx); err != nil {
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err == nil {
+		store.layout, err = inspectLayout(ctx, tx, path)
+		_ = tx.Rollback()
+	} else {
+		err = fmt.Errorf("sessiondb: read schema of %s: %w", path, err)
+	}
+	if err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 	return store, nil
 }
 
-func (s *Store) checkSchema(ctx context.Context) error {
+func (s *Store) Layout() Layout { return s.layout }
+
+type queryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func inspectLayout(ctx context.Context, q queryer, path string) (Layout, error) {
 	const query = `select m.name, c.name
 		from sqlite_master m, pragma_table_info(m.name) c
-		where m.type = 'table' and m.name in ('session', 'message', 'part', 'session_v2')`
-	rows, err := s.db.QueryContext(ctx, query)
+		where m.type = 'table' and m.name in ('session', 'message', 'part', 'session_v2', 'session_message', 'kv')`
+	rows, err := q.QueryContext(ctx, query)
 	if err != nil {
-		return fmt.Errorf("sessiondb: read schema of %s: %w", s.path, err)
+		return LayoutUnknown, fmt.Errorf("sessiondb: read schema of %s: %w", path, err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -252,7 +268,7 @@ func (s *Store) checkSchema(ctx context.Context) error {
 	for rows.Next() {
 		var table, column string
 		if err := rows.Scan(&table, &column); err != nil {
-			return fmt.Errorf("sessiondb: read schema of %s: %w", s.path, err)
+			return LayoutUnknown, fmt.Errorf("sessiondb: read schema of %s: %w", path, err)
 		}
 		if tables[table] == nil {
 			tables[table] = map[string]bool{}
@@ -260,26 +276,30 @@ func (s *Store) checkSchema(ctx context.Context) error {
 		tables[table][column] = true
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("sessiondb: read schema of %s: %w", s.path, err)
+		return LayoutUnknown, fmt.Errorf("sessiondb: read schema of %s: %w", path, err)
 	}
-	if schemaErr := classifySchema(tables); schemaErr != nil {
-		schemaErr.Path = s.path
-		return schemaErr
+	_ = rows.Close()
+	layout, schemaErr := classifySchema(tables)
+	if schemaErr != nil {
+		schemaErr.Path = path
+		return LayoutUnknown, schemaErr
 	}
-	return nil
+	if layout == LayoutV2 {
+		if err := migrationReady(ctx, q, tables, path); err != nil {
+			return LayoutUnknown, err
+		}
+	}
+	return layout, nil
 }
 
-func classifySchema(tables map[string]map[string]bool) *SchemaError {
-	if columns, ok := tables[v2Session.table]; ok {
-		if missing := missingColumns(columns, v2Session.columns); len(missing) > 0 {
-			return &SchemaError{Layout: LayoutUnknown, Reason: "table session_v2 does not match OpenCode v2: missing " + named("column", missing)}
-		}
-		for _, v1 := range v1Tables {
-			if _, ok := tables[v1.table]; ok {
-				return &SchemaError{Layout: LayoutMixed, Reason: "found OpenCode v2 table session_v2 beside legacy v1 tables"}
+func classifySchema(tables map[string]map[string]bool) (Layout, *SchemaError) {
+	if _, ok := tables["session_v2"]; ok {
+		for _, table := range v2Tables {
+			if missing := missingColumns(tables[table.table], table.columns); len(missing) > 0 {
+				return LayoutUnknown, &SchemaError{Layout: LayoutV2, Reason: fmt.Sprintf("table %s is missing %s", table.table, named("column", missing))}
 			}
 		}
-		return &SchemaError{Layout: LayoutV2, Reason: "found OpenCode v2 table session_v2"}
+		return LayoutV2, nil
 	}
 	var absent []string
 	for _, v1 := range v1Tables {
@@ -288,14 +308,14 @@ func classifySchema(tables map[string]map[string]bool) *SchemaError {
 		}
 	}
 	if len(absent) > 0 {
-		return &SchemaError{Layout: LayoutUnknown, Reason: "missing OpenCode v1 " + named("table", absent)}
+		return LayoutUnknown, &SchemaError{Layout: LayoutUnknown, Reason: "missing OpenCode v1 " + named("table", absent)}
 	}
 	for _, v1 := range v1Tables {
 		if missing := missingColumns(tables[v1.table], v1.columns); len(missing) > 0 {
-			return &SchemaError{Layout: LayoutUnknown, Reason: fmt.Sprintf("table %s is missing %s", v1.table, named("column", missing))}
+			return LayoutUnknown, &SchemaError{Layout: LayoutUnknown, Reason: fmt.Sprintf("table %s is missing %s", v1.table, named("column", missing))}
 		}
 	}
-	return nil
+	return LayoutV1, nil
 }
 
 func missingColumns(have map[string]bool, want []string) []string {
@@ -320,6 +340,9 @@ func (s *Store) Close() error { return s.db.Close() }
 
 // Sessions returns one content-free row per OpenCode session in stable order.
 func (s *Store) Sessions(ctx context.Context) ([]Session, error) {
+	if s.layout == LayoutV2 {
+		return s.v2Sessions(ctx)
+	}
 	const query = `select
 		s.id,
 		s.directory,
@@ -383,6 +406,9 @@ func (s *Store) Sessions(ctx context.Context) ([]Session, error) {
 
 // Session returns one session row without reading message or part data.
 func (s *Store) Session(ctx context.Context, sessionID string) (Session, bool, error) {
+	if s.layout == LayoutV2 {
+		return v2Session(ctx, s.db, s.path, sessionID)
+	}
 	const query = `select id, title, directory, coalesce(parent_id, ''), time_created, time_updated
 		from session where id = ?`
 	var row Session

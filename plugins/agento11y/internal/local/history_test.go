@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/opencode/sessiondb/sessiondbtest"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/history"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -43,6 +44,8 @@ func isolateHistoryState(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", dir)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(dir, "data"))
+	t.Setenv("OPENCODE_DB", "")
 	t.Setenv("HOME", dir)
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(dir, "claude"))
 	return dir
@@ -227,7 +230,9 @@ func TestHistoryImportKeepsTheOfferWhenNothingIsSelected(t *testing.T) {
 
 	body := `{"agent":"claude-code","source_paths":["/elsewhere/sess-gone.jsonl"]}`
 	run := waitForTerminalRun(t, srv, startImport(t, srv, body))
-	require.Equal(t, importStatusCompleted, run.Status)
+	require.Equal(t, importStatusFailed, run.Status)
+	assert.Equal(t, 1, run.Missing)
+	assert.NotEmpty(t, run.Warnings)
 	assert.Zero(t, run.Selected)
 	assert.Zero(t, run.Imported)
 
@@ -301,6 +306,273 @@ func TestHistoryPlanDefaultsToNinetyDays(t *testing.T) {
 	path := "/api/v1/history/plan?agent=claude-code&since=" + now.Add(-200*24*time.Hour).Format(time.RFC3339)
 	require.Equal(t, http.StatusOK, getJSON(t, srv, path, &plan))
 	assert.Len(t, plan.Sessions, 2)
+}
+
+func writeHistoryOpenCodeV2(t *testing.T, opts ...sessiondbtest.Option) *sessiondbtest.Builder {
+	t.Helper()
+	db := sessiondbtest.New(t, append(opts, sessiondbtest.WithSessionV2())...)
+	t.Setenv("OPENCODE_DB", db.Path)
+	at := time.Now().Add(-2 * time.Hour).UnixMilli()
+	db.AddSessionV2("v2-private", "private-v2-title", "/work/repo", at, at+1000)
+	db.AddV2Message("v2-user", "v2-private", "user", 0, at, at,
+		`{"text":"private-v2-prompt","metadata":{"secret":"private-v2-metadata"}}`)
+	db.AddV2Message("v2-assistant", "v2-private", "assistant", 1, at, at+1000,
+		fmt.Sprintf(`{"time":{"created":%d,"completed":%d},"model":{"id":"test-model","providerID":"test-provider"},"content":[{"type":"text","text":"private-v2-answer"},{"type":"tool","id":"call","name":"test-tool","state":{"status":"completed","input":{},"content":[{"type":"text","text":"private-v2-tool-result"}]}}],"metadata":{"secret":"private-v2-metadata"}}`, at, at+1000))
+	return db
+}
+
+func TestHistoryOpenCodeV2PlanPrivacy(t *testing.T) {
+	tests := []struct {
+		name    string
+		mixed   bool
+		claimed bool
+	}{
+		{name: "native"},
+		{name: "completed migration", mixed: true},
+		{name: "durable claim", claimed: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stateDir := isolateHistoryState(t)
+			srv, _ := newTestServer(t)
+			opts := []sessiondbtest.Option{sessiondbtest.WithoutV1()}
+			if tt.mixed {
+				opts = []sessiondbtest.Option{sessiondbtest.WithMigrationState()}
+			}
+			db := writeHistoryOpenCodeV2(t, opts...)
+			if tt.mixed {
+				db.AddSession("legacy-only", "", "private-legacy-title", "/work/repo", 1, 2)
+				db.SetMigrationState(`{"phase":"completed"}`)
+			}
+			if tt.claimed {
+				claim := time.Now().Add(-24 * time.Hour).UnixMilli()
+				db.SetV2Claim("v2-private", &claim)
+			}
+
+			rr := httptest.NewRecorder()
+			srv.ServeHTTP(rr, newLocalRequest(http.MethodGet, "/api/v1/history/plan?agent=opencode", nil))
+			require.Equal(t, http.StatusOK, rr.Code)
+			var plan struct {
+				Sessions []historySessionJSON `json:"sessions"`
+				Skipped  []map[string]any     `json:"skipped"`
+				Warnings []string             `json:"warnings"`
+			}
+			require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &plan))
+			require.Empty(t, plan.Warnings)
+			if tt.claimed {
+				require.Empty(t, plan.Sessions)
+				require.Len(t, plan.Skipped, 1)
+				assert.Equal(t, string(history.SkipActiveSession), plan.Skipped[0]["reason"])
+			} else {
+				require.Len(t, plan.Sessions, 1)
+				assert.Equal(t, "v2-private", plan.Sessions[0].Title)
+				assert.Equal(t, db.Path, plan.Sessions[0].SourcePath)
+				assert.Equal(t, 1, plan.Sessions[0].TurnCount)
+			}
+			for _, secret := range []string{"private-v2-title", "private-v2-prompt", "private-v2-answer", "private-v2-tool-result", "private-v2-metadata", "private-legacy-title"} {
+				assert.NotContains(t, rr.Body.String(), secret)
+			}
+			assert.Empty(t, srv.historyEndpoint())
+			_, err := os.Stat(filepath.Join(stateDir, "agento11y", "history"))
+			assert.True(t, os.IsNotExist(err), "plan created history state: %v", err)
+			detail, err := srv.storage.ConversationDetail("v2-private")
+			require.NoError(t, err)
+			assert.Nil(t, detail)
+		})
+	}
+}
+
+func TestHistoryOpenCodeV2SourceChanges(t *testing.T) {
+	tests := []struct {
+		name        string
+		change      func(*testing.T, *sessiondbtest.Builder)
+		warning     string
+		wantMissing int
+		wantFailed  int
+		wantRead    bool
+		allSources  bool
+	}{
+		{
+			name: "unsupported",
+			change: func(t *testing.T, db *sessiondbtest.Builder) {
+				_, err := db.DB.Exec(`alter table session_message drop column seq`)
+				require.NoError(t, err)
+			},
+			warning: "missing column seq", wantMissing: 1,
+		},
+		{
+			name: "migrating",
+			change: func(_ *testing.T, db *sessiondbtest.Builder) {
+				db.SetMigrationState(`{"phase":"sessions","cursor":"private-migration-cursor"}`)
+			},
+			warning: "migration is in progress", wantMissing: 1,
+		},
+		{
+			name: "deleted session with retained legacy",
+			change: func(t *testing.T, db *sessiondbtest.Builder) {
+				_, err := db.DB.Exec(`delete from session_v2`)
+				require.NoError(t, err)
+			},
+			warning: "no longer available or eligible", wantMissing: 1,
+		},
+		{
+			name: "unavailable database",
+			change: func(t *testing.T, db *sessiondbtest.Builder) {
+				require.NoError(t, db.DB.Close())
+				require.NoError(t, os.Remove(db.Path))
+			},
+			warning: "no longer available or eligible", wantMissing: 1,
+		},
+		{
+			name: "new execution claim",
+			change: func(_ *testing.T, db *sessiondbtest.Builder) {
+				claim := time.Now().Add(-24 * time.Hour).UnixMilli()
+				db.SetV2Claim("v2-private", &claim)
+			},
+			warning: "no longer available or eligible", wantMissing: 1,
+		},
+		{
+			name: "read failure",
+			change: func(t *testing.T, db *sessiondbtest.Builder) {
+				_, err := db.DB.Exec(`update session_message set data = '{"text":{"secret":"private-malformed-payload"}}' where type = 'user'`)
+				require.NoError(t, err)
+			},
+			warning: "invalid JSON projection", wantFailed: 1, wantRead: true,
+		},
+		{
+			name: "discovery and read warnings",
+			change: func(t *testing.T, db *sessiondbtest.Builder) {
+				_, err := db.DB.Exec(`update session_message set data = '{"text":{"secret":"private-malformed-payload"}}' where type = 'user'`)
+				require.NoError(t, err)
+				other := sessiondbtest.New(t, sessiondbtest.WithoutV1(), sessiondbtest.WithSessionV2(), sessiondbtest.WithoutColumn("session_message", "seq"))
+				t.Setenv("XDG_DATA_HOME", t.TempDir())
+				root := filepath.Join(os.Getenv("XDG_DATA_HOME"), "opencode")
+				require.NoError(t, os.MkdirAll(root, 0o700))
+				require.NoError(t, other.DB.Close())
+				require.NoError(t, os.Rename(other.Path, filepath.Join(root, "opencode-unsupported.db")))
+			},
+			warning: "missing column seq", wantFailed: 1, wantRead: true,
+		},
+		{
+			name: "unsupported with implicit selection",
+			change: func(t *testing.T, db *sessiondbtest.Builder) {
+				_, err := db.DB.Exec(`alter table session_message drop column seq`)
+				require.NoError(t, err)
+			},
+			warning: "missing column seq", allSources: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			isolateHistoryState(t)
+			srv, ts := newHistoryServer(t)
+			db := writeHistoryOpenCodeV2(t, sessiondbtest.WithMigrationState())
+			db.AddSession("legacy-only", "", "private-legacy-title", "/work/repo", 1, 2)
+			db.SetMigrationState(`{"phase":"completed"}`)
+			var plan struct {
+				Sessions []historySessionJSON `json:"sessions"`
+			}
+			require.Equal(t, http.StatusOK, getJSON(t, srv, "/api/v1/history/plan?agent=opencode", &plan))
+			require.Len(t, plan.Sessions, 1)
+			tt.change(t, db)
+
+			logs, err := os.CreateTemp(t.TempDir(), "import-log")
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = logs.Close() })
+			srv.logger.SetOutput(logs)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			stream := openEventStream(t, ctx, ts.URL)
+			defer stream.close()
+			require.NoError(t, stream.waitForComment(2*time.Second))
+			body := fmt.Sprintf(`{"agent":"opencode","source_paths":[%q]}`, plan.Sessions[0].SourcePath)
+			if tt.allSources {
+				body = `{"agent":"opencode"}`
+			}
+			runID := startImport(t, srv, body)
+			run := waitForTerminalRun(t, srv, runID)
+			require.Equal(t, importStatusFailed, run.Status)
+			assert.Equal(t, tt.wantMissing, run.Missing)
+			assert.Equal(t, tt.wantFailed, run.Failed)
+			assert.Zero(t, run.Imported)
+			assert.NotEmpty(t, run.Error)
+			assert.Contains(t, strings.Join(run.Warnings, "\n"), tt.warning)
+			if tt.wantRead {
+				assert.Equal(t, 1, run.Selected)
+				assert.Contains(t, strings.Join(run.Warnings, "\n"), "invalid JSON projection")
+			} else {
+				assert.Zero(t, run.Selected)
+			}
+
+			var status ImportRun
+			require.Equal(t, http.StatusOK, getJSON(t, srv, "/api/v1/history/runs/"+runID, &status))
+			assert.Equal(t, run, status)
+			for {
+				event, err := stream.nextEvent(5 * time.Second)
+				require.NoError(t, err)
+				if event.Import != nil && event.Import.terminal() {
+					assert.Equal(t, run, *event.Import)
+					break
+				}
+			}
+			logged, err := os.ReadFile(logs.Name())
+			require.NoError(t, err)
+			for _, warning := range run.Warnings {
+				assert.Contains(t, string(logged), warning)
+			}
+			raw, err := json.Marshal(status)
+			require.NoError(t, err)
+			for _, secret := range []string{"private-v2-title", "private-v2-prompt", "private-v2-answer", "private-v2-tool-result", "private-v2-metadata", "private-legacy-title", "private-migration-cursor", "private-malformed-payload"} {
+				assert.NotContains(t, string(raw), secret)
+				assert.NotContains(t, string(logged), secret)
+			}
+			show, err := history.ShouldOfferPrompt(history.AgentOpenCode)
+			require.NoError(t, err)
+			assert.True(t, show)
+			for _, id := range []string{"v2-private", "legacy-only"} {
+				detail, err := srv.storage.ConversationDetail(id)
+				require.NoError(t, err)
+				assert.Nil(t, detail)
+			}
+		})
+	}
+}
+
+func TestHistoryOpenCodeV2RejectsUndiscoveredPath(t *testing.T) {
+	isolateHistoryState(t)
+	srv, _ := newHistoryServer(t)
+	discovered := writeHistoryOpenCodeV2(t, sessiondbtest.WithoutV1())
+	other := writeHistoryOpenCodeV2(t, sessiondbtest.WithoutV1())
+	t.Setenv("OPENCODE_DB", discovered.Path)
+
+	body := fmt.Sprintf(`{"agent":"opencode","source_paths":[%q]}`, other.Path)
+	run := waitForTerminalRun(t, srv, startImport(t, srv, body))
+	assert.Equal(t, importStatusFailed, run.Status)
+	assert.Equal(t, 1, run.Discovered)
+	assert.Equal(t, 1, run.Missing)
+	assert.Zero(t, run.Selected)
+	assert.Zero(t, run.Imported)
+	detail, err := srv.storage.ConversationDetail("v2-private")
+	require.NoError(t, err)
+	assert.Nil(t, detail)
+}
+
+func TestHistoryImportWarningSnapshots(t *testing.T) {
+	srv, _ := newTestServer(t)
+	run := ImportRun{RunID: "warnings", Status: importStatusRunning, Warnings: []string{"original"}}
+	require.True(t, srv.startImportRun(run, func() {}))
+	run.Warnings[0] = "changed input"
+	first, ok := srv.importRunState(run.RunID)
+	require.True(t, ok)
+	require.Equal(t, []string{"original"}, first.Warnings)
+	first.Warnings[0] = "changed status"
+	updated, ok := srv.applyImportRun(run.RunID, func(r *ImportRun) { r.Warnings[0] = "updated" })
+	require.True(t, ok)
+	updated.Warnings[0] = "changed update"
+	last, ok := srv.importRunState(run.RunID)
+	require.True(t, ok)
+	assert.Equal(t, []string{"updated"}, last.Warnings)
+	assert.Equal(t, []string{"changed status"}, first.Warnings)
 }
 
 func TestHistoryPlanRejectsBadInput(t *testing.T) {
@@ -450,6 +722,7 @@ func TestHistoryImportMatchesSelectionAgainstFreshDiscovery(t *testing.T) {
 	assert.Equal(t, importStatusCompleted, run.Status)
 	assert.Equal(t, 1, run.Selected)
 	assert.Equal(t, 1, run.Missing, "a source path discovery no longer finds must be reported, not read")
+	assert.NotEmpty(t, run.Warnings)
 	assert.Equal(t, 2, run.Imported)
 
 	gone, err := srv.storage.ConversationDetail("sess-gone")
@@ -632,6 +905,12 @@ func TestHistoryImportNeverForwardsToCloud(t *testing.T) {
 	require.True(t, fwd.enabled, "forwarding is off, so this test proves nothing")
 
 	writeHistoryTranscript(t, "sess-private", 3, time.Now().Add(-2*time.Hour))
+	writeHistoryOpenCodeV2(t, sessiondbtest.WithoutV1())
+	v2run := waitForTerminalRun(t, srv, startImport(t, srv, `{"agent":"opencode"}`))
+	require.Equal(t, importStatusCompleted, v2run.Status)
+	require.Equal(t, 1, v2run.Imported)
+	require.Empty(t, v2run.Warnings)
+
 	run := waitForTerminalRun(t, srv, startImport(t, srv, `{"agent":"claude-code"}`))
 	require.Equal(t, importStatusCompleted, run.Status)
 	require.Equal(t, 3, run.Imported)
@@ -646,6 +925,15 @@ func TestHistoryImportNeverForwardsToCloud(t *testing.T) {
 	raw, err := json.Marshal(detail)
 	require.NoError(t, err)
 	assert.Contains(t, string(raw), "answer 0", "the local store must keep the full imported content")
+
+	v2detail, err := storage.ConversationDetail("v2-private")
+	require.NoError(t, err)
+	require.NotNil(t, v2detail)
+	require.Len(t, v2detail.Generations, 1)
+	raw, err = json.Marshal(v2detail)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), "private-v2-answer")
+	assert.Contains(t, string(raw), "private-v2-prompt")
 }
 
 // TestHistoryImportRecreatesTheConversationsDirectory covers the store

@@ -2716,6 +2716,20 @@ function HistoryImportStatus({ run }: HistoryImportStatusProps) {
         )}
         {run.error && <div style={{ fontSize: 12 }}>{run.error}</div>}
       </Notice>
+      {!!run.warnings?.length && (
+        <div style={{ marginTop: 8 }}>
+          <Notice kind="warning" title="Source warnings">
+            <ul
+              aria-label="Source warnings"
+              style={{ margin: 0, paddingLeft: 20, fontSize: 12, overflowWrap: 'anywhere' }}
+            >
+              {run.warnings.map((warning, index) => (
+                <li key={index}>{warning}</li>
+              ))}
+            </ul>
+          </Notice>
+        </div>
+      )}
     </div>
   );
 }

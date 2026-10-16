@@ -151,6 +151,10 @@ Plain output reports the local verdict, rules path, enforceable count, rule resu
 
 Exits: `0` for completed allow, including warnings or transforms; `1` for completed deny; `2` for input, file, compilation, evaluation, or output errors. Compilation errors take precedence. The output retains the partial response from valid rules. Failed evaluations include warnings and dropped redactions, not just denials. A response rule ID does not identify every transform that ran. Diagnostic JSON includes the submitted command and rewritten content: do not use real secrets in shared test output. Run `agento11y guards test --help` for details.
 
+## History import
+
+`agento11y history import opencode` supports v1 and released v2 databases. Use `--dry-run` to preview without exporting. See [History import](https://github.com/grafana/agento11y/tree/main/plugins/agento11y#history-import) for limitations before importing into local storage or Cloud.
+
 ## Content capture
 
 Coding-agent plugins default to `metadata_only`: only model, tokens, tool names, timing, and cost are sent. Prompts, responses, and tool I/O stay on the local machine. To opt into sending content, set `AGENTO11Y_CONTENT_CAPTURE_MODE` in `~/.config/agento11y/config.env`.

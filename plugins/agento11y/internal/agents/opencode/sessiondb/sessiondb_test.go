@@ -29,29 +29,30 @@ func TestOpenValidatesSchema(t *testing.T) {
 		v1Rows bool
 		v2Rows bool
 		layout Layout
+		marker string
 		// reason is empty when Open accepts the database.
 		reason string
 	}{
-		{name: "v1", v1Rows: true},
+		{name: "v1", v1Rows: true, layout: LayoutV1},
 		{
 			name:   "v1 with v1.18.29 session_message",
 			opts:   []sessiondbtest.Option{sessiondbtest.WithSessionMessage()},
 			v1Rows: true,
+			layout: LayoutV1,
 		},
 		{
 			name:   "v2",
 			opts:   []sessiondbtest.Option{sessiondbtest.WithoutV1(), sessiondbtest.WithSessionV2()},
 			v2Rows: true,
 			layout: LayoutV2,
-			reason: "found OpenCode v2 table session_v2",
 		},
 		{
-			name:   "mixed v1 and v2",
-			opts:   []sessiondbtest.Option{sessiondbtest.WithSessionV2()},
+			name:   "completed mixed v1 and v2",
+			opts:   []sessiondbtest.Option{sessiondbtest.WithSessionV2(), sessiondbtest.WithMigrationState()},
 			v1Rows: true,
 			v2Rows: true,
-			layout: LayoutMixed,
-			reason: "found OpenCode v2 table session_v2 beside legacy v1 tables",
+			layout: LayoutV2,
+			marker: `{"phase":"completed"}`,
 		},
 		{
 			name:   "v1 table missing a column",
@@ -88,8 +89,8 @@ func TestOpenValidatesSchema(t *testing.T) {
 				sessiondbtest.WithSessionV2(),
 			},
 			v1Rows: true,
-			layout: LayoutUnknown,
-			reason: "table session_v2 does not match OpenCode v2: missing column slug",
+			layout: LayoutV2,
+			reason: "table session_v2 is missing column slug",
 		},
 	}
 	for _, tt := range tests {
@@ -101,6 +102,10 @@ func TestOpenValidatesSchema(t *testing.T) {
 			}
 			if tt.v2Rows {
 				db.AddSessionV2("current", "secret v2 title", "/work/secret-v2", 3, 4)
+				db.AddV2Message("current-assistant", "current", "assistant", 0, 3, 4, `{"time":{"created":3,"completed":4}}`)
+			}
+			if tt.marker != "" {
+				db.SetMigrationState(tt.marker)
 			}
 
 			store, err := Open(context.Background(), db.Path)
@@ -109,9 +114,15 @@ func TestOpenValidatesSchema(t *testing.T) {
 					t.Fatalf("Open: %v", err)
 				}
 				defer func() { _ = store.Close() }()
+				if store.Layout() != tt.layout {
+					t.Fatalf("Layout = %v, want %v", store.Layout(), tt.layout)
+				}
 				sessions, err := store.Sessions(context.Background())
 				if err != nil || len(sessions) != 1 || sessions[0].TerminalMessageCount != 1 {
-					t.Fatalf("Sessions = (%+v, %v), want the legacy session", sessions, err)
+					t.Fatalf("Sessions = (%+v, %v), want one terminal assistant", sessions, err)
+				}
+				if tt.layout == LayoutV2 && sessions[0].ID != "current" {
+					t.Fatalf("v2 selection resurrected legacy session: %+v", sessions)
 				}
 				return
 			}

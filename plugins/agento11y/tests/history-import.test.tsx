@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { localDateStartISO } from '../internal/local/web/src/history-date-picker';
 import {
@@ -188,6 +188,84 @@ describe('HistoryImportBanner', () => {
 });
 
 describe('SettingsHistoryTab', () => {
+  describe('source warnings', () => {
+    const warnings = [
+      '/fixtures/opencode/opencode.db: v1-to-v2 migration is not complete',
+      '/fixtures/opencode/opencode-work.db: unsupported schema',
+    ];
+    const states = [
+      {
+        status: 'failed',
+        selected: 0,
+        imported: 0,
+        error: 'no sessions selected; sources are unavailable or ineligible (see warnings)',
+      },
+      { status: 'completed' },
+      { status: 'completed', failed: 1 },
+      { status: 'running' },
+      { status: 'pending' },
+      { status: 'cancelled' },
+    ];
+    const history = (state: Partial<ImportRunView>) =>
+      historyImport({
+        offers: [],
+        run: run({ agent: 'opencode', selected: 2, sessions: 2, imported: 4, skipped: 1, failed: 0, ...state }),
+      });
+
+    it.each(states)('shows source paths and reasons for $status imports (failed turns: $failed)', (state) => {
+      render(<SettingsHistoryTab history={history({ ...state, warnings })} />);
+
+      const list = screen.getByRole('list', { name: 'Source warnings' });
+      expect(within(list).getAllByRole('listitem')).toHaveLength(warnings.length);
+      for (const warning of warnings) expect(within(list).getByText(warning)).toBeTruthy();
+      if (state.error) expect(screen.getByText(state.error)).toBeTruthy();
+      if (state.status === 'completed') {
+        expect(screen.getByText('Import finished')).toBeTruthy();
+        expect(screen.getByText('4 turns imported')).toBeTruthy();
+        expect(screen.getByText(`${state.failed || 0} failed`)).toBeTruthy();
+      }
+    });
+
+    it.each(states)('accepts absent or empty warnings for $status imports (failed turns: $failed)', (state) => {
+      const view = render(<SettingsHistoryTab history={history(state)} />);
+      expect(screen.queryByText('Source warnings')).toBeNull();
+      expect(screen.queryByRole('list', { name: 'Source warnings' })).toBeNull();
+      if (state.error) expect(screen.getByText(state.error)).toBeTruthy();
+
+      view.rerender(<SettingsHistoryTab history={history({ ...state, warnings: [] })} />);
+      expect(screen.queryByText('Source warnings')).toBeNull();
+      expect(screen.queryByRole('list', { name: 'Source warnings' })).toBeNull();
+      if (state.error) expect(screen.getByText(state.error)).toBeTruthy();
+    });
+
+    it('keeps warnings visible when a running import completes with partial results', () => {
+      const view = render(<SettingsHistoryTab history={history({ status: 'running', warnings })} />);
+      for (const warning of warnings) expect(screen.getByText(warning)).toBeTruthy();
+
+      view.rerender(<SettingsHistoryTab history={history({ status: 'completed', failed: 1, warnings })} />);
+      expect(screen.getByText('Import finished')).toBeTruthy();
+      expect(screen.getByText('4 turns imported')).toBeTruthy();
+      expect(screen.getByText('1 failed')).toBeTruthy();
+      for (const warning of warnings) expect(screen.getByText(warning)).toBeTruthy();
+
+      view.rerender(<SettingsHistoryTab history={history({ run_id: 'next-run', status: 'running' })} />);
+      expect(screen.queryByText('Source warnings')).toBeNull();
+      for (const warning of warnings) expect(screen.queryByText(warning)).toBeNull();
+    });
+
+    it('renders warning text literally, without creating markup or source links', () => {
+      const warning = '/fixtures/<script>source</script>.db: unsupported <b>schema</b>';
+      const { container } = render(
+        <SettingsHistoryTab history={history({ status: 'completed', warnings: [warning] })} />,
+      );
+      expect(screen.getByText(warning)).toBeTruthy();
+      const list = screen.getByRole('list', { name: 'Source warnings' });
+      expect(within(list).queryByRole('link')).toBeNull();
+      expect(container.querySelector('script')).toBeNull();
+      expect(list.querySelector('b')).toBeNull();
+    });
+  });
+
   it('plans with the default or selected date and imports the echoed bound', async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = new URL(String(input), 'http://localhost');

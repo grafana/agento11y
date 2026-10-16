@@ -198,12 +198,13 @@ func TestOpenCodePreviewWarnsOnMalformedMessage(t *testing.T) {
 	}
 }
 
-func TestOpenCodeUnsupportedSchemaWarnsAndExportsNothing(t *testing.T) {
+func TestOpenCodeSchemaSelectionAndStalePreviews(t *testing.T) {
 	tests := []struct {
 		name   string
 		opts   []sessiondbtest.Option
 		v1Rows bool
 		v2Rows bool
+		marker string
 		// reason is empty when the database is importable.
 		reason string
 	}{
@@ -217,14 +218,27 @@ func TestOpenCodeUnsupportedSchemaWarnsAndExportsNothing(t *testing.T) {
 			name:   "v2",
 			opts:   []sessiondbtest.Option{sessiondbtest.WithoutV1(), sessiondbtest.WithSessionV2()},
 			v2Rows: true,
-			reason: "found OpenCode v2 table session_v2",
 		},
 		{
-			name:   "mixed v1 and v2",
+			name:   "completed mixed v1 and v2",
+			opts:   []sessiondbtest.Option{sessiondbtest.WithSessionV2(), sessiondbtest.WithMigrationState()},
+			v1Rows: true,
+			v2Rows: true,
+			marker: `{"phase":"completed"}`,
+		},
+		{
+			name:   "unverified mixed v1 and v2",
 			opts:   []sessiondbtest.Option{sessiondbtest.WithSessionV2()},
 			v1Rows: true,
 			v2Rows: true,
-			reason: "found OpenCode v2 table session_v2 beside legacy v1 tables",
+			reason: "legacy session rows require a completed v1-v2 migration",
+		},
+		{
+			name:   "migration in progress",
+			opts:   []sessiondbtest.Option{sessiondbtest.WithSessionV2(), sessiondbtest.WithMigrationState()},
+			v2Rows: true,
+			marker: `{"phase":"sessions","cursor":"secret"}`,
+			reason: "v1-v2 migration is in progress",
 		},
 		{
 			name:   "v1 table missing a column",
@@ -242,10 +256,14 @@ func TestOpenCodeUnsupportedSchemaWarnsAndExportsNothing(t *testing.T) {
 			}
 			if tt.v2Rows {
 				db.AddSessionV2("current", "secret v2 title", "/work/secret-v2", 3, 4)
+				db.AddV2Message("current-assistant", "current", "assistant", 9, 3, 4, `{"time":{"created":3,"completed":4}}`)
+			}
+			if tt.marker != "" {
+				db.SetMigrationState(tt.marker)
 			}
 			imp := &opencodeImporter{roots: []string{db.Path}}
 			schemaErr := "sessiondb: unsupported OpenCode database schema in " + db.Path + ": " + tt.reason +
-				"; history import reads only OpenCode v1 session tables, so no sessions were read from this database"
+				"; no sessions were read from this database"
 
 			plan, err := BuildPlan(context.Background(), PlanOptions{Agent: AgentOpenCode, Importer: imp})
 			if err != nil {
@@ -261,8 +279,9 @@ func TestOpenCodeUnsupportedSchemaWarnsAndExportsNothing(t *testing.T) {
 				t.Fatalf("plan sessions = %+v, warnings = %q; want %d sessions, warnings %q", plan.Sessions, plan.Warnings, wantSessions, wantWarnings)
 			}
 
-			// A preview taken before OpenCode migrated the database must not
-			// export the legacy rows it left behind.
+			if tt.v2Rows && tt.reason == "" && plan.Sessions[0].SessionID != "current" {
+				t.Fatal("v2 discovery restored legacy rows")
+			}
 			stale := SessionPreview{Agent: AgentOpenCode, SessionID: "legacy", SourcePath: db.Path}
 			exporter := &recordingExporter{}
 			result, err := RunImport(context.Background(), ImportOptions{
@@ -272,7 +291,7 @@ func TestOpenCodeUnsupportedSchemaWarnsAndExportsNothing(t *testing.T) {
 			if err != nil {
 				t.Fatalf("RunImport: %v", err)
 			}
-			if tt.reason == "" {
+			if tt.reason == "" && !tt.v2Rows {
 				if result.Imported != 1 || len(exporter.got) != 1 {
 					t.Fatalf("RunImport = %+v, exported %d turns; want 1", result, len(exporter.got))
 				}
@@ -280,6 +299,9 @@ func TestOpenCodeUnsupportedSchemaWarnsAndExportsNothing(t *testing.T) {
 			}
 			if len(exporter.got) != 0 || result.Imported != 0 || result.Failed != 1 {
 				t.Fatalf("RunImport = %+v, exported %d turns; want none", result, len(exporter.got))
+			}
+			if tt.reason == "" {
+				schemaErr = "sessiondb: select session legacy from " + db.Path + ": session no longer exists"
 			}
 			if want := []string{"session legacy: " + schemaErr}; !slices.Equal(result.Warnings, want) {
 				t.Fatalf("RunImport warnings = %q, want %q", result.Warnings, want)
@@ -291,12 +313,67 @@ func TestOpenCodeUnsupportedSchemaWarnsAndExportsNothing(t *testing.T) {
 	}
 }
 
+func TestOpenCodeV2ClaimActivityAndSelectedSourceChanges(t *testing.T) {
+	for _, change := range []string{"claim", "delete", "migration", "schema", "unavailable"} {
+		t.Run(change, func(t *testing.T) {
+			db := sessiondbtest.New(t, sessiondbtest.WithoutV1(), sessiondbtest.WithSessionV2(), sessiondbtest.WithMigrationState())
+			db.AddSessionV2("session", "secret-title", "/work", 1, 2)
+			db.AddV2Message("assistant", "session", "assistant", 2, 1, 2, `{"time":{"created":1,"completed":2},"content":[{"type":"text","text":"secret-output"}]}`)
+			imp := &opencodeImporter{roots: []string{db.Path}}
+			claim := int64(1)
+			db.SetV2Claim("session", &claim)
+			discovery, err := Discover(context.Background(), AgentOpenCode, imp, DiscoverOptions{})
+			if err != nil || len(discovery.Sessions) != 1 || !discovery.Sessions[0].Active {
+				t.Fatalf("claimed discovery = %+v, %v", discovery, err)
+			}
+			plan, err := BuildPlan(context.Background(), PlanOptions{Agent: AgentOpenCode, Importer: imp, Filter: NewFilter()})
+			if err != nil || len(plan.Sessions) != 0 || len(plan.Skipped) != 1 {
+				t.Fatalf("claimed plan = %+v, %v", plan, err)
+			}
+			db.SetV2Claim("session", nil)
+			plan, err = BuildPlan(context.Background(), PlanOptions{Agent: AgentOpenCode, Importer: imp})
+			if err != nil || len(plan.Sessions) != 1 {
+				t.Fatalf("released plan = %+v, %v", plan, err)
+			}
+			switch change {
+			case "claim":
+				db.SetV2Claim("session", &claim)
+			case "delete":
+				_, err = db.DB.Exec(`delete from session_v2`)
+			case "migration":
+				db.SetMigrationState(`{"phase":"sessions","cursor":"secret-cursor"}`)
+			case "schema":
+				_, err = db.DB.Exec(`alter table session_message rename column seq to unused`)
+			case "unavailable":
+				if err = db.DB.Close(); err == nil {
+					err = os.Remove(db.Path)
+				}
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			exporter := &recordingExporter{}
+			result, err := RunImport(context.Background(), ImportOptions{Agent: AgentOpenCode, Importer: imp, Sessions: plan.Sessions, Exporter: exporter, Ledger: testLedger(t)})
+			if err != nil || result.Imported != 0 || result.Failed != 1 || len(exporter.got) != 0 || len(result.Warnings) != 1 {
+				t.Fatalf("changed source = %+v, %v, exports=%d", result, err, len(exporter.got))
+			}
+			if strings.Contains(result.Warnings[0], "secret") || !strings.Contains(result.Warnings[0], db.Path) {
+				t.Fatalf("warning = %q", result.Warnings[0])
+			}
+		})
+	}
+}
+
 func TestOpenCodeCollisionsKeepChildrenWithTheirRoot(t *testing.T) {
 	tests := []struct {
 		name      string
 		roots     [2]string
 		rootTurns bool
+		v2        bool
 	}{
+		{name: "v2 same root and child ids", roots: [2]string{"root", "root"}, rootTurns: true, v2: true},
+		{name: "v2 same child id under different roots", roots: [2]string{"root-a", "root-b"}, rootTurns: true, v2: true},
+		{name: "v2 same omitted root id", roots: [2]string{"root", "root"}, v2: true},
 		{name: "same root and child ids", roots: [2]string{"root", "root"}, rootTurns: true},
 		{name: "same child id under different roots", roots: [2]string{"root-a", "root-b"}, rootTurns: true},
 		{name: "same omitted root id", roots: [2]string{"root", "root"}},
@@ -307,13 +384,27 @@ func TestOpenCodeCollisionsKeepChildrenWithTheirRoot(t *testing.T) {
 			rootsByPath := map[string]string{}
 			var sessions []SessionPreview
 			for i, rootID := range tt.roots {
-				db := sessiondbtest.New(t)
-				db.AddSession(rootID, "", "Root", "/work", 1, 10)
-				db.AddSession("child", rootID, "Child", "/work", 2, 11)
-				if tt.rootTurns {
-					db.AddMessage("root-assistant", rootID, 3, 4, `{"role":"assistant","time":{"created":3,"completed":4}}`)
+				var opts []sessiondbtest.Option
+				if tt.v2 {
+					opts = []sessiondbtest.Option{sessiondbtest.WithoutV1(), sessiondbtest.WithSessionV2()}
 				}
-				db.AddMessage("child-assistant", "child", 5, 6, `{"role":"assistant","time":{"created":5,"completed":6}}`)
+				db := sessiondbtest.New(t, opts...)
+				if tt.v2 {
+					db.AddSessionV2(rootID, "Root", "/work", 1, 10)
+					db.AddSessionV2("child", "Child", "/work", 2, 11)
+					db.SetV2Lineage("child", rootID, "")
+					if tt.rootTurns {
+						db.AddV2Message("root-assistant", rootID, "assistant", 2, 3, 4, `{"time":{"created":3,"completed":4}}`)
+					}
+					db.AddV2Message("child-assistant", "child", "assistant", 4, 5, 6, `{"time":{"created":5,"completed":6}}`)
+				} else {
+					db.AddSession(rootID, "", "Root", "/work", 1, 10)
+					db.AddSession("child", rootID, "Child", "/work", 2, 11)
+					if tt.rootTurns {
+						db.AddMessage("root-assistant", rootID, 3, 4, `{"role":"assistant","time":{"created":3,"completed":4}}`)
+					}
+					db.AddMessage("child-assistant", "child", 5, 6, `{"role":"assistant","time":{"created":5,"completed":6}}`)
+				}
 				previews, err := imp.Previews(context.Background(), db.Path)
 				if err != nil {
 					t.Fatalf("database %d previews: %v", i, err)

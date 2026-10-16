@@ -466,7 +466,7 @@ For an offline dry run, use `agento11y guards test 'rm -rf ~/.ssh'`. It does not
 ### History import
 
 Until an import runs, the viewer and Grafana Cloud hold only sessions captured after installation.
-`agento11y history import` backfills sessions `claude-code`, `codex`, `cursor`, `opencode`, or `pi` already wrote to disk. An OpenCode database with OpenCode 2 tables is skipped with a warning.
+`agento11y history import` backfills sessions `claude-code`, `codex`, `cursor`, `opencode`, or `pi` already wrote to disk. OpenCode supports v1 and released v2 databases. See [History import](https://github.com/grafana/agento11y/tree/main/plugins/agento11y#history-import) for limitations.
 
 ```sh
 agento11y history import claude-code --dry-run   # plan only; no setup or export

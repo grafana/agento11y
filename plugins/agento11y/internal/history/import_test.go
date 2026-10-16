@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/grafana/agento11y/go/agento11y"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/opencode/sessiondb/sessiondbtest"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
 
@@ -242,6 +243,55 @@ func TestRunImportKeepsALedgerPerDestination(t *testing.T) {
 		if got.Imported != s.imported || got.Skipped != s.skipped {
 			t.Errorf("%s: %+v, want %d imported and %d skipped", s.name, got, s.imported, s.skipped)
 		}
+	}
+}
+
+func TestRunImportOpenCodeV2DestinationsAndPartialFailure(t *testing.T) {
+	pinStateHome(t)
+	db := sessiondbtest.New(t, sessiondbtest.WithoutV1(), sessiondbtest.WithSessionV2())
+	db.AddSessionV2("session", "Title", "/work", 1, 10)
+	for i, id := range []string{"first", "second"} {
+		db.AddV2Message(id, "session", "assistant", int64(i*3), 1, 2, `{"time":{"created":1,"completed":2}}`)
+	}
+	imp := &opencodeImporter{}
+	sessions, err := imp.Previews(context.Background(), db.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identities := map[string]string{}
+	for _, tc := range []struct {
+		name, endpoint            string
+		fail, force               bool
+		imported, skipped, failed int
+	}{
+		{name: "local partial failure", endpoint: "http://127.0.0.1:8765", fail: true, imported: 1, failed: 1},
+		{name: "local retry", endpoint: "http://127.0.0.1:8765", imported: 1, skipped: 1},
+		{name: "cloud independent", endpoint: "https://history.invalid", imported: 2},
+		{name: "cloud rerun", endpoint: "https://history.invalid", skipped: 2},
+		{name: "local rerun", endpoint: "http://127.0.0.1:8765", skipped: 2},
+		{name: "local force", endpoint: "http://127.0.0.1:8765", force: true, imported: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			exporter := &recordingExporter{}
+			if tc.fail {
+				exporter.failOn = func(gen HistoricalGeneration) error {
+					if gen.Source.TurnID == "second" {
+						return errors.New("synthetic export failure")
+					}
+					return nil
+				}
+			}
+			result, err := RunImport(context.Background(), ImportOptions{Agent: AgentOpenCode, Importer: imp, Sessions: sessions, Exporter: exporter, Target: Target{Endpoint: tc.endpoint}, Force: tc.force})
+			if err != nil || result.Imported != tc.imported || result.Skipped != tc.skipped || result.Failed != tc.failed {
+				t.Fatalf("import = %+v, %v", result, err)
+			}
+			for _, gen := range exporter.got {
+				if previous := identities[gen.Source.TurnID]; previous != "" && previous != gen.Gen.ID {
+					t.Fatal("destination, retry or force changed the generation ID")
+				}
+				identities[gen.Source.TurnID] = gen.Gen.ID
+			}
+		})
 	}
 }
 

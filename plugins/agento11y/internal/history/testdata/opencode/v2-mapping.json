@@ -1,0 +1,40 @@
+{
+  "source": "Synthetic projections shaped after OpenCode 13afea6a1a, v2.0.22 (527f0b931d1f9b3ebd34e106c51b31ce5db5b075) and v2.0.29 (042d0832f5f3a73eaa039a58a7d565776f6d4290).",
+  "messages": [
+    {"id":"user", "type":"user", "seq":1, "data":{"text":"delivered prompt", "files":[{"uri":"FILE-MUST-NOT-EXPORT"}], "metadata":{"secret":"METADATA-MUST-NOT-EXPORT"}}},
+    {"id":"synthetic", "type":"synthetic", "seq":3, "data":{"text":"delivered steering"}},
+    {"id":"compaction", "type":"compaction", "seq":5, "data":{"status":"completed", "summary":"SUMMARY-MUST-NOT-EXPORT", "recent":"RECENT-MUST-NOT-EXPORT", "cost":9}},
+    {"id":"first", "type":"assistant", "seq":10, "data":{
+      "id":"CONFLICTING-ID", "type":"user", "sessionID":"CONFLICTING-SESSION", "agent":"build",
+      "model":{"id":"test-model", "providerID":"test-provider"},
+      "time":{"created":1000, "streamed":2000, "completed":3000}, "finish":"tool-calls", "cost":0,
+      "tokens":{"input":200, "output":50, "reasoning":10, "cache":{"read":30, "write":20}},
+      "providerState":{"secret":"PROVIDER-MUST-NOT-EXPORT"}, "snapshot":{"files":["SNAPSHOT-MUST-NOT-EXPORT"]},
+      "content":[
+        {"type":"text", "text":"answer", "state":{"signature":"SIGNATURE-MUST-NOT-EXPORT"}},
+        {"type":"reasoning", "text":"thought", "state":{"secret":"REASONING-STATE-MUST-NOT-EXPORT"}},
+        {"type":"tool", "id":"stream", "name":"read", "state":{"status":"streaming", "input":"{\"token\":\"ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij\""}},
+        {"type":"tool", "id":"running", "name":"read", "state":{"status":"running", "input":{"path":"/work"}, "metadata":{"secret":"TOOL-METADATA-MUST-NOT-EXPORT"}}},
+        {"type":"tool", "id":"shell", "name":"shell", "state":{"status":"completed", "input":{"command":"exit 1"}, "content":[{"type":"text", "text":"line one"},{"type":"file", "uri":"TOOL-FILE-MUST-NOT-EXPORT"},{"type":"text", "text":"line two"}], "metadata":{"exit":1}}},
+        {"type":"tool", "id":"failed", "name":"fetch", "state":{"status":"error", "input":{}, "error":{"type":"network", "message":"ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij", "response":{"body":"ERROR-BODY-MUST-NOT-EXPORT"}}}},
+        {"type":"tool", "id":"invalid", "name":"invalid", "state":{"status":"completed", "input":{}, "content":[{"type":"text", "text":"bad input"}]}},
+        {"type":"tool", "id":"bash", "name":"bash", "state":{"status":"completed", "input":{}, "content":[{"type":"text", "text":"bad command"}], "metadata":{"exit":2}}},
+        {"type":"text", "text":" "}, {"type":"reasoning", "text":"\n"}
+      ]
+    }},
+    {"id":"second", "type":"assistant", "seq":12, "data":{"agent":"plan", "model":{"id":"test-model", "providerID":"test-provider"}, "time":{"created":4000, "completed":5000}, "content":[{"type":"text", "text":"second step"}]}},
+    {"id":"lost-input", "type":"user", "seq":20, "data":{"text":"consume at unfinished assistant"}},
+    {"id":"streamed-only", "type":"assistant", "seq":21, "data":{"time":{"created":6000,"streamed":7000},"content":[]}},
+    {"id":"retry-only", "type":"assistant", "seq":23, "data":{"time":{"created":8000},"retry":{"attempt":2,"error":{"type":"retry","message":"RETRY-MUST-NOT-EXPORT"}},"content":[]}},
+    {"id":"transparent-retry", "type":"assistant", "seq":24, "data":{"time":{"created":9000,"completed":10000},"retry":{"attempt":3},"content":[]}},
+    {"id":"idle-prompt", "type":"user", "seq":30, "data":{"text":"clear at idle"}},
+    {"id":"idle", "type":"idle", "seq":31, "data":{"outcome":"interrupted"}},
+    {"id":"failed-assistant", "type":"assistant", "seq":35, "data":{"time":{"created":11000}, "error":{"type":"provider.failure", "message":"RAW-ASSISTANT-ERROR-MUST-NOT-EXPORT", "response":{"body":"RAW-RESPONSE-MUST-NOT-EXPORT"}}, "content":[]}},
+    {"id":"continuation-input", "type":"synthetic", "seq":40, "data":{"text":"continue"}},
+    {"id":"continuation", "type":"assistant", "seq":41, "data":{"time":{"created":12000,"streamed":13000,"completed":14000}, "tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}},"content":[]}},
+    {"id":"system", "type":"system", "seq":50, "data":{"text":"SYSTEM-MUST-NOT-EXPORT"}},
+    {"id":"skill", "type":"skill", "seq":51, "data":{"text":"SKILL-MUST-NOT-EXPORT"}},
+    {"id":"shell-record", "type":"shell", "seq":52, "data":{"command":"SHELL-RECORD-MUST-NOT-EXPORT","output":"SHELL-OUTPUT-MUST-NOT-EXPORT"}},
+    {"id":"switch", "type":"agent-switched", "seq":53, "data":{"agent":"next", "previous":"old"}}
+  ]
+}

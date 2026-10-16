@@ -255,9 +255,12 @@ Imported sessions are thinner than live capture — host logs omit fields that l
 - **opencode**: Reads `opencode*.db` under `$XDG_DATA_HOME/opencode` (default `~/.local/share/opencode`).
   `OPENCODE_DB` adds another database. Absolute values are used as-is. Relative values are resolved under the OpenCode data directory.
   History cannot recover the system prompt, host version, configured agent-name prefix, capture-time Git branch, time to first token, or separate tool spans.
-  An assistant message is imported when it has a completion timestamp or an error. Messages with neither are skipped.
-  OpenCode forks copy all messages before the fork point into a new session with new IDs. If you import both sessions, those copied assistant turns are imported twice.
-  Only OpenCode 1.x databases are read. A database with OpenCode 2 tables (`session_v2`), including one that still holds 1.x rows, is skipped with a warning, and none of its sessions are imported.
+  Supports OpenCode v1 and released v2 databases, but not preview versions.
+  Databases with incomplete or unverified upgrades to v2 are skipped with a warning. Sessions OpenCode still marks as active are skipped, regardless of age.
+  Only completed or failed assistant turns are imported. For v2, input contains only new plain-text messages, not the full context sent to the model.
+  Compaction and title-generation costs are excluded, so imported costs can differ from OpenCode's totals.
+  A stored v2 message or accumulated input over 4 MiB stops importing that session with a warning.
+  Importing both a fork and its original session counts copied turns twice. Importing turns already captured live can also count them twice.
 
 Without `--since`, an import covers the last 90 days. Pass `--since 365d` (or a timestamp) to widen the window, and `--until` to bound the other end. Other useful flags: `--workspace`, `--max-sessions`, `--max-turns`, `--all`, `--yes`, `--force`. Without a terminal, pass `--all --yes` to import from a script.
 

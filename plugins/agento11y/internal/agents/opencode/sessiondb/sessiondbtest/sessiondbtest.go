@@ -116,6 +116,12 @@ func WithSessionV2() Option {
 	return func(c *config) { c.statements = append(c.statements, sessionV2Schema, sessionMessageSchema) }
 }
 
+func WithMigrationState() Option {
+	return func(c *config) {
+		c.statements = append(c.statements, `create table kv (key text primary key, value text)`)
+	}
+}
+
 // WithoutColumn drops one column after the other options have run.
 func WithoutColumn(table, column string) Option {
 	return func(c *config) {
@@ -182,6 +188,37 @@ func (b *Builder) AddSessionV2(id, title, directory string, created, updated int
 		(id, project_id, slug, directory, title, version, time_created, time_updated)
 		values (?, 'global', ?, ?, ?, '2.0.0', ?, ?)`, id, id, directory, title, created, updated); err != nil {
 		b.t.Fatalf("sessiondbtest: insert session_v2: %v", err)
+	}
+}
+
+func (b *Builder) SetV2Lineage(id, parent, fork string) {
+	b.t.Helper()
+	if _, err := b.DB.Exec(`update session_v2 set parent_id = nullif(?, ''), fork_session_id = nullif(?, '') where id = ?`, parent, fork, id); err != nil {
+		b.t.Fatalf("sessiondbtest: set lineage: %v", err)
+	}
+}
+
+// A nil timestamp releases the execution claim.
+func (b *Builder) SetV2Claim(id string, timestamp *int64) {
+	b.t.Helper()
+	if _, err := b.DB.Exec(`update session_v2 set time_suspended = ? where id = ?`, timestamp, id); err != nil {
+		b.t.Fatalf("sessiondbtest: set claim: %v", err)
+	}
+}
+
+func (b *Builder) SetMigrationState(data string) {
+	b.t.Helper()
+	if _, err := b.DB.Exec(`insert or replace into kv (key, value) values ('migration.v1-v2', ?)`, data); err != nil {
+		b.t.Fatalf("sessiondbtest: set migration state: %v", err)
+	}
+}
+
+func (b *Builder) AddV2Message(id, sessionID, kind string, seq, created, updated int64, data string) {
+	b.t.Helper()
+	if _, err := b.DB.Exec(`insert into session_message
+		(id, session_id, type, seq, time_created, time_updated, data) values (?, ?, ?, ?, ?, ?, ?)`,
+		id, sessionID, kind, seq, created, updated, data); err != nil {
+		b.t.Fatalf("sessiondbtest: insert session_message: %v", err)
 	}
 }
 

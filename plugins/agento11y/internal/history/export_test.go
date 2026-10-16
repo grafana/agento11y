@@ -4,17 +4,27 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/grafana/agento11y/go/agento11y"
+	agento11yv1 "github.com/grafana/agento11y/go/proto/agento11y/v1"
+	"github.com/grafana/agento11y/go/proto/agento11y/wire"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/opencode/sessiondb/sessiondbtest"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"google.golang.org/protobuf/proto"
 )
 
 type capturedRecord struct {
@@ -724,6 +734,334 @@ func TestLoopbackEndpointAlwaysCarriesTheForwardMarker(t *testing.T) {
 			defer mu.Unlock()
 			if marker == "" {
 				t.Fatal("an import that reached the local daemon carried no forward marker, so the daemon would relay it to Cloud")
+			}
+		})
+	}
+}
+
+const openCodeV2ExportSecret = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij"
+
+func openCodeV2ExportFixture(t *testing.T) *sessiondbtest.Builder {
+	t.Helper()
+	db := sessiondbtest.New(t, sessiondbtest.WithoutV1(), sessiondbtest.WithSessionV2())
+	db.AddSessionV2("root", "title "+openCodeV2ExportSecret, "/synthetic/work", 1000, 9000)
+	db.AddV2Message("user", "root", "user", 1, 1000, 1000, fmt.Sprintf(`{
+		"text":"prompt %s", "files":[{"uri":"FILE-MUST-NOT-EXPORT"}],
+		"metadata":{"private":"USER-METADATA-MUST-NOT-EXPORT"}
+	}`, openCodeV2ExportSecret))
+	db.AddV2Message("first", "root", "assistant", 3, 1000, 3000, strings.ReplaceAll(`{
+		"agent":"build", "model":{"id":"test-model","providerID":"test-provider"},
+		"time":{"created":1000,"streamed":2000,"completed":3000}, "cost":0.125,
+		"tokens":{"input":200,"output":50,"reasoning":10,"cache":{"read":30,"write":20}},
+		"providerState":{"private":"PROVIDER-MUST-NOT-EXPORT"},
+		"metadata":{"private":"ASSISTANT-METADATA-MUST-NOT-EXPORT"},
+		"snapshot":{"private":"SNAPSHOT-MUST-NOT-EXPORT"},
+		"content":[
+			{"type":"text","text":"answer SECRET","state":{"signature":"SIGNATURE-MUST-NOT-EXPORT"}},
+			{"type":"reasoning","text":"thought SECRET","state":{"private":"REASONING-STATE-MUST-NOT-EXPORT"}},
+			{"type":"tool","id":"completed","name":"read","state":{"status":"completed",
+				"input":{"query":"argument SECRET"},
+				"content":[{"type":"text","text":"result SECRET"},{"type":"file","uri":"TOOL-FILE-MUST-NOT-EXPORT"}],
+				"metadata":{"private":"TOOL-METADATA-MUST-NOT-EXPORT"}}},
+			{"type":"tool","id":"failed","name":"fetch","state":{"status":"error","input":{},
+				"error":{"type":"network","message":"fallback SECRET","response":{"body":"TOOL-ERROR-BODY-MUST-NOT-EXPORT"}}}},
+			{"type":"tool","id":"streaming","name":"read","state":{"status":"streaming","input":"{\"query\":\"stream SECRET\""}},
+			{"type":"file","uri":"ASSISTANT-FILE-MUST-NOT-EXPORT"}
+		]
+	}`, "SECRET", openCodeV2ExportSecret))
+	db.AddV2Message("zero", "root", "assistant", 5, 4000, 6000, `{
+		"model":{"id":"test-model","providerID":"test-provider"},
+		"time":{"created":4000,"completed":6000}, "cost":0,
+		"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}, "content":[]
+	}`)
+	db.AddV2Message("failed", "root", "assistant", 8, 7000, 9000, `{
+		"model":{"id":"test-model","providerID":"test-provider"},
+		"time":{"created":7000,"completed":9000},
+		"error":{"type":"provider.failure","message":"ASSISTANT-ERROR-MUST-NOT-EXPORT",
+			"response":{"body":"ASSISTANT-ERROR-BODY-MUST-NOT-EXPORT"}}, "content":[]
+	}`)
+	return db
+}
+
+// NewTargetExporter forces full capture on loopback. Configure the SDK directly
+// to test Cloud capture modes without sending data outside the test receiver.
+func sdkHistoryExporter(t *testing.T, endpoint string, mode agento11y.ContentCaptureMode) (*Exporter, *tracetest.SpanRecorder) {
+	t.Helper()
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	client := agento11y.NewClient(agento11y.Config{
+		ContentCapture: mode,
+		Tracer:         provider.Tracer("agento11y.history.test"),
+		Logger:         log.New(io.Discard, "", 0),
+		GenerationExport: agento11y.GenerationExportConfig{
+			Protocol: agento11y.GenerationExportProtocolHTTP,
+			Endpoint: endpoint + "/api/v1/generations:export",
+			Auth: agento11y.AuthConfig{
+				Mode: agento11y.ExportAuthModeBasic, TenantID: "synthetic-tenant", BasicPassword: "synthetic-token",
+			},
+		},
+	})
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := client.Shutdown(ctx); err != nil {
+			t.Errorf("SDK shutdown: %v", err)
+		}
+	})
+	return NewExporter(client), recorder
+}
+
+func TestOpenCodeV2SDKLoopback(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		local    bool
+		metadata bool
+	}{
+		{name: "local forces full capture", local: true},
+		{name: "Cloud-shaped full capture"},
+		{name: "Cloud-shaped metadata only", metadata: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			envconfig.PinAliasEnvBlank(t)
+			db := openCodeV2ExportFixture(t)
+			var mu sync.Mutex
+			var generations []*agento11yv1.Generation
+			var requestBodies []byte
+			var markers []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api/v1/generations:export" {
+					t.Errorf("unexpected export path %q", r.URL.Path)
+					http.NotFound(w, r)
+					return
+				}
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Errorf("read export: %v", err)
+					http.Error(w, "read failed", http.StatusBadRequest)
+					return
+				}
+				req, err := wire.UnmarshalExportGenerationsJSON(body)
+				if err != nil {
+					t.Errorf("decode export: %v", err)
+					http.Error(w, "decode failed", http.StatusBadRequest)
+					return
+				}
+				mu.Lock()
+				generations = append(generations, req.Generations...)
+				requestBodies = append(requestBodies, body...)
+				markers = append(markers, r.Header.Get(ForwardMarkerHeader))
+				mu.Unlock()
+				results := make([]map[string]any, len(req.Generations))
+				for i, gen := range req.Generations {
+					results[i] = map[string]any{"generation_id": gen.Id, "accepted": true}
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"results": results})
+			}))
+			t.Cleanup(srv.Close)
+
+			var exp *Exporter
+			var spans *tracetest.SpanRecorder
+			if tc.local {
+				var cleanup func(context.Context) error
+				var err error
+				exp, cleanup, err = NewTargetExporter(context.Background(), Target{
+					Endpoint: srv.URL, ContentMode: "metadata_only",
+				}, log.New(io.Discard, "", 0))
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() {
+					ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+					defer cancel()
+					if err := cleanup(ctx); err != nil {
+						t.Errorf("target shutdown: %v", err)
+					}
+				}()
+			} else {
+				mode := agento11y.ContentCaptureModeFull
+				if tc.metadata {
+					mode = agento11y.ContentCaptureModeMetadataOnly
+				}
+				exp, spans = sdkHistoryExporter(t, srv.URL, mode)
+			}
+
+			imp, ok := NewImporter(AgentOpenCode)
+			if !ok {
+				t.Fatal("OpenCode importer is not registered")
+			}
+			sessions, err := imp.(MultiSessionImporter).Previews(context.Background(), db.Path)
+			if err != nil || len(sessions) != 1 || sessions[0].TurnCount != 3 {
+				t.Fatalf("previews = %+v, error %v", sessions, err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			result, err := RunImport(ctx, ImportOptions{
+				Agent: AgentOpenCode, Sessions: sessions, Exporter: exp,
+				Ledger: openTestLedger(t, filepath.Join(t.TempDir(), "ledger.jsonl")),
+			})
+			if err != nil || result.Imported != 3 || result.Failed != 0 || len(result.Warnings) != 0 {
+				t.Fatalf("RunImport = %+v, error %v", result, err)
+			}
+
+			mu.Lock()
+			got := append([]*agento11yv1.Generation(nil), generations...)
+			raw := string(requestBodies)
+			gotMarkers := append([]string(nil), markers...)
+			mu.Unlock()
+			if len(got) != 3 || len(gotMarkers) == 0 {
+				t.Fatalf("received %d generations in %d requests", len(got), len(gotMarkers))
+			}
+			for _, marker := range gotMarkers {
+				if tc.local && marker != "1" {
+					t.Errorf("local export forward marker = %q, want 1", marker)
+				}
+			}
+			if strings.Contains(raw, openCodeV2ExportSecret) || strings.Contains(raw, "MUST-NOT-EXPORT") {
+				t.Fatal("export leaked a secret, opaque state, file or raw error")
+			}
+			byID := make(map[string]*agento11yv1.Generation)
+			for _, gen := range got {
+				byID[gen.Id] = gen
+			}
+			id := func(turn string) string {
+				return (SourceRef{Agent: AgentOpenCode, SessionID: "root", SourcePath: db.Path, TurnID: turn, TurnIDStable: true}).GenerationID()
+			}
+			first, zero, failed := byID[id("first")], byID[id("zero")], byID[id("failed")]
+			if first == nil || zero == nil || failed == nil {
+				t.Fatal("export lost native generation identities")
+			}
+			firstMeta, zeroMeta, failedMeta := first.Metadata.AsMap(), zero.Metadata.AsMap(), failed.Metadata.AsMap()
+			wantUsage := &agento11yv1.TokenUsage{
+				InputTokens: 250, OutputTokens: 60, TotalTokens: 310,
+				CacheReadInputTokens: 30, CacheWriteInputTokens: 20, ReasoningTokens: 10,
+				InputSemantics: agento11yv1.TokenInputSemantics_TOKEN_INPUT_SEMANTICS_INCLUSIVE,
+			}
+			if !proto.Equal(first.Usage, wantUsage) || firstMeta["cost_usd"] != 0.125 || firstMeta[MetaApproxUsage] != nil {
+				t.Errorf("first usage/cost/quality = %+v / %v", first.Usage, firstMeta)
+			}
+			if !proto.Equal(zero.Usage, &agento11yv1.TokenUsage{InputSemantics: agento11yv1.TokenInputSemantics_TOKEN_INPUT_SEMANTICS_INCLUSIVE}) || zeroMeta["cost_usd"] != float64(0) || zeroMeta[MetaApproxUsage] != nil {
+				t.Errorf("present-zero usage/cost/quality = %+v / %v", zero.Usage, zeroMeta)
+			}
+			wantCallError := "provider.failure"
+			if tc.metadata {
+				wantCallError = "sdk_error"
+			}
+			if _, present := failedMeta["cost_usd"]; present || failedMeta[MetaApproxUsage] != true || failed.CallError != wantCallError {
+				t.Errorf("failed generation invented cost/usage or lost safe error: %+v", failed)
+			}
+			for _, gen := range got {
+				meta := gen.Metadata.AsMap()
+				if meta[MetaBackfill] != true || meta["opencode.settlement"] != "history" || meta["opencode.input_source"] != "persisted_user_delta" {
+					t.Errorf("history metadata = %v", meta)
+				}
+				wantMode := "full"
+				if tc.metadata {
+					wantMode = "metadata_only"
+				}
+				if meta["agento11y.sdk.content_capture_mode"] != wantMode {
+					t.Errorf("SDK capture mode = %v, want %s", meta["agento11y.sdk.content_capture_mode"], wantMode)
+				}
+				if tc.metadata {
+					if len(gen.RawArtifacts) != 0 || gen.SystemPrompt != "" || meta[MetaConversationTitle] != nil {
+						t.Errorf("metadata-only export retained artifacts, system prompt or title: %+v", gen)
+					}
+					for _, messages := range [][]*agento11yv1.Message{gen.Input, gen.Output} {
+						for _, message := range messages {
+							for _, part := range message.Parts {
+								if part.GetText() != "" || part.GetThinking() != "" || len(part.GetToolCall().GetInputJson()) != 0 || part.GetToolResult().GetContent() != "" || len(part.GetToolResult().GetContentJson()) != 0 || part.GetMedia() != nil {
+									t.Errorf("metadata-only export retained a content body: %+v", part)
+								}
+							}
+						}
+					}
+					for _, tool := range gen.Tools {
+						if tool.Description != "" || len(tool.InputSchemaJson) != 0 {
+							t.Errorf("metadata-only export retained tool content: %+v", tool)
+						}
+					}
+				}
+			}
+			if !tc.metadata {
+				if len(first.Input) != 1 || len(first.Output) != 7 {
+					t.Fatalf("full export input/output counts = %d/%d, want 1/7", len(first.Input), len(first.Output))
+				}
+				for field, text := range map[string]string{
+					"title":               fmt.Sprint(firstMeta[MetaConversationTitle]),
+					"input":               first.Input[0].Parts[0].GetText(),
+					"text":                first.Output[0].Parts[0].GetText(),
+					"reasoning":           first.Output[1].Parts[0].GetThinking(),
+					"arguments":           string(first.Output[2].Parts[0].GetToolCall().GetInputJson()),
+					"result":              first.Output[3].Parts[0].GetToolResult().GetContent(),
+					"error fallback":      first.Output[5].Parts[0].GetToolResult().GetContent(),
+					"streaming arguments": string(first.Output[6].Parts[0].GetToolCall().GetInputJson()),
+				} {
+					if !strings.Contains(text, "REDACTED") || strings.Contains(text, openCodeV2ExportSecret) {
+						t.Errorf("%s did not retain redacted content: %q", field, text)
+					}
+				}
+				if !first.Output[5].Parts[0].GetToolResult().GetIsError() || first.CallError != "" {
+					t.Error("tool failure lost its error flag or failed the generation")
+				}
+			}
+			if !first.StartedAt.AsTime().Equal(time.UnixMilli(1000)) || !first.CompletedAt.AsTime().Equal(time.UnixMilli(2000)) || firstMeta[MetaApproxCompleted] != nil {
+				t.Errorf("streamed timestamps/quality = %v / %v / %v", first.StartedAt, first.CompletedAt, first.Metadata)
+			}
+			if !zero.CompletedAt.AsTime().Equal(time.UnixMilli(6000)) || zeroMeta[MetaApproxCompleted] != true || zeroMeta["opencode.completion_time_approximate"] != true {
+				t.Errorf("completed fallback timestamps/quality = %v / %v", zero.CompletedAt, zero.Metadata)
+			}
+			if spans == nil {
+				return
+			}
+			ended := spans.Ended()
+			if len(ended) != 3 {
+				t.Fatalf("SDK recorded %d spans, want 3", len(ended))
+			}
+			for _, span := range ended {
+				attrs := make(map[string]attribute.Value)
+				for _, attr := range span.Attributes() {
+					attrs[string(attr.Key)] = attr.Value
+					if strings.Contains(attr.Value.Emit(), openCodeV2ExportSecret) || strings.Contains(attr.Value.Emit(), "MUST-NOT-EXPORT") {
+						t.Errorf("span attribute %s leaked source content", attr.Key)
+					}
+				}
+				events, err := json.Marshal(span.Events())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.Contains(string(events), openCodeV2ExportSecret) || strings.Contains(string(events), "MUST-NOT-EXPORT") {
+					t.Error("span event leaked source content")
+				}
+				gen, ok := byID[attrs["agento11y.generation.id"].AsString()]
+				if !ok {
+					t.Fatalf("span has unknown generation ID %q", attrs["agento11y.generation.id"].AsString())
+				}
+				if !span.StartTime().Equal(gen.StartedAt.AsTime()) || !span.EndTime().Equal(gen.CompletedAt.AsTime()) {
+					t.Errorf("span timestamps = %v/%v, generation %+v", span.StartTime(), span.EndTime(), gen)
+				}
+				if gen.Id == first.Id {
+					for key, want := range map[string]int64{
+						"gen_ai.usage.input_tokens": 250, "gen_ai.usage.output_tokens": 60,
+						"gen_ai.usage.cache_read_input_tokens": 30, "gen_ai.usage.cache_write_input_tokens": 20,
+					} {
+						if attrs[key].AsInt64() != want {
+							t.Errorf("span %s = %v, want %d", key, attrs[key], want)
+						}
+					}
+					if attrs["gen_ai.token.semantics"].AsString() != "inclusive" || span.Status().Code != codes.Ok {
+						t.Errorf("span semantics/status = %v/%v", attrs["gen_ai.token.semantics"], span.Status())
+					}
+				}
+				if gen.Id == failed.Id && span.Status().Code != codes.Error {
+					t.Errorf("failed assistant span status = %v", span.Status())
+				}
+				if tc.metadata {
+					for _, key := range []string{"gen_ai.input.messages", "gen_ai.output.messages", "gen_ai.system_instructions", "gen_ai.tool.definitions", MetaConversationTitle} {
+						if _, present := attrs[key]; present {
+							t.Errorf("metadata-only span retained %s", key)
+						}
+					}
+				}
 			}
 		})
 	}

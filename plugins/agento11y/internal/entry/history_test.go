@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -17,10 +18,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/opencode/sessiondb/sessiondbtest"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/history"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/login"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/xdg"
 )
 
 // historyFixedNow pins the clock so the 90-day default boundary is checkable.
@@ -352,6 +355,260 @@ func TestHistoryDryRunReportsThePlan(t *testing.T) {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("stdout = %q, want it to contain %q", stdout, want)
 		}
+	}
+}
+
+func TestHistoryOpenCodeLayouts(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		opts       []sessiondbtest.Option
+		legacy     bool
+		v2         bool
+		marker     string
+		claimed    bool
+		wantTurns  int
+		wantReason string
+	}{
+		{name: "v1", legacy: true, wantTurns: 1},
+		{
+			name: "v1 with incidental session_message", legacy: true, wantTurns: 1,
+			opts: []sessiondbtest.Option{sessiondbtest.WithSessionMessage()},
+		},
+		{
+			name: "native v2 without migration marker or events", v2: true, wantTurns: 1,
+			opts: []sessiondbtest.Option{sessiondbtest.WithoutV1(), sessiondbtest.WithSessionV2()},
+		},
+		{
+			name: "completed mixed uses only v2", legacy: true, v2: true, wantTurns: 1,
+			opts:   []sessiondbtest.Option{sessiondbtest.WithSessionV2(), sessiondbtest.WithMigrationState()},
+			marker: `{"phase":"completed"}`,
+		},
+		{
+			name: "completed mixed never restores deleted v2 sessions", legacy: true,
+			opts:   []sessiondbtest.Option{sessiondbtest.WithSessionV2(), sessiondbtest.WithMigrationState()},
+			marker: `{"phase":"completed"}`,
+		},
+		{
+			name: "old durable claim", v2: true, claimed: true,
+			opts: []sessiondbtest.Option{sessiondbtest.WithoutV1(), sessiondbtest.WithSessionV2()},
+		},
+		{
+			name: "mixed migration in progress", legacy: true, v2: true,
+			opts:       []sessiondbtest.Option{sessiondbtest.WithSessionV2(), sessiondbtest.WithMigrationState()},
+			marker:     `{"phase":"sessions","cursor":"secret-migration-cursor"}`,
+			wantReason: "v1-v2 migration is in progress",
+		},
+		{
+			name: "native layout with migration in progress", v2: true,
+			opts:   []sessiondbtest.Option{sessiondbtest.WithoutV1(), sessiondbtest.WithSessionV2(), sessiondbtest.WithMigrationState()},
+			marker: `{"phase":"sessions"}`, wantReason: "v1-v2 migration is in progress",
+		},
+		{
+			name: "mixed without migration table", legacy: true, v2: true,
+			opts:       []sessiondbtest.Option{sessiondbtest.WithSessionV2()},
+			wantReason: "legacy session rows require a completed v1-v2 migration",
+		},
+		{
+			name: "mixed without migration marker", legacy: true, v2: true,
+			opts:       []sessiondbtest.Option{sessiondbtest.WithSessionV2(), sessiondbtest.WithMigrationState()},
+			wantReason: "legacy session rows require a completed v1-v2 migration",
+		},
+		{
+			name: "mixed with invalid migration state", legacy: true, v2: true,
+			opts:       []sessiondbtest.Option{sessiondbtest.WithSessionV2(), sessiondbtest.WithMigrationState()},
+			marker:     `{"phase":"secret-migration-state"`,
+			wantReason: "legacy session rows require a completed v1-v2 migration",
+		},
+		{
+			name: "incomplete v2 never falls back to v1", legacy: true, v2: true,
+			opts:       []sessiondbtest.Option{sessiondbtest.WithSessionV2(), sessiondbtest.WithoutColumn("session_v2", "time_suspended")},
+			wantReason: "table session_v2 is missing column time_suspended",
+		},
+		{
+			name:       "unsupported preview layout",
+			opts:       []sessiondbtest.Option{sessiondbtest.WithoutV1(), sessiondbtest.WithSessionMessage()},
+			wantReason: "missing OpenCode v1",
+		},
+	} {
+		for _, dryRun := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/dry-run=%t", tt.name, dryRun), func(t *testing.T) {
+				withHistoryNow(t)
+				isolateDotenvHome(t)
+				t.Setenv("XDG_DATA_HOME", t.TempDir())
+				db := sessiondbtest.New(t, tt.opts...)
+				t.Setenv("OPENCODE_DB", db.Path)
+				created := historyFixedNow.Add(-25 * time.Hour).UnixMilli()
+				updated := historyFixedNow.Add(-24 * time.Hour).UnixMilli()
+				if tt.legacy {
+					db.AddSession("legacy", "", "secret-legacy-title", "/work/repo", created, updated)
+					db.AddMessage("legacy-assistant", "legacy", created, updated,
+						fmt.Sprintf(`{"role":"assistant","time":{"created":%d,"completed":%d}}`, created, updated))
+					db.AddPart("legacy-text", "legacy-assistant", "legacy", created, updated,
+						`{"type":"text","text":"secret-legacy-output"}`)
+				}
+				if tt.v2 {
+					db.AddSessionV2("current", "secret-v2-title", "/work/repo", created, updated)
+					db.AddV2Message("current-user", "current", "user", 1, created, created,
+						`{"text":"secret-user-prompt","metadata":{"private":"secret-user-metadata"}}`)
+					db.AddV2Message("current-assistant", "current", "assistant", 3, created, updated,
+						fmt.Sprintf(`{"model":{"id":"test-model","providerID":"test-provider"},"time":{"created":%d,"completed":%d},"content":[{"type":"text","text":"secret-assistant-output"},{"type":"reasoning","text":"secret-reasoning"},{"type":"tool","id":"call","name":"read","state":{"status":"completed","input":{"path":"secret-tool-argument"},"content":[{"type":"text","text":"secret-tool-result"}]}}],"metadata":{"private":"secret-assistant-metadata"},"providerState":{"private":"secret-provider-state"}}`, created, updated))
+					if tt.claimed {
+						db.SetV2Claim("current", &created)
+					}
+				}
+				if tt.marker != "" {
+					db.SetMigrationState(tt.marker)
+				}
+
+				exported := 0
+				if dryRun || tt.wantTurns == 0 {
+					prevLocal, prevExporter := historyEnsureLocal, historyNewExporter
+					t.Cleanup(func() { historyEnsureLocal, historyNewExporter = prevLocal, prevExporter })
+					historyEnsureLocal = func(context.Context) (string, error) {
+						t.Fatal("dry run or empty plan started a local receiver")
+						return "", errors.New("unexpected receiver")
+					}
+					historyNewExporter = func(context.Context, history.Target, *log.Logger) (history.TurnExporter, func(context.Context) error, error) {
+						t.Fatal("dry run or empty plan constructed an exporter")
+						return nil, nil, errors.New("unexpected exporter")
+					}
+				} else {
+					withStubHistoryExporter(t, &exported)
+				}
+				withStubLoginRun(t, func(context.Context, login.RunOpts) (login.Result, error) {
+					t.Fatal("local import or dry run started login")
+					return login.Result{}, nil
+				})
+
+				args := []string{"history", "import", "opencode", "--local", "--all", "--yes"}
+				if dryRun {
+					args = append(args, "--dry-run")
+				}
+				stdout, stderr, code := runHistory(t, args...)
+				if code != nil {
+					t.Fatalf("exit = %d, stdout=%q stderr=%q", *code, stdout, stderr)
+				}
+				if want := fmt.Sprintf("planned: %d sessions, %d turns", tt.wantTurns, tt.wantTurns); !strings.Contains(stdout, want) {
+					t.Fatalf("stdout = %q, want %q", stdout, want)
+				}
+				if strings.Contains(stdout+stderr, "secret-") {
+					t.Fatal("CLI output contains source content")
+				}
+				if tt.wantReason != "" {
+					for _, want := range []string{"warning:", db.Path, tt.wantReason, "no sessions were read"} {
+						if !strings.Contains(stdout+stderr, want) {
+							t.Errorf("output = %q, want diagnostic %q", stdout+stderr, want)
+						}
+					}
+				} else if strings.Contains(stdout+stderr, "warning:") {
+					t.Fatalf("supported layout produced a warning: %s%s", stdout, stderr)
+				}
+				if tt.claimed && !strings.Contains(stdout, "active") {
+					t.Fatalf("old execution claim was not reported as active: %s", stdout)
+				}
+				if dryRun || tt.wantTurns == 0 {
+					if exported != 0 {
+						t.Fatalf("exported = %d, want 0", exported)
+					}
+					if _, err := os.Stat(filepath.Join(xdg.AppStateRoot(), "history")); !errors.Is(err, os.ErrNotExist) {
+						t.Fatalf("dry run or empty plan created history state: %v", err)
+					}
+					if dryRun && !strings.Contains(stdout, "Dry run: nothing was decoded, exported, or stored.") {
+						t.Fatalf("dry-run guarantee missing: %s", stdout)
+					}
+					return
+				}
+				if exported != tt.wantTurns || !strings.Contains(stdout, "Imported 1 turns from 1 sessions") {
+					t.Fatalf("exported = %d, stdout=%q stderr=%q", exported, stdout, stderr)
+				}
+				stdout, stderr, code = runHistory(t, args...)
+				if code != nil || exported != tt.wantTurns || !strings.Contains(stdout, "1 already imported, 0 failed") {
+					t.Fatalf("rerun exit=%v exported=%d stdout=%q stderr=%q", code, exported, stdout, stderr)
+				}
+			})
+		}
+	}
+}
+
+func TestHistoryOpenCodeSelectedSourceChanges(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		change func(*testing.T, *sessiondbtest.Builder)
+		reason string
+	}{
+		{
+			name: "migration starts",
+			change: func(_ *testing.T, db *sessiondbtest.Builder) {
+				db.SetMigrationState(`{"phase":"sessions","cursor":"secret-migration-cursor"}`)
+			},
+			reason: "v1-v2 migration is in progress",
+		},
+		{
+			name: "schema becomes unsupported",
+			change: func(t *testing.T, db *sessiondbtest.Builder) {
+				if _, err := db.DB.Exec(`alter table session_message drop column seq`); err != nil {
+					t.Fatal(err)
+				}
+			},
+			reason: "table session_message is missing column seq",
+		},
+		{
+			name: "session becomes claimed",
+			change: func(_ *testing.T, db *sessiondbtest.Builder) {
+				claim := historyFixedNow.UnixMilli()
+				db.SetV2Claim("current", &claim)
+			},
+			reason: "session has an unresolved execution claim",
+		},
+		{
+			name: "session is deleted",
+			change: func(t *testing.T, db *sessiondbtest.Builder) {
+				if _, err := db.DB.Exec(`delete from session_v2 where id = 'current'`); err != nil {
+					t.Fatal(err)
+				}
+			},
+			reason: "session no longer exists",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			withHistoryNow(t)
+			isolateDotenvHome(t)
+			t.Setenv("XDG_DATA_HOME", t.TempDir())
+			db := sessiondbtest.New(t, sessiondbtest.WithoutV1(), sessiondbtest.WithSessionV2(), sessiondbtest.WithMigrationState())
+			t.Setenv("OPENCODE_DB", db.Path)
+			at := historyFixedNow.Add(-24 * time.Hour).UnixMilli()
+			db.AddSessionV2("current", "secret-v2-title", "/work/repo", at, at)
+			db.AddV2Message("assistant", "current", "assistant", 1, at, at,
+				fmt.Sprintf(`{"time":{"created":%d,"completed":%d},"content":[{"type":"text","text":"secret-assistant-output"}]}`, at, at))
+			exported := 0
+			withStubHistoryExporter(t, &exported)
+			prevSelect := historySelect
+			t.Cleanup(func() { historySelect = prevSelect })
+			historySelect = func(sessions []history.SessionPreview) ([]history.SessionPreview, error) {
+				if len(sessions) != 1 || sessions[0].SessionID != "current" {
+					t.Fatalf("offered sessions = %+v, want current", sessions)
+				}
+				tt.change(t, db)
+				return sessions, nil
+			}
+
+			var stdout, stderr bytes.Buffer
+			err := historyImport(historyImportOptions{
+				Agent: history.AgentOpenCode, Local: true, Yes: true,
+				Since: historyFixedNow.Add(-history.DefaultSinceWindow),
+			}, true, &stdout, &stderr)
+			if err == nil || exported != 0 || !strings.Contains(stdout.String(), "1 failed") {
+				t.Fatalf("import error=%v exported=%d stdout=%q stderr=%q", err, exported, stdout.String(), stderr.String())
+			}
+			for _, want := range []string{"warning:", "current", db.Path, tt.reason} {
+				if !strings.Contains(stderr.String(), want) {
+					t.Errorf("stderr = %q, want %q", stderr.String(), want)
+				}
+			}
+			if strings.Contains(stdout.String()+stderr.String()+err.Error(), "secret-") {
+				t.Fatal("changed-source diagnostic contains source content")
+			}
+		})
 	}
 }
 

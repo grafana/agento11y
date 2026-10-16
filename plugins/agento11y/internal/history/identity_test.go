@@ -1,8 +1,11 @@
 package history
 
 import (
+	"context"
 	"strings"
 	"testing"
+
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/opencode/sessiondb/sessiondbtest"
 )
 
 func baseRef() SourceRef {
@@ -100,6 +103,61 @@ func TestFieldJoiningCannotCollide(t *testing.T) {
 	b := SourceRef{Agent: AgentCodex, SessionID: "a", SourcePath: "bc"}
 	if a.Identity() == b.Identity() {
 		t.Fatal("adjacent fields collided; the join separator is not doing its job")
+	}
+}
+
+func TestOpenCodeSameFileMigrationKeepsLedgerIdentity(t *testing.T) {
+	db := sessiondbtest.New(t, sessiondbtest.WithSessionV2(), sessiondbtest.WithMigrationState())
+	var schema string
+	if err := db.DB.QueryRow(`select sql from sqlite_master where name = 'session_v2'`).Scan(&schema); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`drop table session_v2`); err != nil {
+		t.Fatal(err)
+	}
+	db.AddSession("session", "", "Title", "/work", 1, 2)
+	db.AddMessage("assistant", "session", 1, 2, `{"role":"assistant","time":{"created":1,"completed":2}}`)
+	ledger := testLedger(t)
+	imp := &opencodeImporter{}
+	var original SourceRef
+	for _, phase := range []string{"v1", "v2", "v2 forced"} {
+		t.Run(phase, func(t *testing.T) {
+			if phase == "v2" {
+				if _, err := db.DB.Exec(schema); err != nil {
+					t.Fatal(err)
+				}
+				db.AddSessionV2("session", "Title", "/work", 1, 2)
+				db.AddV2Message("assistant", "session", "assistant", 11, 1, 2, `{"time":{"created":1,"completed":2}}`)
+				db.SetMigrationState(`{"phase":"completed"}`)
+			}
+			sessions, err := imp.Previews(context.Background(), db.Path)
+			if err != nil || len(sessions) != 1 {
+				t.Fatalf("previews = %+v, %v", sessions, err)
+			}
+			turns := collectTurns(t, imp, sessions[0])
+			if len(turns) != 1 {
+				t.Fatalf("turns = %d", len(turns))
+			}
+			if phase == "v1" {
+				original = turns[0].Source
+			} else if turns[0].Source.Identity() != original.Identity() || turns[0].Gen.ID != original.GenerationID() {
+				t.Fatal("migration changed the ledger or generation identity")
+			}
+			exporter := &recordingExporter{}
+			result, err := RunImport(context.Background(), ImportOptions{Agent: AgentOpenCode, Importer: imp, Sessions: sessions, Exporter: exporter, Ledger: ledger, Force: phase == "v2 forced"})
+			wantImported, wantSkipped := 1, 0
+			if phase == "v2" {
+				wantImported, wantSkipped = 0, 1
+			}
+			if err != nil || result.Imported != wantImported || result.Skipped != wantSkipped || result.Failed != 0 || len(exporter.got) != wantImported {
+				t.Fatalf("import = %+v, %v, exports=%d", result, err, len(exporter.got))
+			}
+			for _, turn := range exporter.got {
+				if turn.Gen.ID != original.GenerationID() {
+					t.Fatal("force changed the generation identity")
+				}
+			}
+		})
 	}
 }
 
