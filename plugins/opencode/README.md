@@ -113,6 +113,20 @@ Sessions started with plain `opencode` use the background service. The plugin st
 
 `agento11y history import opencode` reads v1 and released v2 databases. See [History import](../agento11y/README.md#history-import) for limitations.
 
+### Compaction records
+
+On OpenCode 2, each observed compaction success or failure exports a separate `SYNC` generation with operation `generateText` and tag `opencode.call_kind=compaction`. Its parent is the active, previous, or spawning turn observed at compaction start. Ordinary turns keep their IDs and parent chain.
+
+Tokens and cost cover one logical compaction, including retries and rejected summaries, rather than one provider call (`opencode.usage_scope=logical_compaction`). Missing usage or cost stays absent; explicit zeros stay zero. Cumulative session usage adds no generation.
+
+Successful events supply the compaction model when available. Failed events name no model. Their generations use provider and model `unknown`, with `opencode.model_source=unavailable`. The plugin never substitutes the primary turn's model because compaction can use a different model.
+
+Compaction input is the history observed at its start, not the final provider request. Without an observed start, input is empty, parent edges are absent, and start time equals completion time. Metadata `opencode.start_time_approximate` and `opencode.completion_time_approximate` record these timing limits. Compactions have no time-to-first-token sample or tool spans.
+
+Summary output uses full secret redaction and follows `AGENTO11Y_CONTENT_CAPTURE_MODE`. In `metadata_only`, input and output are empty; usage and metadata remain. Summary output excludes retained recent context and opaque provider state. Success replaces history for later turns; failure preserves history and instructions.
+
+OpenCode 1 capture is unchanged. History import has separate [compaction limitations](../agento11y/README.md#history-import).
+
 ## Tagging sessions
 
 Launch with `--tag key=value` (repeatable) to attach tags to every generation the plugin exports:
@@ -130,6 +144,7 @@ The plugin attaches built-in tags of its own:
 - `git.branch` — current branch from the opencode project directory, or a 12-char short SHA on detached HEAD. Omitted when not inside a git checkout.
 - `cwd` — the opencode project directory.
 - `subagent` — `"true"` on generations from a subagent session. Omitted for ordinary sessions, and for a subagent that opencode started before the plugin loaded.
+- `opencode.call_kind` is `compaction` on separate OpenCode 2 compaction generations. Absent on ordinary turns.
 
 Built-in tags win collisions with user tags, matching the claude-code and cursor launchers. See [Tags and Metadata](../../docs/concepts/tags-and-metadata.md#built-in-tags-from-the-agent-launchers) for the tags the launchers share.
 

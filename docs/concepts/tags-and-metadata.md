@@ -137,6 +137,7 @@ The coding-agent plugins (claude-code, codex, copilot, cursor, opencode, pi, vib
 | `git.branch` | Branch checked out in that directory, or a short commit SHA when HEAD is detached. Omitted outside a git checkout. | all launchers |
 | `subagent` | `"true"` on generations from a subagent run. Absent otherwise, never `"false"`. | claude-code, codex, cursor, opencode |
 | `pi.call_kind` | The host made this model call outside a user turn: `compaction` for context compaction, `branch_summary` for a tree-navigation summary. Absent on ordinary turns. | pi |
+| `opencode.call_kind` | `compaction` for a separate OpenCode 2 compaction generation. Absent on ordinary turns. | opencode v2 |
 
 Launchers also set a few keys specific to one host, so this table is not the full list of what arrives on a generation.
 
@@ -214,6 +215,13 @@ Codex and copilot also add their own `codex.*` and `copilot.*` keys, so this tab
 | `pi.compaction.will_retry` | `true` when pi retries the turn it aborted to run this compaction. Only overflow recovery retries. | pi |
 | `pi.fork.parent_session_id` | Conversation id of the session a fork was taken from. On the fork's first generation only. | pi |
 | `pi.fork.parent_generation_id` | Generation id of the trunk turn the fork continues from. Ships as metadata rather than a parent edge, because the trunk only holds that generation if it ran instrumented. | pi |
+| `opencode.usage_scope` | `logical_compaction` on OpenCode 2 compaction generations. Usage and cost total all attempts within that compaction, not one provider call. Missing usage stays absent. | opencode v2 |
+| `opencode.compaction.reason` | `manual` or `auto`, as OpenCode reports it. Overflow recovery also reports `auto`. | opencode v2 |
+| `opencode.model_source` | `event` when the compaction terminal names a model; `unavailable` otherwise, with model and provider `unknown`. Failed events name no model. | opencode v2 |
+| `opencode.input_source` | `first_observed_prefix` for turns and compactions with an observed start; `unavailable` for compactions without one. Input is observed history, not the final provider request. | opencode v2 |
+| `opencode.settlement` | Terminal event or lifecycle outcome that ended the generation. Compactions use only `compaction.ended` or `compaction.failed`. | opencode v2 |
+| `opencode.start_time_approximate` | `true` on compactions without an observed start, whose start time equals completion time. `false` when the start was observed. | opencode v2 |
+| `opencode.completion_time_approximate` | `true` on compactions, which use terminal-event time. For turns, `false` when stream-completion time was observed, otherwise `true`. | opencode v2 |
 | `opencode.parent_session_id` | Session id of the run that spawned this subagent session. On every subagent generation, including one whose parent turn could not be named. | opencode |
 | `opencode.child_session_id` | Subagent's own session id. Present when its turns were reparented onto the spawning conversation, where `conversation_id` names the root session of the subagent chain instead. | opencode |
 

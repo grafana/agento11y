@@ -1,6 +1,33 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { stableOpencodeGenerationId } from "./lineage.js";
+import {
+  stableOpencodeCompactionGenerationId,
+  stableOpencodeGenerationId,
+} from "./lineage.js";
+
+describe("stableOpencodeCompactionGenerationId", () => {
+  it("is stable on replay and uses the compaction namespace", () => {
+    const id = stableOpencodeCompactionGenerationId("sess-1", "event-1");
+    expect(id).toBe(stableOpencodeCompactionGenerationId("sess-1", "event-1"));
+    expect(id).toBe(stableOpencodeGenerationId("sess-1", "compaction:event-1"));
+    expect(id).toMatch(/^opencode-[0-9a-f]{24}$/);
+  });
+
+  it("is isolated from the assistant ID for the same event string", () => {
+    expect(stableOpencodeCompactionGenerationId("sess-1", "event-1")).not.toBe(
+      stableOpencodeGenerationId("sess-1", "event-1"),
+    );
+  });
+
+  it.each([
+    ["sess-2", "event-1"],
+    ["sess-1", "event-2"],
+  ])("is isolated across sessions and terminals (%s, %s)", (sessionID, eventID) => {
+    expect(stableOpencodeCompactionGenerationId("sess-1", "event-1")).not.toBe(
+      stableOpencodeCompactionGenerationId(sessionID, eventID),
+    );
+  });
+});
 
 describe("stableOpencodeGenerationId", () => {
   it("is deterministic for identical inputs", () => {

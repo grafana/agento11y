@@ -8,6 +8,10 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createAgento11yClient } from "./client.js";
 import type { Agento11yOpencodeConfig } from "./config.js";
+import {
+  stableOpencodeCompactionGenerationId,
+  stableOpencodeGenerationId,
+} from "./lineage.js";
 import { createRedactor } from "./redaction.js";
 import {
   createOwnedTelemetryProviders,
@@ -257,8 +261,64 @@ describe("native v2 capture: real SDK golden and OTLP", () => {
       (request) => request.path === "/api/v1/generations:export",
     );
     const generations = exports.flatMap((request) => request.body.generations);
-    expect(generations).toHaveLength(1);
-    const turn = generations[0];
+    expect(generations).toHaveLength(2);
+    const turn = generations.find(
+      (generation: any) =>
+        generation.id ===
+        stableOpencodeGenerationId(
+          nativeFixture.sessionID,
+          nativeFixture.assistantMessageID,
+        ),
+    );
+    const terminal = transcript.find(
+      (event) => event.type === "session.compaction.ended",
+    );
+    if (!terminal) throw new Error("missing compaction fixture");
+    const compaction = generations.find(
+      (generation: any) =>
+        generation.id ===
+        stableOpencodeCompactionGenerationId(
+          nativeFixture.sessionID,
+          terminal.id,
+        ),
+    );
+    expect(compaction).toMatchObject({
+      conversation_id: nativeFixture.sessionID,
+      agent_name: "opencode",
+      operation_name: "generateText",
+      mode: "GENERATION_MODE_SYNC",
+      model: { provider: "anthropic", name: nativeFixture.model.id },
+      tags: {
+        "opencode.call_kind": "compaction",
+        cwd: nativeFixture.location.directory,
+      },
+      input: [],
+      started_at: new Date(terminal.created).toISOString(),
+      completed_at: new Date(terminal.created).toISOString(),
+      usage: { input_tokens: "100", output_tokens: "20", total_tokens: "120" },
+      metadata: {
+        cost_usd: 0.001,
+        "opencode.usage_scope": "logical_compaction",
+        "opencode.compaction.reason": "auto",
+        "opencode.settlement": "compaction.ended",
+        "opencode.input_source": "unavailable",
+        "opencode.model_source": "event",
+        "opencode.start_time_approximate": true,
+        "opencode.completion_time_approximate": true,
+      },
+    });
+    expect(compaction.parent_generation_ids).toBeUndefined();
+    expect(compaction.output).toEqual(
+      contentCapture === "metadata_only"
+        ? []
+        : [
+            {
+              role: "MESSAGE_ROLE_ASSISTANT",
+              name: "",
+              parts: [{ text: `Earlier summary; token: ${REDACTED}` }],
+            },
+          ],
+    );
     expect(turn.conversation_id).toBe(nativeFixture.sessionID);
     expect(turn.agent_name).toBe("opencode:build");
     expect(turn.tags).toEqual({ cwd: nativeFixture.location.directory });
@@ -313,7 +373,7 @@ describe("native v2 capture: real SDK golden and OTLP", () => {
     expect(wire).not.toContain(nativeFixture.secret);
     expect(wire).not.toContain(nativeFixture.envSecret);
     expect(wire).not.toContain("DO_NOT_EXPORT_PROVIDER_STATE");
-    assertTelemetry(turn, contentCapture);
+    assertTelemetry(turn, compaction, contentCapture);
     return {
       turn,
       exports: exports.map(({ path, body }) => ({
@@ -323,7 +383,7 @@ describe("native v2 capture: real SDK golden and OTLP", () => {
     };
   }
 
-  function assertTelemetry(turn: any, mode: string) {
+  function assertTelemetry(turn: any, compaction: any, mode: string) {
     const otlpRequests = receiver.requests.filter((request) =>
       request.path.startsWith("/otlp/"),
     );
@@ -357,6 +417,16 @@ describe("native v2 capture: real SDK golden and OTLP", () => {
       (span) => attributes(span)["gen_ai.operation.name"] === "execute_tool",
     );
     expect(generationSpans).toHaveLength(1);
+    const compactionSpans = spans.filter(
+      (span) => attributes(span)["gen_ai.operation.name"] === "generateText",
+    );
+    expect(compactionSpans).toHaveLength(1);
+    expect(compactionSpans[0].traceId).toBe(compaction.trace_id);
+    expect(compactionSpans[0].spanId).toBe(compaction.span_id);
+    expect(attributes(compactionSpans[0])).toMatchObject({
+      "gen_ai.usage.input_tokens": 100,
+      "gen_ai.usage.output_tokens": 20,
+    });
     expect(toolSpans).toHaveLength(1);
     const generation = generationSpans[0];
     expect(generation.traceId).toBe(turn.trace_id);
@@ -408,11 +478,18 @@ describe("native v2 capture: real SDK golden and OTLP", () => {
           point.sum === 1,
       ),
     ).toBe(true);
+    const compactionDurations = durations.filter(
+      (point) => attributes(point)["gen_ai.operation.name"] === "generateText",
+    );
+    expect(compactionDurations).toHaveLength(1);
+    expect(compactionDurations[0].count).toBe(1);
+    expect(compactionDurations[0].sum).toBe(0);
     const firstToken = metrics
       .filter((metric) => metric.name === "gen_ai.client.time_to_first_token")
       .flatMap((metric) => metric.histogram.dataPoints);
     expect(firstToken).toHaveLength(1);
     expect(firstToken[0].sum).toBe(0.15);
+    expect(firstToken[0].count).toBe(1);
     const tokens = metrics
       .filter((metric) => metric.name === "gen_ai.client.token.usage")
       .flatMap((metric) => metric.histogram.dataPoints);
@@ -424,11 +501,23 @@ describe("native v2 capture: real SDK golden and OTLP", () => {
       reasoning: 10,
     })) {
       const point = tokens.find(
-        (point) => attributes(point)["gen_ai.token.type"] === type,
+        (point) =>
+          attributes(point)["gen_ai.token.type"] === type &&
+          attributes(point)["gen_ai.operation.name"] === "streamText",
       );
       expect(point, `token metric ${type}`).toBeDefined();
       expect(point.sum).toBe(count);
       expect(attributes(point)["gen_ai.token.semantics"]).toBe("inclusive");
+    }
+    for (const [type, count] of Object.entries({ input: 100, output: 20 })) {
+      const points = tokens.filter(
+        (point) =>
+          attributes(point)["gen_ai.token.type"] === type &&
+          attributes(point)["gen_ai.operation.name"] === "generateText",
+      );
+      expect(points).toHaveLength(1);
+      expect(points[0].count).toBe(1);
+      expect(points[0].sum).toBe(count);
     }
   }
 

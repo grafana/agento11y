@@ -7,6 +7,13 @@ import {
   type GenerationStart,
 } from "@grafana/agento11y";
 import {
+  AggregationTemporality,
+  DataPointType,
+  InMemoryMetricExporter,
+  MeterProvider,
+  PeriodicExportingMetricReader,
+} from "@opentelemetry/sdk-metrics";
+import {
   BasicTracerProvider,
   InMemorySpanExporter,
   SimpleSpanProcessor,
@@ -14,7 +21,10 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import type { Agento11yOpencodeConfig } from "./config.js";
 import { resolveGitBranch } from "./git.js";
-import { stableOpencodeGenerationId } from "./lineage.js";
+import {
+  stableOpencodeCompactionGenerationId,
+  stableOpencodeGenerationId,
+} from "./lineage.js";
 import { createRedactor } from "./redaction.js";
 import { createNativeCapture } from "./v2-events.js";
 import type {
@@ -22,6 +32,7 @@ import type {
   NativeEventOf,
   NativeLocation,
 } from "./v2-mappers.js";
+import { nativeFixture } from "./v2-testdata.js";
 
 vi.mock("./git.js", () => ({
   resolveGitBranch: vi.fn((cwd: string) =>
@@ -46,7 +57,8 @@ function event<T extends NativeEvent["type"]>(
     id: `event-${++serial}`,
     ...(!type.endsWith(".delta") &&
       !type.endsWith(".progress") &&
-      type !== "location.shutdown" && {
+      type !== "location.shutdown" &&
+      type !== "session.usage.updated" && {
         durable: {
           aggregateID: "sessionID" in data ? data.sessionID : "",
           seq: serial,
@@ -146,6 +158,70 @@ function move(
     200,
   );
 }
+const compactionTokens = {
+  input: 100,
+  output: 20,
+  reasoning: 3,
+  cache: { read: 4, write: 5 },
+};
+function compactionStart(
+  sessionID = "s",
+  reason: "auto" | "manual" = "auto",
+  location = home,
+) {
+  return event(
+    "session.compaction.started",
+    {
+      sessionID,
+      reason,
+      recent: "not generated output",
+      inputID: "compact-inbox",
+    },
+    location,
+    120,
+  );
+}
+function compactionEnd(
+  sessionID = "s",
+  overrides: Partial<NativeEventOf<"session.compaction.ended">["data"]> = {},
+  location = home,
+) {
+  return event(
+    "session.compaction.ended",
+    {
+      sessionID,
+      reason: "auto",
+      model: { id: "compaction-model", providerID: "compaction-provider" },
+      text: "checkpoint",
+      recent: "retained recent context",
+      tokens: compactionTokens,
+      cost: 0.001,
+      ...overrides,
+    },
+    location,
+    220,
+  );
+}
+function compactionFailure(
+  sessionID = "s",
+  overrides: Partial<NativeEventOf<"session.compaction.failed">["data"]> = {},
+) {
+  return event(
+    "session.compaction.failed",
+    {
+      sessionID,
+      reason: "manual",
+      inputID: "compact-inbox",
+      error: {
+        type: "compaction.failed",
+        message: `failed ${nativeFixture.secret}; DATABASE_PASSWORD=${nativeFixture.envSecret}`,
+      },
+      ...overrides,
+    },
+    home,
+    220,
+  );
+}
 const config: Agento11yOpencodeConfig = {
   endpoint: "http://127.0.0.1:1",
   auth: { mode: "none" },
@@ -168,34 +244,35 @@ function harness(
   const generations: Recorded[] = [];
   const toolResults: unknown[] = [];
   const debugLog = vi.fn();
-  const exportGeneration = vi.fn(
-    async (
-      seed: GenerationStart,
-      run: (recorder: GenerationRecorder) => Promise<void>,
-    ) => {
-      const entry: Recorded = { seed };
-      generations.push(entry);
-      await run({
-        setResult: (result) => {
-          entry.result = result;
-        },
-        setCallError: (error) => {
-          entry.error = error;
-        },
-        setFirstTokenAt: (firstAt) => {
-          entry.firstAt = firstAt;
-        },
-        setCacheDiagnostics: vi.fn(),
-        end: vi.fn(),
-        getError: () => undefined,
-      });
-    },
-  );
+  const recordGeneration = async (
+    seed: GenerationStart,
+    run: (recorder: GenerationRecorder) => Promise<void>,
+  ) => {
+    const entry: Recorded = { seed };
+    generations.push(entry);
+    await run({
+      setResult: (result) => {
+        entry.result = result;
+      },
+      setCallError: (error) => {
+        entry.error = error;
+      },
+      setFirstTokenAt: (firstAt) => {
+        entry.firstAt = firstAt;
+      },
+      setCacheDiagnostics: vi.fn(),
+      end: vi.fn(),
+      getError: () => undefined,
+    });
+  };
+  const exportGeneration = vi.fn(recordGeneration);
+  const exportCompaction = vi.fn(recordGeneration);
   const evaluateHook = vi.fn(() => {
     throw new Error("capture must not evaluate guards");
   });
   const client = {
     startStreamingGeneration: exportGeneration,
+    startGeneration: exportCompaction,
     evaluateHook,
     startToolExecution: vi.fn(() => ({
       setResult: (result: unknown) => toolResults.push(result),
@@ -218,6 +295,7 @@ function harness(
     toolResults,
     debugLog,
     exportGeneration,
+    exportCompaction,
     evaluateHook,
   };
 }
@@ -229,52 +307,59 @@ function replay(
   return capture.drain();
 }
 
-describe("native lifecycle fold", () => {
-  const terminals: Array<{
-    name: string;
-    make: () => NativeEvent;
-    usage: boolean;
-  }> = [
-    { name: "step ended", make: () => end(), usage: true },
-    {
-      name: "step failed",
-      make: () =>
-        event("session.step.failed", {
-          sessionID: "s",
-          assistantMessageID: "a",
-          error: { type: "provider.unknown", message: "secret" },
-        }),
-      usage: false,
-    },
-    {
-      name: "execution completed",
-      make: () => event("session.execution.succeeded", { sessionID: "s" }),
-      usage: false,
-    },
-    {
-      name: "execution failed",
-      make: () =>
-        event("session.execution.failed", {
-          sessionID: "s",
-          error: { type: "unknown", message: "secret" },
-        }),
-      usage: false,
-    },
-    ...(["user", "shutdown", "superseded", "inactivity"] as const).map(
-      (reason) => ({
-        name: `execution interrupted ${reason}`,
-        make: () =>
-          event("session.execution.interrupted", { sessionID: "s", reason }),
-        usage: false,
+const compactionReloads = ["ended", "failed"].flatMap((kind) =>
+  ["old first", "replacement first", "replacement only"].map((delivery) => ({
+    kind,
+    delivery,
+  })),
+);
+const lifecycleTerminals: Array<{
+  name: string;
+  make: () => NativeEvent;
+  usage: boolean;
+}> = [
+  { name: "step ended", make: () => end(), usage: true },
+  {
+    name: "step failed",
+    make: () =>
+      event("session.step.failed", {
+        sessionID: "s",
+        assistantMessageID: "a",
+        error: { type: "provider.unknown", message: "secret" },
       }),
-    ),
-    {
-      name: "deletion",
-      make: () => event("session.deleted", { sessionID: "s" }),
+    usage: false,
+  },
+  {
+    name: "execution completed",
+    make: () => event("session.execution.succeeded", { sessionID: "s" }),
+    usage: false,
+  },
+  {
+    name: "execution failed",
+    make: () =>
+      event("session.execution.failed", {
+        sessionID: "s",
+        error: { type: "unknown", message: "secret" },
+      }),
+    usage: false,
+  },
+  ...(["user", "shutdown", "superseded", "inactivity"] as const).map(
+    (reason) => ({
+      name: `execution interrupted ${reason}`,
+      make: () =>
+        event("session.execution.interrupted", { sessionID: "s", reason }),
       usage: false,
-    },
-  ];
-  it.each(terminals)("settles at most once through $name", async ({
+    }),
+  ),
+  {
+    name: "deletion",
+    make: () => event("session.deleted", { sessionID: "s" }),
+    usage: false,
+  },
+];
+
+describe("native lifecycle fold", () => {
+  it.each(lifecycleTerminals)("settles at most once through $name", async ({
     make,
     usage,
   }) => {
@@ -359,39 +444,51 @@ describe("native lifecycle fold", () => {
   });
 
   it("supersession after successful overflow compaction settles abandoned identity without invented usage", async () => {
-    const { capture, generations } = harness();
+    const { capture, generations, exportGeneration, exportCompaction } =
+      harness();
+    const begun = compactionStart();
+    const terminal = compactionEnd();
     await replay(capture, [
       start(),
-      event("session.compaction.ended", {
-        sessionID: "s",
-        reason: "auto",
-        model: { id: "model", providerID: "provider" },
-        text: "checkpoint",
-        recent: "",
-        cost: 1,
-        tokens: {
-          input: 100,
-          output: 10,
-          reasoning: 0,
-          cache: { read: 0, write: 0 },
-        },
-      }),
+      begun,
+      terminal,
       start("s", "b"),
       end("s", "b"),
       end(),
     ]);
     await capture.shutdown();
-    expect(generations).toHaveLength(2);
-    expect(generations[0]?.result?.usage).toBeUndefined();
-    expect(generations[0]?.result?.metadata?.["opencode.settlement"]).toBe(
+    expect(generations).toHaveLength(3);
+    expect(exportGeneration).toHaveBeenCalledTimes(2);
+    expect(exportCompaction).toHaveBeenCalledTimes(1);
+    const abandoned = generations.find(
+      (entry) => entry.seed.id === stableOpencodeGenerationId("s", "a"),
+    );
+    const retried = generations.find(
+      (entry) => entry.seed.id === stableOpencodeGenerationId("s", "b"),
+    );
+    const compacted = generations.find(
+      (entry) => entry.seed.tags?.["opencode.call_kind"] === "compaction",
+    );
+    expect(abandoned?.result?.usage).toBeUndefined();
+    expect(abandoned?.result?.metadata?.["opencode.settlement"]).toBe(
       "superseded",
     );
-    expect(JSON.stringify(generations[1]?.result?.input)).toContain(
-      "checkpoint",
-    );
-    expect(generations[1]?.seed.parentGenerationIds).toEqual([
+    expect(JSON.stringify(retried?.result?.input)).toContain("checkpoint");
+    expect(retried?.result?.usage?.inputTokens).toBe(19);
+    expect(retried?.seed.parentGenerationIds).toEqual([
       stableOpencodeGenerationId("s", "a"),
     ]);
+    expect(compacted?.seed.id).toBe(
+      stableOpencodeCompactionGenerationId("s", terminal.id),
+    );
+    expect(compacted?.seed.parentGenerationIds).toEqual([
+      stableOpencodeGenerationId("s", "a"),
+    ]);
+    expect(compacted?.result?.usage).toMatchObject({
+      inputTokens: 109,
+      outputTokens: 23,
+    });
+    expect(compacted?.result?.metadata?.cost_usd).toBe(0.001);
   });
 
   it("excludes queued/cancelled inbox and freezes the FIRST observed prefix across retries", async () => {
@@ -764,6 +861,814 @@ describe("native lifecycle fold", () => {
   });
 });
 
+describe("native compaction lifecycle", () => {
+  const compactions = (generations: Recorded[]) =>
+    generations.filter(
+      (entry) => entry.seed.tags?.["opencode.call_kind"] === "compaction",
+    );
+  const findCompaction = (generations: Recorded[], terminal: NativeEvent) =>
+    generations.find(
+      (entry) =>
+        entry.seed.id ===
+        stableOpencodeCompactionGenerationId(
+          "sessionID" in terminal.data ? terminal.data.sessionID : "",
+          terminal.id,
+        ),
+    );
+
+  it.each([
+    "auto",
+    "manual",
+  ] as const)("exports a started/%s ended compaction with independent usage and timing", async (reason) => {
+    const { capture, generations, exportCompaction, exportGeneration, client } =
+      harness();
+    const begun = compactionStart("s", reason);
+    const terminal = compactionEnd("s", { reason });
+    await replay(capture, [
+      enqueue("observed prefix"),
+      event("session.inbox.delivered", { sessionID: "s", inboxID: "i" }),
+      start(),
+      begun,
+      event("session.synthetic", { sessionID: "s", text: "after snapshot" }),
+      event("session.compaction.delta", {
+        sessionID: "s",
+        text: "discarded summary attempt",
+      }),
+      terminal,
+    ]);
+    expect(exportCompaction).toHaveBeenCalledTimes(1);
+    expect(exportGeneration).not.toHaveBeenCalled();
+    const compacted = findCompaction(generations, terminal);
+    expect(compacted?.seed).toMatchObject({
+      mode: "SYNC",
+      operationName: "generateText",
+      conversationId: "s",
+      parentGenerationIds: [stableOpencodeGenerationId("s", "a")],
+      agentName: "opencode",
+      agentVersion: "2.0.22",
+      model: { provider: "compaction-provider", name: "compaction-model" },
+      startedAt: new Date(begun.created),
+      tags: {
+        "opencode.call_kind": "compaction",
+        cwd: "/repo",
+        "git.branch": "feature/native",
+      },
+    });
+    expect(compacted?.result).toMatchObject({
+      input: [
+        { role: "user", parts: [{ type: "text", text: "observed prefix" }] },
+      ],
+      output: [
+        { role: "assistant", parts: [{ type: "text", text: "checkpoint" }] },
+      ],
+      usage: {
+        inputTokens: 109,
+        outputTokens: 23,
+        totalTokens: 132,
+        cacheReadInputTokens: 4,
+        cacheWriteInputTokens: 5,
+        reasoningTokens: 3,
+        inputSemantics: "inclusive",
+      },
+      completedAt: new Date(terminal.created),
+      metadata: {
+        cost_usd: 0.001,
+        "opencode.usage_scope": "logical_compaction",
+        "opencode.compaction.reason": reason,
+        "opencode.settlement": "compaction.ended",
+        "opencode.model_source": "event",
+        "opencode.input_source": "first_observed_prefix",
+        "opencode.start_time_approximate": false,
+        "opencode.completion_time_approximate": true,
+      },
+    });
+    expect(compacted?.firstAt).toBeUndefined();
+    expect(compacted?.error).toBeUndefined();
+    expect(client.startToolExecution).not.toHaveBeenCalled();
+    expect(JSON.stringify(compacted)).not.toMatch(
+      /after snapshot|discarded summary|retained recent/,
+    );
+    await capture.shutdown();
+  });
+
+  it.each([
+    false,
+    true,
+  ])("end-only has no invented input, parent or start time (active primary=%s)", async (primary) => {
+    const { capture, generations } = harness();
+    const terminal = compactionEnd();
+    await replay(capture, [
+      enqueue("available but not observed at compaction start"),
+      event("session.inbox.delivered", { sessionID: "s", inboxID: "i" }),
+      ...(primary ? [start()] : []),
+      terminal,
+    ]);
+    const compacted = findCompaction(generations, terminal);
+    expect(compacted?.seed.parentGenerationIds).toBeUndefined();
+    expect(compacted?.seed.startedAt).toEqual(compacted?.result?.completedAt);
+    expect(compacted?.seed.startedAt).toEqual(new Date(terminal.created));
+    expect(compacted?.result?.input).toEqual([]);
+    expect(compacted?.result?.metadata).toMatchObject({
+      "opencode.input_source": "unavailable",
+      "opencode.start_time_approximate": true,
+    });
+    await capture.shutdown();
+  });
+
+  it.each(
+    [false, true].flatMap((started) =>
+      [false, true].map((usage) => ({ started, usage })),
+    ),
+  )("exports failure without leaking its message (started=$started, usage=$usage)", async ({
+    started,
+    usage,
+  }) => {
+    const { capture, generations, exportCompaction } = harness();
+    const begun = started ? compactionStart("s", "manual") : undefined;
+    const terminal = compactionFailure(
+      "s",
+      usage ? { tokens: compactionTokens, cost: 0.001 } : {},
+    );
+    await replay(capture, [...(begun ? [begun] : []), terminal]);
+    expect(exportCompaction).toHaveBeenCalledTimes(1);
+    const compacted = findCompaction(generations, terminal);
+    expect(compacted?.seed.model).toEqual({
+      provider: "unknown",
+      name: "unknown",
+    });
+    expect(compacted?.result?.metadata).toMatchObject({
+      "opencode.model_source": "unavailable",
+      "opencode.compaction.reason": "manual",
+      "opencode.settlement": "compaction.failed",
+      "opencode.start_time_approximate": !started,
+    });
+    expect(compacted?.result?.stopReason).toBe("error");
+    expect(compacted?.result?.output).toEqual([]);
+    expect((compacted?.error as Error)?.message).toBe("compaction.failed");
+    if (usage) {
+      expect(compacted?.result?.usage).toMatchObject({
+        inputTokens: 109,
+        outputTokens: 23,
+      });
+      expect(compacted?.result?.metadata?.cost_usd).toBe(0.001);
+    } else {
+      expect(compacted?.result).not.toHaveProperty("usage");
+      expect(compacted?.result?.metadata).not.toHaveProperty("cost_usd");
+    }
+    expect(JSON.stringify(generations)).not.toContain(nativeFixture.secret);
+    expect(JSON.stringify(generations)).not.toContain(nativeFixture.envSecret);
+    await capture.shutdown();
+  });
+
+  it.each([
+    "ended",
+    "failed",
+  ] as const)("deduplicates %s before and after drain, and after shutdown", async (kind) => {
+    const { capture, generations, exportCompaction } = harness();
+    capture.handleEvent(compactionStart());
+    const terminal = kind === "ended" ? compactionEnd() : compactionFailure();
+    capture.handleEvent(terminal);
+    capture.handleEvent(terminal);
+    await capture.drain();
+    await replay(capture, [terminal, terminal]);
+    await capture.shutdown();
+    capture.handleEvent(terminal);
+    expect(compactions(generations)).toHaveLength(1);
+    expect(exportCompaction).toHaveBeenCalledTimes(1);
+    expect(findCompaction(generations, terminal)).toBeDefined();
+  });
+
+  it.each(
+    compactionReloads,
+  )("exports one $kind compaction through overlapping instances ($delivery)", async ({
+    kind,
+    delivery,
+  }) => {
+    const old = harness();
+    await replay(old.capture, [
+      event("session.synthetic", { sessionID: "s", text: "old prefix" }),
+      start(),
+      compactionStart(),
+      event("location.shutdown", {}),
+    ]);
+    const replacement = harness();
+    const terminal =
+      kind === "ended"
+        ? compactionEnd()
+        : compactionFailure("s", { tokens: compactionTokens, cost: 0.001 });
+    try {
+      const instances =
+        delivery === "old first"
+          ? [old, replacement]
+          : delivery === "replacement first"
+            ? [replacement, old]
+            : [replacement];
+      for (const { capture } of instances) await replay(capture, [terminal]);
+      await old.capture.shutdown();
+      await replay(replacement.capture, [terminal]);
+      expect(compactions(old.generations)).toHaveLength(1);
+      expect(replacement.exportCompaction).not.toHaveBeenCalled();
+      const compacted = findCompaction(old.generations, terminal);
+      expect(compacted?.seed.startedAt).toEqual(new Date(120));
+      expect(compacted?.seed.parentGenerationIds).toEqual([
+        stableOpencodeGenerationId("s", "a"),
+      ]);
+      expect(JSON.stringify(compacted?.result?.input)).toContain("old prefix");
+      expect(compacted?.result?.usage?.inputTokens).toBe(109);
+      expect(compacted?.result?.usage?.outputTokens).toBe(23);
+      await replay(replacement.capture, [start("s", "b"), end("s", "b")]);
+      const next = replacement.generations[0];
+      expect(JSON.stringify(next?.result?.input).includes("checkpoint")).toBe(
+        kind === "ended",
+      );
+      expect(next?.seed.parentGenerationIds).toBeUndefined();
+    } finally {
+      await Promise.all([
+        old.capture.shutdown(),
+        replacement.capture.shutdown(),
+      ]);
+    }
+  });
+
+  it.each(
+    ["ended", "failed"].flatMap((kind) =>
+      [
+        "delayed start while old open",
+        "delayed start after old closes",
+        "next start before old terminal",
+        "forwarded terminal before next start",
+      ].map((delivery) => ({ kind, delivery })),
+    ),
+  )("keeps sequential $kind compactions with $delivery", async ({
+    kind,
+    delivery,
+  }) => {
+    const old = harness();
+    const replacement = harness();
+    const firstStart = compactionStart();
+    const first = kind === "ended" ? compactionEnd() : compactionFailure();
+    const nextStart = compactionStart();
+    nextStart.created = 230;
+    const next = kind === "ended" ? compactionEnd() : compactionFailure();
+    next.created = 330;
+    try {
+      if (delivery.startsWith("delayed start")) {
+        await replay(replacement.capture, [first]);
+        await replay(old.capture, [
+          firstStart,
+          event("location.shutdown", {}),
+          first,
+        ]);
+        if (delivery === "delayed start after old closes")
+          await old.capture.shutdown();
+      } else {
+        await replay(old.capture, [firstStart, event("location.shutdown", {})]);
+        if (delivery === "forwarded terminal before next start")
+          await replay(replacement.capture, [first]);
+      }
+      await replay(replacement.capture, [
+        event("session.synthetic", {
+          sessionID: "s",
+          text: "next compaction prefix",
+        }),
+        nextStart,
+        next,
+      ]);
+      if (delivery === "next start before old terminal")
+        await replay(old.capture, [next]);
+      await replay(old.capture, [first]);
+      const recorded = [...old.generations, ...replacement.generations];
+      expect(compactions(recorded)).toHaveLength(2);
+      expect(findCompaction(recorded, first)?.seed.startedAt).toEqual(
+        new Date(
+          delivery.startsWith("delayed start")
+            ? first.created
+            : firstStart.created,
+        ),
+      );
+      const compacted = findCompaction(replacement.generations, next);
+      expect(compacted?.seed.startedAt).toEqual(new Date(230));
+      expect(compacted?.result?.metadata?.["opencode.input_source"]).toBe(
+        "first_observed_prefix",
+      );
+      expect(JSON.stringify(compacted?.result?.input)).toContain(
+        "next compaction prefix",
+      );
+    } finally {
+      await Promise.all([
+        old.capture.shutdown(),
+        replacement.capture.shutdown(),
+      ]);
+    }
+  });
+
+  it.each([
+    "no start",
+    "shared start",
+    "owner shutdown",
+    "owner moved",
+    "owner deleted",
+  ])("coordinates overlapping captures with %s", async (transition) => {
+    const old = harness();
+    const replacement = harness();
+    const started = compactionStart();
+    try {
+      if (transition !== "no start") old.capture.handleEvent(started);
+      if (transition === "shared start")
+        replacement.capture.handleEvent(started);
+      if (transition === "owner shutdown") await old.capture.shutdown();
+      if (transition === "owner moved") old.capture.handleEvent(move());
+      if (transition === "owner deleted")
+        old.capture.handleEvent(event("session.deleted", { sessionID: "s" }));
+      const terminal = compactionEnd();
+      for (const { capture } of [replacement, old])
+        await replay(capture, [terminal]);
+      const recorded = [...old.generations, ...replacement.generations];
+      expect(compactions(recorded)).toHaveLength(1);
+      expect(old.exportCompaction).toHaveBeenCalledTimes(
+        transition === "shared start" ? 1 : 0,
+      );
+      expect(replacement.exportCompaction).toHaveBeenCalledTimes(
+        transition === "shared start" ? 0 : 1,
+      );
+      expect(
+        findCompaction(recorded, terminal)?.result?.metadata?.[
+          "opencode.input_source"
+        ],
+      ).toBe(
+        transition === "shared start" ? "first_observed_prefix" : "unavailable",
+      );
+      const begun = compactionStart();
+      const next = compactionEnd();
+      await replay(replacement.capture, [begun, next]);
+      expect(
+        findCompaction(replacement.generations, next)?.result?.metadata?.[
+          "opencode.input_source"
+        ],
+      ).toBe("first_observed_prefix");
+    } finally {
+      await Promise.all([
+        old.capture.shutdown(),
+        replacement.capture.shutdown(),
+      ]);
+    }
+  });
+
+  it.each([
+    away,
+    { directory: home.directory, workspaceID: "other-workspace" },
+  ])("keeps compaction reservations separate at %j", async (otherLocation) => {
+    const old = harness();
+    const other = harness(otherLocation);
+    const terminal = compactionEnd();
+    try {
+      await replay(old.capture, [compactionStart()]);
+      await replay(other.capture, [{ ...terminal, location: otherLocation }]);
+      await replay(old.capture, [terminal]);
+      expect(old.exportCompaction).toHaveBeenCalledTimes(1);
+      expect(other.exportCompaction).toHaveBeenCalledTimes(1);
+      expect(
+        compactions(other.generations)[0]?.result?.metadata?.[
+          "opencode.input_source"
+        ],
+      ).toBe("unavailable");
+    } finally {
+      await Promise.all([old.capture.shutdown(), other.capture.shutdown()]);
+    }
+  });
+
+  it.each([
+    "active",
+    "last",
+    "spawning",
+    "none",
+  ] as const)("freezes the %s parent and history at start without changing ordinary lineage", async (parentSource) => {
+    const { capture, generations } = harness();
+    if (parentSource === "spawning") {
+      capture.handleEvent(start("root", "spawn"));
+      capture.handleEvent(created("s", "root"));
+    }
+    if (parentSource === "active" || parentSource === "last")
+      capture.handleEvent(start());
+    if (parentSource === "last") capture.handleEvent(end());
+    const prefix = event("session.synthetic", {
+      sessionID: "s",
+      text: "frozen history",
+    });
+    capture.handleEvent(prefix);
+    capture.handleEvent(compactionStart());
+    prefix.data.text = "mutated after dispatch";
+    if (parentSource === "active") capture.handleEvent(end());
+    capture.handleEvent(start("s", "b"));
+    capture.handleEvent(end("s", "b"));
+    const terminal = compactionEnd();
+    await replay(capture, [terminal, start("s", "c"), end("s", "c")]);
+    const compacted = findCompaction(generations, terminal);
+    const expectedParent =
+      parentSource === "spawning"
+        ? stableOpencodeGenerationId("root", "spawn")
+        : parentSource === "none"
+          ? undefined
+          : stableOpencodeGenerationId("s", "a");
+    expect(compacted?.seed.parentGenerationIds).toEqual(
+      expectedParent ? [expectedParent] : undefined,
+    );
+    expect(compacted?.seed.conversationId).toBe(
+      parentSource === "spawning" ? "root" : "s",
+    );
+    expect(compacted?.result?.input).toEqual([
+      { role: "user", parts: [{ type: "text", text: "frozen history" }] },
+    ]);
+    const next = generations.find(
+      (entry) => entry.seed.id === stableOpencodeGenerationId("s", "c"),
+    );
+    expect(next?.seed.parentGenerationIds).toEqual([
+      stableOpencodeGenerationId("s", "b"),
+    ]);
+    await capture.shutdown();
+  });
+
+  it("keeps sequential compactions independent across two interleaved sessions", async () => {
+    const { capture, generations, exportCompaction } = harness();
+    const firstStart = compactionStart();
+    const otherStart = compactionStart("other");
+    const other = compactionEnd("other", {
+      text: "other checkpoint",
+      cost: 0.002,
+    });
+    const first = compactionEnd("s", { text: "first checkpoint" });
+    const secondStart = compactionStart();
+    const second = compactionEnd("s", { text: "second checkpoint" });
+    await replay(capture, [
+      event("session.synthetic", { sessionID: "s", text: "s prefix" }),
+      event("session.synthetic", { sessionID: "other", text: "other prefix" }),
+      start(),
+      end(),
+      start("other"),
+      end("other"),
+      firstStart,
+      otherStart,
+      other,
+      first,
+      secondStart,
+      second,
+      start("s", "b"),
+      end("s", "b"),
+      start("other", "b"),
+      end("other", "b"),
+    ]);
+    expect(exportCompaction).toHaveBeenCalledTimes(3);
+    expect(
+      new Set(compactions(generations).map((entry) => entry.seed.id)).size,
+    ).toBe(3);
+    for (const [terminal, input, parent] of [
+      [first, "s prefix", stableOpencodeGenerationId("s", "a")],
+      [other, "other prefix", stableOpencodeGenerationId("other", "a")],
+      [second, "first checkpoint", stableOpencodeGenerationId("s", "a")],
+    ] as const) {
+      const compacted = findCompaction(generations, terminal);
+      expect(JSON.stringify(compacted?.result?.input)).toContain(input);
+      expect(compacted?.seed.parentGenerationIds).toEqual([parent]);
+    }
+    expect(JSON.stringify(findCompaction(generations, first))).not.toContain(
+      "other prefix",
+    );
+    expect(JSON.stringify(findCompaction(generations, other))).not.toContain(
+      "s prefix",
+    );
+    for (const sessionID of ["s", "other"]) {
+      const turn = generations.find(
+        (entry) => entry.seed.id === stableOpencodeGenerationId(sessionID, "b"),
+      );
+      expect(turn?.seed.parentGenerationIds).toEqual([
+        stableOpencodeGenerationId(sessionID, "a"),
+      ]);
+    }
+    await capture.shutdown();
+  });
+
+  it.each([
+    { name: "started only", tail: () => [] },
+    {
+      name: "delta",
+      tail: () => [
+        event("session.compaction.delta", {
+          sessionID: "s",
+          text: nativeFixture.secret,
+        }),
+      ],
+    },
+    { name: "location shutdown", tail: () => [event("location.shutdown", {})] },
+    { name: "move", tail: () => [move()] },
+    ...lifecycleTerminals.map(({ name, make }) => ({
+      name,
+      tail: () => [make()],
+    })),
+    { name: "primary supersession", tail: () => [start("s", "b")] },
+  ])("does not synthesize a terminal on $name or capture.shutdown", async ({
+    tail,
+  }) => {
+    const { capture, generations, exportCompaction } = harness();
+    await replay(capture, [start(), compactionStart(), ...tail()]);
+    expect(exportCompaction).not.toHaveBeenCalled();
+    await capture.shutdown();
+    expect(exportCompaction).not.toHaveBeenCalled();
+    expect(compactions(generations)).toEqual([]);
+  });
+
+  it("never exports a standalone compaction delta", async () => {
+    const { capture, generations } = harness();
+    await replay(capture, [
+      event("session.compaction.delta", {
+        sessionID: "s",
+        text: nativeFixture.secret,
+      }),
+    ]);
+    await capture.shutdown();
+    expect(generations).toEqual([]);
+  });
+
+  it.each([
+    "move",
+    "delete",
+  ] as const)("removes stale snapshots on %s before a later end-only compaction", async (transition) => {
+    const { capture, generations } = harness();
+    await replay(capture, [
+      event("session.synthetic", {
+        sessionID: "s",
+        text: "stale compaction prefix",
+      }),
+      start(),
+      compactionStart(),
+      ...(transition === "move"
+        ? [move(), move("s", home, away)]
+        : [event("session.deleted", { sessionID: "s" }), created("s")]),
+    ]);
+    const terminal = compactionEnd();
+    await replay(capture, [terminal]);
+    const compacted = findCompaction(generations, terminal);
+    expect(compactions(generations)).toHaveLength(1);
+    expect(compacted?.result?.input).toEqual([]);
+    expect(compacted?.seed.parentGenerationIds).toBeUndefined();
+    expect(compacted?.seed.startedAt).toEqual(new Date(terminal.created));
+    expect(JSON.stringify(compacted)).not.toContain("stale compaction prefix");
+    await capture.shutdown();
+  });
+
+  it.each([
+    {
+      name: "compaction only",
+      primary: false,
+      primaryFirst: false,
+      failed: false,
+    },
+    {
+      name: "primary settles first",
+      primary: true,
+      primaryFirst: true,
+      failed: false,
+    },
+    {
+      name: "compaction settles first",
+      primary: true,
+      primaryFirst: false,
+      failed: false,
+    },
+    {
+      name: "pending failure after primary",
+      primary: true,
+      primaryFirst: true,
+      failed: true,
+    },
+  ])("retains pending work through location shutdown: $name", async ({
+    primary,
+    primaryFirst,
+    failed,
+  }) => {
+    const { capture, generations, exportCompaction } = harness();
+    await replay(capture, [
+      ...(primary ? [start()] : []),
+      compactionStart(),
+      event("location.shutdown", {}),
+      ...(primary && primaryFirst ? [end()] : []),
+    ]);
+    expect(exportCompaction).not.toHaveBeenCalled();
+    const terminal = failed ? compactionFailure() : compactionEnd();
+    // Terminal events can omit location.
+    delete terminal.location;
+    await replay(capture, [
+      terminal,
+      ...(primary && !primaryFirst ? [end()] : []),
+      terminal,
+    ]);
+    await capture.shutdown();
+    expect(compactions(generations)).toHaveLength(1);
+    const compacted = findCompaction(generations, terminal);
+    expect(compacted?.seed.startedAt).toEqual(new Date(120));
+    expect(compacted?.seed.parentGenerationIds).toEqual(
+      primary ? [stableOpencodeGenerationId("s", "a")] : undefined,
+    );
+    expect(compacted?.result?.usage?.inputTokens).toBe(
+      failed ? undefined : 109,
+    );
+    expect(generations).toHaveLength(primary ? 2 : 1);
+  });
+
+  it.each(
+    [false, true].flatMap((primary) =>
+      ["ended", "failed"].map((kind) => ({ primary, kind })),
+    ),
+  )("rejects new compactions after draining, even with an existing primary (primary=$primary, $kind)", async ({
+    primary,
+    kind,
+  }) => {
+    const { capture, generations, exportCompaction } = harness();
+    await replay(capture, [
+      ...(primary ? [start()] : []),
+      event("location.shutdown", {}),
+      compactionStart(),
+      kind === "ended" ? compactionEnd() : compactionFailure(),
+      ...(primary ? [end()] : []),
+    ]);
+    await capture.shutdown();
+    expect(exportCompaction).not.toHaveBeenCalled();
+    expect(compactions(generations)).toEqual([]);
+    expect(generations).toHaveLength(primary ? 1 : 0);
+  });
+
+  it.each([
+    away,
+    { directory: "/repo", workspaceID: "w2" },
+  ])("does not retain or export foreign compactions at %j", async (foreign) => {
+    const { capture, generations } = harness();
+    await replay(capture, [
+      compactionStart("s", "auto", foreign),
+      compactionEnd("s", { text: "foreign summary" }, foreign),
+      compactionEnd(),
+    ]);
+    expect(compactions(generations)).toHaveLength(1);
+    expect(JSON.stringify(generations)).not.toContain("foreign summary");
+    expect(
+      compactions(generations)[0]?.result?.metadata?.["opencode.input_source"],
+    ).toBe("unavailable");
+    await capture.shutdown();
+  });
+
+  it("ignores cumulative usage.updated without changing primary or compaction usage", async () => {
+    const { capture, generations } = harness();
+    const terminal = compactionEnd();
+    await replay(capture, [start(), compactionStart(), terminal]);
+    const before = JSON.stringify(findCompaction(generations, terminal));
+    await replay(capture, [
+      event("session.usage.updated", {
+        sessionID: "s",
+        tokens: { ...compactionTokens, input: 99999 },
+        cost: 999,
+      }),
+      end(),
+      event("session.usage.updated", {
+        sessionID: "s",
+        tokens: { ...compactionTokens, input: 999999 },
+        cost: 9999,
+      }),
+    ]);
+    expect(generations).toHaveLength(2);
+    expect(JSON.stringify(findCompaction(generations, terminal))).toBe(before);
+    const turn = generations.find(
+      (entry) => entry.seed.id === stableOpencodeGenerationId("s", "a"),
+    );
+    expect(turn?.result?.usage?.inputTokens).toBe(19);
+    expect(turn?.result?.metadata?.cost_usd).toBe(0.5);
+    await capture.shutdown();
+  });
+});
+
+describe("native compaction reload through the real SDK", () => {
+  it.each(
+    compactionReloads,
+  )("does not double $kind exports or token metrics ($delivery)", async ({
+    kind,
+    delivery,
+  }) => {
+    const exporter = new InMemoryMetricExporter(
+      AggregationTemporality.CUMULATIVE,
+    );
+    const reader = new PeriodicExportingMetricReader({
+      exporter,
+      exportIntervalMillis: 60_000,
+    });
+    const provider = new MeterProvider({ readers: [reader] });
+    const exported: Generation[] = [];
+    const instances: Array<{
+      client: Agento11yClient;
+      capture: ReturnType<typeof createNativeCapture>;
+    }> = [];
+    const make = (name: string, createCapture = createNativeCapture) => {
+      const client = new Agento11yClient({
+        hooks: { enabled: false },
+        meter: provider.getMeter(name),
+        generationExport: { protocol: "none" },
+        generationExporter: {
+          exportGenerations: async ({ generations }) => {
+            exported.push(...generations);
+            return {
+              results: generations.map((generation) => ({
+                generationId: generation.id,
+                accepted: true,
+              })),
+            };
+          },
+          exportWorkflowSteps: async () => ({ results: [] }),
+        },
+      });
+      const instance = {
+        client,
+        capture: createCapture({
+          client,
+          config,
+          redactor: createRedactor(),
+          ...home,
+          debugLog: vi.fn(),
+        }),
+      };
+      instances.push(instance);
+      return instance;
+    };
+    try {
+      const old = make("old");
+      await replay(old.capture, [
+        compactionStart(),
+        event("location.shutdown", {}),
+      ]);
+      vi.resetModules();
+      const reloaded = await import("./v2-events.js");
+      expect(reloaded.createNativeCapture).not.toBe(createNativeCapture);
+      const replacement = make("replacement", reloaded.createNativeCapture);
+      const usage = {
+        tokens: {
+          input: 100,
+          output: 20,
+          reasoning: 0,
+          cache: { read: 0, write: 0 },
+        },
+        cost: 0.001,
+      };
+      const terminal =
+        kind === "ended"
+          ? compactionEnd("s", usage)
+          : compactionFailure("s", usage);
+      const ordered =
+        delivery === "old first"
+          ? [old, replacement]
+          : delivery === "replacement first"
+            ? [replacement, old]
+            : [replacement];
+      for (const { capture } of ordered) await replay(capture, [terminal]);
+      await old.capture.shutdown();
+      await replay(replacement.capture, [terminal]);
+      for (const { client } of instances) await client.flush();
+      await reader.forceFlush();
+      expect(exported).toHaveLength(1);
+      expect(exported[0]?.id).toBe(
+        stableOpencodeCompactionGenerationId("s", terminal.id),
+      );
+      expect(exported[0]?.usage).toMatchObject({
+        inputTokens: 100,
+        outputTokens: 20,
+      });
+      expect(exported[0]?.metadata?.["opencode.input_source"]).toBe(
+        "first_observed_prefix",
+      );
+      const points = exporter
+        .getMetrics()
+        .flatMap((resource) => resource.scopeMetrics)
+        .flatMap((scope) => scope.metrics)
+        .flatMap((metric) =>
+          metric.descriptor.name === "gen_ai.client.token.usage" &&
+          metric.dataPointType === DataPointType.HISTOGRAM
+            ? metric.dataPoints
+            : [],
+        );
+      expect(
+        points.map((point) => ({
+          type: point.attributes["gen_ai.token.type"],
+          count: point.value.count,
+          sum: point.value.sum,
+        })),
+      ).toEqual([
+        { type: "input", count: 1, sum: 100 },
+        { type: "output", count: 1, sum: 20 },
+      ]);
+    } finally {
+      for (const { capture, client } of instances) {
+        await capture.shutdown();
+        await client.shutdown();
+      }
+      await provider.shutdown();
+    }
+  });
+});
+
 describe("native history through the real SDK exporter", () => {
   const modes = [
     "full",
@@ -919,13 +1824,14 @@ describe("native history through the real SDK exporter", () => {
   }) => {
     const summary = `  summary ${secret}; ${envSecret}\n`;
     const recent = `\n recent ${secret}; ${envSecret}  `;
+    const checkpoint = compaction(summary, recent);
     const { exported, diagnostics } = await exportEvents(
       [
         enqueue("old prompt"),
         event("session.inbox.delivered", { sessionID: "s", inboxID: "i" }),
         start(),
         end(),
-        compaction(summary, recent),
+        checkpoint,
         start("s", "b"),
         event("session.text.ended", {
           sessionID: "s",
@@ -940,24 +1846,58 @@ describe("native history through the real SDK exporter", () => {
       contentCapture,
       redactInputMessages,
     );
-    expect(exported).toHaveLength(3);
+    expect(exported).toHaveLength(4);
     expect(diagnostics).toEqual([]);
+    const auxiliary = exported.find(
+      (generation) =>
+        generation.id ===
+        stableOpencodeCompactionGenerationId("s", checkpoint.id),
+    );
+    expect(auxiliary).toMatchObject({
+      mode: "SYNC",
+      operationName: "generateText",
+      tags: { "opencode.call_kind": "compaction" },
+      usage: { inputTokens: 100, outputTokens: 10 },
+      metadata: {
+        cost_usd: 1,
+        "opencode.usage_scope": "logical_compaction",
+        "opencode.settlement": "compaction.ended",
+        "opencode.input_source": "unavailable",
+      },
+    });
+    expect(auxiliary?.input).toEqual([]);
+    expect(texts(auxiliary?.output)).toEqual(
+      contentCapture === "metadata_only" ? [] : [redactor.redact(summary)],
+    );
+    expect(JSON.stringify(auxiliary)).not.toContain(secret);
+    expect(JSON.stringify(auxiliary)).not.toContain(nativeFixture.envSecret);
+    expect(JSON.stringify(auxiliary?.output)).not.toContain("recent");
+    const turns = exported.filter(
+      (generation) => generation.tags?.["opencode.call_kind"] !== "compaction",
+    );
+    expect(turns).toHaveLength(3);
+    const after = turns.find(
+      (generation) => generation.id === stableOpencodeGenerationId("s", "b"),
+    );
+    const later = turns.find(
+      (generation) => generation.id === stableOpencodeGenerationId("s", "c"),
+    );
     const expected =
       contentCapture === "metadata_only"
         ? []
         : [summary, recent].map((text) =>
             redactInputMessages ? redactor.redact(text) : text,
           );
-    expect(texts(exported[1]?.input)).toEqual(expected);
-    expect(texts(exported[2]?.input)).toEqual(
+    expect(texts(after?.input)).toEqual(expected);
+    expect(texts(later?.input)).toEqual(
       contentCapture === "metadata_only"
         ? []
         : [...expected, "after checkpoint"],
     );
-    for (const generation of exported.slice(1)) {
-      expect(JSON.stringify(generation.input)).not.toContain("old prompt");
+    for (const generation of [after, later]) {
+      expect(JSON.stringify(generation?.input)).not.toContain("old prompt");
       expect(
-        generation.input?.every((message) =>
+        generation?.input?.every((message) =>
           ["user", "assistant"].includes(message.role),
         ),
       ).toBe(true);
@@ -1057,12 +1997,13 @@ describe("native history through the real SDK exporter", () => {
   it.each(
     modes,
   )("freezes instructions across compaction and captures only new updates afterward under %s", async (contentCapture) => {
+    const checkpoint = compaction("checkpoint", "recent");
     const { exported, diagnostics } = await exportEvents(
       [
         instructions("before checkpoint"),
         start(),
         instructions("update during active assistant"),
-        compaction("checkpoint", "recent"),
+        checkpoint,
         start("s", "b"),
         end("s", "b"),
         instructions("after checkpoint"),
@@ -1071,15 +2012,239 @@ describe("native history through the real SDK exporter", () => {
       ],
       contentCapture,
     );
-    expect(exported).toHaveLength(3);
+    expect(exported).toHaveLength(4);
     expect(diagnostics).toEqual([]);
-    expect(exported.map((generation) => generation.systemPrompt ?? "")).toEqual(
+    const auxiliary = exported.find(
+      (generation) =>
+        generation.id ===
+        stableOpencodeCompactionGenerationId("s", checkpoint.id),
+    );
+    expect(auxiliary?.tags?.["opencode.call_kind"]).toBe("compaction");
+    const turns = ["a", "b", "c"].map((id) =>
+      exported.find(
+        (generation) => generation.id === stableOpencodeGenerationId("s", id),
+      ),
+    );
+    expect(turns.map((generation) => generation?.systemPrompt ?? "")).toEqual(
       contentCapture === "metadata_only"
         ? ["", "", ""]
         : ["before checkpoint", "", "after checkpoint"],
     );
-    expect(texts(exported[1]?.input)).toEqual(
+    const next = exported.find(
+      (generation) => generation.id === stableOpencodeGenerationId("s", "b"),
+    );
+    expect(texts(next?.input)).toEqual(
       contentCapture === "metadata_only" ? [] : ["checkpoint", "recent"],
+    );
+  });
+
+  it.each(
+    policies,
+  )("captures compaction input and fully redacts its summary under $contentCapture, redactInputMessages=$redactInputMessages", async ({
+    contentCapture,
+    redactInputMessages,
+  }) => {
+    const user = `user prefix ${secret}`;
+    const summary = `summary ${secret}; ${envSecret}`;
+    const begun = compactionStart();
+    const terminal = compactionEnd("s", {
+      text: summary,
+      recent: "RECENT_NOT_GENERATED",
+    });
+    const data = {
+      sessionID: "s",
+      assistantMessageID: "a",
+      id: "history-tool",
+    };
+    const { exported, diagnostics } = await exportEvents(
+      [
+        enqueue(user),
+        event("session.inbox.delivered", { sessionID: "s", inboxID: "i" }),
+        start(),
+        event("session.tool.input.started", { ...data, name: "read" }),
+        event("session.tool.called", {
+          ...data,
+          input: { path: `file ${secret}` },
+          executed: false,
+        }),
+        event("session.tool.success", {
+          ...data,
+          content: [
+            { type: "text", text: `tool result ${secret}; ${envSecret}` },
+          ],
+          executed: false,
+        }),
+        end(),
+        begun,
+        terminal,
+      ],
+      contentCapture,
+      redactInputMessages,
+    );
+    expect(diagnostics).toEqual([]);
+    expect(exported).toHaveLength(2);
+    const compacted = exported.find(
+      (generation) =>
+        generation.id ===
+        stableOpencodeCompactionGenerationId("s", terminal.id),
+    );
+    expect(compacted?.tags?.["opencode.call_kind"]).toBe("compaction");
+    expect(compacted?.usage?.inputTokens).toBe(109);
+    expect(compacted?.metadata).toMatchObject({
+      "opencode.input_source": "first_observed_prefix",
+      "opencode.start_time_approximate": false,
+    });
+    expect(texts(compacted?.output)).toEqual(
+      contentCapture === "metadata_only" ? [] : [redactor.redact(summary)],
+    );
+    expect(JSON.stringify(compacted?.output)).not.toContain(secret);
+    expect(JSON.stringify(compacted?.output)).not.toContain(
+      nativeFixture.envSecret,
+    );
+    expect(JSON.stringify(compacted?.output)).not.toContain(
+      "RECENT_NOT_GENERATED",
+    );
+    if (contentCapture === "metadata_only") {
+      expect(compacted?.input).toEqual([]);
+    } else {
+      expect(texts(compacted?.input)).toEqual([
+        redactInputMessages ? redactor.redact(user) : user,
+      ]);
+      const parts = compacted?.input?.flatMap((message) => message.parts ?? []);
+      const call = parts?.find((part) => part.type === "tool_call");
+      const result = parts?.find((part) => part.type === "tool_result");
+      expect(call?.type).toBe("tool_call");
+      expect(result?.type).toBe("tool_result");
+      const captureTools = contentCapture !== "no_tool_content";
+      if (call?.type === "tool_call") {
+        expect(call.toolCall.inputJSON).toBe(
+          captureTools
+            ? redactor.redact(JSON.stringify({ path: `file ${secret}` }))
+            : "",
+        );
+      }
+      if (result?.type === "tool_result") {
+        expect(result.toolResult.content).toBe(
+          captureTools
+            ? redactor.redact(`tool result ${secret}; ${envSecret}`)
+            : "",
+        );
+      }
+    }
+  });
+
+  it.each(
+    policies,
+  )("failure preserves ordinary history and instructions under $contentCapture, redactInputMessages=$redactInputMessages", async ({
+    contentCapture,
+    redactInputMessages,
+  }) => {
+    const prefix = [
+      enqueue(`original prompt ${secret}`),
+      event("session.inbox.delivered", { sessionID: "s", inboxID: "i" }),
+      instructions(`original instruction ${secret}; ${envSecret}`),
+      start(),
+      event("session.text.ended", {
+        sessionID: "s",
+        assistantMessageID: "a",
+        ordinal: 0,
+        text: "original reply",
+      }),
+      end(),
+      instructions("instruction after first turn"),
+    ];
+    const next = [start("s", "b"), end("s", "b")];
+    const terminal = compactionFailure("s", {
+      tokens: compactionTokens,
+      cost: 0.001,
+    });
+    const baseline = await exportEvents(
+      [...prefix, ...next],
+      contentCapture,
+      redactInputMessages,
+    );
+    const failed = await exportEvents(
+      [...prefix, compactionStart("s", "manual"), terminal, ...next],
+      contentCapture,
+      redactInputMessages,
+    );
+    expect(baseline.exported).toHaveLength(2);
+    expect(failed.exported).toHaveLength(3);
+    expect(failed.diagnostics).toEqual([]);
+    const compacted = failed.exported.find(
+      (generation) =>
+        generation.id ===
+        stableOpencodeCompactionGenerationId("s", terminal.id),
+    );
+    expect(compacted?.tags?.["opencode.call_kind"]).toBe("compaction");
+    for (const assistantID of ["a", "b"]) {
+      const id = stableOpencodeGenerationId("s", assistantID);
+      const before = baseline.exported.find(
+        (generation) => generation.id === id,
+      );
+      const after = failed.exported.find((generation) => generation.id === id);
+      expect(after?.input).toEqual(before?.input);
+      expect(after?.systemPrompt).toBe(before?.systemPrompt);
+      expect(after?.parentGenerationIds).toEqual(before?.parentGenerationIds);
+      expect(after?.usage).toEqual(before?.usage);
+    }
+    const following = failed.exported.find(
+      (generation) => generation.id === stableOpencodeGenerationId("s", "b"),
+    );
+    expect(texts(following?.input)).toEqual(
+      contentCapture === "metadata_only"
+        ? []
+        : [
+            redactInputMessages
+              ? redactor.redact(`original prompt ${secret}`)
+              : `original prompt ${secret}`,
+            "original reply",
+          ],
+    );
+    expect(following?.systemPrompt ?? "").toBe(
+      contentCapture === "metadata_only"
+        ? ""
+        : redactor.redact(
+            `original instruction ${secret}; ${envSecret}\n\ninstruction after first turn`,
+          ),
+    );
+  });
+
+  it.each(
+    modes,
+  )("exports native empty summary usage without opaque provider state under %s", async (contentCapture) => {
+    const terminal = compactionEnd("s", {
+      text: "",
+      recent: "",
+      model: undefined,
+    });
+    Object.assign(terminal.data, {
+      providerState: { secret: "OPAQUE_PROVIDER_STATE" },
+      providerContext: { secret: "OPAQUE_PROVIDER_CONTEXT" },
+    });
+    const { exported, diagnostics } = await exportEvents(
+      [compactionStart(), terminal],
+      contentCapture,
+    );
+    expect(diagnostics).toEqual([]);
+    expect(exported).toHaveLength(1);
+    const compacted = exported.find(
+      (generation) =>
+        generation.id ===
+        stableOpencodeCompactionGenerationId("s", terminal.id),
+    );
+    expect(compacted?.output).toEqual([]);
+    expect(compacted?.usage).toMatchObject({
+      inputTokens: 109,
+      outputTokens: 23,
+    });
+    expect(compacted?.metadata).toMatchObject({
+      cost_usd: 0.001,
+      "opencode.model_source": "unavailable",
+    });
+    expect(compacted?.model).toEqual({ provider: "unknown", name: "unknown" });
+    expect(JSON.stringify(exported)).not.toMatch(
+      /OPAQUE_PROVIDER|providerState|providerContext/,
     );
   });
 
@@ -1088,13 +2253,24 @@ describe("native history through the real SDK exporter", () => {
     ["summary only", " \n\t"],
     ["\t", "\n"],
   ])("exports compaction with summary=%j and recent=%j", async (summary, recent) => {
+    const checkpoint = compaction(summary, recent);
     const { exported, diagnostics } = await exportEvents(
-      [compaction(summary, recent), start(), end()],
+      [checkpoint, start(), end()],
       "full",
     );
-    expect(exported).toHaveLength(1);
+    expect(exported).toHaveLength(2);
     expect(diagnostics).toEqual([]);
-    expect(texts(exported[0]?.input)).toEqual(
+    const auxiliary = exported.find(
+      (generation) =>
+        generation.id ===
+        stableOpencodeCompactionGenerationId("s", checkpoint.id),
+    );
+    expect(auxiliary?.tags?.["opencode.call_kind"]).toBe("compaction");
+    expect(texts(auxiliary?.output)).toEqual(summary.trim() ? [summary] : []);
+    const turn = exported.find(
+      (generation) => generation.id === stableOpencodeGenerationId("s", "a"),
+    );
+    expect(texts(turn?.input)).toEqual(
       [summary, recent].filter((text) => text.trim().length > 0),
     );
   });

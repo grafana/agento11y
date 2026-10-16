@@ -1,13 +1,19 @@
 import type { Agento11yClient, Message } from "@grafana/agento11y";
 import type { Agento11yOpencodeConfig } from "./config.js";
 import { resolveGitBranch } from "./git.js";
-import { stableOpencodeGenerationId } from "./lineage.js";
+import {
+  stableOpencodeCompactionGenerationId,
+  stableOpencodeGenerationId,
+} from "./lineage.js";
 import type { Redactor } from "./mappers.js";
 import { buildBuiltinTags } from "./tags.js";
 import { emitToolSpans } from "./toolSpans.js";
 import {
+  mapNativeCompactionGeneration,
   mapNativeGeneration,
   type NativeBlock,
+  type NativeCompactionStart,
+  type NativeCompactionTerminal,
   type NativeEvent,
   type NativeEventOf,
   type NativeLocation,
@@ -45,6 +51,7 @@ interface SessionState {
   instructions: string[];
   inbox: Map<string, InboxItem>;
   assistant?: Assistant;
+  compaction?: NativeCompactionStart & { seq: number };
   lastGeneration?: string;
   title?: string;
   parentSession?: string;
@@ -63,7 +70,24 @@ export interface NativeCaptureOptions {
   debugLog: (message: string, ...args: unknown[]) => void;
 }
 
-/** Setup-local, synchronous event fold. Export promises never block host guard callbacks. */
+interface CompactionGroup {
+  users: number;
+  // Durable sequence numbers distinguish compactions; the host supplies no compaction ID.
+  owners: Map<string, Map<number, (event: NativeCompactionTerminal) => void>>;
+  settled: Map<string, number | undefined>;
+  completedSeq: Map<string, number>;
+}
+// Location subscriptions overlap, and local plugin reloads re-evaluate this module.
+const compactionRegistryKey = Symbol.for(
+  "grafana.agento11y.opencode.compactions.v1",
+);
+const processState = globalThis as typeof globalThis & {
+  [compactionRegistryKey]?: Map<string, CompactionGroup>;
+};
+processState[compactionRegistryKey] ??= new Map();
+const compactionGroups = processState[compactionRegistryKey];
+
+/** Synchronous event fold. Export promises never block host guard callbacks. */
 export function createNativeCapture({
   client,
   config,
@@ -77,6 +101,28 @@ export function createNativeCapture({
   shutdown(): Promise<void>;
   drain(): Promise<void>;
 } {
+  const groupKey = JSON.stringify([directory, workspaceID]);
+  let compactions = compactionGroups.get(groupKey);
+  if (!compactions) {
+    compactions = {
+      users: 0,
+      owners: new Map(),
+      settled: new Map(),
+      completedSeq: new Map(),
+    };
+    compactionGroups.set(groupKey, compactions);
+  }
+  const group = compactions;
+  group.users++;
+  const releaseCompaction = (sessionID: string, seq?: number) => {
+    const reservations = group.owners.get(sessionID);
+    if (!reservations) return;
+    for (const [started, owner] of reservations) {
+      if (owner === handleEvent && (seq === undefined || started === seq))
+        reservations.delete(started);
+    }
+    if (!reservations.size) group.owners.delete(sessionID);
+  };
   const sessions = new Map<string, SessionState>();
   // Ownership comes from events, never from a later session lookup.
   const locations = new Map<string, NativeLocation>();
@@ -125,7 +171,7 @@ export function createNativeCapture({
     const assistant = session.assistant;
     if (!assistant) return;
     session.assistant = undefined;
-    if (draining) sessions.delete(sessionID);
+    if (draining && !session.compaction) sessions.delete(sessionID);
     const id = stableOpencodeGenerationId(sessionID, assistant.id);
     if (settled.has(id)) return;
     settled.add(id); // Commit before scheduling any asynchronous export.
@@ -206,6 +252,82 @@ export function createNativeCapture({
       });
     });
   };
+  const settleCompaction = (
+    event: NativeCompactionTerminal,
+    session: SessionState,
+  ) => {
+    const sessionID = event.data.sessionID;
+    const id = stableOpencodeCompactionGenerationId(sessionID, event.id);
+    const complete = (seq: number | undefined) => {
+      if (seq === undefined) return;
+      if (session.compaction?.seq === seq) session.compaction = undefined;
+      releaseCompaction(sessionID, seq);
+    };
+    if (group.settled.has(id)) {
+      complete(group.settled.get(id));
+      return;
+    }
+    const reservations = group.owners.get(sessionID);
+    let started: number | undefined;
+    for (const seq of reservations?.keys() ?? []) {
+      if (seq < event.durable.seq && (started === undefined || seq > started))
+        started = seq;
+    }
+    const reserved =
+      started === undefined ? undefined : reservations?.get(started);
+    if (reserved !== undefined && reserved !== handleEvent) {
+      // The draining subscription may close before it consumes this terminal.
+      reserved(event);
+      return;
+    }
+    const snapshot =
+      session.compaction?.seq === started ? session.compaction : undefined;
+    const mapped = mapNativeCompactionGeneration(
+      event,
+      snapshot,
+      config,
+      redactor,
+    );
+    group.settled.set(id, started);
+    group.completedSeq.set(
+      sessionID,
+      Math.max(group.completedSeq.get(sessionID) ?? -1, event.durable.seq),
+    );
+    complete(started);
+    const seed = {
+      ...mapped.seed,
+      conversationId: session.conversationId,
+      conversationTitle:
+        session.conversationId === event.data.sessionID
+          ? session.title
+          : undefined,
+      parentGenerationIds: snapshot?.parent ? [snapshot.parent] : undefined,
+      agentVersion,
+      effectiveVersion: agentVersion,
+      tags: {
+        ...buildBuiltinTags({
+          cwd: directory,
+          gitBranch: resolveGitBranch(directory),
+          isSubagent: session.parentSession !== undefined,
+        }),
+        ...mapped.seed.tags,
+      },
+      metadata: session.parentSession
+        ? {
+            "opencode.parent_session_id": session.parentSession,
+            ...(session.conversationId !== event.data.sessionID && {
+              "opencode.child_session_id": event.data.sessionID,
+            }),
+          }
+        : undefined,
+    };
+    enqueue(async () => {
+      await client.startGeneration(seed, async (recorder) => {
+        recorder.setResult(mapped.result);
+        if (mapped.error) recorder.setCallError(new Error(mapped.error));
+      });
+    });
+  };
   const textMessage = (text: string): Message => ({
     role: "user",
     parts: [{ type: "text", text }],
@@ -238,7 +360,7 @@ export function createNativeCapture({
       if (owns(event.location)) {
         draining = true;
         for (const [id, session] of sessions)
-          if (!session.assistant) sessions.delete(id);
+          if (!session.assistant && !session.compaction) sessions.delete(id);
       }
       return;
     }
@@ -248,7 +370,16 @@ export function createNativeCapture({
     )
       return;
     const sessionID = event.data.sessionID;
-    if (draining && !sessions.get(sessionID)?.assistant) return;
+    const pending = sessions.get(sessionID);
+    if (draining && !pending?.assistant && !pending?.compaction) return;
+    if (
+      draining &&
+      (event.type === "session.compaction.started" ||
+        ((event.type === "session.compaction.ended" ||
+          event.type === "session.compaction.failed") &&
+          !pending?.compaction))
+    )
+      return;
     const since = locationSince.get(sessionID);
     if (
       since !== undefined &&
@@ -266,6 +397,7 @@ export function createNativeCapture({
         if (session) settle(sessionID, session, event.created, "moved");
       }
       // Neither side imports the other location's retained history or queued inbox.
+      releaseCompaction(sessionID);
       sessions.delete(sessionID);
       if (owns(previous) || owns(event.data.location)) seen.add(event.id);
       locations.set(sessionID, { ...event.data.location });
@@ -334,13 +466,41 @@ export function createNativeCapture({
         // These are chronological updates, not a complete effective system snapshot.
         if (event.data.text?.trim()) session.instructions.push(event.data.text);
         return;
+      case "session.compaction.started": {
+        const seq = event.durable.seq;
+        if (seq <= (group.completedSeq.get(sessionID) ?? -1)) return;
+        const reserved = group.owners.get(sessionID)?.get(seq);
+        if (reserved !== undefined && reserved !== handleEvent) return;
+        releaseCompaction(sessionID);
+        let reservations = group.owners.get(sessionID);
+        if (!reservations) {
+          reservations = new Map();
+          group.owners.set(sessionID, reservations);
+        }
+        reservations.set(seq, handleEvent);
+        session.compaction = {
+          seq,
+          startedAt: event.created,
+          input: structuredClone(session.history),
+          parent: session.assistant
+            ? stableOpencodeGenerationId(sessionID, session.assistant.id)
+            : (session.lastGeneration ?? session.spawningGeneration),
+        };
+        return;
+      }
       case "session.compaction.ended":
-        // This is an observed checkpoint, not a claim of the final provider request.
-        // Opaque native providerContext is deliberately not decoded/reconstructed.
-        session.history = [textMessage(event.data.text)];
-        if (event.data.recent !== undefined)
-          session.history.push(textMessage(event.data.recent));
-        session.instructions = [];
+      case "session.compaction.failed":
+        settleCompaction(event, session);
+        if (event.type === "session.compaction.ended") {
+          // This is an observed checkpoint, not a claim of the final provider request.
+          // Opaque native providerContext is deliberately not decoded/reconstructed.
+          session.history = [textMessage(event.data.text)];
+          if (event.data.recent !== undefined)
+            session.history.push(textMessage(event.data.recent));
+          session.instructions = [];
+        }
+        if (draining && !session.assistant && !session.compaction)
+          sessions.delete(sessionID);
         return;
       case "session.step.started": {
         const id = stableOpencodeGenerationId(
@@ -393,6 +553,7 @@ export function createNativeCapture({
         return;
       case "session.deleted":
         settle(sessionID, session, event.created, "deleted");
+        releaseCompaction(sessionID);
         sessions.delete(sessionID);
         locations.delete(sessionID);
         return;
@@ -499,6 +660,8 @@ export function createNativeCapture({
     closed = true;
     const at = Date.now();
     for (const [id, session] of sessions) settle(id, session, at, "shutdown");
+    for (const sessionID of group.owners.keys()) releaseCompaction(sessionID);
+    if (--group.users === 0) compactionGroups.delete(groupKey);
     sessions.clear();
     locations.clear();
     seen.clear();

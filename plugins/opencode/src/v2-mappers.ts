@@ -1,11 +1,14 @@
 import type {
   ContentCaptureMode,
   GenerationResult,
+  GenerationStart,
   Message,
   MessagePart,
   TokenUsage,
 } from "@grafana/agento11y";
 import type { Plugin } from "@opencode/plugin";
+import type { Agento11yOpencodeConfig } from "./config.js";
+import { stableOpencodeCompactionGenerationId } from "./lineage.js";
 import type { Redactor } from "./mappers.js";
 import type { ToolExecutionRecord } from "./toolSpans.js";
 
@@ -275,6 +278,95 @@ export function mapNativeGeneration(
       "opencode.settlement": generation.settlement,
       ...(generation.cost !== undefined && { cost_usd: generation.cost }),
     },
+  };
+}
+
+export type NativeCompactionStart = {
+  startedAt: number;
+  input: readonly Message[];
+  parent?: string;
+};
+
+export type NativeCompactionTerminal = NativeEventOf<
+  "session.compaction.ended" | "session.compaction.failed"
+>;
+
+export function mapNativeCompactionGeneration(
+  terminalEvent: NativeCompactionTerminal,
+  start: NativeCompactionStart | undefined,
+  config: Agento11yOpencodeConfig,
+  redactor: Redactor,
+): {
+  seed: GenerationStart & { id: string };
+  result: GenerationResult;
+  error?: string;
+} {
+  const ended =
+    terminalEvent.type === "session.compaction.ended"
+      ? terminalEvent.data
+      : undefined;
+  const model = ended?.model;
+  const { contentCapture } = config;
+  const seed: GenerationStart & { id: string } = {
+    id: stableOpencodeCompactionGenerationId(
+      terminalEvent.data.sessionID,
+      terminalEvent.id,
+    ),
+    mode: "SYNC",
+    operationName: "generateText",
+    agentName: nativeAgentName(config.agentName, undefined),
+    model: model
+      ? { provider: model.providerID, name: model.id }
+      : { provider: "unknown", name: "unknown" },
+    startedAt: new Date(start?.startedAt ?? terminalEvent.created),
+    contentCapture,
+    tags: { "opencode.call_kind": "compaction" },
+  };
+  const result: GenerationResult = {
+    input:
+      contentCapture === "metadata_only"
+        ? []
+        : mapNativeMessages(
+            start?.input ?? [],
+            redactor,
+            contentCapture,
+            config.redactInputMessages,
+          ),
+    // Summaries need full redaction for secrets quoted from tools and config.
+    output:
+      contentCapture !== "metadata_only" && ended?.text.trim()
+        ? [
+            {
+              role: "assistant",
+              parts: [{ type: "text", text: redactor.redact(ended.text) }],
+            },
+          ]
+        : [],
+    responseModel: seed.model.name,
+    stopReason: ended ? "end_turn" : "error",
+    completedAt: new Date(terminalEvent.created),
+    metadata: {
+      "opencode.usage_scope": "logical_compaction",
+      "opencode.compaction.reason": terminalEvent.data.reason,
+      "opencode.settlement": ended ? "compaction.ended" : "compaction.failed",
+      "opencode.model_source": model ? "event" : "unavailable",
+      "opencode.input_source": start ? "first_observed_prefix" : "unavailable",
+      "opencode.start_time_approximate": start === undefined,
+      "opencode.completion_time_approximate": true,
+      ...(terminalEvent.data.cost !== undefined && {
+        cost_usd: terminalEvent.data.cost,
+      }),
+    },
+  };
+  const usage = mapNativeUsage(terminalEvent.data.tokens);
+  if (usage !== undefined) result.usage = usage;
+  return {
+    seed,
+    result,
+    ...(terminalEvent.type === "session.compaction.failed" && {
+      // Never retain error.message: host errors may contain credentials.
+      error: terminalEvent.data.error.type,
+    }),
   };
 }
 
