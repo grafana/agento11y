@@ -66,7 +66,7 @@ func FormatEvalFailure(toolName, detail string) string {
 }
 
 // errMissingCredentials uses the primary variable names in user-facing errors.
-var errMissingCredentials = errors.New("missing AGENTO11Y_ENDPOINT/AGENTO11Y_AUTH_TENANT_ID/AGENTO11Y_AUTH_TOKEN")
+var errMissingCredentials = errors.New("missing AGENTO11Y_ENDPOINT/AGENTO11Y_AUTH_TENANT_ID/AGENTO11Y_AUTH_TOKEN credentials required by the selected AGENTO11Y_AUTH_MODE")
 
 // newGuardClient builds a client for one guard phase. The caller applies
 // FailOpen when credentials are missing. Localhost endpoints use placeholder
@@ -76,7 +76,19 @@ func newGuardClient(cfg envconfig.GuardsConfig, phase agento11y.HookPhase) (*age
 	tenantID := envconfig.Getenv("AUTH_TENANT_ID")
 	authToken := envconfig.Getenv("AUTH_TOKEN")
 	tenantID, authToken = envconfig.LocalAuthPlaceholders(endpoint, tenantID, authToken)
-	if endpoint == "" || tenantID == "" || authToken == "" {
+	mode := agento11y.ExportAuthMode(strings.ToLower(envconfig.Getenv("AUTH_MODE")))
+	switch mode {
+	case agento11y.ExportAuthModeNone, agento11y.ExportAuthModeTenant, agento11y.ExportAuthModeBearer, agento11y.ExportAuthModeBasic:
+	default:
+		mode = agento11y.ExportAuthModeBasic
+		if authToken == "" {
+			mode = agento11y.ExportAuthModeTenant
+		}
+	}
+	if endpoint == "" ||
+		(mode == agento11y.ExportAuthModeTenant && tenantID == "") ||
+		(mode == agento11y.ExportAuthModeBasic && (tenantID == "" || authToken == "")) ||
+		(mode == agento11y.ExportAuthModeBearer && authToken == "") {
 		return nil, endpoint, errMissingCredentials
 	}
 
@@ -93,9 +105,10 @@ func newGuardClient(cfg envconfig.GuardsConfig, phase agento11y.HookPhase) (*age
 		},
 		GenerationExport: agento11y.GenerationExportConfig{
 			Auth: agento11y.AuthConfig{
-				Mode:          agento11y.ExportAuthModeBasic,
+				Mode:          mode,
 				BasicUser:     tenantID,
 				BasicPassword: authToken,
+				BearerToken:   authToken,
 				TenantID:      tenantID,
 			},
 		},

@@ -595,7 +595,7 @@ func Collect(ctx context.Context, opts Options, p Params) *Report {
 				} else {
 					needsToken = append(needsToken, agent.Name)
 				}
-			} else if agent.Install == InstallStateUnknown {
+			} else if agent.Install == InstallStateUnknown && agent.Health != HealthSkipped {
 				unknownAgent = true
 			}
 		}

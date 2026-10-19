@@ -72,7 +72,7 @@ type ClientOptions struct {
 	// env tags, and the explicit tag is the one the user asked for.
 	Tags map[string]string
 	// Auth overrides generation-export auth; an empty mode defaults to basic
-	// with a token, otherwise tenant.
+	// with a token, tenant with a tenant ID, otherwise none.
 	Auth agento11y.AuthConfig
 }
 
@@ -84,6 +84,9 @@ func exportConfig(userAgent string, auth agento11y.AuthConfig) agento11y.Generat
 		auth.Mode = agento11y.ExportAuthModeBasic
 		if auth.BasicPassword == "" && envconfig.Getenv("AUTH_TOKEN") == "" {
 			auth.Mode = agento11y.ExportAuthModeTenant
+			if auth.TenantID == "" && envconfig.Getenv("AUTH_TENANT_ID") == "" {
+				auth.Mode = agento11y.ExportAuthModeNone
+			}
 		}
 	}
 	export := agento11y.GenerationExportConfig{

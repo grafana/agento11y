@@ -532,3 +532,55 @@ func TestWriteHookSpecificOutputUpdatedInput(t *testing.T) {
 	// nil writer must not panic.
 	WriteHookSpecificOutputUpdatedInput(nil, json.RawMessage(`{}`))
 }
+
+func TestToolCallGuardAuth(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode, tenant, token string
+		wantAuthorization         string
+		wantTenant                string
+		wantMissing               bool
+	}{
+		{name: "automatic tenant", tenant: "tenant", wantTenant: "tenant"},
+		{name: "explicit tenant", mode: "tenant", tenant: "tenant", wantTenant: "tenant"},
+		{name: "basic", tenant: "tenant", token: "token", wantAuthorization: "Basic dGVuYW50OnRva2Vu", wantTenant: "tenant"},
+		{name: "bearer", mode: "bearer", token: "token", wantAuthorization: "Bearer token"},
+		{name: "none", mode: "none"},
+		{name: "basic missing token", mode: "basic", tenant: "tenant", wantMissing: true},
+		{name: "bearer missing token", mode: "bearer", tenant: "tenant", wantMissing: true},
+		{name: "missing tenant", wantMissing: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			envconfig.PinAliasEnvBlank(t)
+			var calls atomic.Int32
+			// HTTPS avoids the local HTTP placeholder credentials, so this
+			// exercises the same auth selection as a Cloud endpoint.
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				if got := r.Header.Get("Authorization"); got != tc.wantAuthorization {
+					t.Errorf("Authorization = %q, want %q", got, tc.wantAuthorization)
+				}
+				if got := r.Header.Get("X-Scope-OrgID"); got != tc.wantTenant {
+					t.Errorf("tenant = %q, want %q", got, tc.wantTenant)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"action":"deny","reason":"blocked tool","rule_id":"policy"}`))
+			}))
+			defer server.Close()
+			previous := http.DefaultTransport
+			http.DefaultTransport = server.Client().Transport
+			t.Cleanup(func() { http.DefaultTransport = previous })
+			t.Setenv("AGENTO11Y_ENDPOINT", server.URL)
+			t.Setenv("AGENTO11Y_AUTH_MODE", tc.mode)
+			t.Setenv("AGENTO11Y_AUTH_TENANT_ID", tc.tenant)
+			t.Setenv("AGENTO11Y_AUTH_TOKEN", tc.token)
+			res := EvaluateToolCall(t.Context(), envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true}, ToolCallInput{ToolName: "bash"}, nil)
+			if tc.wantMissing {
+				if calls.Load() != 0 || res.Blocked() {
+					t.Fatalf("missing credentials: calls=%d, result=%+v", calls.Load(), res)
+				}
+			} else if calls.Load() != 1 || !res.Blocked() || res.RuleID != "policy" {
+				t.Fatalf("calls=%d, result=%+v, want server policy denial", calls.Load(), res)
+			}
+		})
+	}
+}

@@ -599,6 +599,11 @@ func TestCollectTenantOnlyCredentialsByInstalledAgent(t *testing.T) {
 	}{
 		{name: "Codex only", agents: []AgentStatus{{Name: "codex", Install: InstallStateInstalled}}, wantHealth: HealthOK},
 		{name: "OpenCode only", agents: []AgentStatus{{Name: "opencode", Install: InstallStateInstalled}}, wantHealth: HealthOK},
+		{name: "OpenCode with skipped CLI probes", agents: []AgentStatus{
+			{Name: "opencode", Install: InstallStateInstalled},
+			{Name: "codex", Install: InstallStateUnknown, Health: HealthSkipped},
+			{Name: "copilot", Install: InstallStateUnknown, Health: HealthSkipped},
+		}, wantHealth: HealthOK},
 		{name: "no agents", wantHealth: HealthWarn, wantExit: 1},
 		{name: "agents not installed", agents: []AgentStatus{{Name: "cursor", Install: InstallStateNotInstalled}}, wantHealth: HealthWarn, wantExit: 1},
 		{name: "unknown agent", agents: []AgentStatus{{Name: "codex", Install: InstallStateInstalled}, {Name: "cursor", Install: InstallStateUnknown}}, wantHealth: HealthWarn, wantExit: 1},

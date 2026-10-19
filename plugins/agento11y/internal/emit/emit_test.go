@@ -226,3 +226,15 @@ func TestNewClientTokenlessAuth(t *testing.T) {
 		})
 	}
 }
+
+func TestNewClientWithoutAuth(t *testing.T) {
+	envconfig.PinAliasEnvBlank(t)
+	t.Setenv("AGENTO11Y_ENDPOINT", "http://localhost:8080")
+	if got := exportConfig("", agento11y.AuthConfig{}).Auth.Mode; got != agento11y.ExportAuthModeNone {
+		t.Fatalf("auth mode = %q, want none", got)
+	}
+	client := NewClient(ClientOptions{})
+	if err := client.Shutdown(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
