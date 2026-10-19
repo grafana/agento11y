@@ -37,11 +37,11 @@ func NewGuardsEngineFromContents(path string, data []byte, logger *log.Logger) *
 	if err != nil {
 		return guardeval.NewEngineFromContents(path, data, logger)
 	}
-	return guardeval.NewRulesEngine(upgradeLegacyPackRules(raw), logger)
+	return guardeval.NewRulesEngineWithShellPolicies(upgradeLegacyPackRules(raw), logger, classifyStockShellPolicy)
 }
 
 func refreshStoredPackRule(rule guardeval.Rule) (guardeval.Rule, error) {
-	// EncodeRules includes metadata that json.Marshal omits from Rule.extra.
+	// Compare original fields too, so nested metadata prevents a stock refresh.
 	data, err := guardeval.EncodeRules([]guardeval.Rule{rule})
 	if err != nil {
 		return rule, err

@@ -188,7 +188,7 @@ func TestRegexEvaluator_RejectAndTarget(t *testing.T) {
 			ce, err := compileEvaluator(EvaluatorSpec{Kind: "regex", Config: tc.config})
 			require.NoError(t, err)
 			require.NotNil(t, ce)
-			_, passed, explanation := runEvaluator(ce, tc.input)
+			_, passed, explanation := ce.evaluate(tc.input, nil)
 			assert.Equal(t, tc.wantPassed, passed)
 			if tc.wantExplanation != "" {
 				assert.Equal(t, tc.wantExplanation, explanation)

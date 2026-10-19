@@ -23,15 +23,58 @@ import (
 // into the SDK would put a server-side decoder in a client library.
 
 func decodeHookEvaluateRequest(body []byte) (agento11y.HookEvaluateRequest, error) {
+	req, _, err := decodeLocalHookEvaluateRequest(body)
+	return req, err
+}
+
+func decodeLocalHookEvaluateRequest(body []byte) (agento11y.HookEvaluateRequest, []guardeval.ShellMetadata, error) {
 	var raw wireEvaluateRequest
 	if err := json.Unmarshal(body, &raw); err != nil {
-		return agento11y.HookEvaluateRequest{}, err
+		return agento11y.HookEvaluateRequest{}, nil, err
 	}
 	return agento11y.HookEvaluateRequest{
 		Phase:   agento11y.HookPhase(strings.TrimSpace(raw.Phase)),
 		Context: raw.Context.decode(),
 		Input:   raw.Input.decode(rawWireJSON),
-	}, nil
+	}, decodeShellMetadata(raw.ShellMetadata), nil
+}
+
+func decodeShellMetadata(data json.RawMessage) []guardeval.ShellMetadata {
+	var items []struct {
+		MessageIndex *int    `json:"message_index"`
+		PartIndex    *int    `json:"part_index"`
+		Dialect      *string `json:"dialect"`
+	}
+	if json.Unmarshal(data, &items) != nil {
+		return nil
+	}
+	var metadata []guardeval.ShellMetadata
+	for _, item := range items {
+		if item.MessageIndex == nil || item.PartIndex == nil || item.Dialect == nil || *item.MessageIndex < 0 || *item.PartIndex < 0 {
+			return nil
+		}
+		metadata = append(metadata, guardeval.ShellMetadata{MessageIndex: *item.MessageIndex, PartIndex: *item.PartIndex, Dialect: *item.Dialect})
+	}
+	return metadata
+}
+
+func stripShellMetadata(body []byte) ([]byte, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return nil, err
+	}
+	removed := false
+	// Match encoding/json's case folding to keep shell metadata out of Cloud requests.
+	for key := range fields {
+		if strings.EqualFold(key, "shell_metadata") {
+			delete(fields, key)
+			removed = true
+		}
+	}
+	if !removed {
+		return body, nil
+	}
+	return json.Marshal(fields)
 }
 
 func decodeHookEvaluateResponse(body []byte) (agento11y.HookEvaluateResponse, error) {
@@ -53,9 +96,10 @@ func decodeHookEvaluateResponse(body []byte) (agento11y.HookEvaluateResponse, er
 }
 
 type wireEvaluateRequest struct {
-	Phase   string      `json:"phase"`
-	Context wireContext `json:"context"`
-	Input   wireInput   `json:"input"`
+	Phase         string          `json:"phase"`
+	Context       wireContext     `json:"context"`
+	Input         wireInput       `json:"input"`
+	ShellMetadata json.RawMessage `json:"shell_metadata"`
 }
 
 type wireEvaluateResponse struct {

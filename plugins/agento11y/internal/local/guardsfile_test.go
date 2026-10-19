@@ -2,6 +2,7 @@ package local
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/guardeval"
 	"github.com/stretchr/testify/assert"
@@ -56,28 +58,122 @@ func TestServer_Guards_DisableSucceedsWhenFileMalformed(t *testing.T) {
 }
 
 func TestServer_Guards_PackTogglePreservesCustomExtraFields(t *testing.T) {
-	original := `
+	for _, limit := range []string{"1e20", "-1e20"} {
+		t.Run(limit, func(t *testing.T) {
+			original := fmt.Sprintf(`
 [[rules]]
 rule_id = "block.rm"
 phase = "postflight"
 action_on_fail = "deny"
 short_circuit = true
 evaluator_ids = ["ev-1"]
+metadata.limit = %s
 tool_filter.blocked_names = ["Bash(*rm -rf*)"]
+
+[[rules]]
+rule_id = "custom.sibling"
+tool_filter.blocked_names = ["SiblingTool"]
+`, limit)
+			s, guardsPath, configPath := newGuardsServer(t)
+			defer s.Close()
+			require.NoError(t, os.WriteFile(guardsPath, []byte(original), 0o600))
+			require.NoError(t, os.WriteFile(configPath, []byte("AGENTO11Y_GUARDS_ENABLED=true\nAGENTO11Y_LOCAL_FORWARD=false\n"), 0o600))
+			require.Empty(t, s.forward.load().hookURL)
+			want, err := guardeval.ParseRules([]byte(original))
+			require.NoError(t, err)
+			before := s.localEngine().Status()
+			require.Empty(t, before.Errors)
+			require.Equal(t, 2, before.Enforcing)
+
+			checkEnforcement := func(stock bool) {
+				t.Helper()
+				for _, tc := range []struct {
+					name, input, ruleID string
+				}{
+					{"Bash", `{"command":"rm -rf ./build"}`, "block.rm"},
+					{"SiblingTool", `{}`, "custom.sibling"},
+					{"Bash", `{"command":"git reset --hard HEAD"}`, "pack.git"},
+				} {
+					if !stock && tc.ruleID == "pack.git" {
+						continue
+					}
+					body := fmt.Sprintf(`{"phase":"postflight","input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"c1","name":%q,"input_json":%s}}]}]}}`, tc.name, tc.input)
+					status, got := postHook(t, s, body, nil)
+					require.Equal(t, http.StatusOK, status)
+					assert.Equal(t, agento11y.HookActionDeny, got.Action, tc.ruleID)
+					assert.Equal(t, tc.ruleID, got.RuleID)
+				}
+			}
+			checkEnforcement(false)
+			for _, tc := range []struct {
+				body      string
+				enforcing int
+			}{
+				{`{"packs":{"git":true}}`, 3},
+				{`{"packs":{"secrets":true}}`, 4},
+				{`{"packs":{"secrets":false}}`, 3},
+			} {
+				resp := doReq(t, s, http.MethodPut, "/api/v1/guards", tc.body)
+				require.Equal(t, http.StatusOK, resp.StatusCode)
+				var got guardsFileResponse
+				decodeJSON(t, resp.Body, &got)
+				require.NoError(t, resp.Body.Close())
+				assert.True(t, got.Enabled)
+				assert.Empty(t, got.Errors)
+				assert.Equal(t, tc.enforcing, got.Enforcing)
+				checkEnforcement(true)
+
+				data, err := os.ReadFile(guardsPath)
+				require.NoError(t, err)
+				saved, err := guardeval.ParseRules(data)
+				require.NoError(t, err)
+				require.Len(t, saved, tc.enforcing)
+				assert.Equal(t, want, saved[:len(want)])
+				after := s.localEngine().Status()
+				assert.Empty(t, after.Errors)
+				assert.Equal(t, tc.enforcing, after.Enforcing)
+			}
+		})
+	}
+}
+
+func TestServer_Guards_PackTogglePreservesRawRules(t *testing.T) {
+	for _, id := range []string{"custom", " pack.git "} {
+		t.Run(id, func(t *testing.T) {
+			original := `[[rules]]
+rule_id = "` + id + `"
+action_on_fail = " WARN "
+"owner.name" = "ops"
+match = {}
+tool_filter = { future = {} }
+transform.patterns = [{ id = " padded ", regex = "x", replacement = "  ", "note.key" = true }]
+evaluators = [{ kind = "regex", "audit.name" = "keep", config = { target = "input", "literal.key" = "value" } }]
 `
-	s, guardsPath, _ := newGuardsServer(t)
-	require.NoError(t, os.WriteFile(guardsPath, []byte(original), 0o600))
-
-	resp := doReq(t, s, http.MethodPut, "/api/v1/guards", `{"packs":{"git":true}}`)
-	defer resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-
-	got, err := os.ReadFile(guardsPath)
-	require.NoError(t, err)
-	assert.Contains(t, string(got), "short_circuit = true")
-	assert.Contains(t, string(got), `evaluator_ids = ["ev-1"]`)
-	assert.Contains(t, string(got), `rule_id = "block.rm"`)
-	assert.Contains(t, string(got), `rule_id = "pack.git"`)
+			s, path, _ := newGuardsServer(t)
+			require.NoError(t, os.WriteFile(path, []byte(original), 0o600))
+			want, err := guardeval.ParseRules([]byte(original))
+			require.NoError(t, err)
+			for _, body := range []string{`{"packs":{"secrets":true}}`, `{"packs":{"secrets":false}}`} {
+				resp := doReq(t, s, http.MethodPut, "/api/v1/guards", body)
+				require.Equal(t, http.StatusOK, resp.StatusCode)
+				require.NoError(t, resp.Body.Close())
+				data, err := os.ReadFile(path)
+				require.NoError(t, err)
+				saved, err := guardeval.ParseRules(data)
+				require.NoError(t, err)
+				found := false
+				for _, item := range saved {
+					var rule guardeval.Rule
+					require.NoError(t, json.Unmarshal(item, &rule))
+					if rule.RuleID == id {
+						found = true
+						assert.JSONEq(t, string(want[0]), string(item))
+					}
+				}
+				require.True(t, found)
+			}
+		})
+	}
 }
 
 func TestServer_Guards_MalformedPackPutLeavesEnabledUnchanged(t *testing.T) {

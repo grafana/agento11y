@@ -53,6 +53,7 @@ Changes to pack rules take effect on the daemon's next check without a daemon re
 ## Choose packs
 
 Examples describe each unmodified pack on its own.
+Current coding-agent integrations use lexer-based regex matching. Offline tests can use Bash syntax-tree analysis; see [Enforcement limits](#enforcement-limits).
 Another pack, a custom rule, or Cloud policy can change the final result.
 Treat an allowed example as a matching limit, not a recommendation to run it.
 
@@ -73,7 +74,7 @@ It does not scrub existing files, earlier transcripts, or arbitrary tool results
 
 The pack matches tool names and argument text, not filesystem access.
 For example, it denies `cat .env`, `cat .env.local`, and recognized read, write, edit, or patch calls referencing those names.
-In a shell command it judges the words the shell runs, so a commit message that mentions `.env` is allowed.
+Shell matching distinguishes quoted data from command words, so a quoted commit message mentioning `.env` can pass.
 It allows `cat .envrc`, `cat .environment`, and `cat config.env` when no other rule blocks them.
 A file named `.env.example` also matches, even if it contains no secrets.
 Other filenames containing secrets are outside this pack's scope.
@@ -86,27 +87,27 @@ The pack does not resolve paths or inspect file contents.
 The pack denies these command forms, including supported option-order and quoting variations, even for intentional cleanup:
 
 - `git reset --hard`
-- `git push --force` and `git push -f`
-- `git clean -f`, unless the same option cluster carries `-n`, a dry run, as `git clean -nfd` does
-- `git push` with a `+` refspec, such as `git push origin +main`
-- `git checkout --`, `git checkout .` and other whole-tree pathspecs (`./`, `./*`, `*`, `:/`)
-- `git checkout -f` or `--force`, and `git switch -f`, `--force` or `--discard-changes`
-- `git restore` of a path into the working tree, unless `--staged` is its only mode, including paths read from stdin (`xargs git restore`, `--pathspec-from-file -`)
+- `git push --force`, `git push -f`, and force refspecs such as `git push origin +HEAD:main`
+- `git clean -f`, except recognized dry runs
+- `git checkout --` and whole-tree pathspecs such as `.`, `./`, `./*`, `*`, and `:/`
+- `git checkout -f` or `--force`, and `git switch -f`, `--force`, or `--discard-changes`
+- `git restore` into the working tree, including paths supplied through `--pathspec-from-file` or `xargs`
 - `git stash drop` and `git stash clear`
 - `git branch -D`
 
-Each form is denied with git's global options before the command, such as `git -P` or `git -C dir`, and with the option abbreviations git accepts, such as `git reset --ha` or `git clean --fo`.
-It allows `git push --force-with-lease`, `git push --force-if-includes`, ordinary pushes, `git restore --staged`, and `git checkout` of a branch.
-`git checkout <path>` and `git checkout <commit> <path>...` are allowed, since a path cannot be told from a branch name; only whole-tree pathspecs and `--` are denied.
-A git config change that turns a safety off, such as `git -c clean.requireForce=false clean`, is not checked.
-Other commands that rewrite history, such as rebase, are outside this pack's list.
+It allows `git push --force-with-lease`, `git push --force-if-includes`, ordinary pushes, and `git restore --staged` without a worktree mode.
+Branch checkouts and individual paths without `--` also allow: the pack cannot distinguish `git checkout file.go` from a branch checkout.
 
-Every shell pack reads a command the way the shell does. It splits the command where the shell splits commands (`;`, `&&`, `||`, `|`, `&`, newlines, `( )`, `{ }`), removes quotes and backslashes, decodes `$'...'` escapes, drops redirections such as `2>&1`, and matches a command's name after any unquoted separator, so a wrapper in front of it (`sudo`, `pkexec`, `ssh host`, `docker exec c`, or one the packs have never heard of) does not hide it, while quoted text, such as a commit message that mentions `git reset --hard`, is not matched. A command named as an unquoted argument, as in `echo rm -rf /`, is judged too.
-So `git "reset" --hard`, `cd repo && git reset --hard`, `2>&1 git reset --hard` and `sudo rm -rf /` are denied, while a quoted commit message, a quoted `echo` argument, a comment or a heredoc body that only mentions a blocked command is allowed. A newline ends what can stand in front of a name, so a heredoc body is not matched unless a shell reads it, as in `bash <<EOF`; a heredoc piped into a shell (`cat <<EOF | sh`) is not seen.
-The code the shell runs from text is read as commands too: `$(...)` and backticks, also in the body of a heredoc whose delimiter is unquoted (`<<EOF`, which the shell expands), `sh -c` and `bash -c` after options such as `-o pipefail`, `su -c`, `env -S`, `script -c`, `eval`, `watch`, `trap`, `find -exec`, and a heredoc fed to a shell.
-Code inside code is read three levels deep, and code at the last level is judged as written.
-A shell command longer than 64 KiB is not read; a rule on it fails, so a pack denies it.
-A command built when it runs gets past every pack: a variable (`g=git; $g reset --hard`), a git or shell alias, a script file, or text piped into a shell, as in `echo "..." | bash`.
+Regex matching allows dry-run clusters such as `git clean -nf`, but still denies separate flags in `git clean -n -f`.
+When parsing completes, the pack recognizes separate dry-run flags and option order, including `--no-dry-run` cancellation.
+An option value does not count: `git clean -e -n -f` denies because `-n` is the exclusion value.
+The parser treats option values and operands after `--` as data, not flags.
+
+Supported Git global options, such as `git -P` and `git -C dir`, do not hide these commands.
+Regex matching recognizes selected option abbreviations, such as `git reset --ha` and `git clean --fo`.
+Unsupported parser options trigger fallback rather than complete analysis.
+Other history rewrites, such as rebase, and configuration changes such as `git -c clean.requireForce=false clean` are outside this pack's checks.
+Git aliases are not expanded.
 
 ### Destructive commands
 
@@ -120,18 +121,26 @@ Deletion through another program is outside this pack's list.
 
 The pack checks recursive `chmod`/`chown`, and `chmod 777`, targeting `/`, `~`, or `$HOME`.
 It denies examples such as `chmod -R 755 /`, `chown -R root ~`, and `chmod 777 "$HOME"`.
-It recognizes selected root and home spellings, including `${HOME}`, trailing slashes, `~/.` and `$HOME/.`, and some glob forms.
+It recognizes selected root and home spellings, including `/.`, `${HOME}`, trailing slashes, `~/.`, `$HOME/.`, and some glob forms.
 
 It allows `chmod -R 755 /tmp`, `chmod -R 755 "$HOME/project"`, and `chmod 755 /`.
 It does not expand arbitrary variables or resolve a literal home path such as `/Users/alex` to `$HOME`.
 
 ### Disk wipe
 
-The pack denies `dd` writing to a disk device, such as `dd if=/dev/zero of=/dev/sda`, `of=/dev/nvme0n1` or `of=/dev/disk2`, including supported quoting variations for `of=`.
-It allows `dd if=/dev/sda of=/tmp/image` and `dd if=/dev/zero of=/tmp/image`, and writes to devices that are not disks, such as `of=/dev/null` or `of=/dev/stdout`.
+The pack denies `dd` writes to recognized disk devices, including `/dev/sda`, `/dev/nvme0n1`, and `/dev/disk2`.
+Supported quoting variations for `of=` also match.
+It allows `dd if=/dev/sda of=/tmp/image` and `dd if=/dev/zero of=/tmp/image`.
+Writes to non-disk devices such as `/dev/null`, `/dev/stdout`, and `/dev/fd/1` also allow.
 
-The other patterns match `mkfs`, `mkfs.*`, and `wipefs`, and `fdisk` and `parted` unless they only list: `fdisk -l`, `parted -l` and `parted /dev/sda print` are allowed, while `fdisk /dev/sdb`, `parted /dev/sdb` and `parted -s /dev/sdb mklabel gpt` are denied.
-It does not see a write to a device through other tools, such as `cat disk.img > /dev/disk2` or `diskutil eraseDisk`.
+The pack denies `mkfs`, `mkfs.*`, and `wipefs`, including inspection forms.
+It allows `fdisk -l`, `parted -l`, and `parted /dev/sda print` with or without Bash metadata.
+It denies interactive device operations such as `fdisk /dev/sda` and `parted /dev/sda`.
+Mutations such as `parted -s /dev/sda mklabel gpt` also deny.
+When parsing completes, additional `fdisk` list options allow: `-x`/`--list-details` and `-F`/`--list-free`.
+An option value does not count as a flag: parsed `fdisk --output -l /dev/sda` still denies.
+
+Other device-writing tools, such as `cat disk.img > /dev/disk2` or `diskutil eraseDisk`, are outside this pack's checks.
 Do not rely on this pack as a complete disk-access policy.
 
 ### High-risk prompt triage
@@ -148,14 +157,62 @@ It allows health-policy text, local file writes, and outbound calls without thos
 
 ## Enforcement limits
 
-Prompt and shell rules match text with regular expressions.
-Shell commands are split and unquoted the way the shell reads them, but nothing is run: variables are not expanded, aliases are not followed, and executable payloads are not decoded.
-Commands hidden inside scripts or other programs can pass.
+### Runtime parser for stock command packs
 
-Shell matching recognizes `Bash`, `shell`, `run_terminal_cmd`, `execute_command`, `run_command`, `terminal`, `powershell`, `pwsh`, `exec_command`, `local_shell`, `run_shell_command`, and `run_in_terminal`, ignoring case.
-It reads every nonempty string or string array under the `command`, `cmd`, and `script` arguments.
-An array is joined with each argument quoted the way the shell would read it, so `["bash","-lc","git reset --hard"]` keeps bash's script as one word, and it is also judged joined with plain spaces, as earlier versions judged it.
-A shell call with no readable command key is judged by the string values in its arguments, and arguments that are not JSON by their text.
+Only unmodified Git safety, Destructive commands, Permissions, and Disk wipe packs support Bash parsing.
+Pack enablement does not change this; editing any other field disables parsing for that rule.
+Saved rules stay unchanged. Edited packs, custom regex rules, and older binaries use regex matching.
+
+Current coding-agent integrations omit shell metadata and still use lexer-based regex matching.
+Parsing requires separate host metadata identifying the final command as Bash after any host rewrites.
+The tool must be named exactly `Bash` or `bash`, with a string `command` argument.
+Metadata cannot activate parsing for generic tool names such as `shell`, `exec_command`, or `local_shell`.
+A tool name, agent identity, or shell setting inside tool arguments is not enough.
+
+The parser never executes shell input.
+It handles supported static `env`, `sudo`, `command`, and `exec` wrappers, plus literal `bash`/`sh`/`dash` `-c` payloads.
+It checks literal heredocs passed to those shells, command substitutions, and process substitutions, including substitutions in expanding heredocs.
+When analysis completes, plain quoted mentions and data heredocs do not count as commands.
+For example, `echo 'rm -rf /'` and a literal `cat` heredoc allow; `echo "$(rm -rf /)"` denies.
+The parser does not resolve commands at runtime, expand aliases, inspect Python or other interpreter payloads, or read script files.
+It cannot guarantee that arbitrary shell input is safe.
+
+Parser limits are 64 KiB of cumulative source, 8192 syntax tree nodes, and four nested shell payloads.
+Missing or unsupported metadata, unsupported syntax or executors, unresolved policy arguments, invalid syntax, or exceeded parser limits trigger regex fallback.
+Separately, a shell command longer than 64 KiB fails a shell rule, so stock packs deny it with or without metadata.
+Carriage return (CR) and NUL characters also trigger fallback.
+Any parser-detected denial still applies; otherwise the regex result decides.
+
+Git configuration overrides (`-c`, `--config-env`, or explicit `GIT_CONFIG_*` assignments) trigger fallback because they can select programs to execute.
+Explicit `GIT_SSH` and `GIT_SSH_COMMAND` assignments also trigger fallback.
+Even harmless configuration overrides use regex matching; their values are not interpreted.
+
+Secondary Bash evaluation contexts, such as prompt expansion, arithmetic array references, and indirect expansion, can also trigger fallback.
+Quoted payloads in those contexts or Git configuration can pass the lexer-based fallback despite executing dangerous commands at runtime.
+
+Evaluation explanations report why analysis was incomplete, including in offline `--json` output.
+Fallback can miss dangerous commands or block harmless text. Incomplete analysis alone does not deny a call.
+
+### Lexer-based regex matching
+
+The default and fallback paths use a shell lexer before applying regex patterns; they are not Bash syntax-tree analysis.
+The lexer splits command boundaries, removes shell quoting and backslashes, decodes `$'...'` escapes, and drops redirections such as `2>&1`.
+Stock patterns distinguish quoted data from commands: quoted `echo` arguments, comments, and ordinary heredoc bodies mentioning blocked commands generally allow.
+Unquoted command names in arguments can still match: `echo rm -rf /` denies.
+Matching command names after unquoted separators also catches wrappers such as `sudo`, `ssh host`, and `docker exec c`.
+
+The lexer reads literal code in substitutions and shell `-c` arguments.
+It also reads payloads for `su -c`, `env -S`, `script -c`, `eval`, `watch`, `trap`, and `find -exec`.
+It reads heredocs supplied directly to shells and substitutions in expanding heredocs, but not data piped into a shell.
+Nested code is read three levels deep; code at the last level is matched as written.
+The lexer does not expand variables, follow aliases, read script files, or inspect arbitrary interpreter payloads.
+Custom regexes also receive original command text and can match quoted mentions that stock patterns ignore.
+
+Shell matching recognizes these tool names, ignoring case:
+`Bash`, `shell`, `run_terminal_cmd`, `execute_command`, `run_command`, `terminal`, `powershell`, `pwsh`, `exec_command`, `local_shell`, `run_shell_command`, and `run_in_terminal`.
+It reads every nonempty string or string array under `command`, `cmd`, and `script`, including nested keys such as `local_shell`'s `action.command`.
+Arrays preserve argument boundaries through shell quoting; top-level arrays also retain plain-space joining for compatibility.
+Without readable command keys, matching uses string values from the arguments; non-JSON arguments are matched as text.
 Recognizing a PowerShell tool does not add patterns for every PowerShell command.
 Unknown tools or argument shapes can pass without a shell or egress check.
 
@@ -208,6 +265,20 @@ The dry run contacts no endpoints, starts no daemon, and writes no files.
 It evaluates the saved rules even if host guards are disabled.
 A successful deny proves the local rule matched the synthetic request; it does not prove your running agent sends guard requests.
 
+Tests use regex matching by default, even with the default tool name `Bash`.
+Add `--shell bash` to test Bash parsing. Only `bash` is supported; `--tool` must remain `Bash` or `bash`.
+The flag does not change `--tool` or verify the host shell.
+Compare results with and without parsing:
+
+```sh
+agento11y guards test --json 'git clean -n -f'
+agento11y guards test --shell bash --json 'git clean -n -f'
+```
+
+With Git safety alone, the default test denies separate flags; the parsed test allows this dry run.
+Both paths allow the clustered form `git clean -nf`.
+Check JSON evaluation explanations even when verdicts agree: they identify incomplete analysis and fallback.
+
 Exit codes are `0` for allow, `1` for deny, and `2` for an input, file, compilation, or evaluation error.
 For flags, JSON output, and synthetic-request limitations, refer to [Test local guards offline](../plugins/agento11y/README.md#test-local-guards-offline).
 Use fake values for redaction tests: output can include the original command and rewritten arguments.
@@ -241,7 +312,7 @@ action_on_fail = "deny"
 | `action_on_fail` | What happens when a check fails: `deny` blocks, `warn` records the failure and continues, and `allow` ends local evaluation without running later rules. Defaults to `deny`. |
 | `evaluators` | Checks attached to this rule. Each `[[rules.evaluators]]` starts another check. |
 | `kind` | Evaluator type. `regex` runs locally; Cloud-only kinds do not. |
-| `config.target` | Text to inspect. `shell_command` judges the command of each call to a recognized shell tool (`bash`, `shell`, `run_terminal_cmd`, `execute_command`, `run_command`, `terminal`, `powershell`, `pwsh`, `exec_command`, `local_shell`, `run_shell_command`, `run_in_terminal`, in any letter case) after joining backslash-newlines: the command as written, the command with its quotes removed, and each simple command in it, split where the shell splits commands, with quoted text and heredoc bodies kept as data and the code in `$(...)`, backticks, `sh -c`, `eval`, `trap`, `find -exec` and a heredoc fed to a shell read as commands, each also from its name on, without assignments, wrappers and redirections. A check matches if any of them matches. A command longer than 64 KiB fails the check. |
+| `config.target` | Text to inspect. `shell_command` selects arguments from recognized shell tools, including original text and lexer-derived commands. See [Lexer-based regex matching](#lexer-based-regex-matching). Commands longer than 64 KiB fail the check. |
 | `config.reject` | With `true`, any pattern match fails the check. With `false` (the default), no match fails the check. |
 | `config.patterns` | List of Go regular expressions. TOML single-quoted strings preserve backslashes. `(?i)` makes this example case-insensitive. |
 
