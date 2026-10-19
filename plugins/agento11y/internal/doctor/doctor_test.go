@@ -537,6 +537,45 @@ func TestTenantOnlyConversationsAreProbed(t *testing.T) {
 	}
 }
 
+func TestCollectTenantOnlyCredentialsByInstalledAgent(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		agents     []AgentStatus
+		wantHealth Health
+		wantExit   int
+		wantAgent  string
+	}{
+		{name: "Codex only", agents: []AgentStatus{{Name: "codex", Install: InstallStateInstalled}}, wantHealth: HealthOK},
+		{name: "Cursor installed", agents: []AgentStatus{{Name: "codex", Install: InstallStateInstalled}, {Name: "cursor", Install: InstallStateInstalled}}, wantHealth: HealthError, wantExit: 1, wantAgent: "cursor"},
+		{name: "Copilot installed", agents: []AgentStatus{{Name: "copilot", Install: InstallStateInstalled}}, wantHealth: HealthError, wantExit: 1, wantAgent: "copilot"},
+		{name: "Cursor not installed", agents: []AgentStatus{{Name: "codex", Install: InstallStateInstalled}, {Name: "cursor", Install: InstallStateNotInstalled}}, wantHealth: HealthOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateEnv(t)
+			stubSeams(t)
+			collectAgents = func(context.Context, string) []AgentStatus { return tc.agents }
+			probeOTLPFn = func(context.Context, envValue) *AnalyticsProbe {
+				return &AnalyticsProbe{Metrics: &ProbeResult{StatusCode: 200, OK: true}, Traces: &ProbeResult{StatusCode: 200, OK: true}}
+			}
+			r := Collect(context.Background(), Options{RequireCloud: true}, Params{OSEnv: map[string]string{
+				"AGENTO11Y_ENDPOINT":                    "https://x",
+				"AGENTO11Y_AUTH_TENANT_ID":              "tenant",
+				"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": "https://otlp.example",
+				"OTEL_EXPORTER_OTLP_HEADERS":            "Authorization=Bearer test",
+			}})
+			if r.Conversations.Health != tc.wantHealth || r.Conversations.Probe == nil {
+				t.Fatalf("conversations = %+v, want health %q and probe", r.Conversations, tc.wantHealth)
+			}
+			if got := r.exitCodeFor(Options{RequireCloud: true}); got != tc.wantExit {
+				t.Fatalf("strict Cloud exit = %d, want %d", got, tc.wantExit)
+			}
+			if tc.wantAgent != "" && !strings.Contains(strings.Join(r.Conversations.Messages, " "), tc.wantAgent) {
+				t.Fatalf("messages %v do not name %s", r.Conversations.Messages, tc.wantAgent)
+			}
+		})
+	}
+}
+
 // TestRenderHuman_RowNamesOnlyTheWinningSpelling walks the whole path from the
 // snapshot to the rendered row. A row that named the losing spelling would send
 // a user to edit a value the binary never reads.

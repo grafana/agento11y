@@ -237,7 +237,16 @@ func Stop(p Payload, cfg config.Config, logger *log.Logger) {
 	client := buildClient(cfg, frag.Cwd, userID, providers, logger)
 	defer func() { _ = client.Shutdown(ctx) }()
 
-	mapped := mapper.Map(mapper.Inputs{Fragment: frag, SubagentLink: subagentLink, TokenSnapshot: tokenSnapshot, ContentCapture: cfg.ContentCapture, AgentName: cfg.Agent(), SkipPromptRedaction: cfg.SkipPromptRedaction, UserID: userID})
+	mapped := mapper.Map(mapper.Inputs{
+		Fragment:            frag,
+		SubagentLink:        subagentLink,
+		ParentTitle:         parentTitleForLink(subagentLink, logger),
+		TokenSnapshot:       tokenSnapshot,
+		ContentCapture:      cfg.ContentCapture,
+		AgentName:           cfg.Agent(),
+		SkipPromptRedaction: cfg.SkipPromptRedaction,
+		UserID:              userID,
+	})
 	logger.Printf("stop: export id=%s conversation=%s agent=%s model=%s", mapped.Generation.ID, mapped.Generation.ConversationID, mapped.Generation.AgentName, mapped.Generation.Model.Name)
 	if err := emitGeneration(ctx, client, frag, mapped, cfg.ContentCapture, logger); err != nil {
 		logger.Printf("stop: emit: %v", err)
@@ -325,6 +334,7 @@ func sweepPendingRetries(ctx context.Context, client *agento11y.Client, cfg conf
 		mapped := mapper.Map(mapper.Inputs{
 			Fragment:            f,
 			SubagentLink:        subagentLink,
+			ParentTitle:         parentTitleForLink(subagentLink, logger),
 			TokenSnapshot:       tokenSnapshot,
 			ContentCapture:      cfg.ContentCapture,
 			SkipPromptRedaction: cfg.SkipPromptRedaction,
@@ -442,6 +452,17 @@ func resolveSubagentLinkForStop(p Payload, frag *fragment.Fragment, logger *log.
 		return link
 	}
 	return fragment.LoadSubagentLinkTolerant(p.SessionID, logger)
+}
+
+func parentTitleForLink(link *fragment.SubagentLink, logger *log.Logger) string {
+	if link == nil || link.ParentGenerationID == "" {
+		return ""
+	}
+	parent := fragment.LoadSessionTolerant(link.ParentSessionID, logger)
+	if parent == nil {
+		return ""
+	}
+	return parent.ConversationTitle
 }
 
 func updateCommon(p Payload, logger *log.Logger, mutate func(f *fragment.Fragment)) error {

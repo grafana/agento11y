@@ -32,6 +32,7 @@ const (
 type Inputs struct {
 	Fragment       *fragment.Fragment
 	SubagentLink   *fragment.SubagentLink
+	ParentTitle    string
 	TokenSnapshot  *codexlog.TokenSnapshot
 	ContentCapture agento11y.ContentCaptureMode
 	// AgentName overrides the exported agent identity. Blank means "codex".
@@ -94,6 +95,12 @@ func Map(in Inputs) Mapped {
 	tags["codex.stop_hook_active"] = strconv.FormatBool(frag.StopHookActive)
 	conversationID, agentName, parentIDs, metadata := linkFields(frag, in.SubagentLink, tags, in.agent())
 	title := conversationTitle(frag, conversationID)
+	if len(parentIDs) > 0 {
+		title = strings.TrimSpace(in.ParentTitle)
+		if title == "" {
+			title = conversationID
+		}
+	}
 
 	tools := buildToolDefinitions(frag.Tools)
 	input, output := buildMessages(frag, payloadMode, in.RawContent, in.SkipPromptRedaction)

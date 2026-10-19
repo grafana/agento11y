@@ -336,6 +336,14 @@ func (c *codexImporter) Turns(ctx context.Context, sess SessionPreview) iter.Seq
 			toolNames: map[string]string{},
 			yield:     yield,
 		}
+		if link != nil && link.ParentGenerationID != "" {
+			if parentPath, ok := c.findSessionPath(ctx, link.ParentSessionID); ok {
+				r.title = c.parentIndex(parentPath).title
+			}
+			if r.title == "" {
+				r.title = link.ParentSessionID
+			}
+		}
 		err := codexlog.ScanRecords(sess.SourcePath, codexlog.ImportScanOptions(), func(rec codexlog.Record) (bool, error) {
 			if err := ctx.Err(); err != nil {
 				return true, err
@@ -833,6 +841,7 @@ type codexSpawn struct {
 // otherwise scanned ten times.
 type codexParent struct {
 	spawns map[string]codexSpawn // by child session ID
+	title  string
 }
 
 func (c *codexImporter) parentIndex(path string) codexParent {
@@ -860,6 +869,7 @@ func codexScanParent(path string) codexParent {
 		segments      codexSegmenter
 		emitted       int
 		sessionID     string
+		title         string
 		open          = map[string]codexSpawn{} // spawn calls in the open segment
 		calls         = map[string]codexSpawn{} // spawn calls in closed segments
 		childByCallID = map[string]string{}
@@ -890,10 +900,20 @@ func codexScanParent(path string) codexParent {
 			if meta, ok := codexlog.ParseSessionMeta(rec.Payload); ok && meta.SessionID != "" {
 				sessionID = meta.SessionID
 			}
+		case "event_msg":
+			if title == "" {
+				msg := codexlog.ParseEventMsg(rec.Payload)
+				if msg.Type == "user_message" {
+					title = codexTitleFromText(msg.Message)
+				}
+			}
 		case "response_item":
 			item, ok := codexlog.ParseResponseItem(rec.Payload)
 			if !ok {
 				break
+			}
+			if title == "" && item.Type == "message" && item.Role == "user" {
+				title = codexTitleFromText(codexlog.MessageText(item.Content))
 			}
 			callID := strings.TrimSpace(item.CallID)
 			switch {
@@ -922,7 +942,7 @@ func codexScanParent(path string) codexParent {
 	_, sourceID, _ := segments.current()
 	closeSegment(segments.flush(), sourceID)
 
-	parent := codexParent{spawns: map[string]codexSpawn{}}
+	parent := codexParent{spawns: map[string]codexSpawn{}, title: title}
 	for callID, childID := range childByCallID {
 		spawn, ok := calls[callID]
 		if !ok {

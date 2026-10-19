@@ -156,7 +156,7 @@ func TestSessionTitleRedactsBeforeCut(t *testing.T) {
 	if got := SessionTitle("  run\nthe tests  "); got != "run the tests" {
 		t.Fatalf("SessionTitle = %q, want collapsed prompt", got)
 	}
-	const secret = "glc_abcdefghijklmnopqrstuvwxyz0123456789"
+	const secret = "glc_abcdefghijklmnopqrstuvwxyz0123456789" // trufflehog:ignore
 	got := SessionTitle("prefix " + secret + " suffix")
 	if strings.Contains(got, secret) || !strings.Contains(got, "[REDACTED:") {
 		t.Fatalf("SessionTitle = %q, want the token redacted", got)

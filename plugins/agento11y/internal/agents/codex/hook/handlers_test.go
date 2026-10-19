@@ -569,7 +569,7 @@ func TestStopExportsConversationTitleFromFirstPrompt(t *testing.T) {
 	t.Setenv("SIGIL_AUTH_TOKEN", "token")
 	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeFull}
 
-	const secret = "glc_abcdefghijklmnopqrstuvwxyz0123456789"
+	const secret = "glc_abcdefghijklmnopqrstuvwxyz0123456789" // trufflehog:ignore
 	UserPromptSubmit(context.Background(), io.Discard, Payload{
 		HookEventName: "UserPromptSubmit",
 		SessionID:     "sess",
@@ -803,6 +803,12 @@ func TestStopRetrySweepPreservesSubagentLinkAndTokenUsage(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed subagent link: %v", err)
 	}
+	if err := fragment.UpdateSession("parent", logger, func(s *fragment.Session) bool {
+		s.ConversationTitle = "parent task"
+		return true
+	}); err != nil {
+		t.Fatalf("seed parent title: %v", err)
+	}
 
 	// Plant a prior-turn fragment marked PendingRetry, with a transcript
 	// containing token usage for that turn. The retry sweep must pick up
@@ -829,7 +835,7 @@ func TestStopRetrySweepPreservesSubagentLinkAndTokenUsage(t *testing.T) {
 		t.Fatalf("seed new turn: %v", err)
 	}
 
-	Stop(Payload{HookEventName: "Stop", SessionID: "child", TurnID: "new-turn"}, config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}, logger)
+	Stop(Payload{HookEventName: "Stop", SessionID: "child", TurnID: "new-turn"}, config.Config{ContentCapture: agento11y.ContentCaptureModeFull}, logger)
 
 	type exportedGen struct {
 		ID                  string         `json:"id"`
@@ -865,6 +871,9 @@ func TestStopRetrySweepPreservesSubagentLinkAndTokenUsage(t *testing.T) {
 	}
 	if retried.ConversationID != "parent" {
 		t.Errorf("retry ConversationID = %q, want %q", retried.ConversationID, "parent")
+	}
+	if got := retried.Metadata["agento11y.conversation.title"]; got != "parent task" {
+		t.Errorf("retry conversation title = %q, want parent task; metadata=%v", got, retried.Metadata)
 	}
 	if len(retried.ParentGenerationIDs) != 1 || retried.ParentGenerationIDs[0] != parentGenerationID {
 		t.Errorf("retry ParentGenerationIDs = %v, want [%s]", retried.ParentGenerationIDs, parentGenerationID)

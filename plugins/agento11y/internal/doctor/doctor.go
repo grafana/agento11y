@@ -582,6 +582,19 @@ func Collect(ctx context.Context, opts Options, p Params) *Report {
 	r.AutoUpdateDisabled = updatecheck.Disabled()
 
 	runProbes(ctx, r, osEnv, fileEnv)
+	if r.Conversations.configured() && !r.Conversations.Token.Set {
+		var needsToken []string
+		for _, agent := range r.Agents {
+			if agent.Install == InstallStateInstalled && agent.Name != "codex" {
+				needsToken = append(needsToken, agent.Name)
+			}
+		}
+		if len(needsToken) > 0 {
+			r.Conversations.Health = HealthError
+			r.Conversations.Messages = append(r.Conversations.Messages,
+				"AGENTO11Y_AUTH_TOKEN is required by installed agents: "+strings.Join(needsToken, ", "))
+		}
+	}
 	return r
 }
 

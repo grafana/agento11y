@@ -356,6 +356,7 @@ func TestMapResolvedSubagentLink(t *testing.T) {
 		SessionID: "child",
 		TurnID:    "child-turn",
 		Model:     "gpt-5.5",
+		Prompt:    "child task",
 	}
 	link := &fragment.SubagentLink{
 		ChildSessionID:     "child",
@@ -369,13 +370,20 @@ func TestMapResolvedSubagentLink(t *testing.T) {
 		Source:             "transcript.session_meta",
 	}
 
-	got := Map(Inputs{Fragment: f, SubagentLink: link, ContentCapture: agento11y.ContentCaptureModeMetadataOnly, Now: time.Unix(1, 0)})
+	got := Map(Inputs{Fragment: f, SubagentLink: link, ParentTitle: "parent task", ContentCapture: agento11y.ContentCaptureModeMetadataOnly, Now: time.Unix(1, 0)})
 
 	if got.Generation.AgentName != SubagentAgentName || got.Start.AgentName != SubagentAgentName {
 		t.Fatalf("AgentName = %q/%q, want %q", got.Start.AgentName, got.Generation.AgentName, SubagentAgentName)
 	}
 	if got.Generation.ConversationID != "parent" || got.Start.ConversationID != "parent" {
 		t.Fatalf("ConversationID = %q/%q, want parent", got.Start.ConversationID, got.Generation.ConversationID)
+	}
+	if got.Generation.ConversationTitle != "parent task" || got.Start.ConversationTitle != "parent task" {
+		t.Fatalf("ConversationTitle = %q/%q, want parent task", got.Start.ConversationTitle, got.Generation.ConversationTitle)
+	}
+	missingParentTitle := Map(Inputs{Fragment: f, SubagentLink: link, ContentCapture: agento11y.ContentCaptureModeMetadataOnly, Now: time.Unix(1, 0)})
+	if missingParentTitle.Generation.ConversationTitle != "parent" {
+		t.Fatalf("ConversationTitle = %q, want parent ID when its title is unavailable", missingParentTitle.Generation.ConversationTitle)
 	}
 	if len(got.Generation.ParentGenerationIDs) != 1 || got.Generation.ParentGenerationIDs[0] != "parent-gen" {
 		t.Fatalf("ParentGenerationIDs = %+v, want parent-gen", got.Generation.ParentGenerationIDs)
@@ -401,6 +409,7 @@ func TestMapPartialSubagentLink(t *testing.T) {
 		SessionID: "child",
 		TurnID:    "child-turn",
 		Model:     "gpt-5.5",
+		Prompt:    "child task",
 	}
 	link := &fragment.SubagentLink{
 		ChildSessionID:  "child",
@@ -408,13 +417,16 @@ func TestMapPartialSubagentLink(t *testing.T) {
 		AgentRole:       "default",
 	}
 
-	got := Map(Inputs{Fragment: f, SubagentLink: link, ContentCapture: agento11y.ContentCaptureModeMetadataOnly, Now: time.Unix(1, 0)})
+	got := Map(Inputs{Fragment: f, SubagentLink: link, ParentTitle: "parent task", ContentCapture: agento11y.ContentCaptureModeMetadataOnly, Now: time.Unix(1, 0)})
 
 	if got.Generation.AgentName != SubagentAgentName {
 		t.Fatalf("AgentName = %q, want %q", got.Generation.AgentName, SubagentAgentName)
 	}
 	if got.Generation.ConversationID != "child" {
 		t.Fatalf("ConversationID = %q, want child for partial link", got.Generation.ConversationID)
+	}
+	if got.Generation.ConversationTitle != "child task" {
+		t.Fatalf("ConversationTitle = %q, want child task for partial link", got.Generation.ConversationTitle)
 	}
 	if got.Generation.ParentGenerationIDs != nil {
 		t.Fatalf("ParentGenerationIDs = %+v, want nil", got.Generation.ParentGenerationIDs)
