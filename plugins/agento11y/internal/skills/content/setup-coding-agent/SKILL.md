@@ -89,16 +89,22 @@ Pick one method that matches the platform and how the user installs other tools.
 curl -fsSL https://raw.githubusercontent.com/grafana/agento11y/main/plugins/agento11y/scripts/install.sh | sh
 ```
 
-The script downloads the latest release for the OS and architecture to `~/.local/bin`. It verifies the SHA-256 when `sha256sum` or `shasum` is available; otherwise it warns and continues.
+The Unix script downloads the latest release for the OS and architecture to `~/.local/bin`. It verifies the SHA-256 when `sha256sum` or `shasum` is available; otherwise it warns and continues.
 Re-run it to upgrade. `INSTALL_DIR` changes the directory and `VERSION` pins a release.
 
-**Homebrew (macOS):**
+**Quick install (Windows PowerShell 5.1 or PowerShell 7):**
 
-```sh
-brew install grafana/grafana/agento11y
+```powershell
+irm https://raw.githubusercontent.com/grafana/agento11y/main/plugins/agento11y/scripts/install.ps1 | iex
 ```
 
-Upgrade with `brew upgrade grafana/grafana/agento11y`.
+The Windows script downloads the native x64 or ARM64 ZIP and verifies its SHA-256 checksum.
+It installs only `agento11y.exe` under `%LOCALAPPDATA%\agento11y\bin` for the current user and adds that directory to the session and persistent user `PATH`.
+No administrator rights or Go installation are needed. Execution policy stays unchanged. Re-run the command to upgrade.
+For overrides, set `VERSION` and `INSTALL_DIR` before running the command, or pass `-Version` and `-InstallDir` to a downloaded copy of the script. Versions accept a leading `v`.
+See the [shared installation guide](https://github.com/grafana/agento11y/blob/main/plugins/agento11y/README.md#install) to download and inspect the script before running it.
+
+**Homebrew (macOS):** `brew install grafana/grafana/agento11y`. Upgrade with `brew upgrade grafana/grafana/agento11y`.
 
 **mise:** `mise use -g aqua:grafana/agento11y@latest` (requires [mise shell activation](https://mise.jdx.dev/cli/activate.html) so `agento11y` is on `PATH`).
 
@@ -108,21 +114,12 @@ Upgrade with `brew upgrade grafana/grafana/agento11y`.
 go install github.com/grafana/agento11y/plugins/agento11y/cmd/agento11y@latest
 ```
 
-This writes to `go env GOPATH`/bin, or `GOBIN` when set. On Windows the other
-option is the `windows_amd64` or `windows_arm64` zip from the releases page:
-extract `agento11y.exe` and put it on `PATH`.
+`go install` writes to `go env GOPATH`/bin, or `GOBIN` when set. Put the Unix or Go install directory on `PATH`. Verify any install with `agento11y --version`.
 
-Whichever method you use, the install directory has to be on `PATH`. Check the
-result:
+If corporate policy blocks scripts, download the `windows_amd64` or `windows_arm64` ZIP from the [releases page](https://github.com/grafana/agento11y/releases).
+Verify its SHA-256 against the release checksum file, extract `agento11y.exe`, and put it on `PATH`.
 
-```sh
-agento11y --version
-```
-
-The command was renamed from `sigil`. The quick installer and Homebrew also
-install a `sigil` alias. `go install` installs only the binary you name. The old
-name will be removed in a future release, so do not write new instructions
-against `sigil`.
+The command was renamed from `sigil`. The Unix quick installer and Homebrew add that alias; the Windows installer does not. `go install` installs only the binary you name. The old name will be removed, so do not write new instructions against `sigil`.
 
 ## Step 3: Choose a destination
 

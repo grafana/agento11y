@@ -19,6 +19,13 @@ curl -fsSL https://raw.githubusercontent.com/grafana/agento11y/main/plugins/agen
 agento11y vibe
 ```
 
+**Quick install (Windows PowerShell 5.1 or PowerShell 7):**
+
+```powershell
+irm https://raw.githubusercontent.com/grafana/agento11y/main/plugins/agento11y/scripts/install.ps1 | iex
+agento11y vibe
+```
+
 **Homebrew (macOS):**
 
 ```sh
@@ -26,14 +33,16 @@ brew install grafana/grafana/agento11y
 agento11y vibe
 ```
 
-**Go install (Windows, or any platform with Go 1.25+):**
+**Go install (any platform with Go 1.25+):**
 
 ```sh
 go install github.com/grafana/agento11y/plugins/agento11y/cmd/agento11y@latest
 agento11y vibe
 ```
 
-The command was renamed from `sigil`; the old name still works but will be removed in a future release.
+The Windows script updates `PATH` and installs only `agento11y.exe`. See the [`agento11y` binary README](../agento11y/README.md#install) for installer options and the manual ZIP fallback.
+
+The command was renamed from `sigil`; the Unix quick installer and Homebrew still add that alias, but it will be removed.
 
 On first run, `agento11y vibe` asks where sessions go, saves the answer to `~/.config/agento11y/config.env`, then resolves the `vibe` binary on `PATH`, upserts the three agento11y-owned `[[hooks]]` entries, and launches Vibe. **Grafana Cloud** asks for the credentials below. **Local only** sets `AGENTO11Y_LOCAL=true` and starts the local receiver for that launch. The question needs macOS or Linux and a terminal; see [Configure](../agento11y/README.md#configure) for the full rules.
 
