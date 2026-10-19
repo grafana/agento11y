@@ -429,8 +429,8 @@ func applyPackUpdates(existing []guardeval.Rule, updates map[string]bool) ([]gua
 		}
 		enabled[id] = true
 		previous, exists := stored[id]
-		// Disabled duplicates do not replace the definition the engine enforces.
-		if !exists || rule.Enabled == nil || *rule.Enabled || (previous.Enabled != nil && !*previous.Enabled) {
+		// Match the engine: first enabled definition, otherwise first disabled.
+		if !exists || (previous.Enabled != nil && !*previous.Enabled && (rule.Enabled == nil || *rule.Enabled)) {
 			stored[id] = rule
 		}
 	}

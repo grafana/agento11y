@@ -23,6 +23,7 @@ require (
 	golang.org/x/term v0.46.0
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
+	mvdan.cc/sh/v3 v3.14.1
 	// The pure-Go SQLite driver, for the Cursor history importer. The release
 	// binary builds with CGO_ENABLED=0, so a cgo driver cannot be used.
 	modernc.org/sqlite v1.56.0

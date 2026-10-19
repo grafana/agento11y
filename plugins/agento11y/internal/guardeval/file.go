@@ -98,8 +98,8 @@ const rulesFileHeader = "# Local guard rules. Saving from Settings → Local rew
 
 // EncodeRules writes a ruleset as a guards.toml document. Empty input is a
 // comment-only file, which ParseRules reads as an empty ruleset. Every rule is
-// stamped postflight when phase is unset, which is the only phase the local
-// viewer writes.
+// stamped postflight when phase is unset on a new rule. Decoded rules retain
+// their original fields unless the model was edited.
 //
 // Nested fields use dotted keys and inline tables so a save keeps the compact
 // hand-written shape (`tool_filter.blocked_names = [...]`,
@@ -119,10 +119,32 @@ func EncodeRules(rules []Rule) ([]byte, error) {
 			return nil, err
 		}
 	}
-	return []byte(b.String()), nil
+	data := []byte(b.String())
+	// Invalid output would disable every rule when the file is reloaded.
+	if _, err := ParseRules(data); err != nil {
+		return nil, fmt.Errorf("encoded guards.toml: %w", err)
+	}
+	return data, nil
 }
 
 func writeCompactRule(b *strings.Builder, rule Rule) error {
+	if rule.raw != nil {
+		modeled, err := modeledRuleFields(rule)
+		if err != nil {
+			return err
+		}
+		fields := overlayRuleValue(rule.raw, rule.modeled, modeled).(map[string]any)
+		keys := make([]string, 0, len(fields))
+		for key := range fields {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		b.WriteString("[[rules]]\n")
+		for _, key := range keys {
+			writeTomlField(b, []string{key}, fields[key])
+		}
+		return nil
+	}
 	phase := strings.TrimSpace(rule.Phase)
 	if phase == "" {
 		phase = hookPhasePostflight
@@ -138,16 +160,6 @@ func writeCompactRule(b *strings.Builder, rule Rule) error {
 	}
 	if action := strings.TrimSpace(rule.ActionOnFail); action != "" {
 		writeTomlKey(b, "action_on_fail", action)
-	}
-	if len(rule.extra) > 0 {
-		keys := make([]string, 0, len(rule.extra))
-		for key := range rule.extra {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			writeTomlKey(b, key, rule.extra[key])
-		}
 	}
 	if len(rule.Match) > 0 {
 		keys := make([]string, 0, len(rule.Match))
@@ -207,14 +219,22 @@ func writeCompactRule(b *strings.Builder, rule Rule) error {
 		}
 		sort.Strings(keys)
 		for _, key := range keys {
-			writeTomlKey(b, "config."+key, ev.Config[key])
+			writeTomlField(b, []string{"config", key}, ev.Config[key])
 		}
 	}
 	return nil
 }
 
 func writeTomlKey(b *strings.Builder, key string, value any) {
-	b.WriteString(encodeTomlKeyPath(key))
+	writeTomlField(b, strings.Split(key, "."), value)
+}
+
+func writeTomlField(b *strings.Builder, path []string, value any) {
+	parts := make([]string, len(path))
+	for i, part := range path {
+		parts[i] = encodeTomlKeyPart(part)
+	}
+	b.WriteString(strings.Join(parts, "."))
 	b.WriteString(" = ")
 	b.WriteString(encodeTomlValue(value))
 	b.WriteByte('\n')
@@ -229,6 +249,15 @@ func encodeTomlValue(value any) string {
 			return "true"
 		}
 		return "false"
+	case json.Number:
+		number := v.String()
+		if !strings.ContainsAny(number, ".eE") {
+			if _, err := v.Int64(); err != nil {
+				// TOML integers must fit int64, even when JSON spells a float without an exponent.
+				return number + ".0"
+			}
+		}
+		return number
 	case int:
 		return strconv.Itoa(v)
 	case int64:
@@ -286,14 +315,6 @@ func encodeTomlInlineTable(m map[string]any) string {
 	}
 	b.WriteByte('}')
 	return b.String()
-}
-
-func encodeTomlKeyPath(key string) string {
-	parts := strings.Split(key, ".")
-	for i, part := range parts {
-		parts[i] = encodeTomlKeyPart(part)
-	}
-	return strings.Join(parts, ".")
 }
 
 func encodeTomlKeyPart(part string) string {

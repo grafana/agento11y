@@ -127,12 +127,20 @@ func TestFilterRuleIDs(t *testing.T) {
 // TestNewRulesEngine_Compile pins what compiling does to a ruleset: the
 // ordering, the rules it drops, and what it counts as able to act.
 func TestNewRulesEngine_Compile(t *testing.T) {
+	classify := func(fields map[string]any) ShellPolicyProfile {
+		if fields["rule_id"] == "stock" && fields["note"] == nil {
+			return ShellPolicyDestructive
+		}
+		return ""
+	}
 	cases := []struct {
-		name          string
-		rules         []json.RawMessage
-		wantIDs       []string
-		wantRules     int
-		wantEnforcing int
+		name           string
+		rules          []json.RawMessage
+		classify       ShellPolicyClassifier
+		wantIDs        []string
+		wantShellRules []string
+		wantRules      int
+		wantEnforcing  int
 		// wantErrors are fragments every reported problem list must contain.
 		wantErrors []string
 	}{
@@ -237,6 +245,40 @@ func TestNewRulesEngine_Compile(t *testing.T) {
 			wantErrors:    []string{`rule_id "shared" duplicates`},
 		},
 		{
+			name: "stock shell evaluator stays aligned after malformed rules",
+			rules: []json.RawMessage{
+				json.RawMessage(`{"rule_id":42}`),
+				json.RawMessage(`{"rule_id":"stock","evaluators":[{"kind":"regex","config":{"target":"shell_command","pattern":"rm.*-rf","reject":true}}]}`),
+				json.RawMessage(`{"rule_id":"custom","evaluators":[{"kind":"regex","config":{"target":"shell_command","pattern":"rm.*-rf","reject":true}}]}`),
+			},
+			classify: classify, wantIDs: []string{"custom", "stock"}, wantShellRules: []string{"stock"},
+			wantRules: 2, wantEnforcing: 2, wantErrors: []string{"rule[0]"},
+		},
+		{
+			name: "disabled stock rule does not type an enabled custom duplicate",
+			rules: []json.RawMessage{
+				json.RawMessage(`{"rule_id":"stock","enabled":false,"evaluators":[{"kind":"regex","config":{"target":"shell_command","pattern":"rm.*-rf","reject":true}}]}`),
+				json.RawMessage(`{"rule_id":"stock","note":"custom","evaluators":[{"kind":"regex","config":{"target":"shell_command","pattern":"rm.*-rf","reject":true}}]}`),
+			},
+			classify: classify, wantIDs: []string{"stock"}, wantRules: 1, wantEnforcing: 1,
+		},
+		{
+			name: "discarded stock duplicate does not type the selected custom rule",
+			rules: []json.RawMessage{
+				json.RawMessage(`{"rule_id":"stock","note":"custom","evaluators":[{"kind":"regex","config":{"target":"shell_command","pattern":"rm.*-rf","reject":true}}]}`),
+				json.RawMessage(`{"rule_id":"stock","evaluators":[{"kind":"regex","config":{"target":"shell_command","pattern":"rm.*-rf","reject":true}}]}`),
+			},
+			classify: classify, wantIDs: []string{"stock"}, wantRules: 1, wantEnforcing: 1, wantErrors: []string{"duplicates"},
+		},
+		{
+			name: "invalid shell fallback skips only its rule",
+			rules: []json.RawMessage{
+				json.RawMessage(`{"rule_id":"stock","evaluators":[{"kind":"regex","config":{"target":"shell_command","pattern":"(","reject":true}}]}`),
+				json.RawMessage(`{"rule_id":"valid","tool_filter":{"blocked_names":["Bash"]}}`),
+			},
+			classify: classify, wantIDs: []string{"valid"}, wantRules: 1, wantEnforcing: 1, wantErrors: []string{`rule "stock" evaluator[0]`},
+		},
+		{
 			name: "an unknown action_on_fail is reported and still denies",
 			rules: rawRules(t,
 				toolFilterRule("typo", 0, "block", "Bash"),
@@ -251,9 +293,25 @@ func TestNewRulesEngine_Compile(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var logbuf bytes.Buffer
-			engine := NewRulesEngine(tc.rules, log.New(&logbuf, "", 0))
+			logger := log.New(&logbuf, "", 0)
+			var engine *Engine
+			if tc.classify == nil {
+				engine = NewRulesEngine(tc.rules, logger)
+			} else {
+				engine = NewRulesEngineWithShellPolicies(tc.rules, logger, tc.classify)
+			}
 
 			assert.Equal(t, tc.wantIDs, compiledIDs(engine), "compiled rules, in evaluation order")
+			var shellRules []string
+			for _, rule := range engine.rules {
+				for _, evaluator := range rule.evaluators {
+					if _, ok := evaluator.(*shellPolicyEvaluator); ok {
+						shellRules = append(shellRules, rule.id)
+						assert.Equal(t, "regex", evaluator.kind())
+					}
+				}
+			}
+			assert.ElementsMatch(t, tc.wantShellRules, shellRules)
 
 			status := engine.Status()
 			assert.Equal(t, tc.wantRules, status.Rules)

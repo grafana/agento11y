@@ -1418,6 +1418,10 @@ func TestCollectConfig_Guards(t *testing.T) {
 }
 
 func TestCollectConfig_GuardsFile(t *testing.T) {
+	legacy, err := os.ReadFile("../local/testdata/guardpacks/afa354d4.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
 	const oneRule = `
 [[rules]]
 rule_id = "block.rm"
@@ -1425,14 +1429,15 @@ phase = "postflight"
 tool_filter.blocked_names = ["Bash(*rm -rf*)"]
 `
 	tests := []struct {
-		name         string
-		writeConfig  bool
-		guards       string
-		wantExists   bool
-		wantRules    int
-		wantErrorHas string
-		wantMsg      string
-		wantHealth   Health
+		name            string
+		writeConfig     bool
+		guards          string
+		guardsDirectory bool
+		wantExists      bool
+		wantRules       int
+		wantErrorHas    string
+		wantMsg         string
+		wantHealth      Health
 	}{
 		{
 			name:        "missing file is not a problem",
@@ -1446,6 +1451,23 @@ tool_filter.blocked_names = ["Bash(*rm -rf*)"]
 			wantExists:  true,
 			wantRules:   1,
 			wantHealth:  HealthOK,
+		},
+		{
+			name:        "historical packs use production loader",
+			writeConfig: true,
+			guards:      string(legacy),
+			wantExists:  true,
+			wantRules:   6,
+			wantHealth:  HealthOK,
+		},
+		{
+			name:            "read error retains diagnostic",
+			writeConfig:     true,
+			guardsDirectory: true,
+			wantExists:      true,
+			wantErrorHas:    "read ",
+			wantMsg:         "no rules",
+			wantHealth:      HealthWarn,
 		},
 		{
 			name:         "parse error fail-opens the file",
@@ -1480,6 +1502,12 @@ phase = "postflight"
 			}
 			if tc.guards != "" {
 				writeGuards(t, tc.guards)
+			}
+			if tc.guardsDirectory {
+				path := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "agento11y", "guards.toml")
+				if err := os.Mkdir(path, 0o700); err != nil {
+					t.Fatal(err)
+				}
 			}
 
 			sec := collectConfig(nil, nil)

@@ -53,6 +53,7 @@ Changes to pack rules take effect on the daemon's next check without a daemon re
 ## Choose packs
 
 Examples describe each unmodified pack on its own.
+Current coding-agent integrations use regex matching. Offline tests can use Bash parsing; see [Enforcement limits](#enforcement-limits).
 Another pack, a custom rule, or Cloud policy can change the final result.
 Treat an allowed example as a matching limit, not a recommendation to run it.
 
@@ -92,6 +93,9 @@ The pack denies these command forms, including supported option-order and quotin
 - `git branch -D`
 
 It allows `git push --force-with-lease`, `git push --force-if-includes`, and ordinary pushes.
+When parsing completes, the pack allows `git clean` with `-n` or `--dry-run`, even with `-f`.
+An option value does not count: `git clean -e -n -f` denies because `-n` is the exclusion value.
+The parser treats option values and operands after `--` as data, not flags.
 Other commands that rewrite history, such as rebase, are outside this pack's list.
 Git aliases are not expanded.
 
@@ -118,8 +122,10 @@ The pack denies `dd if=/dev/zero of=/dev/sda`, including supported quoting varia
 It allows `dd if=/dev/sda of=/tmp/image`: the output is not a device path.
 It also allows `dd if=/dev/zero of=/tmp/image`.
 
-The other patterns match `mkfs`, `mkfs.*`, `wipefs`, `fdisk`, and `parted` without distinguishing destructive options from inspection options.
-For example, `fdisk -l` matches even though it lists partitions.
+The pack denies `mkfs`, `mkfs.*`, `wipefs`, and `parted`, including inspection forms.
+Regex matching also denies `fdisk -l`.
+When parsing completes, the pack allows `fdisk` list options: `-l`/`--list`, `-x`/`--list-details`, and `-F`/`--list-free`.
+An option value does not count: `fdisk --output -l /dev/sda` still denies.
 Do not rely on this pack as a complete disk-access policy.
 
 ### High-risk prompt triage
@@ -136,12 +142,40 @@ It allows health-policy text, local file writes, and outbound calls without thos
 
 ## Enforcement limits
 
-Prompt and shell rules match text with regular expressions.
-They recognize selected syntax variations, but do not interpret the shell, expand arbitrary variables, follow aliases, or decode executable payloads.
-Quoted text and heredoc bodies can match even when they only describe a command.
-Commands hidden inside scripts or other programs can pass.
+### Runtime parser for stock command packs
 
-Shell matching recognizes `Bash`, `shell`, `run_terminal_cmd`, `execute_command`, `run_command`, `terminal`, `powershell`, and `pwsh`, ignoring case.
+Only unmodified Git safety, Destructive commands, Permissions, and Disk wipe packs support Bash parsing.
+Pack enablement does not change this; editing any other field disables parsing for that rule.
+Saved rules stay unchanged. Edited packs, custom regex rules, and older binaries use regex matching.
+
+Current coding-agent integrations still use regex matching.
+Parsing requires the host to identify the final command as Bash after any host rewrites.
+The tool must be named `Bash` or `bash`, with a string `command` argument.
+A tool name, agent identity, or shell setting inside tool arguments is not enough.
+
+The parser never executes shell input.
+It handles supported static `env`, `sudo`, `command`, and `exec` wrappers, plus literal `bash`/`sh`/`dash` `-c` payloads.
+It checks literal heredocs passed to those shells, command substitutions, and process substitutions, including substitutions in expanding heredocs.
+When analysis completes, plain quoted mentions and data heredocs do not count as commands.
+For example, `echo 'rm -rf /'` and a literal `cat` heredoc allow; `echo "$(rm -rf /)"` denies.
+The parser does not resolve commands at runtime, expand aliases, inspect Python or other interpreter payloads, or read script files.
+It cannot guarantee that arbitrary shell input is safe.
+
+Limits are 64 KiB of cumulative source, 8192 syntax tree nodes, and four nested shell payloads.
+Missing or unsupported metadata, unsupported syntax or executors, unresolved policy arguments, invalid syntax, or exceeded limits trigger regex fallback.
+Carriage return (CR) and NUL characters also trigger fallback.
+Any parser-detected denial still applies; otherwise the regex result decides.
+Git configuration overrides (`-c`, `--config-env`, or explicit `GIT_CONFIG_*` assignments) trigger fallback because they can select programs to execute.
+Explicit `GIT_SSH` and `GIT_SSH_COMMAND` assignments also trigger fallback.
+Even harmless configuration overrides use regex matching; their values are not interpreted.
+Evaluation explanations report why analysis was incomplete, including in offline `--json` output.
+Fallback can miss dangerous commands or block harmless text. Incomplete analysis alone does not deny a call.
+
+### Legacy regex matching
+
+Other regex rules and fallback match text, including harmless quoted mentions and heredoc data.
+They can miss commands hidden inside scripts or other programs.
+Legacy shell matching recognizes `Bash`, `shell`, `run_terminal_cmd`, `execute_command`, `run_command`, `terminal`, `powershell`, and `pwsh`, ignoring case.
 It reads a nonempty string or string array from `command`, `cmd`, or `script` arguments.
 Arrays are joined with spaces without reconstructing quoting, so matching can differ from the tool's interpretation of the arguments.
 Recognizing a PowerShell tool does not add patterns for every PowerShell command.
@@ -195,6 +229,18 @@ Never run a destructive command to prove that a guard works.
 The dry run contacts no endpoints, starts no daemon, and writes no files.
 It evaluates the saved rules even if host guards are disabled.
 A successful deny proves the local rule matched the synthetic request; it does not prove your running agent sends guard requests.
+
+Tests use regex matching by default, even with the default tool name `Bash`.
+Add `--shell bash` to test Bash parsing. Only `bash` is supported; `--tool` must remain `Bash` or `bash`.
+The flag does not change `--tool` or verify the host shell.
+Compare results with and without parsing:
+
+```sh
+agento11y guards test --json 'git clean -nf'
+agento11y guards test --shell bash --json 'git clean -nf'
+```
+
+Check the JSON evaluation explanations for incomplete analysis, which falls back to regex matching.
 
 Exit codes are `0` for allow, `1` for deny, and `2` for an input, file, compilation, or evaluation error.
 For flags, JSON output, and synthetic-request limitations, refer to [Test local guards offline](../plugins/agento11y/README.md#test-local-guards-offline).
