@@ -47,11 +47,10 @@ func ProbeConversations(ctx context.Context, endpoint, tenant, token string, ins
 }
 
 // defaultProbeConversations checks the generation-export endpoint with the
-// same headers a real export sends: HTTP Basic auth (base64(tenant:token))
-// plus the X-Scope-OrgID tenant header, matching the SDK exporter's
-// ExportAuthModeBasic that every agent plugin uses. Using Bearer here would
-// draw a spurious 401 from Grafana Cloud's gateway even with a valid token. It
-// POSTs an empty body so the edge auth layer is exercised (401/403 surface
+// same headers Codex export sends: X-Scope-OrgID, plus HTTP Basic auth when
+// a token is configured. Bearer auth would draw a spurious 401 from Grafana
+// Cloud's gateway even with a valid token. The probe POSTs an empty body so
+// the edge auth layer is exercised (401/403 surface
 // before the empty body is rejected) without creating a real generation.
 // Connectivity and auth failures are returned as results, never as errors that
 // abort the report. insecure mirrors SIGIL_INSECURE so a scheme-less endpoint
@@ -81,13 +80,21 @@ func defaultProbeConversations(ctx context.Context, endpoint string, tenant envV
 	res := doProbe(target, req)
 	switch {
 	case res.credentialsRejected():
-		// Sigil's tenant auth answers 401 for every auth failure on this
-		// endpoint, a missing write scope included, so name the scope here
-		// too — last, because it is the rarest cause.
-		res.Message = credentialsRejectedMessage(tenant) +
-			". A token without the sigil:write scope is rejected the same way"
+		if token == "" {
+			res.Message = "tenant-only credentials rejected: check the tenant id and endpoint"
+		} else {
+			// Sigil's tenant auth answers 401 for every auth failure on this
+			// endpoint, a missing write scope included, so name the scope here
+			// too — last, because it is the rarest cause.
+			res.Message = credentialsRejectedMessage(tenant) +
+				". A token without the sigil:write scope is rejected the same way"
+		}
 	case res.scopeDenied():
-		res.Message = "the token is likely missing the sigil:write scope"
+		if token == "" {
+			res.Message = "tenant-only export denied by the endpoint"
+		} else {
+			res.Message = "the token is likely missing the sigil:write scope"
+		}
 	}
 	return res
 }

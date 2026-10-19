@@ -298,7 +298,7 @@ type ConversationsSection struct {
 }
 
 func (s ConversationsSection) configured() bool {
-	return s.Endpoint.Set && s.TenantID.Set && s.Token.Set
+	return s.Endpoint.Set && s.TenantID.Set
 }
 
 // AnalyticsSection reports the OTLP metrics + traces pipeline.
@@ -692,13 +692,13 @@ func collectConversations(osEnv, fileEnv map[string]string) ConversationsSection
 		TenantID: tenant.envValue(),
 		Token:    token.tokenValue(),
 	}
-	switch boolToInt(endpoint.set) + boolToInt(tenant.set) + boolToInt(token.set) {
-	case 3:
+	switch {
+	case endpoint.set && tenant.set:
 		sec.Health = HealthOK
-	case 0:
+	case !endpoint.set && !tenant.set && !token.set:
 		sec.Health = HealthWarn
 		sec.Messages = append(sec.Messages,
-			"not configured — run `agento11y login` or set AGENTO11Y_ENDPOINT, AGENTO11Y_AUTH_TENANT_ID and AGENTO11Y_AUTH_TOKEN")
+			"not configured — run `agento11y login` or set AGENTO11Y_ENDPOINT and AGENTO11Y_AUTH_TENANT_ID (and AGENTO11Y_AUTH_TOKEN for agents that require it)")
 	default:
 		sec.Health = HealthError
 		var missing []string
@@ -707,9 +707,6 @@ func collectConversations(osEnv, fileEnv map[string]string) ConversationsSection
 		}
 		if !tenant.set {
 			missing = append(missing, "AGENTO11Y_AUTH_TENANT_ID")
-		}
-		if !token.set {
-			missing = append(missing, "AGENTO11Y_AUTH_TOKEN")
 		}
 		sec.Messages = append(sec.Messages, "incomplete credentials; missing "+strings.Join(missing, ", "))
 	}
@@ -1512,11 +1509,4 @@ func normalizeVersion(v string) string {
 		return "dev"
 	}
 	return v
-}
-
-func boolToInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
 }

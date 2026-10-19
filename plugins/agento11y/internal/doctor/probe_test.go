@@ -147,6 +147,35 @@ func TestProbeConversations(t *testing.T) {
 	}
 }
 
+func TestProbeConversationsTenantOnly(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		want   string
+	}{
+		{status: 202},
+		{status: 401, want: "tenant-only credentials rejected"},
+		{status: 403, want: "tenant-only export denied"},
+	} {
+		t.Run(http.StatusText(tc.status), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if got := r.Header.Get("X-Scope-OrgID"); got != probeTenant.Value {
+					t.Errorf("tenant header = %q", got)
+				}
+				if got := r.Header.Get("Authorization"); got != "" {
+					t.Errorf("authorization header = %q, want empty", got)
+				}
+				w.WriteHeader(tc.status)
+			}))
+			defer srv.Close()
+
+			res := defaultProbeConversations(context.Background(), srv.URL, probeTenant, "", false)
+			if res.StatusCode != tc.status || (tc.want != "" && !strings.Contains(res.Message, tc.want)) {
+				t.Fatalf("probe = %+v, want status %d and message %q", res, tc.status, tc.want)
+			}
+		})
+	}
+}
+
 func TestProbeConversations_Timeout(t *testing.T) {
 	prev := probeTimeout
 	t.Cleanup(func() { probeTimeout = prev })

@@ -4,7 +4,7 @@ agento11y doctor v0.22.0
   endpoint:         not set
   tenant id:        not set
   auth token:       not set
-  ! not configured — run `agento11y login` or set AGENTO11Y_ENDPOINT, AGENTO11Y_AUTH_TENANT_ID and AGENTO11Y_AUTH_TOKEN
+  ! not configured — run `agento11y login` or set AGENTO11Y_ENDPOINT and AGENTO11Y_AUTH_TENANT_ID (and AGENTO11Y_AUTH_TOKEN for agents that require it)
 
 ! Analytics (OTLP metrics & traces)
   endpoint:         not set

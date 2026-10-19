@@ -331,10 +331,9 @@ func TestCollectConversations(t *testing.T) {
 			wantMsg:    "not configured",
 		},
 		{
-			name:       "missing token",
+			name:       "tenant-only credentials",
 			osEnv:      map[string]string{"SIGIL_ENDPOINT": "https://x", "SIGIL_AUTH_TENANT_ID": "1"},
-			wantHealth: HealthError,
-			wantMsg:    "AGENTO11Y_AUTH_TOKEN",
+			wantHealth: HealthOK,
 		},
 		{
 			name:       "preferred-only credentials",
@@ -448,9 +447,9 @@ func TestCollectConversations(t *testing.T) {
 		{
 			// The shape heuristic must not turn an error into a warning.
 			name:       "suspicious host does not downgrade a credentials error",
-			osEnv:      map[string]string{"AGENTO11Y_ENDPOINT": "https://mystack.grafana.net", "AGENTO11Y_AUTH_TENANT_ID": "1"},
+			osEnv:      map[string]string{"AGENTO11Y_ENDPOINT": "https://mystack.grafana.net", "AGENTO11Y_AUTH_TOKEN": "glc_t"},
 			wantHealth: HealthError,
-			wantMsg:    "incomplete credentials; missing AGENTO11Y_AUTH_TOKEN",
+			wantMsg:    "incomplete credentials; missing AGENTO11Y_AUTH_TENANT_ID",
 		},
 		{
 			name:       "malformed endpoint error survives the shape check",
@@ -510,6 +509,31 @@ func TestCollectConversationsConflictingTokens(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(sec.Messages, " "), "AGENTO11Y_AUTH_TOKEN") {
 		t.Fatalf("messages %v do not name the selected key", sec.Messages)
+	}
+}
+
+func TestTenantOnlyConversationsAreProbed(t *testing.T) {
+	prev := probeConversationsFn
+	t.Cleanup(func() { probeConversationsFn = prev })
+	called := false
+	probeConversationsFn = func(_ context.Context, endpoint string, tenant envValue, token string, _ bool) *ProbeResult {
+		called = true
+		if endpoint != "https://x" || tenant.Value != "1" || token != "" {
+			t.Fatalf("probe credentials = (%q, %q, %q)", endpoint, tenant.Value, token)
+		}
+		return &ProbeResult{StatusCode: 200, OK: true}
+	}
+	sec := collectConversations(map[string]string{
+		"AGENTO11Y_ENDPOINT":       "https://x",
+		"AGENTO11Y_AUTH_TENANT_ID": "1",
+	}, nil)
+	if !sec.configured() || sec.Health != HealthOK {
+		t.Fatalf("tenant-only section = %+v", sec)
+	}
+	r := &Report{Conversations: sec}
+	runProbes(context.Background(), r, map[string]string{"AGENTO11Y_AUTH_TENANT_ID": "1"}, nil)
+	if !called || r.Conversations.Probe == nil || r.Conversations.Health != HealthOK {
+		t.Fatalf("tenant-only probe result = %+v; called = %v", r.Conversations, called)
 	}
 }
 
