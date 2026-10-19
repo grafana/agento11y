@@ -601,22 +601,30 @@ func TestStopExportsConversationTitleFromFirstPrompt(t *testing.T) {
 }
 
 func TestStopMissingCredentialsDiscardsFragment(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	t.Setenv("SIGIL_ENDPOINT", "")
-	t.Setenv("SIGIL_AUTH_TENANT_ID", "")
-	t.Setenv("SIGIL_AUTH_TOKEN", "")
-	logger := log.New(io.Discard, "", 0)
-	if err := fragment.Update("sess", "turn", logger, func(f *fragment.Fragment) bool {
-		f.Model = "gpt-5.5"
-		return true
-	}); err != nil {
-		t.Fatalf("Update: %v", err)
-	}
-
-	Stop(Payload{HookEventName: "Stop", SessionID: "sess", TurnID: "turn"}, config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}, logger)
-
-	if got := fragment.LoadTolerant("sess", "turn", logger); got != nil {
-		t.Fatalf("expected fragment discarded without credentials, got %+v", got)
+	for _, tc := range []struct {
+		name, endpoint, tenant, mode string
+	}{
+		{name: "missing all"},
+		{name: "basic mode without token", endpoint: "https://example.test", tenant: "tenant", mode: "basic"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			envconfig.PinAliasEnvBlank(t)
+			t.Setenv("SIGIL_ENDPOINT", tc.endpoint)
+			t.Setenv("SIGIL_AUTH_TENANT_ID", tc.tenant)
+			t.Setenv("SIGIL_AUTH_MODE", tc.mode)
+			logger := log.New(io.Discard, "", 0)
+			if err := fragment.Update("sess", "turn", logger, func(f *fragment.Fragment) bool {
+				f.Model = "gpt-5.5"
+				return true
+			}); err != nil {
+				t.Fatalf("Update: %v", err)
+			}
+			Stop(Payload{HookEventName: "Stop", SessionID: "sess", TurnID: "turn"}, config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}, logger)
+			if got := fragment.LoadTolerant("sess", "turn", logger); got != nil {
+				t.Fatalf("expected fragment discarded without credentials, got %+v", got)
+			}
+		})
 	}
 }
 

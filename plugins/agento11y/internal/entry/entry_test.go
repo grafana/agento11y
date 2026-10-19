@@ -1599,17 +1599,22 @@ func TestRun_LauncherSkipsAutoPromptWhenCredsPresent(t *testing.T) {
 
 func TestRun_CodexTenantOnlyCredentialsSkipAutoPrompt(t *testing.T) {
 	for _, tc := range []struct {
+		name           string
 		agent          string
+		authMode       string
 		wantLoginCalls int
 	}{
-		{agent: "codex", wantLoginCalls: 0},
-		{agent: "pi", wantLoginCalls: 1},
+		{name: "Codex automatic tenant auth", agent: "codex"},
+		{name: "Codex explicit basic without token", agent: "codex", authMode: "basic", wantLoginCalls: 1},
+		{name: "Codex explicit tenant auth", agent: "codex", authMode: "tenant"},
+		{name: "Pi requires a token", agent: "pi", wantLoginCalls: 1},
 	} {
-		t.Run(tc.agent, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			isolateDotenvHome(t)
 			t.Setenv("SIGIL_ENDPOINT", "https://sigil.example.com")
 			t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
 			t.Setenv("SIGIL_AUTH_TOKEN", "")
+			t.Setenv("SIGIL_AUTH_MODE", tc.authMode)
 
 			loginCalls := 0
 			withStubLoginRun(t, func(context.Context, login.RunOpts) (login.Result, error) {

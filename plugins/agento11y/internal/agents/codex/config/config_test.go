@@ -127,3 +127,28 @@ func TestConfig_Agent(t *testing.T) {
 		})
 	}
 }
+
+func TestHasCredentialsHonorsAuthMode(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode, token string
+		want              bool
+	}{
+		{name: "automatic tenant auth", want: true},
+		{name: "explicit tenant auth", mode: "tenant", want: true},
+		{name: "basic needs token", mode: "basic"},
+		{name: "bearer needs token", mode: "bearer"},
+		{name: "basic with token", mode: "basic", token: "test-token", want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AGENTO11Y_ENDPOINT", "https://example.test")
+			t.Setenv("AGENTO11Y_AUTH_TENANT_ID", "tenant")
+			t.Setenv("AGENTO11Y_AUTH_TOKEN", tc.token)
+			t.Setenv("AGENTO11Y_AUTH_MODE", tc.mode)
+			t.Setenv("SIGIL_AUTH_TOKEN", "")
+			t.Setenv("SIGIL_AUTH_MODE", "")
+			if got := HasCredentials(); got != tc.want {
+				t.Fatalf("HasCredentials() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

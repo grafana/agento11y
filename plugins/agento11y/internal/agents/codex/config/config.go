@@ -36,9 +36,17 @@ func (c Config) Agent() string {
 	return mapper.AgentName
 }
 
-// HasCredentials reports whether generation export has an endpoint and tenant.
+// HasCredentials reports whether generation export has the credentials for its
+// selected auth mode.
 func HasCredentials() bool {
-	return envconfig.Getenv("ENDPOINT") != "" && envconfig.Getenv("AUTH_TENANT_ID") != ""
+	return envconfig.Getenv("ENDPOINT") != "" && envconfig.Getenv("AUTH_TENANT_ID") != "" &&
+		(envconfig.Getenv("AUTH_TOKEN") != "" || AllowsTenantOnlyAuthMode(envconfig.Getenv("AUTH_MODE")))
+}
+
+// AllowsTenantOnlyAuthMode reports whether Codex can export without a token.
+func AllowsTenantOnlyAuthMode(mode string) bool {
+	mode = strings.TrimSpace(mode)
+	return mode == "" || strings.EqualFold(mode, "tenant")
 }
 
 // FilePath returns the dotenv config path for the consolidated binary.

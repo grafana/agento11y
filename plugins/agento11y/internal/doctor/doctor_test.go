@@ -537,6 +537,24 @@ func TestTenantOnlyConversationsAreProbed(t *testing.T) {
 	}
 }
 
+func TestCollectBasicAuthModeWithoutToken(t *testing.T) {
+	isolateEnv(t)
+	stubSeams(t)
+	t.Setenv("AGENTO11Y_AUTH_MODE", "basic")
+	writeConfig(t, "AGENTO11Y_ENDPOINT=https://x\nAGENTO11Y_AUTH_TENANT_ID=tenant\n")
+	r := Collect(context.Background(), Options{RequireCloud: true}, Params{OSEnv: SnapshotEnv()})
+	if r.Conversations.Health != HealthError || r.Conversations.Probe != nil {
+		t.Fatalf("conversations = %+v, want error without a probe", r.Conversations)
+	}
+	msg := strings.Join(r.Conversations.Messages, " ")
+	if !strings.Contains(msg, "AGENTO11Y_AUTH_MODE=basic") || !strings.Contains(msg, "AGENTO11Y_AUTH_TOKEN") {
+		t.Fatalf("messages = %v, want auth mode and missing token", r.Conversations.Messages)
+	}
+	if got := r.exitCodeFor(Options{RequireCloud: true}); got != 1 {
+		t.Fatalf("strict Cloud exit = %d, want 1", got)
+	}
+}
+
 func TestCollectTenantOnlyCredentialsByInstalledAgent(t *testing.T) {
 	for _, tc := range []struct {
 		name       string

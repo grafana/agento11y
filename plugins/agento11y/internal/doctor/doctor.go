@@ -30,6 +30,7 @@ import (
 	"strings"
 
 	"github.com/grafana/agento11y/go/proto/agento11y/wire"
+	codexconfig "github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/config"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/autotag"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/clihelp"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
@@ -71,6 +72,7 @@ const agentUserPlaceholder = "<depends on the agent>"
 var trackedSuffixes = []string{
 	"ENDPOINT",
 	"INSECURE",
+	"AUTH_MODE",
 	"AUTH_TENANT_ID",
 	"AUTH_TOKEN",
 	"OTEL_EXPORTER_OTLP_ENDPOINT",
@@ -699,6 +701,7 @@ func collectConversations(osEnv, fileEnv map[string]string) ConversationsSection
 	endpoint := resolveFamily("ENDPOINT", osEnv, fileEnv)
 	tenant := resolveFamily("AUTH_TENANT_ID", osEnv, fileEnv)
 	token := resolveFamily("AUTH_TOKEN", osEnv, fileEnv)
+	authMode := resolveFamily("AUTH_MODE", osEnv, fileEnv)
 
 	sec := ConversationsSection{
 		Endpoint: endpoint.envValue(),
@@ -706,6 +709,11 @@ func collectConversations(osEnv, fileEnv map[string]string) ConversationsSection
 		Token:    token.tokenValue(),
 	}
 	switch {
+	case endpoint.set && tenant.set && !token.set && !codexconfig.AllowsTenantOnlyAuthMode(authMode.value):
+		sec.Health = HealthError
+		sec.Messages = append(sec.Messages, fmt.Sprintf(
+			"tenant-only Codex export is incompatible with %s=%s; set AGENTO11Y_AUTH_TOKEN or use AUTH_MODE=tenant",
+			authMode.key, authMode.value))
 	case endpoint.set && tenant.set:
 		sec.Health = HealthOK
 	case !endpoint.set && !tenant.set && !token.set:
