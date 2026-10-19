@@ -55,6 +55,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agentinstall"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex"
+	codexconfig "github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/config"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/copilot"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor"
 	cursorinstall "github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/install"
@@ -487,7 +488,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 		// In --local mode we never prompt: the launcher will inject
 		// placeholder credentials so the SDK proceeds without contacting
 		// Grafana Cloud.
-		if localEnv == nil && !dotenv.HasCredentials() {
+		hasCredentials := dotenv.HasCredentials()
+		if args[0] == "codex" {
+			hasCredentials = codexconfig.HasCredentials()
+		}
+		if localEnv == nil && !hasCredentials {
 			result, err := loginRun(context.Background(), login.RunOpts{
 				Stderr:           stderr,
 				Logger:           logger,

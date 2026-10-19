@@ -42,17 +42,11 @@ type Session struct {
 // MaxTitleLen caps a conversation title in bytes, matching the history importer.
 const MaxTitleLen = 100
 
-// shortcut: scan 64 KiB to keep the prompt hook fast; scan more if long secrets must become titles.
-const titleRedactBytes = 64 << 10
-
 // SessionTitle redacts a prompt, collapses whitespace, and cuts its title.
 func SessionTitle(prompt string) string {
 	head := strings.TrimSpace(prompt)
 	if head == "" {
 		return ""
-	}
-	if len(head) > titleRedactBytes {
-		head = redact.CutTitle(head, titleRedactBytes)
 	}
 	redacted := redact.New().Redact(head)
 	collapsed := strings.Join(strings.Fields(redacted), " ")

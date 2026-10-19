@@ -173,4 +173,8 @@ func TestSessionTitleRedactsBeforeCut(t *testing.T) {
 	if strings.Contains(got, "glc_") {
 		t.Fatalf("SessionTitle = %q, want no secret prefix", got)
 	}
+	privateKey := "[REDACTED:private-key]"
+	if got := SessionTitle(privateKey + "\nwhat is this?"); got != "[REDACTED:private-key] what is this?" {
+		t.Fatalf("SessionTitle = %q, want the full private key redacted", got)
+	}
 }
