@@ -1228,7 +1228,29 @@ func runProbes(ctx context.Context, r *Report, osEnv, fileEnv map[string]string)
 	// and probing would report that fault again.
 	if r.Conversations.configured() && r.Conversations.Health != HealthError {
 		token := resolveFamily("AUTH_TOKEN", osEnv, fileEnv).value
-		res := probeConversationsFn(ctx, r.Conversations.Endpoint.Value, r.Conversations.TenantID, token, resolveInsecure(osEnv, fileEnv))
+		configuredMode := strings.ToLower(resolveFamily("AUTH_MODE", osEnv, fileEnv).value)
+		mode := "basic"
+		mixedAgents := false
+		if token == "" {
+			mode = "tenant"
+		} else {
+			codexInstalled := false
+			otherInstalled := false
+			for _, agent := range r.Agents {
+				if agent.Install == InstallStateInstalled {
+					if agent.Name == "codex" {
+						codexInstalled = true
+					} else {
+						otherInstalled = true
+					}
+				}
+			}
+			if !otherInstalled && (configuredMode == "tenant" || configuredMode == "bearer" || configuredMode == "none") {
+				mode = configuredMode
+			}
+			mixedAgents = codexInstalled && otherInstalled && (configuredMode == "tenant" || configuredMode == "bearer" || configuredMode == "none")
+		}
+		res := probeConversationsFn(ctx, r.Conversations.Endpoint.Value, r.Conversations.TenantID, token, resolveInsecure(osEnv, fileEnv), mode)
 		r.Conversations.Probe = res
 		switch {
 		case res.AuthFailure():
@@ -1261,6 +1283,10 @@ func runProbes(ctx context.Context, r *Report, osEnv, fileEnv map[string]string)
 			}
 			r.Conversations.Messages = append(r.Conversations.Messages,
 				"the conversations endpoint answered "+describeProbe(res)+" instead of HTTP 202; exports may be dropped")
+		}
+		if mixedAgents && r.Conversations.Health == HealthOK {
+			r.Conversations.Health = HealthWarn
+			r.Conversations.Messages = append(r.Conversations.Messages, "Codex uses "+configuredMode+" auth, which this Basic probe did not check")
 		}
 	}
 	if r.Analytics.Endpoint.Set {

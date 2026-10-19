@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"maps"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -63,7 +64,7 @@ func stubSeams(t *testing.T) {
 		collectAgents, probeConversationsFn, probeOTLPFn, receiverSupported = prevAgents, prevConv, prevOTLP, prevReceiverSupported
 	})
 	collectAgents = func(context.Context, string) []AgentStatus { return nil }
-	probeConversationsFn = func(context.Context, string, envValue, string, bool) *ProbeResult {
+	probeConversationsFn = func(context.Context, string, envValue, string, bool, string) *ProbeResult {
 		return &ProbeResult{StatusCode: 200, OK: true}
 	}
 	probeOTLPFn = func(context.Context, envValue) *AnalyticsProbe { return nil }
@@ -181,7 +182,7 @@ func TestRunHelpAndUsageNoEffects(t *testing.T) {
 				t.Fatal("collected report")
 				return false
 			}
-			probeConversationsFn = func(context.Context, string, envValue, string, bool) *ProbeResult {
+			probeConversationsFn = func(context.Context, string, envValue, string, bool, string) *ProbeResult {
 				t.Fatal("probed conversations")
 				return nil
 			}
@@ -516,10 +517,10 @@ func TestTenantOnlyConversationsAreProbed(t *testing.T) {
 	prev := probeConversationsFn
 	t.Cleanup(func() { probeConversationsFn = prev })
 	called := false
-	probeConversationsFn = func(_ context.Context, endpoint string, tenant envValue, token string, _ bool) *ProbeResult {
+	probeConversationsFn = func(_ context.Context, endpoint string, tenant envValue, token string, _ bool, mode string) *ProbeResult {
 		called = true
-		if endpoint != "https://x" || tenant.Value != "1" || token != "" {
-			t.Fatalf("probe credentials = (%q, %q, %q)", endpoint, tenant.Value, token)
+		if endpoint != "https://x" || tenant.Value != "1" || token != "" || mode != "tenant" {
+			t.Fatalf("probe credentials = (%q, %q, %q, %q)", endpoint, tenant.Value, token, mode)
 		}
 		return &ProbeResult{StatusCode: 200, OK: true}
 	}
@@ -534,6 +535,39 @@ func TestTenantOnlyConversationsAreProbed(t *testing.T) {
 	runProbes(context.Background(), r, map[string]string{"AGENTO11Y_AUTH_TENANT_ID": "1"}, nil)
 	if !called || r.Conversations.Probe == nil || r.Conversations.Health != HealthOK {
 		t.Fatalf("tenant-only probe result = %+v; called = %v", r.Conversations, called)
+	}
+}
+
+func TestExplicitCodexAuthModeProbe(t *testing.T) {
+	for _, tc := range []struct {
+		name, wantMode string
+		agents         []AgentStatus
+		wantHealth     Health
+	}{
+		{name: "Codex only", wantMode: "bearer", agents: []AgentStatus{{Name: "codex", Install: InstallStateInstalled}}, wantHealth: HealthOK},
+		{name: "mixed agents", wantMode: "basic", agents: []AgentStatus{{Name: "codex", Install: InstallStateInstalled}, {Name: "cursor", Install: InstallStateInstalled}}, wantHealth: HealthWarn},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prev := probeConversationsFn
+			t.Cleanup(func() { probeConversationsFn = prev })
+			probeConversationsFn = func(_ context.Context, _ string, _ envValue, _ string, _ bool, mode string) *ProbeResult {
+				if mode != tc.wantMode {
+					t.Errorf("probe mode = %q, want %q", mode, tc.wantMode)
+				}
+				return &ProbeResult{StatusCode: http.StatusAccepted, OK: true}
+			}
+			env := map[string]string{"AGENTO11Y_AUTH_TOKEN": "tok", "AGENTO11Y_AUTH_MODE": "bearer"}
+			r := &Report{Conversations: ConversationsSection{
+				Endpoint: envValue{Set: true, Value: "https://example.test"},
+				TenantID: envValue{Set: true, Value: "tenant"},
+				Token:    tokenValue{Set: true},
+				Health:   HealthOK,
+			}, Agents: tc.agents}
+			runProbes(context.Background(), r, env, nil)
+			if r.Conversations.Health != tc.wantHealth {
+				t.Fatalf("conversation health = %q, want %q", r.Conversations.Health, tc.wantHealth)
+			}
+		})
 	}
 }
 
@@ -1021,7 +1055,7 @@ func TestRunProbes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			prevConv, prevOTLP := probeConversationsFn, probeOTLPFn
 			t.Cleanup(func() { probeConversationsFn, probeOTLPFn = prevConv, prevOTLP })
-			probeConversationsFn = func(context.Context, string, envValue, string, bool) *ProbeResult { return tc.conv }
+			probeConversationsFn = func(context.Context, string, envValue, string, bool, string) *ProbeResult { return tc.conv }
 			var gotOTLPTenant envValue
 			probeOTLPFn = func(_ context.Context, tenant envValue) *AnalyticsProbe {
 				gotOTLPTenant = tenant

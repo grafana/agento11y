@@ -536,6 +536,41 @@ func TestTenantOnlyAuthExports(t *testing.T) {
 	assert.Equal(t, "tenant-1", gotTenant)
 }
 
+func TestExplicitAuthModeExports(t *testing.T) {
+	for _, tc := range []struct {
+		mode, wantAuth, wantTenant string
+	}{
+		{mode: "tenant", wantTenant: "tenant-1"},
+		{mode: "bearer", wantAuth: "Bearer test-token"},
+		{mode: "none"},
+	} {
+		t.Run(tc.mode, func(t *testing.T) {
+			envconfig.PinAliasEnvBlank(t)
+			var gotAuth, gotTenant string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotAuth = r.Header.Get("Authorization")
+				gotTenant = r.Header.Get("X-Scope-OrgID")
+				writeAcceptedGenerationResponseFromRequest(t, w, r)
+			}))
+			defer server.Close()
+			t.Setenv("SIGIL_ENDPOINT", server.URL)
+			t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant-1")
+			t.Setenv("SIGIL_AUTH_TOKEN", "test-token")
+			t.Setenv("SIGIL_AUTH_MODE", tc.mode)
+			logger := log.New(io.Discard, "", 0)
+			cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeFull}
+			frag := &fragment.Fragment{SessionID: "sess", TurnID: "turn", Model: "gpt-5.5", Prompt: "hello"}
+			client := buildClient(cfg, "", "", nil, logger)
+			defer func() { _ = client.Shutdown(context.Background()) }()
+			mapped := mapper.Map(mapper.Inputs{Fragment: frag, ContentCapture: cfg.ContentCapture})
+			require.NoError(t, emitGeneration(context.Background(), client, frag, mapped, cfg.ContentCapture, logger))
+			require.NoError(t, client.Flush(context.Background()))
+			assert.Equal(t, tc.wantAuth, gotAuth)
+			assert.Equal(t, tc.wantTenant, gotTenant)
+		})
+	}
+}
+
 func TestStopExportsConversationTitleFromFirstPrompt(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	envconfig.PinAliasEnvBlank(t)

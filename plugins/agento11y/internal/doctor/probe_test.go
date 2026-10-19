@@ -100,7 +100,7 @@ func TestProbeConversations(t *testing.T) {
 			if tc.badURL {
 				url = "://bad"
 			}
-			res := defaultProbeConversations(context.Background(), url, probeTenant, "glc_tok", false)
+			res := defaultProbeConversations(context.Background(), url, probeTenant, "glc_tok", false, "basic")
 
 			if tc.wantErr {
 				if res.StatusCode != 0 || res.Message == "" {
@@ -168,9 +168,36 @@ func TestProbeConversationsTenantOnly(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			res := defaultProbeConversations(context.Background(), srv.URL, probeTenant, "", false)
+			res := defaultProbeConversations(context.Background(), srv.URL, probeTenant, "", false, "tenant")
 			if res.StatusCode != tc.status || (tc.want != "" && !strings.Contains(res.Message, tc.want)) {
 				t.Fatalf("probe = %+v, want status %d and message %q", res, tc.status, tc.want)
+			}
+		})
+	}
+}
+
+func TestProbeConversationsExplicitModes(t *testing.T) {
+	for _, tc := range []struct {
+		mode, wantAuth, wantTenant string
+	}{
+		{mode: "tenant", wantTenant: probeTenant.Value},
+		{mode: "bearer", wantAuth: "Bearer tok"},
+		{mode: "none"},
+	} {
+		t.Run(tc.mode, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if got := r.Header.Get("Authorization"); got != tc.wantAuth {
+					t.Errorf("Authorization = %q, want %q", got, tc.wantAuth)
+				}
+				if got := r.Header.Get("X-Scope-OrgID"); got != tc.wantTenant {
+					t.Errorf("X-Scope-OrgID = %q, want %q", got, tc.wantTenant)
+				}
+				w.WriteHeader(http.StatusAccepted)
+			}))
+			defer srv.Close()
+			res := defaultProbeConversations(context.Background(), srv.URL, probeTenant, "tok", false, tc.mode)
+			if !res.accepted() {
+				t.Fatalf("probe = %+v, want accepted", res)
 			}
 		})
 	}
@@ -187,7 +214,7 @@ func TestProbeConversations_Timeout(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	res := defaultProbeConversations(context.Background(), srv.URL, probeTenant, "tok", false)
+	res := defaultProbeConversations(context.Background(), srv.URL, probeTenant, "tok", false, "basic")
 	if res.StatusCode != 0 || res.Message == "" {
 		t.Fatalf("expected timeout error, got %+v", res)
 	}
@@ -214,7 +241,7 @@ func TestProbeConversations_InsecureScheme(t *testing.T) {
 
 	// srv.Listener.Addr() is a scheme-less host:port; with insecure the probe
 	// must reach it over http.
-	res := defaultProbeConversations(context.Background(), srv.Listener.Addr().String(), probeTenant, "tok", true)
+	res := defaultProbeConversations(context.Background(), srv.Listener.Addr().String(), probeTenant, "tok", true, "basic")
 	if !res.OK || gotScheme != "http" {
 		t.Fatalf("insecure probe = %+v, server scheme %q, want http reach", res, gotScheme)
 	}

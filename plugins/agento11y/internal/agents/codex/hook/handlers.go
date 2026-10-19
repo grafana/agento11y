@@ -539,6 +539,14 @@ func buildClient(cfg config.Config, cwd, userID string, providers *otel.Provider
 func exportAuth() agento11y.AuthConfig {
 	tenant := envconfig.Getenv("AUTH_TENANT_ID")
 	token := envconfig.Getenv("AUTH_TOKEN")
+	switch strings.ToLower(envconfig.Getenv("AUTH_MODE")) {
+	case "tenant":
+		return agento11y.AuthConfig{Mode: agento11y.ExportAuthModeTenant, TenantID: tenant}
+	case "bearer":
+		return agento11y.AuthConfig{Mode: agento11y.ExportAuthModeBearer, BearerToken: token}
+	case "none":
+		return agento11y.AuthConfig{Mode: agento11y.ExportAuthModeNone}
+	}
 	if tenant != "" && token != "" {
 		return agento11y.AuthConfig{
 			Mode:          agento11y.ExportAuthModeBasic,
