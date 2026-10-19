@@ -42,9 +42,16 @@ type Session struct {
 // MaxTitleLen caps a conversation title in bytes, matching the history importer.
 const MaxTitleLen = 100
 
+// Bound redaction work in the blocking userPromptSubmit hook, as Cursor does.
+// shortcut: secrets longer than 64 KiB may be split; history redacts the full prompt.
+const titleRedactBytes = 64 << 10
+
 // SessionTitle redacts a prompt, collapses whitespace, and cuts its title.
 func SessionTitle(prompt string) string {
 	head := strings.TrimSpace(prompt)
+	if len(head) > titleRedactBytes {
+		head = redact.CutTitle(head, titleRedactBytes)
+	}
 	if head == "" {
 		return ""
 	}

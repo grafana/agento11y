@@ -71,7 +71,8 @@ type ClientOptions struct {
 	// AGENTO11Y_TAGS must not appear here: the SDK lets caller tags win over
 	// env tags, and the explicit tag is the one the user asked for.
 	Tags map[string]string
-	// Auth overrides generation-export auth; an empty mode defaults to basic.
+	// Auth overrides generation-export auth; an empty mode defaults to basic
+	// with a token, otherwise tenant.
 	Auth agento11y.AuthConfig
 }
 
@@ -81,6 +82,9 @@ type ClientOptions struct {
 func exportConfig(userAgent string, auth agento11y.AuthConfig) agento11y.GenerationExportConfig {
 	if auth.Mode == "" {
 		auth.Mode = agento11y.ExportAuthModeBasic
+		if auth.BasicPassword == "" && envconfig.Getenv("AUTH_TOKEN") == "" {
+			auth.Mode = agento11y.ExportAuthModeTenant
+		}
 	}
 	export := agento11y.GenerationExportConfig{
 		Protocol: agento11y.GenerationExportProtocolHTTP,

@@ -135,6 +135,7 @@ func TestHasCredentialsHonorsAuthMode(t *testing.T) {
 	}{
 		{name: "automatic tenant auth", want: true},
 		{name: "explicit tenant auth", mode: "tenant", want: true},
+		{name: "none needs no token", mode: "none", want: true},
 		{name: "basic needs token", mode: "basic"},
 		{name: "bearer needs token", mode: "bearer"},
 		{name: "basic with token", mode: "basic", token: "test-token", want: true},

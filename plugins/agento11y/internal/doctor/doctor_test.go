@@ -598,6 +598,10 @@ func TestCollectTenantOnlyCredentialsByInstalledAgent(t *testing.T) {
 		wantAgent  string
 	}{
 		{name: "Codex only", agents: []AgentStatus{{Name: "codex", Install: InstallStateInstalled}}, wantHealth: HealthOK},
+		{name: "OpenCode only", agents: []AgentStatus{{Name: "opencode", Install: InstallStateInstalled}}, wantHealth: HealthOK},
+		{name: "no agents", wantHealth: HealthWarn, wantExit: 1},
+		{name: "agents not installed", agents: []AgentStatus{{Name: "cursor", Install: InstallStateNotInstalled}}, wantHealth: HealthWarn, wantExit: 1},
+		{name: "unknown agent", agents: []AgentStatus{{Name: "codex", Install: InstallStateInstalled}, {Name: "cursor", Install: InstallStateUnknown}}, wantHealth: HealthWarn, wantExit: 1},
 		{name: "Cursor installed", agents: []AgentStatus{{Name: "codex", Install: InstallStateInstalled}, {Name: "cursor", Install: InstallStateInstalled}}, wantHealth: HealthError, wantExit: 1, wantAgent: "cursor"},
 		{name: "Copilot installed", agents: []AgentStatus{{Name: "copilot", Install: InstallStateInstalled}}, wantHealth: HealthError, wantExit: 1, wantAgent: "copilot"},
 		{name: "Cursor not installed", agents: []AgentStatus{{Name: "codex", Install: InstallStateInstalled}, {Name: "cursor", Install: InstallStateNotInstalled}}, wantHealth: HealthOK},
@@ -2594,5 +2598,27 @@ func TestRun(t *testing.T) {
 				tc.check(t, stdout.String())
 			}
 		})
+	}
+}
+
+func TestCollectNoneAuthModeWithoutToken(t *testing.T) {
+	isolateEnv(t)
+	stubSeams(t)
+	collectAgents = func(context.Context, string) []AgentStatus {
+		return []AgentStatus{{Name: "codex", Install: InstallStateInstalled}}
+	}
+	probeConversationsFn = func(_ context.Context, _ string, _ envValue, token string, _ bool, mode string) *ProbeResult {
+		if token != "" || mode != "none" {
+			t.Fatalf("probe auth = (%q, %q), want no token and none", token, mode)
+		}
+		return &ProbeResult{StatusCode: http.StatusAccepted, OK: true}
+	}
+	r := Collect(context.Background(), Options{}, Params{OSEnv: map[string]string{
+		"AGENTO11Y_ENDPOINT":       "https://x",
+		"AGENTO11Y_AUTH_TENANT_ID": "tenant",
+		"AGENTO11Y_AUTH_MODE":      "none",
+	}})
+	if r.Conversations.Health != HealthOK || r.Conversations.Probe == nil {
+		t.Fatalf("conversations = %+v, want healthy none auth", r.Conversations)
 	}
 }

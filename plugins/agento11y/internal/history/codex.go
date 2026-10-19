@@ -900,6 +900,10 @@ func codexScanParent(path string) codexParent {
 			if meta, ok := codexlog.ParseSessionMeta(rec.Payload); ok && meta.SessionID != "" {
 				sessionID = meta.SessionID
 			}
+		case "input_item":
+			if title == "" {
+				title = codexTitleFromText(codexInputText(rec.Payload))
+			}
 		case "event_msg":
 			if title == "" {
 				msg := codexlog.ParseEventMsg(rec.Payload)

@@ -211,3 +211,18 @@ func TestToolError(t *testing.T) {
 		})
 	}
 }
+
+func TestNewClientTokenlessAuth(t *testing.T) {
+	for _, mode := range []string{"", "tenant", "none"} {
+		t.Run("mode="+mode, func(t *testing.T) {
+			envconfig.PinAliasEnvBlank(t)
+			t.Setenv("AGENTO11Y_ENDPOINT", "http://localhost:8080")
+			t.Setenv("AGENTO11Y_AUTH_TENANT_ID", "tenant")
+			t.Setenv("AGENTO11Y_AUTH_MODE", mode)
+			client := NewClient(ClientOptions{})
+			if err := client.Shutdown(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

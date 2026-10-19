@@ -586,15 +586,27 @@ func Collect(ctx context.Context, opts Options, p Params) *Report {
 	runProbes(ctx, r, osEnv, fileEnv)
 	if r.Conversations.configured() && !r.Conversations.Token.Set {
 		var needsToken []string
+		tenantOnlyAgent := false
+		unknownAgent := false
 		for _, agent := range r.Agents {
-			if agent.Install == InstallStateInstalled && agent.Name != "codex" {
-				needsToken = append(needsToken, agent.Name)
+			if agent.Install == InstallStateInstalled {
+				if agent.Name == "codex" || agent.Name == "opencode" {
+					tenantOnlyAgent = true
+				} else {
+					needsToken = append(needsToken, agent.Name)
+				}
+			} else if agent.Install == InstallStateUnknown {
+				unknownAgent = true
 			}
 		}
 		if len(needsToken) > 0 {
 			r.Conversations.Health = HealthError
 			r.Conversations.Messages = append(r.Conversations.Messages,
 				"AGENTO11Y_AUTH_TOKEN is required by installed agents: "+strings.Join(needsToken, ", "))
+		} else if (!tenantOnlyAgent || unknownAgent) && r.Conversations.Health == HealthOK {
+			r.Conversations.Health = HealthWarn
+			r.Conversations.Messages = append(r.Conversations.Messages,
+				"AGENTO11Y_AUTH_TOKEN is unset; agent compatibility could not be verified (Codex and OpenCode support token-less export)")
 		}
 	}
 	return r
@@ -1233,6 +1245,9 @@ func runProbes(ctx context.Context, r *Report, osEnv, fileEnv map[string]string)
 		mixedAgents := false
 		if token == "" {
 			mode = "tenant"
+			if configuredMode == "none" {
+				mode = "none"
+			}
 		} else {
 			codexInstalled := false
 			otherInstalled := false

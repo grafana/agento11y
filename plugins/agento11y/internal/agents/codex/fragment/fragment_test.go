@@ -178,3 +178,12 @@ func TestSessionTitleRedactsBeforeCut(t *testing.T) {
 		t.Fatalf("SessionTitle = %q, want the full private key redacted", got)
 	}
 }
+
+func TestSessionTitleBoundsPrompt(t *testing.T) {
+	// Collapsing this whole prompt would pull text past the redaction budget
+	// into the title. Only the bounded prefix should contribute.
+	prompt := "hello" + strings.Repeat(" ", titleRedactBytes) + "outside budget"
+	if got := SessionTitle(prompt); got != "hello" {
+		t.Fatalf("SessionTitle = %q, want hello", got)
+	}
+}

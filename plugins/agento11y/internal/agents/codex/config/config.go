@@ -46,7 +46,7 @@ func HasCredentials() bool {
 // AllowsTenantOnlyAuthMode reports whether Codex can export without a token.
 func AllowsTenantOnlyAuthMode(mode string) bool {
 	mode = strings.TrimSpace(mode)
-	return mode == "" || strings.EqualFold(mode, "tenant")
+	return mode == "" || strings.EqualFold(mode, "tenant") || strings.EqualFold(mode, "none")
 }
 
 // FilePath returns the dotenv config path for the consolidated binary.
