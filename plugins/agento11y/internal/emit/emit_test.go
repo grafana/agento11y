@@ -227,14 +227,33 @@ func TestNewClientTokenlessAuth(t *testing.T) {
 	}
 }
 
-func TestNewClientWithoutAuth(t *testing.T) {
-	envconfig.PinAliasEnvBlank(t)
-	t.Setenv("AGENTO11Y_ENDPOINT", "http://localhost:8080")
-	if got := exportConfig("", agento11y.AuthConfig{}).Auth.Mode; got != agento11y.ExportAuthModeNone {
-		t.Fatalf("auth mode = %q, want none", got)
-	}
-	client := NewClient(ClientOptions{})
-	if err := client.Shutdown(t.Context()); err != nil {
-		t.Fatal(err)
+func TestNewClientDefaultAuth(t *testing.T) {
+	for _, tc := range []struct {
+		name, tenant, token string
+		auth                agento11y.AuthConfig
+		want                agento11y.ExportAuthMode
+	}{
+		{name: "no credentials", want: agento11y.ExportAuthModeNone},
+		{name: "token only", token: "token", want: agento11y.ExportAuthModeNone},
+		{name: "tenant only", tenant: "tenant", want: agento11y.ExportAuthModeTenant},
+		{name: "tenant and token", tenant: "tenant", token: "token", want: agento11y.ExportAuthModeBasic},
+		{name: "explicit password only", auth: agento11y.AuthConfig{BasicPassword: "password"}, want: agento11y.ExportAuthModeNone},
+		{name: "explicit user and password", auth: agento11y.AuthConfig{BasicUser: "user", BasicPassword: "password"}, want: agento11y.ExportAuthModeBasic},
+		{name: "explicit tenant and env token", token: "token", auth: agento11y.AuthConfig{TenantID: "tenant"}, want: agento11y.ExportAuthModeBasic},
+		{name: "blank explicit user", token: "token", auth: agento11y.AuthConfig{BasicUser: "  "}, want: agento11y.ExportAuthModeNone},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			envconfig.PinAliasEnvBlank(t)
+			t.Setenv("AGENTO11Y_ENDPOINT", "http://localhost:8080")
+			t.Setenv("AGENTO11Y_AUTH_TENANT_ID", tc.tenant)
+			t.Setenv("AGENTO11Y_AUTH_TOKEN", tc.token)
+			if got := exportConfig("", tc.auth).Auth.Mode; got != tc.want {
+				t.Fatalf("auth mode = %q, want %q", got, tc.want)
+			}
+			client := NewClient(ClientOptions{Auth: tc.auth})
+			if err := client.Shutdown(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
