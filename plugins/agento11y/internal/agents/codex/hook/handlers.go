@@ -102,6 +102,9 @@ func capturePrompt(p Payload, cfg config.Config, logger *log.Logger) {
 		logger.Print("userPromptSubmit: missing session_id or turn_id")
 		return
 	}
+	if strings.TrimSpace(p.Prompt) != "" {
+		setConversationTitle(p.SessionID, p.Prompt, logger)
+	}
 	if err := updateCommon(p, logger, func(f *fragment.Fragment) {
 		if cfg.ContentCapture != agento11y.ContentCaptureModeMetadataOnly {
 			f.Prompt = p.Prompt
@@ -207,7 +210,7 @@ func Stop(p Payload, cfg config.Config, logger *log.Logger) {
 	}
 	envconfig.ApplyLocalAuthPlaceholders()
 	if !config.HasCredentials() {
-		logger.Print("stop: missing SIGIL_ENDPOINT/SIGIL_AUTH_TENANT_ID/SIGIL_AUTH_TOKEN; discarding fragment")
+		logger.Print("stop: missing AGENTO11Y_ENDPOINT/AGENTO11Y_AUTH_TENANT_ID; discarding fragment")
 		if err := fragment.Delete(p.SessionID, p.TurnID); err != nil {
 			logger.Printf("stop: delete fragment: %v", err)
 		}
@@ -464,9 +467,29 @@ func updateCommon(p Payload, logger *log.Logger, mutate func(f *fragment.Fragmen
 	})
 }
 
+// setConversationTitle stores the session title from the first prompt. A later
+// prompt does not replace it, and a denied prompt never reaches here. The
+// title is redacted and cut once, while UserPromptSubmit holds the turn, so
+// later turns reuse the short value.
+func setConversationTitle(sessionID, prompt string, logger *log.Logger) {
+	err := fragment.UpdateSession(sessionID, logger, func(s *fragment.Session) bool {
+		if s.ConversationTitle != "" {
+			return false
+		}
+		s.ConversationTitle = fragment.SessionTitle(prompt)
+		return s.ConversationTitle != ""
+	})
+	if err != nil {
+		logger.Printf("userPromptSubmit: save session title: %v", err)
+	}
+}
+
 func applySessionDefaults(f *fragment.Fragment, s *fragment.Session) {
 	if s == nil {
 		return
+	}
+	if f.ConversationTitle == "" {
+		f.ConversationTitle = s.ConversationTitle
 	}
 	if f.Cwd == "" {
 		f.Cwd = s.Cwd
@@ -482,13 +505,13 @@ func applySessionDefaults(f *fragment.Fragment, s *fragment.Session) {
 	}
 }
 
-// buildClient constructs the agento11y client with the shared HTTP/basic-auth
-// export defaults. Endpoint, tenant ID, and token come from the SDK's automatic
-// SIGIL_* env resolution, matching copilot and cursor. cwd is the turn's
-// working directory, which auto-tags resolve the repository and branch from.
-// userID is the identity Resolve already found (configured USER_ID or the
-// ChatGPT email in auth.json); auto-tags use it before falling back to the
-// OS account name.
+// buildClient constructs the agento11y client for one Codex export. Endpoint
+// comes from the SDK's environment resolution. Auth is chosen here: tenant
+// and token use basic auth, and a tenant id alone uses tenant auth. cwd is
+// the turn's working directory, which auto-tags resolve the repository and
+// branch from. userID is the identity Resolve already found (configured
+// USER_ID or the ChatGPT email in auth.json); auto-tags use it before
+// falling back to the OS account name.
 func buildClient(cfg config.Config, cwd, userID string, providers *otel.Providers, logger *log.Logger) *agento11y.Client {
 	return emit.NewClient(emit.ClientOptions{
 		InstrumentationName: otelInstrumentationName,
@@ -497,7 +520,31 @@ func buildClient(cfg config.Config, cwd, userID string, providers *otel.Provider
 		Providers:           providers,
 		UserAgent:           useragent.For("codex"),
 		Tags:                autotag.FromEnv(autotag.Inputs{Cwd: cwd, UserID: userID}, logger),
+		Auth:                exportAuth(),
 	})
+}
+
+// exportAuth selects basic auth when a token is configured and tenant auth
+// when only the tenant id is. Call after ApplyLocalAuthPlaceholders so a
+// local endpoint's stand-in credentials still take the basic path.
+func exportAuth() agento11y.AuthConfig {
+	tenant := envconfig.Getenv("AUTH_TENANT_ID")
+	token := envconfig.Getenv("AUTH_TOKEN")
+	if tenant != "" && token != "" {
+		return agento11y.AuthConfig{
+			Mode:          agento11y.ExportAuthModeBasic,
+			TenantID:      tenant,
+			BasicUser:     tenant,
+			BasicPassword: token,
+		}
+	}
+	if tenant != "" {
+		return agento11y.AuthConfig{
+			Mode:     agento11y.ExportAuthModeTenant,
+			TenantID: tenant,
+		}
+	}
+	return agento11y.AuthConfig{Mode: agento11y.ExportAuthModeNone}
 }
 
 func emitGeneration(ctx context.Context, client *agento11y.Client, frag *fragment.Fragment, mapped mapper.Mapped, mode agento11y.ContentCaptureMode, logger *log.Logger) error {

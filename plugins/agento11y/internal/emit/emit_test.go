@@ -43,13 +43,13 @@ func TestExportConfig(t *testing.T) {
 	t.Setenv("SIGIL_ENDPOINT", "http://localhost:8080")
 
 	t.Run("empty user agent leaves headers unset", func(t *testing.T) {
-		if got := exportConfig("").Headers; got != nil {
+		if got := exportConfig("", agento11y.AuthConfig{}).Headers; got != nil {
 			t.Fatalf("Headers = %v; want nil", got)
 		}
 	})
 
 	t.Run("user agent sets header", func(t *testing.T) {
-		got := exportConfig("agento11y-plugin-codex/1.2.3").Headers["User-Agent"]
+		got := exportConfig("agento11y-plugin-codex/1.2.3", agento11y.AuthConfig{}).Headers["User-Agent"]
 		if got != "agento11y-plugin-codex/1.2.3" {
 			t.Fatalf("User-Agent = %q; want %q", got, "agento11y-plugin-codex/1.2.3")
 		}

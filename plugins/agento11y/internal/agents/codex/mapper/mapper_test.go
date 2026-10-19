@@ -609,6 +609,46 @@ func TestMapBoundsToolPayloads(t *testing.T) {
 	}
 }
 
+func TestMapConversationTitle(t *testing.T) {
+	stored := Map(Inputs{
+		Fragment: &fragment.Fragment{
+			SessionID:         "sess",
+			TurnID:            "turn",
+			Model:             "gpt-5.5",
+			Prompt:            "later prompt",
+			ConversationTitle: "first prompt",
+		},
+		ContentCapture: agento11y.ContentCaptureModeFull,
+		Now:            time.Unix(1, 0),
+	})
+	if stored.Start.ConversationTitle != "first prompt" || stored.Generation.ConversationTitle != "first prompt" {
+		t.Fatalf("stored title = %q / %q, want first prompt", stored.Start.ConversationTitle, stored.Generation.ConversationTitle)
+	}
+
+	derived := Map(Inputs{
+		Fragment: &fragment.Fragment{
+			SessionID: "sess",
+			TurnID:    "turn",
+			Model:     "gpt-5.5",
+			Prompt:    "  list\ngo files  ",
+		},
+		ContentCapture: agento11y.ContentCaptureModeMetadataOnly,
+		Now:            time.Unix(1, 0),
+	})
+	if derived.Generation.ConversationTitle != "list go files" {
+		t.Fatalf("derived title = %q, want list go files", derived.Generation.ConversationTitle)
+	}
+
+	fallback := Map(Inputs{
+		Fragment:       &fragment.Fragment{SessionID: "sess", TurnID: "turn", Model: "gpt-5.5"},
+		ContentCapture: agento11y.ContentCaptureModeMetadataOnly,
+		Now:            time.Unix(1, 0),
+	})
+	if fallback.Generation.ConversationTitle != "sess" {
+		t.Fatalf("fallback title = %q, want the conversation id", fallback.Generation.ConversationTitle)
+	}
+}
+
 func requireBounded(t *testing.T, what string, raw []byte, limit int) {
 	t.Helper()
 	if !json.Valid(raw) {

@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -148,5 +149,28 @@ func TestCleanupStaleRemovesOldFragmentsSessionsAndSubagentLinks(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(StateRoot(), "logs")); err == nil {
 		t.Fatal("cleanup should not create or remove log directory")
+	}
+}
+
+func TestSessionTitleRedactsBeforeCut(t *testing.T) {
+	if got := SessionTitle("  run\nthe tests  "); got != "run the tests" {
+		t.Fatalf("SessionTitle = %q, want collapsed prompt", got)
+	}
+	const secret = "glc_abcdefghijklmnopqrstuvwxyz0123456789"
+	got := SessionTitle("prefix " + secret + " suffix")
+	if strings.Contains(got, secret) || !strings.Contains(got, "[REDACTED:") {
+		t.Fatalf("SessionTitle = %q, want the token redacted", got)
+	}
+	long := strings.Repeat("a", MaxTitleLen+40)
+	got = SessionTitle(long)
+	if len(got) > MaxTitleLen {
+		t.Fatalf("SessionTitle length = %d, want at most %d", len(got), MaxTitleLen)
+	}
+	// A secret whose pattern would be split by the 100-byte cut must not leave
+	// its prefix behind.
+	split := strings.Repeat("b", 90) + " " + secret
+	got = SessionTitle(split)
+	if strings.Contains(got, "glc_") {
+		t.Fatalf("SessionTitle = %q, want no secret prefix", got)
 	}
 }

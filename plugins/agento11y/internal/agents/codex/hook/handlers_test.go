@@ -506,6 +506,110 @@ func TestStopResolvesSubagentParentGeneration(t *testing.T) {
 	}
 }
 
+func TestStopTenantOnlyAuthExports(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	envconfig.PinAliasEnvBlank(t)
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	logger := log.New(io.Discard, "", 0)
+	var gotAuth, gotTenant string
+	var requestCount atomic.Int64
+	// 127.0.0.1 and localhost are local endpoints, and those get a stand-in
+	// token before export. 127.0.0.2 is still loopback, so the request stays
+	// on this machine, but it is not a local endpoint and the empty token
+	// stays empty.
+	listener, err := net.Listen("tcp4", "127.0.0.2:0")
+	require.NoError(t, err)
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
+		gotAuth = r.Header.Get("Authorization")
+		gotTenant = r.Header.Get("X-Scope-OrgID")
+		writeAcceptedGenerationResponseFromRequest(t, w, r)
+	}))
+	server.Listener = listener
+	server.Start()
+	defer server.Close()
+	t.Setenv("SIGIL_ENDPOINT", server.URL)
+	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant-1")
+	t.Setenv("SIGIL_AUTH_TOKEN", "")
+
+	require.NoError(t, fragment.Update("sess", "turn", logger, func(f *fragment.Fragment) bool {
+		f.Model = "gpt-5.5"
+		f.Prompt = "hello"
+		return true
+	}))
+
+	Stop(Payload{HookEventName: "Stop", SessionID: "sess", TurnID: "turn"}, config.Config{ContentCapture: agento11y.ContentCaptureModeFull}, logger)
+
+	assert.Equal(t, int64(1), requestCount.Load())
+	assert.Empty(t, gotAuth)
+	assert.Equal(t, "tenant-1", gotTenant)
+	assert.Nil(t, fragment.LoadTolerant("sess", "turn", logger))
+}
+
+func TestStopExportsConversationTitleFromFirstPrompt(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	envconfig.PinAliasEnvBlank(t)
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	logger := log.New(io.Discard, "", 0)
+	var titles []string
+	server := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read body: %v", err)
+			http.Error(w, "read body", http.StatusBadRequest)
+			return
+		}
+		var request struct {
+			Generations []struct {
+				Metadata map[string]any `json:"metadata"`
+			} `json:"generations"`
+		}
+		if err := json.Unmarshal(body, &request); err != nil {
+			t.Errorf("decode export: %v", err)
+		}
+		for _, gen := range request.Generations {
+			title, _ := gen.Metadata["agento11y.conversation.title"].(string)
+			titles = append(titles, title)
+		}
+		writeAcceptedGenerationResponse(t, w, body)
+	}))
+	defer server.Close()
+	t.Setenv("SIGIL_ENDPOINT", server.URL)
+	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
+	t.Setenv("SIGIL_AUTH_TOKEN", "token")
+	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeFull}
+
+	const secret = "glc_abcdefghijklmnopqrstuvwxyz0123456789"
+	UserPromptSubmit(context.Background(), io.Discard, Payload{
+		HookEventName: "UserPromptSubmit",
+		SessionID:     "sess",
+		TurnID:        "turn-1",
+		Prompt:        "prefix " + secret + " suffix",
+	}, cfg, logger)
+	Stop(Payload{HookEventName: "Stop", SessionID: "sess", TurnID: "turn-1"}, cfg, logger)
+
+	UserPromptSubmit(context.Background(), io.Discard, Payload{
+		HookEventName: "UserPromptSubmit",
+		SessionID:     "sess",
+		TurnID:        "turn-2",
+		Prompt:        "a later prompt",
+	}, cfg, logger)
+	Stop(Payload{HookEventName: "Stop", SessionID: "sess", TurnID: "turn-2"}, cfg, logger)
+
+	require.Len(t, titles, 2)
+	for i, title := range titles {
+		if strings.Contains(title, secret) || !strings.Contains(title, "[REDACTED:") {
+			t.Fatalf("turn %d title = %q, want the token redacted", i+1, title)
+		}
+		if strings.Contains(title, "later prompt") {
+			t.Fatalf("turn %d title = %q, want the first prompt to win", i+1, title)
+		}
+	}
+	if titles[0] != titles[1] {
+		t.Fatalf("titles differ across turns: %q vs %q", titles[0], titles[1])
+	}
+}
+
 func TestStopMissingCredentialsDiscardsFragment(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("SIGIL_ENDPOINT", "")

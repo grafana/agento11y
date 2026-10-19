@@ -6,9 +6,11 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/fragmentstore"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/redact"
 )
 
 const DefaultStaleAge = 24 * time.Hour
@@ -32,8 +34,42 @@ type Session struct {
 	Source         string `json:"source,omitempty"`
 	Model          string `json:"model,omitempty"`
 	TranscriptPath string `json:"transcriptPath,omitempty"`
-	StartedAt      string `json:"startedAt,omitempty"`
-	LastEventAt    string `json:"lastEventAt,omitempty"`
+	// ConversationTitle is the redacted, truncated title taken from the first
+	// prompt. Later prompts do not replace it.
+	ConversationTitle string `json:"conversationTitle,omitempty"`
+	StartedAt         string `json:"startedAt,omitempty"`
+	LastEventAt       string `json:"lastEventAt,omitempty"`
+}
+
+// MaxTitleLen caps a conversation title in bytes, matching the history importer.
+const MaxTitleLen = 100
+
+// titleRedactBytes bounds how much of a prompt SessionTitle redacts.
+// UserPromptSubmit holds the turn until the hook returns, and redaction costs
+// about a third of a second per MB. A secret that starts in the title and
+// continues past this bound can keep its start. History import redacts the
+// whole prompt.
+const titleRedactBytes = 64 << 10
+
+// SessionTitle is the title a session takes from its first typed prompt.
+// Secrets are redacted before the text is collapsed and cut, so a secret the
+// cut would split cannot leave its prefix in the title. The result is what
+// the history importer stores: whitespace collapsed to single spaces, then
+// cut to MaxTitleLen bytes without splitting a redaction marker.
+func SessionTitle(prompt string) string {
+	head := strings.TrimSpace(prompt)
+	if head == "" {
+		return ""
+	}
+	if len(head) > titleRedactBytes {
+		head = redact.CutTitle(head, titleRedactBytes)
+	}
+	// Redact the bounded prompt before collapsing. Collapsing can create a
+	// match the original spacing did not have, so RedactTitle redacts again
+	// and then cuts.
+	redacted := redact.New().Redact(head)
+	collapsed := strings.Join(strings.Fields(redacted), " ")
+	return redact.RedactTitle(collapsed, MaxTitleLen)
 }
 
 type SubagentLink struct {
@@ -56,6 +92,7 @@ type Fragment struct {
 	Source               string       `json:"source,omitempty"`
 	Model                string       `json:"model,omitempty"`
 	Prompt               string       `json:"prompt,omitempty"`
+	ConversationTitle    string       `json:"conversationTitle,omitempty"`
 	TranscriptPath       string       `json:"transcriptPath,omitempty"`
 	LastAssistantMessage string       `json:"lastAssistantMessage,omitempty"`
 	Tools                []ToolRecord `json:"tools,omitempty"`
