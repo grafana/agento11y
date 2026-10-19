@@ -71,17 +71,13 @@ type ClientOptions struct {
 	// AGENTO11Y_TAGS must not appear here: the SDK lets caller tags win over
 	// env tags, and the explicit tag is the one the user asked for.
 	Tags map[string]string
-	// Auth overrides generation-export auth. A zero Mode keeps the historical
-	// default: basic auth, with the tenant id and token filled from the
-	// environment. Codex sets tenant mode when only a tenant id is configured.
+	// Auth overrides generation-export auth; an empty mode defaults to basic.
 	Auth agento11y.AuthConfig
 }
 
 // exportConfig builds the shared HTTP generation export config.
 // A non-empty userAgent sets the export User-Agent header (each agent passes
 // its own token via useragent.For); empty leaves the SDK default in place.
-// A zero auth Mode selects basic auth and leaves the credentials for the
-// SDK to read from the environment.
 func exportConfig(userAgent string, auth agento11y.AuthConfig) agento11y.GenerationExportConfig {
 	if auth.Mode == "" {
 		auth.Mode = agento11y.ExportAuthModeBasic

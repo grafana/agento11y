@@ -30,6 +30,7 @@
           }
         ],
         "metadata": {
+          "agento11y.conversation.title": "summarize go files",
           "agento11y.sdk.content_capture_mode": "full",
           "agento11y.sdk.name": "sdk-go",
           "agento11y.user.id": "test-user",

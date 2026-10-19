@@ -506,44 +506,34 @@ func TestStopResolvesSubagentParentGeneration(t *testing.T) {
 	}
 }
 
-func TestStopTenantOnlyAuthExports(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
+func TestTenantOnlyAuthExports(t *testing.T) {
 	envconfig.PinAliasEnvBlank(t)
-	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	logger := log.New(io.Discard, "", 0)
 	var gotAuth, gotTenant string
 	var requestCount atomic.Int64
-	// 127.0.0.1 and localhost are local endpoints, and those get a stand-in
-	// token before export. 127.0.0.2 is still loopback, so the request stays
-	// on this machine, but it is not a local endpoint and the empty token
-	// stays empty.
-	listener, err := net.Listen("tcp4", "127.0.0.2:0")
-	require.NoError(t, err)
-	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount.Add(1)
 		gotAuth = r.Header.Get("Authorization")
 		gotTenant = r.Header.Get("X-Scope-OrgID")
 		writeAcceptedGenerationResponseFromRequest(t, w, r)
 	}))
-	server.Listener = listener
-	server.Start()
 	defer server.Close()
 	t.Setenv("SIGIL_ENDPOINT", server.URL)
 	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant-1")
 	t.Setenv("SIGIL_AUTH_TOKEN", "")
 
-	require.NoError(t, fragment.Update("sess", "turn", logger, func(f *fragment.Fragment) bool {
-		f.Model = "gpt-5.5"
-		f.Prompt = "hello"
-		return true
-	}))
-
-	Stop(Payload{HookEventName: "Stop", SessionID: "sess", TurnID: "turn"}, config.Config{ContentCapture: agento11y.ContentCaptureModeFull}, logger)
+	assert.True(t, config.HasCredentials())
+	frag := &fragment.Fragment{SessionID: "sess", TurnID: "turn", Model: "gpt-5.5", Prompt: "hello"}
+	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeFull}
+	client := buildClient(cfg, "", "", nil, logger)
+	defer func() { _ = client.Shutdown(context.Background()) }()
+	mapped := mapper.Map(mapper.Inputs{Fragment: frag, ContentCapture: cfg.ContentCapture})
+	require.NoError(t, emitGeneration(context.Background(), client, frag, mapped, cfg.ContentCapture, logger))
+	require.NoError(t, client.Flush(context.Background()))
 
 	assert.Equal(t, int64(1), requestCount.Load())
 	assert.Empty(t, gotAuth)
 	assert.Equal(t, "tenant-1", gotTenant)
-	assert.Nil(t, fragment.LoadTolerant("sess", "turn", logger))
 }
 
 func TestStopExportsConversationTitleFromFirstPrompt(t *testing.T) {

@@ -149,9 +149,6 @@ func (in Inputs) agent() string {
 	return AgentName
 }
 
-// conversationTitle is the session title when one was stored, else a title
-// cut from this turn's prompt, else the conversation id. History import
-// overwrites the field after Map, so a derived title there does not stick.
 func conversationTitle(frag *fragment.Fragment, conversationID string) string {
 	if frag != nil {
 		if t := strings.TrimSpace(frag.ConversationTitle); t != "" {

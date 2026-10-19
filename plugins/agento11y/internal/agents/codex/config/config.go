@@ -36,12 +36,7 @@ func (c Config) Agent() string {
 	return mapper.AgentName
 }
 
-// HasCredentials reports whether a generation export can authenticate.
-// An endpoint and a tenant id are enough: a token selects basic auth, and a
-// tenant id alone selects tenant auth (X-Scope-OrgID, no password). Local
-// endpoints fill both with placeholders before this check. A token without a
-// tenant id is not enough. Guards still require the token; this gate is the
-// export path only.
+// HasCredentials reports whether generation export has an endpoint and tenant.
 func HasCredentials() bool {
 	return envconfig.Getenv("ENDPOINT") != "" && envconfig.Getenv("AUTH_TENANT_ID") != ""
 }

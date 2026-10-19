@@ -467,10 +467,6 @@ func updateCommon(p Payload, logger *log.Logger, mutate func(f *fragment.Fragmen
 	})
 }
 
-// setConversationTitle stores the session title from the first prompt. A later
-// prompt does not replace it, and a denied prompt never reaches here. The
-// title is redacted and cut once, while UserPromptSubmit holds the turn, so
-// later turns reuse the short value.
 func setConversationTitle(sessionID, prompt string, logger *log.Logger) {
 	err := fragment.UpdateSession(sessionID, logger, func(s *fragment.Session) bool {
 		if s.ConversationTitle != "" {
@@ -505,13 +501,7 @@ func applySessionDefaults(f *fragment.Fragment, s *fragment.Session) {
 	}
 }
 
-// buildClient constructs the agento11y client for one Codex export. Endpoint
-// comes from the SDK's environment resolution. Auth is chosen here: tenant
-// and token use basic auth, and a tenant id alone uses tenant auth. cwd is
-// the turn's working directory, which auto-tags resolve the repository and
-// branch from. userID is the identity Resolve already found (configured
-// USER_ID or the ChatGPT email in auth.json); auto-tags use it before
-// falling back to the OS account name.
+// buildClient configures export auth and tags for a Codex turn.
 func buildClient(cfg config.Config, cwd, userID string, providers *otel.Providers, logger *log.Logger) *agento11y.Client {
 	return emit.NewClient(emit.ClientOptions{
 		InstrumentationName: otelInstrumentationName,
@@ -524,9 +514,7 @@ func buildClient(cfg config.Config, cwd, userID string, providers *otel.Provider
 	})
 }
 
-// exportAuth selects basic auth when a token is configured and tenant auth
-// when only the tenant id is. Call after ApplyLocalAuthPlaceholders so a
-// local endpoint's stand-in credentials still take the basic path.
+// exportAuth selects tenant auth when no token is configured.
 func exportAuth() agento11y.AuthConfig {
 	tenant := envconfig.Getenv("AUTH_TENANT_ID")
 	token := envconfig.Getenv("AUTH_TOKEN")

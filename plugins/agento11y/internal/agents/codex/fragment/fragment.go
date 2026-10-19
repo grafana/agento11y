@@ -29,13 +29,11 @@ type ToolRecord struct {
 }
 
 type Session struct {
-	SessionID      string `json:"sessionId"`
-	Cwd            string `json:"cwd,omitempty"`
-	Source         string `json:"source,omitempty"`
-	Model          string `json:"model,omitempty"`
-	TranscriptPath string `json:"transcriptPath,omitempty"`
-	// ConversationTitle is the redacted, truncated title taken from the first
-	// prompt. Later prompts do not replace it.
+	SessionID         string `json:"sessionId"`
+	Cwd               string `json:"cwd,omitempty"`
+	Source            string `json:"source,omitempty"`
+	Model             string `json:"model,omitempty"`
+	TranscriptPath    string `json:"transcriptPath,omitempty"`
 	ConversationTitle string `json:"conversationTitle,omitempty"`
 	StartedAt         string `json:"startedAt,omitempty"`
 	LastEventAt       string `json:"lastEventAt,omitempty"`
@@ -44,18 +42,10 @@ type Session struct {
 // MaxTitleLen caps a conversation title in bytes, matching the history importer.
 const MaxTitleLen = 100
 
-// titleRedactBytes bounds how much of a prompt SessionTitle redacts.
-// UserPromptSubmit holds the turn until the hook returns, and redaction costs
-// about a third of a second per MB. A secret that starts in the title and
-// continues past this bound can keep its start. History import redacts the
-// whole prompt.
+// shortcut: scan 64 KiB to keep the prompt hook fast; scan more if long secrets must become titles.
 const titleRedactBytes = 64 << 10
 
-// SessionTitle is the title a session takes from its first typed prompt.
-// Secrets are redacted before the text is collapsed and cut, so a secret the
-// cut would split cannot leave its prefix in the title. The result is what
-// the history importer stores: whitespace collapsed to single spaces, then
-// cut to MaxTitleLen bytes without splitting a redaction marker.
+// SessionTitle redacts a prompt, collapses whitespace, and cuts its title.
 func SessionTitle(prompt string) string {
 	head := strings.TrimSpace(prompt)
 	if head == "" {
@@ -64,9 +54,6 @@ func SessionTitle(prompt string) string {
 	if len(head) > titleRedactBytes {
 		head = redact.CutTitle(head, titleRedactBytes)
 	}
-	// Redact the bounded prompt before collapsing. Collapsing can create a
-	// match the original spacing did not have, so RedactTitle redacts again
-	// and then cuts.
 	redacted := redact.New().Redact(head)
 	collapsed := strings.Join(strings.Fields(redacted), " ")
 	return redact.RedactTitle(collapsed, MaxTitleLen)
