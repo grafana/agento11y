@@ -223,6 +223,74 @@ test('secret redaction sanitizer redacts systemPrompt, conversationTitle, and ca
   assert.match(sanitized.callError, /\[REDACTED:openai-project-key\]/);
 });
 
+function newSanitizingClient(exporter, generationSanitizer) {
+  const defaults = defaultConfig();
+  return new Agento11yClient({
+    tracer: trace.getTracer('agento11y-sdk-js-test'),
+    generationExport: {
+      ...defaults.generationExport,
+      batchSize: 1,
+      flushIntervalMs: 60_000,
+    },
+    generationExporter: exporter,
+    generationSanitizer,
+  });
+}
+
+test('secret redaction sanitizer also redacts the title and call error copies in metadata', async () => {
+  const exporter = new CapturingExporter();
+  const client = newSanitizingClient(exporter, createSecretRedactionSanitizer());
+
+  try {
+    const apiKey = `sk-proj-${'a'.repeat(48)}`;
+    const recorder = client.startGeneration({
+      model: { provider: 'openai', name: 'gpt-5' },
+      conversationTitle: `Discussion about ${apiKey}`,
+    });
+    recorder.setCallError(new Error(`API error: invalid key ${apiKey}`));
+    recorder.end();
+
+    await client.flush();
+
+    const generation = exporter.requests[0].generations[0];
+    assert.match(generation.conversationTitle, /\[REDACTED:openai-project-key\]/);
+    assert.match(generation.callError, /\[REDACTED:openai-project-key\]/);
+    assert.equal(generation.metadata['agento11y.conversation.title'], generation.conversationTitle);
+    assert.equal(generation.metadata.call_error, generation.callError);
+    assert.doesNotMatch(JSON.stringify(generation), /sk-proj-/);
+  } finally {
+    await client.shutdown();
+  }
+});
+
+test('generation sanitizer that clears the title and call error also drops their metadata copies', async () => {
+  const exporter = new CapturingExporter();
+  const client = newSanitizingClient(exporter, (generation) => ({
+    ...generation,
+    conversationTitle: '',
+    callError: undefined,
+  }));
+
+  try {
+    const recorder = client.startGeneration({
+      model: { provider: 'openai', name: 'gpt-5' },
+      conversationTitle: 'Private title',
+    });
+    recorder.setCallError(new Error('private error'));
+    recorder.end();
+
+    await client.flush();
+
+    const generation = exporter.requests[0].generations[0];
+    assert.equal(generation.conversationTitle, '');
+    assert.equal(generation.callError, undefined);
+    assert.equal('agento11y.conversation.title' in generation.metadata, false);
+    assert.equal('call_error' in generation.metadata, false);
+  } finally {
+    await client.shutdown();
+  }
+});
+
 test('secret redaction sanitizer redacts assistant and tool messages in input', async () => {
   const sanitizer = createSecretRedactionSanitizer({ redactInputMessages: false });
   const secretToken = 'glc_abcdefghijklmnopqrstuvwxyz1234';

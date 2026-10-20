@@ -1598,6 +1598,9 @@ class GenerationRecorderImpl implements GenerationRecorder {
     } else if (this.client.internalHasGenerationSanitizer()) {
       try {
         generation = this.client.internalSanitizeGeneration(generation);
+        // The mirrors were written from the values before the sanitizer ran,
+        // so a secret it redacted would still go out in them.
+        syncCanonicalMetadataMirrors(generation);
         validationTarget = cloneGeneration(generation);
       } catch (error) {
         effectiveContentCaptureMode = 'metadata_only';
@@ -2607,4 +2610,25 @@ function isJSON(value: string): boolean {
 
 function notEmpty(value: string | undefined): value is string {
   return value !== undefined && value.trim().length > 0;
+}
+
+/**
+ * Write the metadata mirrors of conversationTitle and callError from the
+ * fields as they are now, and drop a mirror whose field is empty. The Go and
+ * .NET SDKs do the same after their sanitizer runs.
+ */
+function syncCanonicalMetadataMirrors(generation: Generation): void {
+  if (generation.metadata === undefined) {
+    return;
+  }
+  if (notEmpty(generation.conversationTitle)) {
+    generation.metadata[spanAttrConversationTitle] = generation.conversationTitle;
+  } else {
+    delete generation.metadata[spanAttrConversationTitle];
+  }
+  if (notEmpty(generation.callError)) {
+    generation.metadata.call_error = generation.callError;
+  } else {
+    delete generation.metadata.call_error;
+  }
 }
