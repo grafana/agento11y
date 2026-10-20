@@ -1205,6 +1205,114 @@ describe("extension lifecycle", () => {
     expect(capturedSeed!.conversationId).toBeUndefined();
   });
 
+  describe("guards (context redaction recording)", () => {
+    // A guard-only pattern: the plugin's own secret redaction doesn't know it,
+    // so only the guard's transform can remove it from what is recorded.
+    const PROMPT = "Status update on Project Falcon for the board";
+    const REDACTED = "Status update on [REDACTED] for the board";
+
+    function setupGuardedTurn(transformedText?: string) {
+      const seeds: Array<{ conversationTitle?: string }> = [];
+      const recorder = {
+        setResult: vi.fn(),
+        setCallError: vi.fn(),
+        setFirstTokenAt: vi.fn(),
+      };
+      const evaluateHook = vi.fn().mockResolvedValue({
+        action: "allow",
+        evaluations: [],
+        ...(transformedText
+          ? {
+              transformedInput: {
+                messages: [
+                  {
+                    role: "user",
+                    parts: [{ type: "text", text: transformedText }],
+                  },
+                ],
+              },
+            }
+          : {}),
+      });
+      const sigil = {
+        startStreamingGeneration: vi.fn(async (seed, run) => {
+          seeds.push(seed as { conversationTitle?: string });
+          await run(recorder);
+        }),
+        startToolExecution: vi.fn(() => ({
+          setResult: vi.fn(),
+          setCallError: vi.fn(),
+          end: vi.fn(),
+          getError: vi.fn(),
+        })),
+        shutdown: vi.fn(async () => {}),
+        evaluateHook,
+      } as Agento11yLike & { evaluateHook: ReturnType<typeof vi.fn> };
+
+      loadConfigMock.mockResolvedValue({
+        endpoint: "http://localhost:8080/api/v1/generations:export",
+        auth: { mode: "none" },
+        agentName: "pi",
+        contentCapture: "full",
+        guards: { enabled: true, timeoutMs: 1500, failOpen: true },
+      });
+      createAgento11yClientMock.mockReturnValue(sigil);
+      return { seeds, recorder, evaluateHook };
+    }
+
+    async function runTurn(pi: FakePi) {
+      await pi.emit("session_start");
+      await pi.emit("turn_start");
+      const user = { role: "user", content: PROMPT, timestamp: Date.now() };
+      await pi.emit("message_end", { message: user });
+      // pi hands the context hook its own copy of the conversation.
+      const event = { messages: [{ ...user }] };
+      const result = await pi.handlers.get("context")!(event, defaultCtx);
+      await pi.emit("message_end", { message: { role: "assistant" } });
+      await pi.emit("turn_end", {
+        message: assistantMessage(),
+        toolResults: [],
+      });
+      return { event, result };
+    }
+
+    function recordedInputText(recorder: {
+      setResult: ReturnType<typeof vi.fn>;
+    }): string[] {
+      const result = recorder.setResult.mock.calls[0]![0] as {
+        input?: Array<{ parts: Array<{ text?: string }> }>;
+      };
+      return (result.input ?? []).flatMap((m) =>
+        m.parts.map((part) => part.text ?? ""),
+      );
+    }
+
+    it("records the redacted prompt and title, not the original", async () => {
+      const { seeds, recorder, evaluateHook } = setupGuardedTurn(REDACTED);
+      const pi = new FakePi();
+      registerExtension(pi as any);
+
+      const { event } = await runTurn(pi);
+
+      expect(evaluateHook).toHaveBeenCalledTimes(1);
+      expect((event.messages[0] as { content: string }).content).toBe(REDACTED);
+      expect(recordedInputText(recorder)).toEqual([REDACTED]);
+      expect(seeds[0]!.conversationTitle).toContain("[REDACTED]");
+      expect(seeds[0]!.conversationTitle).not.toContain("Falcon");
+    });
+
+    it("records the prompt as sent when the guard changes nothing", async () => {
+      const { seeds, recorder } = setupGuardedTurn();
+      const pi = new FakePi();
+      registerExtension(pi as any);
+
+      await runTurn(pi);
+
+      expect(recordedInputText(recorder)).toEqual([PROMPT]);
+      expect(seeds[0]!.conversationTitle).toContain("Falcon");
+    });
+  });
+
   describe("guards (tool_call wiring)", () => {
     function makeRecorder() {
       return {

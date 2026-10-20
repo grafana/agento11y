@@ -43,6 +43,8 @@ import {
   type ToolTiming,
   toolResultText,
   userMessageText,
+  userTextRedactions,
+  withRedactedUserText,
 } from "./mappers.js";
 import {
   type ConversationRecord,
@@ -590,6 +592,23 @@ export default function (pi: ExtensionAPI) {
           "preflight transform dropped: could not align redacted messages with the outgoing conversation",
         );
         return;
+      }
+
+      // The recorded input and the title were captured at message_end, before
+      // this redaction. Record what the model receives instead.
+      const redactions = userTextRedactions(forward, result.messages);
+      if (redactions.size > 0) {
+        pendingInputMessages.forEach((message, i) => {
+          pendingInputMessages[i] = withRedactedUserText(message, redactions);
+        });
+        if (firstUserText !== undefined) {
+          for (const [before, after] of redactions) {
+            if (before.trim() === firstUserText) {
+              firstUserText = after.trim();
+              break;
+            }
+          }
+        }
       }
 
       // applyRedactedText mutated piMessages (pi's own AgentMessage[]) in
