@@ -69,10 +69,9 @@ func keepsAssistantText(mode agento11y.ContentCaptureMode) bool {
 // when the capture mode drops text. A later event replaces an existing
 // segment when it carries the same step id. Cursor also fires the same
 // block twice — once with the `-<n>-<xxxx>` suffix and once with the bare
-// turn id — so a bare event is paired with the last stepped block, and a
-// stepped event is paired with a trailing bare block that looks like the
-// same aggregation. Two different step ids stay separate even when their
-// text matches.
+// turn id — so those two spellings are paired once. After that pair is
+// closed, a later bare event starts a new block. Two different step ids
+// stay separate even when their text matches.
 func recordThinking(f *fragment.Fragment, text string, duration *float64, ts, stepID string, keepText bool) bool {
 	if keepText {
 		text = strings.TrimSpace(text)
@@ -88,6 +87,10 @@ func recordThinking(f *fragment.Fragment, text string, duration *float64, ts, st
 		changed := false
 		if stepID != "" && seg.StepID == "" {
 			seg.StepID = stepID
+			changed = true
+		}
+		if !seg.Paired {
+			seg.Paired = true
 			changed = true
 		}
 		return updateThinkingSegment(seg, text, duration, ts) || changed
@@ -120,14 +123,18 @@ func updateThinkingSegment(seg *fragment.ThinkingSegment, text string, duration 
 }
 
 // thinkingResendIndex finds the last segment when Cursor resent the same
-// block with the other generation_id spelling: a bare turn id after a
-// stepped id, or a stepped id after a trailing bare block.
+// block with the other generation_id spelling. A block is paired at most
+// once, so the next thought's leading bare id cannot overwrite the last
+// finished step.
 func thinkingResendIndex(f *fragment.Fragment, text, stepID string) int {
 	n := len(f.Thinking)
 	if n == 0 {
 		return -1
 	}
 	last := &f.Thinking[n-1]
+	if last.Paired {
+		return -1
+	}
 	if stepID != "" {
 		if last.StepID != "" || !thinkingLooksLikeResend(last, text) {
 			return -1

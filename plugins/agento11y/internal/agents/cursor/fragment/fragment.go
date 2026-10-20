@@ -54,12 +54,14 @@ type AssistantSegment struct {
 // Text is the aggregated block when the capture mode keeps assistant text.
 // DurationMs is that block's duration and is stored in every capture mode.
 // StepID is Cursor's per-model-step generation_id; empty means the event
-// carried only the bare turn id.
+// carried only the bare turn id. Paired is true after this block has seen
+// both spellings of that id, so a later bare event starts a new block.
 type ThinkingSegment struct {
 	Text       string   `json:"text"`
 	DurationMs *float64 `json:"durationMs,omitempty"`
 	Timestamp  string   `json:"timestamp,omitempty"`
 	StepID     string   `json:"stepId,omitempty"`
+	Paired     bool     `json:"paired,omitempty"`
 }
 
 // TokenCounts are observed in afterAgentResponse and stop. Stop's counts

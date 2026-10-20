@@ -388,6 +388,58 @@ func TestAfterAgentThoughtDropsTextInMetadataOnly(t *testing.T) {
 	}
 }
 
+func TestAfterAgentThoughtBareFirstDoesNotOverwritePriorStep(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}
+	first := 1000.0
+	second := 2000.0
+
+	// Cursor often sends the bare turn id first, then the stepped id.
+	AfterAgentThought(Payload{
+		HookEventName:  "afterAgentThought",
+		ConversationID: "conv",
+		GenerationID:   "gen",
+		Text:           "first block",
+		DurationMs:     &first,
+	}, cfg, logger)
+	AfterAgentThought(Payload{
+		HookEventName:  "afterAgentThought",
+		ConversationID: "conv",
+		GenerationID:   "gen-0-ab12",
+		Text:           "first block",
+		DurationMs:     &first,
+	}, cfg, logger)
+	AfterAgentThought(Payload{
+		HookEventName:  "afterAgentThought",
+		ConversationID: "conv",
+		GenerationID:   "gen",
+		Text:           "second block",
+		DurationMs:     &second,
+	}, cfg, logger)
+	AfterAgentThought(Payload{
+		HookEventName:  "afterAgentThought",
+		ConversationID: "conv",
+		GenerationID:   "gen-1-cd34",
+		Text:           "second block",
+		DurationMs:     &second,
+	}, cfg, logger)
+
+	got := fragment.LoadTolerant("conv", "gen", logger)
+	if got == nil {
+		t.Fatal("fragment not written")
+	}
+	if len(got.Thinking) != 2 {
+		t.Fatalf("Thinking = %+v; want the second bare event to start a new block", got.Thinking)
+	}
+	if got.Thinking[0].DurationMs == nil || *got.Thinking[0].DurationMs != first {
+		t.Errorf("first duration = %v; want %v", got.Thinking[0].DurationMs, first)
+	}
+	if got.Thinking[1].DurationMs == nil || *got.Thinking[1].DurationMs != second {
+		t.Errorf("second duration = %v; want %v", got.Thinking[1].DurationMs, second)
+	}
+}
+
 func TestAfterAgentThoughtPairsBareResendInMetadataOnly(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	logger := log.New(&bytes.Buffer{}, "", 0)
