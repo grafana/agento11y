@@ -67,9 +67,12 @@ func keepsAssistantText(mode agento11y.ContentCaptureMode) bool {
 
 // recordThinking stores one completed thinking block. Duration is kept even
 // when the capture mode drops text. A later event replaces an existing
-// segment only when it carries the same step id — text equality across
-// different model steps is not a resend. Without a step id, each event is
-// a new block.
+// segment when it carries the same step id. Cursor also fires the same
+// block twice — once with the `-<n>-<xxxx>` suffix and once with the bare
+// turn id — so a bare event is paired with the last stepped block, and a
+// stepped event is paired with a trailing bare block that looks like the
+// same aggregation. Two different step ids stay separate even when their
+// text matches.
 func recordThinking(f *fragment.Fragment, text string, duration *float64, ts, stepID string, keepText bool) bool {
 	if keepText {
 		text = strings.TrimSpace(text)
@@ -78,19 +81,16 @@ func recordThinking(f *fragment.Fragment, text string, duration *float64, ts, st
 	}
 	duration = cloneDuration(duration)
 	if i := thinkingStepIndex(f, stepID); i >= 0 {
+		return updateThinkingSegment(&f.Thinking[i], text, duration, ts)
+	}
+	if i := thinkingResendIndex(f, text, stepID); i >= 0 {
 		seg := &f.Thinking[i]
 		changed := false
-		if text != "" && seg.Text != text {
-			seg.Text = text
-			seg.Timestamp = ts
+		if stepID != "" && seg.StepID == "" {
+			seg.StepID = stepID
 			changed = true
 		}
-		if duration != nil && (seg.DurationMs == nil || *seg.DurationMs != *duration) {
-			seg.DurationMs = duration
-			seg.Timestamp = ts
-			changed = true
-		}
-		return changed
+		return updateThinkingSegment(seg, text, duration, ts) || changed
 	}
 	if text == "" && duration == nil {
 		return false
@@ -101,6 +101,52 @@ func recordThinking(f *fragment.Fragment, text string, duration *float64, ts, st
 		Timestamp:  ts,
 		StepID:     stepID,
 	})
+	return true
+}
+
+func updateThinkingSegment(seg *fragment.ThinkingSegment, text string, duration *float64, ts string) bool {
+	changed := false
+	if text != "" && seg.Text != text {
+		seg.Text = text
+		seg.Timestamp = ts
+		changed = true
+	}
+	if duration != nil && (seg.DurationMs == nil || *seg.DurationMs != *duration) {
+		seg.DurationMs = duration
+		seg.Timestamp = ts
+		changed = true
+	}
+	return changed
+}
+
+// thinkingResendIndex finds the last segment when Cursor resent the same
+// block with the other generation_id spelling: a bare turn id after a
+// stepped id, or a stepped id after a trailing bare block.
+func thinkingResendIndex(f *fragment.Fragment, text, stepID string) int {
+	n := len(f.Thinking)
+	if n == 0 {
+		return -1
+	}
+	last := &f.Thinking[n-1]
+	if stepID != "" {
+		if last.StepID != "" || !thinkingLooksLikeResend(last, text) {
+			return -1
+		}
+		return n - 1
+	}
+	if last.StepID == "" || !thinkingLooksLikeResend(last, text) {
+		return -1
+	}
+	return n - 1
+}
+
+func thinkingLooksLikeResend(seg *fragment.ThinkingSegment, text string) bool {
+	if text != "" || seg.Text != "" {
+		return text == seg.Text ||
+			(text != "" && seg.Text != "" && (strings.HasPrefix(text, seg.Text) || strings.HasPrefix(seg.Text, text)))
+	}
+	// metadata_only: the suffix and bare events are the same block, even
+	// when the later fire reports a longer duration.
 	return true
 }
 

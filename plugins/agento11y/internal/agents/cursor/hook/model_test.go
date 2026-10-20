@@ -263,6 +263,45 @@ func TestAfterAgentThoughtStoresThinkingText(t *testing.T) {
 	}
 }
 
+func TestAfterAgentThoughtPairsBareTurnIDResend(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeFull}
+	firstDur := 2000.0
+	laterDur := 5000.0
+
+	AfterAgentThought(Payload{
+		HookEventName:  "afterAgentThought",
+		ConversationID: "conv",
+		GenerationID:   "gen-0-ab12",
+		Timestamp:      "2026-04-28T12:00:01Z",
+		Text:           "weigh the options",
+		DurationMs:     &firstDur,
+	}, cfg, logger)
+	AfterAgentThought(Payload{
+		HookEventName:  "afterAgentThought",
+		ConversationID: "conv",
+		GenerationID:   "gen",
+		Timestamp:      "2026-04-28T12:00:04Z",
+		Text:           "weigh the options, then pick one",
+		DurationMs:     &laterDur,
+	}, cfg, logger)
+
+	got := fragment.LoadTolerant("conv", "gen", logger)
+	if got == nil {
+		t.Fatal("fragment not written")
+	}
+	if len(got.Thinking) != 1 || got.Thinking[0].Text != "weigh the options, then pick one" {
+		t.Fatalf("Thinking = %+v; want the bare turn-id event to update the stepped block", got.Thinking)
+	}
+	if got.Thinking[0].StepID != "gen-0-ab12" {
+		t.Errorf("StepID = %q; want the original step id kept", got.Thinking[0].StepID)
+	}
+	if got.Thinking[0].DurationMs == nil || *got.Thinking[0].DurationMs != laterDur {
+		t.Errorf("duration = %v; want %v", got.Thinking[0].DurationMs, laterDur)
+	}
+}
+
 func TestAfterAgentThoughtKeepsDistinctSteps(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	logger := log.New(&bytes.Buffer{}, "", 0)
@@ -346,6 +385,63 @@ func TestAfterAgentThoughtDropsTextInMetadataOnly(t *testing.T) {
 	}
 	if sum != 4000 {
 		t.Errorf("duration sum = %v; want 4000", sum)
+	}
+}
+
+func TestAfterAgentThoughtPairsBareResendInMetadataOnly(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}
+	first := 1000.0
+	second := 2000.0
+
+	AfterAgentThought(Payload{
+		HookEventName:  "afterAgentThought",
+		ConversationID: "conv",
+		GenerationID:   "gen-0-ab12",
+		Text:           "secret reasoning",
+		DurationMs:     &first,
+	}, cfg, logger)
+	AfterAgentThought(Payload{
+		HookEventName:  "afterAgentThought",
+		ConversationID: "conv",
+		GenerationID:   "gen",
+		Text:           "secret reasoning",
+		DurationMs:     &first,
+	}, cfg, logger)
+	AfterAgentThought(Payload{
+		HookEventName:  "afterAgentThought",
+		ConversationID: "conv",
+		GenerationID:   "gen-1-cd34",
+		Text:           "next step",
+		DurationMs:     &second,
+	}, cfg, logger)
+	AfterAgentThought(Payload{
+		HookEventName:  "afterAgentThought",
+		ConversationID: "conv",
+		GenerationID:   "gen",
+		Text:           "next step",
+		DurationMs:     &second,
+	}, cfg, logger)
+
+	got := fragment.LoadTolerant("conv", "gen", logger)
+	if got == nil {
+		t.Fatal("fragment not written")
+	}
+	if len(got.Thinking) != 2 {
+		t.Fatalf("Thinking = %+v; want one block per step after pairing bare resends", got.Thinking)
+	}
+	var sum float64
+	for _, seg := range got.Thinking {
+		if seg.Text != "" {
+			t.Errorf("thinking text leaked: %+v", seg)
+		}
+		if seg.DurationMs != nil {
+			sum += *seg.DurationMs
+		}
+	}
+	if sum != 3000 {
+		t.Errorf("duration sum = %v; want 3000", sum)
 	}
 }
 
