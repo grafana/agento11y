@@ -19,6 +19,7 @@ from agento11y import (
     GenerationStart,
     HookContext,
     HookEvaluateRequest,
+    HookEvaluateResponse,
     HookInput,
     HookModel,
     HookPhase,
@@ -117,6 +118,8 @@ class Agento11yClaudeAgentHandler:
         self._tool_runs: dict[str, Any] = {}
         self._tool_arguments: dict[str, Any] = {}
         self._skip_next_replayed_prompt = ""
+        # Original prompt text -> the text a redact guard returned for it.
+        self._prompt_redactions: dict[str, str] = {}
 
     def instrument_options(self, options: ClaudeAgentOptions | None = None) -> ClaudeAgentOptions:
         """Return Claude options with agento11y hook callbacks attached."""
@@ -175,7 +178,7 @@ class Agento11yClaudeAgentHandler:
         if self._capture_inputs and isinstance(prompt, str):
             prompt_text = prompt.strip()
             if prompt_text != "":
-                self._input_messages.append(user_text_message(prompt_text))
+                self._input_messages.append(self._redacted(user_text_message(prompt_text)))
                 self._skip_next_replayed_prompt = prompt_text
 
     def record_message(self, message: Any) -> None:
@@ -187,7 +190,7 @@ class Agento11yClaudeAgentHandler:
                 if self._skip_next_replayed_prompt and _message_text(mapped) == self._skip_next_replayed_prompt:
                     self._skip_next_replayed_prompt = ""
                     return
-                self._input_messages.append(mapped)
+                self._input_messages.append(self._redacted(mapped))
             return
 
         if isinstance(message, AssistantMessage):
@@ -268,10 +271,15 @@ class Agento11yClaudeAgentHandler:
         prompt = _as_string(_read(input_data, "prompt"))
         if prompt == "":
             return {}
-        denied = self._evaluate_guard(
+        response = self._evaluate_hook(
             messages=[user_text_message(prompt)],
             conversation_preview=prompt,
         )
+        # A UserPromptSubmit hook can block a prompt but can't rewrite it, so a
+        # redact guard can't change what the model receives. Record the
+        # redacted text instead of the original.
+        self._record_prompt_redaction(prompt, response.transformed_input)
+        denied = hook_denied_from_response(response)
         if denied is None:
             return {}
         return {
@@ -333,6 +341,25 @@ class Agento11yClaudeAgentHandler:
         self._end_open_tools()
         return {}
 
+    def _record_prompt_redaction(self, prompt: str, transformed: HookInput | None) -> None:
+        if transformed is None or not transformed.messages:
+            return
+        original = prompt.strip()
+        redacted = _message_text(transformed.messages[0])
+        if original == "" or redacted == "" or redacted == original:
+            return
+        self._prompt_redactions[original] = redacted
+        # start() records a string prompt before the hook fires.
+        self._input_messages = [self._redacted(message) for message in self._input_messages]
+
+    def _redacted(self, message: Message) -> Message:
+        if message.role != MessageRole.USER:
+            return message
+        redacted = self._prompt_redactions.get(_message_text(message))
+        if redacted is None:
+            return message
+        return user_text_message(redacted)
+
     def _evaluate_guard(
         self,
         *,
@@ -340,7 +367,18 @@ class Agento11yClaudeAgentHandler:
         tools: list[ToolDefinition] | None = None,
         conversation_preview: str = "",
     ) -> Any | None:
-        response = self._client.evaluate_hook(
+        return hook_denied_from_response(
+            self._evaluate_hook(messages=messages, tools=tools, conversation_preview=conversation_preview)
+        )
+
+    def _evaluate_hook(
+        self,
+        *,
+        messages: list[Message] | None = None,
+        tools: list[ToolDefinition] | None = None,
+        conversation_preview: str = "",
+    ) -> HookEvaluateResponse:
+        return self._client.evaluate_hook(
             HookEvaluateRequest(
                 phase=HookPhase.PREFLIGHT.value,
                 context=HookContext(
@@ -359,7 +397,6 @@ class Agento11yClaudeAgentHandler:
                 ),
             )
         )
-        return hook_denied_from_response(response)
 
     def _append_hook(self, hooks: dict[str, list[HookMatcher]], event: str, callback: Any) -> None:
         matchers = hooks.setdefault(event, [])

@@ -81,6 +81,8 @@ Agent Observability guards run through Claude Agent SDK hooks:
 - `UserPromptSubmit` evaluates the submitted prompt before Claude proceeds. A guard deny returns `continue_=False`, stopping the run.
 - `PreToolUse` evaluates tool requests before execution. A guard deny maps to Claude's `permissionDecision="deny"`.
 
+A `UserPromptSubmit` hook can block a prompt but can't rewrite it, so a redact guard can't change what Claude receives. The handler records the redacted prompt in the generation instead of the original.
+
 Enable guards on the agento11y client:
 
 ```python
