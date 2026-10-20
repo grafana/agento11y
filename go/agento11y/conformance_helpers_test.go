@@ -59,6 +59,7 @@ const (
 	spanAttrToolCallID             = "gen_ai.tool.call.id"
 	spanAttrToolType               = "gen_ai.tool.type"
 	spanAttrToolDescription        = "gen_ai.tool.description"
+	spanAttrSkillName              = "agento11y.skill.name"
 	spanAttrToolCallArguments      = "gen_ai.tool.call.arguments"
 	spanAttrToolCallResult         = "gen_ai.tool.call.result"
 	spanAttrResponseID             = "gen_ai.response.id"
@@ -653,6 +654,14 @@ func histogramPointMatches(attrs attribute.Set, want map[string]string) bool {
 		}
 	}
 	return true
+}
+
+func requireMetricAttrAbsent(t *testing.T, attrs attribute.Set, key string) {
+	t.Helper()
+
+	if value, ok := (&attrs).Value(attribute.Key(key)); ok {
+		t.Fatalf("did not expect metric attribute %q to be present (value %q)", key, value.Emit())
+	}
 }
 
 func requireProtoMetadata(t *testing.T, generation *agento11yv1.Generation, key, want string) {
