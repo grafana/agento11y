@@ -37,12 +37,12 @@
           "agento11y.sdk.name": "sdk-go",
           "agento11y.user.id": "test-user"
         },
-        "mode": "GENERATION_MODE_SYNC",
+        "mode": "GENERATION_MODE_STREAM",
         "model": {
           "name": "gpt-5-cursor",
           "provider": "openai"
         },
-        "operation_name": "generateText",
+        "operation_name": "streamText",
         "output": [
           {
             "parts": [

@@ -67,7 +67,9 @@
       "\"agent_name\":\"cursor\"",
       "\"conversation_id\":\"conv-cursor-1\"",
       "\"name\":\"gpt-5-cursor\"",
-      "\"provider\":\"openai\""
+      "\"provider\":\"openai\"",
+      "\"mode\":\"GENERATION_MODE_STREAM\"",
+      "\"operation_name\":\"streamText\""
     ]
   }
 }
