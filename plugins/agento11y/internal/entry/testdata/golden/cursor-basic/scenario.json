@@ -68,8 +68,8 @@
       "\"conversation_id\":\"conv-cursor-1\"",
       "\"name\":\"gpt-5-cursor\"",
       "\"provider\":\"openai\"",
-      "\"mode\":\"GENERATION_MODE_STREAM\"",
-      "\"operation_name\":\"streamText\""
+      "\"mode\":\"GENERATION_MODE_SYNC\"",
+      "\"operation_name\":\"generateText\""
     ]
   }
 }

@@ -86,9 +86,9 @@ type Mapped struct {
 	Generation agento11y.Generation
 	StopStatus StopStatus
 	CallError  error
-	// FirstTokenAt is the first streamed model-output time. Zero means the
-	// turn had no afterAgentThought or afterAgentResponse, so no TTFT sample
-	// is recorded.
+	// FirstTokenAt is a real first-token timestamp. Zero means none was
+	// observed, so no TTFT sample is recorded. Cursor hook timestamps are
+	// block-completion times and do not populate this.
 	FirstTokenAt time.Time
 }
 
@@ -156,9 +156,8 @@ func MapFragment(in Inputs) Mapped {
 	operation := "generateText"
 	firstToken := timeutil.ParseTimestamp(frag.FirstTokenAt, time.Time{})
 	if !firstToken.IsZero() {
-		// Cursor delivers afterAgentThought and afterAgentResponse as the
-		// model produces output. The SDK records time-to-first-token only
-		// for a streamText operation.
+		// The SDK records time-to-first-token only for a streamText
+		// operation. Live Cursor hooks do not supply a first-token time.
 		mode = agento11y.GenerationModeStream
 		operation = "streamText"
 	}

@@ -26,9 +26,6 @@ func AfterAgentResponse(p Payload, cfg config.Config, logger *log.Logger) {
 
 	err := fragment.Update(p.ConversationID, p.GenerationID, logger, func(f *fragment.Fragment) bool {
 		fragment.Touch(f, ts)
-		// The first response chunk is the time-to-first-token mark when no
-		// earlier thought recorded one. Later chunks keep that timestamp.
-		noteFirstToken(f, p)
 		mergeModelParams(f, p.ModelParams)
 		// Prefer the composer `model` slug. A later chunk that only carries
 		// model_id must not downgrade an already-stored slug.

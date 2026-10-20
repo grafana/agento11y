@@ -70,14 +70,14 @@ func TestAfterAgentResponse_GatesAssistantTextByMode(t *testing.T) {
 				got.TokenUsage.OutputTokens == nil || *got.TokenUsage.OutputTokens != 20 {
 				t.Errorf("TokenUsage = %+v; want input=10 output=20", got.TokenUsage)
 			}
-			if got.FirstTokenAt != "2026-04-28T12:00:00Z" {
-				t.Errorf("FirstTokenAt = %q; want the response timestamp", got.FirstTokenAt)
+			if got.FirstTokenAt != "" {
+				t.Errorf("FirstTokenAt = %q; want empty because the hook timestamp is completion time", got.FirstTokenAt)
 			}
 		})
 	}
 }
 
-func TestAfterAgentResponse_FirstTokenStaysOnTheFirstChunk(t *testing.T) {
+func TestAfterAgentResponse_DoesNotRecordCompletionAsFirstToken(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	logger := log.New(&bytes.Buffer{}, "", 0)
 	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeFull}
@@ -101,8 +101,8 @@ func TestAfterAgentResponse_FirstTokenStaysOnTheFirstChunk(t *testing.T) {
 	if got == nil {
 		t.Fatal("fragment not written")
 	}
-	if got.FirstTokenAt != "2026-04-28T12:00:01Z" {
-		t.Errorf("FirstTokenAt = %q; want the first chunk", got.FirstTokenAt)
+	if got.FirstTokenAt != "" {
+		t.Errorf("FirstTokenAt = %q; want empty because Cursor fires after the block completes", got.FirstTokenAt)
 	}
 	if len(got.Assistant) != 2 {
 		t.Errorf("Assistant segments = %d; want both chunks", len(got.Assistant))

@@ -76,19 +76,15 @@ func applyStopModel(frag *fragment.Fragment, p Payload) {
 	mergeModelParams(frag, p.ModelParams)
 }
 
-// noteFirstToken records the first model-output event as the time-to-first-token
-// mark. afterAgentThought and afterAgentResponse are that signal; a later
-// chunk does not move it. Returns true when the fragment changed.
-func noteFirstToken(f *fragment.Fragment, p Payload) bool {
-	if f == nil || f.FirstTokenAt != "" {
-		return false
+// thoughtStepID returns Cursor's per-model-step generation_id when
+// afterAgentThought attached the `-<n>-<xxxx>` suffix. A bare turn id
+// returns empty: that event has no step identity to match against.
+func thoughtStepID(generationID string) string {
+	trimmed := strings.TrimSpace(generationID)
+	if trimmed == "" || turnGenerationID(trimmed) == trimmed {
+		return ""
 	}
-	if ts := strings.TrimSpace(p.Timestamp); ts != "" {
-		f.FirstTokenAt = ts
-	} else {
-		f.FirstTokenAt = p.ResolvedTimestamp()
-	}
-	return f.FirstTokenAt != ""
+	return trimmed
 }
 
 // maxModelParamBytes bounds one model_params value stored on the fragment.

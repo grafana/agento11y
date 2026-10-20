@@ -17,18 +17,21 @@ import (
 // it with a per-step generation_id (`<turn-uuid>-<n>-<xxxx>`). We collapse
 // that onto the turn id so thoughts attach to the same fragment as tools and
 // stop, rather than creating orphan thought-only files that sessionEnd would
-// later emit as empty generations with model "unknown".
+// later emit as empty generations with model "unknown". The original step id
+// is kept on the thinking segment so a later block from a different step is
+// not treated as a resend of the first.
 //
 // `text` is that block's aggregated thinking. It is stored when the capture
-// mode exports assistant text, and redacted when the turn is mapped. The
-// event is also the earliest model-output signal, so its timestamp is the
-// time-to-first-token mark when no earlier thought or response was seen.
+// mode exports assistant text, and redacted when the turn is mapped.
+// Duration is stored in every capture mode. The hook timestamp is the block's
+// completion time, not a first-token mark, so it is not recorded as TTFT.
 func AfterAgentThought(p Payload, cfg config.Config, logger *log.Logger) {
 	if p.ConversationID == "" || p.GenerationID == "" {
 		logger.Print("afterAgentThought: missing conversation_id or generation_id")
 		return
 	}
 	genID := turnGenerationID(p.GenerationID)
+	stepID := thoughtStepID(p.GenerationID)
 	ts := p.ResolvedTimestamp()
 	keepText := keepsAssistantText(cfg.ContentCapture)
 
@@ -39,10 +42,7 @@ func AfterAgentThought(p Payload, cfg config.Config, logger *log.Logger) {
 			f.ThinkingPresent = true
 			changed = true
 		}
-		if noteFirstToken(f, p) {
-			changed = true
-		}
-		if recordThinking(f, p.Text, p.DurationMs, ts, keepText) {
+		if recordThinking(f, p.Text, p.DurationMs, ts, stepID, keepText) {
 			fragment.Touch(f, ts)
 			changed = true
 		}
@@ -65,43 +65,61 @@ func keepsAssistantText(mode agento11y.ContentCaptureMode) bool {
 		mode == agento11y.ContentCaptureModeNoToolContent
 }
 
-// recordThinking stores one completed thinking block. A repeat of the same
-// aggregated text does not append. A longer text that starts with the
-// previous block replaces it, so a host that resends a growing aggregation
-// does not duplicate the prefix. Without text, only the duration is kept.
-func recordThinking(f *fragment.Fragment, text string, duration *float64, ts string, keepText bool) bool {
-	text = strings.TrimSpace(text)
-	if keepText && text != "" {
-		if n := len(f.Thinking); n > 0 {
-			last := &f.Thinking[n-1]
-			if last.Text == text || strings.HasPrefix(text, last.Text) {
-				changed := false
-				if last.Text != text {
-					last.Text = text
-					last.Timestamp = ts
-					changed = true
-				}
-				if duration != nil && (last.DurationMs == nil || *last.DurationMs != *duration) {
-					last.DurationMs = duration
-					last.Timestamp = ts
-					changed = true
-				}
-				return changed
-			}
+// recordThinking stores one completed thinking block. Duration is kept even
+// when the capture mode drops text. A later event replaces an existing
+// segment only when it carries the same step id — text equality across
+// different model steps is not a resend. Without a step id, each event is
+// a new block.
+func recordThinking(f *fragment.Fragment, text string, duration *float64, ts, stepID string, keepText bool) bool {
+	if keepText {
+		text = strings.TrimSpace(text)
+	} else {
+		text = ""
+	}
+	duration = cloneDuration(duration)
+	if i := thinkingStepIndex(f, stepID); i >= 0 {
+		seg := &f.Thinking[i]
+		changed := false
+		if text != "" && seg.Text != text {
+			seg.Text = text
+			seg.Timestamp = ts
+			changed = true
 		}
-		f.Thinking = append(f.Thinking, fragment.ThinkingSegment{
-			Text:       text,
-			DurationMs: duration,
-			Timestamp:  ts,
-		})
-		return true
+		if duration != nil && (seg.DurationMs == nil || *seg.DurationMs != *duration) {
+			seg.DurationMs = duration
+			seg.Timestamp = ts
+			changed = true
+		}
+		return changed
 	}
-	if duration == nil {
+	if text == "" && duration == nil {
 		return false
 	}
-	if f.ThinkingDurationMs != nil && *f.ThinkingDurationMs == *duration {
-		return false
-	}
-	f.ThinkingDurationMs = duration
+	f.Thinking = append(f.Thinking, fragment.ThinkingSegment{
+		Text:       text,
+		DurationMs: duration,
+		Timestamp:  ts,
+		StepID:     stepID,
+	})
 	return true
+}
+
+func thinkingStepIndex(f *fragment.Fragment, stepID string) int {
+	if stepID == "" {
+		return -1
+	}
+	for i := range f.Thinking {
+		if f.Thinking[i].StepID == stepID {
+			return i
+		}
+	}
+	return -1
+}
+
+func cloneDuration(d *float64) *float64 {
+	if d == nil {
+		return nil
+	}
+	v := *d
+	return &v
 }

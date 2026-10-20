@@ -51,11 +51,15 @@ type AssistantSegment struct {
 }
 
 // ThinkingSegment is one completed thinking block from afterAgentThought.
-// Text is the aggregated block. DurationMs is that block's duration.
+// Text is the aggregated block when the capture mode keeps assistant text.
+// DurationMs is that block's duration and is stored in every capture mode.
+// StepID is Cursor's per-model-step generation_id; empty means the event
+// carried only the bare turn id.
 type ThinkingSegment struct {
 	Text       string   `json:"text"`
 	DurationMs *float64 `json:"durationMs,omitempty"`
 	Timestamp  string   `json:"timestamp,omitempty"`
+	StepID     string   `json:"stepId,omitempty"`
 }
 
 // TokenCounts are observed in afterAgentResponse and stop. Stop's counts
@@ -77,15 +81,18 @@ type Fragment struct {
 	UserPrompt      string             `json:"userPrompt,omitempty"`
 	TokenUsage      *TokenCounts       `json:"tokenUsage,omitempty"`
 	ThinkingPresent bool               `json:"thinkingPresent,omitempty"`
-	// Thinking holds completed thinking blocks when the capture mode exports
-	// assistant text. metadata_only leaves this empty and keeps only the flag.
+	// Thinking holds completed thinking blocks. Text is empty in
+	// metadata_only; duration and step identity are still stored so the
+	// exported total does not depend on capture mode.
 	Thinking []ThinkingSegment `json:"thinking,omitempty"`
-	// ThinkingDurationMs is the latest afterAgentThought duration when the
-	// thinking text itself was not stored.
+	// ThinkingDurationMs is a legacy single-duration fallback for fragments
+	// written before per-block durations were stored. New writes leave it
+	// empty and put each block on Thinking.
 	ThinkingDurationMs *float64 `json:"thinkingDurationMs,omitempty"`
-	// FirstTokenAt is the timestamp of the first afterAgentThought or
-	// afterAgentResponse. Later chunks do not replace it. Empty means the
-	// turn never reported streamed output, and the export stays synchronous.
+	// FirstTokenAt is a real first-token timestamp when one is available.
+	// Cursor's afterAgentThought and afterAgentResponse timestamps are
+	// block-completion times, so live hooks leave this empty and the export
+	// stays synchronous.
 	FirstTokenAt string `json:"firstTokenAt,omitempty"`
 	// ModelParams are Cursor's selected model parameters (thinking, context,
 	// effort, optimize_for), keyed by id. Later events overwrite the same id.

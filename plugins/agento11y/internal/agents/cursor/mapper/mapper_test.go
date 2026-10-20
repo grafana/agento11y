@@ -160,6 +160,32 @@ func TestMapFragment_ThinkingTextAndModelParams(t *testing.T) {
 	}
 }
 
+func TestMapFragment_SumsDurationOnlyThinkingBlocks(t *testing.T) {
+	first := 1000.0
+	second := 2000.0
+	frag := basicFragment(t)
+	frag.Thinking = []fragment.ThinkingSegment{
+		{DurationMs: &first, StepID: "gen-0-ab12"},
+		{DurationMs: &second, StepID: "gen-1-cd34"},
+	}
+
+	got := MapFragment(Inputs{
+		Fragment:       frag,
+		ContentCapture: agento11y.ContentCaptureModeMetadataOnly,
+		Now:            fixedTime,
+	})
+	if got.Generation.Metadata["cursor.thinking.duration_ms"] != 3000.0 {
+		t.Fatalf("thinking duration = %#v; want 3000", got.Generation.Metadata["cursor.thinking.duration_ms"])
+	}
+	for _, msg := range got.Generation.Output {
+		for _, part := range msg.Parts {
+			if part.Thinking != "" {
+				t.Fatalf("metadata_only exported thinking %q", part.Thinking)
+			}
+		}
+	}
+}
+
 // TestMapFragment_ContentCaptureModes covers what every supported
 // ContentCaptureMode includes or strips in the gRPC payload that
 // buildMessages produces.
