@@ -178,6 +178,7 @@ With guards on, a rule can:
 On OpenCode 2:
 
 - Checks run when a prompt is submitted, before each model request (including compaction, title, and `session.generate` requests), before a tool runs, and when OpenCode evaluates a permission. A denied permission reports the rule's reason.
+- Exported generations carry the text a redact rule sent to the model, not your original message: the input, the system prompt, and the conversation title use the redacted text.
 - Compaction is checked a second time, on the request OpenCode actually sends, because OpenCode rebuilds the compaction text from stored history after the first check. This check reads OpenAI Chat Completions, OpenAI Responses (HTTP and WebSocket), Anthropic Messages, Gemini, and Bedrock Converse requests. With guards on, compaction through any other protocol fails. A redact rule can rewrite only an unsigned HTTP request that carries no server-side state or signed reasoning. In every other case, compaction fails instead of sending the unredacted text.
 - Automatic session titles stop while guards are on, unless you set `agent.title.model` in your OpenCode config. Without a title model, OpenCode's GitHub Copilot provider sends the conversation for a title before any plugin can check it, so the plugin removes OpenCode's title agent.
 - Guards do not cover requests other plugins send themselves, OpenCode's global `generate` API, request changes made by plugins that run after this one, or raw provider body overrides on requests other than compaction.
