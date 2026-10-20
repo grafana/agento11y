@@ -77,6 +77,7 @@ func capturePrompt(p Payload, cfg config.Config, logger *log.Logger) {
 
 	err := fragment.Update(p.ConversationID, p.GenerationID, logger, func(f *fragment.Fragment) bool {
 		fragment.Touch(f, ts)
+		mergeModelParams(f, p.ModelParams)
 		if keepPrompt && p.Prompt != "" {
 			f.UserPrompt = p.Prompt
 		}

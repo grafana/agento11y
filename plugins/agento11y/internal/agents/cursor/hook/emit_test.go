@@ -17,6 +17,9 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/grafana/agento11y/go/agento11y"
+	"go.opentelemetry.io/otel"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/config"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/fragment"
@@ -77,6 +80,103 @@ func TestEmitGenerationSendsCursorUserAgent(t *testing.T) {
 
 	if !strings.HasPrefix(gotUA, "agento11y-plugin-cursor/") {
 		t.Fatalf("User-Agent = %q, want agento11y-plugin-cursor/ prefix", gotUA)
+	}
+}
+
+func TestEmitGenerationRecordsTimeToFirstToken(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	previous := otel.GetMeterProvider()
+	otel.SetMeterProvider(provider)
+	t.Cleanup(func() {
+		otel.SetMeterProvider(previous)
+		_ = provider.Shutdown(context.Background())
+	})
+
+	var body []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var err error
+		body, err = io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "read body", http.StatusBadRequest)
+			return
+		}
+		var request struct {
+			Generations []struct {
+				ID string `json:"id"`
+			} `json:"generations"`
+		}
+		if err := json.Unmarshal(body, &request); err != nil {
+			http.Error(w, "invalid json", http.StatusBadRequest)
+			return
+		}
+		results := make([]map[string]any, 0, len(request.Generations))
+		for _, g := range request.Generations {
+			results = append(results, map[string]any{"generation_id": g.ID, "accepted": true})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"results": results})
+	}))
+	defer server.Close()
+	t.Setenv("SIGIL_ENDPOINT", server.URL)
+	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
+	t.Setenv("SIGIL_AUTH_TOKEN", "token")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+
+	frag := &fragment.Fragment{
+		ConversationID: "conv",
+		GenerationID:   "gen-1",
+		Model:          "gpt-5",
+		StartedAt:      "2026-04-28T12:00:00Z",
+		LastEventAt:    "2026-04-28T12:00:02Z",
+		FirstTokenAt:   "2026-04-28T12:00:00.250Z",
+	}
+	mapped := mapper.MapFragment(mapper.Inputs{
+		Fragment:       frag,
+		Stop:           &mapper.StopInput{Status: "completed"},
+		ContentCapture: agento11y.ContentCaptureModeMetadataOnly,
+		Now:            time.Date(2026, 4, 28, 12, 0, 2, 0, time.UTC),
+	})
+	ctx := context.Background()
+	client := buildClient(Payload{}, nil, config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}, nil, log.New(io.Discard, "", 0))
+	if err := emitGeneration(ctx, client, frag, mapped, log.New(io.Discard, "", 0)); err != nil {
+		t.Fatalf("emitGeneration: %v", err)
+	}
+	if err := client.Flush(ctx); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	_ = client.Shutdown(ctx)
+
+	if !strings.Contains(string(body), "GENERATION_MODE_STREAM") || !strings.Contains(string(body), "streamText") {
+		t.Fatalf("export body missing stream mode:\n%s", body)
+	}
+
+	var collected metricdata.ResourceMetrics
+	if err := reader.Collect(ctx, &collected); err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	var sum float64
+	var found bool
+	for _, scope := range collected.ScopeMetrics {
+		for _, metric := range scope.Metrics {
+			if metric.Name != "gen_ai.client.time_to_first_token" {
+				continue
+			}
+			hist, ok := metric.Data.(metricdata.Histogram[float64])
+			if !ok {
+				t.Fatalf("ttft data type %T", metric.Data)
+			}
+			for _, point := range hist.DataPoints {
+				sum += point.Sum
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected a time-to-first-token sample")
+	}
+	if sum < 0.24 || sum > 0.26 {
+		t.Fatalf("ttft sum = %v; want 0.25s", sum)
 	}
 }
 

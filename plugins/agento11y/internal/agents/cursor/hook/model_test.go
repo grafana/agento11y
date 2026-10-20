@@ -2,11 +2,14 @@ package hook
 
 import (
 	"bytes"
+	"encoding/json"
 	"log"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/config"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/fragment"
@@ -139,6 +142,7 @@ func TestAfterAgentThought(t *testing.T) {
 				if err := fragment.Update("conv", "gen", logger, func(f *fragment.Fragment) bool {
 					f.ThinkingPresent = true
 					f.Model = "claude-sonnet-4"
+					f.FirstTokenAt = "2026-04-28T12:00:00Z"
 					return true
 				}); err != nil {
 					t.Fatalf("seed: %v", err)
@@ -187,9 +191,98 @@ func TestAfterAgentThought(t *testing.T) {
 			if tc.seed != nil {
 				tc.seed(t, logger)
 			}
-			AfterAgentThought(tc.payload, logger)
+			AfterAgentThought(tc.payload, config.Config{}, logger)
 			tc.verify(t, &logBuf)
 		})
+	}
+}
+
+func TestAfterAgentThoughtStoresThinkingText(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeFull}
+	dur := 5000.0
+
+	AfterAgentThought(Payload{
+		HookEventName:  "afterAgentThought",
+		ConversationID: "conv",
+		GenerationID:   "gen-0-ab12",
+		Timestamp:      "2026-04-28T12:00:01Z",
+		Text:           "weigh the options",
+		DurationMs:     &dur,
+	}, cfg, logger)
+	AfterAgentThought(Payload{
+		HookEventName:  "afterAgentThought",
+		ConversationID: "conv",
+		GenerationID:   "gen",
+		Timestamp:      "2026-04-28T12:00:04Z",
+		Text:           "weigh the options, then pick one",
+		DurationMs:     &dur,
+	}, cfg, logger)
+
+	got := fragment.LoadTolerant("conv", "gen", logger)
+	if got == nil {
+		t.Fatal("fragment not written")
+	}
+	if !got.ThinkingPresent {
+		t.Fatal("ThinkingPresent unset")
+	}
+	if got.FirstTokenAt != "2026-04-28T12:00:01Z" {
+		t.Errorf("FirstTokenAt = %q; want the first thought", got.FirstTokenAt)
+	}
+	if len(got.Thinking) != 1 || got.Thinking[0].Text != "weigh the options, then pick one" {
+		t.Fatalf("Thinking = %+v; want the longer aggregation to replace the prefix", got.Thinking)
+	}
+	if got.Thinking[0].DurationMs == nil || *got.Thinking[0].DurationMs != dur {
+		t.Errorf("duration = %v; want %v", got.Thinking[0].DurationMs, dur)
+	}
+	if _, err := os.Stat(fragment.FragmentFilePath("conv", "gen-0-ab12")); !os.IsNotExist(err) {
+		t.Fatalf("step id should collapse onto gen, stat err=%v", err)
+	}
+}
+
+func TestAfterAgentThoughtDropsTextInMetadataOnly(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	dur := 1500.0
+	AfterAgentThought(Payload{
+		HookEventName:  "afterAgentThought",
+		ConversationID: "conv",
+		GenerationID:   "gen",
+		Text:           "secret reasoning",
+		DurationMs:     &dur,
+	}, config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}, logger)
+
+	got := fragment.LoadTolerant("conv", "gen", logger)
+	if got == nil || !got.ThinkingPresent {
+		t.Fatalf("expected thinking flag; got %+v", got)
+	}
+	if len(got.Thinking) != 0 {
+		t.Errorf("thinking text leaked: %+v", got.Thinking)
+	}
+	if got.ThinkingDurationMs == nil || *got.ThinkingDurationMs != dur {
+		t.Errorf("duration = %v; want %v", got.ThinkingDurationMs, dur)
+	}
+}
+
+func TestParseModelParamsToleratesNonStringValues(t *testing.T) {
+	raw := []byte(`{"model_params":[{"id":"optimize_for","value":"cost"},{"id":"thinking","value":true},{"id":"max_tokens","value":128},{"id":"","value":"skip"},{"id":"nested","value":{"a":1}}]}`)
+	var p Payload
+	if err := json.Unmarshal(raw, &p); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	got := parseModelParams(p.ModelParams)
+	if got["optimize_for"] != "cost" || got["thinking"] != "true" || got["max_tokens"] != "128" {
+		t.Fatalf("params = %#v", got)
+	}
+	if _, ok := got["nested"]; !ok {
+		t.Fatal("object value should be kept as JSON")
+	}
+	if _, ok := got[""]; ok {
+		t.Fatal("empty id should be dropped")
+	}
+	if parseModelParams([]byte(`{"id":"thinking"}`)) != nil {
+		t.Fatal("a non-array model_params should not fail the caller; it should yield nothing")
 	}
 }
 

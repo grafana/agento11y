@@ -38,12 +38,24 @@ type ToolRecord struct {
 	Status       string          `json:"status,omitempty"`
 	CompletedAt  string          `json:"completedAt,omitempty"`
 	ErrorMessage string          `json:"errorMessage,omitempty"`
+	// FailureType is Cursor's postToolUseFailure classification
+	// (error, timeout, permission_denied). It is metadata, so it is stored
+	// in every capture mode.
+	FailureType string `json:"failureType,omitempty"`
 }
 
 // AssistantSegment is one chunk of assistant response text, in arrival order.
 type AssistantSegment struct {
 	Text      string `json:"text"`
 	Timestamp string `json:"timestamp,omitempty"`
+}
+
+// ThinkingSegment is one completed thinking block from afterAgentThought.
+// Text is the aggregated block. DurationMs is that block's duration.
+type ThinkingSegment struct {
+	Text       string   `json:"text"`
+	DurationMs *float64 `json:"durationMs,omitempty"`
+	Timestamp  string   `json:"timestamp,omitempty"`
 }
 
 // TokenCounts are observed in afterAgentResponse and stop. Stop's counts
@@ -65,10 +77,23 @@ type Fragment struct {
 	UserPrompt      string             `json:"userPrompt,omitempty"`
 	TokenUsage      *TokenCounts       `json:"tokenUsage,omitempty"`
 	ThinkingPresent bool               `json:"thinkingPresent,omitempty"`
-	StartedAt       string             `json:"startedAt,omitempty"`
-	LastEventAt     string             `json:"lastEventAt,omitempty"`
-	Model           string             `json:"model,omitempty"`
-	Provider        string             `json:"provider,omitempty"`
+	// Thinking holds completed thinking blocks when the capture mode exports
+	// assistant text. metadata_only leaves this empty and keeps only the flag.
+	Thinking []ThinkingSegment `json:"thinking,omitempty"`
+	// ThinkingDurationMs is the latest afterAgentThought duration when the
+	// thinking text itself was not stored.
+	ThinkingDurationMs *float64 `json:"thinkingDurationMs,omitempty"`
+	// FirstTokenAt is the timestamp of the first afterAgentThought or
+	// afterAgentResponse. Later chunks do not replace it. Empty means the
+	// turn never reported streamed output, and the export stays synchronous.
+	FirstTokenAt string `json:"firstTokenAt,omitempty"`
+	// ModelParams are Cursor's selected model parameters (thinking, context,
+	// effort, optimize_for), keyed by id. Later events overwrite the same id.
+	ModelParams map[string]string `json:"modelParams,omitempty"`
+	StartedAt   string            `json:"startedAt,omitempty"`
+	LastEventAt string            `json:"lastEventAt,omitempty"`
+	Model       string            `json:"model,omitempty"`
+	Provider    string            `json:"provider,omitempty"`
 
 	// PendingStop is set by handleStop before it tries to emit. If emission
 	// fails the fragment stays on disk with this set so sessionEnd can replay

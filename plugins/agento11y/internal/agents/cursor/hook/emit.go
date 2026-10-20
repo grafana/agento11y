@@ -90,7 +90,7 @@ func firstWorkspaceRoot(roots []string) string {
 // Flushing/shutdown is the caller's responsibility — sessionEnd batches
 // multiple generations through one client.
 func emitGeneration(ctx context.Context, client *agento11y.Client, frag *fragment.Fragment, mapped mapper.Mapped, logger *log.Logger) error {
-	return emit.Record(ctx, client, mapped.Start, mapped.Generation, mapped.CallError, func(genCtx context.Context) {
+	return emit.RecordWithFirstToken(ctx, client, mapped.Start, mapped.Generation, mapped.CallError, mapped.FirstTokenAt, func(genCtx context.Context) {
 		emitToolSpans(genCtx, client, frag, mapped.Generation, logger)
 	})
 }

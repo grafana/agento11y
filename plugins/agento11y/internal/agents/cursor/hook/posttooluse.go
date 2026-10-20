@@ -3,6 +3,7 @@ package hook
 import (
 	"encoding/json"
 	"log"
+	"strings"
 
 	"github.com/grafana/agento11y/go/agento11y"
 
@@ -30,10 +31,11 @@ func PostToolUse(p Payload, cfg config.Config, logger *log.Logger, isFailure boo
 	}
 	ts := p.ResolvedTimestamp()
 	status := p.Status
-	var errorMsg string
+	var errorMsg, failureType string
 	if isFailure {
 		status = "error"
-		errorMsg = errorMessageForMode(p.Error, cfg.ContentCapture)
+		errorMsg = errorMessageForMode(p, cfg.ContentCapture)
+		failureType = failureTypeForStore(p.FailureType)
 	}
 
 	rec := fragment.ToolRecord{
@@ -44,6 +46,7 @@ func PostToolUse(p Payload, cfg config.Config, logger *log.Logger, isFailure boo
 		Status:       status,
 		CompletedAt:  ts,
 		ErrorMessage: errorMsg,
+		FailureType:  failureType,
 	}
 	// Persist input/output bytes only when full mode is active. Anything else
 	// would be silently dropped at emit time, but writing to disk first would
@@ -56,6 +59,7 @@ func PostToolUse(p Payload, cfg config.Config, logger *log.Logger, isFailure boo
 
 	err := fragment.Update(p.ConversationID, p.GenerationID, logger, func(f *fragment.Fragment) bool {
 		fragment.Touch(f, ts)
+		mergeModelParams(f, p.ModelParams)
 		f.Tools = append(f.Tools, rec)
 		return true
 	})
@@ -74,11 +78,33 @@ func PostToolUse(p Payload, cfg config.Config, logger *log.Logger, isFailure boo
 // returned error". The message is tool content, and it is the one content field
 // the SDK forwards to the span status and error event under no_tool_content.
 // codex and copilot gate and redact the same field the same way.
-func errorMessageForMode(raw json.RawMessage, mode agento11y.ContentCaptureMode) string {
+//
+// Current Cursor payloads send error_message. Older ones send error as a
+// string or {message, code}. error_message wins when both are set.
+func errorMessageForMode(p Payload, mode agento11y.ContentCaptureMode) string {
 	if mode != agento11y.ContentCaptureModeFull {
 		return ""
 	}
-	return redact.New().Redact(extractToolError(raw))
+	msg := strings.TrimSpace(p.ErrorMessage)
+	if msg == "" {
+		msg = extractToolError(p.Error)
+	}
+	if msg == "" {
+		return ""
+	}
+	return redact.New().Redact(msg)
+}
+
+// failureTypeForStore keeps Cursor's failure classification in every capture
+// mode. It is an enum (error, timeout, permission_denied), not tool content.
+// A value that is not one of those is still kept, redacted, and cut, so a
+// host that puts a secret in the field cannot export it whole.
+func failureTypeForStore(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	return redact.CutTitle(redact.New().RedactLightweight(raw), 64)
 }
 
 // extractToolError parses the polymorphic `error` field into a single string.

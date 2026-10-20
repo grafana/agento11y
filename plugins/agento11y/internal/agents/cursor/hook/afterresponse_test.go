@@ -70,7 +70,42 @@ func TestAfterAgentResponse_GatesAssistantTextByMode(t *testing.T) {
 				got.TokenUsage.OutputTokens == nil || *got.TokenUsage.OutputTokens != 20 {
 				t.Errorf("TokenUsage = %+v; want input=10 output=20", got.TokenUsage)
 			}
+			if got.FirstTokenAt != "2026-04-28T12:00:00Z" {
+				t.Errorf("FirstTokenAt = %q; want the response timestamp", got.FirstTokenAt)
+			}
 		})
+	}
+}
+
+func TestAfterAgentResponse_FirstTokenStaysOnTheFirstChunk(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeFull}
+
+	AfterAgentResponse(Payload{
+		HookEventName:  "afterAgentResponse",
+		ConversationID: "conv",
+		GenerationID:   "gen",
+		Timestamp:      "2026-04-28T12:00:01Z",
+		Text:           "first",
+	}, cfg, logger)
+	AfterAgentResponse(Payload{
+		HookEventName:  "afterAgentResponse",
+		ConversationID: "conv",
+		GenerationID:   "gen",
+		Timestamp:      "2026-04-28T12:00:09Z",
+		Text:           " second",
+	}, cfg, logger)
+
+	got := fragment.LoadTolerant("conv", "gen", logger)
+	if got == nil {
+		t.Fatal("fragment not written")
+	}
+	if got.FirstTokenAt != "2026-04-28T12:00:01Z" {
+		t.Errorf("FirstTokenAt = %q; want the first chunk", got.FirstTokenAt)
+	}
+	if len(got.Assistant) != 2 {
+		t.Errorf("Assistant segments = %d; want both chunks", len(got.Assistant))
 	}
 }
 

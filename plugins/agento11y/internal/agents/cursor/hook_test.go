@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/fragment"
 )
 
 // TestHookDispatch verifies the dispatcher-level response contract: the event
@@ -111,5 +113,32 @@ func TestHookDispatch(t *testing.T) {
 				t.Errorf("expected exactly one response line, got %d: %q", got, stdout.String())
 			}
 		})
+	}
+}
+
+func TestHookKeepsEventWhenModelParamValueIsNotAString(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("SIGIL_GUARDS_ENABLED", "")
+	t.Setenv("SIGIL_ENDPOINT", "")
+	t.Setenv("SIGIL_AUTH_TENANT_ID", "")
+	t.Setenv("SIGIL_AUTH_TOKEN", "")
+
+	stdin := `{"hook_event_name":"preToolUse","conversation_id":"conv","generation_id":"gen","tool_name":"Shell","tool_use_id":"tu_1","tool_input":{"command":"echo hi"},"model_params":[{"id":"optimize_for","value":"cost"},{"id":"thinking","value":true},{"id":"max_tokens","value":128}]}`
+	var stdout, logs bytes.Buffer
+	if err := Hook(context.Background(), strings.NewReader(stdin), &stdout, log.New(&logs, "", 0)); err != nil {
+		t.Fatalf("Hook: %v", err)
+	}
+	if strings.Contains(logs.String(), "invalid JSON") {
+		t.Fatalf("non-string model_params value dropped the event: %s", logs.String())
+	}
+	if !strings.Contains(stdout.String(), `"permission":"allow"`) {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+	got := fragment.LoadTolerant("conv", "gen", log.New(&bytes.Buffer{}, "", 0))
+	if got == nil {
+		t.Fatal("expected model params on the fragment")
+	}
+	if got.ModelParams["optimize_for"] != "cost" || got.ModelParams["thinking"] != "true" || got.ModelParams["max_tokens"] != "128" {
+		t.Fatalf("ModelParams = %#v", got.ModelParams)
 	}
 }
