@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { trace } from '@opentelemetry/api';
+import { SpanStatusCode, trace } from '@opentelemetry/api';
+import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { Agento11yClient, createSecretRedactionSanitizer, defaultConfig } from '../.test-dist/index.js';
 
 class CapturingExporter {
@@ -223,10 +224,15 @@ test('secret redaction sanitizer redacts systemPrompt, conversationTitle, and ca
   assert.match(sanitized.callError, /\[REDACTED:openai-project-key\]/);
 });
 
-function newSanitizingClient(exporter, generationSanitizer) {
+function newSanitizingClient(
+  exporter,
+  generationSanitizer,
+  { tracer = trace.getTracer('agento11y-sdk-js-test'), contentCapture } = {},
+) {
   const defaults = defaultConfig();
   return new Agento11yClient({
-    tracer: trace.getTracer('agento11y-sdk-js-test'),
+    tracer,
+    contentCapture,
     generationExport: {
       ...defaults.generationExport,
       batchSize: 1,
@@ -288,6 +294,112 @@ test('generation sanitizer that clears the title and call error also drops their
     assert.equal('call_error' in generation.metadata, false);
   } finally {
     await client.shutdown();
+  }
+});
+
+function newSpanCapture() {
+  const spanExporter = new InMemorySpanExporter();
+  const traceProvider = new BasicTracerProvider({
+    spanProcessors: [new SimpleSpanProcessor(spanExporter)],
+  });
+  return { spanExporter, traceProvider, tracer: traceProvider.getTracer('agento11y-sdk-js-test') };
+}
+
+function singleSpan(spanExporter) {
+  const spans = spanExporter.getFinishedSpans();
+  assert.equal(spans.length, 1);
+  return spans[0];
+}
+
+test('secret redaction sanitizer also redacts the title and call error on the span', async () => {
+  const { spanExporter, traceProvider, tracer } = newSpanCapture();
+  const client = newSanitizingClient(new CapturingExporter(), createSecretRedactionSanitizer(), { tracer });
+
+  try {
+    const apiKey = `sk-proj-${'a'.repeat(48)}`;
+    const recorder = client.startGeneration({
+      model: { provider: 'openai', name: 'gpt-5' },
+      conversationTitle: `Discussion about ${apiKey}`,
+    });
+    recorder.setCallError(new Error(`API error: invalid key ${apiKey}`));
+    recorder.end();
+
+    const span = singleSpan(spanExporter);
+    assert.match(span.attributes['agento11y.conversation.title'], /\[REDACTED:openai-project-key\]/);
+    assert.equal(span.status.code, SpanStatusCode.ERROR);
+    assert.match(span.status.message, /\[REDACTED:openai-project-key\]/);
+    assert.equal(span.events.length, 1);
+    assert.match(span.events[0].attributes['exception.message'], /\[REDACTED:openai-project-key\]/);
+    assert.doesNotMatch(JSON.stringify([span.attributes, span.status, span.events]), /sk-proj-/);
+  } finally {
+    await client.shutdown();
+    await traceProvider.shutdown();
+  }
+});
+
+test('generation sanitizer that clears the title and call error leaves neither on the span', async () => {
+  const { spanExporter, traceProvider, tracer } = newSpanCapture();
+  const client = newSanitizingClient(
+    new CapturingExporter(),
+    (generation) => ({ ...generation, conversationTitle: '', callError: undefined }),
+    { tracer },
+  );
+
+  try {
+    const recorder = client.startGeneration({
+      model: { provider: 'openai', name: 'gpt-5' },
+      conversationTitle: 'Private title',
+    });
+    recorder.setCallError(new Error('private error'));
+    recorder.end();
+
+    const span = singleSpan(spanExporter);
+    assert.equal(span.attributes['agento11y.conversation.title'], '');
+    assert.equal(span.status.code, SpanStatusCode.ERROR);
+    assert.ok(span.status.message.length > 0);
+    assert.doesNotMatch(JSON.stringify([span.attributes, span.status, span.events]), /Private title|private error/);
+  } finally {
+    await client.shutdown();
+    await traceProvider.shutdown();
+  }
+});
+
+test('generation sanitizer that clears the title adds no title to a full_with_metadata_spans span', async () => {
+  const { spanExporter, traceProvider, tracer } = newSpanCapture();
+  const client = newSanitizingClient(
+    new CapturingExporter(),
+    (generation) => ({ ...generation, conversationTitle: '' }),
+    { tracer, contentCapture: 'full_with_metadata_spans' },
+  );
+
+  try {
+    const recorder = client.startGeneration({
+      model: { provider: 'openai', name: 'gpt-5' },
+      conversationTitle: 'Private title',
+    });
+    recorder.end();
+
+    const span = singleSpan(spanExporter);
+    assert.equal('agento11y.conversation.title' in span.attributes, false);
+  } finally {
+    await client.shutdown();
+    await traceProvider.shutdown();
+  }
+});
+
+test('generation sanitizer leaves no title on the span when the generation had none', async () => {
+  const { spanExporter, traceProvider, tracer } = newSpanCapture();
+  const client = newSanitizingClient(new CapturingExporter(), createSecretRedactionSanitizer(), { tracer });
+
+  try {
+    const recorder = client.startGeneration({ model: { provider: 'openai', name: 'gpt-5' } });
+    recorder.end();
+
+    const span = singleSpan(spanExporter);
+    assert.equal('agento11y.conversation.title' in span.attributes, false);
+  } finally {
+    await client.shutdown();
+    await traceProvider.shutdown();
   }
 });
 

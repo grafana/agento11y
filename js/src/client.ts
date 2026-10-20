@@ -1591,6 +1591,7 @@ class GenerationRecorderImpl implements GenerationRecorder {
     const callErrorCategory = errorCategoryFromError(this.callError, false);
 
     let effectiveContentCaptureMode = this.contentCaptureMode;
+    let sanitized = false;
     let validationTarget = cloneGeneration(generation);
     stampContentCaptureMetadata(generation, this.contentCaptureMode);
     if (this.contentCaptureMode === 'metadata_only') {
@@ -1602,6 +1603,7 @@ class GenerationRecorderImpl implements GenerationRecorder {
         // so a secret it redacted would still go out in them.
         syncCanonicalMetadataMirrors(generation);
         validationTarget = cloneGeneration(generation);
+        sanitized = true;
       } catch (error) {
         effectiveContentCaptureMode = 'metadata_only';
         stripContent(generation, callErrorCategory);
@@ -1631,6 +1633,16 @@ class GenerationRecorderImpl implements GenerationRecorder {
       // start-span omission isn't re-emitted here as an empty value.
       this.client.internalClearSpanConversationTitle(this.span);
     }
+    if (
+      sanitized &&
+      this.contentCaptureMode !== 'full_with_metadata_spans' &&
+      notEmpty(this.seed.conversationTitle) &&
+      !notEmpty(generation.conversationTitle)
+    ) {
+      // The start span published the seed title. A sanitizer that cleared
+      // the title must not leave that value on the span.
+      this.client.internalClearSpanConversationTitle(this.span);
+    }
     this.client.internalApplyTraceContextFromSpan(this.span, generation);
     this.client.internalRecordGeneration(generation);
 
@@ -1652,14 +1664,19 @@ class GenerationRecorderImpl implements GenerationRecorder {
     // with the category, so the span path can read it back from the
     // generation. Under full_with_metadata_spans generation.callError stays
     // raw for the gRPC export, so we substitute the precomputed category for
-    // the span path here.
+    // the span path here. After a sanitizer the span takes its text, so it
+    // cannot show what the sanitizer redacted; a sanitizer that cleared the
+    // error leaves the category, so the span still reads as an error.
+    const callErrorFallback = callErrorCategory.length > 0 ? callErrorCategory : 'sdk_error';
     let finalCallError: string | undefined;
     if (this.callError === undefined) {
       finalCallError = undefined;
     } else if (effectiveContentCaptureMode === 'metadata_only') {
       finalCallError = generation.callError;
     } else if (effectiveContentCaptureMode === 'full_with_metadata_spans') {
-      finalCallError = callErrorCategory.length > 0 ? callErrorCategory : 'sdk_error';
+      finalCallError = callErrorFallback;
+    } else if (sanitized) {
+      finalCallError = notEmpty(generation.callError) ? generation.callError : callErrorFallback;
     } else {
       finalCallError = this.callError;
     }
