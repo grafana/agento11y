@@ -1,6 +1,7 @@
 package weavertest
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,6 +66,65 @@ func TestRegistryDependencyLayouts(t *testing.T) {
 				t.Fatalf("rewritten manifest =\n%s\nwant registry path %s", got, wantPath)
 			}
 		})
+	}
+}
+
+func TestProcessDefinitionImports(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		spans      string
+		wantImport bool
+	}{
+		{name: "legacy registry", spans: "groups:\n  - id: gen_ai.execute_tool.internal\n"},
+		{name: "command execution kind", spans: "span_refinements:\n  - id: gen_ai.execute_tool.command.internal\n    attributes:\n      - ref: process.exit.code\n", wantImport: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(root, "model", "gen-ai"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, "model", "gen-ai", "spans.yaml"), []byte(test.spans), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			for range 2 {
+				if err := importProcessDefinitions(root); err != nil {
+					t.Fatal(err)
+				}
+			}
+			contents, err := os.ReadFile(filepath.Join(root, "model", "weavertest-process.yaml"))
+			if !test.wantImport {
+				if !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("legacy registry gained process imports: %q, %v", contents, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(contents) != "file_format: definition/2\nimports:\n  attribute_groups:\n    - registry.process\n" {
+				t.Fatalf("process imports = %q", contents)
+			}
+		})
+	}
+	t.Run("missing model fails", func(t *testing.T) {
+		if err := importProcessDefinitions(t.TempDir()); err == nil {
+			t.Fatal("missing spans accepted")
+		}
+	})
+}
+
+func TestRegistryProvisionStamp(t *testing.T) {
+	root := t.TempDir()
+	for _, stamp := range []string{"", "v1\n", "v2\n", registryStampContents} {
+		if err := os.WriteFile(filepath.Join(root, ".provisioned"), []byte(stamp), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := isProvisioned(root), stamp == "v3\n"; got != want {
+			t.Errorf("stamp %q: provisioned = %v, want %v", stamp, got, want)
+		}
+	}
+	if isProvisioned(t.TempDir()) {
+		t.Error("missing stamp accepted")
 	}
 }
 

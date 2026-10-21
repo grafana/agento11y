@@ -66,6 +66,7 @@ from .models import (
     SubmitConversationRatingResponse,
     TokenInputSemantics,
     ToolExecutionEnd,
+    ToolExecutionKind,
     ToolExecutionStart,
     ToolResult,
     WorkflowStep,
@@ -532,6 +533,19 @@ class Client:
         if seed.tool_name == "":
             return NoopToolExecutionRecorder()
 
+        for name in (
+            "tool_call_id",
+            "tool_type",
+            "skill_name",
+            "skill_description",
+            "skill_source_uri",
+            "skill_resource_name",
+            "process_executable_name",
+            "process_executable_path",
+        ):
+            setattr(seed, name, getattr(seed, name).strip())
+        seed.skill_source_uri = _sanitize_skill_source_uri(seed.skill_source_uri)
+
         seed.conversation_title = seed.conversation_title.strip()
         if seed.conversation_id == "":
             conversation_id = conversation_id_from_context() or ""
@@ -579,11 +593,27 @@ class Client:
             include_content = seed.include_content
 
         span = self._tracer.start_span(
-            _tool_span_name(seed.tool_name),
+            _tool_span_name(seed),
             kind=SpanKind.INTERNAL,
             start_time=_datetime_to_ns(started_at),
+            attributes={
+                _span_attr_operation_name: "execute_tool",
+                _span_attr_tool_name: seed.tool_name,
+                **{
+                    key: value
+                    for key, value in (
+                        (_span_attr_tool_call_id, seed.tool_call_id),
+                        (_span_attr_tool_type, seed.tool_type),
+                    )
+                    if value
+                },
+                **_tool_skill_process_attributes(seed),
+            },
         )
         _set_tool_span_attributes(span, seed)
+        if tool_mode not in (ContentCaptureMode.METADATA_ONLY, ContentCaptureMode.FULL_WITH_METADATA_SPANS):
+            for key, value in _tool_skill_process_attributes(seed, private=True).items():
+                span.set_attribute(key, value)
         self._set_client_tag_attributes(span)
 
         return ToolExecutionRecorder(
@@ -2112,9 +2142,14 @@ class ToolExecutionRecorder:
     def set_result(self, end: ToolExecutionEnd | None = None, **kwargs: Any) -> None:
         """Stores tool arguments/result payload."""
 
-        payload = ToolExecutionEnd(**kwargs) if end is None else end
+        payload = copy.deepcopy(ToolExecutionEnd(**kwargs) if end is None else end)
+        # Dataclasses are mutable: validate again at the recorder boundary.
+        if payload.process_exit_code is not None and (
+            isinstance(payload.process_exit_code, bool) or not isinstance(payload.process_exit_code, int)
+        ):
+            raise ValueError("process_exit_code must be an int or None")
         with self._lock:
-            self._result = copy.deepcopy(payload)
+            self._result = payload
             self._has_result = True
 
     def end(self) -> None:
@@ -2129,8 +2164,10 @@ class ToolExecutionRecorder:
 
         completed_at = _to_utc(result.completed_at) if result.completed_at is not None else _to_utc(self.client._now())
 
-        self.span.update_name(_tool_span_name(self.seed.tool_name))
+        self.span.update_name(_tool_span_name(self.seed))
         _set_tool_span_attributes(self.span, self.seed)
+        if self.seed.execution_kind == ToolExecutionKind.COMMAND and result.process_exit_code is not None:
+            self.span.set_attribute("process.exit.code", result.process_exit_code)
 
         content_error: Exception | None = None
         if self.include_content:
@@ -2256,9 +2293,63 @@ def _embedding_span_name(model_name: str) -> str:
     return f"{_default_embedding_operation_name} {model}"
 
 
-def _tool_span_name(tool_name: str) -> str:
-    name = tool_name.strip() or "unknown"
-    return f"execute_tool {name}"
+def _tool_span_name(start: ToolExecutionStart) -> str:
+    name = f"execute_tool {start.tool_name.strip() or 'unknown'}"
+    suffix = ""
+    if start.execution_kind == ToolExecutionKind.LOAD_SKILL:
+        suffix = start.skill_name
+    elif start.execution_kind in (ToolExecutionKind.READ_SKILL_RESOURCE, ToolExecutionKind.COMMAND):
+        if start.skill_resource_name:
+            suffix = " ".join(part for part in (start.skill_name, start.skill_resource_name) if part)
+        elif start.execution_kind == ToolExecutionKind.COMMAND:
+            suffix = start.process_executable_name
+    return f"{name} {suffix}" if suffix else name
+
+
+def _sanitize_skill_source_uri(value: str) -> str:
+    # Validate before parsing or scrubbing can hide malformed input.
+    if (
+        not value
+        or any(char.isspace() or ord(char) < 32 or 127 <= ord(char) <= 159 for char in value)
+        or re.search(r"%(?![0-9A-Fa-f]{2})", value)
+    ):
+        return ""
+    try:
+        uri = urllib_parse.urlsplit(value)
+        if not uri.scheme:
+            return ""
+        if uri.scheme == "file":
+            if not uri.path.startswith("/"):
+                return ""
+        elif not uri.hostname:
+            return ""
+        # Accessing port validates malformed/non-numeric ports too.
+        _ = uri.port
+        return urllib_parse.urlunsplit((uri.scheme, uri.netloc.rsplit("@", 1)[-1], uri.path, "", ""))
+    except ValueError:
+        return ""
+
+
+def _tool_skill_process_attributes(start: ToolExecutionStart, *, private: bool = False) -> dict[str, str]:
+    if start.execution_kind not in (
+        ToolExecutionKind.LOAD_SKILL,
+        ToolExecutionKind.READ_SKILL_RESOURCE,
+        ToolExecutionKind.COMMAND,
+    ):
+        return {}
+    attrs = (
+        {"gen_ai.skill.description": start.skill_description, "gen_ai.skill.source.uri": start.skill_source_uri}
+        if private
+        else {"gen_ai.skill.name": start.skill_name}
+    )
+    if not private and start.execution_kind != ToolExecutionKind.LOAD_SKILL:
+        attrs["gen_ai.skill.resource.name"] = start.skill_resource_name
+    if start.execution_kind == ToolExecutionKind.COMMAND:
+        if private:
+            attrs["process.executable.path"] = start.process_executable_path
+        else:
+            attrs["process.executable.name"] = start.process_executable_name
+    return {key: value for key, value in attrs.items() if value}
 
 
 def _set_generation_span_attributes(span: Span, generation: Generation) -> None:
@@ -2397,6 +2488,8 @@ def _set_tool_span_attributes(span: Span, start: ToolExecutionStart) -> None:
     span.set_attribute(_span_attr_operation_name, "execute_tool")
     span.set_attribute(_span_attr_tool_name, start.tool_name)
     span.set_attribute(_span_attr_sdk_name, _sdk_name)
+    for key, value in _tool_skill_process_attributes(start).items():
+        span.set_attribute(key, value)
 
     if start.tool_call_id:
         span.set_attribute(_span_attr_tool_call_id, start.tool_call_id)

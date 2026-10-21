@@ -3,6 +3,7 @@ package com.grafana.agento11y.sdk;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
@@ -87,6 +88,37 @@ class ToolLoopTest {
     }
 
     @Test
+    void convenienceLoopNeverInfersExecutionKindOrExitCode() {
+        InMemorySpanExporter spans = InMemorySpanExporter.create();
+        try (SdkTracerProvider provider = SdkTracerProvider.builder()
+                    .addSpanProcessor(SimpleSpanProcessor.create(spans)).build();
+                Agento11yClient client = new Agento11yClient(new Agento11yClientConfig()
+                        .setTracer(provider.get("test"))
+                        .setGenerationExporter(new TestFixtures.CapturingExporter()))) {
+            List<String> names = List.of("load_skill", "read_skill_resource", "run_skill_script", "exec_command");
+            for (String name : names) {
+                Message message = new Message().setRole(MessageRole.ASSISTANT).setParts(List.of(
+                        MessagePart.toolCall(new ToolCall().setId(name).setName(name).setInputJson(("""
+                                {"execution_kind":"command","skill_name":"review","skill_resource_name":"check.py",
+                                 "process_executable_name":"python3","process_exit_code":0}
+                                """).getBytes(StandardCharsets.UTF_8)))));
+                client.executeToolCalls(List.of(message), (tool, bytes) -> Map.of("process_exit_code", 0), null);
+            }
+            assertThat(spans.getFinishedSpanItems()).hasSize(names.size());
+            for (int i = 0; i < names.size(); i++) {
+                SpanData span = spans.getFinishedSpanItems().get(i);
+                assertThat(span.getName()).isEqualTo("execute_tool " + names.get(i));
+                assertThat(span.getAttributes().asMap().keySet()).extracting(AttributeKey::getKey)
+                        .noneMatch(key -> key.startsWith("gen_ai.skill.") || key.startsWith("process.")
+                                || key.equals("agento11y.skill.name"));
+                ToolExecution execution = client.debugSnapshot().getToolExecutions().get(i);
+                assertThat(execution.getExecutionKind()).isNull();
+                assertThat(execution.getProcessExitCode()).isNull();
+            }
+        }
+    }
+
+    @Test
     void executorErrorMarksSpanError() throws Exception {
         InMemorySpanExporter spanExporter = InMemorySpanExporter.create();
         SdkTracerProvider provider = SdkTracerProvider.builder()
@@ -114,6 +146,8 @@ class ToolLoopTest {
             assertThat(out).hasSize(1);
             assertThat(out.get(0).getParts().get(0).getToolResult().isError()).isTrue();
             assertThat(out.get(0).getParts().get(0).getToolResult().getContent()).contains("tool failed");
+            assertThat(client.debugSnapshot().getToolExecutions().get(0).getExecutionKind()).isNull();
+            assertThat(client.debugSnapshot().getToolExecutions().get(0).getProcessExitCode()).isNull();
         }
 
         SpanData boom = spanExporter.getFinishedSpanItems().stream()

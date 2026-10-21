@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+from copy import copy, deepcopy
+from dataclasses import replace
+from datetime import datetime, timezone
+
 import pytest
 from agento11y import (
+    ContentCaptureMode,
     EmbeddingResult,
     EmbeddingStart,
     Generation,
@@ -13,11 +18,109 @@ from agento11y import (
     Part,
     PartKind,
     ToolCall,
+    ToolExecutionEnd,
+    ToolExecutionKind,
+    ToolExecutionStart,
     ToolResult,
     validate_embedding_result,
     validate_embedding_start,
     validate_generation,
 )
+
+
+def test_tool_execution_kind_values() -> None:
+    assert {execution_kind.name: execution_kind.value for execution_kind in ToolExecutionKind} == {
+        "LOAD_SKILL": "load_skill",
+        "READ_SKILL_RESOURCE": "read_skill_resource",
+        "COMMAND": "command",
+    }
+    for execution_kind in ToolExecutionKind:
+        assert isinstance(execution_kind, str)
+        assert ToolExecutionKind(execution_kind.value) is execution_kind
+
+
+def test_tool_execution_models_preserve_positional_api_and_defaults() -> None:
+    timestamp = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    start = ToolExecutionStart(
+        "shell",
+        "call-1",
+        "function",
+        "Run shell",
+        "conv-1",
+        "Title",
+        "agent",
+        "v1",
+        "model",
+        "provider",
+        True,
+        ContentCaptureMode.FULL,
+        timestamp,
+    )
+    assert start == ToolExecutionStart(
+        tool_name="shell",
+        tool_call_id="call-1",
+        tool_type="function",
+        tool_description="Run shell",
+        conversation_id="conv-1",
+        conversation_title="Title",
+        agent_name="agent",
+        agent_version="v1",
+        request_model="model",
+        request_provider="provider",
+        include_content=True,
+        content_capture=ContentCaptureMode.FULL,
+        started_at=timestamp,
+    )
+    assert start.execution_kind is None
+    assert start.skill_name == ""
+    assert start.skill_description == ""
+    assert start.skill_source_uri == ""
+    assert start.skill_resource_name == ""
+    assert start.process_executable_name == ""
+    assert start.process_executable_path == ""
+    end = ToolExecutionEnd({"command": "pwd"}, "output", timestamp)
+    assert end == ToolExecutionEnd(arguments={"command": "pwd"}, result="output", completed_at=timestamp)
+    assert end.process_exit_code is None
+
+
+@pytest.mark.parametrize("copy_model", [copy, deepcopy, replace])
+@pytest.mark.parametrize("execution_kind", [None, *ToolExecutionKind])
+def test_tool_execution_start_copy_preserves_skill_process_fields(copy_model, execution_kind) -> None:
+    start = ToolExecutionStart(
+        tool_name="tool",
+        execution_kind=execution_kind,
+        skill_name="review",
+        skill_description="Review code",
+        skill_source_uri="file:///skills/review/SKILL.md",
+        skill_resource_name="references/checklist.md",
+        process_executable_name="python",
+        process_executable_path="/usr/bin/python",
+    )
+
+    copied = copy_model(start)
+
+    assert copied is not start
+    assert copied == start
+    assert copied.execution_kind is execution_kind
+
+
+@pytest.mark.parametrize("copy_model", [copy, deepcopy, replace])
+@pytest.mark.parametrize("exit_code", [None, 0, 1, -9])
+def test_tool_execution_end_copy_preserves_exit_code(copy_model, exit_code) -> None:
+    end = ToolExecutionEnd(process_exit_code=exit_code)
+
+    copied = copy_model(end)
+
+    assert copied is not end
+    assert copied == end
+    assert copied.process_exit_code == exit_code
+    assert type(copied.process_exit_code) is type(exit_code)
+
+
+@pytest.mark.parametrize("exit_code", [True, False, "0", 0.0, 1.5, float("nan"), [], {}])
+def test_tool_execution_end_rejects_invalid_exit_code(exit_code) -> None:
+    with pytest.raises(ValueError, match="process_exit_code must be an int or None"):
+        ToolExecutionEnd(process_exit_code=exit_code)
 
 
 def _base_generation() -> Generation:

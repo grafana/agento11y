@@ -397,6 +397,213 @@ test('tool execution includeContent controls argument/result attributes', async 
   }
 });
 
+for (const [executionKind, processExitCode] of [
+  ['load_skill', undefined],
+  ['read_skill_resource', undefined],
+  ['command', undefined],
+  ['command', 0],
+  ['command', 7],
+]) {
+  test(`tool execution snapshots preserve ${executionKind} with exit code ${processExitCode} and isolate clones`, async () => {
+    const harness = newHarness();
+    const fields = {
+      executionKind,
+      skillName: 'review',
+      skillDescription: 'Review code changes',
+      skillSourceURI: 'file:///skills/review/SKILL.md',
+      skillResourceName: 'references/checklist.md',
+      processExecutableName: 'node',
+      processExecutablePath: '/usr/local/bin/node',
+    };
+    const startedAt = new Date('2026-01-01T00:00:00Z');
+    const completedAt = new Date('2026-01-01T00:00:01Z');
+
+    try {
+      const start = { toolName: 'run', ...fields, startedAt: new Date(startedAt) };
+      const recorder = harness.client.startToolExecution(start);
+      for (const key of Object.keys(fields)) {
+        start[key] = 'changed';
+      }
+      start.startedAt.setTime(0);
+
+      const result = { completedAt: new Date(completedAt) };
+      if (processExitCode !== undefined) {
+        result.processExitCode = processExitCode;
+      }
+      recorder.setResult(result);
+      result.processExitCode = 99;
+      result.completedAt.setTime(0);
+      recorder.end();
+      assert.equal(recorder.getError(), undefined);
+
+      const snapshot = harness.client.debugSnapshot();
+      assert.equal(snapshot.toolExecutions.length, 1);
+      const execution = snapshot.toolExecutions[0];
+      for (const [key, value] of Object.entries(fields)) {
+        assert.equal(execution[key], value, key);
+      }
+      assert.equal(execution.processExitCode, processExitCode);
+      assert.deepEqual(execution.startedAt, startedAt);
+      assert.deepEqual(execution.completedAt, completedAt);
+
+      const expected = structuredClone(execution);
+      for (const key of Object.keys(fields)) {
+        execution[key] = 'changed';
+      }
+      execution.processExitCode = 99;
+      execution.startedAt.setTime(0);
+      execution.completedAt.setTime(0);
+      assert.deepEqual(harness.client.debugSnapshot().toolExecutions, [expected]);
+    } finally {
+      await shutdownHarness(harness);
+    }
+  });
+}
+
+test('tool execution snapshots leave optional execution-kind, skill, and process fields undefined', async () => {
+  const harness = newHarness();
+
+  try {
+    for (const result of [undefined, {}]) {
+      const recorder = harness.client.startToolExecution({ toolName: 'legacy' });
+      if (result !== undefined) {
+        recorder.setResult(result);
+      }
+      recorder.end();
+      assert.equal(recorder.getError(), undefined);
+    }
+
+    const executions = harness.client.debugSnapshot().toolExecutions;
+    assert.equal(executions.length, 2);
+    for (const execution of executions) {
+      for (const key of [
+        'executionKind',
+        'skillName',
+        'skillDescription',
+        'skillSourceURI',
+        'skillResourceName',
+        'processExecutableName',
+        'processExecutablePath',
+        'processExitCode',
+      ]) {
+        assert.equal(execution[key], undefined, key);
+      }
+    }
+  } finally {
+    await shutdownHarness(harness);
+  }
+});
+
+test('skill source URI projection validates absolute locations without resolving sources', async (t) => {
+  const harness = newHarness({ contentCapture: 'full' });
+  try {
+    const cases = [
+      [' file:///private/skills/review?secret=1#private ', 'file:///private/skills/review'],
+      ['https://user:secret@skills.example.com:443/a/../review?q=secret#private', 'https://skills.example.com/review'],
+      ['s3://user:secret@skills/review?secret=1#private', 's3://skills/review'],
+      ['file:/opt/skills/review/SKILL.md', 'file:///opt/skills/review/SKILL.md'],
+      ['file:///opt/skills/review%20guide/SKILL.md', 'file:///opt/skills/review%20guide/SKILL.md'],
+      ['file://skills.example.com/review%20guide', 'file://skills.example.com/review%20guide'],
+      [
+        'https://user:secret@skills.example.com:8443/review%20guide%2Fnotes?token=secret#private',
+        'https://skills.example.com:8443/review%20guide%2Fnotes',
+      ],
+      ['https://[::1]:8443/review%20guide', 'https://[::1]:8443/review%20guide'],
+      ['s3://user:secret@skills/review%20guide%2Fnotes?secret=1#private', 's3://skills/review%20guide%2Fnotes'],
+      ['gs://skills/review%20guide?secret=1#private', 'gs://skills/review%20guide'],
+      ['https://skills.example.com/review%', undefined],
+      ['https://skills.example.com/review%2', undefined],
+      ['https://skills.example.com/review%GG', undefined],
+      ['s3://skills/review%GG', undefined],
+      ['file:///opt/skills/review%GG', undefined],
+      ['https://skills.example.com/review?secret=%GG', undefined],
+      ['https://skills.example.com/review#%GG', undefined],
+      ['https://skills.example.com/review guide', undefined],
+      ['https://skills.example.com/re\tview', undefined],
+      ['https://skills.example.com/re\nview', undefined],
+      ['https://skills.example.com/re\rview', undefined],
+      ['https://skills.example.com/re\u0000view', undefined],
+      ['https://skills.example.com/re\u007fview', undefined],
+      ['s3://skills/review guide', undefined],
+      ['file:///opt/skills/review guide', undefined],
+      ['file:', undefined],
+      ['file:relative', undefined],
+      ['file://', undefined],
+      ['https:///path', undefined],
+      ['https:/path', undefined],
+      ['https://', undefined],
+      ['https://?secret=1', undefined],
+      ['https://:443/path', undefined],
+      ['https://skills.example.com:invalid/review', undefined],
+      ['https://skills.example.com:65536/review', undefined],
+      ['s3://skills:invalid/review', undefined],
+      ['s3://skills:65536/review', undefined],
+      ['https://skills.example.com:/review', undefined],
+      ['s3://skills:/review', undefined],
+      ['s3://user@@skills/review', undefined],
+      ['s3://skills%2Fother/review', undefined],
+      ['file://skills.example.com', undefined],
+      ['https://skills.example.com\\review', undefined],
+      ['s3:///review', undefined],
+      ['s3:/skills/review', undefined],
+      ['../skills/review', undefined],
+      ['/skills/review', undefined],
+      ['//skills.example.com/review', undefined],
+      ['https://[broken', undefined],
+      [' \t ', undefined],
+    ];
+    for (const [skillSourceURI, expected] of cases) {
+      await t.test(JSON.stringify(skillSourceURI), () => {
+        const recorder = harness.client.startToolExecution({
+          toolName: 'load',
+          executionKind: 'load_skill',
+          skillSourceURI,
+        });
+        recorder.end();
+        assert.equal(recorder.getError(), undefined);
+        assert.equal(toolSpans(harness.spanExporter).at(-1).attributes['gen_ai.skill.source.uri'], expected);
+        assert.equal(harness.client.debugSnapshot().toolExecutions.at(-1).skillSourceURI, skillSourceURI);
+      });
+    }
+  } finally {
+    await shutdownHarness(harness);
+  }
+});
+
+test('tool exit codes are completion-only safe integers on explicit command spans', async () => {
+  const harness = newHarness();
+  try {
+    for (const executionKind of [undefined, 'future', 'load_skill', 'read_skill_resource', 'command']) {
+      for (const processExitCode of [
+        undefined,
+        null,
+        true,
+        false,
+        '0',
+        1.5,
+        NaN,
+        Infinity,
+        -Infinity,
+        2 ** 53,
+        0,
+        -1,
+        Number.MAX_SAFE_INTEGER,
+        Number.MIN_SAFE_INTEGER,
+      ]) {
+        const recorder = harness.client.startToolExecution({ toolName: 'exec', executionKind });
+        recorder.setResult({ processExitCode });
+        recorder.end();
+        assert.equal(recorder.getError(), undefined);
+        const expected =
+          executionKind === 'command' && Number.isSafeInteger(processExitCode) ? processExitCode : undefined;
+        assert.equal(toolSpans(harness.spanExporter).at(-1).attributes['process.exit.code'], expected);
+      }
+    }
+  } finally {
+    await shutdownHarness(harness);
+  }
+});
+
 test('tool execution callError is surfaced locally and marks error span', async () => {
   const harness = newHarness();
 
@@ -491,6 +698,7 @@ function newHarness(overrides = {}) {
       ...(overrides.generationExport ?? {}),
     },
     embeddingCapture: overrides.embeddingCapture,
+    contentCapture: overrides.contentCapture,
     generationExporter,
   });
 

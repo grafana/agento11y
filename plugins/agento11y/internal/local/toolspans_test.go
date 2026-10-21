@@ -36,7 +36,9 @@ func TestServerProjectsToolSpans(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, dir := newTestServer(t)
-			request := toolTraceRequest(toolTraceSpan("conv-tools", "call-1", "Bash"))
+			span := toolTraceSpan("conv-tools", "call-1", "Bash")
+			span.Attributes = append(span.Attributes, intKeyValue("process.exit.code", 0))
+			request := toolTraceRequest(span)
 			body := marshalTraceRequest(t, request, tc.contentType)
 			encoding := ""
 			if tc.gzip {
@@ -65,18 +67,159 @@ func TestServerProjectsToolSpans(t *testing.T) {
 			assert.Equal(t, "call-1", got.ToolCallID)
 			assert.Equal(t, "Bash", got.ToolName)
 			assert.Equal(t, "workflow-toolkit:review", got.SkillName)
+			assert.Equal(t, "scripts/check.py", got.SkillResourceName)
+			assert.Equal(t, "python3", got.ProcessExecutableName)
+			require.NotNil(t, got.ProcessExitCode)
+			assert.Equal(t, int64(0), *got.ProcessExitCode)
 			assert.True(t, got.Failed)
 			assert.Equal(t, "tool_execution_error", got.ErrorType)
 			assert.Equal(t, "sdk_error", got.ErrorCategory)
 			assert.Equal(t, time.Unix(10, 0).UTC(), got.StartedAt)
 			assert.Equal(t, time.Unix(12, 0).UTC(), got.CompletedAt)
 
-			for _, secret := range []string{"secret arguments", "secret result", "secret description", "secret exception", "secret status", "/Users/private/source.go"} {
+			for _, secret := range []string{"secret arguments", "secret result", "secret description", "secret exception", "secret status", "/Users/private/source.go", "secret skill description", "https://private.example/skill", "/private/bin/python3"} {
 				assert.NotContains(t, lines[0], secret)
 			}
 		})
 	}
 }
+
+func TestProjectToolSpansSkillNamespaces(t *testing.T) {
+	for _, contentType := range []string{wire.ContentTypeJSON, wire.ContentTypeProto} {
+		for _, tc := range []struct {
+			name  string
+			attrs []*commonpb.KeyValue
+			want  string
+		}{
+			{name: "absent"},
+			{name: "legacy", attrs: []*commonpb.KeyValue{stringKeyValue("agento11y.skill.name", " legacy ")}, want: "legacy"},
+			{name: "standard", attrs: []*commonpb.KeyValue{stringKeyValue("gen_ai.skill.name", " standard ")}, want: "standard"},
+			{name: "conflicting", attrs: []*commonpb.KeyValue{stringKeyValue("agento11y.skill.name", "legacy"), stringKeyValue("gen_ai.skill.name", " standard ")}, want: "standard"},
+			{name: "empty standard", attrs: []*commonpb.KeyValue{stringKeyValue("gen_ai.skill.name", ""), stringKeyValue("agento11y.skill.name", " legacy ")}, want: "legacy"},
+			{name: "blank standard", attrs: []*commonpb.KeyValue{stringKeyValue("gen_ai.skill.name", " \t\n"), stringKeyValue("agento11y.skill.name", " legacy ")}, want: "legacy"},
+			{name: "blank legacy", attrs: []*commonpb.KeyValue{stringKeyValue("gen_ai.skill.name", " \t"), stringKeyValue("agento11y.skill.name", " \n")}},
+			{name: "non-string standard", attrs: []*commonpb.KeyValue{intKeyValue("gen_ai.skill.name", 1), stringKeyValue("agento11y.skill.name", " legacy ")}, want: "legacy"},
+		} {
+			t.Run(contentType+"/"+tc.name, func(t *testing.T) {
+				span := toolTraceSpan("conv-names", "call-1", "Read")
+				span.Attributes = []*commonpb.KeyValue{
+					stringKeyValue("gen_ai.operation.name", "execute_tool"),
+					stringKeyValue("gen_ai.conversation.id", "conv-names"),
+					stringKeyValue("gen_ai.tool.name", "Read"),
+				}
+				span.Attributes = append(span.Attributes, tc.attrs...)
+				records, err := projectToolSpans(marshalTraceRequest(t, toolTraceRequest(span), contentType), contentType, "")
+				require.NoError(t, err)
+				require.Len(t, records, 1)
+				assert.Equal(t, tc.want, records[0].SkillName)
+			})
+		}
+	}
+}
+
+func TestToolSpanSkillAndProcessFieldsJSONLRoundTrip(t *testing.T) {
+	for _, contentType := range []string{wire.ContentTypeJSON, wire.ContentTypeProto} {
+		for _, tc := range []struct {
+			name string
+			attr *commonpb.KeyValue
+			want *int64
+		}{
+			{name: "absent"},
+			{name: "zero", attr: intKeyValue("process.exit.code", 0), want: int64Pointer(0)},
+			{name: "negative", attr: intKeyValue("process.exit.code", -1), want: int64Pointer(-1)},
+			{name: "nonzero", attr: intKeyValue("process.exit.code", 23), want: int64Pointer(23)},
+			{name: "min int64", attr: intKeyValue("process.exit.code", -1<<63), want: int64Pointer(-1 << 63)},
+			{name: "max int64", attr: intKeyValue("process.exit.code", 1<<63-1), want: int64Pointer(1<<63 - 1)},
+			{name: "string is not integer", attr: stringKeyValue("process.exit.code", "0")},
+			{name: "bool is not integer", attr: &commonpb.KeyValue{Key: "process.exit.code", Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_BoolValue{BoolValue: true}}}},
+			{name: "double is not integer", attr: &commonpb.KeyValue{Key: "process.exit.code", Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_DoubleValue{DoubleValue: 0}}}},
+			{name: "missing value", attr: &commonpb.KeyValue{Key: "process.exit.code"}},
+		} {
+			t.Run(contentType+"/"+tc.name, func(t *testing.T) {
+				span := toolTraceSpan("conv-roundtrip", "call-1", "Bash")
+				if tc.attr != nil {
+					span.Attributes = append(span.Attributes, tc.attr)
+				}
+				records, err := projectToolSpans(marshalTraceRequest(t, toolTraceRequest(span), contentType), contentType, "")
+				require.NoError(t, err)
+				require.Len(t, records, 1)
+				assert.Equal(t, tc.want, records[0].ProcessExitCode)
+				assert.Equal(t, "workflow-toolkit:review", records[0].SkillName)
+				assert.Equal(t, "scripts/check.py", records[0].SkillResourceName)
+				assert.Equal(t, "python3", records[0].ProcessExecutableName)
+
+				storage := newStorage(t)
+				_, err = storage.appendToolSpans(records)
+				require.NoError(t, err)
+				path := filepath.Join(storage.Dir(), ToolSpansDir, "conv-roundtrip.jsonl")
+				lines := readLines(t, path)
+				require.Len(t, lines, 1)
+				var fields map[string]json.RawMessage
+				require.NoError(t, json.Unmarshal([]byte(lines[0]), &fields))
+				assert.JSONEq(t, `"workflow-toolkit:review"`, string(fields["skill_name"]))
+				assert.JSONEq(t, `"scripts/check.py"`, string(fields["skill_resource_name"]))
+				assert.JSONEq(t, `"python3"`, string(fields["process_executable_name"]))
+				if tc.want == nil {
+					assert.NotContains(t, fields, "process_exit_code")
+				} else {
+					var code int64
+					require.NoError(t, json.Unmarshal(fields["process_exit_code"], &code))
+					assert.Equal(t, *tc.want, code)
+				}
+				for _, private := range []string{"description", "uri", "path", "secret", "https://private.example/skill", "/private/bin/python3"} {
+					assert.NotContains(t, lines[0], private)
+				}
+
+				restarted, err := NewStorage(storage.Dir())
+				require.NoError(t, err)
+				files, err := restarted.toolSpanFiles()
+				require.NoError(t, err)
+				require.Len(t, files, 1)
+				entry, err := restarted.toolSpans.get(files[0])
+				require.NoError(t, err)
+				records[0].DeliveryOrder = 1
+				assert.Equal(t, records, entry.spans)
+			})
+		}
+	}
+}
+
+func TestOldToolSpanSidecarsKeepOptionalFieldsAbsent(t *testing.T) {
+	storage := newStorage(t)
+	path := filepath.Join(storage.Dir(), ToolSpansDir, "conv-old.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	old := []byte("{\"trace_id\":\"trace-1\",\"span_id\":\"span-1\",\"conversation_id\":\"conv-old\",\"tool_name\":\"Bash\",\"skill_name\":\"legacy\"}\n" +
+		"{\"trace_id\":\"trace-2\",\"span_id\":\"span-2\",\"conversation_id\":\"conv-old\",\"tool_name\":\"Read\"}\n")
+	require.NoError(t, os.WriteFile(path, old, 0o600))
+	files, err := storage.toolSpanFiles()
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	entry, err := storage.toolSpans.get(files[0])
+	require.NoError(t, err)
+	require.Len(t, entry.spans, 2)
+	assert.Equal(t, "legacy", entry.spans[0].SkillName)
+	assert.Empty(t, entry.spans[1].SkillName)
+	for _, record := range entry.spans {
+		assert.Empty(t, record.SkillResourceName)
+		assert.Empty(t, record.ProcessExecutableName)
+		assert.Nil(t, record.ProcessExitCode)
+		encoded, err := json.Marshal(record)
+		require.NoError(t, err)
+		for _, key := range []string{"skill_resource_name", "process_executable_name", "process_exit_code"} {
+			assert.NotContains(t, string(encoded), key)
+		}
+	}
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, old, data, "reading old sidecars must not backfill or rewrite them")
+	_, err = storage.appendToolSpans([]toolSpanRecord{{TraceID: "trace-3", SpanID: "span-3", ConversationID: "conv-old", ToolName: "Write"}})
+	require.NoError(t, err)
+	data, err = os.ReadFile(path)
+	require.NoError(t, err)
+	assert.True(t, bytes.HasPrefix(data, old), "appending must leave old records unchanged")
+}
+
+func int64Pointer(value int64) *int64 { return new(value) }
 
 func TestProjectToolSpansRejectsMalformedAndOversizedGzip(t *testing.T) {
 	_, err := projectToolSpans([]byte("not protobuf"), wire.ContentTypeProto, "")
@@ -320,7 +463,12 @@ func toolTraceSpan(conversationID, callID, toolName string) *tracepb.Span {
 		stringKeyValue(spanAttrToolName, toolName),
 		stringKeyValue(spanAttrErrorType, "tool_execution_error"),
 		stringKeyValue(spanAttrErrorCategory, "sdk_error"),
-		stringKeyValue(spanAttrSkillName, "workflow-toolkit:review"),
+		stringKeyValue(spanAttrSkillName, " workflow-toolkit:review "),
+		stringKeyValue("gen_ai.skill.resource.name", " scripts/check.py "),
+		stringKeyValue("process.executable.name", " python3 "),
+		stringKeyValue("gen_ai.skill.description", "secret skill description"),
+		stringKeyValue("gen_ai.skill.source.uri", "https://private.example/skill"),
+		stringKeyValue("process.executable.path", "/private/bin/python3"),
 		stringKeyValue("gen_ai.tool.description", "secret description"),
 		stringKeyValue("gen_ai.tool.call.arguments", "secret arguments"),
 		stringKeyValue("gen_ai.tool.call.result", "secret result"),
@@ -349,6 +497,10 @@ func toolTraceRequest(spans ...*tracepb.Span) *coltracepb.ExportTraceServiceRequ
 
 func stringKeyValue(key, value string) *commonpb.KeyValue {
 	return &commonpb.KeyValue{Key: key, Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: value}}}
+}
+
+func intKeyValue(key string, value int64) *commonpb.KeyValue {
+	return &commonpb.KeyValue{Key: key, Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: value}}}
 }
 
 func marshalTraceRequest(t *testing.T, request *coltracepb.ExportTraceServiceRequest, contentType string) []byte {

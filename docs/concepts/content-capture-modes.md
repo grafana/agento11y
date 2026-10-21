@@ -1,6 +1,6 @@
 # Content Capture Modes
 
-Content capture decides which fields the agento11y SDK includes in exported generations and OTel span attributes. Use it to keep prompts, tool I/O, and model responses inside the process when the destination (Grafana stack, OTel collector, shared infrastructure) should not receive them.
+Content capture decides which fields the agento11y SDK includes in exported generations and OTel span attributes. Use it to exclude prompts, tool I/O, and model responses from destinations that should not receive them.
 
 Each SDK README links here for language-specific examples.
 
@@ -10,7 +10,7 @@ Each SDK README links here for language-specific examples.
 | --- | --- |
 | `default` | Inherit from the next layer in the resolution chain. At the client level this resolves to `no_tool_content`. |
 | `full` | Export all content: generation messages, thinking, system prompts, tool arguments and results, embedding input texts. |
-| `no_tool_content` | Export full generation content but omit tool-execution arguments and results from span attributes. Matches the pre-`ContentCaptureMode` SDK default. |
+| `no_tool_content` | Export full generation content. Omit tool-execution arguments and results unless the caller uses the legacy `IncludeContent` opt-in. Matches the pre-`ContentCaptureMode` SDK default. |
 | `metadata_only` | Preserve structure (message roles, part kinds, tool names, media kind/MIME metadata, model, token usage, timing, IDs) and strip text, tool arguments, tool results, media URLs/data URLs, thinking, system prompts, conversation titles, raw artifacts, tool descriptions, tool input schemas, and detailed error messages. |
 | `full_with_metadata_spans` | Send full content over the gRPC/HTTP generation ingest, but omit content fields from OTel spans. Useful when ingest is private but traces and metrics are shared. |
 
@@ -21,11 +21,42 @@ Each SDK README links here for language-specific examples.
 | Mode | Generation export (gRPC/HTTP) | Generation span | Tool execution span | Embedding span |
 | --- | --- | --- | --- | --- |
 | `full` | Full content. | Content attributes included. | Arguments and results included. | Input texts included when `EmbeddingCapture.CaptureInput` is on. |
-| `no_tool_content` | Full content. | Content attributes included. | Arguments and results omitted. | Input texts included when `EmbeddingCapture.CaptureInput` is on. |
+| `no_tool_content` | Full content. | Content attributes included. | Arguments and results omitted unless the legacy content opt-in is set. | Input texts included when `EmbeddingCapture.CaptureInput` is on. |
 | `metadata_only` | Structure only. Messages, tool args/results, media URLs/data URLs, thinking, system prompts, conversation titles, artifacts, error text removed. | Content attributes omitted. | Arguments and results omitted. | Input texts omitted. |
 | `full_with_metadata_spans` | Full content. | Content attributes omitted (`agento11y.conversation.title` and related fields). | Arguments and results omitted. Equivalent to `metadata_only` for tool spans because there is no separate gRPC export for tool executions. | Input texts omitted. Equivalent to `metadata_only` for embedding spans for the same reason. |
 
 Embedding input text capture is gated by both the effective capture mode and `EmbeddingCapture.CaptureInput` / `embeddingCapture.captureInput`. Setting the flag does not bypass `metadata_only` or `full_with_metadata_spans`.
+
+### Skill and process attribute privacy
+
+[Skill loads, resource reads, and commands](./tool-call-vs-tool-execution.md#tracing-skill-loads-resource-reads-and-commands) use these additional fields:
+
+| Fields | `full` | Effective `metadata_only` / `full_with_metadata_spans` |
+| --- | --- | --- |
+| Skill name, resource name, executable name, completion exit code | Retained when applicable to the execution kind. | Retained when applicable to the execution kind. |
+| Skill description (`gen_ai.skill.description`), source URI (`gen_ai.skill.source.uri`), executable path (`process.executable.path`) | Included when applicable. | Excluded from spans. |
+
+These filtering and sampling rules apply to typed skill and process fields.
+Filtering uses the **effective** mode after resolution, not the requested mode.
+Go and Python clients using experimental OTel generation export resolve `full_with_metadata_spans` to `full`.
+On those clients, the three private attributes can reach spans. Use `metadata_only` to exclude them.
+The matrix above otherwise applies to the normal gRPC/HTTP generation export.
+Go `otelgenai` includes private fields only when `CaptureMode.SpanContent()` permits them.
+The three private fields never enter sampler inputs, regardless of capture mode.
+
+Skill source URIs exported from typed fields lose all user information, query parameters, and fragments, including under `full`.
+For example, `https://user:secret@skills.example.com/review?token=abc#notes` becomes `https://skills.example.com/review`.
+Malformed values are omitted without failing the tool call. URI scrubbing performs no filesystem or network lookup.
+Core recorders can retain private inputs in memory. Capture modes control export, not sanitization of in-memory copies.
+
+In Go `otelgenai`, raw `Invocation.Attributes` and attributes returned by end hooks bypass capture filtering and URI scrubbing.
+They can override typed attributes. Callers must filter private attributes and sanitize source URIs themselves.
+
+Do not use `no_tool_content` as a privacy boundary for skill descriptions, source URIs, or executable paths.
+The existing arguments/results behavior is unchanged, including the legacy content opt-in under `no_tool_content`.
+That opt-in does not bypass effective `metadata_only` or `full_with_metadata_spans`.
+Structural fields and exit codes add no metric labels.
+The local forwarder also strips the three private attributes from spans and span events in reduced modes.
 
 ## Caveats
 
@@ -33,7 +64,10 @@ No capture mode strips user-provided `metadata` or `tags` on a generation or too
 
 Capture modes decide *which fields ship*, not what's inside them. To sanitize the fields that do ship (e.g. strip secrets out of assistant text under `full`), use the pre-ingest redactor: `GenerationSanitizer` in Go, `generationSanitizer` in JS/TS, the equivalent in Python.
 
-`full_with_metadata_spans` only protects spans. Generation content still flows through the SDK's generation export channel. Use `metadata_only` if you also want the ingest channel to receive no content.
+`full_with_metadata_spans` only protects spans, subject to the Go/Python experimental OTel resolution caveat above. Generation content still flows through the SDK's generation export channel. Use `metadata_only` if you also want the ingest channel to receive no content.
+
+JS and Java completed-tool debug snapshots retain raw arguments, results, error text, and private skill and process fields even in reduced modes.
+Do not treat those snapshots as sanitized or safe to export.
 
 ## Defaults
 

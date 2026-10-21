@@ -936,8 +936,18 @@ func stringAttribute(attrs []*commonpb.KeyValue, key string) string {
 // one span's or one event's attribute list.
 func filterContentAttributes(attrs []*commonpb.KeyValue) []*commonpb.KeyValue {
 	return slices.DeleteFunc(attrs, func(kv *commonpb.KeyValue) bool {
-		return kv == nil || contentcapture.IsTraceContentAttribute(kv.GetKey())
+		return kv == nil || isTraceContentAttribute(kv.GetKey())
 	})
+}
+
+// The standalone plugin pins SDK v0.18.0, whose predicate lacks these private keys.
+func isTraceContentAttribute(key string) bool {
+	switch key {
+	case "gen_ai.skill.description", "gen_ai.skill.source.uri", "process.executable.path":
+		return true
+	default:
+		return contentcapture.IsTraceContentAttribute(key)
+	}
 }
 
 func stripSpanEvents(events []*tracepb.Span_Event) []*tracepb.Span_Event {

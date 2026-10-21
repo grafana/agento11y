@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"log"
 	"maps"
+	"net/url"
 	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/grafana/agento11y/go/agento11y/contentcapture"
@@ -977,11 +979,12 @@ func (c *Client) StartToolExecution(ctx context.Context, start ToolExecutionStar
 	}
 	callCtx, span := tracer.Start(
 		ctx,
-		toolSpanName(seed.ToolName),
+		toolSpanName(seed),
 		trace.WithSpanKind(trace.SpanKindInternal),
 		trace.WithTimestamp(startedAt),
+		trace.WithAttributes(toolSpanAttributes(seed)...),
 	)
-	span.SetAttributes(toolSpanAttributes(seed)...)
+	span.SetAttributes(toolPrivateSpanAttributes(seed, toolMode)...)
 	setSpanTagAttributes(span, c.config.Tags)
 
 	return callCtx, &ToolExecutionRecorder{
@@ -1455,6 +1458,7 @@ func (r *ToolExecutionRecorder) SetResult(end ToolExecutionEnd) {
 		return
 	}
 	r.mu.Lock()
+	end.ProcessExitCode = cloneInt64Ptr(end.ProcessExitCode)
 	r.result = end
 	r.hasResult = true
 	r.mu.Unlock()
@@ -1491,8 +1495,12 @@ func (r *ToolExecutionRecorder) End() {
 		completedAt = completedAt.UTC()
 	}
 
-	r.span.SetName(toolSpanName(r.seed.ToolName))
+	r.span.SetName(toolSpanName(r.seed))
 	r.span.SetAttributes(toolSpanAttributes(r.seed)...)
+	r.span.SetAttributes(toolPrivateSpanAttributes(r.seed, r.contentCaptureMode)...)
+	if r.seed.ExecutionKind == ToolExecutionKindCommand && end.ProcessExitCode != nil {
+		r.span.SetAttributes(attribute.Int64("process.exit.code", *end.ProcessExitCode))
+	}
 
 	var contentErr error
 	if r.includeContent {
@@ -2471,12 +2479,99 @@ func countToolCalls(messages []Message) int {
 	return total
 }
 
-func toolSpanName(toolName string) string {
-	name := strings.TrimSpace(toolName)
+func toolSpanName(start ToolExecutionStart) string {
+	name := strings.TrimSpace(start.ToolName)
 	if name == "" {
 		name = "unknown"
 	}
-	return "execute_tool " + name
+	parts := []string{"execute_tool", name}
+	skill := strings.TrimSpace(start.SkillName)
+	resource := strings.TrimSpace(start.SkillResourceName)
+	switch start.ExecutionKind {
+	case ToolExecutionKindLoadSkill:
+		if skill != "" {
+			parts = append(parts, skill)
+		}
+	case ToolExecutionKindReadSkillResource, ToolExecutionKindCommand:
+		if resource != "" {
+			if skill != "" {
+				parts = append(parts, skill)
+			}
+			parts = append(parts, resource)
+		} else if executable := strings.TrimSpace(start.ProcessExecutableName); start.ExecutionKind == ToolExecutionKindCommand && executable != "" {
+			parts = append(parts, executable)
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+func isToolExecutionKind(executionKind ToolExecutionKind) bool {
+	switch executionKind {
+	case ToolExecutionKindLoadSkill, ToolExecutionKindReadSkillResource, ToolExecutionKindCommand:
+		return true
+	default:
+		return false
+	}
+}
+
+func toolPrivateSpanAttributes(start ToolExecutionStart, mode ContentCaptureMode) []attribute.KeyValue {
+	if !isToolExecutionKind(start.ExecutionKind) || mode == ContentCaptureModeMetadataOnly || mode == ContentCaptureModeFullWithMetadataSpans {
+		return nil
+	}
+	var attrs []attribute.KeyValue
+	if description := strings.TrimSpace(start.SkillDescription); description != "" {
+		attrs = append(attrs, attribute.String("gen_ai.skill.description", description))
+	}
+	if source := scrubToolSourceURI(start.SkillSourceURI); source != "" {
+		attrs = append(attrs, attribute.String("gen_ai.skill.source.uri", source))
+	}
+	if path := strings.TrimSpace(start.ProcessExecutablePath); start.ExecutionKind == ToolExecutionKindCommand && path != "" {
+		attrs = append(attrs, attribute.String("process.executable.path", path))
+	}
+	return attrs
+}
+
+func scrubToolSourceURI(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if strings.ContainsFunc(raw, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
+		return ""
+	}
+	// net/url does not validate escapes in the query, even though it is discarded below.
+	if _, err := url.PathUnescape(raw); err != nil {
+		return ""
+	}
+	uri, err := url.Parse(raw)
+	if err != nil || !uri.IsAbs() || uri.Opaque != "" {
+		return ""
+	}
+	if strings.EqualFold(uri.Scheme, "file") {
+		if !strings.HasPrefix(uri.Path, "/") {
+			return ""
+		}
+		uri.Scheme = "file"
+		uri.OmitHost = false
+	} else if uri.Host == "" {
+		return ""
+	}
+	if uri.Host != "" {
+		if uri.Hostname() == "" || strings.HasSuffix(uri.Host, ":") {
+			return ""
+		}
+		if port := uri.Port(); port != "" {
+			n, err := strconv.Atoi(port)
+			if err != nil || n < 0 || n > 65535 {
+				return ""
+			}
+		}
+	} else if uri.User != nil {
+		return ""
+	}
+	uri.User = nil
+	uri.RawQuery = ""
+	uri.ForceQuery = false
+	uri.Fragment = ""
+	uri.RawFragment = ""
+	return uri.String()
 }
 
 func toolSpanAttributes(start ToolExecutionStart) []attribute.KeyValue {
@@ -2512,6 +2607,17 @@ func toolSpanAttributes(start ToolExecutionStart) []attribute.KeyValue {
 	}
 	if model := strings.TrimSpace(start.RequestModel); model != "" {
 		attrs = append(attrs, attribute.String(spanAttrRequestModel, model))
+	}
+	if isToolExecutionKind(start.ExecutionKind) {
+		if skill := strings.TrimSpace(start.SkillName); skill != "" {
+			attrs = append(attrs, attribute.String("gen_ai.skill.name", skill))
+		}
+		if resource := strings.TrimSpace(start.SkillResourceName); start.ExecutionKind != ToolExecutionKindLoadSkill && resource != "" {
+			attrs = append(attrs, attribute.String("gen_ai.skill.resource.name", resource))
+		}
+		if executable := strings.TrimSpace(start.ProcessExecutableName); start.ExecutionKind == ToolExecutionKindCommand && executable != "" {
+			attrs = append(attrs, attribute.String("process.executable.name", executable))
+		}
 	}
 
 	return attrs

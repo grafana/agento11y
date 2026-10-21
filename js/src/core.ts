@@ -74,6 +74,7 @@ export type {
   ToolCallPart,
   ToolDefinition,
   ToolExecution,
+  ToolExecutionKind,
   ToolExecutionRecorder,
   ToolExecutionResult,
   ToolExecutionStart,

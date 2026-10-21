@@ -431,6 +431,61 @@ with client.start_tool_execution(
     rec.set_result(arguments={"city": "Paris"}, result={"temp_c": 18})
 ```
 
+### Tracing skill loads, resource reads, and commands
+
+Set `ToolExecutionStart.execution_kind` explicitly with `ToolExecutionKind`. The SDK does not infer execution kinds from tool names, paths, or arguments.
+These additions follow [merged GenAI #498](https://github.com/open-telemetry/semantic-conventions-genai/pull/498), which remains in development.
+
+| Execution kind | Meaning | Applicable fields |
+| --- | --- | --- |
+| `ToolExecutionKind.LOAD_SKILL` (`load_skill`) | Load skill instructions | `skill_name`, `skill_description`, `skill_source_uri` |
+| `ToolExecutionKind.READ_SKILL_RESOURCE` (`read_skill_resource`) | Read a skill resource | Skill fields above, `skill_resource_name` |
+| `ToolExecutionKind.COMMAND` (`command`) | Execute a command, optionally for a skill | Skill/resource fields above, `process_executable_name`, `process_executable_path`; completion `process_exit_code` |
+
+Unset or unrecognized execution kinds keep generic tool behavior and emit no skill or process attributes. The SDK ignores inapplicable fields.
+Skill fields emit `gen_ai.skill.name`, `gen_ai.skill.description`, `gen_ai.skill.source.uri`, and `gen_ai.skill.resource.name`.
+Process fields emit `process.executable.name`, `process.executable.path`, and `process.exit.code`.
+The SDK does not dual-write `agento11y.skill.name`.
+
+Span names start with `execute_tool <tool>` and use trimmed, nonblank identity:
+
+- `load_skill` appends the skill name, when present.
+- `read_skill_resource` appends `<skill> <resource>`, or just `<resource>` without a skill. Without a resource, it appends nothing.
+- `command` uses the same resource suffix, then falls back to the executable name, then no suffix.
+
+Resource reads and commands never use a skill-only suffix.
+The span name and applicable structural names are available to samplers at creation.
+Private fields and the completion exit code are excluded from sampler attributes.
+
+Process fields describe one directly executed process. Do not infer them from shell text, pipelines, or command batches.
+`ToolExecutionEnd.process_exit_code` is a nullable integer (`int | None`): `None` means unknown; zero records successful completion.
+Booleans, strings, and fractional values are invalid. Exit codes are independent of recorded execution errors.
+For example, record a known completion code as follows:
+
+```python
+from agento11y import ToolExecutionEnd, ToolExecutionKind, ToolExecutionStart
+
+with client.start_tool_execution(
+    ToolExecutionStart(
+        tool_name="exec",
+        execution_kind=ToolExecutionKind.COMMAND,
+        skill_name="review",
+        skill_resource_name="scripts/check.py",
+        process_executable_name="python3",
+    )
+) as rec:
+    rec.set_result(ToolExecutionEnd(process_exit_code=0))
+```
+
+`skill_description`, `skill_source_uri`, and `process_executable_path` are private content.
+The SDK omits them from spans under effective `METADATA_ONLY` or `FULL_WITH_METADATA_SPANS`, after resolving overrides, inheritance, and the resolver.
+Core `NO_TOOL_CONTENT` retains these private fields; arguments/results still require the existing content opt-in.
+Every exported skill source URI has userinfo, query, and fragment removed, even under `FULL`.
+Invalid or relative URIs are omitted without network or filesystem lookup.
+With experimental OTel generation export, `FULL_WITH_METADATA_SPANS` resolves to `FULL`; it does not protect private fields from spans.
+
+Generic tool recording, `execute_tool_calls`, and existing metrics are unchanged. No skill/process metric dimensions are added.
+
 ## SDK identity attributes
 
 - Generation and tool spans always include:
@@ -465,7 +520,7 @@ with with_conversation_id("conv-ctx"), with_agent_name("planner"), with_agent_ve
 
 `DEFAULT` is a placeholder for "inherit from the next layer"; at the client level it resolves to `NO_TOOL_CONTENT`. The SDK default is `NO_TOOL_CONTENT`, which matches the SDK's behavior before this feature was added.
 
-`FULL_WITH_METADATA_SPANS` is the right mode when the gRPC ingest destination is private but the OTel trace/metric destination is shared and must not receive any content. Tool execution and embedding spans behave like `METADATA_ONLY` under this mode because they have no separate gRPC export.
+With HTTP/gRPC generation export, `FULL_WITH_METADATA_SPANS` keeps generation content in ingest and omits content from spans. Tool execution and embedding spans behave like `METADATA_ONLY` because they have no separate generation export. With experimental OTel generation export, this mode resolves to `FULL` instead; content can appear in spans.
 
 User-provided `metadata` and `tags` are **not** stripped by any capture mode; callers must avoid putting sensitive content in those dicts when using `METADATA_ONLY` or `FULL_WITH_METADATA_SPANS`. SDK-internal metadata keys that carry content (e.g. `call_error`, `agento11y.conversation.title`) are stripped along with the matching content. See [Tags and Metadata](../docs/concepts/tags-and-metadata.md) for where client tags, per-generation tags, metadata, and `user_id` each show up (export vs spans vs metrics).
 

@@ -823,12 +823,11 @@ export class Agento11yClient {
   }
 
   internalStartToolExecutionSpan(seed: ToolExecutionStart, startedAt: Date): Span {
-    const span = this.tracer.startSpan(toolSpanName(seed.toolName), {
+    const span = this.tracer.startSpan(toolSpanName(seed), {
       kind: SpanKind.INTERNAL,
       startTime: startedAt,
+      attributes: { ...toolSpanAttributes(seed), ...skillProcessAttributes(seed) },
     });
-
-    setToolSpanAttributes(span, seed);
     setTagSpanAttributes(span, this.config.tags);
     return span;
   }
@@ -970,7 +969,18 @@ export class Agento11yClient {
     localError: Error | undefined,
     contentCaptureMode: ContentCaptureMode = 'default',
   ): Error | undefined {
-    setToolSpanAttributes(span, toolExecution);
+    const includePrivate = contentCaptureMode !== 'metadata_only' && contentCaptureMode !== 'full_with_metadata_spans';
+    span.setAttributes({
+      ...toolSpanAttributes(toolExecution),
+      ...skillProcessAttributes(toolExecution, includePrivate),
+    });
+    if (
+      toolExecution.executionKind === 'command' &&
+      typeof toolExecution.processExitCode === 'number' &&
+      Number.isSafeInteger(toolExecution.processExitCode)
+    ) {
+      span.setAttribute('process.exit.code', toolExecution.processExitCode);
+    }
 
     if (toolExecution.includeContent) {
       const argumentsResult = serializeToolContent(toolExecution.arguments);
@@ -1825,6 +1835,14 @@ class ToolExecutionRecorderImpl implements ToolExecutionRecorder {
       toolCallId: this.seed.toolCallId,
       toolType: this.seed.toolType,
       toolDescription: this.seed.toolDescription,
+      executionKind: this.seed.executionKind,
+      skillName: this.seed.skillName,
+      skillDescription: this.seed.skillDescription,
+      skillSourceURI: this.seed.skillSourceURI,
+      skillResourceName: this.seed.skillResourceName,
+      processExecutableName: this.seed.processExecutableName,
+      processExecutablePath: this.seed.processExecutablePath,
+      processExitCode: this.result?.processExitCode,
       conversationId: this.seed.conversationId,
       conversationTitle: this.seed.conversationTitle,
       agentName: this.seed.agentName,
@@ -1909,12 +1927,93 @@ function embeddingSpanName(modelName: string): string {
   return `${defaultEmbeddingOperationName} ${model}`;
 }
 
-function toolSpanName(toolName: string): string {
-  const normalized = toolName.trim();
-  if (normalized.length === 0) {
-    return 'execute_tool unknown';
+function toolSpanName(tool: ToolExecutionStart): string {
+  const base = `execute_tool ${tool.toolName.trim() || 'unknown'}`;
+  let suffix: string | undefined;
+  switch (tool.executionKind) {
+    case 'load_skill':
+      suffix = tool.skillName?.trim();
+      break;
+    case 'read_skill_resource':
+    case 'command': {
+      const skill = tool.skillName?.trim();
+      const resource = tool.skillResourceName?.trim();
+      suffix = resource ? (skill ? `${skill} ${resource}` : resource) : undefined;
+      if (!suffix && tool.executionKind === 'command') {
+        suffix = tool.processExecutableName?.trim();
+      }
+      break;
+    }
   }
-  return `execute_tool ${normalized}`;
+  return suffix ? `${base} ${suffix}` : base;
+}
+
+// Private fields are added at completion, never to sampler inputs.
+function skillProcessAttributes(tool: ToolExecutionStart, includePrivate = false): Record<string, string> {
+  const attrs: Record<string, string> = {};
+  if (
+    tool.executionKind !== 'load_skill' &&
+    tool.executionKind !== 'read_skill_resource' &&
+    tool.executionKind !== 'command'
+  ) {
+    return attrs;
+  }
+  const add = (key: string, value: string | undefined): void => {
+    const normalized = value?.trim();
+    if (normalized) {
+      attrs[key] = normalized;
+    }
+  };
+  add('gen_ai.skill.name', tool.skillName);
+  if (tool.executionKind !== 'load_skill') {
+    add('gen_ai.skill.resource.name', tool.skillResourceName);
+  }
+  if (tool.executionKind === 'command') {
+    add('process.executable.name', tool.processExecutableName);
+    if (includePrivate) {
+      add('process.executable.path', tool.processExecutablePath);
+    }
+  }
+  if (includePrivate) {
+    add('gen_ai.skill.description', tool.skillDescription);
+    const uri = projectSkillSourceURI(tool.skillSourceURI?.trim());
+    if (uri) {
+      attrs['gen_ai.skill.source.uri'] = uri;
+    }
+  }
+  return attrs;
+}
+
+function projectSkillSourceURI(uri: string | undefined): string | undefined {
+  if (!uri || /[\s\\]|\p{Cc}|%(?![\da-f]{2})/iu.test(uri)) {
+    return undefined;
+  }
+  // Validate the original location before URL can repair a missing host or absolute path.
+  const location = /^([a-z][a-z\d+.-]*):(?:\/\/([^/?#]*))?([^?#]*)/i.exec(uri);
+  if (!location) {
+    return undefined;
+  }
+  const [, scheme = '', authority, path = ''] = location;
+  if (scheme.toLowerCase() === 'file' ? !path.startsWith('/') : !authority) {
+    return undefined;
+  }
+  try {
+    if (authority) {
+      if (authority.split('@').length > 2 || authority.endsWith(':')) {
+        return undefined;
+      }
+      // Validate host and port even for schemes with opaque WHATWG hosts (e.g. s3).
+      new URL(`https://${authority}/`);
+    }
+    const url = new URL(uri);
+    url.username = '';
+    url.password = '';
+    url.search = '';
+    url.hash = '';
+    return url.toString();
+  } catch {
+    return undefined;
+  }
 }
 
 function tagMetricAttributes(tags: Record<string, string> | undefined): Record<string, string> {
@@ -2161,52 +2260,29 @@ function setEmbeddingEndSpanAttributes(
   }
 }
 
-function setToolSpanAttributes(
-  span: Span,
-  tool: {
-    toolName: string;
-    toolCallId?: string;
-    toolType?: string;
-    toolDescription?: string;
-    conversationId?: string;
-    conversationTitle?: string;
-    agentName?: string;
-    agentVersion?: string;
-    requestProvider?: string;
-    requestModel?: string;
-  },
-): void {
-  span.setAttribute(spanAttrOperationName, 'execute_tool');
-  span.setAttribute(spanAttrToolName, tool.toolName);
-  span.setAttribute(spanAttrSDKName, sdkName);
-
-  if (notEmpty(tool.toolCallId)) {
-    span.setAttribute(spanAttrToolCallID, tool.toolCallId);
+function toolSpanAttributes(tool: ToolExecutionStart): Record<string, string> {
+  const attrs: Record<string, string> = {
+    [spanAttrOperationName]: 'execute_tool',
+    [spanAttrToolName]: tool.toolName.trim(),
+    [spanAttrSDKName]: sdkName,
+  };
+  const optional = {
+    [spanAttrToolCallID]: tool.toolCallId,
+    [spanAttrToolType]: tool.toolType,
+    [spanAttrToolDescription]: tool.toolDescription,
+    [spanAttrConversationID]: tool.conversationId,
+    [spanAttrConversationTitle]: tool.conversationTitle,
+    [spanAttrAgentName]: tool.agentName,
+    [spanAttrAgentVersion]: tool.agentVersion,
+    [spanAttrProviderName]: tool.requestProvider,
+    [spanAttrRequestModel]: tool.requestModel,
+  };
+  for (const [key, value] of Object.entries(optional)) {
+    if (notEmpty(value)) {
+      attrs[key] = value;
+    }
   }
-  if (notEmpty(tool.toolType)) {
-    span.setAttribute(spanAttrToolType, tool.toolType);
-  }
-  if (notEmpty(tool.toolDescription)) {
-    span.setAttribute(spanAttrToolDescription, tool.toolDescription);
-  }
-  if (notEmpty(tool.conversationId)) {
-    span.setAttribute(spanAttrConversationID, tool.conversationId);
-  }
-  if (notEmpty(tool.conversationTitle)) {
-    span.setAttribute(spanAttrConversationTitle, tool.conversationTitle);
-  }
-  if (notEmpty(tool.agentName)) {
-    span.setAttribute(spanAttrAgentName, tool.agentName);
-  }
-  if (notEmpty(tool.agentVersion)) {
-    span.setAttribute(spanAttrAgentVersion, tool.agentVersion);
-  }
-  if (notEmpty(tool.requestProvider)) {
-    span.setAttribute(spanAttrProviderName, tool.requestProvider);
-  }
-  if (notEmpty(tool.requestModel)) {
-    span.setAttribute(spanAttrRequestModel, tool.requestModel);
-  }
+  return attrs;
 }
 
 function serializeToolContent(value: unknown): { value?: string; error?: Error } {
