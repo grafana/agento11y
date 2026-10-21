@@ -525,7 +525,8 @@ func TestTenantOnlyAuthExports(t *testing.T) {
 	assert.True(t, config.HasCredentials())
 	frag := &fragment.Fragment{SessionID: "sess", TurnID: "turn", Model: "gpt-5.5", Prompt: "hello"}
 	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeFull}
-	client := buildClient(cfg, "", "", nil, logger)
+	client, err := buildClient(cfg, "", "", nil, logger)
+	require.NoError(t, err)
 	defer func() { _ = client.Shutdown(context.Background()) }()
 	mapped := mapper.Map(mapper.Inputs{Fragment: frag, ContentCapture: cfg.ContentCapture})
 	require.NoError(t, emitGeneration(context.Background(), client, frag, mapped, cfg.ContentCapture, logger))
@@ -560,7 +561,8 @@ func TestExplicitAuthModeExports(t *testing.T) {
 			logger := log.New(io.Discard, "", 0)
 			cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeFull}
 			frag := &fragment.Fragment{SessionID: "sess", TurnID: "turn", Model: "gpt-5.5", Prompt: "hello"}
-			client := buildClient(cfg, "", "", nil, logger)
+			client, err := buildClient(cfg, "", "", nil, logger)
+			require.NoError(t, err)
 			defer func() { _ = client.Shutdown(context.Background()) }()
 			mapped := mapper.Map(mapper.Inputs{Fragment: frag, ContentCapture: cfg.ContentCapture})
 			require.NoError(t, emitGeneration(context.Background(), client, frag, mapped, cfg.ContentCapture, logger))

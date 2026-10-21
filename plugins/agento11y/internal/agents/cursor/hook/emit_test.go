@@ -67,7 +67,10 @@ func TestEmitGenerationSendsCursorUserAgent(t *testing.T) {
 	})
 
 	ctx := context.Background()
-	client := buildClient(Payload{}, nil, config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}, nil, log.New(io.Discard, "", 0))
+	client, err := buildClient(Payload{}, nil, config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}, nil, log.New(io.Discard, "", 0))
+	if err != nil {
+		t.Fatalf("buildClient: %v", err)
+	}
 	if err := emitGeneration(ctx, client, frag, mapped, nil); err != nil {
 		t.Fatalf("emitGeneration: %v", err)
 	}
@@ -232,7 +235,10 @@ func TestBuildClientAttachesAutoTags(t *testing.T) {
 			})
 
 			ctx := context.Background()
-			client := buildClient(tc.payload, tc.session, cfg, nil, log.New(io.Discard, "", 0))
+			client, err := buildClient(tc.payload, tc.session, cfg, nil, log.New(io.Discard, "", 0))
+			if err != nil {
+				t.Fatalf("buildClient: %v", err)
+			}
 			if err := emitGeneration(ctx, client, frag, mapped, nil); err != nil {
 				t.Fatalf("emitGeneration: %v", err)
 			}

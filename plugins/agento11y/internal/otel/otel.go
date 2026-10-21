@@ -19,7 +19,9 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +37,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
 
@@ -49,11 +52,13 @@ type Providers struct {
 	tp          *sdktrace.TracerProvider
 	mp          *sdkmetric.MeterProvider
 	traceExport *checkedTraceExporter
+	generation  *generationProvider
 }
 
 // A batch can fail before ForceFlush runs. The SDK reports that failure to its
 // global error handler and empties the queue; a later ForceFlush alone would
-// incorrectly report success. Remember failures until the caller checks them.
+// incorrectly report success. Normal trace flushes take and clear the error;
+// generation flushes only peek so failures remain sticky.
 type checkedTraceExporter struct {
 	sdktrace.SpanExporter
 	mu  sync.Mutex
@@ -108,7 +113,8 @@ func (p *Providers) Meter(name string) metric.Meter {
 	return p.mp.Meter(name)
 }
 
-// ForceFlush exports pending traces and metrics concurrently.
+// ForceFlush exports pending tool traces and metrics concurrently. Generation
+// records have a separate context-aware GenerationFlusher.
 func (p *Providers) ForceFlush() error {
 	if p == nil {
 		return nil
@@ -127,7 +133,7 @@ func (p *Providers) ForceFlush() error {
 	return errors.Join(first, p.traceExport.takeError())
 }
 
-// Shutdown flushes and shuts down both providers concurrently. The
+// Shutdown flushes and shuts down all providers concurrently. The
 // caller's context is honoured; when it has no deadline we apply a 3 s
 // budget so a stuck exporter can't pin the process.
 func (p *Providers) Shutdown(ctx context.Context) error {
@@ -139,16 +145,21 @@ func (p *Providers) Shutdown(ctx context.Context) error {
 		ctx, cancel = context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
 	}
-	errc := make(chan error, 2)
+	n := 2
+	if p.generation != nil {
+		n++
+	}
+	errc := make(chan error, n)
 	go func() { errc <- p.mp.Shutdown(ctx) }()
 	go func() { errc <- p.tp.Shutdown(ctx) }()
-	var first error
-	for range 2 {
-		if err := <-errc; err != nil && first == nil {
-			first = err
-		}
+	if p.generation != nil {
+		go func() { errc <- p.generation.shutdown(ctx) }()
 	}
-	return errors.Join(first, p.traceExport.takeError())
+	var errs []error
+	for range n {
+		errs = append(errs, <-errc)
+	}
+	return errors.Join(append(errs, p.traceExport.takeError())...)
 }
 
 // Options overrides the exporter configuration Setup otherwise reads from
@@ -161,6 +172,12 @@ func (p *Providers) Shutdown(ctx context.Context) error {
 type Options struct {
 	// IDGenerator optionally preserves trace identities during historical imports.
 	IDGenerator sdktrace.IDGenerator
+	// GenerationProtocol overrides the ambient generation transport. Empty
+	// resolves AGENTO11Y_PROTOCOL (SIGIL_ fallback), defaulting to HTTP. OTel
+	// still requires the preferred-only experimental opt-in and a valid endpoint.
+	GenerationProtocol agento11y.GenerationExportProtocol
+	// EnableExperimentalFeatures preserves an import's resolved opt-in.
+	EnableExperimentalFeatures *bool
 	// Endpoint replaces the environment OTLP endpoint when non-empty. Its
 	// scheme also decides the transport, so AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE
 	// cannot downgrade an https endpoint named here to cleartext.
@@ -171,7 +188,8 @@ type Options struct {
 }
 
 // Setup creates OTLP HTTP trace + metric providers from the environment.
-// Returns nil providers (no error) when no OTLP endpoint is configured.
+// Returns nil providers (no error) when no OTLP endpoint is configured, unless
+// OTel generation export was requested, in which case missing config is an error.
 //
 // instanceID is written to the resource as service.instance.id so concurrent
 // agent sessions on the same host produce distinct OTel resource identities
@@ -186,9 +204,34 @@ func Setup(ctx context.Context, instanceID string) (*Providers, error) {
 // somewhere else passes the destination here instead of changing them under
 // the daemon.
 func SetupWithOptions(ctx context.Context, instanceID string, opts Options) (*Providers, error) {
+	// Resolve through the shared validator, with explicit options replacing
+	// only their own alias families. This validates the effective destination,
+	// not a possibly absent or invalid ambient endpoint.
+	look := func(suffix string) (string, string, bool) {
+		if suffix == "PROTOCOL" && opts.GenerationProtocol != "" {
+			return string(opts.GenerationProtocol), "Options.GenerationProtocol", true
+		}
+		if suffix == "OTEL_EXPORTER_OTLP_ENDPOINT" && strings.TrimSpace(opts.Endpoint) != "" {
+			return opts.Endpoint, "Options.Endpoint", true
+		}
+		return envconfig.LookupEnv(suffix)
+	}
+	exact := func(key string) string {
+		if key == agento11y.EnvEnableExperimentalFeatures && opts.EnableExperimentalFeatures != nil {
+			return strconv.FormatBool(*opts.EnableExperimentalFeatures)
+		}
+		return os.Getenv(key)
+	}
+	protocol, err := envconfig.ResolveGenerationTransportWith(look, exact)
+	if err != nil {
+		return nil, err
+	}
 	cfg, ok := resolveExporterConfig(opts)
 	if !ok {
 		return nil, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("setup telemetry: %w", err)
 	}
 	if instanceID == "" {
 		instanceID = uuid.NewString()
@@ -230,7 +273,17 @@ func SetupWithOptions(ctx context.Context, instanceID string, opts Options) (*Pr
 		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExp, sdkmetric.WithInterval(time.Second))),
 		sdkmetric.WithResource(res),
 	)
-	return &Providers{tp: tp, mp: mp, traceExport: checked}, nil
+	p := &Providers{tp: tp, mp: mp, traceExport: checked}
+	if protocol == agento11y.GenerationExportProtocolOTel {
+		generationExp, err := otlptracehttp.New(setupCtx, traceOptions(cfg)...)
+		if err != nil {
+			_ = p.Shutdown(ctx)
+			return nil, fmt.Errorf("build generation exporter: %w", err)
+		}
+		p.generation = newGenerationProvider(generationExp, res, opts.IDGenerator)
+		p.generation.endpoint = cfg.endpoint
+	}
+	return p, nil
 }
 
 // EndpointFromEnv returns the configured OTLP endpoint, preferring the
@@ -258,24 +311,21 @@ func ProbeConfig() (metrics, traces ProbeTarget, ok bool) {
 	if !ok {
 		return ProbeTarget{}, ProbeTarget{}, false
 	}
-	return ProbeTarget{URL: probeSignalURL(cfg, "metrics"), Headers: cloneHeaders(cfg.headers)},
-		ProbeTarget{URL: probeSignalURL(cfg, "traces"), Headers: cloneHeaders(cfg.headers)},
+	return ProbeTarget{URL: SignalEndpointURL(cfg.endpoint, "metrics"), Headers: cloneHeaders(cfg.headers)},
+		ProbeTarget{URL: SignalEndpointURL(cfg.endpoint, "traces"), Headers: cloneHeaders(cfg.headers)},
 		true
 }
 
-// probeSignalURL is SignalEndpointURL adjusted for the insecure setting. When
-// the exporter is configured insecure, the SDK's WithInsecure() forces
-// cleartext to the same host:port regardless of the endpoint scheme, so a
-// probe over https would exercise a different transport than real export. Drop
-// to http here to match what export actually does.
-func probeSignalURL(cfg exporterConfig, signal string) string {
-	u := SignalEndpointURL(cfg.endpoint, signal)
-	if cfg.insecure {
-		if rest, ok := strings.CutPrefix(u, "https://"); ok {
-			return "http://" + rest
-		}
+// EffectiveEndpointURL matches the OTLP HTTP exporter's WithInsecure behavior:
+// insecure forces HTTP even when the configured URL specifies HTTPS.
+func EffectiveEndpointURL(endpoint string, insecure bool) string {
+	endpoint = strings.TrimSpace(endpoint)
+	u, err := url.Parse(endpoint)
+	if err == nil && insecure && strings.EqualFold(u.Scheme, "https") {
+		u.Scheme = "http"
+		return u.String()
 	}
-	return u
+	return endpoint
 }
 
 func cloneHeaders(in map[string]string) map[string]string {
@@ -303,6 +353,7 @@ func resolveExporterConfig(opts Options) (exporterConfig, bool) {
 		// ambient value ship an https endpoint's spans in the clear.
 		cfg.insecure = !isHTTPSEndpoint(opts.Endpoint)
 	}
+	cfg.endpoint = EffectiveEndpointURL(cfg.endpoint, cfg.insecure)
 	return cfg, true
 }
 

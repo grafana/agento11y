@@ -671,16 +671,21 @@ func TestHistoryImportRunsAsynchronously(t *testing.T) {
 	}
 }
 
-// TestHistoryImportIsIdempotent covers the ledger: a second run of the same
-// selection re-exports nothing.
+// A transport or listener change must not replay already imported turns.
 func TestHistoryImportIsIdempotent(t *testing.T) {
 	isolateHistoryState(t)
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	srv, _ := newHistoryServer(t)
 	writeHistoryTranscript(t, "sess-1", 2, time.Now().Add(-2*time.Hour))
 
 	first := waitForTerminalRun(t, srv, startImport(t, srv, `{"agent":"claude-code"}`))
 	require.Equal(t, 2, first.Imported)
 
+	t.Setenv("AGENTO11Y_PROTOCOL", "otel")
+	t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "true")
+	otherPort := httptest.NewServer(srv)
+	t.Cleanup(otherPort.Close)
+	srv.SetLocalEndpoint(otherPort.URL)
 	second := waitForTerminalRun(t, srv, startImport(t, srv, `{"agent":"claude-code"}`))
 	assert.Equal(t, 0, second.Imported)
 	assert.Equal(t, 2, second.Skipped)
@@ -871,7 +876,20 @@ func TestHistoryRunListIsBounded(t *testing.T) {
 // forwarding enabled and credentials configured, an import must put nothing on
 // the wire while the local store keeps the full content.
 func TestHistoryImportNeverForwardsToCloud(t *testing.T) {
+	for _, protocol := range []string{"http", "otel"} {
+		t.Run(protocol, func(t *testing.T) { testHistoryImportNeverForwardsToCloud(t, protocol) })
+	}
+}
+
+func testHistoryImportNeverForwardsToCloud(t *testing.T, protocol string) {
 	isolateHistoryState(t)
+	clearForwardEnv(t)
+	t.Setenv("AGENTO11Y_PROTOCOL", protocol)
+	t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "true")
+	t.Setenv("AGENTO11Y_HEADERS", "Authorization=Bearer ambient-generation,X-Ambient=secret")
+	t.Setenv("OTEL_EXPORTER_OTLP_HEADERS", "Authorization=Bearer ambient-otlp,X-Ambient=secret")
+	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_HEADERS", "Authorization=Bearer ambient-trace")
+	t.Setenv("OTEL_EXPORTER_OTLP_METRICS_HEADERS", "Authorization=Bearer ambient-metric")
 
 	var cloudRequests atomic.Int64
 	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -889,12 +907,27 @@ func TestHistoryImportNeverForwardsToCloud(t *testing.T) {
 		"AGENTO11Y_CONTENT_CAPTURE_MODE":        "full",
 		"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": cloud.URL + "/otlp",
 	})
-	clearForwardEnv(t)
 	storage, err := NewStorage(filepath.Join(t.TempDir(), "local"))
 	require.NoError(t, err)
 	srv := NewServer(storage, nil, configPath)
 	t.Cleanup(srv.Close)
-	ts := httptest.NewServer(srv)
+	var traces, metrics, generationHTTP atomic.Int64
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			assert.Empty(t, r.Header.Get("Authorization"), "local history must replace Cloud authorization")
+			assert.Empty(t, r.Header.Get("X-Ambient"))
+			assert.Equal(t, "1", r.Header.Get(ForwardMarkerHeader))
+			switch r.URL.Path {
+			case "/otlp/v1/traces":
+				traces.Add(1)
+			case "/otlp/v1/metrics":
+				metrics.Add(1)
+			case "/api/v1/generations:export":
+				generationHTTP.Add(1)
+			}
+		}
+		srv.ServeHTTP(w, r)
+	}))
 	defer ts.Close()
 	srv.SetLocalEndpoint(ts.URL)
 
@@ -934,6 +967,13 @@ func TestHistoryImportNeverForwardsToCloud(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(raw), "private-v2-answer")
 	assert.Contains(t, string(raw), "private-v2-prompt")
+	assert.Positive(t, traces.Load(), "the SDK must send traces with the no-forward header")
+	assert.Positive(t, metrics.Load(), "the SDK must send metrics with the no-forward header")
+	if protocol == "otel" {
+		assert.Zero(t, generationHTTP.Load(), "OTel must not also export HTTP generations")
+	} else {
+		assert.Positive(t, generationHTTP.Load())
+	}
 }
 
 // TestHistoryImportRecreatesTheConversationsDirectory covers the store

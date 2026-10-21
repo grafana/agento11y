@@ -46,6 +46,22 @@ func TestLaunchEnvApply(t *testing.T) {
 			},
 		},
 		{
+			name: "keeps experimental OTel selection with full local capture",
+			env: []string{
+				"AGENTO11Y_PROTOCOL=otel",
+				"AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true",
+				"AGENTO11Y_CONTENT_CAPTURE_MODE=metadata_only",
+				"OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer test-token",
+			},
+			want: map[string]string{
+				"AGENTO11Y_PROTOCOL":                     "otel",
+				"AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "true",
+				"AGENTO11Y_CONTENT_CAPTURE_MODE":         "full",
+				"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT":  "http://127.0.0.1:4320/otlp",
+				"OTEL_EXPORTER_OTLP_HEADERS":             "Authorization=Bearer test-token",
+			},
+		},
+		{
 			name: "keeps configured credentials under either spelling",
 			env: []string{
 				"SIGIL_AUTH_TENANT_ID=42",

@@ -83,7 +83,7 @@ A binary older than that command prints `agento11y: unknown agent "skills"` and 
 | [Codex](https://developers.openai.com/codex) | [`plugins/codex/`](https://github.com/grafana/agento11y/tree/main/plugins/codex) | Shared `agento11y` Go binary via hooks |
 | [Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) | [`plugins/copilot/`](https://github.com/grafana/agento11y/tree/main/plugins/copilot) | Shared `agento11y` Go binary via hooks |
 | [Cursor](https://cursor.com) | [`plugins/cursor/`](https://github.com/grafana/agento11y/tree/main/plugins/cursor) | Shared `agento11y` Go binary via hooks |
-| [OpenCode](https://opencode.ai) | [`plugins/opencode/`](https://github.com/grafana/agento11y/tree/main/plugins/opencode) | Shared `agento11y` Go binary, installs `@grafana/agento11y-opencode`; supports OpenCode 1.3.13 to 1.x and 2.0.22 to 2.x |
+| [OpenCode](https://opencode.ai) | [`plugins/opencode/`](https://github.com/grafana/agento11y/tree/main/plugins/opencode) | Independent npm package `@grafana/agento11y-opencode`, installed by `agento11y opencode`; supports OpenCode 1.3.13 to 1.x and 2.0.22 to 2.x |
 | [Pi](https://github.com/earendil-works/pi) | [`plugins/pi/`](https://github.com/grafana/agento11y/tree/main/plugins/pi) | Independent npm package `@grafana/agento11y-pi` |
 | [Kiro CLI 3 (experimental)](https://kiro.dev/cli/) | [`plugins/kiro/`](https://github.com/grafana/agento11y/tree/main/plugins/kiro) | Workspace hooks; prompts/tools only, no assistant text, model usage, or cost |
 | [Vibe](https://github.com/mistralai/mistral-vibe) | [`plugins/vibe/`](https://github.com/grafana/agento11y/tree/main/plugins/vibe) | Shared `agento11y` Go binary via `hooks.toml` |
@@ -122,6 +122,21 @@ AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT=<otlp-gateway-url>
 ```
 
 To re-enter credentials later, run `agento11y login`. It asks where sessions go first when no destination and no credentials are saved. A rerun with a complete saved Cloud connection first shows its Grafana stack. **Keep this connection** jumps to preferences without changing the connection. **Change connection** opens the Cloud questions. For Grafana Cloud it asks for your Grafana stack and prints that stack's coding-agent setup page (`https://<your-stack>.grafana.net/a/grafana-agento11y-app/setup-coding-agent`), trying to open it in a browser. Paste the environment block from that page into the next field, which is masked because the block carries a token. Login fills the endpoint, tenant ID, token, OTLP endpoint, and OTLP headers from it. It asks for missing values individually, followed by the local web UI, content capture mode, session tags, and guards. The stack is saved as `AGENTO11Y_STACK_URL` so a later run offers it back. It only builds the printed links and is never saved as `AGENTO11Y_ENDPOINT`, which points at a different host. Before writing the file, login sends one request to the endpoint with the credentials and reports what came back. Run `agento11y doctor` to repeat that check later.
+
+## Experimental OTel generation export
+
+HTTP remains the default. To export generations as OpenTelemetry (OTel) spans, set these values in the environment or `~/.config/agento11y/config.env`:
+
+```dotenv
+AGENTO11Y_PROTOCOL=otel
+AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true
+```
+
+Configure `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_ENDPOINT`) and OTLP authentication. Use an endpoint that supports Agent Observability generation ingestion.
+
+OTel export supports Claude Code, Codex, Copilot, Cursor, Vibe, and Kiro. Local mode, history imports, and Claude plugin eval imports also support OTel. Pi and OpenCode live plugins still use HTTP.
+
+Guards, scores, and experiment APIs still need HTTP credentials.
 
 ## Local mode
 

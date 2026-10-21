@@ -132,6 +132,12 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 		return nil
 	}
 
+	protocol, err := envconfig.ResolveGenerationTransport()
+	if err != nil {
+		logger.Printf("not exporting: %v", err)
+		return nil
+	}
+
 	endpoint := envconfig.Getenv("ENDPOINT")
 	tenantID := envconfig.Getenv("AUTH_TENANT_ID")
 	authToken := envconfig.Getenv("AUTH_TOKEN")
@@ -150,7 +156,7 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 			"AGENTO11Y_AUTH_TOKEN":     authToken,
 		},
 	)
-	if len(missing) > 0 {
+	if protocol == agento11y.GenerationExportProtocolHTTP && len(missing) > 0 {
 		fmt.Fprintf(os.Stderr, "agento11y claude-code: not exporting: missing %s\n", strings.Join(missing, ", "))
 		logger.Printf("not exporting: missing %s", strings.Join(missing, ", "))
 		return nil
@@ -165,14 +171,21 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 	defer cancel()
 	hookCtx = agento11y.WithUserID(hookCtx, userID)
 
-	otelProviders, err := otel.Setup(hookCtx, input.SessionID)
+	otelProviders, err := otel.SetupWithOptions(hookCtx, input.SessionID, otel.Options{GenerationProtocol: protocol})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agento11y claude-code: otel setup failed: %v\n", err)
 		logger.Printf("otel setup: %v", err)
+		if protocol == agento11y.GenerationExportProtocolOTel {
+			return nil
+		}
 	} else if otelProviders != nil {
 		logger.Printf("otel: endpoint=%s", otel.EndpointFromEnv())
 	}
-	defer func() { _ = otelProviders.Shutdown(hookCtx) }()
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = otelProviders.Shutdown(cleanupCtx)
+	}()
 
 	stop := strings.TrimSpace(input.HookEventName) == "Stop"
 	lines, safeOffset, rawCount, titles := readTranscriptSettled(hookCtx, input.TranscriptPath, st.Offset, stop, logger)
@@ -223,7 +236,16 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 	}
 
 	cfg.ContentCapture = contentMode
+	if err := emit.ConfigureGenerationTransport(&cfg, otelProviders, protocol); err != nil {
+		logger.Printf("client setup: %v", err)
+		return nil
+	}
 	client := agento11y.NewClient(cfg)
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = client.Shutdown(cleanupCtx)
+	}()
 	t0 := time.Now()
 
 	toolResults := buildToolResultMap(gens)
@@ -233,15 +255,16 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 			emitToolSpans(genCtx, client, gen, toolResults, toolResultAt)
 		}); err != nil {
 			logger.Printf("enqueue: %v", err)
+			if protocol == agento11y.GenerationExportProtocolOTel {
+				return nil
+			}
 		}
 	}
 
 	if err := client.Flush(hookCtx); err != nil {
 		logger.Printf("flush: %v", err)
-		_ = client.Shutdown(hookCtx)
 		return nil
 	}
-	_ = client.Shutdown(hookCtx)
 
 	if otelProviders != nil {
 		if err := otelProviders.ForceFlush(); err != nil {

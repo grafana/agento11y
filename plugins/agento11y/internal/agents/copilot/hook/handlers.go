@@ -450,8 +450,6 @@ func Stop(p Payload, cfg config.Config, logger *log.Logger) {
 		f.StopReason = firstNonEmpty(p.StopReason(), p.Reason(), "end_turn")
 	}); err != nil {
 		logger.Printf("stop: update turn: %v", err)
-		clearActiveTurn = true
-		_ = fragment.ClearActiveTurn(sessionID, turnID, logger)
 		return
 	}
 	defer func() {
@@ -463,8 +461,15 @@ func Stop(p Payload, cfg config.Config, logger *log.Logger) {
 		}
 	}()
 
-	envconfig.ApplyLocalAuthPlaceholders()
-	if !config.HasCredentials() {
+	protocol, err := envconfig.ResolveGenerationTransport()
+	if err != nil {
+		logger.Printf("stop: generation transport: %v", err)
+		return
+	}
+	if protocol == agento11y.GenerationExportProtocolHTTP {
+		envconfig.ApplyLocalAuthPlaceholders()
+	}
+	if protocol == agento11y.GenerationExportProtocolHTTP && !config.HasCredentials() {
 		logger.Print("stop: missing SIGIL_ENDPOINT/SIGIL_AUTH_TENANT_ID/SIGIL_AUTH_TOKEN; discarding fragment")
 		clearActiveTurn = true
 		if err := fragment.Delete(sessionID, turnID); err != nil {
@@ -486,14 +491,22 @@ func Stop(p Payload, cfg config.Config, logger *log.Logger) {
 	providers := emit.SetupOTel(ctx, sessionID, logger)
 	if providers != nil {
 		defer func() {
-			if err := providers.Shutdown(ctx); err != nil {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cleanupCancel()
+			if err := providers.Shutdown(cleanupCtx); err != nil {
 				logger.Printf("otel: shutdown: %v", err)
 			}
 		}()
 	}
-	client := buildClient(cfg, frag.Cwd, providers, logger)
+	client, err := buildClient(cfg, frag.Cwd, providers, logger)
+	if err != nil {
+		logger.Printf("stop: build client: %v", err)
+		return
+	}
 	defer func() {
-		_ = client.Shutdown(ctx)
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		_ = client.Shutdown(cleanupCtx)
 	}()
 	mapped := mapper.Map(mapper.Inputs{
 		Fragment:            frag,
@@ -715,7 +728,7 @@ func shouldPreferTranscriptSnapshot(current transcript.Snapshot, haveCurrent boo
 // turn's working directory, which auto-tags resolve the repository and branch
 // from; copilot payloads carry no user identity, so that falls back to the
 // configured AGENTO11Y_USER_ID or the OS account name.
-func buildClient(cfg config.Config, cwd string, providers *otel.Providers, logger *log.Logger) *agento11y.Client {
+func buildClient(cfg config.Config, cwd string, providers *otel.Providers, logger *log.Logger) (*agento11y.Client, error) {
 	return emit.NewClient(emit.ClientOptions{
 		InstrumentationName: otelInstrumentationName,
 		ContentCapture:      cfg.ContentCapture,

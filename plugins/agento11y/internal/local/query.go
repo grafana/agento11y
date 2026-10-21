@@ -1313,7 +1313,7 @@ func scanJSONL[T any](path string, decode func([]byte) (T, bool), visit func(T))
 	sc := bufio.NewScanner(f)
 	// JSONL lines can hold full transcripts; bump the buffer well above
 	// the default 64 KiB.
-	sc.Buffer(make([]byte, 64*1024), 64*1024*1024)
+	sc.Buffer(make([]byte, 64*1024), maxJSONLRecordBytes)
 	for sc.Scan() {
 		line := sc.Bytes()
 		if len(line) == 0 {

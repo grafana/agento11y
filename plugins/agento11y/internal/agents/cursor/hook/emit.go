@@ -33,12 +33,7 @@ func setupOTelIfConfigured(ctx context.Context, instanceID string, logger *log.L
 	return emit.SetupOTel(ctx, instanceID, logger)
 }
 
-// buildClient constructs the agento11y client. Endpoint, tenant ID, and token
-// come from the SDK's automatic SIGIL_* env resolution (config.ApplyEnv has
-// already injected dotenv values into the OS env). The plugin only owns the
-// pieces the SDK can't infer: HTTP protocol, the `/api/v1/generations:export`
-// path suffix, basic-auth mode, account identity, and the OTel tracer/meter
-// wiring. cursor does not pass a logger, so the SDK client stays silent.
+// Cursor leaves the SDK logger unset to keep hook output silent.
 //
 // The auto-tag inputs are the first workspace root and the configured user ID
 // or, if unset, the signed-in user's email.
@@ -47,7 +42,7 @@ func setupOTelIfConfigured(ctx context.Context, instanceID string, logger *log.L
 // that emit telemetry carry neither, so the session
 // sessionStart saved is the primary source and the live payload is the
 // fallback for a conversation whose session file was never written.
-func buildClient(p Payload, session *fragment.Session, cfg config.Config, providers *otel.Providers, logger *log.Logger) *agento11y.Client {
+func buildClient(p Payload, session *fragment.Session, cfg config.Config, providers *otel.Providers, logger *log.Logger) (*agento11y.Client, error) {
 	userID := strings.TrimSpace(cfg.UserIDOverride)
 	if userID == "" {
 		userID = autoTagUserEmail(p, session)

@@ -245,6 +245,13 @@ func TestHandlePreToolUse(t *testing.T) {
 			wantStdoutEmpty:  true,
 		},
 		{
+			name:             "OTel generation selection keeps HTTP guards",
+			env:              map[string]string{"SIGIL_GUARDS_ENABLED": "true", "AGENTO11Y_PROTOCOL": "otel", "AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "false"},
+			serverResponds:   `{"action":"allow"}`,
+			expectServerCall: true,
+			wantStdoutEmpty:  true,
+		},
+		{
 			name:             "enabled_deny_writes_claude_envelope",
 			env:              map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
 			serverResponds:   `{"action":"deny","reason":"blocked tool"}`,

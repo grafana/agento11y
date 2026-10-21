@@ -283,6 +283,21 @@ AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana
 
 Find these values at `https://<your-grafana>.grafana.net/a/grafana-agento11y-app/setup-coding-agent`.
 
+### Experimental OTel generation export
+
+HTTP remains the default. To export generations as OpenTelemetry (OTel) spans, set these values in the environment or `~/.config/agento11y/config.env`:
+
+```dotenv
+AGENTO11Y_PROTOCOL=otel
+AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true
+```
+
+Configure `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_ENDPOINT`) and OTLP authentication. Use an endpoint that supports Agent Observability generation ingestion.
+
+OTel export supports Claude Code, Codex, Copilot, Cursor, Vibe, and Kiro. Local mode, history imports, and Claude plugin eval imports also support OTel. Pi and OpenCode live plugins still use HTTP.
+
+Guards, scores, and experiment APIs still need HTTP credentials.
+
 ### Content capture
 
 The shared `agento11y` binary defaults to `metadata_only`: only model, tokens, tool names, timing, and cost ship to Grafana Agent Observability. Prompts, responses, and tool I/O stay local unless guards are enabled. Guards send evaluated messages and tool arguments to `AGENTO11Y_ENDPOINT` in every capture mode. To send captured content, set `AGENTO11Y_CONTENT_CAPTURE_MODE` in `~/.config/agento11y/config.env`. The shared parser accepts every SDK mode:
@@ -428,12 +443,14 @@ Run `agento11y doctor` first. It's a read-only diagnostic that reports both expo
 agento11y doctor
 ```
 
-The two pipelines are independent and fail independently:
+With default HTTP capture, conversations and analytics use separate pipelines. Experimental OTel generations share the trace route:
 
-- **Conversations** (the chat transcripts) export over `AGENTO11Y_ENDPOINT` + `AGENTO11Y_AUTH_TENANT_ID` + `AGENTO11Y_AUTH_TOKEN`. The token needs the `sigil:write` scope.
+- **Conversations** (the chat transcripts) use `AGENTO11Y_ENDPOINT` + `AGENTO11Y_AUTH_TENANT_ID` + `AGENTO11Y_AUTH_TOKEN` by default. The token needs `sigil:write`. With experimental OTel selected, Go producers use the configured OTLP trace route instead.
 - **Analytics** (the Agent Observability metrics and traces) export over `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_ENDPOINT`). The token needs `metrics:write` and `traces:write`.
 
-The common failure is conversations showing up while the analytics page stays empty: the OTLP endpoint is unset, or the token lacks the metrics/traces scopes. `agento11y doctor` flags that case explicitly and exits non-zero when a pipeline is broken.
+In OTel mode, doctor checks the selected transport, experimental opt-in, and trace route. A successful probe does not confirm storage in Agent Observability.
+
+With default HTTP capture, the common failure is conversations showing up while the analytics page stays empty: the OTLP endpoint is unset, or the token lacks the metrics/traces scopes. `agento11y doctor` flags that case explicitly and exits non-zero when a pipeline is broken.
 
 For onboarding checks and unattended rollout, require a complete healthy Cloud
 connection rather than accepting an unconfigured installation:

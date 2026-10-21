@@ -197,10 +197,32 @@ func probeOTLPSignal(ctx context.Context, target otel.ProbeTarget, tenant envVal
 	return res
 }
 
-// doProbe sends req and maps the outcome to a ProbeResult. A transport error is
-// reported as no response. ProbeResult.accepted decides which statuses count,
-// so the reported ok flag and the section verdict cannot disagree. A 3xx never
-// counts; probeClient explains why the probe does not follow one.
+func probeGenerationOTLP(ctx context.Context, target otel.ProbeTarget, tenant envValue) *ProbeResult {
+	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+
+	// An empty protobuf ExportTraceServiceRequest contains no spans or content.
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target.URL, nil)
+	if err != nil {
+		return &ProbeResult{URL: target.URL, Message: err.Error()}
+	}
+	for k, v := range target.Headers {
+		req.Header.Set(k, v)
+	}
+	req.Header.Set("Content-Type", "application/x-protobuf")
+	res := doProbe(target.URL, req)
+	res.OK = res.StatusCode >= 200 && res.StatusCode < 300
+	switch {
+	case res.credentialsRejected():
+		res.Message = credentialsRejectedMessage(tenant)
+	case res.scopeDenied():
+		res.Message = "the token is likely missing the traces:write scope"
+	}
+	return res
+}
+
+// Redirects never count as success. Following one could certify a login page
+// instead of the ingest route. Generation OTel probing further excludes 405.
 func doProbe(target string, req *http.Request) *ProbeResult {
 	resp, err := probeClient.Do(req)
 	if err != nil {

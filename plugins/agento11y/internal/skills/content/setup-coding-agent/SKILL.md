@@ -178,14 +178,9 @@ OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana.net/otlp
 OTEL_EXPORTER_OTLP_HEADERS='Authorization=Basic <base64-value>'
 ```
 
-A stack with no OTLP gateway has neither `OTEL_*` line, so conversations work
-but analytics does not. Login rejects placeholders in values it takes from the
-block; a flag can replace a block slot. It ignores pasted protocol and auth-mode
-values because the launcher hardcodes HTTP and Basic. Existing config keys stay.
+Without OTLP, default HTTP conversations work but analytics does not. Login rejects placeholders; flags can replace pasted values. Login ignores pasted protocol and auth-mode values. Configure experimental OTel through the environment or `config.env`, as described in the Reference. Existing config keys stay.
 
-For both pipelines, the token needs `sigil:write`, `metrics:write`, and
-`traces:write`. One token covers them. A generated policy can carry extra scopes;
-the integrations use only these three.
+For default HTTP capture and analytics, one token needs `sigil:write`, `metrics:write`, and `traces:write`. Generated policies can include extra scopes; the HTTP integrations use only these three.
 
 ### The flags
 
@@ -281,24 +276,17 @@ only if they ask; silently shadowing their agent command is surprising.
    user trusted the hooks from `/hooks`. Read launcher stderr for lines starting
    with `agento11y:`.
 
-Confirm both pipelines. Conversations and analytics fail independently. If
-conversations arrive while **Analytics** stays empty, check the OTLP pipeline.
+Confirm conversations and analytics separately. With default HTTP capture, conversations can arrive while **Analytics** stays empty. Check OTLP when that happens.
 
 ## Troubleshooting
 
-`agento11y doctor` is the first command for every problem. It is read-only. When
-the required settings exist, it sends one conversations probe plus separate
-metrics and traces probes, then reports their HTTP statuses. Some non-success
-responses are warnings rather than errors, so read each probe message as well as
-the section status.
+Run `agento11y doctor` first. It is read-only. It validates the required generation settings before probing the selected generation transport and reporting the HTTP status. With an OTLP endpoint configured, it sends separate metrics and traces probes and reports their HTTP statuses. With OTel selected, it checks opt-in and the trace route. A successful OTLP probe verifies transport and authentication, not generation ingestion. Read each probe message; some non-success responses are warnings.
 
 ### The two pipelines
 
-They are independent and fail independently.
+Default HTTP capture uses separate pipelines. Experimental OTel generations share the trace route.
 
-- **Conversations** (the chat transcripts) export over `AGENTO11Y_ENDPOINT`,
-  `AGENTO11Y_AUTH_TENANT_ID`, and `AGENTO11Y_AUTH_TOKEN`. The token needs the
-  `sigil:write` scope.
+- **Conversations** use `AGENTO11Y_ENDPOINT`, `AGENTO11Y_AUTH_TENANT_ID`, and `AGENTO11Y_AUTH_TOKEN` by default (`sigil:write`). With experimental OTel selected, Go producers use the configured OTLP trace route.
 - **Analytics** (the metrics and traces) export over
   `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT`, or the vendor-neutral
   `OTEL_EXPORTER_OTLP_ENDPOINT`. The token needs `metrics:write` and
@@ -311,25 +299,13 @@ both signals when an endpoint is set.
 
 ### Reading the report row by row
 
-- **endpoint** and **tenant id**: the resolved value plus the variable it came
-  from. `not set` means neither spelling was found. Doctor names the winning
-  spelling because both `AGENTO11Y_*` and the older `SIGIL_*` are accepted.
-- **auth token**: `set` plus a short prefix. The value is never printed.
-- **probe**: the HTTP status and URL. Analytics has separate **metrics probe**
-  and **traces probe** rows. `no response` includes DNS, connection, timeout, TLS,
-  and blocked-network failures.
-- **file**: the config path and whether it exists.
-- **content capture**: the effective mode and where it came from. An invalid
-  value falls back to `metadata_only` and the section message names the variable
-  to fix.
-- **guards**: `disabled`, or `enabled` with timeout and Cloud fail-open/closed.
-  **local rules** names `guards.toml`; **local guard checks** reports Cloud relay.
-- **Coding agents**: one row per agent. `not found on PATH` means doctor cannot
-  find that CLI. `on PATH, plugin not installed` describes current state; the
-  integration may never have been installed, may have been removed, or may be
-  installed for another scope. `install state unknown` means the read-only probe
-  could not determine the state. Cursor has no install probe. Its human row says
-  `detected <version>` when Cursor is on PATH; only JSON reports it as unknown.
+- `endpoint` and `tenant id`: the resolved value and its source variable. `not set` means neither spelling was found. Doctor names the winning `AGENTO11Y_*` or `SIGIL_*` spelling.
+- `auth token`: `set` and a short prefix. The value is never printed.
+- `probe`: the HTTP status and URL. Analytics has separate **metrics probe** and **traces probe** rows. `no response` includes DNS, connection, timeout, TLS, and blocked-network failures.
+- `file`: the config path and whether it exists.
+- `content capture`: the effective mode and its source. Invalid values fall back to `metadata_only`; the section message names the variable to fix.
+- `guards`: `disabled`, or `enabled` with timeout and Cloud fail-open/closed. **local rules** names `guards.toml`; **local guard checks** reports Cloud relay.
+- Coding agents: one row per agent. `not found on PATH` means doctor cannot find that CLI. `on PATH, plugin not installed` can mean never installed, removed, or installed for another scope. `install state unknown` means the read-only probe could not determine the state. Cursor has no install probe: the human row says `detected <version>` when present; only JSON reports unknown. Installation state does not confirm that the user trusted Codex hooks.
 
 ### Status codes
 
@@ -372,10 +348,12 @@ All hosts read the resolved config path. The default is `~/.config/agento11y/con
 
 | Key | Meaning |
 | --- | --- |
-| `AGENTO11Y_ENDPOINT` | Conversations API URL |
+| `AGENTO11Y_ENDPOINT` | Conversations API URL; Cloud history destination identity even with OTel |
 | `AGENTO11Y_AUTH_TENANT_ID` | Instance ID |
 | `AGENTO11Y_AUTH_TOKEN` | Access-policy token |
-| `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP endpoint for metrics and traces |
+| `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP endpoint for metrics, traces, and opt-in OTel generations |
+| `AGENTO11Y_PROTOCOL` | Generation transport: `http` (default) or experimental `otel` |
+| `AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES` | `true` enables the OTel experiment; no legacy alias |
 | `AGENTO11Y_STACK_URL` | The stack login asks about; builds links only, never ingest |
 | `AGENTO11Y_CONTENT_CAPTURE_MODE` | Which content fields ship (see below) |
 | `AGENTO11Y_TAGS` | `key=value,key=value` attached to every generation |
@@ -390,11 +368,26 @@ All hosts read the resolved config path. The default is `~/.config/agento11y/con
 | `AGENTO11Y_DEBUG` | A true value writes the debug log |
 | `AGENTO11Y_ANONYMOUS_USAGE_STATS` | `disabled` stops reporting usage statistics about the CLI itself; `log` prints them instead of sending |
 
-All branded keys except `AGENTO11Y_STACK_URL` have an older `SIGIL_*` spelling.
+Branded keys have older `SIGIL_*` spellings except `AGENTO11Y_STACK_URL` and `AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES`. `SIGIL_PROTOCOL` remains supported.
 **Local only** writes `AGENTO11Y_LOCAL` and `SIGIL_LOCAL` as true, and both
 `LOCAL_FORWARD` spellings as false. **Local web UI = Yes** writes all four local
 keys as true. **Local web UI = No** writes all four as false. An explicit
 `agento11y login` still runs Cloud setup. Doctor reports provenance only for settings in its report.
+
+### Experimental OTel generation export
+
+HTTP remains the default. To export generations as OpenTelemetry (OTel) spans, set these values in the environment or `~/.config/agento11y/config.env`:
+
+```dotenv
+AGENTO11Y_PROTOCOL=otel
+AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true
+```
+
+Configure `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_ENDPOINT`) and OTLP authentication. Use an endpoint that supports Agent Observability generation ingestion.
+
+OTel export supports Claude Code, Codex, Copilot, Cursor, Vibe, and Kiro. Local mode, history imports, and Claude plugin eval imports also support OTel. Pi and OpenCode live plugins still use HTTP.
+
+Guards, scores, and experiment APIs still need HTTP credentials.
 
 ### Tagging sessions
 
@@ -436,18 +429,13 @@ Other hosts have no account-email lookup. Discovery makes no provider requests, 
 
 ### Content capture
 
-For coding agents, use only these modes:
+`AGENTO11Y_CONTENT_CAPTURE_MODE` accepts `full`, `no_tool_content`, `metadata_only`, and `full_with_metadata_spans`. The default is `metadata_only`: model, tokens, timing, IDs, and cost when available, without message content or tool I/O. `default` aliases `metadata_only`; unknown values fall back with a warning.
 
-| Mode | What ships in generation exports |
-| --- | --- |
-| `metadata_only` | Model, tokens, timing, IDs, tool names, and cost when available. Prompts, responses, and tool I/O are omitted. |
-| `full` | Conversation content, including tool arguments and results. Host APIs can omit or truncate fields they do not expose in full. |
+For HTTP, `full` includes conversation content and tool arguments/results; `metadata_only` retains tool names and reduced structure.
 
-Set the mode with `AGENTO11Y_CONTENT_CAPTURE_MODE`. It defaults to
-`metadata_only`. Unknown values fall back to `metadata_only` with a warning.
-Every plugin redacts known secret formats from captured content, but capture mode
-chooses which fields ship, not whether the shipped fields are clean. Treat
-`full` as opt-in on shared machines.
+For direct OTel export, the SDK upgrades `full_with_metadata_spans` to `full`, so generation spans contain content. OTel `metadata_only` drops whole message and tool-definition documents, unlike HTTP's structure-preserving reduction. Separate tool spans remain available.
+
+Capture modes choose which fields ship. By default, every plugin redacts known secret formats from captured content, but redaction does not guarantee that shipped content is safe. Ask before enabling `full`, especially on shared machines. Hosts can omit or truncate fields.
 
 ### Local mode
 

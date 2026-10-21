@@ -263,7 +263,7 @@ func projectToolSpans(body []byte, contentType, contentEncoding string) ([]toolS
 	decoded := body
 	if isGzipEncoding(contentEncoding) {
 		var err error
-		decoded, err = gunzipLimited(body, maxOTLPBodyBytes)
+		decoded, err = gunzipLimited(body, maxOTLPTraceBodyBytes)
 		if err != nil {
 			return nil, err
 		}
@@ -274,6 +274,25 @@ func projectToolSpans(body []byte, contentType, contentEncoding string) ([]toolS
 	}
 	return toolSpanRecords(request), nil
 }
+
+// traceHasGenerationMarker checks keys as well as values: malformed markers
+// must not silently pass through the unsupported JSON generation transport.
+func traceHasGenerationMarker(request *coltracepb.ExportTraceServiceRequest) bool {
+	for _, resource := range request.GetResourceSpans() {
+		for _, scope := range resource.GetScopeSpans() {
+			for _, span := range scope.GetSpans() {
+				for _, attr := range span.GetAttributes() {
+					if attr.GetKey() == "agento11y.record" {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+var errExpandedOTLPTooLarge = errors.New("expanded OTLP payload too large")
 
 func gunzipLimited(body []byte, limit int64) ([]byte, error) {
 	zr, err := gzip.NewReader(bytes.NewReader(body))
@@ -286,7 +305,7 @@ func gunzipLimited(body []byte, limit int64) ([]byte, error) {
 		return nil, err
 	}
 	if int64(len(out)) > limit {
-		return nil, fmt.Errorf("decompressed trace payload exceeds %d bytes", limit)
+		return nil, fmt.Errorf("%w: decompressed payload exceeds %d bytes", errExpandedOTLPTooLarge, limit)
 	}
 	return out, nil
 }

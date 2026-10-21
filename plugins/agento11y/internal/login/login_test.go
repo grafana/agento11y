@@ -2337,6 +2337,26 @@ func TestRun_ExplicitValues(t *testing.T) {
 			},
 		},
 		{
+			name: "experimental transport settings survive login",
+			file: existing + "AGENTO11Y_PROTOCOL=otel\nAGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true\nSIGIL_PROTOCOL=http\n",
+			opts: RunOpts{Endpoint: "https://new.example", TenantID: "222", Token: "new-token"},
+			want: map[string]string{
+				"AGENTO11Y_PROTOCOL":                     "otel",
+				"AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "true",
+				"SIGIL_PROTOCOL":                         "http",
+			},
+		},
+		{
+			name: "legacy transport setting survives login",
+			file: existing + "SIGIL_PROTOCOL=otel\nAGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=false\n",
+			opts: RunOpts{Endpoint: "https://new.example", TenantID: "222", Token: "new-token"},
+			want: map[string]string{
+				"SIGIL_PROTOCOL":                         "otel",
+				"AGENTO11Y_PROTOCOL":                     "",
+				"AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "false",
+			},
+		},
+		{
 			name: "otlp endpoint is persisted",
 			opts: RunOpts{
 				Endpoint:     "https://new.example",

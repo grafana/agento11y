@@ -41,6 +41,7 @@ import (
 func clearForwardEnv(t *testing.T) {
 	t.Helper()
 	envconfig.PinAliasEnvBlank(t)
+	t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "")
 	for _, suffix := range []string{"LOCAL_FORWARD", "GUARDS_ENABLED", "GUARDS_FAIL_OPEN", "GUARDS_TIMEOUT_MS"} {
 		require.Contains(t, envconfig.AliasSuffixes, suffix, "clearForwardEnv relies on PinAliasEnvBlank covering %s", suffix)
 	}
@@ -1073,7 +1074,9 @@ func TestForwardLoader_StatusReportsFailures(t *testing.T) {
 	var status int
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(status)
-		_, _ = w.Write([]byte(`{"error":"unknown field parts.media.url"}`))
+		if status != http.StatusOK {
+			_, _ = w.Write([]byte(`{"error":"unknown field parts.media.url"}`))
+		}
 	}))
 	defer srv.Close()
 
@@ -1260,7 +1263,7 @@ func TestStripTraceContent_RemovesContentKeepsStructure(t *testing.T) {
 				stringKV("gen_ai.tool.name", "do_thing"),
 			}}
 			span.Events = []*tracepb.Span_Event{event}
-			stripTraceContent(traceRequestForSpans(span))
+			require.NoError(t, stripTraceContent(traceRequestForSpans(span)))
 			assert.Equal(t, []string{"gen_ai.tool.name"}, attributeKeys(span.GetAttributes()))
 			assert.Equal(t, []string{"gen_ai.tool.name"}, attributeKeys(event.GetAttributes()))
 		})
@@ -1272,7 +1275,7 @@ func TestStripTraceContent_RemovesContentKeepsStructure(t *testing.T) {
 			stringKV("gen_ai.tool.call.result", "secret result"),
 			stringKV("gen_ai.tool.name", "do_thing"),
 		}}
-		stripTraceContent(traceRequestForSpans(&tracepb.Span{Events: []*tracepb.Span_Event{event}}))
+		require.NoError(t, stripTraceContent(traceRequestForSpans(&tracepb.Span{Events: []*tracepb.Span_Event{event}})))
 		assert.Equal(t, []string{"gen_ai.tool.name"}, attributeKeys(event.GetAttributes()))
 	})
 
@@ -1385,7 +1388,7 @@ func TestStripTraceContent_RemovesContentKeepsStructure(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			stripTraceContent(traceRequestForSpans(tc.span))
+			require.NoError(t, stripTraceContent(traceRequestForSpans(tc.span)))
 			assert.Equal(t, tc.wantAttrs, attributeKeys(tc.span.GetAttributes()))
 			assert.Equal(t, tc.wantEvents, eventNames(tc.span.GetEvents()))
 			assert.Equal(t, tc.wantStatus, tc.span.GetStatus().GetMessage())

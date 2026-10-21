@@ -1,6 +1,7 @@
 agento11y doctor dev
 
 ✗ Conversations (generation export)
+  transport:          http
   endpoint:           not a url :// (AGENTO11Y_ENDPOINT, env)
   tenant id:          12345 (AGENTO11Y_AUTH_TENANT_ID, config.env)
   auth token:         set (glc_…, SIGIL_AUTH_TOKEN, config.env)
@@ -13,6 +14,8 @@ agento11y doctor dev
 
 ! Config
   file:               /home/u/.config/agento11y/config.env (present)
+  generation:         http (default)
+  experimental:       false (default)
   content capture:    metadata_only (default)
   prompt redaction:   enabled (invalid value, fell back)
   guards:             disabled (SIGIL_GUARDS_ENABLED, env)

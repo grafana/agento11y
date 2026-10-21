@@ -2,7 +2,6 @@ package local
 
 import (
 	"bytes"
-	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -25,6 +24,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/otel"
+	colmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
@@ -51,6 +51,9 @@ const maxRecordedForwardFailures = 5
 // The legs are recorded and cleared independently, so the label a queued
 // payload is dropped under must match the one its POST reports.
 const forwardLabelGenerations = "generations"
+
+// Generation-bearing traces recover independently from HTTP generations and tool-only traces.
+const forwardLabelOTLPGenerations = "otlp/generations"
 
 // forwardLabelHooks names the guard-evaluation leg in the failure ring. Unlike
 // the other two legs this one is synchronous: a failure here changes the
@@ -95,7 +98,10 @@ type forwardConfig struct {
 
 	genURL     string            // normalized /api/v1/generations:export URL ("" = not forwarded)
 	genHeaders map[string]string // Basic auth + tenant header
-	genReason  string            // why generations are not forwarded
+	genReason  string            // why HTTP generations are not forwarded
+
+	generationProtocol agento11y.GenerationExportProtocol
+	generationError    string
 
 	otlpEndpoint string            // base OTLP endpoint ("" = not forwarded)
 	otlpHeaders  map[string]string // the exporter's header set for this endpoint
@@ -119,12 +125,13 @@ type forwardConfig struct {
 // every leg is live (or forwarding is simply off). One reason shared by all
 // legs is a whole-config refusal and drops the per-leg prefixes.
 func (c forwardConfig) disabledReasons() string {
-	if c.genReason == c.otlpReason && c.genReason == c.hookReason {
-		return c.genReason
+	_, genReason := c.generationStatus()
+	if genReason == c.otlpReason && genReason == c.hookReason {
+		return genReason
 	}
 	parts := make([]string, 0, 3)
-	if c.genReason != "" {
-		parts = append(parts, "generations: "+c.genReason)
+	if genReason != "" {
+		parts = append(parts, "generations: "+genReason)
 	}
 	if c.otlpReason != "" {
 		parts = append(parts, "otlp: "+c.otlpReason)
@@ -220,9 +227,8 @@ type forwardStatus struct {
 	Enabled bool `json:"enabled"`
 	// Mode is one of forwardMode{Off,MetadataOnly,Full}.
 	Mode string `json:"mode"`
-	// Generations and OTLP report the two legs separately: a configuration
-	// can forward generations with no OTLP endpoint, or relay OTLP with
-	// credentials the generation export cannot use.
+	// Generations follows the selected protocol. Legacy HTTP forwarding stays
+	// independent, so Pi/OpenCode sessions can still use their original route.
 	Generations bool `json:"generations"`
 	OTLP        bool `json:"otlp"`
 	// Hooks reports whether guard evaluation from a --local session is
@@ -275,18 +281,29 @@ const (
 	forwardModeFull         = "full"
 )
 
+func (c forwardConfig) generationStatus() (bool, string) {
+	if c.generationError != "" {
+		return false, c.generationError
+	}
+	if c.generationProtocol == agento11y.GenerationExportProtocolOTel {
+		return c.otlpEndpoint != "", c.otlpReason
+	}
+	return c.genURL != "", c.genReason
+}
+
 // status reports the current forwarding posture. It goes through load() rather
 // than re-resolving so the viewer reflects exactly what the forward path does,
 // including the cache and the unreadable-config refusal.
 func (l *forwardLoader) status() forwardStatus {
 	cfg := l.load()
+	generations, generationReason := cfg.generationStatus()
 	st := forwardStatus{
 		Enabled:       cfg.enabled,
 		Mode:          forwardModeOff,
-		Generations:   cfg.genURL != "",
+		Generations:   generations,
 		OTLP:          cfg.otlpEndpoint != "",
 		Hooks:         cfg.hookURL != "",
-		Reason:        cfg.genReason,
+		Reason:        generationReason,
 		OTLPReason:    cfg.otlpReason,
 		HookReason:    cfg.hookReason,
 		Failures:      l.recentFailures(),
@@ -357,6 +374,14 @@ func resolveForwardConfig(logger *log.Logger, get envReader) forwardConfig {
 
 	cfg := off
 	cfg.strip = contentModeFamily(logger, get) != agento11y.ContentCaptureModeFull
+	protocol, err := envconfig.ResolveGenerationTransportWith(func(suffix string) (string, string, bool) {
+		value, key := get.family(suffix)
+		return value, key, key != ""
+	}, get.key)
+	cfg.generationProtocol = protocol
+	if err != nil {
+		cfg.generationError = err.Error()
+	}
 
 	if reason := forwardDisabledReason(endpoint, tenant, token); reason != "" {
 		cfg.genReason = reason
@@ -807,15 +832,18 @@ func relabelContentCaptureMode(g *agento11yv1.Generation) {
 // relay; that path decompresses a gzip body so the proto can be parsed and
 // relays the re-marshaled payload uncompressed.
 func (l *forwardLoader) forwardOTLP(cfg forwardConfig, signal, contentType, contentEncoding string, body []byte) {
+	l.forwardOTLPWithLabel(cfg, signal, contentType, contentEncoding, body, otlpForwardLabel(signal))
+}
+
+func (l *forwardLoader) forwardOTLPWithLabel(cfg forwardConfig, signal, contentType, contentEncoding string, body []byte, label string) {
 	if !cfg.enabled || cfg.otlpEndpoint == "" || len(body) == 0 {
 		return
 	}
-	label := otlpForwardLabel(signal)
 	out, ct, enc := body, contentType, contentEncoding
 	if signal == "traces" && cfg.strip {
 		decoded := body
 		if isGzipEncoding(contentEncoding) {
-			d, err := gunzip(body)
+			d, err := gunzipLimited(body, maxOTLPTraceBodyBytes)
 			if err != nil {
 				l.recordFailuref(label, "gunzip: %v (dropping payload)", err)
 				return
@@ -840,16 +868,6 @@ func isGzipEncoding(encoding string) bool {
 	return strings.EqualFold(strings.TrimSpace(encoding), "gzip")
 }
 
-// gunzip decompresses a gzip-encoded body.
-func gunzip(body []byte) ([]byte, error) {
-	zr, err := gzip.NewReader(bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = zr.Close() }()
-	return io.ReadAll(zr)
-}
-
 // stripTracePayload decodes an OTLP trace export (protobuf, or JSON when the
 // content type says so), strips content from every span, and re-encodes in the
 // same format. The returned content type matches the encoding used.
@@ -859,7 +877,9 @@ func stripTracePayload(body []byte, contentType string) ([]byte, string, error) 
 	if err != nil {
 		return nil, "", err
 	}
-	stripTraceContent(req)
+	if err := stripTraceContent(req); err != nil {
+		return nil, "", err
+	}
 	if isJSON {
 		out, err := protojson.Marshal(req)
 		return out, wire.ContentTypeJSON, err
@@ -882,12 +902,15 @@ func decodeTracePayload(body []byte, contentType string) (*coltracepb.ExportTrac
 	return req, nil
 }
 
-func stripTraceContent(req *coltracepb.ExportTraceServiceRequest) {
+func stripTraceContent(req *coltracepb.ExportTraceServiceRequest) error {
 	for _, rs := range req.GetResourceSpans() {
 		for _, ss := range rs.GetScopeSpans() {
 			for _, span := range ss.GetSpans() {
 				if span == nil {
 					continue
+				}
+				if err := stripGenerationMetadata(span); err != nil {
+					return err
 				}
 				// The status message is read before the attribute filter so
 				// the replacement category is still available.
@@ -897,6 +920,44 @@ func stripTraceContent(req *coltracepb.ExportTraceServiceRequest) {
 			}
 		}
 	}
+	return nil
+}
+
+func stripGenerationMetadata(span *tracepb.Span) error {
+	const key = "agento11y.generation.metadata"
+	found := false
+	for _, kv := range span.GetAttributes() {
+		if kv.GetKey() != key {
+			continue
+		}
+		found = true
+		raw, ok := kv.GetValue().GetValue().(*commonpb.AnyValue_StringValue)
+		if !ok || !strings.HasPrefix(strings.TrimSpace(raw.StringValue), "{") {
+			return fmt.Errorf("%s must be a JSON object", key)
+		}
+		metadata := new(structpb.Struct)
+		if err := protojson.Unmarshal([]byte(raw.StringValue), metadata); err != nil {
+			return fmt.Errorf("invalid %s JSON object", key)
+		}
+		generation := &agento11yv1.Generation{Metadata: metadata}
+		// Share the HTTP reduction policy so new metadata mirrors cannot bypass it.
+		contentcapture.StripGeneration(generation, "")
+		relabelContentCaptureMode(generation)
+		encoded, err := protojson.Marshal(generation.Metadata)
+		if err != nil {
+			return fmt.Errorf("encode reduced %s: %w", key, err)
+		}
+		kv.Value = &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: string(encoded)}}
+	}
+	if !found && stringAttribute(span.GetAttributes(), "agento11y.record") == "true" {
+		span.Attributes = append(span.Attributes, &commonpb.KeyValue{
+			Key: key,
+			Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{
+				StringValue: `{"agento11y.sdk.content_capture_mode":"metadata_only"}`,
+			}},
+		})
+	}
+	return nil
 }
 
 // stripSpanStatus replaces an error span's status message, which the SDK sets
@@ -1001,8 +1062,64 @@ func (l *forwardLoader) post(url, contentType, contentEncoding string, headers m
 		l.recordFailuref(label, "POST %s status %d: %s", url, resp.StatusCode, strings.TrimSpace(string(snippet)))
 		return
 	}
-	_, _ = io.Copy(io.Discard, resp.Body)
+	if signal, ok := strings.CutPrefix(label, "otlp/"); ok {
+		if label == forwardLabelOTLPGenerations {
+			signal = "traces"
+		}
+		responseType := resp.Header.Get("Content-Type")
+		if responseType == "" {
+			responseType = contentType
+		}
+		if err := checkOTLPForwardResponse(resp.Body, responseType, signal); err != nil {
+			l.recordFailuref(label, "POST %s: %v", url, err)
+			return
+		}
+	} else {
+		_, _ = io.Copy(io.Discard, resp.Body)
+	}
 	l.recordSuccess(label)
+}
+
+func checkOTLPForwardResponse(body io.Reader, contentType, signal string) error {
+	// OTLP acknowledgments contain counts and diagnostics, never exported records.
+	const limit = 1 << 20
+	data, err := io.ReadAll(io.LimitReader(body, limit+1))
+	if err != nil {
+		return fmt.Errorf("read OTLP response: %w", err)
+	}
+	if len(data) > limit {
+		return fmt.Errorf("OTLP response exceeds %d bytes", limit)
+	}
+	var response proto.Message
+	switch signal {
+	case "traces":
+		response = new(coltracepb.ExportTraceServiceResponse)
+	case "metrics":
+		response = new(colmetricspb.ExportMetricsServiceResponse)
+	default:
+		return fmt.Errorf("unsupported OTLP response signal %q", signal)
+	}
+	if len(data) > 0 {
+		if strings.Contains(strings.ToLower(contentType), "json") {
+			err = protojson.Unmarshal(data, response)
+		} else {
+			err = proto.Unmarshal(data, response)
+		}
+		if err != nil {
+			return fmt.Errorf("invalid OTLP %s response", signal)
+		}
+	}
+	switch response := response.(type) {
+	case *coltracepb.ExportTraceServiceResponse:
+		if rejected := response.GetPartialSuccess().GetRejectedSpans(); rejected > 0 {
+			return fmt.Errorf("OTLP partial success: rejected_spans=%d", rejected)
+		}
+	case *colmetricspb.ExportMetricsServiceResponse:
+		if rejected := response.GetPartialSuccess().GetRejectedDataPoints(); rejected > 0 {
+			return fmt.Errorf("OTLP partial success: rejected_data_points=%d", rejected)
+		}
+	}
+	return nil
 }
 
 // isForwardedRequest reports whether an inbound payload already came from

@@ -272,7 +272,7 @@ func TestEmitOneStrandedDropsThoughtOnly(t *testing.T) {
 
 	// No credentials / client: call the helper directly. Thought-only path
 	// returns before emitGeneration, so a nil client is fine for that branch.
-	if !emitOneStranded(t.Context(), nil, nil, conv, thoughtGID, config.Config{}, logger) {
+	if emitted, ok := emitOneStranded(t.Context(), nil, nil, conv, thoughtGID, config.Config{}, logger); emitted || !ok {
 		t.Fatal("thought-only emitOneStranded should succeed (drop)")
 	}
 	if _, err := os.Stat(fragment.FragmentFilePath(conv, thoughtGID)); !os.IsNotExist(err) {

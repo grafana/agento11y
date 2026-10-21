@@ -62,7 +62,10 @@ func TestNewClientUsesSDKEnvResolution(t *testing.T) {
 	// SDK validates that basic_password is present, so provide them.
 	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
 	t.Setenv("SIGIL_AUTH_TOKEN", "token")
-	client := NewClient(ClientOptions{InstrumentationName: "sigil.test"})
+	client, err := NewClient(ClientOptions{InstrumentationName: "sigil.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if client == nil {
 		t.Fatal("NewClient returned nil")
 	}
@@ -123,11 +126,14 @@ func TestNewClientAppliesClientTags(t *testing.T) {
 			t.Setenv("AGENTO11Y_USER_ID", tc.envID)
 			t.Setenv("SIGIL_USER_ID", tc.legacyID)
 
-			client := NewClient(ClientOptions{
+			client, err := NewClient(ClientOptions{
 				UserID:              tc.clientID,
 				InstrumentationName: "agento11y.test",
 				Tags:                map[string]string{"user": "alice@example.com", "repo": "grafana/agento11y"},
 			})
+			if err != nil {
+				t.Fatal(err)
+			}
 			if client == nil {
 				t.Fatal("NewClient returned nil")
 			}
@@ -247,7 +253,10 @@ func TestNewClientTokenlessAuth(t *testing.T) {
 			t.Setenv("AGENTO11Y_ENDPOINT", "http://localhost:8080")
 			t.Setenv("AGENTO11Y_AUTH_TENANT_ID", "tenant")
 			t.Setenv("AGENTO11Y_AUTH_MODE", mode)
-			client := NewClient(ClientOptions{})
+			client, err := NewClient(ClientOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
 			if err := client.Shutdown(t.Context()); err != nil {
 				t.Fatal(err)
 			}
@@ -278,7 +287,10 @@ func TestNewClientDefaultAuth(t *testing.T) {
 			if got := exportConfig("", tc.auth).Auth.Mode; got != tc.want {
 				t.Fatalf("auth mode = %q, want %q", got, tc.want)
 			}
-			client := NewClient(ClientOptions{Auth: tc.auth})
+			client, err := NewClient(ClientOptions{Auth: tc.auth})
+			if err != nil {
+				t.Fatal(err)
+			}
 			if err := client.Shutdown(t.Context()); err != nil {
 				t.Fatal(err)
 			}

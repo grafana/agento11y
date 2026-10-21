@@ -1,10 +1,11 @@
 // Package envconfig collects small helpers for reading the sigil plugin's
-// branded environment variables. Every supported variable is an alias family:
-// the preferred AGENTO11Y_<suffix> spelling with a SIGIL_<suffix> legacy
-// fallback kept during the compatibility period.
+// branded environment variables. Alias families use the preferred
+// AGENTO11Y_<suffix> spelling with a SIGIL_<suffix> legacy fallback kept during
+// the compatibility period. The experimental opt-in is preferred-only.
 package envconfig
 
 import (
+	"fmt"
 	"log"
 	"maps"
 	"net"
@@ -310,6 +311,57 @@ func ParseExtraTags(s string) map[string]string {
 		return nil
 	}
 	return out
+}
+
+func ResolveGenerationTransport() (agento11y.GenerationExportProtocol, error) {
+	return ResolveGenerationTransportWith(LookupEnv, os.Getenv)
+}
+
+// look resolves branded aliases; exact reads literal keys from the same snapshot.
+// The experimental opt-in has no SIGIL_ alias. Capture mode follows SDK policy,
+// including the full_with_metadata_spans to full upgrade for OTel.
+func ResolveGenerationTransportWith(look Lookup, exact func(string) string) (agento11y.GenerationExportProtocol, error) {
+	raw, key, _ := look("PROTOCOL")
+	protocol := agento11y.GenerationExportProtocol(strings.ToLower(strings.TrimSpace(raw)))
+	switch protocol {
+	case "", agento11y.GenerationExportProtocolHTTP, agento11y.GenerationExportProtocolGRPC, agento11y.GenerationExportProtocolNone:
+		// SDK-only transport choices must not disable shared-binary capture.
+		return agento11y.GenerationExportProtocolHTTP, nil
+	case agento11y.GenerationExportProtocolOTel:
+		if !ParseBool(exact(agento11y.EnvEnableExperimentalFeatures)) {
+			return "", fmt.Errorf("%w: otel generation export requires %s=true", agento11y.ErrExperimentalFeatureDisabled, agento11y.EnvEnableExperimentalFeatures)
+		}
+		endpoint, _, _ := look("OTEL_EXPORTER_OTLP_ENDPOINT")
+		if strings.TrimSpace(endpoint) == "" {
+			endpoint = exact("OTEL_EXPORTER_OTLP_ENDPOINT")
+		}
+		if err := validateGenerationOTLPEndpoint(endpoint); err != nil {
+			return "", err
+		}
+		return protocol, nil
+	default:
+		if key == "" {
+			key = PreferredKey("PROTOCOL")
+		}
+		return "", fmt.Errorf("unsupported %s=%q: expected http or otel", key, raw)
+	}
+}
+
+// validateGenerationOTLPEndpoint requires an explicit HTTP(S) base URL for
+// generation export. Do not include the URL in errors: it may contain secrets.
+func validateGenerationOTLPEndpoint(endpoint string) error {
+	u, err := url.Parse(strings.TrimSpace(endpoint))
+	if err != nil || u == nil || (u.Scheme != "http" && u.Scheme != "https") ||
+		u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != "" {
+		return fmt.Errorf("otel generation export requires a valid configured HTTP(S) OTLP base endpoint (AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT or OTEL_EXPORTER_OTLP_ENDPOINT)")
+	}
+	if port := u.Port(); port != "" {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 {
+			return fmt.Errorf("otel generation export OTLP base endpoint has an invalid port")
+		}
+	}
+	return nil
 }
 
 // ResolveAgentName returns the agent identity to attach to generations and

@@ -52,6 +52,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agentinstall"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex"
@@ -72,6 +73,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	launcherpkg "github.com/grafana/agento11y/plugins/agento11y/internal/launcher"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/localhealth"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/login"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/skills"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/usagestats"
@@ -466,7 +468,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 			return
 		}
 
-		launcherArgs, localEnv, noLocalOverride, ok := parseLauncherArgs(args[0], args[1:], stderr, envLocal)
+		launcherArgs, localEnv, noLocalOverride, protocol, ok := parseLauncherArgs(args[0], args[1:], stderr, envLocal)
 		if !ok {
 			return
 		}
@@ -492,7 +494,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 		if args[0] == "codex" {
 			hasCredentials = codexconfig.HasCredentials()
 		}
-		if localEnv == nil && !hasCredentials {
+		if needsLauncherLogin(localEnv, protocol, hasCredentials) {
 			result, err := loginRun(context.Background(), login.RunOpts{
 				Stderr:           stderr,
 				Logger:           logger,
@@ -1248,14 +1250,31 @@ func parseLauncherOptions(name string, rest []string) (*launcherOptions, error) 
 //     forgot the separator, so we point them at `agento11y <name> -- <args>`.
 //   - `--` is present but unrecognised tokens precede it: those are
 //     genuinely unknown sigil-side options, so we name them explicitly.
-func parseLauncherArgs(name string, rest []string, stderr io.Writer, envLocal localEnvRequest) ([]string, *local.LaunchEnv, bool, bool) {
+func parseLauncherArgs(name string, rest []string, stderr io.Writer, envLocal localEnvRequest) ([]string, *local.LaunchEnv, bool, agento11y.GenerationExportProtocol, bool) {
 	opts, err := parseLauncherOptions(name, rest)
 	if err != nil {
 		usageError(stderr, name, err.Error())
 		exit(2)
-		return nil, nil, false, false
+		return nil, nil, false, "", false
 	}
 	forwarded, localFlag, noLocalFlag, flagTags := opts.forwarded, opts.local, opts.noLocal, opts.tags
+	localMode := !noLocalFlag && (localFlag || envLocal.on)
+	if (name == "pi" || name == "opencode") && strings.EqualFold(envconfig.Getenv("PROTOCOL"), "otel") {
+		_, _ = fmt.Fprintf(stderr, "agento11y: %s live capture does not support OTel generation export. Set AGENTO11Y_PROTOCOL=http for this launch; Go history imports support OTel.\n", name)
+		exit(1)
+		return nil, nil, false, "", false
+	}
+	localOTLP := ""
+	if localMode {
+		// Managed local launches replace the collector before capture starts.
+		localOTLP = fmt.Sprintf("http://127.0.0.1:%d/otlp", local.DefaultPort)
+	}
+	protocol, err := resolveLaunchTransport(localOTLP)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "agento11y: %v\n", err)
+		exit(1)
+		return nil, nil, false, "", false
+	}
 
 	if len(flagTags) > 0 {
 		// Merge onto the effective selected tags and write the result under
@@ -1272,7 +1291,7 @@ func parseLauncherArgs(name string, rest []string, stderr io.Writer, envLocal lo
 	}
 
 	var localEnv *local.LaunchEnv
-	if !noLocalFlag && (localFlag || envLocal.on) {
+	if localMode {
 		// An explicit --local speaks for itself, so name the variable only when
 		// it is what turned local mode on.
 		sourceKey := envLocal.key
@@ -1282,11 +1301,25 @@ func parseLauncherArgs(name string, rest []string, stderr io.Writer, envLocal lo
 		endpoint, otlp, err := setupLocalLaunch(stderr, sourceKey)
 		if err != nil {
 			exit(1)
-			return nil, nil, false, false
+			return nil, nil, false, "", false
 		}
 		localEnv = &local.LaunchEnv{Endpoint: endpoint, OTLPEndpoint: otlp}
 	}
-	return forwarded, localEnv, noLocalFlag, true
+	return forwarded, localEnv, noLocalFlag, protocol, true
+}
+
+func needsLauncherLogin(localEnv *local.LaunchEnv, protocol agento11y.GenerationExportProtocol, hasCredentials bool) bool {
+	return localEnv == nil && protocol == agento11y.GenerationExportProtocolHTTP && !hasCredentials
+}
+
+func resolveLaunchTransport(localOTLP string) (agento11y.GenerationExportProtocol, error) {
+	look := func(suffix string) (string, string, bool) {
+		if suffix == "OTEL_EXPORTER_OTLP_ENDPOINT" && localOTLP != "" {
+			return localOTLP, "local receiver", true
+		}
+		return envconfig.LookupEnv(suffix)
+	}
+	return envconfig.ResolveGenerationTransportWith(look, os.Getenv)
 }
 
 // normalizeTag validates a `--tag` value and returns it as a trimmed
@@ -1368,6 +1401,14 @@ func setupLocalLaunch(stderr io.Writer, envKey string) (endpoint, otlp string, e
 
 	endpoint = status.Endpoint
 	otlp = status.Endpoint + "/otlp"
+	protocol, err := resolveLaunchTransport(otlp)
+	if err == nil && protocol == agento11y.GenerationExportProtocolOTel {
+		err = localhealth.RequireGenerationIngest(ctx, otlp)
+	}
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "agento11y: %v\n", err)
+		return "", "", err
+	}
 
 	posture, postureErr := local.FetchForwardPosture(ctx, status.Endpoint)
 	if postureErr != nil {

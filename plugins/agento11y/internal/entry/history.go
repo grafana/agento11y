@@ -13,12 +13,14 @@ import (
 	"time"
 
 	"github.com/charmbracelet/huh"
+	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/cli"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/clihelp"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/history"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/localhealth"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/login"
 	"golang.org/x/term"
 )
@@ -304,7 +306,12 @@ func historyResolveDestination(ctx context.Context, opts *historyImportOptions, 
 		opts.LocalEnvKey = envLocal.key
 		return nil
 	}
-	if historyDestinationConfigured() || !interactive {
+	protocol, err := envconfig.ResolveGenerationTransport()
+	if err != nil {
+		return err
+	}
+	// The HTTP setup flow asks for an API token that OTel does not need.
+	if protocol == agento11y.GenerationExportProtocolOTel || historyDestinationConfigured() || !interactive {
 		return nil
 	}
 
@@ -331,8 +338,11 @@ func historyResolveDestination(ctx context.Context, opts *historyImportOptions, 
 }
 
 // historyDestinationConfigured reports whether first-run setup has anything to
-// ask. Cloud needs complete credentials, while a loopback endpoint needs none.
+// ask. OTel needs Cloud ledger identity but not an HTTP API token.
 func historyDestinationConfigured() bool {
+	if protocol, err := envconfig.ResolveGenerationTransport(); err == nil && protocol == agento11y.GenerationExportProtocolOTel {
+		return history.Target{}.Local() || (envconfig.Getenv("ENDPOINT") != "" && envconfig.Getenv("AUTH_TENANT_ID") != "")
+	}
 	return dotenv.HasCredentials() || history.Target{}.Local()
 }
 
@@ -627,13 +637,11 @@ func historyProgress(stderr io.Writer) (func(history.Progress), func()) {
 		}
 }
 
-// historyTarget builds the export destination from the resolved Local value.
-// A Cloud import leaves the target empty so [history.NewTargetExporter] reads
-// the configured endpoint. A local import points at the daemon, where the
-// exporter enables full content and adds the marker that prevents forwarding.
+// Freeze the destination before exporter construction so the ledger uses
+// the same identity even if the environment changes during setup.
 func historyTarget(ctx context.Context, opts historyImportOptions) (history.Target, error) {
 	if !opts.Local {
-		return history.Target{}, nil
+		return history.ResolveTarget(history.Target{}, nil)
 	}
 	startCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -644,10 +652,19 @@ func historyTarget(ctx context.Context, opts historyImportOptions) (history.Targ
 		}
 		return history.Target{}, fmt.Errorf("start the local receiver: %w", err)
 	}
-	return history.Target{
+	target, err := history.ResolveTarget(history.Target{
 		Endpoint:     endpoint,
 		OTLPEndpoint: endpoint + "/otlp",
-	}, nil
+	}, nil)
+	if err != nil {
+		return history.Target{}, err
+	}
+	if target.Protocol == agento11y.GenerationExportProtocolOTel {
+		if err := localhealth.RequireGenerationIngest(startCtx, target.OTLPEndpoint); err != nil {
+			return history.Target{}, err
+		}
+	}
+	return target, nil
 }
 
 func printHistoryPlan(stdout io.Writer, opts historyImportOptions, plan history.ImportPlan) {

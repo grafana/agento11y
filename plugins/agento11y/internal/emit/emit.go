@@ -26,6 +26,7 @@ import (
 	"github.com/grafana/agento11y/go/proto/agento11y/wire"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/localhealth"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/otel"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/timeutil"
 )
@@ -106,9 +107,32 @@ func exportConfig(userAgent string, auth agento11y.AuthConfig) agento11y.Generat
 	return export
 }
 
-// NewClient builds an agento11y client with the shared HTTP generation
-// export defaults and optional OTel providers.
-func NewClient(opts ClientOptions) *agento11y.Client {
+func ConfigureGenerationTransport(cfg *agento11y.Config, providers *otel.Providers, protocol agento11y.GenerationExportProtocol) error {
+	cfg.GenerationExport.Protocol = protocol
+	if protocol != agento11y.GenerationExportProtocolOTel {
+		return nil
+	}
+	if providers == nil || providers.GenerationTracerProvider() == nil {
+		return errors.New("OTel generation export requires a configured generation tracer provider")
+	}
+	if endpoint := providers.GenerationEndpoint(); localhealth.IsDaemonEndpoint(endpoint) {
+		if err := localhealth.RequireGenerationIngest(context.Background(), endpoint); err != nil {
+			return err
+		}
+	}
+	cfg.GenerationExport.Auth.Mode = agento11y.ExportAuthModeNone
+	cfg.EnableExperimentalFeatures = new(true)
+	cfg.TracerProvider = providers.GenerationTracerProvider()
+	cfg.MeterProvider = providers.MeterProvider()
+	cfg.Flusher = providers.GenerationFlusher()
+	return nil
+}
+
+func NewClient(opts ClientOptions) (*agento11y.Client, error) {
+	protocol, err := envconfig.ResolveGenerationTransport()
+	if err != nil {
+		return nil, err
+	}
 	c := agento11y.Config{
 		ContentCapture:   opts.ContentCapture,
 		Logger:           opts.Logger,
@@ -120,7 +144,10 @@ func NewClient(opts ClientOptions) *agento11y.Client {
 		c.Tracer = opts.Providers.Tracer(opts.InstrumentationName)
 		c.Meter = opts.Providers.Meter(opts.InstrumentationName)
 	}
-	return agento11y.NewClient(c)
+	if err := ConfigureGenerationTransport(&c, opts.Providers, protocol); err != nil {
+		return nil, err
+	}
+	return agento11y.NewClient(c), nil
 }
 
 // SetupOTel builds OTel providers when an OTLP endpoint is configured

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/tags"
@@ -58,20 +59,37 @@ func mapTurn(sessionID string, t turn, mode agento11y.ContentCaptureMode) (agent
 }
 
 func sendTurn(ctx context.Context, sessionID string, t turn, mode agento11y.ContentCaptureMode, logger *log.Logger) error {
-	envconfig.ApplyLocalAuthPlaceholders()
-	if !dotenv.HasCredentials() {
+	protocol, err := envconfig.ResolveGenerationTransport()
+	if err != nil {
+		return fmt.Errorf("generation transport: %w", err)
+	}
+	if protocol == agento11y.GenerationExportProtocolHTTP {
+		envconfig.ApplyLocalAuthPlaceholders()
+	}
+	if protocol == agento11y.GenerationExportProtocolHTTP && !dotenv.HasCredentials() {
 		return fmt.Errorf("capture not configured; run agento11y login")
 	}
 	providers := emit.SetupOTel(ctx, sessionID, logger)
 	if providers != nil {
-		defer func() { _ = providers.Shutdown(ctx) }()
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cleanupCancel()
+			_ = providers.Shutdown(cleanupCtx)
+		}()
 	}
-	client := emit.NewClient(emit.ClientOptions{
+	client, err := emit.NewClient(emit.ClientOptions{
 		InstrumentationName: "agento11y.kiro", ContentCapture: mode, Logger: logger,
 		Providers: providers, UserAgent: useragent.For("kiro"),
 		Tags: autotag.FromEnv(autotag.Inputs{Cwd: t.CWD}, logger),
 	})
-	defer func() { _ = client.Shutdown(ctx) }()
+	if err != nil {
+		return fmt.Errorf("build client: %w", err)
+	}
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		_ = client.Shutdown(cleanupCtx)
+	}()
 	start, gen := mapTurn(sessionID, t, mode)
 	if err := emit.Record(ctx, client, start, gen, nil, func(genCtx context.Context) {
 		for i, rec := range t.Tools {
