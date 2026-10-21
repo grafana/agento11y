@@ -244,6 +244,14 @@ func TestClaudePreviewIsBounded(t *testing.T) {
 // what live capture would have produced for the same lines, not a second
 // mapping of the same transcript.
 func TestClaudeTurnsMatchTheLiveMapper(t *testing.T) {
+	envconfig.PinAliasEnvBlank(t)
+	home := t.TempDir()
+	setHomeDir(t, home)
+	profile := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", profile)
+	t.Setenv("CLAUDE_CODE_CUSTOM_OAUTH_URL", "")
+	writeFile(t, filepath.Join(home, ".claude.json"), `{"oauthAccount":{"emailAddress":"default@example.com"}}`)
+	writeFile(t, filepath.Join(profile, ".claude.json"), `{"oauthAccount":{"emailAddress":"selected@example.com"}}`)
 	root := t.TempDir()
 	path := writeClaudeSession(t, root, "-work-repo", "sess-a")
 	// Claude Code writes its own title for the session; both paths must use it.
@@ -278,6 +286,9 @@ func TestClaudeTurnsMatchTheLiveMapper(t *testing.T) {
 	}
 	for i := range want {
 		got := turns[i].Gen
+		if got.UserID != "selected@example.com" {
+			t.Fatalf("turn %d UserID = %q, want selected@example.com", i, got.UserID)
+		}
 		// The importer fills the user ID the live hook attaches separately.
 		got.UserID = want[i].UserID
 		// The generation ID is the import's own: the mapper derives it from

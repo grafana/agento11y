@@ -65,6 +65,8 @@ type ClientOptions struct {
 	// non-empty. Each agent passes its own token via useragent.For; empty
 	// leaves the SDK default in place.
 	UserAgent string
+	// An empty UserID preserves the SDK's environment default.
+	UserID string
 	// Tags are client tags: merged into every generation and emitted as
 	// `agento11y.tag.<key>` on spans and metrics. Adapters pass the values
 	// autotag.FromEnv resolved for AGENTO11Y_AUTO_CODING_AGENT_TAGS. Keys set in
@@ -112,6 +114,7 @@ func NewClient(opts ClientOptions) *agento11y.Client {
 		Logger:           opts.Logger,
 		GenerationExport: exportConfig(opts.UserAgent, opts.Auth),
 		Tags:             opts.Tags,
+		UserID:           opts.UserID,
 	}
 	if opts.Providers != nil {
 		c.Tracer = opts.Providers.Tracer(opts.InstrumentationName)

@@ -74,69 +74,97 @@ func TestNewClientUsesSDKEnvResolution(t *testing.T) {
 // merges them into every generation export (and, with a meter configured,
 // emits them as metric attributes).
 func TestNewClientAppliesClientTags(t *testing.T) {
-	type exported struct {
-		Generations []struct {
-			ID   string            `json:"id"`
-			Tags map[string]string `json:"tags"`
-		} `json:"generations"`
-	}
-	var got exported
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, "read body", http.StatusBadRequest)
-			return
-		}
-		if err := json.Unmarshal(body, &got); err != nil {
-			http.Error(w, "invalid json", http.StatusBadRequest)
-			return
-		}
-		results := make([]map[string]any, 0, len(got.Generations))
-		for _, g := range got.Generations {
-			results = append(results, map[string]any{"generation_id": g.ID, "accepted": true})
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"results": results})
-	}))
-	defer server.Close()
-	// Pin every branded family blank first: the SDK prefers the AGENTO11Y_
-	// spelling, so a machine with AGENTO11Y_ENDPOINT and AGENTO11Y_AUTH_TOKEN
-	// exported would send this generation to that endpoint instead of the test
-	// server.
-	envconfig.PinAliasEnvBlank(t)
-	t.Setenv("SIGIL_ENDPOINT", server.URL)
-	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
-	t.Setenv("SIGIL_AUTH_TOKEN", "token")
+	for _, tc := range []struct {
+		name, clientID, envID, legacyID, startID, resultID, wantID string
+	}{
+		{name: "no identity"},
+		{name: "client identity", clientID: "client-user", wantID: "client-user"},
+		{name: "environment fallback", envID: "env-user", wantID: "env-user"},
+		{name: "legacy environment fallback", legacyID: "legacy-user", wantID: "legacy-user"},
+		{name: "client overrides environment", clientID: "client-user", envID: "env-user", wantID: "client-user"},
+		{name: "start overrides client", clientID: "client-user", startID: "start-user", wantID: "start-user"},
+		{name: "result overrides client", clientID: "client-user", resultID: "result-user", wantID: "result-user"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			type exported struct {
+				Generations []struct {
+					ID       string            `json:"id"`
+					Tags     map[string]string `json:"tags"`
+					Metadata map[string]any    `json:"metadata"`
+				} `json:"generations"`
+			}
+			var got exported
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					http.Error(w, "read body", http.StatusBadRequest)
+					return
+				}
+				if err := json.Unmarshal(body, &got); err != nil {
+					http.Error(w, "invalid json", http.StatusBadRequest)
+					return
+				}
+				results := make([]map[string]any, 0, len(got.Generations))
+				for _, g := range got.Generations {
+					results = append(results, map[string]any{"generation_id": g.ID, "accepted": true})
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]any{"results": results})
+			}))
+			defer server.Close()
+			// Pin every branded family blank first: the SDK prefers the AGENTO11Y_
+			// spelling, so a machine with AGENTO11Y_ENDPOINT and AGENTO11Y_AUTH_TOKEN
+			// exported would send this generation to that endpoint instead of the test
+			// server.
+			envconfig.PinAliasEnvBlank(t)
+			t.Setenv("SIGIL_ENDPOINT", server.URL)
+			t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
+			t.Setenv("SIGIL_AUTH_TOKEN", "token")
+			t.Setenv("AGENTO11Y_USER_ID", tc.envID)
+			t.Setenv("SIGIL_USER_ID", tc.legacyID)
 
-	client := NewClient(ClientOptions{
-		InstrumentationName: "agento11y.test",
-		Tags:                map[string]string{"user": "alice@example.com", "repo": "grafana/agento11y"},
-	})
-	if client == nil {
-		t.Fatal("NewClient returned nil")
-	}
-	ctx := context.Background()
-	if err := Record(ctx, client,
-		agento11y.GenerationStart{Model: agento11y.ModelRef{Provider: "openai", Name: "gpt-5"}},
-		agento11y.Generation{
-			ID:             "gen-1",
-			ConversationID: "conv-1",
-			Model:          agento11y.ModelRef{Provider: "openai", Name: "gpt-5"},
-			CompletedAt:    time.Now(),
-		}, nil, nil); err != nil {
-		t.Fatalf("Record: %v", err)
-	}
-	if err := client.Flush(ctx); err != nil {
-		t.Fatalf("Flush: %v", err)
-	}
-	_ = client.Shutdown(ctx)
+			client := NewClient(ClientOptions{
+				UserID:              tc.clientID,
+				InstrumentationName: "agento11y.test",
+				Tags:                map[string]string{"user": "alice@example.com", "repo": "grafana/agento11y"},
+			})
+			if client == nil {
+				t.Fatal("NewClient returned nil")
+			}
+			ctx := context.Background()
+			if err := Record(ctx, client,
+				agento11y.GenerationStart{Model: agento11y.ModelRef{Provider: "openai", Name: "gpt-5"}, UserID: tc.startID},
+				agento11y.Generation{
+					UserID:         tc.resultID,
+					ID:             "gen-1",
+					ConversationID: "conv-1",
+					Model:          agento11y.ModelRef{Provider: "openai", Name: "gpt-5"},
+					CompletedAt:    time.Now(),
+				}, nil, nil); err != nil {
+				t.Fatalf("Record: %v", err)
+			}
+			if err := client.Flush(ctx); err != nil {
+				t.Fatalf("Flush: %v", err)
+			}
+			_ = client.Shutdown(ctx)
 
-	if len(got.Generations) != 1 {
-		t.Fatalf("exported %d generations; want 1", len(got.Generations))
-	}
-	tags := got.Generations[0].Tags
-	if tags["user"] != "alice@example.com" || tags["repo"] != "grafana/agento11y" {
-		t.Fatalf("exported tags = %v; want user and repo client tags", tags)
+			if len(got.Generations) != 1 {
+				t.Fatalf("exported %d generations; want 1", len(got.Generations))
+			}
+			tags := got.Generations[0].Tags
+			if tags["user"] != "alice@example.com" || tags["repo"] != "grafana/agento11y" {
+				t.Fatalf("exported tags = %v; want user and repo client tags", tags)
+			}
+			metadata := got.Generations[0].Metadata
+			if gotID, _ := metadata["agento11y.user.id"].(string); gotID != tc.wantID {
+				t.Errorf("exported identity = %q, want %q", gotID, tc.wantID)
+			}
+			if tc.wantID == "" {
+				if _, ok := metadata["agento11y.user.id"]; ok {
+					t.Error("identity metadata must be absent")
+				}
+			}
+		})
 	}
 }
 

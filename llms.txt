@@ -231,6 +231,10 @@ To attach custom key/values, pick the mechanism by where it must show up. See [`
 
 Coding-agent plugins (Path A) add one opt-in switch on top: `AGENTO11Y_AUTO_CODING_AGENT_TAGS=true` resolves the session's user, repository, and branch and attaches them as **client tags**, so they do become metric labels (`agento11y_tag_user`, `agento11y_tag_repo`, `agento11y_tag_git_branch`). `AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=user,repo` narrows that to some of the names and defaults to all of them; on its own, with the switch off, it does nothing. The switch is off by default, a key already set in `AGENTO11Y_TAGS` wins, and neither variable exists in the SDKs. Two consequences to state before recommending it: the `user` value is commonly a work email address that then lives in Prometheus labels for the metric retention period, and cardinality is the product of users, repositories, and branches, with branch names growing without bound. Suggest `user,repo` before all three.
 
+Coding-agent account discovery is local-only. Claude uses its selected config-directory account file, Codex uses existing `auth.json` email fields, and Cursor uses saved session email before current hook email. Other hosts have no account-email lookup. Discovery makes no provider requests, refreshes no credentials, and runs no host account commands. See [local account identity sources](https://github.com/grafana/agento11y/blob/main/docs/concepts/tags-and-metadata.md#local-account-identity-sources).
+
+Automatic user-tag precedence is explicit `TAGS[user]`, explicit `USER_ID`, host account identity, then OS username. The OS fallback sets only the optional tag, never conversation identity. An explicit `user` tag stays independent of identity. Disabling automatic tags does not disable account identity. `AGENTO11Y_USER_ID` accepts arbitrary identifiers, including pseudonyms; set the same value across plugins to unify attribution. Legacy `SIGIL_*` aliases remain supported.
+
 Capture modes do not strip `tags`/`metadata`/`user_id`; do not put secrets there.
 
 ## Mission

@@ -144,14 +144,21 @@ When enabled, guards send every submitted message and tool argument to `AGENTO11
 | `AGENTO11Y_TAGS` | — | `key=value,key=value` tags on every generation and as `agento11y.tag.<key>` on OTel spans/metrics (e.g. `project=my-app`). |
 | `AGENTO11Y_AUTO_CODING_AGENT_TAGS` | `false` | Opt in to client tags resolved for the session: the user, the repository, and the branch. Unlike the built-ins, these reach OTel metrics as `agento11y_tag_*` labels. See [Tags and Metadata](../../docs/concepts/tags-and-metadata.md#opt-in-automatic-tags-agento11y_auto_coding_agent_tags) for the cardinality and personal-data trade-offs. |
 | `AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES` | all names | Narrows the switch above to a comma-separated subset of `user`, `repo`, `branch` (`all` is also accepted). Does nothing while the switch is off. |
-| `AGENTO11Y_USER_ID` | from `~/.claude.json` | Override the user id. |
+| `AGENTO11Y_USER_ID` | selected local account | Override the user ID with any identifier, including a pseudonym. |
 | `AGENTO11Y_AGENT_NAME` | `claude-code` | Override the exported `agent_name`. Subagent turns become `<name>/<subagent type>`, or `<name>/subagent` when Claude Code names no type. Avoid a `/` in the name itself: a slash marks a subagent generation, so every turn of the run is counted as one. Guard rules and dashboards that filter on `claude-code` no longer match the generations this run exports. |
-| `AGENTO11Y_USER_ID_SOURCE` | `email` | Which field to read from `~/.claude.json`: `email` or `accountUuid`. |
+| `AGENTO11Y_USER_ID_SOURCE` | `email` | Which field to read from the selected account file: `email` or `accountUuid`. |
 | `AGENTO11Y_LOCAL` | `false` | Send Claude Code captures (launches and installed hooks) to the local viewer at `http://127.0.0.1:8765` instead of Grafana Cloud. Local mode always stores full content. Cloud forwarding also requires `AGENTO11Y_LOCAL_FORWARD`. |
 | `AGENTO11Y_DEBUG` | `false` | Log to `~/.local/state/agento11y/logs/agento11y.log`. |
 | `AGENTO11Y_AUTO_UPDATE` | `true` | Refresh the `agento11y-claude-code` plugin automatically. Set `false` to pin the installed version. |
 | `AGENTO11Y_GUARDS_ENABLED` | `false` | See [Guards](#guards). |
 | `AGENTO11Y_GUARDS_FAIL_OPEN` | `true` | On timeout, network error, or 5xx, send the message or run the tool call. Set `false` to block the message or call. |
 | `AGENTO11Y_GUARDS_TIMEOUT_MS` | `1500` | Guard timeout per message or tool call. Raise it for slow `llm_judge` evaluators. |
+
+Claude identity uses the account file selected by `CLAUDE_CONFIG_DIR`, including legacy `.config.json` precedence and the custom-OAuth filename.
+With no config directory override, the modern account file is `HOME/.claude.json`, or `HOME/.claude-custom-oauth.json` when `CLAUDE_CODE_CUSTOM_OAUTH_URL` is nonempty.
+Empty or relative config directories can select files from the working directory, matching Claude behavior.
+A selected file that is unreadable, malformed, or missing identity supplies no inferred user ID; discovery does not search another account.
+The same identity supplies the optional automatic `user` tag, unless an explicit tag overrides it.
+See [Local account identity sources](../../docs/concepts/tags-and-metadata.md#local-account-identity-sources) for selection rules and precedence.
 
 If your OTLP **Instance ID** (on the OpenTelemetry card) differs from your Agent Observability Instance ID, set `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(otlp-id:glc_token)>`.

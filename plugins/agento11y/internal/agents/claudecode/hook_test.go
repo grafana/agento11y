@@ -1864,3 +1864,92 @@ func TestHook_ExportsClaudeCodeTitle(t *testing.T) {
 		t.Errorf("export does not carry the ai-title: %s", body)
 	}
 }
+
+func TestHook_AccountIdentity(t *testing.T) {
+	const secret = "synthetic-account-secret"
+	for _, tc := range []struct {
+		name, account, wantID string
+	}{
+		{name: "selected profile", account: `{"oauthAccount":{"emailAddress":"selected@example.com"},"token":"` + secret + `"}`, wantID: "selected@example.com"},
+		{name: "malformed profile", account: `{"token":"` + secret + `","oauthAccount":`},
+		{name: "invalid field type", account: `{"oauthAccount":{"emailAddress":{"` + secret + `":"value"}}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			envconfig.PinAliasEnvBlank(t)
+			t.Setenv("HOME", dir)
+			t.Setenv("USERPROFILE", dir)
+			t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+			t.Setenv("CLAUDE_CONFIG_DIR", dir)
+			t.Setenv("CLAUDE_CODE_CUSTOM_OAUTH_URL", "")
+			if err := os.WriteFile(filepath.Join(dir, ".claude.json"), []byte(tc.account), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			var gotBody atomic.Value
+			gotBody.Store("")
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					http.Error(w, "read body", http.StatusBadRequest)
+					return
+				}
+				gotBody.Store(string(body))
+				r.Body = io.NopCloser(bytes.NewReader(body))
+				acceptGenerationExport(w, r)
+			}))
+			defer server.Close()
+			setHookExportEnv(t, server.URL)
+			t.Setenv("SIGIL_USER_ID", "")
+
+			const sessionID = "account-identity-session"
+			transcriptPath := filepath.Join(dir, "transcript.jsonl")
+			content := buildHookUserJSONL(sessionID, "hello") + "\n" +
+				buildHookAssistantJSONL(sessionID, "req-1", "end_turn", "hello", 5) + "\n"
+			if err := os.WriteFile(transcriptPath, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			stderr, err := os.CreateTemp(dir, "stderr")
+			if err != nil {
+				t.Fatal(err)
+			}
+			previousStderr := os.Stderr
+			os.Stderr = stderr
+			t.Cleanup(func() {
+				os.Stderr = previousStderr
+				_ = stderr.Close()
+			})
+			logs := runHookForTest(t, hookInput{HookEventName: "Stop", SessionID: sessionID, TranscriptPath: transcriptPath})
+			os.Stderr = previousStderr
+			diagnostics, err := os.ReadFile(stderr.Name())
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, _ := gotBody.Load().(string)
+			for _, output := range []string{body, logs, string(diagnostics)} {
+				if strings.Contains(output, secret) || strings.Contains(output, tc.account) {
+					t.Fatal("account contents leaked into diagnostics or export")
+				}
+			}
+			if tc.wantID == "" && !strings.Contains(string(diagnostics), "malformed selected account file") {
+				t.Error("missing malformed-account diagnostic")
+			}
+			var request struct {
+				Generations []struct {
+					Metadata map[string]any `json:"metadata"`
+				} `json:"generations"`
+			}
+			if err := json.Unmarshal([]byte(body), &request); err != nil {
+				t.Fatalf("decode export: %v", err)
+			}
+			if len(request.Generations) != 1 {
+				t.Fatalf("exported %d generations, want 1", len(request.Generations))
+			}
+			metadata := request.Generations[0].Metadata
+			if gotID, _ := metadata["agento11y.user.id"].(string); gotID != tc.wantID {
+				t.Errorf("identity = %q, want %q", gotID, tc.wantID)
+			}
+		})
+	}
+}

@@ -293,7 +293,7 @@ func (c *claudeImporter) Turns(ctx context.Context, sess SessionPreview) iter.Se
 				claudeFinalizeSubagentGens(p.sourcePath, p.gens, parents, sess.SessionID)
 			}
 		}
-		// Match live capture: the hook attaches the user id from ~/.claude.json
+		// Match live capture: the hook attaches the user id from the selected account file
 		// to every generation it emits, so a backfilled turn resolves it the
 		// same way.
 		user := userid.Resolve()

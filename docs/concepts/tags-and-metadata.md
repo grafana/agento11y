@@ -190,6 +190,40 @@ In Prometheus the tags arrive as `agento11y_tag_user`, `agento11y_tag_repo`, and
 
 Run `agento11y doctor` to see the enabled names, the variables that set them, and the value each one resolves to in the current directory before it leaves the machine. `doctor` runs outside a session, so it cannot read the account a host agent signs in to: with `AGENTO11Y_USER_ID` unset it reports `user` as `<depends on the agent>` rather than guessing. Set `AGENTO11Y_USER_ID` to see the exact value.
 
+### Local account identity sources
+
+Automatic user-tag precedence is: explicit `TAGS[user]`, explicit `USER_ID`, host account identity, operating-system username, then absent.
+Both `AGENTO11Y_*` variables and their legacy `SIGIL_*` aliases remain supported.
+`USER_ID` accepts arbitrary identifiers, including pseudonyms; it does not require an email address.
+An explicit `user` tag does not change conversation identity.
+The operating-system fallback supplies only the optional tag, never conversation identity.
+Disabling automatic tags does not disable account identity.
+
+| Plugin | Local source used | Limitation |
+| --- | --- | --- |
+| Claude Code | Account file selected for its config directory | Uses the selected file only; see selection rules below |
+| Codex | Existing `auth.json` email fields | No keyring or ephemeral-auth lookup |
+| Cursor | Saved session email, then current hook email | Uses the first nonblank email |
+| OpenCode | No account lookup | Credential resolution can refresh tokens; private database access is deferred |
+| Pi | No account lookup | Supported extension APIs do not expose passive effective-account email |
+| Copilot | No account lookup | Inspected account/status fields expose login, not email |
+| Vibe, Kiro | No account lookup | Available identity helpers can make network requests |
+| Hermes | No account lookup | Observer callbacks do not identify the selected account credential |
+
+Claude first checks `.config.json` in the selected config directory: `CLAUDE_CONFIG_DIR`, or `HOME/.claude` when unset.
+Only this legacy directory path uses Unicode Normalization Form C (NFC).
+Otherwise, Claude selects `.claude.json` under nonempty `CLAUDE_CONFIG_DIR`, or directly under `HOME`.
+A nonempty `CLAUDE_CODE_CUSTOM_OAUTH_URL` changes that second filename to `.claude-custom-oauth.json`; discovery never contacts the URL.
+An explicitly empty config directory checks `.config.json` in the working directory before the home candidate.
+Relative config directories resolve from the working directory, matching Claude's selection behavior.
+A selected file that cannot supply identity does not trigger a search of another account file.
+Claude's `AGENTO11Y_USER_ID_SOURCE=accountUuid` selects the account UUID instead of email.
+
+Discovery makes no provider requests, refreshes no credentials, and runs no host account commands.
+Plugins do not infer email from usernames, account IDs, Git authors, or another tool's login.
+Different account emails remain different users. Set the same explicit `AGENTO11Y_USER_ID` across plugins to unify attribution.
+History imports do not add automatic tags.
+
 ### Cardinality and personal data
 
 Enabling these names is a deliberate trade. Read this first:

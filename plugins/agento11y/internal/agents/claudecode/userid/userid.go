@@ -14,12 +14,14 @@ import (
 	"os"
 	"path/filepath"
 
+	"golang.org/x/text/unicode/norm"
+
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
 
 // Resolve returns the user id to attach to every emitted generation.
 // The branded USER_ID family wins when set to a non-whitespace value;
-// otherwise we read ~/.claude.json using the field selected by the
+// otherwise we read the selected local account file using the field selected by the
 // USER_ID_SOURCE family (default "email", falling back to "email" on any
 // unrecognized value). Any failure resolves to "" — telemetry is best-effort.
 func Resolve() string {
@@ -29,14 +31,36 @@ func Resolve() string {
 
 	source := envconfig.Getenv("USER_ID_SOURCE")
 
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
+	configDir, configured := os.LookupEnv("CLAUDE_CONFIG_DIR")
+	if !configured {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		configDir = filepath.Join(home, ".claude")
 	}
-	return loadFromClaudeJSON(filepath.Join(home, ".claude.json"), source)
+
+	legacy := filepath.Join(norm.NFC.String(configDir), ".config.json")
+	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+		return loadFromClaudeJSON(legacy, source)
+	}
+
+	accountDir := configDir
+	if !configured || configDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		accountDir = home
+	}
+	filename := ".claude.json"
+	if os.Getenv("CLAUDE_CODE_CUSTOM_OAUTH_URL") != "" {
+		filename = ".claude-custom-oauth.json"
+	}
+	return loadFromClaudeJSON(filepath.Join(accountDir, filename), source)
 }
 
-// loadFromClaudeJSON reads ~/.claude.json and returns the selected
+// loadFromClaudeJSON reads the selected account file and returns the selected
 // oauthAccount field. Unknown sources fall back to "email". Returns "" on any
 // error (missing file, malformed JSON, missing field). A malformed file is
 // surfaced to stderr — mirrors state.Load for the same failure class and
@@ -54,7 +78,7 @@ func loadFromClaudeJSON(path, source string) string {
 		} `json:"oauthAccount"`
 	}
 	if err := json.Unmarshal(data, &parsed); err != nil {
-		fmt.Fprintln(os.Stderr, "agento11y claude-code: malformed ~/.claude.json, cannot resolve user id:", err)
+		fmt.Fprintln(os.Stderr, "agento11y claude-code: malformed selected account file, cannot resolve user id")
 		return ""
 	}
 

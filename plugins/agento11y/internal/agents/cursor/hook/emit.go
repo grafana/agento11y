@@ -3,6 +3,7 @@ package hook
 import (
 	"context"
 	"log"
+	"strings"
 
 	"github.com/grafana/agento11y/go/agento11y"
 
@@ -36,24 +37,30 @@ func setupOTelIfConfigured(ctx context.Context, instanceID string, logger *log.L
 // come from the SDK's automatic SIGIL_* env resolution (config.ApplyEnv has
 // already injected dotenv values into the OS env). The plugin only owns the
 // pieces the SDK can't infer: HTTP protocol, the `/api/v1/generations:export`
-// path suffix, basic-auth mode, and the OTel tracer/meter wiring. cursor does
-// not pass a logger, so the SDK client stays silent.
+// path suffix, basic-auth mode, account identity, and the OTel tracer/meter
+// wiring. cursor does not pass a logger, so the SDK client stays silent.
 //
-// The auto-tag inputs are the first workspace root and the signed-in user's
-// email, the same values mapper.MapFragment reads for git.branch and the
-// generation user id. Cursor sends both on sessionStart, and the stop and
-// sessionEnd payloads that emit telemetry carry neither, so the session
+// The auto-tag inputs are the first workspace root and the configured user ID
+// or, if unset, the signed-in user's email.
+// The resolved identity also supplies the client's default user ID.
+// Cursor sends workspace roots and email on sessionStart, and the stop and sessionEnd payloads
+// that emit telemetry carry neither, so the session
 // sessionStart saved is the primary source and the live payload is the
 // fallback for a conversation whose session file was never written.
 func buildClient(p Payload, session *fragment.Session, cfg config.Config, providers *otel.Providers, logger *log.Logger) *agento11y.Client {
+	userID := strings.TrimSpace(cfg.UserIDOverride)
+	if userID == "" {
+		userID = autoTagUserEmail(p, session)
+	}
 	return emit.NewClient(emit.ClientOptions{
 		InstrumentationName: otelInstrumentationName,
 		ContentCapture:      cfg.ContentCapture,
 		Providers:           providers,
 		UserAgent:           useragent.For("cursor"),
+		UserID:              userID,
 		Tags: autotag.FromEnv(autotag.Inputs{
 			Cwd:    autoTagWorkspaceRoot(p, session),
-			UserID: autoTagUserEmail(p, session),
+			UserID: userID,
 		}, logger),
 	})
 }
@@ -68,10 +75,12 @@ func autoTagWorkspaceRoot(p Payload, session *fragment.Session) string {
 }
 
 func autoTagUserEmail(p Payload, session *fragment.Session) string {
-	if session != nil && session.UserEmail != "" {
-		return session.UserEmail
+	if session != nil {
+		if email := strings.TrimSpace(session.UserEmail); email != "" {
+			return email
+		}
 	}
-	return p.UserEmail
+	return strings.TrimSpace(p.UserEmail)
 }
 
 func firstWorkspaceRoot(roots []string) string {
