@@ -402,26 +402,17 @@ func ReadTokenUsageForTurn(path, turnID string, opts ScanOptions) (TokenSnapshot
 // has used.
 func ParseSessionMeta(raw json.RawMessage) (SessionMeta, bool) {
 	var p struct {
-		ID              string `json:"id"`
-		SessionID       string `json:"session_id"`
-		Cwd             string `json:"cwd"`
-		ThreadSource    string `json:"thread_source"`
-		ParentSessionID string `json:"parent_session_id"`
-		ParentThreadID  string `json:"parent_thread_id"`
-		AgentRole       string `json:"agent_role"`
-		AgentNickname   string `json:"agent_nickname"`
-		AgentDepth      int    `json:"agent_depth"`
-		Depth           int    `json:"depth"`
-		Source          struct {
-			Subagent struct {
-				ThreadSpawn struct {
-					ParentThreadID string `json:"parent_thread_id"`
-					Depth          int    `json:"depth"`
-					AgentNickname  string `json:"agent_nickname"`
-					AgentRole      string `json:"agent_role"`
-				} `json:"thread_spawn"`
-			} `json:"subagent"`
-		} `json:"source"`
+		ID              string          `json:"id"`
+		SessionID       string          `json:"session_id"`
+		Cwd             string          `json:"cwd"`
+		ThreadSource    string          `json:"thread_source"`
+		ParentSessionID string          `json:"parent_session_id"`
+		ParentThreadID  string          `json:"parent_thread_id"`
+		AgentRole       string          `json:"agent_role"`
+		AgentNickname   string          `json:"agent_nickname"`
+		AgentDepth      int             `json:"agent_depth"`
+		Depth           int             `json:"depth"`
+		Source          json.RawMessage `json:"source"`
 	}
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return SessionMeta{}, false
@@ -430,10 +421,28 @@ func ParseSessionMeta(raw json.RawMessage) (SessionMeta, bool) {
 		SessionID:       firstNonEmpty(p.ID, p.SessionID),
 		Cwd:             p.Cwd,
 		ThreadSource:    p.ThreadSource,
-		ParentSessionID: firstNonEmpty(p.ParentSessionID, p.ParentThreadID, p.Source.Subagent.ThreadSpawn.ParentThreadID),
-		AgentRole:       firstNonEmpty(p.AgentRole, p.Source.Subagent.ThreadSpawn.AgentRole),
-		AgentNickname:   firstNonEmpty(p.AgentNickname, p.Source.Subagent.ThreadSpawn.AgentNickname),
-		AgentDepth:      firstNonZero(p.AgentDepth, p.Depth, p.Source.Subagent.ThreadSpawn.Depth),
+		ParentSessionID: firstNonEmpty(p.ParentSessionID, p.ParentThreadID),
+		AgentRole:       p.AgentRole,
+		AgentNickname:   p.AgentNickname,
+		AgentDepth:      firstNonZero(p.AgentDepth, p.Depth),
+	}
+	var source struct {
+		Subagent struct {
+			ThreadSpawn struct {
+				ParentThreadID string `json:"parent_thread_id"`
+				Depth          int    `json:"depth"`
+				AgentNickname  string `json:"agent_nickname"`
+				AgentRole      string `json:"agent_role"`
+			} `json:"thread_spawn"`
+		} `json:"subagent"`
+	}
+	// Other source variants must not discard outer metadata or add partial linkage.
+	if err := json.Unmarshal(p.Source, &source); err == nil {
+		spawn := source.Subagent.ThreadSpawn
+		meta.ParentSessionID = firstNonEmpty(meta.ParentSessionID, spawn.ParentThreadID)
+		meta.AgentRole = firstNonEmpty(meta.AgentRole, spawn.AgentRole)
+		meta.AgentNickname = firstNonEmpty(meta.AgentNickname, spawn.AgentNickname)
+		meta.AgentDepth = firstNonZero(meta.AgentDepth, spawn.Depth)
 	}
 	if meta.ThreadSource == "" && meta.ParentSessionID != "" {
 		meta.ThreadSource = "subagent"

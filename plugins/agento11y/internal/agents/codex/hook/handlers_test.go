@@ -289,6 +289,75 @@ func TestStopSuccessfulExportDeletesFragmentAndUsesAuth(t *testing.T) {
 	}
 }
 
+func TestStopExportsRepositoryFromSessionCWD(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		depth    int
+		autoTags string
+		wantRepo string
+	}{
+		{name: "checkout root", autoTags: "true", wantRepo: "fixture/codex"},
+		{name: "depth five", depth: 5, autoTags: "true", wantRepo: "fixture/codex"},
+		{name: "depth six", depth: 6, autoTags: "true", wantRepo: "fixture/codex"},
+		{name: "depth twelve", depth: 12, autoTags: "true", wantRepo: "fixture/codex"},
+		{name: "automatic tags disabled", depth: 12, autoTags: "false"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			envconfig.PinAliasEnvBlank(t)
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			t.Setenv("CODEX_HOME", t.TempDir())
+			t.Setenv("AGENTO11Y_AUTO_CODING_AGENT_TAGS", tc.autoTags)
+			t.Setenv("AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES", "repo,branch")
+			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+			t.Setenv("OTEL_TRACES_EXPORTER", "none")
+			t.Setenv("OTEL_METRICS_EXPORTER", "none")
+			logger := log.New(io.Discard, "", 0)
+			root := t.TempDir()
+			require.NoError(t, os.MkdirAll(filepath.Join(root, ".git"), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(root, ".git/HEAD"), []byte("ref: refs/heads/session-branch\n"), 0o644))
+			require.NoError(t, os.WriteFile(filepath.Join(root, ".git/config"), []byte("[remote \"origin\"]\n\turl = git@github.com:fixture/codex.git\n"), 0o644))
+			cwd := filepath.Join(root, filepath.FromSlash(strings.Repeat("nested/", tc.depth)))
+			require.NoError(t, os.MkdirAll(cwd, 0o755))
+			var gotBody atomic.Value
+			gotBody.Store("")
+			server := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					http.Error(w, "read body", http.StatusBadRequest)
+					return
+				}
+				gotBody.Store(string(body))
+				writeAcceptedGenerationResponse(t, w, body)
+			}))
+			defer server.Close()
+			t.Setenv("AGENTO11Y_ENDPOINT", server.URL)
+			cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}
+			SessionStart(Payload{HookEventName: "SessionStart", SessionID: "sess", CWD: cwd, Model: "gpt-5.5"}, cfg, logger)
+			UserPromptSubmit(context.Background(), io.Discard, Payload{HookEventName: "UserPromptSubmit", SessionID: "sess", TurnID: "turn", Prompt: "hello"}, cfg, logger)
+			Stop(Payload{HookEventName: "Stop", SessionID: "sess", TurnID: "turn"}, cfg, logger)
+
+			body := gotBody.Load().(string)
+			require.NotEmpty(t, body, "expected an export request")
+			var req struct {
+				Generations []struct {
+					Tags map[string]string `json:"tags"`
+				} `json:"generations"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(body), &req))
+			require.Len(t, req.Generations, 1)
+			tags := req.Generations[0].Tags
+			assert.Equal(t, cwd, tags["cwd"])
+			assert.Equal(t, "session-branch", tags["git.branch"])
+			if tc.wantRepo == "" {
+				assert.NotContains(t, tags, "repo")
+			} else {
+				assert.Equal(t, tc.wantRepo, tags["repo"])
+			}
+			assert.Nil(t, fragment.LoadTolerant("sess", "turn", logger))
+		})
+	}
+}
+
 // TestStopPromptRedactionWiring pins config.Config.SkipPromptRedaction
 // through to the exported body. The mapper tests cover the flag itself and
 // the config test covers Load; this one covers the wire between them.
