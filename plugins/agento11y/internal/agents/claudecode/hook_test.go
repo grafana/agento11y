@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -171,7 +172,7 @@ func TestHookEventRouting(t *testing.T) {
 			assertState: func(t *testing.T) {
 				t.Helper()
 				st := state.Load("unknown-route")
-				if st != (state.Session{}) {
+				if st.Offset != 0 || st.Title != "" || st.AITitle != "" || st.CustomTitle != "" || st.Model != "" || len(st.ExportedSubagents) != 0 {
 					t.Fatalf("state = %#v, want zero value", st)
 				}
 			},
@@ -1952,4 +1953,194 @@ func TestHook_AccountIdentity(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestHook_ExportsSubagentTranscriptUsage is the live-capture counterpart of
+// history import: Claude Code writes the subagent's real turns (and token
+// usage) to a sibling file, and the parent transcript only has an Agent
+// tool_use/tool_result pair. Before this path existed the hook synthesised a
+// zero-token placeholder, which is what priced those agents at $0.
+func TestHook_ExportsSubagentTranscriptUsage(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	envconfig.PinAliasEnvBlank(t)
+
+	var (
+		exports   [][]exportedGeneration
+		rawBodies []string
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "read body", http.StatusBadRequest)
+			return
+		}
+		rawBodies = append(rawBodies, string(body))
+		var req struct {
+			Generations []exportedGeneration `json:"generations"`
+		}
+		if err := json.Unmarshal(body, &req); err == nil {
+			exports = append(exports, req.Generations)
+		}
+		r.Body = io.NopCloser(strings.NewReader(string(body)))
+		acceptGenerationExport(w, r)
+	}))
+	defer server.Close()
+	setHookExportEnv(t, server.URL)
+	t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "metadata_only")
+
+	sessionID := "084e2f13-b8e9-4971-801e-4b2d6334ceec"
+	agentID := "a18f9a9d9f1f3d28e"
+	transcriptPath := filepath.Join(dir, sessionID+".jsonl")
+	subDir := filepath.Join(dir, sessionID, "subagents")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	parent := strings.Join([]string{
+		buildHookUserJSONL(sessionID, "investigate the cost gap"),
+		buildHookAssistantLineAt(sessionID, "req-parent", "tool_use", hookFixtureTimestamp, []any{map[string]any{
+			"type": "tool_use", "id": "agent_1", "name": "Agent",
+			"input": map[string]any{"subagent_type": "general-purpose", "description": "look around"},
+		}}, 7),
+		buildHookToolResultJSONL(sessionID, "agent_1", "agentId: "+agentID+"\nTranscript dir: "+subDir+"\nfound the mapper"),
+		buildHookAssistantJSONL(sessionID, "req-done", "end_turn", "done", 5),
+	}, "\n") + "\n"
+	if err := os.WriteFile(transcriptPath, []byte(parent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sub := strings.Join([]string{
+		buildHookUserJSONL(sessionID, "look around"),
+		buildHookSidechainAssistantJSONL(sessionID, "req-side", agentID, "general-purpose", "the mapper drops usage", 40),
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(subDir, "agent-"+agentID+".jsonl"), []byte(sub), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	logs := runHookForTest(t, hookInput{
+		HookEventName:  "Stop",
+		SessionID:      sessionID,
+		TranscriptPath: transcriptPath,
+	})
+	if len(exports) != 1 {
+		t.Fatalf("export requests = %d, want 1 (logs:\n%s\nbodies:\n%s)", len(exports), logs, strings.Join(rawBodies, "\n---\n"))
+	}
+
+	var (
+		parentNames []string
+		subGens     []exportedGeneration
+	)
+	for _, g := range exports[0] {
+		if g.ConversationID != sessionID {
+			t.Errorf("conversation %q, want %q", g.ConversationID, sessionID)
+		}
+		switch g.AgentName {
+		case "claude-code":
+			parentNames = append(parentNames, g.AgentName)
+		case "claude-code/general-purpose", "claude-code/subagent":
+			subGens = append(subGens, g)
+		default:
+			t.Errorf("unexpected agent %q", g.AgentName)
+		}
+	}
+	if len(parentNames) != 2 {
+		t.Fatalf("parent generations = %d, want 2 (spawn + wrap-up); all=%v logs:\n%s",
+			len(parentNames), agentNames(exports[0]), logs)
+	}
+	if len(subGens) != 1 {
+		t.Fatalf("subagent generations = %d, want 1 with real usage; all=%v logs:\n%s",
+			len(subGens), agentNames(exports[0]), logs)
+	}
+	if subGens[0].AgentName != "claude-code/general-purpose" {
+		t.Errorf("subagent name = %q, want claude-code/general-purpose", subGens[0].AgentName)
+	}
+	if in, out := subGens[0].usageTokens(); in != 80 || out != 40 {
+		t.Errorf("subagent usage = input %d output %d, want 80/40", in, out)
+	}
+	if len(subGens[0].ParentGenerationIDs) != 1 {
+		t.Errorf("subagent parents = %v, want the spawning generation", subGens[0].ParentGenerationIDs)
+	}
+
+	st := state.Load(sessionID)
+	if !slices.Contains(st.ExportedSubagents, agentID) {
+		t.Fatalf("ExportedSubagents = %v, want to include %s", st.ExportedSubagents, agentID)
+	}
+
+	// A later Stop that only wraps up a new parent turn must not re-export the
+	// subagent file, or cost would double-count.
+	extra := buildHookUserJSONL(sessionID, "thanks") + "\n" +
+		buildHookAssistantJSONL(sessionID, "req-3", "end_turn", "you are welcome", 2) + "\n"
+	f, err := os.OpenFile(transcriptPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(extra); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	runHookForTest(t, hookInput{
+		HookEventName:  "Stop",
+		SessionID:      sessionID,
+		TranscriptPath: transcriptPath,
+	})
+	if len(exports) != 2 {
+		t.Fatalf("second Stop export requests = %d, want 2 total", len(exports))
+	}
+	for _, g := range exports[1] {
+		if strings.HasPrefix(g.AgentName, "claude-code/") {
+			t.Fatalf("second Stop re-exported subagent %q", g.AgentName)
+		}
+	}
+}
+
+type exportedGeneration struct {
+	ID                  string   `json:"id"`
+	AgentName           string   `json:"agent_name"`
+	ConversationID      string   `json:"conversation_id"`
+	ParentGenerationIDs []string `json:"parent_generation_ids"`
+	Usage               struct {
+		InputTokens  json.Number `json:"input_tokens"`
+		OutputTokens json.Number `json:"output_tokens"`
+	} `json:"usage"`
+}
+
+func (g exportedGeneration) usageTokens() (input, output int64) {
+	input, _ = g.Usage.InputTokens.Int64()
+	output, _ = g.Usage.OutputTokens.Int64()
+	return input, output
+}
+
+func agentNames(gens []exportedGeneration) []string {
+	out := make([]string, len(gens))
+	for i, g := range gens {
+		out[i] = g.AgentName
+	}
+	return out
+}
+
+func buildHookSidechainAssistantJSONL(sessionID, requestID, agentID, attribution, text string, outputTokens int64) string {
+	line := map[string]any{
+		"type":             "assistant",
+		"sessionId":        sessionID,
+		"isSidechain":      true,
+		"agentId":          agentID,
+		"attributionAgent": attribution,
+		"timestamp":        hookFixtureTimestamp,
+		"version":          "1.0.0",
+		"requestId":        requestID,
+		"message": map[string]any{
+			"model": "claude-opus-4",
+			"usage": map[string]any{"input_tokens": 80, "output_tokens": outputTokens},
+			"content": []any{
+				map[string]any{"type": "text", "text": text},
+			},
+		},
+	}
+	data, _ := json.Marshal(line)
+	return string(data)
 }

@@ -19,6 +19,7 @@ import (
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/mapper"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/state"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/subagent"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/transcript"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/userid"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/guard"
@@ -192,7 +193,7 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 		r = redact.New()
 	}
 
-	gens, toolResultAt := mapper.Process(lines, &st, mapper.Options{
+	opts := mapper.Options{
 		SessionID:           input.SessionID,
 		Titles:              titles,
 		Logger:              logger,
@@ -201,7 +202,15 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 		AgentVersion:        envconfig.ResolveAgentVersion(""),
 		SkipPromptRedaction: skipPromptRedaction,
 		TitleDropped:        contentMode == agento11y.ContentCaptureModeMetadataOnly,
-	}, r)
+	}
+	subFiles, err := liveSubagentFiles(input.TranscriptPath, logger)
+	if err != nil {
+		logger.Printf("list subagent transcripts: %v", err)
+	}
+	opts.SuppressSyntheticSubagentToolCallIDs = subagent.SyntheticToolCallIDs(lines, subagent.RefsForFiles(subFiles))
+
+	gens, toolResultAt := mapper.Process(lines, &st, opts, r)
+	gens = append(gens, liveSubagentGens(input, lines, gens, subFiles, &st, opts, r, logger)...)
 
 	if len(gens) == 0 {
 		logger.Printf("no generations produced; keeping offset=%d for next event", st.Offset)

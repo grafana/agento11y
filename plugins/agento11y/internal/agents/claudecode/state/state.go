@@ -22,6 +22,10 @@ type Session struct {
 	// Model is captured from SessionStart so tool hooks can include model context
 	// when calling agento11y guards (PreToolUse events do not include model fields).
 	Model string `json:"model,omitempty"`
+	// ExportedSubagents is the set of subagent transcript keys already
+	// exported for this session, so a later Stop does not send the same turns
+	// again. Keys are agent IDs from agent-<id>.jsonl filenames.
+	ExportedSubagents []string `json:"exported_subagents,omitempty"`
 }
 
 func dir() string {

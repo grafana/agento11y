@@ -44,8 +44,8 @@ type Options struct {
 	SkipPromptRedaction bool
 	// SuppressSyntheticSubagentToolCallIDs skips the summary-only generation
 	// for an Agent tool result whose full subagent transcript is mapped
-	// separately. Live capture leaves it nil, so it keeps recording summaries
-	// when the parent transcript is the only record of the subagent run.
+	// separately. Live capture sets it when sibling subagent files exist, and
+	// leaves it nil when the parent transcript is the only record of the run.
 	SuppressSyntheticSubagentToolCallIDs map[string]bool
 	// Titles are the title lines the transcript read returned. Process records
 	// them in the session state, where a newer one replaces an older one, so
