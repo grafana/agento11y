@@ -37,7 +37,7 @@ func TestPublicHelpPages(t *testing.T) {
 			if path == "login" {
 				for _, want := range []string{
 					"access-policy token with the sigil:write scope",
-					"requires --endpoint and --tenant. Cannot be combined with --token.",
+					"requires --endpoint and --tenant, or an --env-file that sets them. Cannot be combined with --token.",
 					"Prompt for missing values. Verify credentials before saving unless --no-verify is set.",
 				} {
 					if !strings.Contains(out.String(), want) {

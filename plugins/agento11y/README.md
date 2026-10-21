@@ -311,6 +311,7 @@ agento11y login --endpoint https://agento11y-prod-<region>.grafana.net --tenant 
 | `--token value` | access-policy token with the `sigil:write` scope |
 | `--token-stdin` | read the token from stdin; requires `--endpoint` and `--tenant` |
 | `--otlp-endpoint url` | OTLP endpoint for SDK traces and metrics |
+| `--env-file path` | read the environment block from a file, or from stdin when the path is `-` |
 | `--no-verify` | write the file without checking the credentials |
 | `--yes` | save even when the check fails |
 
@@ -321,6 +322,15 @@ Keep the token out of your shell history with `--token-stdin`:
 ```sh
 printf %s "$TOKEN" | agento11y login --endpoint https://agento11y-prod-<region>.grafana.net --tenant <instance-id> --token-stdin
 ```
+
+A team can share one environment block instead, as a file or through a password manager. Save the block from the setup page, then pass the file, or pipe it in with `-`:
+
+```sh
+agento11y login --env-file team.env
+op document get agento11y-cloud-env | agento11y login --env-file -
+```
+
+Login reads the same lines as a pasted block: the endpoint, instance ID, token, OTLP endpoint, and OTLP headers. Other keys in the file are ignored and named on stderr, so a shared file cannot change anyone's content capture, guards, or other settings. `export` prefixes and `#` comment lines are accepted, so the same file also works with `source`. A file of `op://` references must be resolved first, for example `op inject -i team.env | agento11y login --env-file -`. Flags still win over the values in the block, and a file that holds only the endpoint and instance ID can be combined with `--token-stdin`. A block larger than 64 KiB is refused.
 
 ## Settings
 

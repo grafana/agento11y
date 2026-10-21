@@ -1096,6 +1096,7 @@ func TestValidatePastedBlock(t *testing.T) {
 		in      string
 		fixed   fixedValues
 		wantErr string // substring the message must name; "" means no error
+		notIn   string // substring the message must not contain
 	}{
 		{name: "empty box is a skip", in: "  \n"},
 		{name: "one credential is enough", in: "AGENTO11Y_AUTH_TOKEN=glc_test"},
@@ -1122,6 +1123,25 @@ func TestValidatePastedBlock(t *testing.T) {
 			name:    "a placeholder token is rejected",
 			in:      "AGENTO11Y_ENDPOINT=https://api.example.invalid\nAGENTO11Y_AUTH_TOKEN=<create a token above>\n",
 			wantErr: "placeholder",
+		},
+		{
+			// The rejected value can sit next to a secret, and a block from
+			// --env-file prints this error to a log.
+			name:    "a placeholder error leaves the value out",
+			in:      "AGENTO11Y_AUTH_TOKEN=glc_SECRET<more>\n",
+			wantErr: "placeholder",
+			notIn:   "glc_SECRET",
+		},
+		{
+			name:    "a URL error leaves the value out",
+			in:      "AGENTO11Y_ENDPOINT=\"https://api.example.invalid glc_SECRET\"\n",
+			wantErr: "invalid URL",
+			notIn:   "glc_SECRET",
+		},
+		{
+			// A shell `#` comment line in a file that kept its newlines.
+			name: "a commented-out line is not read",
+			in:   "AGENTO11Y_AUTH_TOKEN=glc_test\n# AGENTO11Y_ENDPOINT=<old staging URL>\n",
 		},
 		{
 			name:    "an endpoint that is not a URL is rejected",
@@ -1163,6 +1183,9 @@ func TestValidatePastedBlock(t *testing.T) {
 			}
 			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
 				t.Fatalf("validatePastedBlock(%q) = %v, want a message naming %q", c.in, err, c.wantErr)
+			}
+			if c.notIn != "" && strings.Contains(err.Error(), c.notIn) {
+				t.Errorf("message %q leaks %q", err, c.notIn)
 			}
 		})
 	}
@@ -2645,5 +2668,160 @@ func TestPasteFieldReceivesAFlattenedBlock(t *testing.T) {
 	}
 	if v.endpoint != "https://api.example.invalid" || v.tenantID != "123" || v.token != "glc_test" {
 		t.Errorf("applyPaste gave endpoint=%q tenant=%q token=%q", v.endpoint, v.tenantID, v.token)
+	}
+}
+
+// TestRun_Block covers `login --env-file` and a piped block: a block supplies the credentials
+// without a terminal, a flag still beats it, and a block that cannot finish
+// the login alone is refused before anything is written.
+func TestRun_Block(t *testing.T) {
+	const block = "AGENTO11Y_ENDPOINT=https://block.example.com\n" +
+		"AGENTO11Y_AUTH_TENANT_ID=456\n" +
+		"AGENTO11Y_AUTH_TOKEN=glc_block\n" +
+		"OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.block.example\n" +
+		"OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic abc\n"
+	cases := []struct {
+		name       string
+		existing   string // config.env before the run
+		opts       RunOpts
+		wantErr    string
+		wantStderr string
+		wantFile   map[string]string // "" means the key must be absent
+	}{
+		{
+			name: "block alone",
+			opts: RunOpts{Block: block},
+			wantFile: map[string]string{
+				"SIGIL_ENDPOINT":                    "https://block.example.com",
+				"SIGIL_AUTH_TENANT_ID":              "456",
+				"SIGIL_AUTH_TOKEN":                  "glc_block",
+				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT": "https://otlp.block.example",
+				"OTEL_EXPORTER_OTLP_HEADERS":        "Authorization=Basic abc",
+			},
+		},
+		{
+			// The headers carry the block's credential, so they must not be
+			// saved next to a token the flag replaced.
+			name: "token flag beats block and drops its headers",
+			opts: RunOpts{Block: block, Token: "glc_mine"},
+			wantFile: map[string]string{
+				"SIGIL_ENDPOINT":             "https://block.example.com",
+				"SIGIL_AUTH_TOKEN":           "glc_mine",
+				"OTEL_EXPORTER_OTLP_HEADERS": "",
+			},
+		},
+		{
+			// Only the credential and OTLP lines are read, as from a pasted
+			// block, so a block cannot turn off TLS, point at a binary, or
+			// replace the saved stack.
+			name: "settings beyond the credentials are ignored",
+			opts: RunOpts{Block: block +
+				"AGENTO11Y_CONTENT_CAPTURE_MODE=full\n" +
+				"AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE=true\n" +
+				"AGENTO11Y_BIN=/tmp/evil\n" +
+				"SIGIL_STACK_URL=https://evil.example\n"},
+			wantStderr: "ignored AGENTO11Y_BIN, AGENTO11Y_CONTENT_CAPTURE_MODE, AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE, SIGIL_STACK_URL from the block",
+			wantFile: map[string]string{
+				"AGENTO11Y_CONTENT_CAPTURE_MODE":        "",
+				"AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE": "",
+				"AGENTO11Y_BIN":                         "",
+				"AGENTO11Y_STACK_URL":                   "",
+				"SIGIL_STACK_URL":                       "",
+			},
+		},
+		{
+			// The raw OTLP endpoint is a credential field login already
+			// resolved, so the flag's value must not gain a stale twin.
+			name: "otlp flag beats the block's raw OTLP endpoint",
+			opts: RunOpts{
+				Block:        block + "OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.block.example\n",
+				OTLPEndpoint: "https://otlp.mine.example",
+			},
+			wantFile: map[string]string{
+				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT": "https://otlp.mine.example",
+			},
+		},
+		{
+			// Headers without the block's own OTLP endpoint would carry the
+			// Cloud credential to the collector saved before.
+			name:     "headers without an OTLP endpoint are dropped",
+			existing: "SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT=https://collector.internal\n",
+			opts: RunOpts{Block: "AGENTO11Y_ENDPOINT=https://block.example.com\n" +
+				"AGENTO11Y_AUTH_TENANT_ID=456\n" +
+				"AGENTO11Y_AUTH_TOKEN=glc_block\n" +
+				"OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic abc\n"},
+			wantFile: map[string]string{
+				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT": "https://collector.internal",
+				"OTEL_EXPORTER_OTLP_HEADERS":        "",
+			},
+		},
+		{
+			// A commented-out line in a file stays dead, as it would for
+			// `source`.
+			name: "a commented-out endpoint stays dead",
+			opts: RunOpts{Block: block + "# AGENTO11Y_ENDPOINT=https://staging.example.com\n"},
+			wantFile: map[string]string{
+				"SIGIL_ENDPOINT": "https://block.example.com",
+			},
+		},
+		{
+			name:    "block without a token",
+			opts:    RunOpts{Block: "AGENTO11Y_ENDPOINT=https://block.example.com\nAGENTO11Y_AUTH_TENANT_ID=456\n"},
+			wantErr: "does not set AGENTO11Y_AUTH_TOKEN; add them to the block or pass --token",
+		},
+		{
+			name:    "a 1Password reference is refused",
+			opts:    RunOpts{Block: "AGENTO11Y_ENDPOINT=https://block.example.com\nAGENTO11Y_AUTH_TENANT_ID=456\nAGENTO11Y_AUTH_TOKEN=op://Team/agento11y/token\n"},
+			wantErr: "1Password reference",
+		},
+		{name: "no credentials", opts: RunOpts{Block: "FOO=bar\n"}, wantErr: "no credentials"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			// Run exports what it saves, and a shell value beats config.env,
+			// so clear what an earlier case left behind.
+			for _, k := range []string{"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", "SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_ENDPOINT"} {
+				t.Setenv(k, "")
+				_ = os.Unsetenv(k)
+			}
+			path := filepath.Join(t.TempDir(), "config.env")
+			if c.existing != "" {
+				if err := os.WriteFile(path, []byte(c.existing), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var stderr bytes.Buffer
+			c.opts.ConfigPath, c.opts.Stdin, c.opts.Stderr, c.opts.SkipVerify = path, nonTTYStdin(t), &stderr, true
+			_, err := Run(context.Background(), c.opts)
+			if !strings.Contains(stderr.String(), c.wantStderr) {
+				t.Errorf("stderr missing %q:\n%s", c.wantStderr, stderr.String())
+			}
+			if c.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+					t.Fatalf("Run err = %v, want %q", err, c.wantErr)
+				}
+				if _, statErr := os.Stat(path); c.existing == "" && !os.IsNotExist(statErr) {
+					t.Error("config was written despite the error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			f, err := os.Open(path)
+			if err != nil {
+				t.Fatalf("open config: %v", err)
+			}
+			defer f.Close()
+			got, err := dotenv.ParseDotenv(f)
+			if err != nil {
+				t.Fatalf("parse config: %v", err)
+			}
+			for key, want := range c.wantFile {
+				if got[key] != want {
+					t.Errorf("%s = %q, want %q", key, got[key], want)
+				}
+			}
+		})
 	}
 }
