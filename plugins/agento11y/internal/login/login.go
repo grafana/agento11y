@@ -1927,8 +1927,7 @@ func requireURL(s string) error {
 	if err != nil {
 		// A *url.Error quotes the whole input, which can carry a secret from
 		// a block; keep only the reason.
-		var ue *url.Error
-		if errors.As(err, &ue) {
+		if ue, ok := errors.AsType[*url.Error](err); ok {
 			err = ue.Err
 		}
 		return fmt.Errorf("invalid URL: %w", err)
