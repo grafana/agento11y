@@ -2758,3 +2758,112 @@ func TestRun_LauncherAutoLoginKeepsNextStepQuiet(t *testing.T) {
 		t.Errorf("auto-login must supply no explicit values: %+v", *got)
 	}
 }
+
+// TestReadBlock checks the size cap that stops `yes | agento11y login` from
+// reading forever, and the hint printed while a pipe stays open and silent.
+func TestReadBlock(t *testing.T) {
+	var stderr bytes.Buffer
+	if _, err := readBlock(strings.NewReader(strings.Repeat("y\n", maxBlockBytes)), "stdin", &stderr); err == nil || !strings.Contains(err.Error(), "larger than") {
+		t.Errorf("oversized block: err = %v, want a size error", err)
+	}
+
+	old := blockWaitHint
+	blockWaitHint = time.Millisecond
+	t.Cleanup(func() { blockWaitHint = old })
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	hinted := &syncBuffer{}
+	done := make(chan string)
+	go func() {
+		data, _ := readBlock(r, "team.env", hinted)
+		done <- data
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(hinted.String(), "waiting for the environment block from team.env") {
+		if time.Now().After(deadline) {
+			t.Fatal("no hint while the pipe stayed open")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	_, _ = w.WriteString("AGENTO11Y_AUTH_TOKEN=glc_x\n")
+	_ = w.Close()
+	if got := <-done; got != "AGENTO11Y_AUTH_TOKEN=glc_x\n" {
+		t.Errorf("block = %q after the pipe closed", got)
+	}
+}
+
+// TestRun_LoginEnvFile checks where login takes an environment block from,
+// --env-file with a path or -, and the inputs it refuses before login runs.
+// A bare `login` never reads stdin as a block: a pipe that stays open would
+// hang it, where it used to fail at once.
+func TestRun_LoginEnvFile(t *testing.T) {
+	const block = "AGENTO11Y_AUTH_TOKEN=glc_x\n"
+	file := filepath.Join(t.TempDir(), "team.env")
+	if err := os.WriteFile(file, []byte(block), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name       string
+		args       []string
+		stdin      string
+		wantBlock  string
+		wantToken  string
+		wantExit   *int
+		wantStderr string
+	}{
+		{name: "file path", args: []string{"login", "--env-file", file}, wantBlock: block},
+		{name: "dash reads stdin", args: []string{"login", "--env-file", "-"}, stdin: block, wantBlock: block},
+		{name: "piped stdin without the flag is not read", args: []string{"login"}, stdin: block},
+		{name: "file plus token on stdin", args: []string{"login", "--env-file", file, "--token-stdin"}, stdin: "glc_mine\n", wantBlock: block, wantToken: "glc_mine"},
+		{name: "two stdin readers", args: []string{"login", "--env-file", "-", "--token-stdin"}, stdin: block, wantExit: new(2), wantStderr: "pass one"},
+		{name: "empty stdin with dash", args: []string{"login", "--env-file", "-"}, stdin: "\n", wantExit: new(1), wantStderr: "no environment block"},
+		{name: "missing file", args: []string{"login", "--env-file", file + ".missing"}, wantExit: new(1), wantStderr: "could not read"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			isolateDotenvHome(t)
+			var got *login.RunOpts
+			withStubLoginRun(t, func(_ context.Context, opts login.RunOpts) (login.Result, error) {
+				got = &opts
+				return login.Result{}, nil
+			})
+			var stdout, stderr bytes.Buffer
+			gotExit := withExit(t, func() {
+				run(c.args, strings.NewReader(c.stdin), &stdout, &stderr)
+			})
+			if c.wantExit != nil {
+				if gotExit == nil || *gotExit != *c.wantExit || got != nil {
+					t.Fatalf("exit = %v, login ran = %v; want exit %d and no run", gotExit, got != nil, *c.wantExit)
+				}
+				if !strings.Contains(stderr.String(), c.wantStderr) {
+					t.Errorf("stderr missing %q:\n%s", c.wantStderr, stderr.String())
+				}
+				return
+			}
+			if got == nil || got.Block != c.wantBlock || got.Token != c.wantToken {
+				t.Fatalf("login opts = %+v, want Block %q and Token %q", got, c.wantBlock, c.wantToken)
+			}
+		})
+	}
+}
+
+// syncBuffer is a bytes.Buffer safe for the hint timer's goroutine to write
+// while the test reads it.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
