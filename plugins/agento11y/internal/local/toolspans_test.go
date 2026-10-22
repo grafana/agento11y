@@ -19,7 +19,6 @@ import (
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -31,8 +30,8 @@ func TestServerProjectsToolSpans(t *testing.T) {
 	}{
 		{name: "protobuf", contentType: wire.ContentTypeProto},
 		{name: "protobuf gzip", contentType: wire.ContentTypeProto, gzip: true},
-		{name: "proto JSON", contentType: wire.ContentTypeJSON},
-		{name: "proto JSON gzip", contentType: wire.ContentTypeJSON, gzip: true},
+		{name: "OTLP JSON", contentType: wire.ContentTypeJSON},
+		{name: "OTLP JSON gzip", contentType: wire.ContentTypeJSON, gzip: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, dir := newTestServer(t)
@@ -284,13 +283,14 @@ func TestServerToolSpanProjectionIsBestEffortAndForwardingPreservesInput(t *test
 
 func TestServerSkipsUnsafeToolSpanConversationID(t *testing.T) {
 	srv, dir := newTestServer(t)
-	body := marshalTraceRequest(t, toolTraceRequest(toolTraceSpan("../escape", "call-1", "Bash")), wire.ContentTypeProto)
+	body, err := proto.Marshal(toolTraceRequest(toolTraceSpan("../escape", "call-1", "Bash")))
+	require.NoError(t, err)
 	req := newLocalRequest(http.MethodPost, otlpTracesPath, bytes.NewReader(body))
 	req.Header.Set("Content-Type", wire.ContentTypeProto)
 	rr := httptest.NewRecorder()
 	srv.ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
-	_, err := os.Stat(filepath.Join(dir, ToolSpansDir))
+	_, err = os.Stat(filepath.Join(dir, ToolSpansDir))
 	assert.ErrorIs(t, err, os.ErrNotExist)
 	_, err = os.Stat(filepath.Join(dir, "escape.jsonl"))
 	assert.ErrorIs(t, err, os.ErrNotExist)

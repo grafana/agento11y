@@ -10,6 +10,7 @@ on:
         options:
           - pi
           - opencode
+          - dsh
           - all
       version:
         description: "Semver bump (applied to each selected plugin from its own current version)"
@@ -81,7 +82,8 @@ jobs:
           case "${{ inputs.plugin }}" in
             pi)       PLUGINS_JSON='["pi"]' ;;
             opencode) PLUGINS_JSON='["opencode"]' ;;
-            all)      PLUGINS_JSON='["pi","opencode"]' ;;
+            dsh)      PLUGINS_JSON='["dsh"]' ;;
+            all)      PLUGINS_JSON='["pi","opencode","dsh"]' ;;
           esac
           echo "plugins=${PLUGINS_JSON}" >> "$GITHUB_OUTPUT"
 

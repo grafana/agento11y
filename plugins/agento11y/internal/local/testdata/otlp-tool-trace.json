@@ -1,0 +1,39 @@
+{
+  "resourceSpans": [{
+    "resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "agento11y-dsh"}}]},
+    "scopeSpans": [{
+      "scope": {"name": "agento11y-dsh"},
+      "spans": [{
+        "traceId": "01010101010101010101010101010101",
+        "spanId": "0202020202020202",
+        "parentSpanId": "0303030303030303",
+        "name": "execute_tool Bash",
+        "kind": 1,
+        "startTimeUnixNano": "10000000000",
+        "endTimeUnixNano": "12000000000",
+        "attributes": [
+          {"key": "gen_ai.operation.name", "value": {"stringValue": "execute_tool"}},
+          {"key": "gen_ai.conversation.id", "value": {"stringValue": "conv-tools"}},
+          {"key": "gen_ai.tool.call.id", "value": {"stringValue": "call-1"}},
+          {"key": "gen_ai.tool.name", "value": {"stringValue": "Bash"}},
+          {"key": "gen_ai.usage.input_tokens", "value": {"intValue": "10"}},
+          {"key": "error.type", "value": {"stringValue": "tool_execution_error"}},
+          {"key": "error.category", "value": {"stringValue": "sdk_error"}},
+          {"key": "agento11y.skill.name", "value": {"stringValue": "workflow-toolkit:review"}},
+          {"key": "gen_ai.tool.description", "value": {"stringValue": "secret description"}},
+          {"key": "gen_ai.tool.call.arguments", "value": {"stringValue": "secret arguments"}},
+          {"key": "gen_ai.tool.call.result", "value": {"stringValue": "secret result"}},
+          {"key": "code.file.path", "value": {"stringValue": "/Users/private/source.go"}},
+          {"key": "opaque", "value": {"bytesValue": "AQEBAQEBAQEBAQEBAQEBAQ=="}},
+          {"key": "nested", "value": {"kvlistValue": {"values": [{"key": "traceId", "value": {"stringValue": "not-an-id"}}]}}}
+        ],
+        "status": {"code": 2, "message": "secret status"},
+        "events": [
+          {"name": "exception", "attributes": [{"key": "exception.message", "value": {"stringValue": "secret exception"}}]},
+          {"name": "structural-event"}
+        ],
+        "links": [{"traceId": "ABABABABABABABABABABABABABABABAB", "spanId": "CDCDCDCDCDCDCDCD"}]
+      }]
+    }]
+  }]
+}

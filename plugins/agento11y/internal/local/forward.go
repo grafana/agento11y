@@ -760,7 +760,7 @@ func buildGenerationPayload(raw []json.RawMessage, strip bool) ([]byte, error) {
 		return envelope, nil
 	}
 	// DiscardUnknown, unlike wire.UnmarshalExportGenerationsJSON: an exporter
-	// newer than this daemon (the pi and opencode plugins ship on their own
+	// newer than this daemon (the dsh, pi, and opencode plugins ship on their own
 	// npm cadence) would otherwise cost the whole batch, and discarding a
 	// field the daemon cannot strip is the safe direction for a reduced copy.
 	var req agento11yv1.ExportGenerationsRequest
@@ -861,7 +861,7 @@ func stripTracePayload(body []byte, contentType string) ([]byte, string, error) 
 	}
 	stripTraceContent(req)
 	if isJSON {
-		out, err := protojson.Marshal(req)
+		out, err := marshalTraceJSON(req)
 		return out, wire.ContentTypeJSON, err
 	}
 	out, err := proto.Marshal(req)
@@ -871,7 +871,7 @@ func stripTracePayload(body []byte, contentType string) ([]byte, string, error) 
 func decodeTracePayload(body []byte, contentType string) (*coltracepb.ExportTraceServiceRequest, error) {
 	req := new(coltracepb.ExportTraceServiceRequest)
 	if strings.Contains(strings.ToLower(contentType), "json") {
-		if err := protojson.Unmarshal(body, req); err != nil {
+		if err := unmarshalTraceJSON(body, req); err != nil {
 			return nil, err
 		}
 		return req, nil

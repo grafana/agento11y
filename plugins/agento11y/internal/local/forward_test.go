@@ -824,6 +824,8 @@ func TestForwardLoader_ForwardOTLP(t *testing.T) {
 	require.NoError(t, err)
 	tracesJSON, err := protojson.Marshal(traceRequestWithContent())
 	require.NoError(t, err)
+	otlpJSON, err := os.ReadFile("testdata/otlp-tool-trace.json")
+	require.NoError(t, err)
 
 	cases := []struct {
 		name string
@@ -839,6 +841,7 @@ func TestForwardLoader_ForwardOTLP(t *testing.T) {
 		wantPath        string
 		wantVerbatim    bool
 		wantContentType string
+		wantStatus      string
 	}{
 		{
 			name: "metrics_relayed_verbatim_even_when_stripping",
@@ -878,6 +881,21 @@ func TestForwardLoader_ForwardOTLP(t *testing.T) {
 			signal: "traces", strip: true, contentType: "application/json", body: tracesJSON,
 			wantPath: "/v1/traces", wantContentType: wire.ContentTypeJSON,
 		},
+		{
+			name:   "full_json_traces_preserve_hex_ids",
+			signal: "traces", strip: false, contentType: "application/json", body: otlpJSON,
+			wantPath: "/v1/traces", wantVerbatim: true,
+		},
+		{
+			name:   "reduced_json_traces_preserve_hex_ids",
+			signal: "traces", strip: true, contentType: "application/json", body: otlpJSON,
+			wantPath: "/v1/traces", wantContentType: wire.ContentTypeJSON, wantStatus: "sdk_error",
+		},
+		{
+			name:   "gzip_reduced_json_traces_preserve_hex_ids",
+			signal: "traces", strip: true, contentType: "application/json", gzip: true, body: otlpJSON,
+			wantPath: "/v1/traces", wantContentType: wire.ContentTypeJSON, wantStatus: "sdk_error",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -901,7 +919,18 @@ func TestForwardLoader_ForwardOTLP(t *testing.T) {
 			// encoding must be dropped.
 			assert.Empty(t, c.contentEncoding)
 			assert.Equal(t, tc.wantContentType, c.contentType)
-			assertTraceStripped(t, c.body, c.contentType)
+			wantStatus := tc.wantStatus
+			if wantStatus == "" {
+				wantStatus = "invalid_request"
+			}
+			assertTraceStripped(t, c.body, c.contentType, wantStatus)
+			if bytes.Equal(tc.body, otlpJSON) {
+				assert.Contains(t, string(c.body), `"traceId":"01010101010101010101010101010101"`)
+				assert.Contains(t, string(c.body), `"spanId":"0202020202020202"`)
+				assert.Contains(t, string(c.body), `"parentSpanId":"0303030303030303"`)
+				assert.Contains(t, string(c.body), `"traceId":"abababababababababababababababab"`)
+				assert.Contains(t, string(c.body), `"spanId":"cdcdcdcdcdcdcdcd"`)
+			}
 		})
 	}
 }
@@ -1396,14 +1425,10 @@ func TestStripTraceContent_RemovesContentKeepsStructure(t *testing.T) {
 // assertTraceStripped decodes an uncompressed OTLP trace export and asserts the
 // content attributes, exception event, and raw error status message were
 // removed while structural attributes and events survive.
-func assertTraceStripped(t *testing.T, body []byte, contentType string) {
+func assertTraceStripped(t *testing.T, body []byte, contentType, wantStatus string) {
 	t.Helper()
-	var got coltracepb.ExportTraceServiceRequest
-	if strings.Contains(contentType, "json") {
-		require.NoError(t, protojson.Unmarshal(body, &got))
-	} else {
-		require.NoError(t, proto.Unmarshal(body, &got))
-	}
+	got, err := decodeTracePayload(body, contentType)
+	require.NoError(t, err)
 	span := got.GetResourceSpans()[0].GetScopeSpans()[0].GetSpans()[0]
 	keys := attributeKeys(span.GetAttributes())
 	for _, blocked := range traceContentKeys {
@@ -1418,7 +1443,7 @@ func assertTraceStripped(t *testing.T, body []byte, contentType string) {
 
 	// The status message carries the same raw provider error the exception
 	// event did, so it is replaced by the classified category.
-	assert.Equal(t, "invalid_request", span.GetStatus().GetMessage())
+	assert.Equal(t, wantStatus, span.GetStatus().GetMessage())
 	assert.Equal(t, tracepb.Status_STATUS_CODE_ERROR, span.GetStatus().GetCode())
 }
 

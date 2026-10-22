@@ -2,7 +2,7 @@
 name: setup-coding-agent
 description: >-
   Set up Grafana Agent observability for a coding agent (Claude Code, Codex,
-  Copilot CLI, Cursor, OpenCode, pi, Vibe, or experimental Kiro CLI) with the agento11y binary:
+  Copilot CLI, Cursor, dsh, OpenCode, pi, Vibe, or experimental Kiro CLI) with the agento11y binary:
   install it, save credentials, wire the agent, verify a session reaches
   Grafana Cloud, and diagnose a broken pipeline. Use when the user says "set
   up agento11y", "monitor my coding agent", "agento11y doctor says something
@@ -14,8 +14,8 @@ description: >-
 
 Grafana Agent observability records model calls, tokens, timing, tool names, and
 reported or estimated cost. Conversation content is opt-in. The `agento11y`
-binary launches agents and hosts hook-based integrations; pi and OpenCode export
-in process. This path installs and configures the integration. It never changes
+binary launches agents and hosts hook-based integrations; dsh, pi and OpenCode
+export in process. This path installs and configures the integration. It never changes
 the user's application code.
 
 Do the steps the machine's current state calls for, not all five. Step 1 says
@@ -239,6 +239,7 @@ rules in the Reference.
 | Claude Code | `agento11y claude` | shared Go binary, plugin `agento11y-claude-code` |
 | Codex | `agento11y codex` | shared Go binary, plugin `agento11y-codex` |
 | Copilot CLI | `agento11y copilot` | hooks shared with Copilot Chat in VS Code |
+| DeepSeek Harness | `agento11y dsh -- web` | macOS/Linux only; installs `@grafana/agento11y-dsh` as an overlay |
 | OpenCode | `agento11y opencode` | installs `@grafana/agento11y-opencode`; OpenCode 1.3.13 to 1.x or 2.0.22 to 2.x, other releases are refused; OpenCode 2 sessions get `--standalone` so a private server inherits launcher settings |
 | pi | `agento11y pi` | installs `@grafana/agento11y-pi` |
 | Vibe | `agento11y vibe` | shared Go binary via `hooks.toml` |
@@ -293,8 +294,6 @@ responses are warnings rather than errors, so read each probe message as well as
 the section status.
 
 ### The two pipelines
-
-They are independent and fail independently.
 
 - **Conversations** (the chat transcripts) export over `AGENTO11Y_ENDPOINT`,
   `AGENTO11Y_AUTH_TENANT_ID`, and `AGENTO11Y_AUTH_TOKEN`. The token needs the
@@ -487,7 +486,7 @@ A cancelled or failed run resumes from turns not marked exported.
 
 ### Auto-update
 
-Claude, Codex, and OpenCode 1 refresh after a binary version change and, after
+Claude, Codex, dsh, and OpenCode 1 refresh after a binary version change and, after
 the first post-install refresh, at most once a day. A relaunch inside that period
 does not pick up a plugin fix. `AGENTO11Y_AUTO_UPDATE=0|false|no|off` opts out.
 Copilot and Vibe reconcile hooks on each launch. Pi leaves upgrades to pi's

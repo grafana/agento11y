@@ -103,7 +103,7 @@ jobs:
               fi
               git tag -a "$TAG" -m "${prefix} ${VERSION}"
               # A failed push must not abort the loop: rows run in table order,
-              # so errexit here would always leave pi and opencode untagged.
+              # so errexit here would always leave pi, opencode, and dsh untagged.
               if git push origin "refs/tags/${TAG}"; then
                 CREATED+=("$TAG")
               elif [[ -n "$(git ls-remote --tags origin "refs/tags/${TAG}")" ]]; then

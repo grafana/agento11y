@@ -59,6 +59,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/copilot"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor"
 	cursorinstall "github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/install"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/dsh"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/kiro"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/opencode"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/pi"
@@ -183,6 +184,7 @@ var launchers = map[string]agentLauncher{
 	"claude":   claudecode.Launch,
 	"codex":    codex.Launch,
 	"copilot":  copilot.Launch,
+	"dsh":      dsh.Launch,
 	"opencode": opencode.Launch,
 	"pi":       pi.Launch,
 	"vibe":     vibe.Launch,
