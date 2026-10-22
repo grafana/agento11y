@@ -610,6 +610,12 @@ export interface EmbeddingRecorder {
 
 /** Recorder API for generation lifecycle. */
 export interface GenerationRecorder {
+  /**
+   * Starts a tool span parented to this generation without changing the active
+   * OTel context. Only trace parentage is bound; identity and content capture
+   * resolve as for client.startToolExecution. The caller must end the tool.
+   */
+  startToolExecution(start: ToolExecutionStart): ToolExecutionRecorder;
   setResult(result: GenerationResult): void;
   setCallError(error: unknown): void;
   setFirstTokenAt(firstTokenAt: Date): void;

@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/state"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/emit"
@@ -1113,6 +1114,219 @@ func TestHook_SpanWindowsFromTranscript(t *testing.T) {
 	}
 }
 
+func TestHook_NativeSkillDetectionFromTranscript(t *testing.T) {
+	const (
+		sessionID = "native-skill-session"
+		promptAt  = "2025-06-01T12:00:00Z"
+		callAt    = "2025-06-01T12:00:01Z"
+		resultAt  = "2025-06-01T12:00:02.2Z"
+		replyAt   = "2025-06-01T12:00:03Z"
+	)
+	secret := "glc_" + strings.Repeat("a", 24)
+	calls := []struct {
+		id, tool, input, skill string
+		failed                 bool
+	}{
+		{"native", "Skill", `{"skill":"review","args":"` + secret + `"}`, "review", false},
+		{"failed", "Skill", `{"skill":"  Team.Plugin:Review_2  "}`, "Team.Plugin:Review_2", true},
+		// The mapper bounds arguments before export. The skill key is beyond that bound.
+		{"truncated", "Skill", `{"args":"` + strings.Repeat("x", 5000) + `","skill":"other:review"}`, "other:review", false},
+		{"secret", "Skill", `{"skill":"` + secret + `"}`, "", false},
+		{"path", "Skill", `{"skill":"/private/skills/review"}`, "", false},
+		{"missing", "Skill", `{"name":"review"}`, "", false},
+		{"wrong-type", "Skill", `{"skill":["review"]}`, "", false},
+		{"read", "Read", `{"file_path":"/private/.claude/skills/review/SKILL.md"}`, "", false},
+		{"read-plugin", "Read", `{"file_path":"/private/.claude/plugins/cache/team/plugin/1/skills/review/SKILL.md","skill":"review"}`, "", false},
+		{"read-relative", "Read", `{"file_path":".claude/skills/review/SKILL.md"}`, "", false},
+	}
+	var blocks []any
+	var results []any
+	for _, call := range calls {
+		blocks = append(blocks, map[string]any{
+			"type": "tool_use", "id": call.id, "name": call.tool, "input": json.RawMessage(call.input),
+		})
+		results = append(results, map[string]any{
+			"type": "tool_result", "tool_use_id": call.id, "is_error": call.failed,
+			"content": "---\nname: review\n---\nPrivate skill instructions " + secret,
+		})
+	}
+	resultLine, err := json.Marshal(map[string]any{
+		"type": "user", "sessionId": sessionID, "timestamp": resultAt,
+		"message": map[string]any{"role": "user", "content": results},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A native call in an earlier fragment must survive coalescing with the terminal fragment.
+	lines := []string{
+		buildHookUserJSONLAt(sessionID, "load review", promptAt),
+		buildHookAssistantLineAt(sessionID, "req_a", "", promptAt, blocks[:1], 0),
+		buildHookAssistantLineAt(sessionID, "req_a", "tool_use", callAt, blocks[1:], 7),
+	}
+	lines = append(lines, string(resultLine), buildHookAssistantJSONLAt(sessionID, "req_b", "end_turn", "done", 5, replyAt))
+	jsonl := strings.Join(lines, "\n") + "\n"
+
+	type testCase struct {
+		source string
+		mode   agento11y.ContentCaptureMode
+	}
+	var tests []testCase
+	for _, source := range []string{"parent", "background", "nested"} {
+		for _, mode := range []agento11y.ContentCaptureMode{
+			agento11y.ContentCaptureModeMetadataOnly,
+			agento11y.ContentCaptureModeNoToolContent,
+			agento11y.ContentCaptureModeFull,
+			agento11y.ContentCaptureModeFullWithMetadataSpans,
+		} {
+			tests = append(tests, testCase{source, mode})
+		}
+	}
+	for _, tt := range tests {
+		t.Run(tt.source+"/"+tt.mode.String(), func(t *testing.T) {
+			mode := tt.mode
+			dir := t.TempDir()
+			path := filepath.Join(dir, sessionID+".jsonl")
+			envconfig.PinAliasEnvBlank(t)
+			t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+			t.Setenv("AGENTO11Y_CONTENT_CAPTURE_MODE", mode.String())
+			server := httptest.NewServer(http.HandlerFunc(acceptGenerationExport))
+			defer server.Close()
+			setHookExportEnv(t, server.URL)
+			targetPath := path
+			parentSize := int64(len(jsonl))
+			event := "Stop"
+			if tt.source != "parent" {
+				event = "SessionEnd"
+				subDir := filepath.Join(dir, sessionID, "subagents")
+				agentID := "skillagent"
+				spawn := func(id string, background bool) string {
+					return strings.Join([]string{
+						buildHookUserJSONL(sessionID, "delegate review"),
+						buildHookAssistantLineAt(sessionID, "req-spawn-"+id, "tool_use", callAt, []any{map[string]any{
+							"type": "tool_use", "id": "spawn-" + id, "name": "Agent",
+							"input": map[string]any{"subagent_type": "general-purpose", "run_in_background": background},
+						}}, 7),
+						buildHookToolResultJSONL(sessionID, "spawn-"+id, "agentId: "+id+"\nTranscript dir: "+subDir),
+						buildHookAssistantJSONL(sessionID, "req-spawn-done-"+id, "end_turn", "delegated", 5),
+					}, "\n") + "\n"
+				}
+				parent := spawn(agentID, true)
+				if tt.source == "nested" {
+					parent = spawn("midagent", false)
+					subDir = filepath.Join(subDir, "agent-midagent", "subagents")
+					if err := os.MkdirAll(subDir, 0o700); err != nil {
+						t.Fatal(err)
+					}
+					midPath := filepath.Join(dir, sessionID, "subagents", "agent-midagent.jsonl")
+					if err := os.WriteFile(midPath, []byte(spawn(agentID, true)), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := os.MkdirAll(subDir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(parent), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				runHookForTest(t, hookInput{HookEventName: "Stop", SessionID: sessionID, TranscriptPath: path})
+				parentSize = int64(len(parent))
+				if got := state.Load(sessionID).Offset; got != parentSize {
+					t.Fatalf("parent offset = %d, want %d before subagent writes", got, parentSize)
+				}
+				targetPath = filepath.Join(subDir, "agent-"+agentID+".jsonl")
+			}
+			if err := os.WriteFile(targetPath, []byte(jsonl), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			recorder := installGlobalSpanRecorder(t)
+			logs := runHookForTest(t, hookInput{HookEventName: event, SessionID: sessionID, TranscriptPath: path})
+			if !strings.Contains(logs, "produced 2 generations") {
+				t.Fatalf("hook did not produce two generations: %s", logs)
+			}
+			st := state.Load(sessionID)
+			if st.Offset != parentSize {
+				t.Errorf("offset = %d, want %d", st.Offset, parentSize)
+			}
+			if tt.source != "parent" && st.SubagentOffsets["skillagent"] != int64(len(jsonl)) {
+				t.Errorf("subagent offset = %d, want %d", st.SubagentOffsets["skillagent"], len(jsonl))
+			}
+			gens := spansByName(recorder.Ended(), "generateText")
+			tools := spansByName(recorder.Ended(), "execute_tool")
+			if len(gens) != 2 || len(tools) != len(calls) || len(recorder.Ended()) != 2+len(calls) {
+				t.Fatalf("got %d generations, %d tools, %d total spans", len(gens), len(tools), len(recorder.Ended()))
+			}
+			for i, requestID := range []string{"req_a", "req_b"} {
+				wantID := uuid.NewSHA1(uuid.NameSpaceDNS, []byte(sessionID+":"+requestID)).String()
+				if got := spanAttr(gens[i], "agento11y.generation.id"); got != wantID {
+					t.Errorf("generation[%d] ID = %q, want %q", i, got, wantID)
+				}
+			}
+			byID := make(map[string]sdktrace.ReadOnlySpan)
+			for _, s := range tools {
+				id := spanAttr(s, "gen_ai.tool.call.id")
+				if byID[id] != nil {
+					t.Fatalf("duplicate tool span for %q", id)
+				}
+				byID[id] = s
+			}
+			for _, call := range calls {
+				s := byID[call.id]
+				if s == nil {
+					t.Errorf("missing span for call %q", call.id)
+					continue
+				}
+				wantName := "execute_tool " + call.tool
+				if call.skill != "" {
+					wantName += " " + call.skill
+				}
+				if s.Name() != wantName || spanAttr(s, "gen_ai.skill.name") != call.skill {
+					t.Errorf("call %q: name=%q skill=%q, want %q / %q", call.id, s.Name(), spanAttr(s, "gen_ai.skill.name"), wantName, call.skill)
+				}
+				if spanAttr(s, "gen_ai.tool.name") != call.tool || spanAttr(s, "gen_ai.tool.type") != "function" || spanAttr(s, "gen_ai.operation.name") != "execute_tool" || spanAttr(s, "gen_ai.conversation.id") != sessionID {
+					t.Errorf("call %q: tool identity changed", call.id)
+				}
+				if s.SpanContext().TraceID() != gens[0].SpanContext().TraceID() || s.Parent().SpanID() != gens[0].SpanContext().SpanID() {
+					t.Errorf("call %q: tool span is not a child of its generation", call.id)
+				}
+				start, _ := time.Parse(time.RFC3339Nano, callAt)
+				end, _ := time.Parse(time.RFC3339Nano, resultAt)
+				if tt.source != "parent" {
+					// Subagent tool-result timestamps are not propagated to the emitter.
+					end = start
+				}
+				if !s.StartTime().Equal(start) || !s.EndTime().Equal(end) {
+					t.Errorf("call %q: changed span window %v to %v", call.id, s.StartTime(), s.EndTime())
+				}
+				if (s.Status().Code == codes.Error) != call.failed {
+					t.Errorf("call %q: error status=%v, failed=%v", call.id, s.Status().Code, call.failed)
+				}
+				args := spanAttr(s, "gen_ai.tool.call.arguments")
+				result := spanAttr(s, "gen_ai.tool.call.result")
+				if mode == agento11y.ContentCaptureModeFull {
+					if args == "" || result == "" {
+						t.Errorf("call %q: full mode omitted tool content", call.id)
+					}
+				} else if args != "" || result != "" {
+					t.Errorf("call %q: tool content escaped capture mode", call.id)
+				}
+				for _, key := range []string{"gen_ai.skill.description", "gen_ai.skill.source.uri", "gen_ai.skill.resource.name", "process.executable.name", "process.executable.path", "agento11y.skill.name"} {
+					if spanAttr(s, key) != "" {
+						t.Errorf("call %q: unexpected attribute %s", call.id, key)
+					}
+				}
+				if strings.Contains(s.Name(), secret) {
+					t.Errorf("call %q: secret escaped into span name", call.id)
+				}
+				for _, attr := range s.Attributes() {
+					if strings.Contains(attr.Value.Emit(), secret) {
+						t.Errorf("call %q: secret escaped into attribute %s", call.id, attr.Key)
+					}
+				}
+			}
+		})
+	}
+}
+
 // installGlobalSpanRecorder records the spans Hook produces. Hook builds its own
 // client and only sets a tracer when an OTLP endpoint is configured, so with the
 // endpoint blank the SDK falls back to the global provider.
@@ -1393,7 +1607,7 @@ func TestEmitToolSpans(t *testing.T) {
 				results = map[string]*agento11y.ToolResult{}
 			}
 
-			emitToolSpans(context.Background(), client, tt.gen, results, tt.resultAt)
+			emitToolSpans(context.Background(), client, tt.gen, results, tt.resultAt, nil)
 			_ = client.Shutdown(context.Background())
 
 			toolSpans := spansByName(recorder.Ended(), "execute_tool")
@@ -1459,7 +1673,7 @@ func TestEmitToolSpans_ErrorStatus(t *testing.T) {
 		"tc_err": {ToolCallID: "tc_err", Content: "denied", IsError: true},
 	}
 
-	emitToolSpans(context.Background(), client, gen, results, nil)
+	emitToolSpans(context.Background(), client, gen, results, nil, nil)
 	_ = client.Shutdown(context.Background())
 
 	spans := spansByName(recorder.Ended(), "execute_tool")

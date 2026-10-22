@@ -437,6 +437,12 @@ For direct OTel export, the SDK upgrades `full_with_metadata_spans` to `full`, s
 
 Capture modes choose which fields ship. By default, every plugin redacts known secret formats from captured content, but redaction does not guarantee that shipped content is safe. Ask before enabling `full`, especially on shared machines. Hosts can omit or truncate fields.
 
+Live skill-load detection covers native tools in [Claude Code](https://github.com/grafana/agento11y/tree/main/plugins/claude-code#3-verify) and [OpenCode](https://github.com/grafana/agento11y/tree/main/plugins/opencode#3-verify), and catalog-matched instruction reads in [Pi](https://github.com/grafana/agento11y/tree/main/plugins/pi#3-verify).
+Recognized attempts add `gen_ai.skill.name` to existing tool-execution spans, including failures. They do not prove successful instruction loading or explain later actions.
+Validated names remain in reduced modes; secret-like names are omitted. Detection adds no descriptions, paths, URIs, or metric labels and changes no payload policy.
+Detection does not cover other hosts, history import, direct `/skill` prompt insertion, resource reads, scripts, or attribution of later activity.
+Skill visibility requires retained tool and generation spans in Tempo plus deployed Sigil consumer support; a conversation alone is insufficient.
+
 ### Local mode
 
 `agento11y <agent> --local`, **Local only**, or **Local web UI = Yes** routes launcher runs and agento11y hooks through the local daemon. The daemon stores full generation content in its JSONL store. It forwards full content only when `AGENTO11Y_CONTENT_CAPTURE_MODE=full`; every other selected mode becomes `metadata_only` for Cloud.

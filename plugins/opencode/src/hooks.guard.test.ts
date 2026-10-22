@@ -10,6 +10,8 @@ import {
   _setGuardToastDelayMs,
   type Agento11yHooks,
   createAgento11yHooks,
+  drainActiveToolExecutions,
+  type ToolExecutionRecord,
 } from "./hooks.js";
 import {
   emitMessageUpdated,
@@ -194,6 +196,95 @@ describe("opencode guards", () => {
     });
 
     await emitServerInstanceDisposed(hooks);
+  });
+
+  it.each([
+    "after",
+    "drain",
+    "late mutation",
+    "nonmatch",
+  ])("detects effective skill identity after a guard transform: %s", async (completion) => {
+    const hookServer = await startHookServer({
+      action: "allow",
+      evaluations: [],
+      transformed_input: {
+        output: [
+          {
+            role: "assistant",
+            parts: [
+              {
+                kind: "tool_call",
+                tool_call: {
+                  id: "call-1",
+                  name: "skill",
+                  input_json: base64Json({ name: "team:guard" }),
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    servers.push(hookServer.server);
+    const hooks = await createAgento11yHooks(
+      { ...config(hookServer.baseUrl), contentCapture: "metadata_only" },
+      { session: { message: vi.fn() } } as any,
+    );
+    if (!hooks) throw new Error("expected hooks");
+    try {
+      const call = { sessionID: "s1", callID: "call-1", tool: "skill" };
+      const args = { name: "old", path: "/private/SKILL.md" };
+      await hooks.toolExecuteBefore(call, { args });
+      expect(args).toEqual({ name: "team:guard" });
+      if (completion === "late mutation") args.name = "team:late";
+      if (completion === "nonmatch") args.name = "glc_abcdefghijklmnopqrstuv";
+      let record: ToolExecutionRecord | undefined;
+      if (completion === "after") {
+        hooks.toolExecuteAfter(
+          { ...call, args },
+          { title: "", output: "", metadata: {} },
+        );
+        record = _peekToolExecutionState().completed[0];
+      } else {
+        [record] = drainActiveToolExecutions("s1");
+        expect(record?.isError).toBe(true);
+      }
+      expect(record?.skillName).toBe(
+        completion === "nonmatch"
+          ? null
+          : completion === "late mutation"
+            ? "team:late"
+            : "team:guard",
+      );
+    } finally {
+      await hooks.dispose();
+    }
+  });
+
+  it("leaves no skill record to drain when the guard deletes the call", async () => {
+    const hookServer = await startHookServer({
+      action: "deny",
+      reason: "blocked",
+      evaluations: [],
+    });
+    servers.push(hookServer.server);
+    const hooks = await createAgento11yHooks(
+      config(hookServer.baseUrl),
+      {} as any,
+    );
+    if (!hooks) throw new Error("expected hooks");
+    try {
+      await expect(
+        hooks.toolExecuteBefore(
+          { sessionID: "s1", callID: "call-1", tool: "skill" },
+          { args: { name: "review" } },
+        ),
+      ).rejects.toThrow("blocked");
+      expect(drainActiveToolExecutions("s1")).toEqual([]);
+      expect(_peekToolExecutionState().completed).toEqual([]);
+    } finally {
+      await hooks.dispose();
+    }
   });
 
   it("rewrites the args opencode runs the tool with, and exports those", async () => {

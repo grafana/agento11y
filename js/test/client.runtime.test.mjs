@@ -697,6 +697,74 @@ test('built-in none exporter records generations without sending', async () => {
   }
 });
 
+test('no-op tracing omits generation correlation IDs from snapshots and exports', async () => {
+  const exporter = new MockGenerationExporter();
+  const client = newClient(exporter, { batchSize: 10, flushIntervalMs: 60_000 });
+  try {
+    const generation = client.startGeneration(seedGeneration('noop'));
+    const tool = generation.startToolExecution({ toolName: 'weather' });
+    tool.end();
+    generation.end();
+    assert.equal(generation.getError(), undefined);
+    assert.equal(tool.getError(), undefined);
+    await client.flush();
+    for (const record of [client.debugSnapshot().generations[0], exporter.requests[0].generations[0]]) {
+      assert.equal(record.traceId, undefined);
+      assert.equal(record.spanId, undefined);
+    }
+  } finally {
+    await client.shutdown();
+  }
+});
+
+test('bound tools share client empty-name no-op and shutdown checks', async () => {
+  const client = newClient(new MockGenerationExporter(), { batchSize: 10, flushIntervalMs: 60_000 });
+  const generation = client.startGeneration(seedGeneration('noop-tool'));
+  try {
+    for (const toolName of ['', ' \t\n ']) {
+      for (const create of [
+        () => client.startToolExecution({ toolName }),
+        () => generation.startToolExecution({ toolName }),
+      ]) {
+        const tool = create();
+        tool.setResult({ arguments: { ignored: true }, result: 'ignored' });
+        tool.setCallError(new Error('ignored'));
+        tool.end();
+        tool.end();
+        assert.equal(tool.getError(), undefined);
+      }
+    }
+    assert.equal(client.debugSnapshot().toolExecutions.length, 0);
+    generation.end();
+    const shutdown = client.shutdown();
+    for (const toolName of ['', 'weather']) {
+      assert.throws(() => client.startToolExecution({ toolName }), /client is shutdown/);
+      assert.throws(() => generation.startToolExecution({ toolName }), /client is shutdown/);
+    }
+    await shutdown;
+    assert.throws(() => generation.startToolExecution({ toolName: 'weather' }), /client is shutdown/);
+  } finally {
+    generation.end();
+    await client.shutdown();
+  }
+});
+
+test('bound tools retain client-level result validation and idempotent finalization', async () => {
+  const client = newClient(new MockGenerationExporter(), { batchSize: 10, flushIntervalMs: 60_000 });
+  try {
+    const generation = client.startGeneration(seedGeneration('invalid-tool'));
+    const tool = generation.startToolExecution({ toolName: 'weather', startedAt: new Date('2026-01-02') });
+    tool.setResult({ completedAt: new Date('2026-01-01') });
+    tool.end();
+    tool.end();
+    assert.match(tool.getError()?.message ?? '', /completedAt/);
+    assert.equal(client.debugSnapshot().toolExecutions.length, 0);
+    generation.end();
+  } finally {
+    await client.shutdown();
+  }
+});
+
 test('embedding recorder does not enqueue generation exports', async () => {
   const exporter = new MockGenerationExporter();
   const client = newClient(exporter, {

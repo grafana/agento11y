@@ -174,13 +174,17 @@ Exits: `0` for completed allow, including warnings or transforms; `1` for comple
 
 ## Content capture
 
-Coding-agent plugins default to `metadata_only`: only model, tokens, tool names, timing, and cost are sent. Prompts, responses, and tool I/O stay on the local machine. To opt into sending content, set `AGENTO11Y_CONTENT_CAPTURE_MODE` in `~/.config/agento11y/config.env`.
+Coding-agent plugins default to `metadata_only`: model, tokens, tool names, recognized skill names, timing, and cost are sent. Prompts, responses, and tool I/O stay local unless guards are enabled. Guards send evaluated messages and tool arguments to `AGENTO11Y_ENDPOINT` in every capture mode. To opt into captured content, set `AGENTO11Y_CONTENT_CAPTURE_MODE` in `~/.config/agento11y/config.env`.
 
 Accepted values depend on the plugin surface:
 
 - Claude Code, Codex, Copilot, Cursor, Vibe, Kiro (shared `agento11y` binary), OpenCode (`@grafana/agento11y-opencode`), and Pi (`@grafana/agento11y-pi`): `full`, `no_tool_content`, `metadata_only`, `full_with_metadata_spans`. `default` is accepted as an alias for `metadata_only`.
 
 Unknown values fall back to `metadata_only` with a warning. Capture modes choose which fields ship, not whether the shipped fields are scrubbed.
+
+Live skill-load detection covers native tools in [Claude Code](https://github.com/grafana/agento11y/tree/main/plugins/claude-code#3-verify) and [OpenCode](https://github.com/grafana/agento11y/tree/main/plugins/opencode#3-verify), and catalog-matched instruction reads in [Pi](https://github.com/grafana/agento11y/tree/main/plugins/pi#3-verify). Recognized attempts add `gen_ai.skill.name` to existing tool-execution spans, including failures. They do not prove successful instruction loading or explain later actions. Validated names remain in reduced modes; secret-like names are omitted. Detection adds no descriptions, paths, URIs, or metric labels and changes no payload policy.
+
+Detection does not cover other hosts, history import, direct `/skill` prompt insertion, resource reads, scripts, or attribution of later activity. Skill visibility requires retained tool and generation spans in Tempo plus deployed Sigil consumer support; a conversation alone is insufficient.
 
 When a plugin ships content, it redacts known secret formats first, using the same pattern table the SDKs use. This covers user prompts, system prompts, assistant text, thinking, conversation titles, error messages, tool arguments, and tool results, on the generation and on the tool-execution span. Set `AGENTO11Y_REDACT_INPUT_MESSAGES=false` to send prompts without redaction; everything else stays redacted. Prompts, system prompts and tool payloads also get the key/value heuristics (`PASSWORD=…`), which prose fields do not, so a prompt containing `sort key: name` comes out with the word after the colon replaced. Treat content capture as opt-in for shared/production machines.
 
@@ -405,7 +409,7 @@ Set Go `ToolExecutionStart.ExecutionKind`, Python `ToolExecutionStart.execution_
 Go `otelgenai.Invocation` uses `ExecutionKind`. Java uses `setExecutionKind(...)`; .NET uses `ExecutionKind`.
 Do not change `ToolType`; it still describes categories such as `function` or `extension`.
 Unset or unknown execution kinds stay generic and omit skill and process attributes, even when those fields are supplied.
-There is no automatic skill detection or inference from tool names, arguments, paths, or results.
+Core SDKs do not detect skills or infer execution kinds from tool names, arguments, paths, or results. Coding-agent plugins have the limited live detection described in Path A.
 Generic convenience loops remain generic and infer no exit codes.
 
 - All three execution kinds accept skill name, description, and source URI (`gen_ai.skill.name`, `gen_ai.skill.description`, `gen_ai.skill.source.uri`).

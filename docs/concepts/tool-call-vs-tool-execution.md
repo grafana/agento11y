@@ -96,7 +96,9 @@ try (ToolExecutionRecorder rec = client.startToolExecution(
 }
 ```
 
-This allows Agent Observability to correlate the model's request with your execution timing.
+This allows Agent Observability to correlate the model's request with your execution timing. `toolCallId` does not select the execution span's parent.
+
+In JS/TS, `GenerationRecorder.startToolExecution(...)` explicitly parents the tool span to that generation across `await`, without a global context manager. It does not change active context or inherit the generation's capture settings, identity, or request model. Set those tool options explicitly when they must match the generation, and call the returned tool recorder's `end()`. The client-level `startToolExecution(...)` still exists and uses the active OpenTelemetry context. See the [TypeScript example](../../js/README.md#tool-execution-example).
 
 ## Tracing skill loads, resource reads, and commands
 

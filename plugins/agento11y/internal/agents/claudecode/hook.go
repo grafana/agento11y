@@ -18,6 +18,7 @@ import (
 	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/mapper"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/skilldetect"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/state"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/subagent"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/transcript"
@@ -211,6 +212,9 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 		r = redact.New()
 	}
 
+	// Mapping can redact or truncate arguments. Detect structural identities
+	// from the settled transcript, independent of content capture mode.
+	skillNames := buildSkillNameMap(lines)
 	opts := mapper.Options{
 		SessionID:           input.SessionID,
 		Titles:              titles,
@@ -235,7 +239,7 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 		opts.SuppressSyntheticSubagentToolCallIDs = subagent.SyntheticToolCallIDs(lines, subagent.RefsForFiles(subFiles))
 		parentGens, toolResultAt = mapper.Process(lines, &st, opts, r)
 	}
-	subGens := liveSubagentGens(input, lines, parentGens, subFiles, &st, opts, r, logger)
+	subGens := liveSubagentGens(input, lines, parentGens, subFiles, &st, opts, r, skillNames, logger)
 	gens := make([]agento11y.Generation, 0, len(parentGens)+len(subGens))
 	gens = append(gens, parentGens...)
 	gens = append(gens, subGens...)
@@ -276,7 +280,7 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 
 	for _, gen := range gens {
 		if err := emit.Record(hookCtx, client, generationStart(gen), gen, nil, func(genCtx context.Context) {
-			emitToolSpans(genCtx, client, gen, toolResults, toolResultAt)
+			emitToolSpans(genCtx, client, gen, toolResults, toolResultAt, skillNames)
 		}); err != nil {
 			logger.Printf("enqueue: %v", err)
 			if protocol == agento11y.GenerationExportProtocolOTel {
@@ -508,6 +512,28 @@ func generationStart(gen agento11y.Generation) agento11y.GenerationStart {
 	}
 }
 
+func buildSkillNameMap(lines []transcript.Line) map[string]string {
+	names := make(map[string]string)
+	for _, line := range lines {
+		if line.Type != "assistant" {
+			continue
+		}
+		var msg transcript.AssistantMessage
+		if err := json.Unmarshal(line.Message, &msg); err != nil {
+			continue
+		}
+		for _, block := range msg.Content {
+			if block.Type != "tool_use" || block.ID == "" {
+				continue
+			}
+			if name, ok := skilldetect.Detect(block.Name, block.Input); ok {
+				names[block.ID] = name
+			}
+		}
+	}
+	return names
+}
+
 // buildToolResultMap indexes tool results by their call ID across all generations.
 // Tool results appear in the Input of the generation that follows the tool call.
 func buildToolResultMap(gens []agento11y.Generation) map[string]*agento11y.ToolResult {
@@ -551,7 +577,7 @@ func toolSpanWindow(genCompletedAt, resultAt time.Time) (startedAt, completedAt 
 // emitToolSpans creates execute_tool spans for each tool call in the generation
 // output, windowed by toolSpanWindow from the generation's completion and the
 // matching tool_result timestamp in resultAt.
-func emitToolSpans(ctx context.Context, client *agento11y.Client, gen agento11y.Generation, results map[string]*agento11y.ToolResult, resultAt map[string]time.Time) {
+func emitToolSpans(ctx context.Context, client *agento11y.Client, gen agento11y.Generation, results map[string]*agento11y.ToolResult, resultAt map[string]time.Time, skillNames map[string]string) {
 	for _, msg := range gen.Output {
 		for _, part := range msg.Parts {
 			if part.ToolCall == nil {
@@ -569,6 +595,10 @@ func emitToolSpans(ctx context.Context, client *agento11y.Client, gen agento11y.
 				RequestModel:    gen.Model.Name,
 				RequestProvider: gen.Model.Provider,
 				StartedAt:       startedAt,
+			}
+			if name := skillNames[tc.ID]; name != "" && tc.Name == "Skill" {
+				start.ExecutionKind = agento11y.ToolExecutionKindLoadSkill
+				start.SkillName = name
 			}
 			_, toolRec := client.StartToolExecution(ctx, start)
 

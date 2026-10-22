@@ -91,6 +91,12 @@ tail -f ~/.local/state/agento11y/logs/agento11y.log
 
 Common culprits: `agento11y --version` doesn't work (binary not on `PATH`), a missing token, or a token without the `sigil:write` scope.
 
+Live capture recognizes only the native `Skill` tool's `skill` input field. It marks the existing tool-execution span with `gen_ai.skill.name`, including failed attempts. Only calls present in the settled live transcript can be recognized. Reading `SKILL.md` with `Read` never qualifies. A recognized attempt does not prove that instructions loaded successfully or guided later actions.
+
+Validated skill names remain in reduced capture modes, including `metadata_only` and `full_with_metadata_spans`. Detection adds no descriptions, paths, or URIs, changes no payload policy, and adds no metric labels. Names that look like secrets are omitted.
+
+Skill visibility requires retained tool and generation spans in Tempo plus deployed Sigil consumer support. A conversation alone is insufficient. Detection excludes history import, direct `/skill` prompt insertion, resource reads, scripts, and attribution of later activity.
+
 ## Export plugin evals to Experiments
 
 Run `claude plugin eval <plugin> --json results.json --no-publish --keep-temp`,
