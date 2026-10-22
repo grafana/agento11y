@@ -1996,7 +1996,7 @@ function skillProcessAttributes(tool: ToolExecutionStart, includePrivate = false
   }
   if (includePrivate) {
     add('gen_ai.skill.description', tool.skillDescription);
-    const uri = projectSkillSourceURI(tool.skillSourceURI?.trim());
+    const uri = projectSkillSourceURI(tool.skillSourceURI);
     if (uri) {
       attrs['gen_ai.skill.source.uri'] = uri;
     }
@@ -2005,6 +2005,7 @@ function skillProcessAttributes(tool: ToolExecutionStart, includePrivate = false
 }
 
 function projectSkillSourceURI(uri: string | undefined): string | undefined {
+  uri = uri?.replace(/^[\s\u0085]+|[\s\u0085]+$/gu, '');
   if (!uri || /[\s\\]|\p{Cc}|%(?![\da-f]{2})/iu.test(uri)) {
     return undefined;
   }

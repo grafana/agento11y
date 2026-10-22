@@ -7,18 +7,17 @@ import (
 	"fmt"
 	"log"
 	"maps"
-	"net/url"
 	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/grafana/agento11y/go/agento11y/contentcapture"
 	"github.com/grafana/agento11y/go/agento11y/internal/tagattr"
+	"github.com/grafana/agento11y/go/internal/skilluri"
 	"github.com/grafana/agento11y/go/otelgenai"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -2522,56 +2521,13 @@ func toolPrivateSpanAttributes(start ToolExecutionStart, mode ContentCaptureMode
 	if description := strings.TrimSpace(start.SkillDescription); description != "" {
 		attrs = append(attrs, attribute.String("gen_ai.skill.description", description))
 	}
-	if source := scrubToolSourceURI(start.SkillSourceURI); source != "" {
+	if source := skilluri.Scrub(start.SkillSourceURI); source != "" {
 		attrs = append(attrs, attribute.String("gen_ai.skill.source.uri", source))
 	}
 	if path := strings.TrimSpace(start.ProcessExecutablePath); start.ExecutionKind == ToolExecutionKindCommand && path != "" {
 		attrs = append(attrs, attribute.String("process.executable.path", path))
 	}
 	return attrs
-}
-
-func scrubToolSourceURI(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if strings.ContainsFunc(raw, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
-		return ""
-	}
-	// net/url does not validate escapes in the query, even though it is discarded below.
-	if _, err := url.PathUnescape(raw); err != nil {
-		return ""
-	}
-	uri, err := url.Parse(raw)
-	if err != nil || !uri.IsAbs() || uri.Opaque != "" {
-		return ""
-	}
-	if strings.EqualFold(uri.Scheme, "file") {
-		if !strings.HasPrefix(uri.Path, "/") {
-			return ""
-		}
-		uri.Scheme = "file"
-		uri.OmitHost = false
-	} else if uri.Host == "" {
-		return ""
-	}
-	if uri.Host != "" {
-		if uri.Hostname() == "" || strings.HasSuffix(uri.Host, ":") {
-			return ""
-		}
-		if port := uri.Port(); port != "" {
-			n, err := strconv.Atoi(port)
-			if err != nil || n < 0 || n > 65535 {
-				return ""
-			}
-		}
-	} else if uri.User != nil {
-		return ""
-	}
-	uri.User = nil
-	uri.RawQuery = ""
-	uri.ForceQuery = false
-	uri.Fragment = ""
-	uri.RawFragment = ""
-	return uri.String()
 }
 
 func toolSpanAttributes(start ToolExecutionStart) []attribute.KeyValue {

@@ -2310,13 +2310,20 @@ def _sanitize_skill_source_uri(value: str) -> str:
     # Validate before parsing or scrubbing can hide malformed input.
     if (
         not value
+        or "\\" in value
         or any(char.isspace() or ord(char) < 32 or 127 <= ord(char) <= 159 for char in value)
         or re.search(r"%(?![0-9A-Fa-f]{2})", value)
     ):
         return ""
     try:
         uri = urllib_parse.urlsplit(value)
-        if not uri.scheme:
+        if not uri.scheme or uri.netloc.endswith(":") or uri.netloc.count("@") > 1:
+            return ""
+        if uri.netloc and not uri.hostname:
+            return ""
+        authority = uri.netloc.rsplit("@", 1)[-1]
+        host = urllib_parse.unquote(uri.hostname or "")
+        if re.search(r"[/\\?#@\[\]\s\x00-\x1f\x7f-\x9f]", host) or (":" in host and not authority.startswith("[")):
             return ""
         if uri.scheme == "file":
             if not uri.path.startswith("/"):
@@ -2325,7 +2332,7 @@ def _sanitize_skill_source_uri(value: str) -> str:
             return ""
         # Accessing port validates malformed/non-numeric ports too.
         _ = uri.port
-        return urllib_parse.urlunsplit((uri.scheme, uri.netloc.rsplit("@", 1)[-1], uri.path, "", ""))
+        return urllib_parse.urlunsplit((uri.scheme, authority, uri.path, "", ""))
     except ValueError:
         return ""
 

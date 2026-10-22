@@ -119,6 +119,7 @@ public final class Agento11yClient implements AutoCloseable {
             65536.0, 262144.0, 1048576.0, 4194304.0, 16777216.0, 67108864.0);
 
     private static final Pattern STATUS_CODE_PATTERN = Pattern.compile("\\b([1-5][0-9][0-9])\\b");
+    private static final Pattern SKILL_SOURCE_URI_PADDING_PATTERN = Pattern.compile("^\\p{IsWhite_Space}+|\\p{IsWhite_Space}+$");
     private static final String INSTRUMENTATION_NAME = "github.com/grafana/agento11y/sdks/java";
     static final String DEFAULT_EMBEDDING_OPERATION_NAME = "embeddings";
     static final String TOOL_EXECUTION_OPERATION_NAME = "execute_tool";
@@ -1174,7 +1175,7 @@ public final class Agento11yClient implements AutoCloseable {
     }
 
     private static String scrubSkillSourceURI(String source) {
-        source = source.trim();
+        source = SKILL_SOURCE_URI_PADDING_PATTERN.matcher(source).replaceAll("");
         if (source.codePoints().anyMatch(c -> Character.isWhitespace(c)
                 || Character.isSpaceChar(c) || Character.isISOControl(c))) {
             return "";

@@ -2,11 +2,9 @@ package otelgenai
 
 import (
 	"fmt"
-	"net/url"
-	"strconv"
 	"strings"
-	"unicode"
 
+	"github.com/grafana/agento11y/go/internal/skilluri"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 )
@@ -89,57 +87,13 @@ func (inv *Invocation) toolPrivateAttributes() []attribute.KeyValue {
 		return nil
 	}
 	attrs := appendTrimmedAttribute(nil, genAISkillDescriptionKey, inv.SkillDescription)
-	if uri := scrubSkillSourceURI(inv.SkillSourceURI); uri != "" {
+	if uri := skilluri.Scrub(inv.SkillSourceURI); uri != "" {
 		attrs = append(attrs, genAISkillSourceURIKey.String(uri))
 	}
 	if executionKind == ToolExecutionKindCommand {
 		attrs = appendTrimmedAttribute(attrs, processExecutablePathKey, inv.ProcessExecutablePath)
 	}
 	return attrs
-}
-
-func scrubSkillSourceURI(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if strings.ContainsFunc(raw, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
-		return ""
-	}
-	// net/url does not validate escapes in the query, even though it is discarded below.
-	if _, err := url.PathUnescape(raw); err != nil {
-		return ""
-	}
-	u, err := url.Parse(raw)
-	if err != nil || !u.IsAbs() || u.Opaque != "" {
-		return ""
-	}
-	// A source must be an absolute location, not just a scheme or relative path.
-	if strings.EqualFold(u.Scheme, "file") {
-		if !strings.HasPrefix(u.Path, "/") {
-			return ""
-		}
-		u.Scheme = "file"
-		u.OmitHost = false
-	} else if u.Host == "" {
-		return ""
-	}
-	if u.Host != "" {
-		if u.Hostname() == "" || strings.HasSuffix(u.Host, ":") {
-			return ""
-		}
-		if port := u.Port(); port != "" {
-			n, err := strconv.Atoi(port)
-			if err != nil || n < 0 || n > 65535 {
-				return ""
-			}
-		}
-	} else if u.User != nil {
-		return ""
-	}
-	u.User = nil
-	u.RawQuery = ""
-	u.ForceQuery = false
-	u.Fragment = ""
-	u.RawFragment = ""
-	return u.String()
 }
 
 type toolIdentity struct {
