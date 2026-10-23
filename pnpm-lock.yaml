@@ -15,7 +15,7 @@ overrides:
   ws: 8.21.0
   '@tootallnate/once': 2.0.1
   fast-xml-builder: 1.1.7
-  '@hono/node-server': 2.0.10
+  '@hono/node-server': 2.1.5
   ip-address: 10.7.4
   qs: 6.16.0
   form-data@<2.5.6: 2.5.6
@@ -1136,8 +1136,8 @@ packages:
     engines: {node: '>=6'}
     hasBin: true
 
-  '@hono/node-server@2.0.10':
-    resolution: {integrity: sha512-ZcnNVhKTmyDJeg0UlnZjvM73JBsTAuhrH/J4fjwGOw59PwOW51r4J+p6CsKZWXdKSme4MFqU62CZMOsdDrU4CA==}
+  '@hono/node-server@2.1.5':
+    resolution: {integrity: sha512-MgP/I06GdvsilDspMk/qmRzpk8LOUStP6jFAbSRi40W09DhoyUn+Mj7eyKICPqeYKybOjVFLVIAQzvu1bfIa7Q==}
     engines: {node: '>=20'}
     peerDependencies:
       hono: 4.13.11
@@ -6299,7 +6299,7 @@ snapshots:
       protobufjs: 7.6.5
       yargs: 17.7.2
 
-  '@hono/node-server@2.0.10(hono@4.13.11)':
+  '@hono/node-server@2.1.5(hono@4.13.11)':
     dependencies:
       hono: 4.13.11
 
@@ -6590,7 +6590,7 @@ snapshots:
 
   '@modelcontextprotocol/sdk@1.32.1(@cfworker/json-schema@4.1.1)(zod@4.3.6)':
     dependencies:
-      '@hono/node-server': 2.0.10(hono@4.13.11)
+      '@hono/node-server': 2.1.5(hono@4.13.11)
       ajv: 8.18.0
       ajv-formats: 3.0.1(ajv@8.18.0)
       content-type: 1.0.5
@@ -6614,7 +6614,7 @@ snapshots:
 
   '@modelcontextprotocol/sdk@1.32.1(@cfworker/json-schema@4.1.1)(zod@4.6.7)':
     dependencies:
-      '@hono/node-server': 2.0.10(hono@4.13.11)
+      '@hono/node-server': 2.1.5(hono@4.13.11)
       ajv: 8.18.0
       ajv-formats: 3.0.1(ajv@8.18.0)
       content-type: 1.0.5
