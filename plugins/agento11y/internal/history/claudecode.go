@@ -434,10 +434,7 @@ func claudeTurnIndexes(coalesced []transcript.Line, gens []agento11y.Generation)
 		if err := json.Unmarshal(line.Message, &msg); err != nil || msg.Usage.OutputTokens <= 0 {
 			continue
 		}
-		groups := line.LegacyGroups
-		if groups < 1 {
-			groups = 1
-		}
+		groups := max(line.LegacyGroups, 1)
 		slots = append(slots, slot{requestID: line.RequestID, groups: groups})
 	}
 
