@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -172,7 +171,7 @@ func TestHookEventRouting(t *testing.T) {
 			assertState: func(t *testing.T) {
 				t.Helper()
 				st := state.Load("unknown-route")
-				if st.Offset != 0 || st.Title != "" || st.AITitle != "" || st.CustomTitle != "" || st.Model != "" || len(st.ExportedSubagents) != 0 {
+				if st.Offset != 0 || st.Title != "" || st.AITitle != "" || st.CustomTitle != "" || st.Model != "" || len(st.SubagentOffsets) != 0 {
 					t.Fatalf("state = %#v, want zero value", st)
 				}
 			},
@@ -2063,8 +2062,8 @@ func TestHook_ExportsSubagentTranscriptUsage(t *testing.T) {
 	}
 
 	st := state.Load(sessionID)
-	if !slices.Contains(st.ExportedSubagents, agentID) {
-		t.Fatalf("ExportedSubagents = %v, want to include %s", st.ExportedSubagents, agentID)
+	if st.SubagentOffsets[agentID] == 0 {
+		t.Fatalf("SubagentOffsets[%s] = 0, want the exported byte offset", agentID)
 	}
 
 	// A later Stop that only wraps up a new parent turn must not re-export the
@@ -2124,6 +2123,19 @@ func agentNames(gens []exportedGeneration) []string {
 }
 
 func buildHookSidechainAssistantJSONL(sessionID, requestID, agentID, attribution, text string, outputTokens int64) string {
+	return buildHookSidechainAssistantLine(sessionID, requestID, agentID, attribution, "",
+		[]any{map[string]any{"type": "text", "text": text}}, outputTokens)
+}
+
+func buildHookSidechainAssistantLine(sessionID, requestID, agentID, attribution, stopReason string, content []any, outputTokens int64) string {
+	msg := map[string]any{
+		"model":   "claude-opus-4",
+		"usage":   map[string]any{"input_tokens": 80, "output_tokens": outputTokens},
+		"content": content,
+	}
+	if stopReason != "" {
+		msg["stop_reason"] = stopReason
+	}
 	line := map[string]any{
 		"type":             "assistant",
 		"sessionId":        sessionID,
@@ -2133,14 +2145,257 @@ func buildHookSidechainAssistantJSONL(sessionID, requestID, agentID, attribution
 		"timestamp":        hookFixtureTimestamp,
 		"version":          "1.0.0",
 		"requestId":        requestID,
-		"message": map[string]any{
-			"model": "claude-opus-4",
-			"usage": map[string]any{"input_tokens": 80, "output_tokens": outputTokens},
-			"content": []any{
-				map[string]any{"type": "text", "text": text},
-			},
-		},
+		"message":          msg,
 	}
 	data, _ := json.Marshal(line)
 	return string(data)
+}
+
+func startGenerationExportServer(t *testing.T) (url string, exports *[][]exportedGeneration) {
+	t.Helper()
+	var got [][]exportedGeneration
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "read body", http.StatusBadRequest)
+			return
+		}
+		var req struct {
+			Generations []exportedGeneration `json:"generations"`
+		}
+		if err := json.Unmarshal(body, &req); err == nil {
+			got = append(got, req.Generations)
+		}
+		r.Body = io.NopCloser(strings.NewReader(string(body)))
+		acceptGenerationExport(w, r)
+	}))
+	t.Cleanup(server.Close)
+	return server.URL, &got
+}
+
+func subagentExports(gens []exportedGeneration) []exportedGeneration {
+	var out []exportedGeneration
+	for _, g := range gens {
+		if strings.HasPrefix(g.AgentName, "claude-code/") {
+			out = append(out, g)
+		}
+	}
+	return out
+}
+
+// TestHook_ExportsBackgroundSubagentLaterTurns covers a run_in_background
+// Agent call: the parent tool_result arrives immediately, but the sibling
+// transcript keeps growing. The first Stop must not freeze the file as done.
+func TestHook_ExportsBackgroundSubagentLaterTurns(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	envconfig.PinAliasEnvBlank(t)
+	url, exports := startGenerationExportServer(t)
+	setHookExportEnv(t, url)
+	t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "metadata_only")
+
+	sessionID := "bg-session"
+	agentID := "bgagent1"
+	transcriptPath := filepath.Join(dir, sessionID+".jsonl")
+	subDir := filepath.Join(dir, sessionID, "subagents")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	subPath := filepath.Join(subDir, "agent-"+agentID+".jsonl")
+
+	parent := strings.Join([]string{
+		buildHookUserJSONL(sessionID, "research in the background"),
+		buildHookAssistantLineAt(sessionID, "req-parent", "tool_use", hookFixtureTimestamp, []any{map[string]any{
+			"type": "tool_use", "id": "agent_bg", "name": "Agent",
+			"input": map[string]any{"subagent_type": "general-purpose", "run_in_background": true},
+		}}, 7),
+		buildHookToolResultJSONL(sessionID, "agent_bg", "agentId: "+agentID+"\nTranscript dir: "+subDir+"\nstarted"),
+		buildHookAssistantJSONL(sessionID, "req-done", "end_turn", "kicked off", 5),
+	}, "\n") + "\n"
+	if err := os.WriteFile(transcriptPath, []byte(parent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	first := strings.Join([]string{
+		buildHookUserJSONL(sessionID, "look around"),
+		buildHookSidechainAssistantLine(sessionID, "req-side-1", agentID, "general-purpose", "", []any{map[string]any{
+			"type": "tool_use", "id": "tu_read", "name": "Read",
+			"input": map[string]any{"file_path": "x.go"},
+		}}, 12),
+		buildHookToolResultJSONL(sessionID, "tu_read", "package x"),
+	}, "\n") + "\n"
+	if err := os.WriteFile(subPath, []byte(first), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	runHookForTest(t, hookInput{HookEventName: "Stop", SessionID: sessionID, TranscriptPath: transcriptPath})
+	if len(*exports) != 1 {
+		t.Fatalf("first Stop exports = %d, want 1", len(*exports))
+	}
+	firstSubs := subagentExports((*exports)[0])
+	if len(firstSubs) != 1 {
+		t.Fatalf("first Stop subagent gens = %d, want 1; all=%v", len(firstSubs), agentNames((*exports)[0]))
+	}
+	if _, out := firstSubs[0].usageTokens(); out != 12 {
+		t.Fatalf("first turn output tokens = %d, want 12", out)
+	}
+
+	second := buildHookSidechainAssistantJSONL(sessionID, "req-side-2", agentID, "general-purpose", "later findings", 40) + "\n"
+	f, err := os.OpenFile(subPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(second); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	runHookForTest(t, hookInput{HookEventName: "SessionEnd", SessionID: sessionID, TranscriptPath: transcriptPath})
+	if len(*exports) != 2 {
+		t.Fatalf("SessionEnd exports = %d, want 2 total", len(*exports))
+	}
+	later := subagentExports((*exports)[1])
+	if len(later) != 1 {
+		t.Fatalf("SessionEnd subagent gens = %d, want the later turn; all=%v", len(later), agentNames((*exports)[1]))
+	}
+	if _, out := later[0].usageTokens(); out != 40 {
+		t.Fatalf("later turn output tokens = %d, want 40", out)
+	}
+}
+
+// TestHook_ExportsNestedSubagentTranscript covers an Agent call made from
+// inside another subagent. The child's tool_result never appears in the main
+// session transcript, so a parent-only completed-key gate would skip it.
+func TestHook_ExportsNestedSubagentTranscript(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	envconfig.PinAliasEnvBlank(t)
+	url, exports := startGenerationExportServer(t)
+	setHookExportEnv(t, url)
+	t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "metadata_only")
+
+	sessionID := "nest-session"
+	midID := "midagent1"
+	childID := "childagent1"
+	transcriptPath := filepath.Join(dir, sessionID+".jsonl")
+	subDir := filepath.Join(dir, sessionID, "subagents")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	parent := strings.Join([]string{
+		buildHookUserJSONL(sessionID, "delegate"),
+		buildHookAssistantLineAt(sessionID, "req-parent", "tool_use", hookFixtureTimestamp, []any{map[string]any{
+			"type": "tool_use", "id": "agent_mid", "name": "Agent",
+			"input": map[string]any{"subagent_type": "general-purpose"},
+		}}, 7),
+		buildHookToolResultJSONL(sessionID, "agent_mid", "agentId: "+midID+"\nTranscript dir: "+subDir+"\nmid done"),
+		buildHookAssistantJSONL(sessionID, "req-done", "end_turn", "done", 5),
+	}, "\n") + "\n"
+	if err := os.WriteFile(transcriptPath, []byte(parent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mid := strings.Join([]string{
+		buildHookUserJSONL(sessionID, "spawn a child"),
+		buildHookSidechainAssistantLine(sessionID, "req-mid", midID, "general-purpose", "", []any{map[string]any{
+			"type": "tool_use", "id": "agent_child", "name": "Agent",
+			"input": map[string]any{"subagent_type": "explore"},
+		}}, 9),
+		buildHookToolResultJSONL(sessionID, "agent_child", "agentId: "+childID+"\nTranscript dir: "+subDir+"\nchild done"),
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(subDir, "agent-"+midID+".jsonl"), []byte(mid), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	child := strings.Join([]string{
+		buildHookUserJSONL(sessionID, "explore the tree"),
+		buildHookSidechainAssistantJSONL(sessionID, "req-child", childID, "explore", "found it", 33),
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(subDir, "agent-"+childID+".jsonl"), []byte(child), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	logs := runHookForTest(t, hookInput{HookEventName: "Stop", SessionID: sessionID, TranscriptPath: transcriptPath})
+	if len(*exports) != 1 {
+		t.Fatalf("exports = %d, want 1 (logs:\n%s)", len(*exports), logs)
+	}
+	var (
+		midGens   int
+		childGens []exportedGeneration
+	)
+	for _, g := range (*exports)[0] {
+		switch g.AgentName {
+		case "claude-code/general-purpose":
+			midGens++
+		case "claude-code/explore":
+			childGens = append(childGens, g)
+		}
+	}
+	if midGens == 0 {
+		t.Fatalf("missing mid subagent; all=%v", agentNames((*exports)[0]))
+	}
+	if len(childGens) != 1 {
+		t.Fatalf("nested subagent gens = %d, want 1; all=%v", len(childGens), agentNames((*exports)[0]))
+	}
+	if _, out := childGens[0].usageTokens(); out != 33 {
+		t.Fatalf("nested usage output = %d, want 33", out)
+	}
+}
+
+// TestHook_DropsParentSidechainWhenFileExists pins the double-count: Claude
+// Code sometimes leaves a sidechain copy in the parent transcript and also
+// writes the same request to the sibling file.
+func TestHook_DropsParentSidechainWhenFileExists(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	envconfig.PinAliasEnvBlank(t)
+	url, exports := startGenerationExportServer(t)
+	setHookExportEnv(t, url)
+	t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "metadata_only")
+
+	sessionID := "dup-session"
+	agentID := "dupagent1"
+	transcriptPath := filepath.Join(dir, sessionID+".jsonl")
+	subDir := filepath.Join(dir, sessionID, "subagents")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	parent := strings.Join([]string{
+		buildHookUserJSONL(sessionID, "investigate"),
+		buildHookAssistantLineAt(sessionID, "req-parent", "tool_use", hookFixtureTimestamp, []any{map[string]any{
+			"type": "tool_use", "id": "agent_1", "name": "Agent",
+			"input": map[string]any{"subagent_type": "general-purpose"},
+		}}, 7),
+		buildHookSidechainAssistantJSONL(sessionID, "req-side", agentID, "general-purpose", "copied into the parent", 40),
+		buildHookToolResultJSONL(sessionID, "agent_1", "agentId: "+agentID+"\nTranscript dir: "+subDir+"\nfound"),
+		buildHookAssistantJSONL(sessionID, "req-done", "end_turn", "done", 5),
+	}, "\n") + "\n"
+	if err := os.WriteFile(transcriptPath, []byte(parent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sub := strings.Join([]string{
+		buildHookUserJSONL(sessionID, "look around"),
+		buildHookSidechainAssistantJSONL(sessionID, "req-side", agentID, "general-purpose", "copied into the parent", 40),
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(subDir, "agent-"+agentID+".jsonl"), []byte(sub), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	runHookForTest(t, hookInput{HookEventName: "Stop", SessionID: sessionID, TranscriptPath: transcriptPath})
+	if len(*exports) != 1 {
+		t.Fatalf("exports = %d, want 1", len(*exports))
+	}
+	subs := subagentExports((*exports)[0])
+	if len(subs) != 1 {
+		t.Fatalf("subagent gens = %d, want 1 (no parent sidechain copy); all=%v", len(subs), agentNames((*exports)[0]))
+	}
+	if _, out := subs[0].usageTokens(); out != 40 {
+		t.Fatalf("output tokens = %d, want 40 once", out)
+	}
 }

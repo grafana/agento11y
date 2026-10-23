@@ -95,6 +95,53 @@ func TestFinalizeRenamesAndLinks(t *testing.T) {
 	}
 }
 
+func TestDropCoveredSidechain(t *testing.T) {
+	files := []string{"/p/sess/subagents/agent-abc.jsonl"}
+	lines := []transcript.Line{
+		{Type: "user", AgentID: "", IsSidechain: false},
+		{Type: "assistant", AgentID: "abc", IsSidechain: true},
+		{Type: "assistant", AgentID: "abc", IsSidechain: false},
+		{Type: "assistant", AgentID: "other", IsSidechain: true},
+	}
+	got := DropCoveredSidechain(lines, files, "/p/sess.jsonl")
+	if len(got) != 3 {
+		t.Fatalf("len = %d, want 3 (covered sidechain dropped)", len(got))
+	}
+	self := DropCoveredSidechain(lines, files, files[0])
+	if len(self) != 4 {
+		t.Fatalf("self file dropped its own turns: len = %d", len(self))
+	}
+}
+
+func TestBlockingCompletedKeysSkipsBackground(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "agent-abc.jsonl")
+	lines := []transcript.Line{
+		{
+			Type:    "assistant",
+			Message: []byte(`{"content":[{"type":"tool_use","id":"tu_bg","name":"Agent","input":{"run_in_background":true,"subagent_type":"general-purpose"}}]}`),
+		},
+		{
+			Type:    "user",
+			Message: []byte(`{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_bg","content":"agentId: abc\n"}]}`),
+		},
+		{
+			Type:    "assistant",
+			Message: []byte(`{"content":[{"type":"tool_use","id":"tu_block","name":"Agent","input":{"subagent_type":"explore"}}]}`),
+		},
+		{
+			Type:    "user",
+			Message: []byte(`{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_block","content":"agentId: def\n"}]}`),
+		},
+	}
+	got := BlockingCompletedKeys(lines, []string{file, filepath.Join(t.TempDir(), "agent-def.jsonl")})
+	if got["abc"] {
+		t.Fatal("background agent must not look finished")
+	}
+	if !got["def"] {
+		t.Fatal("blocking agent with a tool result must look finished")
+	}
+}
+
 func TestIDsUniqueSuffixesCollisions(t *testing.T) {
 	ids := NewIDs()
 	parent := []agento11y.Generation{{ID: "shared"}}

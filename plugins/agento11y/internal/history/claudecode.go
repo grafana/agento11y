@@ -270,7 +270,7 @@ func (c *claudeImporter) Turns(ctx context.Context, sess SessionPreview) iter.Se
 		processed := make([]claudeProcessedTranscript, 0, 1+len(subagentFiles))
 		ids := subagent.NewIDs()
 		st := &state.Session{}
-		processed = append(processed, claudeProcess(sess, sess.SourcePath, lines, refs, ids, st, titles))
+		processed = append(processed, claudeProcess(sess, sess.SourcePath, lines, refs, subagentFiles, ids, st, titles))
 		for _, subPath := range subagentFiles {
 			if err := ctx.Err(); err != nil {
 				yield(HistoricalGeneration{}, err)
@@ -285,7 +285,7 @@ func (c *claudeImporter) Turns(ctx context.Context, sess SessionPreview) iter.Se
 			// they carry its title. The mapper never takes one from a subagent's
 			// own (sidechain) prompts.
 			sub := *st
-			processed = append(processed, claudeProcess(sess, subPath, subLines, refs, ids, &sub, transcript.Titles{}))
+			processed = append(processed, claudeProcess(sess, subPath, subLines, refs, subagentFiles, ids, &sub, transcript.Titles{}))
 		}
 
 		parents := subagent.ParentMap(claudeTranscripts(processed), refs)
@@ -383,11 +383,11 @@ type claudeProcessedTranscript struct {
 // claudeProcess maps one transcript of the session. st carries the session's
 // title state: the parent transcript fills it from its title lines and first
 // prompt, and each subagent transcript gets a copy.
-func claudeProcess(sess SessionPreview, sourcePath string, lines []transcript.Line, refs subagent.Refs, ids *subagent.IDs, st *state.Session, titles transcript.Titles) claudeProcessedTranscript {
+func claudeProcess(sess SessionPreview, sourcePath string, lines []transcript.Line, refs subagent.Refs, files []string, ids *subagent.IDs, st *state.Session, titles transcript.Titles) claudeProcessedTranscript {
 	// CoalesceSession, not Coalesce: an imported transcript is complete, so the
 	// trailing assistant turn is kept instead of being held back for a next
 	// read that never comes.
-	coalesced := mapper.CoalesceSession(lines)
+	coalesced := subagent.DropCoveredSidechain(mapper.CoalesceSession(lines), files, sourcePath)
 	// The discarded map holds each tool result's arrival time, which the live
 	// hook uses to time separate tool spans. An import emits none: tool activity
 	// travels in the generation's message parts.

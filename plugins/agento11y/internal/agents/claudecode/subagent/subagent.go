@@ -6,6 +6,7 @@ package subagent
 import (
 	"encoding/json"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -128,6 +129,155 @@ func SyntheticToolCallIDs(lines []transcript.Line, refs Refs) map[string]bool {
 	return ids
 }
 
+// DropCoveredSidechain removes sidechain lines whose agent ID has its own
+// sibling transcript. Those turns are mapped from that file; keeping the copy
+// in the parent (or an ancestor) would export the same request twice.
+// selfPath is the file these lines came from and is never treated as covering
+// itself.
+func DropCoveredSidechain(lines []transcript.Line, files []string, selfPath string) []transcript.Line {
+	covered := map[string]bool{}
+	self := filepath.Clean(selfPath)
+	for _, file := range files {
+		if self != "" && filepath.Clean(file) == self {
+			continue
+		}
+		if id := AgentIDFromPath(file); id != "" {
+			covered[id] = true
+		}
+	}
+	if len(covered) == 0 {
+		return lines
+	}
+	out := make([]transcript.Line, 0, len(lines))
+	for _, line := range lines {
+		if line.IsSidechain && covered[line.AgentID] {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+// FilesFromLines returns subagent transcripts named by "Transcript dir:" lines
+// in tool results, so a nested run whose files sit outside the session's
+// default subagents/ directory is still found.
+func FilesFromLines(lines []transcript.Line) []string {
+	seen := map[string]bool{}
+	var out []string
+	eachToolResult(lines, func(_ transcript.UserContentBlock, content string) {
+		dir := TranscriptDirFromToolResult(content)
+		if dir == "" {
+			return
+		}
+		files, err := filesIn(dir)
+		if err != nil {
+			return
+		}
+		for _, file := range files {
+			if seen[file] {
+				continue
+			}
+			seen[file] = true
+			out = append(out, file)
+		}
+	})
+	return out
+}
+
+func filesIn(root string) ([]string, error) {
+	if _, err := os.Stat(root); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var out []string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".jsonl") {
+			return nil
+		}
+		out = append(out, path)
+		return nil
+	})
+	if err != nil && !os.IsNotExist(err) {
+		return out, err
+	}
+	return out, nil
+}
+
+// MergeFiles returns the unique union of path lists, preserving order.
+func MergeFiles(groups ...[]string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, group := range groups {
+		for _, file := range group {
+			file = filepath.Clean(file)
+			if file == "" || seen[file] {
+				continue
+			}
+			seen[file] = true
+			out = append(out, file)
+		}
+	}
+	return out
+}
+
+// BlockingCompletedKeys is [CompletedKeys] minus Agent calls that ran in the
+// background. A background tool_result arrives when the child is spawned, not
+// when its transcript is finished.
+func BlockingCompletedKeys(lines []transcript.Line, files []string) map[string]bool {
+	background := map[string]bool{}
+	for _, line := range lines {
+		if line.Type != "assistant" {
+			continue
+		}
+		var msg transcript.AssistantMessage
+		if err := json.Unmarshal(line.Message, &msg); err != nil {
+			continue
+		}
+		for _, block := range msg.Content {
+			if block.Type == "tool_use" && block.Name == "Agent" && agentRunInBackground(block.Input) {
+				background[block.ID] = true
+			}
+		}
+	}
+	refs := RefsForFiles(files)
+	keys := map[string]bool{}
+	eachToolResult(lines, func(block transcript.UserContentBlock, content string) {
+		if background[block.ToolUseID] {
+			return
+		}
+		for _, agentID := range AgentIDsFromToolResult(content) {
+			if refs.hasAgentID(agentID) {
+				keys[agentID] = true
+			}
+		}
+		dir := TranscriptDirFromToolResult(content)
+		if !refs.hasDir(dir) {
+			return
+		}
+		dir = cleanPath(dir)
+		for _, file := range files {
+			fileDir := filepath.Clean(filepath.Dir(file))
+			if fileDir == dir || strings.HasPrefix(fileDir, dir+string(filepath.Separator)) {
+				keys[FileKey(file)] = true
+			}
+		}
+	})
+	return keys
+}
+
+func agentRunInBackground(raw json.RawMessage) bool {
+	var parsed struct {
+		RunInBackground bool `json:"run_in_background"`
+	}
+	_ = json.Unmarshal(raw, &parsed)
+	return parsed.RunInBackground
+}
+
 // CompletedKeys returns the [FileKey] of every subagent file whose Agent tool
 // result is present in lines. Those runs are finished: Claude Code writes the
 // result only after the subagent transcript is complete.
@@ -218,6 +368,43 @@ func ParentMap(processed []Transcript, refs Refs) Parents {
 		})
 	}
 	return parents
+}
+
+// WithFallback fills missing parent links and names from an earlier hook
+// invocation's remembered maps.
+func (p Parents) WithFallback(parentByID, nameByID map[string]string) Parents {
+	if p.byDir == nil {
+		p.byDir = map[string]string{}
+	}
+	if p.byAgentID == nil {
+		p.byAgentID = map[string]string{}
+	}
+	if p.agentNameByAgentID == nil {
+		p.agentNameByAgentID = map[string]string{}
+	}
+	for id, parentID := range parentByID {
+		if id == "" || parentID == "" || p.byAgentID[id] != "" {
+			continue
+		}
+		p.byAgentID[id] = parentID
+	}
+	for id, name := range nameByID {
+		if id == "" || name == "" || p.agentNameByAgentID[id] != "" {
+			continue
+		}
+		p.agentNameByAgentID[id] = name
+	}
+	return p
+}
+
+// RememberedParents returns the agent-ID maps Finalize needs on a later hook.
+func (p Parents) RememberedParents() (parentByID, nameByID map[string]string) {
+	if len(p.byAgentID) == 0 && len(p.agentNameByAgentID) == 0 {
+		return nil, nil
+	}
+	parentByID = maps.Clone(p.byAgentID)
+	nameByID = maps.Clone(p.agentNameByAgentID)
+	return parentByID, nameByID
 }
 
 func toolCallParents(gens []agento11y.Generation) (map[string]string, map[string]string) {

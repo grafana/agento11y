@@ -177,16 +177,21 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 
 	stop := strings.TrimSpace(input.HookEventName) == "Stop"
 	lines, safeOffset, rawCount, titles := readTranscriptSettled(hookCtx, input.TranscriptPath, st.Offset, stop, logger)
-	if rawCount == 0 {
-		return nil
-	}
-	logger.Printf("read %d raw lines", rawCount)
-
-	if safeOffset == 0 {
+	parentReady := rawCount > 0 && safeOffset > 0
+	switch {
+	case parentReady:
+		logger.Printf("read %d raw lines", rawCount)
+		logger.Printf("coalesced to %d lines, safe offset=%d", len(lines), safeOffset)
+	case rawCount > 0:
+		logger.Printf("read %d raw lines", rawCount)
 		logger.Printf("no completed assistant turn yet; keeping offset=%d", st.Offset)
-		return nil
+		lines = nil
+	default:
+		// Parent already exported; background and nested subagent files may
+		// still have new turns (or SessionEnd still has a trailing turn).
+		logger.Printf("no new parent turns; checking subagent transcripts")
+		lines = nil
 	}
-	logger.Printf("coalesced to %d lines, safe offset=%d", len(lines), safeOffset)
 
 	var r *redact.Redactor
 	if contentMode != agento11y.ContentCaptureModeMetadataOnly {
@@ -207,9 +212,16 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 	if err != nil {
 		logger.Printf("list subagent transcripts: %v", err)
 	}
-	opts.SuppressSyntheticSubagentToolCallIDs = subagent.SyntheticToolCallIDs(lines, subagent.RefsForFiles(subFiles))
 
-	gens, toolResultAt := mapper.Process(lines, &st, opts, r)
+	var (
+		gens         []agento11y.Generation
+		toolResultAt map[string]time.Time
+	)
+	if parentReady {
+		lines = subagent.DropCoveredSidechain(lines, subFiles, input.TranscriptPath)
+		opts.SuppressSyntheticSubagentToolCallIDs = subagent.SyntheticToolCallIDs(lines, subagent.RefsForFiles(subFiles))
+		gens, toolResultAt = mapper.Process(lines, &st, opts, r)
+	}
 	gens = append(gens, liveSubagentGens(input, lines, gens, subFiles, &st, opts, r, logger)...)
 
 	if len(gens) == 0 {
@@ -258,7 +270,9 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 		}
 	}
 
-	st.Offset = safeOffset
+	if parentReady {
+		st.Offset = safeOffset
+	}
 	if err := state.Save(input.SessionID, st); err != nil {
 		logger.Printf("save state: %v", err)
 	}
