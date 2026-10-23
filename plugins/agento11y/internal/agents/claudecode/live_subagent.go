@@ -54,7 +54,6 @@ func subagentSessionPath(path string) string {
 // byte offset stored in st so a background agent that keeps writing after its
 // first tool_result is not snapshotted once and then ignored.
 func liveSubagentGens(input *hookInput, parentLines []transcript.Line, parentGens []agento11y.Generation, files []string, st *state.Session, opts mapper.Options, r *redact.Redactor, logger *log.Logger) []agento11y.Generation {
-	files = subagent.MergeFiles(files, subagent.FilesFromLines(parentLines))
 	if len(files) == 0 {
 		return nil
 	}
@@ -132,10 +131,11 @@ func liveSubagentGens(input *hookInput, parentLines []transcript.Line, parentGen
 	return out
 }
 
-// readLiveSubagentFiles walks the known files and any Transcript-dir
-// discoveries, then returns every file that has unread bytes. Completion is
-// collected from every file before any file is coalesced, so a nested child's
-// last turn is kept when its parent's tool_result is in a sibling transcript.
+// readLiveSubagentFiles reads every file under the session's own subagents/
+// tree that has unread bytes. Completion is collected from every file before
+// any file is coalesced, so a nested child's last turn is kept when its
+// parent's tool_result is in a sibling transcript. Discovery does not follow
+// "Transcript dir:" paths: those can name folders from another conversation.
 func readLiveSubagentFiles(files []string, parentLines []transcript.Line, st *state.Session, logger *log.Logger) ([]liveSubagentRead, []string, map[string]bool) {
 	blockingDone := subagent.BlockingCompletedKeys(parentLines, files)
 	queue := append([]string{}, files...)
@@ -145,8 +145,7 @@ func readLiveSubagentFiles(files []string, parentLines []transcript.Line, st *st
 
 	var reads []liveSubagentRead
 	seen := map[string]bool{}
-	for i := 0; i < len(queue); i++ {
-		path := queue[i]
+	for _, path := range queue {
 		if seen[path] {
 			continue
 		}
@@ -158,12 +157,6 @@ func readLiveSubagentFiles(files []string, parentLines []transcript.Line, st *st
 				logger.Printf("read subagent transcript %s: %v", path, err)
 			}
 			continue
-		}
-		for _, extra := range subagent.FilesFromLines(raw) {
-			if !seen[extra] {
-				queue = append(queue, extra)
-				files = subagent.MergeFiles(files, []string{extra})
-			}
 		}
 		for k, done := range subagent.BlockingCompletedKeys(raw, files) {
 			if done {

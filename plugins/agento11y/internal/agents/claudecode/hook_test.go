@@ -2399,3 +2399,148 @@ func TestHook_DropsParentSidechainWhenFileExists(t *testing.T) {
 		t.Fatalf("output tokens = %d, want 40 once", out)
 	}
 }
+
+// TestHook_MergesSplitSubagentResponse covers one API response written as
+// several assistant lines with a parallel tool_result between them. Those
+// fragments share a requestId (and message id) and must export as one
+// generation that keeps the last line's usage.
+func TestHook_MergesSplitSubagentResponse(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	envconfig.PinAliasEnvBlank(t)
+	url, exports := startGenerationExportServer(t)
+	setHookExportEnv(t, url)
+	t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "metadata_only")
+
+	sessionID := "split-session"
+	agentID := "splitagent1"
+	transcriptPath := filepath.Join(dir, sessionID+".jsonl")
+	subDir := filepath.Join(dir, sessionID, "subagents")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	parent := strings.Join([]string{
+		buildHookUserJSONL(sessionID, "investigate"),
+		buildHookAssistantLineAt(sessionID, "req-parent", "tool_use", hookFixtureTimestamp, []any{map[string]any{
+			"type": "tool_use", "id": "agent_1", "name": "Agent",
+			"input": map[string]any{"subagent_type": "general-purpose"},
+		}}, 7),
+		buildHookToolResultJSONL(sessionID, "agent_1", "agentId: "+agentID+"\nTranscript dir: "+subDir+"\nfound"),
+		buildHookAssistantJSONL(sessionID, "req-done", "end_turn", "done", 5),
+	}, "\n") + "\n"
+	if err := os.WriteFile(transcriptPath, []byte(parent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	const messageID = "msg_split"
+	sub := strings.Join([]string{
+		buildHookUserJSONL(sessionID, "inspect the repo"),
+		buildHookSidechainAssistantLineID(sessionID, "req-split", agentID, "general-purpose", messageID, "", []any{
+			map[string]any{"type": "thinking", "thinking": "plan the reads"},
+			map[string]any{"type": "tool_use", "id": "tu_a", "name": "Read", "input": map[string]any{"file_path": "a.go"}},
+		}, 2),
+		buildHookToolResultJSONL(sessionID, "tu_a", "package a"),
+		buildHookSidechainAssistantLineID(sessionID, "req-split", agentID, "general-purpose", messageID, "", []any{
+			map[string]any{"type": "tool_use", "id": "tu_b", "name": "Read", "input": map[string]any{"file_path": "b.go"}},
+		}, 40),
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(subDir, "agent-"+agentID+".jsonl"), []byte(sub), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	runHookForTest(t, hookInput{HookEventName: "Stop", SessionID: sessionID, TranscriptPath: transcriptPath})
+	if len(*exports) != 1 {
+		t.Fatalf("exports = %d, want 1", len(*exports))
+	}
+	subs := subagentExports((*exports)[0])
+	if len(subs) != 1 {
+		t.Fatalf("subagent gens = %d, want 1 merged response; all=%v", len(subs), agentNames((*exports)[0]))
+	}
+	if in, out := subs[0].usageTokens(); in != 80 || out != 40 {
+		t.Fatalf("usage = input %d output %d, want 80/40 (last line, not 80+80 / 2+40)", in, out)
+	}
+	if strings.Contains(subs[0].ID, "#") {
+		t.Fatalf("generation id %q was uniqued; the split parts were exported separately", subs[0].ID)
+	}
+}
+
+// TestHook_IgnoresTranscriptDirOutsideSession pins discovery to the session's
+// own subagents/ folder. A tool result that names some other conversation's
+// Transcript dir must not export that folder's turns as this session's.
+func TestHook_IgnoresTranscriptDirOutsideSession(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	envconfig.PinAliasEnvBlank(t)
+	url, exports := startGenerationExportServer(t)
+	setHookExportEnv(t, url)
+	t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "metadata_only")
+
+	sessionID := "this-session"
+	transcriptPath := filepath.Join(dir, sessionID+".jsonl")
+	otherDir := filepath.Join(dir, "other-session", "subagents")
+	if err := os.MkdirAll(otherDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	other := strings.Join([]string{
+		buildHookUserJSONL("other-session", "from another conversation"),
+		buildHookSidechainAssistantJSONL("other-session", "req-other", "otheragent", "explore", "should not export", 777),
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(otherDir, "agent-otheragent.jsonl"), []byte(other), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	parent := strings.Join([]string{
+		buildHookUserJSONL(sessionID, "run a command"),
+		buildHookAssistantLineAt(sessionID, "req-bash", "tool_use", hookFixtureTimestamp, []any{map[string]any{
+			"type": "tool_use", "id": "bash_1", "name": "Bash",
+			"input": map[string]any{"command": "echo hi"},
+		}}, 4),
+		buildHookToolResultJSONL(sessionID, "bash_1", "Transcript dir: "+otherDir+"\nhello from bash"),
+		buildHookAssistantJSONL(sessionID, "req-done", "end_turn", "done", 5),
+	}, "\n") + "\n"
+	if err := os.WriteFile(transcriptPath, []byte(parent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	runHookForTest(t, hookInput{HookEventName: "Stop", SessionID: sessionID, TranscriptPath: transcriptPath})
+	if len(*exports) != 1 {
+		t.Fatalf("exports = %d, want 1", len(*exports))
+	}
+	for _, g := range (*exports)[0] {
+		if _, out := g.usageTokens(); out == 777 {
+			t.Fatalf("exported a turn from Transcript dir %s outside the session", otherDir)
+		}
+		if strings.HasPrefix(g.AgentName, "claude-code/") {
+			t.Fatalf("exported foreign subagent %q", g.AgentName)
+		}
+	}
+}
+
+func buildHookSidechainAssistantLineID(sessionID, requestID, agentID, attribution, messageID, stopReason string, content []any, outputTokens int64) string {
+	msg := map[string]any{
+		"model":   "claude-opus-4",
+		"usage":   map[string]any{"input_tokens": 80, "output_tokens": outputTokens},
+		"content": content,
+	}
+	if messageID != "" {
+		msg["id"] = messageID
+	}
+	if stopReason != "" {
+		msg["stop_reason"] = stopReason
+	}
+	line := map[string]any{
+		"type":             "assistant",
+		"sessionId":        sessionID,
+		"isSidechain":      true,
+		"agentId":          agentID,
+		"attributionAgent": attribution,
+		"timestamp":        hookFixtureTimestamp,
+		"version":          "1.0.0",
+		"requestId":        requestID,
+		"message":          msg,
+	}
+	data, _ := json.Marshal(line)
+	return string(data)
+}

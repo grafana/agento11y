@@ -51,6 +51,37 @@ func TestFiles(t *testing.T) {
 	}
 }
 
+func TestFilesStaysInsideSessionTree(t *testing.T) {
+	dir := t.TempDir()
+	sessionPath := filepath.Join(dir, "sess-1.jsonl")
+	if err := os.WriteFile(sessionPath, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	nestedDir := filepath.Join(dir, "sess-1", "subagents", "nested")
+	otherDir := filepath.Join(dir, "other-session", "subagents")
+	if err := os.MkdirAll(nestedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(otherDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(nestedDir, "agent-child.jsonl")
+	if err := os.WriteFile(nested, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(otherDir, "agent-other.jsonl"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Files(sessionPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, []string{nested}) {
+		t.Fatalf("Files = %v, want only the nested file under sess-1/subagents", got)
+	}
+}
+
 func TestAgentIDsFromToolResult(t *testing.T) {
 	got := AgentIDsFromToolResult("agentId: abc\nAgent ID: def\nagent_id: `ghi`\n")
 	want := []string{"abc", "def", "ghi"}

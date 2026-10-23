@@ -81,8 +81,15 @@ type userContext struct {
 	commandTitle string
 }
 
-// Coalesce merges consecutive assistant lines sharing the same RequestID
-// into a single line with merged content blocks and the final line's metadata.
+// Coalesce merges assistant lines sharing the same RequestID into a single
+// line with merged content blocks and the final line's metadata. Fragments of
+// one response (same RequestID and Anthropic message id) stay in that group
+// when a tool_result from a parallel tool call lands between them; Claude
+// Code writes that shape in subagent transcripts, and splitting there would
+// export two generations that both carry the full input. A later assistant
+// line that only reuses the RequestID, with no message id or a different
+// one, is a new turn.
+//
 // It returns only the safe prefix ending at the last complete assistant turn.
 // Trailing prompts, tool results, and incomplete assistant fragments are left
 // out so the next hook invocation re-reads them from the unchanged offset.
@@ -111,6 +118,7 @@ func coalesce(lines []transcript.Line, wholeSession bool) ([]transcript.Line, in
 	var (
 		result         = make([]transcript.Line, 0, len(lines))
 		pending        []transcript.Line
+		held           []transcript.Line
 		lastSafeLen    int
 		lastSafeOffset int64
 		answered       = toolResultIDs(lines)
@@ -136,28 +144,37 @@ func coalesce(lines []transcript.Line, wholeSession bool) ([]transcript.Line, in
 
 	flush := func() {
 		if len(pending) == 0 {
+			held = nil
 			return
 		}
 		last := pending[len(pending)-1]
-		var msg transcript.AssistantMessage
+		var (
+			msg    transcript.AssistantMessage
+			merged transcript.Line
+		)
 		switch {
 		case json.Unmarshal(last.Message, &msg) == nil && msg.StopReason != "":
-			result = append(result, mergeAssistantGroup(pending, ""))
-			markSafe(last.EndOffset)
+			merged = mergeAssistantGroup(pending, "")
 		case groupAnswered(pending, answered):
-			result = append(result, mergeAssistantGroup(pending, "tool_use"))
-			markSafe(last.EndOffset)
+			merged = mergeAssistantGroup(pending, "tool_use")
 		case wholeSession:
-			result = append(result, mergeAssistantGroup(pending, ""))
-			markSafe(last.EndOffset)
+			merged = mergeAssistantGroup(pending, "")
+		default:
+			// Incomplete group in a session still being written (no terminal
+			// stop_reason, and no answered tool_use): excluded, offset not
+			// advanced; will be re-read next invocation.
+			pending = nil
+			held = nil
+			return
 		}
-		// Incomplete group in a session still being written (no terminal
-		// stop_reason, and no answered tool_use): excluded, offset not advanced;
-		// will be re-read next invocation.
+		result = append(result, merged)
+		result = append(result, held...)
+		markSafe(last.EndOffset)
 		pending = nil
+		held = nil
 	}
 
-	for _, line := range lines {
+	for i, line := range lines {
 		if line.Type == "assistant" {
 			if line.RequestID == "" {
 				flush()
@@ -171,6 +188,12 @@ func coalesce(lines []transcript.Line, wholeSession bool) ([]transcript.Line, in
 			continue
 		}
 
+		if len(pending) > 0 && laterFragmentOfSameResponse(lines[i+1:], pending[0]) {
+			// A parallel tool_result (or other user line) landed in the
+			// middle of this response; keep gathering fragments.
+			held = append(held, line)
+			continue
+		}
 		flush()
 		result = append(result, line)
 	}
@@ -183,6 +206,32 @@ func coalesce(lines []transcript.Line, wholeSession bool) ([]transcript.Line, in
 		return result, lastSafeOffset
 	}
 	return result[:lastSafeLen], lastSafeOffset
+}
+
+// laterFragmentOfSameResponse reports whether rest contains another assistant
+// fragment of the same Anthropic message. Request ID reuse alone is not
+// enough: Claude Code also continues a later turn under the same request ID
+// after a tool_result, and those are two generations.
+func laterFragmentOfSameResponse(rest []transcript.Line, pending transcript.Line) bool {
+	requestID := pending.RequestID
+	messageID := assistantMessageID(pending)
+	if requestID == "" || messageID == "" {
+		return false
+	}
+	for _, line := range rest {
+		if line.Type == "assistant" && line.RequestID == requestID && assistantMessageID(line) == messageID {
+			return true
+		}
+	}
+	return false
+}
+
+func assistantMessageID(line transcript.Line) string {
+	var msg transcript.AssistantMessage
+	if err := json.Unmarshal(line.Message, &msg); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(msg.ID)
 }
 
 // mergeAssistantGroup merges one request's assistant fragments into a single

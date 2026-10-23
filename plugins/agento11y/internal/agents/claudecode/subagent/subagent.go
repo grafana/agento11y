@@ -25,7 +25,9 @@ func IsTranscript(path string) bool {
 }
 
 // Files returns the subagent transcripts belonging to one session. Claude Code
-// writes them to <dir>/<sessionID>/subagents/ beside <dir>/<sessionID>.jsonl.
+// writes them to <dir>/<sessionID>/subagents/ beside <dir>/<sessionID>.jsonl,
+// including nested children under that folder. Discovery stays inside that
+// tree: a "Transcript dir:" line that names another conversation is ignored.
 func Files(sessionPath string) ([]string, error) {
 	sessionID := strings.TrimSuffix(filepath.Base(sessionPath), filepath.Ext(sessionPath))
 	root := filepath.Join(filepath.Dir(sessionPath), sessionID, "subagents")
@@ -154,73 +156,6 @@ func DropCoveredSidechain(lines []transcript.Line, files []string, selfPath stri
 			continue
 		}
 		out = append(out, line)
-	}
-	return out
-}
-
-// FilesFromLines returns subagent transcripts named by "Transcript dir:" lines
-// in tool results, so a nested run whose files sit outside the session's
-// default subagents/ directory is still found.
-func FilesFromLines(lines []transcript.Line) []string {
-	seen := map[string]bool{}
-	var out []string
-	eachToolResult(lines, func(_ transcript.UserContentBlock, content string) {
-		dir := TranscriptDirFromToolResult(content)
-		if dir == "" {
-			return
-		}
-		files, err := filesIn(dir)
-		if err != nil {
-			return
-		}
-		for _, file := range files {
-			if seen[file] {
-				continue
-			}
-			seen[file] = true
-			out = append(out, file)
-		}
-	})
-	return out
-}
-
-func filesIn(root string) ([]string, error) {
-	if _, err := os.Stat(root); err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	var out []string
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() || !strings.HasSuffix(path, ".jsonl") {
-			return nil
-		}
-		out = append(out, path)
-		return nil
-	})
-	if err != nil && !os.IsNotExist(err) {
-		return out, err
-	}
-	return out, nil
-}
-
-// MergeFiles returns the unique union of path lists, preserving order.
-func MergeFiles(groups ...[]string) []string {
-	seen := map[string]bool{}
-	var out []string
-	for _, group := range groups {
-		for _, file := range group {
-			file = filepath.Clean(file)
-			if file == "" || seen[file] {
-				continue
-			}
-			seen[file] = true
-			out = append(out, file)
-		}
 	}
 	return out
 }

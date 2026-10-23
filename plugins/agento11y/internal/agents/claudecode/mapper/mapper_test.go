@@ -1026,6 +1026,107 @@ func TestCoalesce_MergesFragmentContent(t *testing.T) {
 	}
 }
 
+// TestCoalesce_MergesSameRequestAcrossToolResult is the split-response shape
+// Claude Code writes in subagent transcripts: one API call (same requestId
+// and message id) arrives as several assistant lines, and a tool_result from
+// a parallel tool call lands between them. Those fragments are one generation
+// whose usage is the last line's.
+func TestCoalesce_MergesSameRequestAcrossToolResult(t *testing.T) {
+	const messageID = "msg_split"
+	prompt := makeUserLine("inspect the repo")
+	prompt.EndOffset = 50
+	thinking := withAssistantMessageID(makeAssistantFragment("req-split", 2, []transcript.ContentBlock{
+		{Type: "thinking", Thinking: "plan the reads"},
+		{Type: "tool_use", ID: "tu_a", Name: "Read", Input: json.RawMessage(`{"file_path":"a.go"}`)},
+	}, ""), messageID)
+	thinking.EndOffset = 150
+	result := makeToolResultLine("tu_a", "package a")
+	result.EndOffset = 250
+	nextTool := withAssistantMessageID(makeAssistantFragment("req-split", 40, []transcript.ContentBlock{
+		{Type: "tool_use", ID: "tu_b", Name: "Read", Input: json.RawMessage(`{"file_path":"b.go"}`)},
+	}, ""), messageID)
+	nextTool.EndOffset = 350
+	lines := []transcript.Line{prompt, thinking, result, nextTool}
+
+	got, offset := Coalesce(lines)
+	if offset != 350 {
+		t.Fatalf("offset = %d, want 350 (end of the last fragment)", offset)
+	}
+	if len(got) != 3 {
+		t.Fatalf("Coalesce returned %d lines, want 3 (prompt + one merged assistant + the interleaved tool_result)", len(got))
+	}
+	var msg transcript.AssistantMessage
+	if err := json.Unmarshal(got[1].Message, &msg); err != nil {
+		t.Fatal(err)
+	}
+	if msg.ID != messageID {
+		t.Errorf("message id = %q, want %q", msg.ID, messageID)
+	}
+	if msg.Usage.OutputTokens != 40 {
+		t.Errorf("OutputTokens = %d, want 40 (last line's usage)", msg.Usage.OutputTokens)
+	}
+	if len(msg.Content) != 3 {
+		t.Fatalf("merged content blocks = %d, want thinking + two tool_use", len(msg.Content))
+	}
+	if msg.Content[0].Type != "thinking" || msg.Content[1].ID != "tu_a" || msg.Content[2].ID != "tu_b" {
+		t.Fatalf("merged content = %+v", msg.Content)
+	}
+
+	session := CoalesceSession(lines)
+	if len(session) != 3 {
+		t.Fatalf("CoalesceSession returned %d lines, want 3 (prompt + merged assistant + tool_result)", len(session))
+	}
+
+	gens, _ := Process(got, &state.Session{}, Options{SessionID: "sess-1"}, nil)
+	if len(gens) != 1 {
+		t.Fatalf("Process produced %d generations, want 1", len(gens))
+	}
+	if gens[0].Usage.OutputTokens != 40 {
+		t.Errorf("generation output tokens = %d, want 40", gens[0].Usage.OutputTokens)
+	}
+	if gens[0].Usage.InputTokens != 150 {
+		t.Errorf("generation input tokens = %d, want 150 (last line, not doubled)", gens[0].Usage.InputTokens)
+	}
+}
+
+func TestCoalesce_SameRequestWithoutMessageIDStaysTwoTurns(t *testing.T) {
+	prompt := makeUserLine("inspect the repo")
+	prompt.EndOffset = 50
+	call := makeAssistantFragment("req-1", 25, []transcript.ContentBlock{
+		{Type: "tool_use", ID: "tu_1", Name: "Read", Input: json.RawMessage(`{"file_path":"x.go"}`)},
+	}, "")
+	call.EndOffset = 150
+	result := makeToolResultLine("tu_1", "package x")
+	result.EndOffset = 250
+	answer := makeAssistantFragment("req-1", 25, []transcript.ContentBlock{
+		{Type: "text", Text: "It is package x."},
+	}, "")
+	answer.EndOffset = 350
+
+	got := CoalesceSession([]transcript.Line{prompt, call, result, answer})
+	if len(got) != 4 {
+		t.Fatalf("got %d lines, want 4 (tool-call turn, result, answer stay separate without a message id)", len(got))
+	}
+	gens, _ := Process(got, &state.Session{}, Options{SessionID: "sess-1"}, nil)
+	if len(gens) != 2 {
+		t.Fatalf("Process produced %d generations, want 2", len(gens))
+	}
+}
+
+func withAssistantMessageID(line transcript.Line, id string) transcript.Line {
+	var msg transcript.AssistantMessage
+	if err := json.Unmarshal(line.Message, &msg); err != nil {
+		return line
+	}
+	msg.ID = id
+	raw, err := json.Marshal(msg)
+	if err != nil {
+		return line
+	}
+	line.Message = raw
+	return line
+}
+
 func TestCoalesce_PreservesContextWhenAssistantArrivesInLaterBatch(t *testing.T) {
 	user1 := makeUserLine("user1 prompt")
 	user1.EndOffset = 50
