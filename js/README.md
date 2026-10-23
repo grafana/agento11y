@@ -257,7 +257,7 @@ metric exporter, and why analytics stays empty when this step is skipped.
 ## Core API
 
 - `startGeneration(...)` and `startStreamingGeneration(...)`
-- `startToolExecution(...)`
+- `client.startToolExecution(...)` and `GenerationRecorder.startToolExecution(...)`
 - Recorder methods: `setResult(...)`, `setCallError(...)`, `end()`, `getError()`
 - Lifecycle: `flush()`, `shutdown()`
 
@@ -325,20 +325,41 @@ TraceQL examples:
 
 ## Tool Execution Example
 
+Use `GenerationRecorder.startToolExecution(...)` to parent a tool span to that generation, including across `await`, without a global context manager. The method does not change active context or inherit generation capture settings, identity, or request model. Set those tool options explicitly when they must match the generation. `client.startToolExecution(...)` remains available and uses the active OpenTelemetry context.
+
 ```ts
-await client.startToolExecution(
+await client.startGeneration(
   {
-    toolName: "weather",
-    includeContent: true,
+    conversationId: "weather-session",
+    agentName: "weather-agent",
+    model: { provider: "openai", name: "gpt-5" },
+    tools: [{ name: "weather", type: "function" }],
+    contentCapture: "metadata_only",
   },
-  async (recorder) => {
-    recorder.setResult({
-      arguments: { city: "Paris" },
-      result: { temp_c: 18 },
+  async (generation) => {
+    const city = await Promise.resolve("Paris");
+    const tool = generation.startToolExecution({
+      toolName: "weather",
+      conversationId: "weather-session",
+      agentName: "weather-agent",
+      requestProvider: "openai",
+      requestModel: "gpt-5",
+      contentCapture: "metadata_only",
     });
+    try {
+      tool.setResult({ arguments: { city }, result: { tempC: 18 } });
+    } catch (error) {
+      tool.setCallError(error);
+      throw error;
+    } finally {
+      tool.end();
+    }
+    generation.setResult({ output: [{ role: "assistant", content: "18°C in Paris" }] });
   }
 );
 ```
+
+The generation callback ends the generation automatically. The tool factory returns a recorder; call its `end()` yourself. Both recordings above omit content under `metadata_only`. Configure OpenTelemetry providers to retain the spans; explicit parentage does not create exporters.
 
 ### Tracing skill loads, resource reads, and commands
 

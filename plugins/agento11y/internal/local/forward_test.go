@@ -941,7 +941,8 @@ func TestForwardLoader_SkillAndProcessPrivacy(t *testing.T) {
 
 					attributes := []*commonpb.KeyValue{
 						stringKV("gen_ai.tool.name", "run_skill_script"),
-						stringKV("gen_ai.skill.name", "review"),
+						stringKV("gen_ai.skill.name", "review:changes"),
+						stringKV("gen_ai.tool.call.id", "skill-call"),
 						stringKV("agento11y.skill.name", "legacy"),
 						stringKV("gen_ai.skill.resource.name", "scripts/check.py"),
 						stringKV("process.executable.name", "python3"),
@@ -952,6 +953,7 @@ func TestForwardLoader_SkillAndProcessPrivacy(t *testing.T) {
 						attributes = append(attributes, stringKV(key, "secret "+key))
 					}
 					request := traceRequestForSpans(&tracepb.Span{
+						Name:       "execute_tool run_skill_script review:changes",
 						Attributes: attributes,
 						Events:     []*tracepb.Span_Event{{Name: "tool-completed", Attributes: attributes}},
 					})
@@ -974,6 +976,7 @@ func TestForwardLoader_SkillAndProcessPrivacy(t *testing.T) {
 					forwarded, err := decodeTracePayload(got.body, got.contentType)
 					require.NoError(t, err)
 					span := forwarded.GetResourceSpans()[0].GetScopeSpans()[0].GetSpans()[0]
+					assert.Equal(t, "execute_tool run_skill_script review:changes", span.GetName())
 					require.Len(t, span.GetEvents(), 1)
 					assert.Equal(t, "tool-completed", span.GetEvents()[0].GetName())
 					for _, attrs := range [][]*commonpb.KeyValue{span.GetAttributes(), span.GetEvents()[0].GetAttributes()} {

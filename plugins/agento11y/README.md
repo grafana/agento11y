@@ -158,6 +158,10 @@ Run `agento11y skills show setup-local-guards` and follow it to help me choose, 
 
 The skills for instrumenting your own application code are separate and ship with [`gcx`](https://github.com/grafana/gcx) instead: `gcx agent skills install agento11y-instrument`.
 
+Live skill-load detection covers native tools in [Claude Code](../claude-code/README.md#3-verify) and [OpenCode](../opencode/README.md#3-verify), and catalog-matched instruction reads in [Pi](../pi/README.md#3-verify). Recognized attempts add `gen_ai.skill.name` to existing tool-execution spans, including failures. They do not prove successful instruction loading or explain later actions. Validated names remain in reduced modes; secret-like names are omitted. Detection adds no descriptions, paths, URIs, or metric labels and changes no payload policy.
+
+Detection does not cover other hosts, history import, direct `/skill` prompt insertion, resource reads, scripts, or attribution of later activity. Skill visibility requires retained tool and generation spans in Tempo plus deployed Sigil consumer support; a conversation alone is insufficient.
+
 ## Local mode
 
 `agento11y <agent> --local` records the session to a JSONL store and starts the local Agent Observability app. The command prints the app URL (tries `http://127.0.0.1:8765`, then a higher port if needed).
@@ -300,7 +304,7 @@ Guards, scores, and experiment APIs still need HTTP credentials.
 
 ### Content capture
 
-The shared `agento11y` binary defaults to `metadata_only`: only model, tokens, tool names, timing, and cost ship to Grafana Agent Observability. Prompts, responses, and tool I/O stay local unless guards are enabled. Guards send evaluated messages and tool arguments to `AGENTO11Y_ENDPOINT` in every capture mode. To send captured content, set `AGENTO11Y_CONTENT_CAPTURE_MODE` in `~/.config/agento11y/config.env`. The shared parser accepts every SDK mode:
+The shared `agento11y` binary defaults to `metadata_only`: model, tokens, tool names, recognized skill names, timing, and cost ship to Grafana Agent Observability. Prompts, responses, and tool I/O stay local unless guards are enabled. Guards send evaluated messages and tool arguments to `AGENTO11Y_ENDPOINT` in every capture mode. To send captured content, set `AGENTO11Y_CONTENT_CAPTURE_MODE` in `~/.config/agento11y/config.env`. The shared parser accepts every SDK mode:
 
 ```dotenv
 # valid values: full | no_tool_content | metadata_only | full_with_metadata_spans

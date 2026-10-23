@@ -2,6 +2,7 @@ package claudecode
 
 import (
 	"log"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -53,7 +54,7 @@ func subagentSessionPath(path string) string {
 // and attaches new turns to the parent session. Each file resumes from the
 // byte offset stored in st so a background agent that keeps writing after its
 // first tool_result is not snapshotted once and then ignored.
-func liveSubagentGens(input *hookInput, parentLines []transcript.Line, parentGens []agento11y.Generation, files []string, st *state.Session, opts mapper.Options, r *redact.Redactor, logger *log.Logger) []agento11y.Generation {
+func liveSubagentGens(input *hookInput, parentLines []transcript.Line, parentGens []agento11y.Generation, files []string, st *state.Session, opts mapper.Options, r *redact.Redactor, skillNames map[string]string, logger *log.Logger) []agento11y.Generation {
 	if len(files) == 0 {
 		return nil
 	}
@@ -99,6 +100,7 @@ func liveSubagentGens(input *hookInput, parentLines []transcript.Line, parentGen
 			continue
 		}
 
+		maps.Copy(skillNames, buildSkillNameMap(coalesced))
 		subSt := *st
 		subOpts := opts
 		subOpts.Titles = transcript.Titles{}

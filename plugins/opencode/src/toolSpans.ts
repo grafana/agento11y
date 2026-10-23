@@ -1,10 +1,16 @@
-import type { Agento11yClient, ContentCaptureMode } from "@grafana/agento11y";
+import type {
+  ContentCaptureMode,
+  ToolExecutionRecorder,
+  ToolExecutionStart,
+} from "@grafana/agento11y";
 import type { Redactor } from "./mappers.js";
 
 export type ToolExecutionRecord = {
   sessionID: string;
   toolName: string;
   toolCallId: string;
+  // undefined: unobserved; null: observed nonmatch; string: recognized skill.
+  skillName?: string | null;
   startedAt: number;
   completedAt: number;
   input?: unknown;
@@ -21,7 +27,7 @@ export type ToolExecutionRecord = {
  * @internal Exported for testing.
  */
 export function emitToolSpans(
-  client: Agento11yClient,
+  factory: (start: ToolExecutionStart) => ToolExecutionRecorder,
   records: ToolExecutionRecord[],
   opts: {
     conversationId: string;
@@ -40,10 +46,14 @@ export function emitToolSpans(
 
   for (const record of records) {
     try {
-      const rec = client.startToolExecution({
+      const rec = factory({
         toolName: record.toolName,
         toolCallId: record.toolCallId,
         toolType: "function",
+        ...(record.skillName && {
+          executionKind: "load_skill",
+          skillName: record.skillName,
+        }),
         conversationId: opts.conversationId,
         conversationTitle: opts.conversationTitle,
         agentName: opts.agentName,

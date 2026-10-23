@@ -6,6 +6,7 @@ import {
   type GenerationResult,
   type GenerationStart,
 } from "@grafana/agento11y";
+import { SpanStatusCode } from "@opentelemetry/api";
 import {
   AggregationTemporality,
   DataPointType,
@@ -26,6 +27,7 @@ import {
   stableOpencodeGenerationId,
 } from "./lineage.js";
 import { createRedactor } from "./redaction.js";
+import { detectSkillName } from "./skills.js";
 import { createNativeCapture } from "./v2-events.js";
 import type {
   NativeEvent,
@@ -240,6 +242,7 @@ interface Recorded {
 function harness(
   location = home,
   overrides: Partial<Agento11yOpencodeConfig> = {},
+  createCapture = createNativeCapture,
 ) {
   const generations: Recorded[] = [];
   const toolResults: unknown[] = [];
@@ -261,6 +264,7 @@ function harness(
         entry.firstAt = firstAt;
       },
       setCacheDiagnostics: vi.fn(),
+      startToolExecution: client.startToolExecution,
       end: vi.fn(),
       getError: () => undefined,
     });
@@ -280,7 +284,7 @@ function harness(
       end: vi.fn(),
     })),
   } as unknown as Agento11yClient;
-  const capture = createNativeCapture({
+  const capture = createCapture({
     client,
     config: { ...config, ...overrides },
     redactor: createRedactor(),
@@ -306,6 +310,378 @@ function replay(
   events.forEach(capture.handleEvent);
   return capture.drain();
 }
+
+function skillTools(
+  sessionID = "s",
+  assistantMessageID = "a",
+  failed = false,
+  name = "skill",
+): NativeEvent[] {
+  const data = { sessionID, assistantMessageID, id: "c" };
+  return [
+    event("session.tool.input.started", { ...data, name }, home, 110),
+    event(
+      "session.tool.called",
+      {
+        ...data,
+        input: { id: "durable-old", name: "not-v2" },
+        executed: false,
+      },
+      home,
+      120,
+    ),
+    failed
+      ? event(
+          "session.tool.failed",
+          {
+            ...data,
+            executed: false,
+            error: {
+              type: "tool.execution",
+              message: "display-name is not the requested id",
+            },
+          },
+          home,
+          180,
+        )
+      : event(
+          "session.tool.success",
+          {
+            ...data,
+            executed: false,
+            content: [
+              { type: "text", text: "display-name is not the requested id" },
+            ],
+          },
+          home,
+          180,
+        ),
+  ];
+}
+function observation(
+  overrides: Partial<
+    Parameters<
+      ReturnType<typeof createNativeCapture>["observeToolExecution"]
+    >[0]
+  > = {},
+) {
+  return {
+    sessionID: "s",
+    messageID: "a",
+    id: "c",
+    tool: "skill",
+    agent: "build",
+    skillName: "final-id",
+    ...overrides,
+  };
+}
+
+describe("native final-input observation join", () => {
+  it.each(
+    [true, false].flatMap((failed) =>
+      ["before intake", "after terminal"].map((order) => ({ failed, order })),
+    ),
+  )("joins $order for failed=$failed without changing native content or eligibility", async ({
+    failed,
+    order,
+  }) => {
+    const { capture, client, generations, toolResults, evaluateHook } =
+      harness();
+    capture.handleEvent(start());
+    if (order === "before intake") capture.observeToolExecution(observation());
+    skillTools("s", "a", failed).forEach(capture.handleEvent);
+    if (order === "after terminal") capture.observeToolExecution(observation());
+    capture.handleEvent(end());
+    await capture.drain();
+    expect(client.startToolExecution).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        executionKind: "load_skill",
+        skillName: "final-id",
+        toolName: "skill",
+        toolCallId: "c",
+        startedAt: new Date(120),
+      }),
+    );
+    expect(toolResults).toEqual([
+      expect.objectContaining({
+        completedAt: new Date(180),
+        arguments: JSON.stringify({ id: "durable-old", name: "not-v2" }),
+      }),
+    ]);
+    expect(JSON.stringify(generations)).toContain("durable-old");
+    expect(JSON.stringify(generations)).not.toContain("final-id");
+    expect(generations[0]?.result?.usage?.totalTokens).toBe(42);
+    expect(evaluateHook).not.toHaveBeenCalled();
+    await capture.shutdown();
+  });
+
+  it.each([
+    null,
+    "replacement-id",
+  ])("replaces an earlier recognized observation with %s", async (skillName) => {
+    const { capture, client } = harness();
+    capture.handleEvent(start());
+    capture.observeToolExecution(observation());
+    capture.observeToolExecution(observation({ skillName }));
+    await replay(capture, [...skillTools(), end()]);
+    const seed = vi.mocked(client.startToolExecution).mock.calls[0]?.[0];
+    expect(seed?.skillName).toBe(skillName ?? undefined);
+    expect(seed?.executionKind).toBe(skillName ? "load_skill" : undefined);
+    await capture.shutdown();
+  });
+
+  it.each([
+    "absent",
+    "before owner",
+    "before active",
+    "missing location",
+    "missing workspace",
+    "foreign directory",
+    "foreign workspace",
+    "session",
+    "message",
+    "agent",
+    "call",
+    "tool",
+    "missing session",
+    "missing message",
+    "missing agent",
+    "missing call",
+    "missing tool",
+    "late",
+  ])("keeps uncorrelated observations generic: %s", async (kind) => {
+    const { capture, client } = harness();
+    if (kind === "before owner") capture.observeToolExecution(observation());
+    if (kind === "before active") {
+      capture.handleEvent(created("s"));
+      capture.observeToolExecution(observation());
+    }
+    if (
+      [
+        "missing location",
+        "missing workspace",
+        "foreign directory",
+        "foreign workspace",
+      ].includes(kind)
+    ) {
+      const location =
+        kind === "foreign directory"
+          ? away
+          : kind === "missing workspace"
+            ? { directory: home.directory }
+            : { ...home, workspaceID: "other-workspace" };
+      capture.handleEvent(
+        kind === "missing location"
+          ? { ...start(), location: undefined }
+          : start("s", "a", location),
+      );
+      capture.observeToolExecution(observation());
+    }
+    capture.handleEvent(start());
+    const fields: Record<string, Partial<ReturnType<typeof observation>>> = {
+      session: { sessionID: "other" },
+      message: { messageID: "other" },
+      agent: { agent: "plan" },
+      call: { id: "other" },
+      tool: { tool: "read" },
+      "missing session": { sessionID: "" },
+      "missing message": { messageID: "" },
+      "missing agent": { agent: "" },
+      "missing call": { id: "" },
+      "missing tool": { tool: "" },
+    };
+    if (fields[kind]) capture.observeToolExecution(observation(fields[kind]));
+    await replay(capture, [...skillTools(), end()]);
+    if (kind === "late") {
+      capture.observeToolExecution(observation());
+      await replay(capture, [
+        start("s", "b"),
+        ...skillTools("s", "b"),
+        end("s", "b"),
+      ]);
+    }
+    expect(client.startToolExecution).toHaveBeenCalledTimes(
+      kind === "late" ? 2 : 1,
+    );
+    for (const [seed] of vi.mocked(client.startToolExecution).mock.calls) {
+      expect(seed.executionKind).toBeUndefined();
+      expect(seed.skillName).toBeUndefined();
+    }
+    await capture.shutdown();
+  });
+
+  it("never uses activation history or result display names as a fallback", async () => {
+    const { capture, client, generations } = harness();
+    await replay(capture, [
+      event("session.skill.activated", {
+        sessionID: "s",
+        id: "activated-id",
+        name: "display-name",
+        text: "skill instructions",
+      }),
+      start(),
+      ...skillTools(),
+      end(),
+    ]);
+    expect(client.startToolExecution).toHaveBeenCalledOnce();
+    expect(
+      vi.mocked(client.startToolExecution).mock.calls[0]?.[0].skillName,
+    ).toBeUndefined();
+    expect(JSON.stringify(generations[0]?.result?.input)).toContain(
+      "skill instructions",
+    );
+    await capture.shutdown();
+  });
+
+  it("isolates repeated call/message IDs across active sessions", async () => {
+    const { capture, client } = harness();
+    capture.handleEvent(start("one"));
+    capture.handleEvent(start("two"));
+    capture.observeToolExecution(observation({ sessionID: "one" }));
+    await replay(capture, [
+      ...skillTools("two"),
+      end("two"),
+      ...skillTools("one"),
+      end("one"),
+    ]);
+    const calls = vi.mocked(client.startToolExecution).mock.calls;
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.[0].skillName).toBeUndefined();
+    expect(calls[1]?.[0].skillName).toBe("final-id");
+    await capture.shutdown();
+  });
+
+  it("does not join an inner Code Mode skill hook to its outer call", async () => {
+    const { capture, client } = harness();
+    capture.handleEvent(start());
+    capture.observeToolExecution(observation());
+    await replay(capture, [...skillTools("s", "a", false, "code"), end()]);
+    expect(client.startToolExecution).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ toolName: "code" }),
+    );
+    expect(
+      vi.mocked(client.startToolExecution).mock.calls[0]?.[0].skillName,
+    ).toBeUndefined();
+    await capture.shutdown();
+  });
+
+  it.each([
+    "no block",
+    "no called",
+    "no terminal",
+  ])("observations never create records: %s", async (kind) => {
+    const { capture, client } = harness();
+    capture.handleEvent(start());
+    const observed = Object.freeze(observation());
+    capture.observeToolExecution(observed);
+    capture.observeToolExecution(observed);
+    const tools = skillTools();
+    await replay(capture, [
+      ...(kind === "no block"
+        ? []
+        : tools.filter((_, index) => index !== (kind === "no called" ? 1 : 2))),
+      end(),
+    ]);
+    expect(client.startToolExecution).not.toHaveBeenCalled();
+    await capture.shutdown();
+  });
+
+  it.each([
+    "supersede",
+    "move",
+    "delete",
+    "shutdown",
+    "disable",
+  ])("does not transfer observations to subsequent steps after %s", async (kind) => {
+    const first = harness();
+    let current = first;
+    first.capture.handleEvent(start());
+    first.capture.observeToolExecution(observation());
+    if (kind === "move") {
+      first.capture.handleEvent(move());
+      first.capture.observeToolExecution(observation({ messageID: "b" }));
+      first.capture.handleEvent(move("s", home, away));
+    }
+    if (kind === "delete")
+      first.capture.handleEvent(event("session.deleted", { sessionID: "s" }));
+    if (kind === "shutdown") {
+      await first.capture.shutdown();
+      first.capture.observeToolExecution(observation());
+      current = harness();
+    }
+    if (kind === "disable") {
+      first.capture.stopObservingTools();
+      first.capture.observeToolExecution(observation());
+    }
+    await replay(current.capture, [
+      start("s", "b"),
+      ...skillTools("s", "b"),
+      end("s", "b"),
+    ]);
+    expect(current.client.startToolExecution).toHaveBeenCalledOnce();
+    expect(
+      vi.mocked(current.client.startToolExecution).mock.calls[0]?.[0].skillName,
+    ).toBeUndefined();
+    await first.capture.shutdown();
+    await current.capture.shutdown();
+  });
+
+  it.each([
+    "disable",
+    "shutdown",
+  ])("allows established observations to settle during %s, but accepts no later updates", async (kind) => {
+    const { capture, client } = harness();
+    capture.handleEvent(start());
+    capture.observeToolExecution(observation());
+    skillTools().forEach(capture.handleEvent);
+    if (kind === "disable") capture.stopObservingTools();
+    else await capture.shutdown();
+    capture.observeToolExecution(observation({ skillName: "late-id" }));
+    capture.handleEvent(end());
+    await capture.drain();
+    expect(client.startToolExecution).toHaveBeenCalledOnce();
+    expect(
+      vi.mocked(client.startToolExecution).mock.calls[0]?.[0].skillName,
+    ).toBe("final-id");
+    await capture.shutdown();
+  });
+
+  it("a replacement capture cannot inherit active observations during location drain", async () => {
+    const old = harness();
+    old.capture.handleEvent(start());
+    old.capture.handleEvent(event("location.shutdown", {}));
+    vi.resetModules();
+    const reloaded = await import("./v2-events.js");
+    expect(reloaded.createNativeCapture).not.toBe(createNativeCapture);
+    const replacement = harness(home, {}, reloaded.createNativeCapture);
+    // The active step may finish in the draining owner; no new owner is established by the hook.
+    old.capture.observeToolExecution(observation());
+    replacement.capture.observeToolExecution(observation());
+    await replay(old.capture, [
+      ...skillTools(),
+      end(),
+      start("s", "b"),
+      ...skillTools("s", "b"),
+      end("s", "b"),
+    ]);
+    await replay(replacement.capture, [
+      start("s", "b"),
+      ...skillTools("s", "b"),
+      end("s", "b"),
+    ]);
+    expect(old.client.startToolExecution).toHaveBeenCalledOnce();
+    expect(
+      vi.mocked(old.client.startToolExecution).mock.calls[0]?.[0].skillName,
+    ).toBe("final-id");
+    expect(replacement.client.startToolExecution).toHaveBeenCalledOnce();
+    expect(
+      vi.mocked(replacement.client.startToolExecution).mock.calls[0]?.[0]
+        .skillName,
+    ).toBeUndefined();
+    await old.capture.shutdown();
+    await replacement.capture.shutdown();
+  });
+});
 
 const compactionReloads = ["ended", "failed"].flatMap((kind) =>
   ["old first", "replacement first", "replacement only"].map((delivery) => ({
@@ -2318,21 +2694,39 @@ describe("native tools and real SDK capture modes", () => {
       ),
     ];
   }
-  it.each([
-    "full",
-    "no_tool_content",
-    "metadata_only",
-    "full_with_metadata_spans",
-  ] satisfies ContentCaptureMode[])("exports through real SDK under %s", async (contentCapture) => {
+  it.each(
+    (
+      [
+        "full",
+        "no_tool_content",
+        "metadata_only",
+        "full_with_metadata_spans",
+      ] satisfies ContentCaptureMode[]
+    ).flatMap((contentCapture) =>
+      [false, true].map((failed) => ({ contentCapture, failed })),
+    ),
+  )("exports final skill input through real SDK under $contentCapture failed=$failed", async ({
+    contentCapture,
+    failed,
+  }) => {
     const exporter = new InMemorySpanExporter();
     const provider = new BasicTracerProvider({
       spanProcessors: [new SimpleSpanProcessor(exporter)],
     });
+    const metricExporter = new InMemoryMetricExporter(
+      AggregationTemporality.CUMULATIVE,
+    );
+    const reader = new PeriodicExportingMetricReader({
+      exporter: metricExporter,
+      exportIntervalMillis: 60_000,
+    });
+    const meter = new MeterProvider({ readers: [reader] });
     const exported: Generation[] = [];
     const client = new Agento11yClient({
       contentCapture,
       hooks: { enabled: false },
       tracer: provider.getTracer("native-test"),
+      meter: meter.getMeter("native-test"),
       generationExport: { protocol: "none" },
       generationExporter: {
         exportGenerations: async ({ generations }) => {
@@ -2364,6 +2758,20 @@ describe("native tools and real SDK capture modes", () => {
         event("session.inbox.delivered", { sessionID: "s", inboxID: "i" }),
         start(),
         ...tools(),
+      ]);
+      // Final post-before-hook id, not the durable old input or result display name.
+      const finalInput = Object.freeze({
+        id: "requested-skill",
+        name: "display-name",
+        extra: "FINAL_INPUT_ONLY_DO_NOT_EXPORT",
+      });
+      const skillName = detectSkillName("skill", finalInput, "id") ?? null;
+      capture.observeToolExecution(observation({ skillName }));
+      capture.observeToolExecution(
+        observation({ id: "outer-code-call", skillName }),
+      );
+      await replay(capture, [
+        ...skillTools("s", "a", failed),
         event("session.text.ended", {
           sessionID: "s",
           assistantMessageID: "a",
@@ -2401,13 +2809,99 @@ describe("native tools and real SDK capture modes", () => {
         "ghp_abcdefghijklmnopqrstuvwxyz1234567890",
       );
       const snapshotTools = client.debugSnapshot().toolExecutions;
-      expect(snapshotTools).toHaveLength(1);
+      expect(snapshotTools).toHaveLength(2);
+      expect(snapshotTools[0]?.executionKind).toBeUndefined();
+      expect(snapshotTools[1]).toMatchObject({
+        executionKind: "load_skill",
+        skillName: "requested-skill",
+        toolName: "skill",
+        toolCallId: "c",
+      });
       expect(snapshotTools[0]?.toolCallId).toBe("outer-code-call");
       expect(snapshotTools[0]?.startedAt).toEqual(new Date(120));
       expect(snapshotTools[0]?.completedAt).toEqual(new Date(180));
-      const toolSpans = exporter
-        .getFinishedSpans()
-        .filter((span) => span.attributes["gen_ai.tool.name"] === "code");
+      const spans = exporter.getFinishedSpans();
+      expect(spans).toHaveLength(3);
+      const generationSpan = spans.find(
+        (span) => span.attributes["gen_ai.operation.name"] !== "execute_tool",
+      );
+      const skillSpan = spans.find(
+        (span) => span.attributes["gen_ai.tool.name"] === "skill",
+      );
+      expect(skillSpan?.name).toBe("execute_tool skill requested-skill");
+      expect(skillSpan?.status.code === SpanStatusCode.ERROR).toBe(failed);
+      expect(skillSpan?.attributes["gen_ai.skill.name"]).toBe(
+        "requested-skill",
+      );
+      for (const span of spans.filter(
+        (span) => span.attributes["gen_ai.operation.name"] === "execute_tool",
+      )) {
+        expect(span.spanContext().traceId).toBe(
+          generationSpan?.spanContext().traceId,
+        );
+        expect(span.parentSpanContext?.spanId).toBe(
+          generationSpan?.spanContext().spanId,
+        );
+      }
+      expect(JSON.stringify(exported)).not.toContain("requested-skill");
+      expect(
+        JSON.stringify({
+          spans: spans.map((span) => span.attributes),
+          exported,
+        }),
+      ).not.toContain(finalInput.extra);
+      expect(
+        JSON.stringify(skillSpan?.attributes).includes(
+          "gen_ai.tool.call.arguments",
+        ),
+      ).toBe(contentCapture === "full");
+      expect(
+        JSON.stringify(skillSpan?.attributes).includes(
+          "gen_ai.tool.call.result",
+        ),
+      ).toBe(contentCapture === "full");
+      expect(skillSpan?.attributes["gen_ai.tool.call.arguments"]).toBe(
+        contentCapture === "full"
+          ? JSON.stringify({ id: "durable-old", name: "not-v2" })
+          : undefined,
+      );
+      await reader.forceFlush();
+      const metrics = metricExporter
+        .getMetrics()
+        .flatMap((resource) => resource.scopeMetrics)
+        .flatMap((scope) => scope.metrics);
+      const duration = metrics
+        .filter(
+          (metric) =>
+            metric.descriptor.name === "gen_ai.client.operation.duration",
+        )
+        .flatMap((metric) =>
+          metric.dataPointType === DataPointType.HISTOGRAM
+            ? metric.dataPoints
+            : [],
+        );
+      expect(
+        duration.reduce((count, point) => count + point.value.count, 0),
+      ).toBe(3);
+      const toolPoints = duration.filter(
+        (point) => point.attributes["gen_ai.operation.name"] === "execute_tool",
+      );
+      expect(toolPoints).toHaveLength(2);
+      for (const point of toolPoints) {
+        expect(point.value.count).toBe(1);
+        expect(point.value.sum).toBe(0.06);
+        expect(
+          Object.keys(point.attributes).some((key) =>
+            /skill|execution.kind|tool.call/.test(key),
+          ),
+        ).toBe(false);
+        expect(JSON.stringify(point.attributes)).not.toContain(
+          "requested-skill",
+        );
+      }
+      const toolSpans = spans.filter(
+        (span) => span.attributes["gen_ai.tool.name"] === "code",
+      );
       expect(toolSpans).toHaveLength(1);
       const spanContent = JSON.stringify(toolSpans[0]?.attributes);
       expect(spanContent).not.toContain(
@@ -2434,6 +2928,7 @@ describe("native tools and real SDK capture modes", () => {
       await capture.shutdown();
       await client.shutdown();
       await provider.shutdown();
+      await meter.shutdown();
     }
   });
 

@@ -1,6 +1,8 @@
 import {
+  type Context,
   context,
   type Histogram,
+  isSpanContextValid,
   type Meter,
   metrics,
   type Span,
@@ -405,9 +407,7 @@ export class Agento11yClient {
     start: ToolExecutionStart,
     callback?: RecorderCallback<ToolExecutionRecorder, TResult>,
   ): ToolExecutionRecorder | Promise<TResult> {
-    this.assertOpen();
-    const recorder: ToolExecutionRecorder =
-      start.toolName.trim().length === 0 ? new NoopToolExecutionRecorder() : new ToolExecutionRecorderImpl(this, start);
+    const recorder = this.internalStartToolExecution(start);
     if (callback === undefined) {
       return recorder;
     }
@@ -642,6 +642,16 @@ export class Agento11yClient {
     return this.nowFn();
   }
 
+  internalStartToolExecution(
+    start: ToolExecutionStart,
+    parentContext: Context = context.active(),
+  ): ToolExecutionRecorder {
+    this.assertOpen();
+    return start.toolName.trim().length === 0
+      ? new NoopToolExecutionRecorder()
+      : new ToolExecutionRecorderImpl(this, start, parentContext);
+  }
+
   internalAgentName(): string | undefined {
     return this.config.agentName;
   }
@@ -838,23 +848,25 @@ export class Agento11yClient {
     return span;
   }
 
-  internalStartToolExecutionSpan(seed: ToolExecutionStart, startedAt: Date): Span {
-    const span = this.tracer.startSpan(toolSpanName(seed), {
-      kind: SpanKind.INTERNAL,
-      startTime: startedAt,
-      attributes: { ...toolSpanAttributes(seed), ...skillProcessAttributes(seed) },
-    });
+  internalStartToolExecutionSpan(seed: ToolExecutionStart, startedAt: Date, parentContext: Context): Span {
+    const span = this.tracer.startSpan(
+      toolSpanName(seed),
+      {
+        kind: SpanKind.INTERNAL,
+        startTime: startedAt,
+        attributes: { ...toolSpanAttributes(seed), ...skillProcessAttributes(seed) },
+      },
+      parentContext,
+    );
     setTagSpanAttributes(span, this.config.tags);
     return span;
   }
 
   internalApplyTraceContextFromSpan(span: Span, generation: Generation): void {
-    const context = span.spanContext();
-    if (context.traceId.length > 0) {
-      generation.traceId = context.traceId;
-    }
-    if (context.spanId.length > 0) {
-      generation.spanId = context.spanId;
+    const spanContext = span.spanContext();
+    if (isSpanContextValid(spanContext)) {
+      generation.traceId = spanContext.traceId;
+      generation.spanId = spanContext.spanId;
     }
   }
 
@@ -1490,6 +1502,11 @@ class GenerationRecorderImpl implements GenerationRecorder {
     this.span = this.client.internalStartGenerationSpan(this.seed, this.mode, this.startedAt, this.contentCaptureMode);
   }
 
+  startToolExecution(start: ToolExecutionStart): ToolExecutionRecorder {
+    // Bind only parentage; suppression, baggage and sampler inputs belong to the tool caller.
+    return this.client.internalStartToolExecution(start, trace.setSpan(context.active(), this.span));
+  }
+
   setResult(result: GenerationResult): void {
     if (this.ended) {
       return;
@@ -1805,6 +1822,7 @@ class ToolExecutionRecorderImpl implements ToolExecutionRecorder {
   constructor(
     private readonly client: Agento11yClient,
     seed: ToolExecutionStart,
+    parentContext: Context,
   ) {
     this.seed = cloneToolExecutionStart(seed);
     if (!notEmpty(this.seed.conversationId)) {
@@ -1842,7 +1860,7 @@ class ToolExecutionRecorderImpl implements ToolExecutionRecorder {
     }
     this.resolvedIncludeContent = shouldIncludeToolContent(this.toolMode, this.seed.includeContent ?? false);
     this.startedAt = this.seed.startedAt ?? this.client.internalNow();
-    this.span = this.client.internalStartToolExecutionSpan(this.seed, this.startedAt);
+    this.span = this.client.internalStartToolExecutionSpan(this.seed, this.startedAt, parentContext);
   }
 
   setResult(result: ToolExecutionResult): void {
