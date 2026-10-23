@@ -4,8 +4,6 @@ import (
 	"log"
 	"strings"
 
-	"github.com/grafana/agento11y/go/agento11y"
-
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/config"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/fragment"
 )
@@ -24,11 +22,11 @@ func AfterAgentResponse(p Payload, cfg config.Config, logger *log.Logger) {
 		return
 	}
 	ts := p.ResolvedTimestamp()
-	keepText := cfg.ContentCapture == agento11y.ContentCaptureModeFull ||
-		cfg.ContentCapture == agento11y.ContentCaptureModeNoToolContent
+	keepText := keepsAssistantText(cfg.ContentCapture)
 
 	err := fragment.Update(p.ConversationID, p.GenerationID, logger, func(f *fragment.Fragment) bool {
 		fragment.Touch(f, ts)
+		mergeModelParams(f, p.ModelParams)
 		// Prefer the composer `model` slug. A later chunk that only carries
 		// model_id must not downgrade an already-stored slug.
 		if model := strings.TrimSpace(p.Model); model != "" {

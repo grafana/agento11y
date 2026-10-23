@@ -100,7 +100,7 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 	case "afterAgentResponse":
 		hook.AfterAgentResponse(payload, cfg, logger)
 	case "afterAgentThought":
-		hook.AfterAgentThought(payload, logger)
+		hook.AfterAgentThought(payload, cfg, logger)
 	case "postToolUse":
 		hook.PostToolUse(payload, cfg, logger, false)
 	case "postToolUseFailure":

@@ -38,12 +38,30 @@ type ToolRecord struct {
 	Status       string          `json:"status,omitempty"`
 	CompletedAt  string          `json:"completedAt,omitempty"`
 	ErrorMessage string          `json:"errorMessage,omitempty"`
+	// FailureType is Cursor's postToolUseFailure classification
+	// (error, timeout, permission_denied). It is metadata, so it is stored
+	// in every capture mode.
+	FailureType string `json:"failureType,omitempty"`
 }
 
 // AssistantSegment is one chunk of assistant response text, in arrival order.
 type AssistantSegment struct {
 	Text      string `json:"text"`
 	Timestamp string `json:"timestamp,omitempty"`
+}
+
+// ThinkingSegment is one completed thinking block from afterAgentThought.
+// Text is the aggregated block when the capture mode keeps assistant text.
+// DurationMs is that block's duration and is stored in every capture mode.
+// StepID is Cursor's per-model-step generation_id; empty means the event
+// carried only the bare turn id. Paired is true after this block has seen
+// both spellings of that id, so a later bare event starts a new block.
+type ThinkingSegment struct {
+	Text       string   `json:"text"`
+	DurationMs *float64 `json:"durationMs,omitempty"`
+	Timestamp  string   `json:"timestamp,omitempty"`
+	StepID     string   `json:"stepId,omitempty"`
+	Paired     bool     `json:"paired,omitempty"`
 }
 
 // TokenCounts are observed in afterAgentResponse and stop. Stop's counts
@@ -65,10 +83,26 @@ type Fragment struct {
 	UserPrompt      string             `json:"userPrompt,omitempty"`
 	TokenUsage      *TokenCounts       `json:"tokenUsage,omitempty"`
 	ThinkingPresent bool               `json:"thinkingPresent,omitempty"`
-	StartedAt       string             `json:"startedAt,omitempty"`
-	LastEventAt     string             `json:"lastEventAt,omitempty"`
-	Model           string             `json:"model,omitempty"`
-	Provider        string             `json:"provider,omitempty"`
+	// Thinking holds completed thinking blocks. Text is empty in
+	// metadata_only; duration and step identity are still stored so the
+	// exported total does not depend on capture mode.
+	Thinking []ThinkingSegment `json:"thinking,omitempty"`
+	// ThinkingDurationMs is a legacy single-duration fallback for fragments
+	// written before per-block durations were stored. New writes leave it
+	// empty and put each block on Thinking.
+	ThinkingDurationMs *float64 `json:"thinkingDurationMs,omitempty"`
+	// FirstTokenAt is a real first-token timestamp when one is available.
+	// Cursor's afterAgentThought and afterAgentResponse timestamps are
+	// block-completion times, so live hooks leave this empty and the export
+	// stays synchronous.
+	FirstTokenAt string `json:"firstTokenAt,omitempty"`
+	// ModelParams are Cursor's selected model parameters (thinking, context,
+	// effort, optimize_for), keyed by id. Later events overwrite the same id.
+	ModelParams map[string]string `json:"modelParams,omitempty"`
+	StartedAt   string            `json:"startedAt,omitempty"`
+	LastEventAt string            `json:"lastEventAt,omitempty"`
+	Model       string            `json:"model,omitempty"`
+	Provider    string            `json:"provider,omitempty"`
 
 	// PendingStop is set by handleStop before it tries to emit. If emission
 	// fails the fragment stays on disk with this set so sessionEnd can replay

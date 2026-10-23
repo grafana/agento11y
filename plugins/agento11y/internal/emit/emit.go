@@ -187,7 +187,26 @@ func Record(
 	callErr error,
 	emitTools func(genCtx context.Context),
 ) error {
+	return RecordWithFirstToken(ctx, client, start, gen, callErr, time.Time{}, emitTools)
+}
+
+// RecordWithFirstToken is Record, and it also records firstTokenAt as the
+// streaming time-to-first-token sample. A zero time leaves the histogram
+// unset. The SDK only records that histogram for a streamText operation, so
+// the start and generation have to use streaming mode for the sample to land.
+func RecordWithFirstToken(
+	ctx context.Context,
+	client *agento11y.Client,
+	start agento11y.GenerationStart,
+	gen agento11y.Generation,
+	callErr error,
+	firstTokenAt time.Time,
+	emitTools func(genCtx context.Context),
+) error {
 	genCtx, rec := client.StartGeneration(ctx, start)
+	if !firstTokenAt.IsZero() {
+		rec.SetFirstTokenAt(firstTokenAt)
+	}
 	rec.SetResult(gen, nil)
 	if callErr != nil {
 		rec.SetCallError(callErr)
