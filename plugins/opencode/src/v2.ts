@@ -11,6 +11,7 @@ import {
 import { registerCopilotTitleProtection } from "./v2-copilot.js";
 import { createNativeCapture } from "./v2-events.js";
 import { createNativeGuards } from "./v2-guards.js";
+import { createGuardRedactions } from "./v2-redactions.js";
 import { createFinalCompactionGuards } from "./v2-request-guards.js";
 
 export const setupV2: Plugin.Plugin["setup"] = async (context) => {
@@ -80,10 +81,13 @@ export const setupV2: Plugin.Plugin["setup"] = async (context) => {
       await cleanup();
       return;
     }
+    // Guards record the redactions they apply; capture exports with them.
+    const redactions = createGuardRedactions();
     capture = createNativeCapture({
       client,
       config,
       redactor: createRedactor(),
+      redactions,
       directory: context.location.directory,
       workspaceID: context.location.workspaceID,
       hostVersion: context.app.version,
@@ -96,7 +100,7 @@ export const setupV2: Plugin.Plugin["setup"] = async (context) => {
       ? await registerCopilotTitleProtection(context)
       : undefined;
     if (titles) registrations.push(() => titles.dispose());
-    const guards = createNativeGuards({ client, config, context });
+    const guards = createNativeGuards({ client, config, context, redactions });
     registrations.push(await guards.register());
     registrations.push(
       await createFinalCompactionGuards({
@@ -104,6 +108,7 @@ export const setupV2: Plugin.Plugin["setup"] = async (context) => {
         config,
         context,
         agentVersion: config.agentVersion || context.app.version,
+        redactions,
       }).register(),
     );
 

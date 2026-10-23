@@ -9,6 +9,7 @@ import type {
 import type { Agento11yOpencodeConfig } from "./config.js";
 import { runPreflightTransform } from "./guard.js";
 import { nativeAgentName } from "./v2-mappers.js";
+import type { GuardRedactions } from "./v2-redactions.js";
 import {
   applyRequestTransform,
   inspectHttpBody,
@@ -23,6 +24,8 @@ export interface FinalCompactionGuardsArgs {
   config: Agento11yOpencodeConfig;
   context: Pick<Plugin.Context, "session">;
   agentVersion?: string;
+  /** Receives every redaction applied to an outgoing request, for capture. */
+  redactions?: GuardRedactions;
 }
 
 // Bedrock SigV4 signs the exact body before `http.request` runs (bedrock-auth.ts), so a rewrite would not verify.
@@ -88,6 +91,7 @@ export function createFinalCompactionGuards({
   config,
   context,
   agentVersion,
+  redactions,
 }: FinalCompactionGuardsArgs) {
   const enabled = config.guards?.enabled === true;
   const logger = {
@@ -139,7 +143,14 @@ export function createFinalCompactionGuards({
       const body = rewriteHttpBody(inspected, transformed, !signed(request));
       return body && rebuild(request, body);
     });
-    if (replacement) event.request = replacement;
+    if (!replacement) return;
+    event.request = replacement;
+    // Capture records from session events, which keep the original text.
+    redactions?.record(
+      event.sessionID,
+      inspected.projection.messages,
+      transformed,
+    );
   };
 
   // The socket driver tracks state from what it built, so frames are never rewritten.

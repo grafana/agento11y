@@ -23,6 +23,7 @@ import {
   nativeOutput,
   nativeToolRecords,
 } from "./v2-mappers.js";
+import type { GuardRedactions } from "./v2-redactions.js";
 
 export type { NativeEvent } from "./v2-mappers.js";
 
@@ -68,6 +69,8 @@ export interface NativeCaptureOptions {
   /** Running OpenCode version, the default when no agent version is configured. */
   hostVersion?: string;
   debugLog: (message: string, ...args: unknown[]) => void;
+  /** Redactions native guards applied to outgoing requests. */
+  redactions?: GuardRedactions;
 }
 
 interface CompactionGroup {
@@ -96,6 +99,7 @@ export function createNativeCapture({
   workspaceID,
   hostVersion,
   debugLog,
+  redactions,
 }: NativeCaptureOptions): {
   handleEvent(event: NativeEvent): void;
   shutdown(): Promise<void>;
@@ -177,9 +181,25 @@ export function createNativeCapture({
     settled.add(id); // Commit before scheduling any asynchronous export.
     session.lastGeneration = id;
     session.history.push(...nativeOutput(assistant.blocks));
+    // Guards redact the request sent to the model, but session events keep the
+    // original text. Export what the model received.
+    const exported = redactions
+      ? {
+          ...assistant,
+          input: redactions.messages(sessionID, assistant.input),
+          systemPrompt:
+            assistant.systemPrompt === undefined
+              ? undefined
+              : redactions.text(sessionID, assistant.systemPrompt),
+          title:
+            assistant.title === undefined
+              ? undefined
+              : redactions.text(sessionID, assistant.title),
+        }
+      : assistant;
     const result = mapNativeGeneration(
       {
-        ...assistant,
+        ...exported,
         terminalAt: at,
         settlement: reason,
         tokens: terminal?.tokens,
@@ -195,7 +215,7 @@ export function createNativeCapture({
     const seed = {
       id,
       conversationId: assistant.conversationId,
-      conversationTitle: assistant.title,
+      conversationTitle: exported.title,
       parentGenerationIds: assistant.parent ? [assistant.parent] : undefined,
       agentName: nativeAgentName(config.agentName, assistant.agent),
       agentVersion,
@@ -205,8 +225,8 @@ export function createNativeCapture({
       contentCapture: config.contentCapture,
       systemPrompt:
         config.contentCapture !== "metadata_only" &&
-        assistant.systemPrompt !== undefined
-          ? redactor.redact(assistant.systemPrompt)
+        exported.systemPrompt !== undefined
+          ? redactor.redact(exported.systemPrompt)
           : undefined,
       // Per turn, like v1, so a mid-session checkout reaches the next turn.
       tags: buildBuiltinTags({
@@ -240,7 +260,7 @@ export function createNativeCapture({
         if (error) recorder.setCallError(new Error(error));
         emitToolSpans(client, records, {
           conversationId: assistant.conversationId,
-          conversationTitle: assistant.title,
+          conversationTitle: exported.title,
           agentName: seed.agentName,
           agentVersion,
           requestProvider: assistant.model.providerID,
@@ -280,8 +300,12 @@ export function createNativeCapture({
       reserved(event);
       return;
     }
-    const snapshot =
+    const observed =
       session.compaction?.seq === started ? session.compaction : undefined;
+    const snapshot =
+      observed && redactions
+        ? { ...observed, input: redactions.messages(sessionID, observed.input) }
+        : observed;
     const mapped = mapNativeCompactionGeneration(
       event,
       snapshot,
@@ -298,8 +322,9 @@ export function createNativeCapture({
       ...mapped.seed,
       conversationId: session.conversationId,
       conversationTitle:
-        session.conversationId === event.data.sessionID
-          ? session.title
+        session.conversationId === event.data.sessionID &&
+        session.title !== undefined
+          ? (redactions?.text(sessionID, session.title) ?? session.title)
           : undefined,
       parentGenerationIds: snapshot?.parent ? [snapshot.parent] : undefined,
       agentVersion,

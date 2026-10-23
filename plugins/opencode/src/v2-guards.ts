@@ -15,6 +15,7 @@ import {
   runToolCallGuard,
 } from "./guard.js";
 import { nativeAgentName } from "./v2-mappers.js";
+import type { GuardRedactions } from "./v2-redactions.js";
 
 const TRANSFORM_REFUSAL =
   "agento11y could not safely apply a required guard transformation, so the operation was blocked.";
@@ -295,6 +296,8 @@ export interface NativeGuardsArgs {
   client: Agento11yClient;
   config: Agento11yOpencodeConfig;
   context: Pick<Plugin.Context, "app" | "session" | "tool" | "permission">;
+  /** Receives every redaction applied to an outgoing request, for capture. */
+  redactions?: GuardRedactions;
 }
 
 interface GuardModel {
@@ -312,6 +315,7 @@ export function createNativeGuards({
   client,
   config,
   context,
+  redactions,
 }: NativeGuardsArgs) {
   const enabled = config.guards?.enabled === true;
   const common = {
@@ -388,6 +392,8 @@ export function createNativeGuards({
     const output = applyNativeTransform(event, projection, result.messages);
     event.system = output.system;
     event.messages = output.messages;
+    // Capture records from session events, which keep the original text.
+    redactions?.record(event.sessionID, projection.messages, result.messages);
   };
 
   return {
