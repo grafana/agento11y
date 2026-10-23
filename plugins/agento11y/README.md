@@ -370,7 +370,7 @@ AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=user,repo
 
 | Name | Tag key | Resolved from |
 | --- | --- | --- |
-| `user` | `user` | `AGENTO11Y_USER_ID`, then the identity the host agent knows, then the OS account name |
+| `user` | `user` | `AGENTO11Y_USER_ID`, then the identity the host agent knows. Without either, the `user` key is left off |
 | `repo` | `repo` | `owner/name` of the checkout's `origin` remote, or the checkout directory name |
 | `branch` | `git.branch` | Branch checked out in the session's directory |
 

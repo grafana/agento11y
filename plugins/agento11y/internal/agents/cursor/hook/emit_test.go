@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/user"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -138,7 +137,6 @@ func TestBuildClientAttachesAutoTags(t *testing.T) {
 		envID       string
 		explicitTag string
 		disableAuto bool
-		osFallback  bool
 		wantID      string
 		wantUser    string
 	}{
@@ -198,9 +196,8 @@ func TestBuildClientAttachesAutoTags(t *testing.T) {
 			disableAuto: true, wantID: "alice@example.com",
 		},
 		{
-			name:       "no identity uses OS tag only",
-			payload:    Payload{WorkspaceRoots: []string{workspace}},
-			osFallback: true,
+			name:    "no identity leaves the user tag off",
+			payload: Payload{WorkspaceRoots: []string{workspace}},
 		},
 	}
 
@@ -255,16 +252,10 @@ func TestBuildClientAttachesAutoTags(t *testing.T) {
 					t.Error("identity metadata must be absent")
 				}
 			}
-			wantUser := tc.wantUser
-			if tc.osFallback {
-				if current, err := user.Current(); err == nil {
-					wantUser = strings.TrimSpace(current.Username)
-				}
+			if gotTags["user"] != tc.wantUser {
+				t.Errorf("user tag = %q, want %q", gotTags["user"], tc.wantUser)
 			}
-			if gotTags["user"] != wantUser {
-				t.Errorf("user tag = %q, want %q", gotTags["user"], wantUser)
-			}
-			if tc.disableAuto {
+			if tc.wantUser == "" {
 				if _, ok := gotTags["user"]; ok {
 					t.Error("automatic user tag must be absent")
 				}

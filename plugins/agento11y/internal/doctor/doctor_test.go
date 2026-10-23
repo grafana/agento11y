@@ -1956,8 +1956,7 @@ func TestCollectConfig_AutoTags(t *testing.T) {
 		},
 		{
 			// Without USER_ID the value depends on which agent runs the session,
-			// so the row shows a placeholder rather than the account name doctor
-			// itself runs under.
+			// so the row shows a placeholder rather than one agent's outcome.
 			name: "the user value is left to the agent when USER_ID is unset",
 			osEnv: map[string]string{
 				"AGENTO11Y_AUTO_CODING_AGENT_TAGS":       "true",

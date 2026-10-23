@@ -16,7 +16,6 @@
 // the hook-based agents; this file covers the in-process pi plugin, the same
 // way tags.ts mirrors the Go built-in tag builder.
 
-import { userInfo } from "node:os";
 import { resolveGitBranch, resolveGitRepo } from "./git.js";
 
 /** One value the plugin can resolve for the session. */
@@ -205,8 +204,8 @@ export interface AutoTagInputs {
   /** Workspace root the repository and branch are resolved from. */
   cwd?: string;
   /**
-   * Identity the caller already resolved, usually AGENTO11Y_USER_ID. It ranks
-   * above the OS account name.
+   * Identity the caller already resolved, usually AGENTO11Y_USER_ID. Without
+   * it the user tag is left off.
    */
   userId?: string;
   /**
@@ -253,18 +252,14 @@ function resolveOne(name: AutoTag, inputs: AutoTagInputs): string | undefined {
 }
 
 /**
- * Prefer the identity the user configured, then the OS account name. pi has no
- * signed-in user of its own, so there is no middle source here; the Go
- * launcher inserts the agent-resolved identity between the two.
+ * Use the identity the user configured. pi has no signed-in user of its
+ * own, so there is no second source here. There is no OS account fallback: the
+ * tag has to match the session's user id, or filtering by it finds no
+ * sessions.
  */
 function resolveUser(inputs: AutoTagInputs): string | undefined {
   const configured = (inputs.userId ?? "").trim();
-  if (configured !== "") return configured;
-  try {
-    return userInfo().username;
-  } catch {
-    return undefined;
-  }
+  return configured === "" ? undefined : configured;
 }
 
 function clean(value: string | undefined): string {

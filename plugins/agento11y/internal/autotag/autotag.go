@@ -19,7 +19,6 @@ package autotag
 import (
 	"log"
 	"os"
-	"os/user"
 	"strings"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
@@ -41,17 +40,6 @@ const (
 // stays bounded. Truncation keeps the start of the value.
 const MaxValueLen = 128
 
-// osUsername returns the login name of the account running the process.
-// Indirected through a variable so tests can drive the last user fallback
-// without depending on the machine they run on.
-var osUsername = func() string {
-	u, err := user.Current()
-	if err != nil {
-		return ""
-	}
-	return u.Username
-}
-
 // Inputs carry what the caller already knows. Everything else is resolved
 // here.
 type Inputs struct {
@@ -60,8 +48,7 @@ type Inputs struct {
 	// directory the host agent started the hook in.
 	Cwd string
 	// UserID is the identity the agent adapter already resolved, if any. It
-	// is the fallback below the configured USER_ID and above the OS account
-	// name.
+	// is the fallback below the configured USER_ID.
 	UserID string
 	// Lookup reads branded variables. nil uses the process environment;
 	// doctor passes a lookup backed by its pre-merge snapshot so it reports
@@ -266,15 +253,14 @@ func resolveOne(name envconfig.AutoTag, in Inputs, look envconfig.Lookup) string
 }
 
 // resolveUser prefers the identity the user configured, then the one the agent
-// adapter resolved from its own session data, then the OS account name.
+// adapter resolved from its own session data. It has no OS account fallback:
+// the tag has to match the session's user id, or filtering by it finds no
+// sessions.
 func resolveUser(in Inputs, look envconfig.Lookup) string {
 	if v, _, ok := look("USER_ID"); ok {
 		return v
 	}
-	if v := strings.TrimSpace(in.UserID); v != "" {
-		return v
-	}
-	return osUsername()
+	return strings.TrimSpace(in.UserID)
 }
 
 func clean(v string) string {
