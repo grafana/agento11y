@@ -324,6 +324,8 @@ func (c *claudeImporter) Turns(ctx context.Context, sess SessionPreview) iter.Se
 // The turn index counts within one transcript file rather than across the
 // session. Adding a subagent transcript later then leaves the turns of the
 // files beside it numbered as they were, and their generation IDs unchanged.
+// Merged same-message fragments keep the first part's index so a rerun after
+// the merge does not remint later turns.
 func claudeHistoricalGenerations(sess SessionPreview, processed []claudeProcessedTranscript, user string) []HistoricalGeneration {
 	total := 0
 	for _, p := range processed {
@@ -333,7 +335,11 @@ func claudeHistoricalGenerations(sess SessionPreview, processed []claudeProcesse
 	renamed := make(map[string]string, total)
 	for _, p := range processed {
 		for i, gen := range p.gens {
-			hist := claudeHistorical(sess, gen, p.sourcePath, i, user)
+			index := i
+			if i < len(p.indexes) {
+				index = p.indexes[i]
+			}
+			hist := claudeHistorical(sess, gen, p.sourcePath, index, user)
 			if gen.ID != "" {
 				renamed[gen.ID] = hist.Gen.ID
 			}
@@ -378,6 +384,7 @@ type claudeProcessedTranscript struct {
 	sourcePath string
 	lines      []transcript.Line
 	gens       []agento11y.Generation
+	indexes    []int
 }
 
 // claudeProcess maps one transcript of the session. st carries the session's
@@ -402,7 +409,51 @@ func claudeProcess(sess SessionPreview, sourcePath string, lines []transcript.Li
 		// cuts it, so it redacts it first, as the Sanitizer would.
 	}, nil)
 	ids.Unique(gens)
-	return claudeProcessedTranscript{sourcePath: sourcePath, lines: lines, gens: gens}
+	return claudeProcessedTranscript{
+		sourcePath: sourcePath,
+		lines:      lines,
+		gens:       gens,
+		indexes:    claudeTurnIndexes(coalesced, gens),
+	}
+}
+
+// claudeTurnIndexes numbers generations on the unmerged segmentation. A
+// merged same-message turn keeps its first part's index; later turns keep
+// the indexes they had before the merge, including gaps for absorbed parts.
+func claudeTurnIndexes(coalesced []transcript.Line, gens []agento11y.Generation) []int {
+	type slot struct {
+		requestID string
+		groups    int
+	}
+	var slots []slot
+	for _, line := range coalesced {
+		if line.Type != "assistant" {
+			continue
+		}
+		var msg transcript.AssistantMessage
+		if err := json.Unmarshal(line.Message, &msg); err != nil || msg.Usage.OutputTokens <= 0 {
+			continue
+		}
+		groups := line.LegacyGroups
+		if groups < 1 {
+			groups = 1
+		}
+		slots = append(slots, slot{requestID: line.RequestID, groups: groups})
+	}
+
+	indexes := make([]int, len(gens))
+	next := 0
+	si := 0
+	for i, gen := range gens {
+		indexes[i] = next
+		inc := 1
+		if si < len(slots) && gen.ResponseID != "" && gen.ResponseID == slots[si].requestID {
+			inc = slots[si].groups
+			si++
+		}
+		next += inc
+	}
+	return indexes
 }
 
 func claudeTranscripts(processed []claudeProcessedTranscript) []subagent.Transcript {

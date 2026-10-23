@@ -101,7 +101,7 @@ type userContext struct {
 // still does so in subagent transcripts, so without this rule those turns are
 // dropped.
 func Coalesce(lines []transcript.Line) ([]transcript.Line, int64) {
-	return coalesce(lines, false)
+	return coalesce(lines, coalesceLive)
 }
 
 // CoalesceSession is Coalesce for a session that is no longer being written,
@@ -110,15 +110,48 @@ func Coalesce(lines []transcript.Line) ([]transcript.Line, int64) {
 // assistant turn of a session is kept rather than left for a next read that
 // will never happen.
 func CoalesceSession(lines []transcript.Line) []transcript.Line {
-	out, _ := coalesce(lines, true)
+	out, _ := coalesce(lines, coalesceSession)
 	return out
 }
 
-func coalesce(lines []transcript.Line, wholeSession bool) ([]transcript.Line, int64) {
+// CoalesceUnmerged is CoalesceSession without merging fragments of one
+// Anthropic message across a tool_result. That is how main numbered turns;
+// import tests seed a ledger with it so a rerun after the merge keeps those
+// identities.
+func CoalesceUnmerged(lines []transcript.Line) []transcript.Line {
+	out, _ := coalesce(lines, coalesceUnmerged)
+	return out
+}
+
+// CoalesceGrowing is Coalesce for a subagent transcript that is still being
+// written. A tool_result can land in the middle of one Anthropic message
+// before the rest of the response exists. Exporting that prefix would send a
+// generation whose ID the finished message later reuses, and the first write
+// wins. The group is held (offset left before it) until a later assistant
+// line arrives or the caller uses CoalesceSession because the subagent has
+// finished.
+func CoalesceGrowing(lines []transcript.Line) ([]transcript.Line, int64) {
+	return coalesce(lines, coalesceGrowing)
+}
+
+type coalesceMode int
+
+const (
+	coalesceLive coalesceMode = iota
+	coalesceSession
+	coalesceGrowing
+	coalesceUnmerged
+)
+
+func coalesce(lines []transcript.Line, mode coalesceMode) ([]transcript.Line, int64) {
+	wholeSession := mode == coalesceSession || mode == coalesceUnmerged
+	mergeSameMessage := mode != coalesceUnmerged
 	var (
 		result         = make([]transcript.Line, 0, len(lines))
 		pending        []transcript.Line
 		held           []transcript.Line
+		legacyGroups   int
+		heldBreak      bool
 		lastSafeLen    int
 		lastSafeOffset int64
 		answered       = toolResultIDs(lines)
@@ -138,66 +171,102 @@ func coalesce(lines []transcript.Line, wholeSession bool) ([]transcript.Line, in
 		if msg.StopReason == "" && !wholeSession {
 			return
 		}
+		if line.LegacyGroups < 1 {
+			line.LegacyGroups = 1
+		}
 		result = append(result, line)
 		markSafe(line.EndOffset)
 	}
 
-	flush := func() {
+	notePending := func(line transcript.Line) {
+		if assistantOutputTokens(line) <= 0 {
+			pending = append(pending, line)
+			return
+		}
+		if legacyGroups == 0 || heldBreak {
+			legacyGroups++
+			heldBreak = false
+		}
+		pending = append(pending, line)
+	}
+
+	flush := func(nextStarted bool) {
 		if len(pending) == 0 {
 			held = nil
+			legacyGroups = 0
+			heldBreak = false
 			return
 		}
 		last := pending[len(pending)-1]
 		var (
-			msg    transcript.AssistantMessage
-			merged transcript.Line
+			msg      transcript.AssistantMessage
+			merged   transcript.Line
+			complete bool
 		)
+		hasStop := json.Unmarshal(last.Message, &msg) == nil && msg.StopReason != ""
+		answeredGroup := groupAnswered(pending, answered)
 		switch {
-		case json.Unmarshal(last.Message, &msg) == nil && msg.StopReason != "":
+		case hasStop:
 			merged = mergeAssistantGroup(pending, "")
-		case groupAnswered(pending, answered):
-			merged = mergeAssistantGroup(pending, "tool_use")
+			complete = true
 		case wholeSession:
-			merged = mergeAssistantGroup(pending, "")
-		default:
-			// Incomplete group in a session still being written (no terminal
-			// stop_reason, and no answered tool_use): excluded, offset not
-			// advanced; will be re-read next invocation.
+			inferred := ""
+			if answeredGroup {
+				inferred = "tool_use"
+			}
+			merged = mergeAssistantGroup(pending, inferred)
+			complete = true
+		case answeredGroup && (mode == coalesceLive || nextStarted):
+			merged = mergeAssistantGroup(pending, "tool_use")
+			complete = true
+		}
+		if !complete {
+			// Incomplete group, or a growing subagent's open message: excluded,
+			// offset not advanced; will be re-read next invocation.
 			pending = nil
 			held = nil
+			legacyGroups = 0
+			heldBreak = false
 			return
 		}
+		if legacyGroups < 1 {
+			legacyGroups = 1
+		}
+		merged.LegacyGroups = legacyGroups
 		result = append(result, merged)
 		result = append(result, held...)
 		markSafe(last.EndOffset)
 		pending = nil
 		held = nil
+		legacyGroups = 0
+		heldBreak = false
 	}
 
 	for i, line := range lines {
 		if line.Type == "assistant" {
 			if line.RequestID == "" {
-				flush()
+				flush(true)
 				appendAssistant(line)
 				continue
 			}
 			if len(pending) > 0 && pending[0].RequestID != line.RequestID {
-				flush()
+				flush(true)
 			}
-			pending = append(pending, line)
+			notePending(line)
 			continue
 		}
 
-		if len(pending) > 0 && laterFragmentOfSameResponse(lines[i+1:], pending[0]) {
+		if mergeSameMessage && len(pending) > 0 && laterFragmentOfSameResponse(lines[i+1:], pending[0]) {
 			// A parallel tool_result (or other user line) landed in the
 			// middle of this response; keep gathering fragments.
 			held = append(held, line)
+			heldBreak = true
 			continue
 		}
-		flush()
+		flush(laterAssistant(lines[i+1:]))
 		result = append(result, line)
 	}
-	flush()
+	flush(false)
 
 	if wholeSession {
 		// Nothing is held back: there is no next read to pick up a trailing
@@ -232,6 +301,23 @@ func assistantMessageID(line transcript.Line) string {
 		return ""
 	}
 	return strings.TrimSpace(msg.ID)
+}
+
+func assistantOutputTokens(line transcript.Line) int64 {
+	var msg transcript.AssistantMessage
+	if err := json.Unmarshal(line.Message, &msg); err != nil {
+		return 0
+	}
+	return msg.Usage.OutputTokens
+}
+
+func laterAssistant(rest []transcript.Line) bool {
+	for _, line := range rest {
+		if line.Type == "assistant" {
+			return true
+		}
+	}
+	return false
 }
 
 // mergeAssistantGroup merges one request's assistant fragments into a single

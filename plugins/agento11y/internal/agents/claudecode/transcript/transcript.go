@@ -48,6 +48,11 @@ type Line struct {
 	// EndOffset is the byte position after this line in the transcript file.
 	// Set by Read(), not deserialized from JSON.
 	EndOffset int64 `json:"-"`
+	// LegacyGroups is how many pre-merge assistant generations this line
+	// represents. Coalesce sets it; 1 is a normal turn, 2+ means fragments of
+	// one message were merged across a tool_result. History import uses it so
+	// a merged turn keeps its first part's TurnIndex.
+	LegacyGroups int `json:"-"`
 }
 
 // AssistantMessage is the decoded message for type="assistant" lines.

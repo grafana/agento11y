@@ -2232,12 +2232,8 @@ func TestHook_ExportsBackgroundSubagentLaterTurns(t *testing.T) {
 	if len(*exports) != 1 {
 		t.Fatalf("first Stop exports = %d, want 1", len(*exports))
 	}
-	firstSubs := subagentExports((*exports)[0])
-	if len(firstSubs) != 1 {
-		t.Fatalf("first Stop subagent gens = %d, want 1; all=%v", len(firstSubs), agentNames((*exports)[0]))
-	}
-	if _, out := firstSubs[0].usageTokens(); out != 12 {
-		t.Fatalf("first turn output tokens = %d, want 12", out)
+	if got := subagentExports((*exports)[0]); len(got) != 0 {
+		t.Fatalf("first Stop exported in-progress subagent gens = %d, want 0 held; all=%v", len(got), agentNames((*exports)[0]))
 	}
 
 	second := buildHookSidechainAssistantJSONL(sessionID, "req-side-2", agentID, "general-purpose", "later findings", 40) + "\n"
@@ -2258,11 +2254,16 @@ func TestHook_ExportsBackgroundSubagentLaterTurns(t *testing.T) {
 		t.Fatalf("SessionEnd exports = %d, want 2 total", len(*exports))
 	}
 	later := subagentExports((*exports)[1])
-	if len(later) != 1 {
-		t.Fatalf("SessionEnd subagent gens = %d, want the later turn; all=%v", len(later), agentNames((*exports)[1]))
+	if len(later) != 2 {
+		t.Fatalf("SessionEnd subagent gens = %d, want the held first turn and the later one; all=%v", len(later), agentNames((*exports)[1]))
 	}
-	if _, out := later[0].usageTokens(); out != 40 {
-		t.Fatalf("later turn output tokens = %d, want 40", out)
+	var outs []int64
+	for _, g := range later {
+		_, out := g.usageTokens()
+		outs = append(outs, out)
+	}
+	if !((outs[0] == 12 && outs[1] == 40) || (outs[0] == 40 && outs[1] == 12)) {
+		t.Fatalf("SessionEnd output tokens = %v, want 12 and 40", outs)
 	}
 }
 
@@ -2515,6 +2516,178 @@ func TestHook_IgnoresTranscriptDirOutsideSession(t *testing.T) {
 		if strings.HasPrefix(g.AgentName, "claude-code/") {
 			t.Fatalf("exported foreign subagent %q", g.AgentName)
 		}
+	}
+}
+
+// TestHook_HoldsIncompleteBackgroundResponse covers Bugbot's duplicate-ID
+// case: a parallel tool_result lands before the rest of the same Anthropic
+// message. The prefix must not export on the first Stop, or the finished
+// message later reuses the ID and the first write (output 3) wins.
+func TestHook_HoldsIncompleteBackgroundResponse(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	envconfig.PinAliasEnvBlank(t)
+	url, exports := startGenerationExportServer(t)
+	setHookExportEnv(t, url)
+	t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "metadata_only")
+
+	sessionID := "hold-session"
+	agentID := "holdagent1"
+	transcriptPath := filepath.Join(dir, sessionID+".jsonl")
+	subDir := filepath.Join(dir, sessionID, "subagents")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	subPath := filepath.Join(subDir, "agent-"+agentID+".jsonl")
+
+	parent := strings.Join([]string{
+		buildHookUserJSONL(sessionID, "research in the background"),
+		buildHookAssistantLineAt(sessionID, "req-parent", "tool_use", hookFixtureTimestamp, []any{map[string]any{
+			"type": "tool_use", "id": "agent_bg", "name": "Agent",
+			"input": map[string]any{"subagent_type": "general-purpose", "run_in_background": true},
+		}}, 7),
+		buildHookToolResultJSONL(sessionID, "agent_bg", "agentId: "+agentID+"\nTranscript dir: "+subDir+"\nstarted"),
+		buildHookAssistantJSONL(sessionID, "req-done", "end_turn", "kicked off", 5),
+	}, "\n") + "\n"
+	if err := os.WriteFile(transcriptPath, []byte(parent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	const messageID = "msg_open"
+	prefix := strings.Join([]string{
+		buildHookUserJSONL(sessionID, "inspect the repo"),
+		buildHookSidechainAssistantLineID(sessionID, "req-split", agentID, "general-purpose", messageID, "", []any{
+			map[string]any{"type": "thinking", "thinking": "plan"},
+			map[string]any{"type": "tool_use", "id": "tu_a", "name": "Read", "input": map[string]any{"file_path": "a.go"}},
+		}, 3),
+		buildHookToolResultJSONL(sessionID, "tu_a", "package a"),
+	}, "\n") + "\n"
+	if err := os.WriteFile(subPath, []byte(prefix), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	runHookForTest(t, hookInput{HookEventName: "Stop", SessionID: sessionID, TranscriptPath: transcriptPath})
+	if got := subagentExports((*exports)[0]); len(got) != 0 {
+		t.Fatalf("first Stop exported the open message: %v", agentNames((*exports)[0]))
+	}
+
+	rest := buildHookSidechainAssistantLineID(sessionID, "req-split", agentID, "general-purpose", messageID, "", []any{
+		map[string]any{"type": "tool_use", "id": "tu_b", "name": "Read", "input": map[string]any{"file_path": "b.go"}},
+	}, 660) + "\n"
+	f, err := os.OpenFile(subPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(rest); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	runHookForTest(t, hookInput{HookEventName: "Stop", SessionID: sessionID, TranscriptPath: transcriptPath})
+	if len(*exports) > 1 {
+		if got := subagentExports((*exports)[len(*exports)-1]); len(got) != 0 {
+			t.Fatalf("second Stop exported before the subagent finished: %v", agentNames(got))
+		}
+	}
+
+	runHookForTest(t, hookInput{HookEventName: "SessionEnd", SessionID: sessionID, TranscriptPath: transcriptPath})
+	var subs []exportedGeneration
+	for _, batch := range *exports {
+		subs = append(subs, subagentExports(batch)...)
+	}
+	if len(subs) != 1 {
+		t.Fatalf("subagent gens = %d, want 1 finished message; all=%v", len(subs), agentNames(subs))
+	}
+	if in, out := subs[0].usageTokens(); in != 80 || out != 660 {
+		t.Fatalf("usage = input %d output %d, want 80/660 (last line, not the prefix)", in, out)
+	}
+	if strings.Contains(subs[0].ID, "#") {
+		t.Fatalf("generation id %q was uniqued; the prefix and tail were exported separately", subs[0].ID)
+	}
+}
+
+// TestHook_TranscriptDirDoesNotFinishRunningSibling covers a blocking Agent
+// result whose Transcript dir is the shared subagents/ folder. That must not
+// mark a still-running background sibling done, or CoalesceSession would
+// export an open message under an ID the finished response later reuses.
+func TestHook_TranscriptDirDoesNotFinishRunningSibling(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	envconfig.PinAliasEnvBlank(t)
+	url, exports := startGenerationExportServer(t)
+	setHookExportEnv(t, url)
+	t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "metadata_only")
+
+	sessionID := "sib-session"
+	doneID := "doneagent1"
+	bgID := "bgagent2"
+	transcriptPath := filepath.Join(dir, sessionID+".jsonl")
+	subDir := filepath.Join(dir, sessionID, "subagents")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	parent := strings.Join([]string{
+		buildHookUserJSONL(sessionID, "delegate"),
+		buildHookAssistantLineAt(sessionID, "req-done", "tool_use", hookFixtureTimestamp, []any{map[string]any{
+			"type": "tool_use", "id": "agent_done", "name": "Agent",
+			"input": map[string]any{"subagent_type": "explore"},
+		}}, 7),
+		buildHookToolResultJSONL(sessionID, "agent_done", "agentId: "+doneID+"\nTranscript dir: "+subDir+"\ndone"),
+		buildHookAssistantLineAt(sessionID, "req-bg", "tool_use", hookFixtureTimestamp, []any{map[string]any{
+			"type": "tool_use", "id": "agent_bg", "name": "Agent",
+			"input": map[string]any{"subagent_type": "general-purpose", "run_in_background": true},
+		}}, 6),
+		buildHookToolResultJSONL(sessionID, "agent_bg", "agentId: "+bgID+"\nTranscript dir: "+subDir+"\nstarted"),
+		buildHookAssistantJSONL(sessionID, "req-wrap", "end_turn", "kicked off", 5),
+	}, "\n") + "\n"
+	if err := os.WriteFile(transcriptPath, []byte(parent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	done := strings.Join([]string{
+		buildHookUserJSONL(sessionID, "explore"),
+		buildHookSidechainAssistantJSONL(sessionID, "req-done-sub", doneID, "explore", "finished", 33),
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(subDir, "agent-"+doneID+".jsonl"), []byte(done), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	const messageID = "msg_open"
+	bg := strings.Join([]string{
+		buildHookUserJSONL(sessionID, "still working"),
+		buildHookSidechainAssistantLineID(sessionID, "req-bg-sub", bgID, "general-purpose", messageID, "", []any{
+			map[string]any{"type": "thinking", "thinking": "plan"},
+			map[string]any{"type": "tool_use", "id": "tu_a", "name": "Read", "input": map[string]any{"file_path": "a.go"}},
+		}, 3),
+		buildHookToolResultJSONL(sessionID, "tu_a", "package a"),
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(subDir, "agent-"+bgID+".jsonl"), []byte(bg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	runHookForTest(t, hookInput{HookEventName: "Stop", SessionID: sessionID, TranscriptPath: transcriptPath})
+	var (
+		doneOut int64
+		bgOuts  []int64
+	)
+	for _, g := range subagentExports((*exports)[0]) {
+		_, out := g.usageTokens()
+		switch g.AgentName {
+		case "claude-code/explore":
+			doneOut = out
+		case "claude-code/general-purpose":
+			bgOuts = append(bgOuts, out)
+		}
+	}
+	if doneOut != 33 {
+		t.Fatalf("finished sibling output = %d, want 33", doneOut)
+	}
+	if len(bgOuts) != 0 {
+		t.Fatalf("running sibling exported %v, want the open message held", bgOuts)
 	}
 }
 

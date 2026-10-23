@@ -1074,3 +1074,96 @@ func TestClaudeImportIgnoresTheAgentNameOverride(t *testing.T) {
 		}
 	}
 }
+
+// TestClaudeReimportAfterMergeSendsNoNewTurns seeds a ledger the way main
+// numbered turns (unmerged split parts), then imports with the merge on the
+// same ledger. Unchanged turns keep their identities; the absorbed second
+// part is not a new turn.
+func TestClaudeReimportAfterMergeSendsNoNewTurns(t *testing.T) {
+	root := t.TempDir()
+	sessionID := "sess-reimport"
+	path := filepath.Join(root, "-work-repo", sessionID+".jsonl")
+	asst := func(ts, requestID, messageID string, output int64, content []map[string]any) string {
+		return claudeLine(map[string]any{
+			"type": "assistant", "sessionId": sessionID, "cwd": "/work/repo",
+			"timestamp": ts, "requestId": requestID, "version": "2.1.22",
+			"message": map[string]any{
+				"id": messageID, "model": "claude-sonnet-4-20250514",
+				"stop_reason": nil,
+				"usage":       map[string]any{"input_tokens": 100, "output_tokens": output},
+				"content":     content,
+			},
+		})
+	}
+	body := claudeUserLine(sessionID, "/work/repo", "2026-01-10T12:00:00Z", "inspect the repo") +
+		asst("2026-01-10T12:00:05Z", "req-split", "msg_split", 3, []map[string]any{
+			{"type": "thinking", "thinking": "plan"},
+			{"type": "tool_use", "id": "tu_a", "name": "Read", "input": map[string]any{"file_path": "a.go"}},
+		}) +
+		claudeToolResultLine(sessionID, "tu_a", "package a") +
+		asst("2026-01-10T12:00:09Z", "req-split", "msg_split", 40, []map[string]any{
+			{"type": "tool_use", "id": "tu_b", "name": "Read", "input": map[string]any{"file_path": "b.go"}},
+		}) +
+		claudeUserLine(sessionID, "/work/repo", "2026-01-10T12:01:00Z", "thanks") +
+		asst("2026-01-10T12:01:05Z", "req-next", "msg_next", 9, []map[string]any{
+			{"type": "text", "text": "you are welcome"},
+		})
+	writeFile(t, path, body)
+
+	imp := claudeImporterAt(root)
+	preview, ok, err := imp.Preview(context.Background(), path)
+	if err != nil || !ok {
+		t.Fatalf("Preview: ok=%v err=%v", ok, err)
+	}
+
+	raw, _, err := transcript.Read(path, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyGens, _ := mapper.Process(mapper.CoalesceUnmerged(raw), &state.Session{}, mapper.Options{SessionID: preview.SessionID}, nil)
+	if len(legacyGens) != 3 {
+		t.Fatalf("unmerged generations = %d, want 3 (split parts + later turn)", len(legacyGens))
+	}
+
+	current := collectTurns(t, imp, preview)
+	if len(current) != 2 {
+		t.Fatalf("merged generations = %d, want 2", len(current))
+	}
+	if current[0].Source.TurnIndex != 0 {
+		t.Fatalf("merged turn TurnIndex = %d, want 0 (first part)", current[0].Source.TurnIndex)
+	}
+	if current[1].Source.TurnIndex != 2 {
+		t.Fatalf("later turn TurnIndex = %d, want 2 (unmerged numbering)", current[1].Source.TurnIndex)
+	}
+
+	ledger := testLedger(t)
+	for i, gen := range legacyGens {
+		turnID := gen.ResponseID
+		if turnID == "" {
+			turnID = gen.ID
+		}
+		src := SourceRef{
+			Agent: AgentClaudeCode, SessionID: preview.SessionID,
+			SourcePath: path, TurnIndex: i, TurnID: turnID,
+		}
+		if err := ledger.Mark(src.Identity(), StatusExported, src.GenerationID(), "", 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	exp := &recordingExporter{}
+	result, err := RunImport(context.Background(), ImportOptions{
+		Agent:    AgentClaudeCode,
+		Importer: imp,
+		Sessions: []SessionPreview{preview},
+		Exporter: exp,
+		Ledger:   ledger,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Imported != 0 || len(exp.got) != 0 {
+		t.Fatalf("re-import sent %d new turns (imported=%d skipped=%d); want 0",
+			len(exp.got), result.Imported, result.Skipped)
+	}
+}

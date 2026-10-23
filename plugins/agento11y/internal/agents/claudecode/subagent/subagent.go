@@ -185,22 +185,7 @@ func BlockingCompletedKeys(lines []transcript.Line, files []string) map[string]b
 		if background[block.ToolUseID] {
 			return
 		}
-		for _, agentID := range AgentIDsFromToolResult(content) {
-			if refs.hasAgentID(agentID) {
-				keys[agentID] = true
-			}
-		}
-		dir := TranscriptDirFromToolResult(content)
-		if !refs.hasDir(dir) {
-			return
-		}
-		dir = cleanPath(dir)
-		for _, file := range files {
-			fileDir := filepath.Clean(filepath.Dir(file))
-			if fileDir == dir || strings.HasPrefix(fileDir, dir+string(filepath.Separator)) {
-				keys[FileKey(file)] = true
-			}
-		}
+		markCompletedKeys(keys, content, refs, files)
 	})
 	return keys
 }
@@ -220,24 +205,36 @@ func CompletedKeys(lines []transcript.Line, files []string) map[string]bool {
 	refs := RefsForFiles(files)
 	keys := map[string]bool{}
 	eachToolResult(lines, func(_ transcript.UserContentBlock, content string) {
-		for _, agentID := range AgentIDsFromToolResult(content) {
-			if refs.hasAgentID(agentID) {
-				keys[agentID] = true
-			}
-		}
-		dir := TranscriptDirFromToolResult(content)
-		if !refs.hasDir(dir) {
-			return
-		}
-		dir = cleanPath(dir)
-		for _, file := range files {
-			fileDir := filepath.Clean(filepath.Dir(file))
-			if fileDir == dir || strings.HasPrefix(fileDir, dir+string(filepath.Separator)) {
-				keys[FileKey(file)] = true
-			}
-		}
+		markCompletedKeys(keys, content, refs, files)
 	})
 	return keys
+}
+
+// markCompletedKeys records the subagent files a tool result finishes.
+// Agent IDs name one file. A Transcript dir only does when it uniquely
+// identifies one file; the shared <session>/subagents folder would otherwise
+// mark every running sibling done.
+func markCompletedKeys(keys map[string]bool, content string, refs Refs, files []string) {
+	for _, agentID := range AgentIDsFromToolResult(content) {
+		if refs.hasAgentID(agentID) {
+			keys[agentID] = true
+		}
+	}
+	dir := TranscriptDirFromToolResult(content)
+	if dir == "" || !refs.hasDir(dir) {
+		return
+	}
+	dir = cleanPath(dir)
+	var matches []string
+	for _, file := range files {
+		fileDir := filepath.Clean(filepath.Dir(file))
+		if fileDir == dir || strings.HasPrefix(fileDir, dir+string(filepath.Separator)) {
+			matches = append(matches, file)
+		}
+	}
+	if len(matches) == 1 {
+		keys[FileKey(matches[0])] = true
+	}
 }
 
 func eachToolResult(lines []transcript.Line, fn func(transcript.UserContentBlock, string)) {

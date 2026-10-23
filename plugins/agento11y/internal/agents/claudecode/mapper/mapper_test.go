@@ -1087,6 +1087,53 @@ func TestCoalesce_MergesSameRequestAcrossToolResult(t *testing.T) {
 	if gens[0].Usage.InputTokens != 150 {
 		t.Errorf("generation input tokens = %d, want 150 (last line, not doubled)", gens[0].Usage.InputTokens)
 	}
+	if got[1].LegacyGroups != 2 {
+		t.Errorf("LegacyGroups = %d, want 2 (unmerged first part + second part)", got[1].LegacyGroups)
+	}
+}
+
+func TestCoalesceGrowing_HoldsOpenMessage(t *testing.T) {
+	const messageID = "msg_open"
+	prompt := makeUserLine("inspect the repo")
+	prompt.EndOffset = 50
+	first := withAssistantMessageID(makeAssistantFragment("req-split", 3, []transcript.ContentBlock{
+		{Type: "thinking", Thinking: "plan"},
+		{Type: "tool_use", ID: "tu_a", Name: "Read", Input: json.RawMessage(`{"file_path":"a.go"}`)},
+	}, ""), messageID)
+	first.EndOffset = 150
+	result := makeToolResultLine("tu_a", "package a")
+	result.EndOffset = 250
+
+	held, offset := CoalesceGrowing([]transcript.Line{prompt, first, result})
+	if len(held) != 0 || offset != 0 {
+		t.Fatalf("growing Coalesce exported %d lines at offset %d; want the open message held", len(held), offset)
+	}
+
+	live, liveOffset := Coalesce([]transcript.Line{prompt, first, result})
+	if len(live) != 2 || liveOffset != 150 {
+		t.Fatalf("live Coalesce = %d lines offset %d, want the answered tool_use exported", len(live), liveOffset)
+	}
+
+	last := withAssistantMessageID(makeAssistantFragment("req-split", 660, []transcript.ContentBlock{
+		{Type: "tool_use", ID: "tu_b", Name: "Read", Input: json.RawMessage(`{"file_path":"b.go"}`)},
+	}, ""), messageID)
+	last.EndOffset = 350
+	next := withAssistantMessageID(makeAssistantFragment("req-next", 9, []transcript.ContentBlock{
+		{Type: "text", Text: "done"},
+	}, "end_turn"), "msg_next")
+	next.EndOffset = 450
+
+	ready, readyOffset := CoalesceGrowing([]transcript.Line{prompt, first, result, last, next})
+	if readyOffset != 450 {
+		t.Fatalf("offset = %d, want 450 after the next message started", readyOffset)
+	}
+	gens, _ := Process(ready, &state.Session{}, Options{SessionID: "sess-1"}, nil)
+	if len(gens) != 2 {
+		t.Fatalf("got %d generations, want the finished message plus the next turn", len(gens))
+	}
+	if gens[0].Usage.OutputTokens != 660 {
+		t.Fatalf("first generation output = %d, want 660 (held until complete)", gens[0].Usage.OutputTokens)
+	}
 }
 
 func TestCoalesce_SameRequestWithoutMessageIDStaysTwoTurns(t *testing.T) {

@@ -87,7 +87,7 @@ func liveSubagentGens(input *hookInput, parentLines []transcript.Line, parentGen
 			newOffset = item.readPos
 		} else {
 			var safe int64
-			coalesced, safe = mapper.Coalesce(item.raw)
+			coalesced, safe = mapper.CoalesceGrowing(item.raw)
 			if safe == 0 {
 				continue
 			}

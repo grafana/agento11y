@@ -173,6 +173,47 @@ func TestBlockingCompletedKeysSkipsBackground(t *testing.T) {
 	}
 }
 
+func TestBlockingCompletedKeysIgnoresSharedTranscriptDir(t *testing.T) {
+	dir := t.TempDir()
+	subDir := filepath.Join(dir, "sess", "subagents")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	blocking := filepath.Join(subDir, "agent-done.jsonl")
+	running := filepath.Join(subDir, "agent-bg.jsonl")
+	if err := os.WriteFile(blocking, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(running, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lines := []transcript.Line{
+		{
+			Type:    "assistant",
+			Message: []byte(`{"content":[{"type":"tool_use","id":"tu_done","name":"Agent","input":{"subagent_type":"explore"}}]}`),
+		},
+		{
+			Type:    "user",
+			Message: []byte(`{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_done","content":"agentId: done\nTranscript dir: ` + subDir + `\n"}]}`),
+		},
+		{
+			Type:    "assistant",
+			Message: []byte(`{"content":[{"type":"tool_use","id":"tu_bg","name":"Agent","input":{"run_in_background":true,"subagent_type":"general-purpose"}}]}`),
+		},
+		{
+			Type:    "user",
+			Message: []byte(`{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_bg","content":"agentId: bg\nTranscript dir: ` + subDir + `\n"}]}`),
+		},
+	}
+	got := BlockingCompletedKeys(lines, []string{blocking, running})
+	if !got["done"] {
+		t.Fatal("blocking agent named by agentId must look finished")
+	}
+	if got["bg"] {
+		t.Fatal("shared Transcript dir must not mark the running sibling done")
+	}
+}
+
 func TestIDsUniqueSuffixesCollisions(t *testing.T) {
 	ids := NewIDs()
 	parent := []agento11y.Generation{{ID: "shared"}}
