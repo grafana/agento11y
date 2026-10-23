@@ -90,6 +90,7 @@ Without any of these, each run becomes its own conversation.
   - `on_tool_start` / `on_tool_end` / `on_tool_error` -> `start_tool_execution`
   - `on_chain_start` / `on_chain_end` / `on_chain_error` -> framework chain spans
   - `on_retriever_start` / `on_retriever_end` / `on_retriever_error` -> framework retriever spans
+  - A chain or retriever span that ends with an error leaves the error text off under `METADATA_ONLY` and `FULL_WITH_METADATA_SPANS` (which resolves to `FULL` with experimental OTel generation export), and when a `generation_sanitizer` is configured. Its status then reads `sdk_error`.
   - `on_llm_new_token` -> first-token timestamp for stream mode
 - Mode mapping: non-stream -> `SYNC`, stream -> `STREAM`.
 - Provider resolver parity:

@@ -3,10 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from datetime import timedelta
 from uuid import uuid4
 
-from agento11y import Client, ClientConfig, GenerationExportConfig
+import pytest
+from agento11y import (
+    Client,
+    ClientConfig,
+    ContentCaptureMode,
+    GenerationExportConfig,
+    create_secret_redaction_sanitizer,
+    with_content_capture_mode,
+)
 from agento11y.client import GenerationRecorder
 from agento11y.models import ExportGenerationResult, ExportGenerationsResponse
 from agento11y_langchain import (
@@ -802,6 +811,96 @@ def test_langchain_async_handler_records_generation() -> None:
         assert generation.model.provider == "openai"
     finally:
         client.shutdown()
+
+
+def _resolver_picks(component_name: str):
+    def resolve(metadata):
+        if metadata.get("agento11y.framework.component_name") == component_name:
+            return ContentCaptureMode.METADATA_ONLY
+        return ContentCaptureMode.DEFAULT
+
+    return resolve
+
+
+def _failing_resolver(_metadata):
+    raise RuntimeError("resolver failed")
+
+
+@pytest.mark.parametrize(
+    ("config", "context_mode", "hidden"),
+    [
+        pytest.param({}, None, False, id="default capture keeps the text"),
+        pytest.param({"content_capture": ContentCaptureMode.METADATA_ONLY}, None, True, id="metadata_only"),
+        pytest.param(
+            {"content_capture": ContentCaptureMode.FULL_WITH_METADATA_SPANS},
+            None,
+            True,
+            id="full_with_metadata_spans",
+        ),
+        pytest.param(
+            {"generation_sanitizer": create_secret_redaction_sanitizer()},
+            None,
+            True,
+            id="default capture with a generation sanitizer",
+        ),
+        pytest.param(
+            {"content_capture": ContentCaptureMode.FULL, "content_capture_resolver": _resolver_picks("PrivateChain")},
+            None,
+            True,
+            id="resolver picks metadata_only from the run metadata",
+        ),
+        pytest.param(
+            {"content_capture": ContentCaptureMode.FULL, "content_capture_resolver": _resolver_picks("OtherChain")},
+            None,
+            False,
+            id="resolver keeps the text for a run it does not pick",
+        ),
+        pytest.param({"content_capture_resolver": _failing_resolver}, None, True, id="resolver that throws"),
+        pytest.param({}, ContentCaptureMode.METADATA_ONLY, True, id="with_content_capture_mode at the run start"),
+    ],
+)
+def test_langchain_chain_and_retriever_spans_leave_the_error_text_off_when_content_is_hidden(
+    config, context_mode, hidden
+) -> None:
+    api_key = "sk-proj-" + "a" * 48
+    span_exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    client = Client(
+        ClientConfig(
+            tracer=provider.get_tracer("agento11y-test"),
+            generation_export=GenerationExportConfig(batch_size=10, flush_interval=timedelta(seconds=60)),
+            generation_exporter=_CapturingExporter(),
+            **config,
+        )
+    )
+
+    try:
+        handler = Agento11yLangChainHandler(client=client)
+        chain_run_id = uuid4()
+        retriever_run_id = uuid4()
+        start_scope = with_content_capture_mode(context_mode) if context_mode is not None else contextlib.nullcontext()
+        with start_scope:
+            handler.on_chain_start({"name": "PrivateChain"}, {}, run_id=chain_run_id)
+            handler.on_retriever_start({"name": "PrivateChain"}, "query", run_id=retriever_run_id)
+        handler.on_chain_error(RuntimeError(f"invalid key {api_key}"), run_id=chain_run_id)
+        handler.on_retriever_error(RuntimeError(f"invalid key {api_key}"), run_id=retriever_run_id)
+
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 2
+        for span in spans:
+            assert span.status.status_code.name == "ERROR"
+            assert span.attributes.get("error.type") == "framework_error"
+            if hidden:
+                assert span.status.description == "sdk_error"
+                assert len(span.events) == 0
+                assert api_key not in repr((dict(span.attributes), span.status.description, span.events))
+            else:
+                assert span.status.description == f"invalid key {api_key}"
+                assert len(span.events) == 1
+    finally:
+        client.shutdown()
+        provider.shutdown()
 
 
 def test_langchain_tool_chain_and_retriever_callbacks_emit_spans() -> None:
