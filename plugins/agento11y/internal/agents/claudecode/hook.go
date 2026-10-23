@@ -214,15 +214,18 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 	}
 
 	var (
-		gens         []agento11y.Generation
+		parentGens   []agento11y.Generation
 		toolResultAt map[string]time.Time
 	)
 	if parentReady {
 		lines = subagent.DropCoveredSidechain(lines, subFiles, input.TranscriptPath)
 		opts.SuppressSyntheticSubagentToolCallIDs = subagent.SyntheticToolCallIDs(lines, subagent.RefsForFiles(subFiles))
-		gens, toolResultAt = mapper.Process(lines, &st, opts, r)
+		parentGens, toolResultAt = mapper.Process(lines, &st, opts, r)
 	}
-	gens = append(gens, liveSubagentGens(input, lines, gens, subFiles, &st, opts, r, logger)...)
+	subGens := liveSubagentGens(input, lines, parentGens, subFiles, &st, opts, r, logger)
+	gens := make([]agento11y.Generation, 0, len(parentGens)+len(subGens))
+	gens = append(gens, parentGens...)
+	gens = append(gens, subGens...)
 
 	if len(gens) == 0 {
 		logger.Printf("no generations produced; keeping offset=%d for next event", st.Offset)

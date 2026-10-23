@@ -41,11 +41,11 @@ func subagentSessionPath(path string) string {
 		return path
 	}
 	slash := filepath.ToSlash(path)
-	i := strings.Index(slash, "/subagents/")
-	if i < 0 {
+	sessionDir, _, ok := strings.Cut(slash, "/subagents/")
+	if !ok {
 		return path
 	}
-	sessionDir := filepath.FromSlash(slash[:i])
+	sessionDir = filepath.FromSlash(sessionDir)
 	return filepath.Join(filepath.Dir(sessionDir), filepath.Base(sessionDir)+".jsonl")
 }
 
