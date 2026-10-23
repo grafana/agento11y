@@ -1172,6 +1172,31 @@ class Client:
     def _has_generation_sanitizer(self) -> bool:
         return self._config.generation_sanitizer is not None
 
+    def _should_redact_framework_span_errors(
+        self, metadata: dict[str, Any], ctx_mode: ContentCaptureMode | None
+    ) -> bool:
+        """Reports whether a framework chain or retriever span must leave the error text off.
+
+        The mode resolves the way the framework's generations resolve theirs:
+        the resolver sees this run's metadata, then the client default
+        applies, and ``ctx_mode`` is the ``with_content_capture_mode`` value
+        seen when the run started. A generation sanitizer cannot redact a
+        chain error, so with one configured the text stays off too.
+        """
+        resolver_mode = _call_content_capture_resolver(
+            self._config.content_capture_resolver, metadata, self._config.logger
+        )
+        mode = _resolve_client_content_capture_mode(
+            _resolve_content_capture_mode(resolver_mode, self._config.content_capture)
+        )
+        if ctx_mode is not None:
+            mode = _resolve_content_capture_mode(ctx_mode, mode)
+        mode = self._resolve_otel_capture_mode(mode)
+        return (
+            mode in (ContentCaptureMode.METADATA_ONLY, ContentCaptureMode.FULL_WITH_METADATA_SPANS)
+            or self._has_generation_sanitizer()
+        )
+
     def _sanitize_generation(self, generation: Generation) -> Generation:
         sanitizer = self._config.generation_sanitizer
         if sanitizer is None:

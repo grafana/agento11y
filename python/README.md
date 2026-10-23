@@ -598,6 +598,14 @@ For tool executions, highest to lowest:
 3. `content_capture_resolver` return value
 4. `ClientConfig.content_capture` (defaults to `NO_TOOL_CONTENT`; `DEFAULT` at the client level resolves to `NO_TOOL_CONTENT`)
 
+For framework chain and retriever spans, which carry only the error text, highest to lowest:
+
+1. The capture mode in context as the run starts, from `with_content_capture_mode(...)` or from a generation still open around the run
+2. `content_capture_resolver` return value, called with the run's metadata when the run ends with an error
+3. `ClientConfig.content_capture`
+
+The error text is left off under `METADATA_ONLY` and `FULL_WITH_METADATA_SPANS`, and when a `generation_sanitizer` is configured. With experimental OTel generation export, `FULL_WITH_METADATA_SPANS` resolves to `FULL` here too, and the text is kept.
+
 Exceptions in the resolver are caught and treated as `METADATA_ONLY` (fail-closed).
 
 ## Export Configuration
