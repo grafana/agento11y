@@ -1136,6 +1136,51 @@ func TestCoalesceGrowing_HoldsOpenMessage(t *testing.T) {
 	}
 }
 
+func TestCoalesceGrowing_IgnoresSyntheticWhenDecidingFinished(t *testing.T) {
+	const messageID = "msg_open"
+	prompt := makeUserLine("inspect the repo")
+	prompt.EndOffset = 50
+	first := withAssistantMessageID(makeAssistantFragment("req-split", 3, []transcript.ContentBlock{
+		{Type: "thinking", Thinking: "plan"},
+		{Type: "tool_use", ID: "tu_a", Name: "Read", Input: json.RawMessage(`{"file_path":"a.go"}`)},
+	}, ""), messageID)
+	first.EndOffset = 150
+	result := makeToolResultLine("tu_a", "package a")
+	result.EndOffset = 250
+	synthetic := withAssistantModel(withAssistantMessageID(makeAssistantFragment("req-synth", 1, []transcript.ContentBlock{
+		{Type: "text", Text: "progress"},
+	}, ""), "msg_synth"), "<synthetic>")
+	synthetic.EndOffset = 350
+
+	held, offset := CoalesceGrowing([]transcript.Line{prompt, first, result, synthetic})
+	if len(held) != 0 || offset != 0 {
+		t.Fatalf("growing Coalesce exported %d lines at offset %d; want the open message held past a <synthetic> decoy", len(held), offset)
+	}
+}
+
+func TestCoalesceGrowing_IgnoresMissingRequestIDWhenDecidingFinished(t *testing.T) {
+	const messageID = "msg_open"
+	prompt := makeUserLine("inspect the repo")
+	prompt.EndOffset = 50
+	first := withAssistantMessageID(makeAssistantFragment("req-split", 3, []transcript.ContentBlock{
+		{Type: "thinking", Thinking: "plan"},
+		{Type: "tool_use", ID: "tu_a", Name: "Read", Input: json.RawMessage(`{"file_path":"a.go"}`)},
+	}, ""), messageID)
+	first.EndOffset = 150
+	result := makeToolResultLine("tu_a", "package a")
+	result.EndOffset = 250
+	decoy := withAssistantMessageID(makeAssistantFragment("req-decoy", 1, []transcript.ContentBlock{
+		{Type: "text", Text: "progress"},
+	}, ""), "msg_decoy")
+	decoy.RequestID = ""
+	decoy.EndOffset = 350
+
+	held, offset := CoalesceGrowing([]transcript.Line{prompt, first, result, decoy})
+	if len(held) != 0 || offset != 0 {
+		t.Fatalf("growing Coalesce exported %d lines at offset %d; want the open message held past a requestId-less decoy", len(held), offset)
+	}
+}
+
 func TestCoalesce_SameRequestWithoutMessageIDStaysTwoTurns(t *testing.T) {
 	prompt := makeUserLine("inspect the repo")
 	prompt.EndOffset = 50
@@ -1166,6 +1211,20 @@ func withAssistantMessageID(line transcript.Line, id string) transcript.Line {
 		return line
 	}
 	msg.ID = id
+	raw, err := json.Marshal(msg)
+	if err != nil {
+		return line
+	}
+	line.Message = raw
+	return line
+}
+
+func withAssistantModel(line transcript.Line, model string) transcript.Line {
+	var msg transcript.AssistantMessage
+	if err := json.Unmarshal(line.Message, &msg); err != nil {
+		return line
+	}
+	msg.Model = model
 	raw, err := json.Marshal(msg)
 	if err != nil {
 		return line

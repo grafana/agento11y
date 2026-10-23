@@ -3,6 +3,7 @@ package claudecode
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log"
@@ -2716,4 +2717,147 @@ func buildHookSidechainAssistantLineID(sessionID, requestID, agentID, attributio
 	}
 	data, _ := json.Marshal(line)
 	return string(data)
+}
+
+// TestHook_RedactsSubagentTranscriptSecrets guards full-mode redaction on the
+// sibling-file path. A GitHub PAT in the subagent prompt, a tool input, and
+// the text reply must become [REDACTED:github-pat] on the wire; the parent
+// transcript does not carry the secret, so a miss here would export it.
+func TestHook_RedactsSubagentTranscriptSecrets(t *testing.T) {
+	const secret = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij"
+	const marker = "[REDACTED:github-pat]"
+
+	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	envconfig.PinAliasEnvBlank(t)
+
+	var gotBody atomic.Value
+	gotBody.Store("")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "read body", http.StatusBadRequest)
+			return
+		}
+		gotBody.Store(string(body))
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		acceptGenerationExport(w, r)
+	}))
+	defer server.Close()
+
+	setHookExportEnv(t, server.URL)
+	t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "full")
+
+	sessionID := "subagent-redact-session"
+	agentID := "redactagent1"
+	transcriptPath := filepath.Join(dir, sessionID+".jsonl")
+	subDir := filepath.Join(dir, sessionID, "subagents")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	parent := strings.Join([]string{
+		buildHookUserJSONL(sessionID, "investigate the repo"),
+		buildHookAssistantLineAt(sessionID, "req-parent", "tool_use", hookFixtureTimestamp, []any{map[string]any{
+			"type": "tool_use", "id": "agent_1", "name": "Agent",
+			"input": map[string]any{"subagent_type": "general-purpose", "description": "look around"},
+		}}, 7),
+		buildHookToolResultJSONL(sessionID, "agent_1", "agentId: "+agentID+"\nTranscript dir: "+subDir+"\nfound"),
+		buildHookAssistantJSONL(sessionID, "req-done", "end_turn", "done", 5),
+	}, "\n") + "\n"
+	if err := os.WriteFile(transcriptPath, []byte(parent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sub := strings.Join([]string{
+		buildHookUserJSONL(sessionID, "use token "+secret),
+		buildHookSidechainAssistantLine(sessionID, "req-side-1", agentID, "general-purpose", "tool_use", []any{
+			map[string]any{"type": "tool_use", "id": "tu_bash", "name": "Bash",
+				"input": map[string]any{"command": "echo " + secret}},
+		}, 8),
+		buildHookToolResultJSONL(sessionID, "tu_bash", "ok"),
+		buildHookSidechainAssistantJSONL(sessionID, "req-side-2", agentID, "general-purpose", "got "+secret, 12),
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(subDir, "agent-"+agentID+".jsonl"), []byte(sub), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	logs := runHookForTest(t, hookInput{
+		HookEventName:  "Stop",
+		SessionID:      sessionID,
+		TranscriptPath: transcriptPath,
+	})
+	body, _ := gotBody.Load().(string)
+	if body == "" {
+		t.Fatalf("expected an export request (logs:\n%s)", logs)
+	}
+	if strings.Contains(body, secret) {
+		t.Fatalf("export leaked the subagent GitHub PAT:\n%s", body)
+	}
+
+	var req struct {
+		Generations []struct {
+			AgentName string `json:"agent_name"`
+			Input     []struct {
+				Parts []struct {
+					Text string `json:"text"`
+				} `json:"parts"`
+			} `json:"input"`
+			Output []struct {
+				Parts []struct {
+					Text     string `json:"text"`
+					ToolCall *struct {
+						InputJSON string `json:"input_json"`
+					} `json:"tool_call"`
+				} `json:"parts"`
+			} `json:"output"`
+		} `json:"generations"`
+	}
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatalf("decode export: %v\n%s", err, body)
+	}
+
+	var sawPrompt, sawTool, sawReply bool
+	for _, g := range req.Generations {
+		if !strings.HasPrefix(g.AgentName, "claude-code/") {
+			continue
+		}
+		for _, msg := range g.Input {
+			for _, p := range msg.Parts {
+				if strings.Contains(p.Text, secret) {
+					t.Errorf("subagent prompt leaked the PAT: %q", p.Text)
+				}
+				if strings.Contains(p.Text, marker) {
+					sawPrompt = true
+				}
+			}
+		}
+		for _, msg := range g.Output {
+			for _, p := range msg.Parts {
+				if strings.Contains(p.Text, secret) {
+					t.Errorf("subagent reply leaked the PAT: %q", p.Text)
+				}
+				if strings.Contains(p.Text, marker) {
+					sawReply = true
+				}
+				if p.ToolCall == nil {
+					continue
+				}
+				raw, err := base64.StdEncoding.DecodeString(p.ToolCall.InputJSON)
+				if err != nil {
+					t.Fatalf("decode tool input: %v", err)
+				}
+				args := string(raw)
+				if strings.Contains(args, secret) {
+					t.Errorf("subagent tool input leaked the PAT: %s", args)
+				}
+				if strings.Contains(args, marker) {
+					sawTool = true
+				}
+			}
+		}
+	}
+	if !sawPrompt || !sawTool || !sawReply {
+		t.Fatalf("redacted fields: prompt=%v tool=%v reply=%v (logs:\n%s\nbody:\n%s)", sawPrompt, sawTool, sawReply, logs, body)
+	}
 }
