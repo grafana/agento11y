@@ -23,6 +23,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/skills"
 	"github.com/muesli/termenv"
+	"github.com/stretchr/testify/require"
 )
 
 // nonTTYStdin returns a file that is guaranteed not to be a terminal.
@@ -889,6 +890,231 @@ func TestBuildUpdates(t *testing.T) {
 	}
 }
 
+const blockCreds = "AGENTO11Y_ENDPOINT=https://block.example.com\n" +
+	"AGENTO11Y_AUTH_TENANT_ID=456\n" +
+	"AGENTO11Y_AUTH_TOKEN=glc_block\n"
+
+// runBlockForTest runs a promptless login with block over a config.env that
+// holds existing, and returns the saved file and stderr. Run exports what it
+// saves and a shell value beats config.env, so every seeded family is cleared
+// first.
+func runBlockForTest(t *testing.T, existing string, opts RunOpts) (map[string]string, string, error) {
+	t.Helper()
+	for _, suffix := range append(slices.Clone(seededSuffixes), "OTEL_EXPORTER_OTLP_INSECURE") {
+		for _, k := range []string{envconfig.PreferredKey(suffix), envconfig.LegacyKey(suffix), "OTEL_EXPORTER_OTLP_ENDPOINT"} {
+			t.Setenv(k, "")
+			require.NoError(t, os.Unsetenv(k))
+		}
+	}
+	path := filepath.Join(t.TempDir(), "config.env")
+	if existing != "" {
+		require.NoError(t, os.WriteFile(path, []byte(existing), 0o600))
+	}
+	var stderr bytes.Buffer
+	opts.ConfigPath, opts.Stdin, opts.Stderr, opts.SkipVerify = path, nonTTYStdin(t), &stderr, true
+	_, err := Run(context.Background(), opts)
+	got, readErr := dotenv.ReadDotenv(path, nil)
+	require.NoError(t, readErr)
+	return got, stderr.String(), err
+}
+
+// TestRun_BlockAutoTags covers the preferences a block may set. A team's
+// shared block is the source of truth for which labels attach on the Coding
+// agents page, so --env-file saves its automatic tag keys as the form would
+// save the same answers, and leaves every other preference as it was.
+func TestRun_BlockAutoTags(t *testing.T) {
+	cases := []struct {
+		name       string
+		existing   string // config.env before the run
+		opts       RunOpts
+		wantErr    string
+		wantStderr string
+		wantFile   map[string]string // "" means the key must be absent
+	}{
+		{
+			name: "automatic tags are written in both spellings",
+			opts: RunOpts{Block: blockCreds +
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS=yes\n" +
+				"SIGIL_AUTO_CODING_AGENT_TAGS_NAMES=user,repo\n"},
+			wantFile: map[string]string{
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS":       "true",
+				"SIGIL_AUTO_CODING_AGENT_TAGS":           "true",
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES": "user,repo",
+				"SIGIL_AUTO_CODING_AGENT_TAGS_NAMES":     "user,repo",
+			},
+		},
+		{
+			name: "a flag beats the block",
+			opts: RunOpts{Block: blockCreds + "AGENTO11Y_AUTO_CODING_AGENT_TAGS=true\n", Token: "glc_mine"},
+			wantFile: map[string]string{
+				"AGENTO11Y_AUTH_TOKEN":             "glc_mine",
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS": "true",
+			},
+		},
+		{
+			name: "a key the block leaves out keeps its saved value",
+			existing: "AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=branch\n" +
+				"AGENTO11Y_GUARDS_ENABLED=true\n" +
+				"AGENTO11Y_CONTENT_CAPTURE_MODE=full\n" +
+				"AGENTO11Y_TAGS=team=ai\n",
+			opts: RunOpts{Block: blockCreds + "AGENTO11Y_AUTO_CODING_AGENT_TAGS=true\n"},
+			wantFile: map[string]string{
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS":       "true",
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES": "branch",
+				"AGENTO11Y_GUARDS_ENABLED":               "true",
+				"AGENTO11Y_CONTENT_CAPTURE_MODE":         "full",
+				"AGENTO11Y_TAGS":                         "team=ai",
+			},
+		},
+		{
+			// Nothing saved seeds the switch On, as in the form.
+			name: "names alone on a fresh config turn the switch on",
+			opts: RunOpts{Block: blockCreds + "AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=user,repo\n"},
+			wantFile: map[string]string{
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS":       "true",
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES": "user,repo",
+			},
+		},
+		{
+			// A list the switch cannot use would only make doctor warn, so the
+			// saved Off stays and no list is written, as in the form.
+			name:     "names alone under a saved Off write no list",
+			existing: "AGENTO11Y_AUTO_CODING_AGENT_TAGS=false\n",
+			opts:     RunOpts{Block: blockCreds + "AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=user,repo\n"},
+			wantFile: map[string]string{
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS":       "false",
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES": "",
+				"SIGIL_AUTO_CODING_AGENT_TAGS_NAMES":     "",
+			},
+		},
+		{
+			// Matches answering No in the form.
+			name:     "turning automatic tags off deletes the saved list",
+			existing: "AGENTO11Y_AUTO_CODING_AGENT_TAGS=true\nAGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=user,repo\n",
+			opts:     RunOpts{Block: blockCreds + "AGENTO11Y_AUTO_CODING_AGENT_TAGS=false\n"},
+			wantFile: map[string]string{
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS":       "false",
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES": "",
+				"SIGIL_AUTO_CODING_AGENT_TAGS_NAMES":     "",
+			},
+		},
+		{
+			// "all" is what an absent list means, so it is saved the way the
+			// form saves every name: by deleting the list.
+			name:     "every tag name deletes the saved list",
+			existing: "AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=branch\n",
+			opts:     RunOpts{Block: blockCreds + "AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=all\n"},
+			wantFile: map[string]string{
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS":       "true",
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES": "",
+				"SIGIL_AUTO_CODING_AGENT_TAGS_NAMES":     "",
+			},
+		},
+		{
+			name: "the preferred spelling wins when both hold a value",
+			opts: RunOpts{Block: blockCreds +
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=user\n" +
+				"SIGIL_AUTO_CODING_AGENT_TAGS_NAMES=branch\n"},
+			wantFile: map[string]string{"AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES": "user"},
+		},
+		{
+			name: "a blank preferred spelling falls back to the legacy one",
+			opts: RunOpts{Block: blockCreds +
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=\"  \"\n" +
+				"SIGIL_AUTO_CODING_AGENT_TAGS_NAMES=repo\n"},
+			wantFile: map[string]string{"AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES": "repo"},
+		},
+		{
+			name: "content capture, guards and TLS stay ignored",
+			opts: RunOpts{Block: blockCreds +
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS=true\n" +
+				"SIGIL_CONTENT_CAPTURE_MODE=full\n" +
+				"AGENTO11Y_GUARDS_ENABLED=true\n" +
+				"SIGIL_GUARDS_FAIL_OPEN=false\n" +
+				"OTEL_EXPORTER_OTLP_INSECURE=true\n" +
+				"AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE=true\n"},
+			wantStderr: "ignored AGENTO11Y_GUARDS_ENABLED, AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE, OTEL_EXPORTER_OTLP_INSECURE, SIGIL_CONTENT_CAPTURE_MODE, SIGIL_GUARDS_FAIL_OPEN from the block; login reads only the credential, OTLP, and automatic tag lines.",
+			wantFile: map[string]string{
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS":      "true",
+				"AGENTO11Y_CONTENT_CAPTURE_MODE":        "",
+				"SIGIL_CONTENT_CAPTURE_MODE":            "",
+				"AGENTO11Y_GUARDS_ENABLED":              "",
+				"SIGIL_GUARDS_ENABLED":                  "",
+				"AGENTO11Y_GUARDS_FAIL_OPEN":            "",
+				"OTEL_EXPORTER_OTLP_INSECURE":           "",
+				"AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE": "",
+			},
+		},
+		{
+			name:     "an invalid setting saves nothing",
+			existing: "AGENTO11Y_AUTO_CODING_AGENT_TAGS=false\n",
+			opts:     RunOpts{Block: blockCreds + "AGENTO11Y_AUTO_CODING_AGENT_TAGS=maybe\n"},
+			wantErr:  "AGENTO11Y_AUTO_CODING_AGENT_TAGS is not usable",
+			wantFile: map[string]string{
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS": "false",
+				"AGENTO11Y_ENDPOINT":               "",
+			},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, stderr, err := runBlockForTest(t, c.existing, c.opts)
+			if c.wantErr != "" {
+				require.ErrorContains(t, err, c.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Contains(t, stderr, c.wantStderr)
+			for key, want := range c.wantFile {
+				require.Equal(t, want, got[key], key)
+			}
+		})
+	}
+}
+
+// TestBlockAutoTagsMatchTheForm runs one block over one saved config through
+// --env-file and through the form preset by a paste of the same block, and
+// requires both to save the same automatic tag keys.
+func TestBlockAutoTagsMatchTheForm(t *testing.T) {
+	tagKeys := []string{
+		envconfig.PreferredKey(envconfig.AutoTagsSuffix), envconfig.LegacyKey(envconfig.AutoTagsSuffix),
+		envconfig.PreferredKey(envconfig.AutoTagNamesSuffix), envconfig.LegacyKey(envconfig.AutoTagNamesSuffix),
+	}
+	cases := []struct{ name, savedSwitch, savedNames, block string }{
+		{name: "names on a fresh config", block: "AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=repo\n"},
+		{name: "names under a saved Off", savedSwitch: "false", block: "AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=repo\n"},
+		{name: "Off over a saved list", savedSwitch: "true", savedNames: "user", block: "SIGIL_AUTO_CODING_AGENT_TAGS=off\n"},
+		{name: "On keeps a saved list", savedSwitch: "false", savedNames: "branch", block: "AGENTO11Y_AUTO_CODING_AGENT_TAGS=true\n"},
+		{name: "every name", savedNames: "branch", block: "AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=user,repo,branch\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var existing string
+			if c.savedSwitch != "" {
+				existing += "AGENTO11Y_AUTO_CODING_AGENT_TAGS=" + c.savedSwitch + "\n"
+			}
+			if c.savedNames != "" {
+				existing += "AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=" + c.savedNames + "\n"
+			}
+			saved, _, err := runBlockForTest(t, existing, RunOpts{Block: blockCreds + c.block})
+			require.NoError(t, err)
+
+			// The form seeds these two fields the way Run does, then the
+			// paste presets them and the user submits without changes.
+			form := formValues{
+				autoTags:     seedAutoTags(c.savedSwitch),
+				autoTagNames: seedAutoTagNames(c.savedNames),
+			}
+			applyPaste(&form, fixedValues{}, blockCreds+c.block)
+			form.capturePrompted = true
+			submitted := buildUpdates(form, false)
+			for _, key := range tagKeys {
+				require.Equal(t, submitted[key], saved[key], key)
+			}
+		})
+	}
+}
+
 // TestApplyPaste covers every block shape login accepts: the one the setup
 // page renders, the OpenTelemetry tile, dotenv syntax, legacy spellings, and
 // keys the launcher cannot use. Flags outrank all of them.
@@ -1027,6 +1253,16 @@ func TestApplyPaste(t *testing.T) {
 			wantFilled: pasteFilled{token: true},
 		},
 		{
+			// The form opens on the block's answers, so pasting a team block
+			// interactively saves what --env-file would.
+			name: "automatic tags preset the form",
+			block: "AGENTO11Y_AUTO_CODING_AGENT_TAGS=false\n" +
+				"SIGIL_AUTO_CODING_AGENT_TAGS_NAMES=repo\n",
+			seed:       formValues{autoTags: true},
+			want:       formValues{autoTagNames: []string{"repo"}, autoTagsFromBlock: true},
+			wantFilled: pasteFilled{},
+		},
+		{
 			name:       "an empty block changes nothing",
 			block:      "   \n",
 			seed:       formValues{endpoint: "https://seeded.example"},
@@ -1163,6 +1399,32 @@ func TestValidatePastedBlock(t *testing.T) {
 				"AGENTO11Y_AUTH_TOKEN=glc_test\n" +
 				"OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.example.invalid\n" +
 				`OTEL_EXPORTER_OTLP_HEADERS='Authorization=Basic dGVzdA=='` + "\n",
+		},
+		{
+			// A setting the form could not have produced is refused like a
+			// bad credential line, so nothing is saved.
+			name:    "an automatic tag switch that is not a boolean",
+			in:      "AGENTO11Y_AUTH_TOKEN=glc_test\nSIGIL_AUTO_CODING_AGENT_TAGS=maybe\n",
+			wantErr: "SIGIL_AUTO_CODING_AGENT_TAGS is not usable",
+		},
+		{
+			name:    "an automatic tag name outside the allow-list",
+			in:      "AGENTO11Y_AUTH_TOKEN=glc_test\nAGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=team\n",
+			wantErr: "AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES is not usable: use a comma-separated list of user, repo, and branch, or all",
+		},
+		{
+			// A blank preferred spelling must not hide the legacy value from
+			// validation while the write still reads it.
+			name:    "a blank preferred spelling does not hide a bad legacy one",
+			in:      "AGENTO11Y_AUTH_TOKEN=glc_test\nAGENTO11Y_AUTO_CODING_AGENT_TAGS=\"  \"\nSIGIL_AUTO_CODING_AGENT_TAGS=maybe\n",
+			wantErr: "SIGIL_AUTO_CODING_AGENT_TAGS is not usable",
+		},
+		{
+			// Preferences are not credentials, so they cannot carry a block
+			// alone.
+			name:    "automatic tags alone fill nothing",
+			in:      "AGENTO11Y_AUTO_CODING_AGENT_TAGS=true\n",
+			wantErr: "no credentials",
 		},
 		{
 			// Accepted by the dotenv loader, consumed by nothing: the
@@ -2711,8 +2973,8 @@ func TestRun_Block(t *testing.T) {
 			},
 		},
 		{
-			// Only the credential and OTLP lines are read, as from a pasted
-			// block, so a block cannot turn off TLS, point at a binary, or
+			// Beyond the credential and OTLP lines only the automatic tag keys
+			// are read, so a block cannot turn off TLS, point at a binary, or
 			// replace the saved stack.
 			name: "settings beyond the credentials are ignored",
 			opts: RunOpts{Block: block +

@@ -178,10 +178,10 @@ OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana.net/otlp
 OTEL_EXPORTER_OTLP_HEADERS='Authorization=Basic <base64-value>'
 ```
 
-A stack with no OTLP gateway has neither `OTEL_*` line, so conversations work
-but analytics does not. Login rejects placeholders in values it takes from the
-block; a flag can replace a block slot. It ignores pasted protocol and auth-mode
-values because the launcher hardcodes HTTP and Basic. Existing config keys stay.
+A stack with no OTLP gateway has neither `OTEL_*` line, so conversations work but
+analytics does not. Login rejects placeholders in values it takes from the block;
+a flag can replace a block slot. Besides credentials it reads automatic tags and
+ignores the rest, such as content capture, guards and TLS. Saved keys it omits stay.
 
 For both pipelines, the token needs `sigil:write`, `metrics:write`, and
 `traces:write`. One token covers them. A generated policy can carry extra scopes;

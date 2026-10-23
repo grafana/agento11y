@@ -378,7 +378,7 @@ func Run(ctx context.Context, opts RunOpts) (Result, error) {
 			block.otlpHeadersPasted = false
 		}
 		if ignored := ignoredBlockKeys(opts.Block); len(ignored) > 0 {
-			_, _ = fmt.Fprintf(opts.Stderr, "agento11y login: ignored %s from the block; login reads only the credential and OTLP lines.\n", strings.Join(ignored, ", "))
+			_, _ = fmt.Fprintf(opts.Stderr, "agento11y login: ignored %s from the block; login reads only the credential, OTLP, and automatic tag lines.\n", strings.Join(ignored, ", "))
 		}
 	}
 
@@ -432,6 +432,9 @@ func Run(ctx context.Context, opts RunOpts) (Result, error) {
 	if block.otlpHeadersPasted {
 		v.otlpHeaders, v.otlpHeadersPasted = block.otlpHeaders, true
 	}
+	// The block's automatic-tag keys go over the seeds here, as applyPaste
+	// puts them over the form's seeds, so both runs save the same answer.
+	v.autoTagsFromBlock = presetAutoTags(&v, parseBlock(opts.Block))
 
 	if askUser {
 		if err := promptValues(ctx, &v, fixed, existingToken, opts.Stderr, offerLocal); err != nil {
@@ -1167,7 +1170,7 @@ type pasteFilled struct {
 // AGENTO11Y_PROTOCOL and AGENTO11Y_AUTH_MODE are dropped: the launcher
 // hardcodes HTTP and Basic (see internal/emit).
 func applyPaste(v *formValues, fixed fixedValues, block string) pasteFilled {
-	env, _ := dotenv.ParseDotenv(strings.NewReader(normalizePastedBlock(block)))
+	env := parseBlock(block)
 	var filled pasteFilled
 	filled.endpoint = setPasted(&v.endpoint, fixed.endpoint, brandedPaste(env, "ENDPOINT"))
 	filled.tenantID = setPasted(&v.tenantID, fixed.tenantID, brandedPaste(env, "AUTH_TENANT_ID"))
@@ -1178,11 +1181,71 @@ func applyPaste(v *formValues, fixed fixedValues, block string) pasteFilled {
 	// OpenTelemetry variable, and the block ships it as such.
 	filled.otlpHeaders = setPasted(&v.otlpHeaders, fixed.otelEndpoint, env["OTEL_EXPORTER_OTLP_HEADERS"])
 	v.otlpHeadersPasted = filled.otlpHeaders
+	v.autoTagsFromBlock = presetAutoTags(v, env)
 	return filled
 }
 
-// blockReadSuffixes are the branded keys login reads from a block (see
-// applyPaste), plus PROTOCOL and AUTH_MODE, which the setup page's block
+// parseBlock reads a pasted or piped block. An unreadable one is reported by
+// validatePastedBlock, which runs first.
+func parseBlock(block string) map[string]string {
+	env, _ := dotenv.ParseDotenv(strings.NewReader(normalizePastedBlock(block)))
+	return env
+}
+
+// blockPreferenceSuffixes are the preferences a block may set: the automatic
+// tag switch and names, which decide the user, repository, and branch labels
+// on the Coding agents page. A block cannot set content capture, guards,
+// session tags, TLS, the binary, the web dir, or the stack URL.
+var blockPreferenceSuffixes = []string{envconfig.AutoTagsSuffix, envconfig.AutoTagNamesSuffix}
+
+// blockPreference resolves one preference family from a block: the
+// AGENTO11Y_ spelling when it holds a value, otherwise the SIGIL_ one. key is
+// the spelling that supplied the trimmed value, and both are "" when the block
+// sets neither. Validation and presetAutoTags both read through it, so they
+// cannot disagree about which spelling wins.
+func blockPreference(env map[string]string, suffix string) (key, value string) {
+	for _, k := range []string{envconfig.PreferredKey(suffix), envconfig.LegacyKey(suffix)} {
+		if value := strings.TrimSpace(env[k]); value != "" {
+			return k, value
+		}
+	}
+	return "", ""
+}
+
+// presetAutoTags puts the block's automatic-tag answers over the ones v
+// holds, and reports whether the block set either key. A key the block leaves
+// out keeps the seeded answer.
+func presetAutoTags(v *formValues, env map[string]string) bool {
+	_, on := blockPreference(env, envconfig.AutoTagsSuffix)
+	_, names := blockPreference(env, envconfig.AutoTagNamesSuffix)
+	if on != "" {
+		v.autoTags = envconfig.ParseBool(on)
+	}
+	if names != "" {
+		v.autoTagNames = seedAutoTagNames(names)
+	}
+	return on != "" || names != ""
+}
+
+// validateBlockPreferences applies the form's rules to the automatic-tag keys
+// a block set: a boolean switch, and at least one supported name. The error
+// names the key and leaves the value out, as for a credential.
+func validateBlockPreferences(env map[string]string) error {
+	if key, raw := blockPreference(env, envconfig.AutoTagsSuffix); raw != "" {
+		if _, ok := envconfig.ParseBoolValue(raw); !ok {
+			return fmt.Errorf("the block's %s is not usable: use true or false", key)
+		}
+	}
+	if key, raw := blockPreference(env, envconfig.AutoTagNamesSuffix); raw != "" {
+		if enabled, unknown := envconfig.ParseAutoTags(raw); len(unknown) > 0 || len(enabled) == 0 {
+			return fmt.Errorf("the block's %s is not usable: use a comma-separated list of user, repo, and branch, or all", key)
+		}
+	}
+	return nil
+}
+
+// blockReadSuffixes are the branded credential keys login reads from a block
+// (see applyPaste), plus PROTOCOL and AUTH_MODE, which the setup page's block
 // always carries and login sets itself.
 var blockReadSuffixes = []string{"ENDPOINT", "AUTH_TENANT_ID", "AUTH_TOKEN", "OTEL_EXPORTER_OTLP_ENDPOINT", "PROTOCOL", "AUTH_MODE"}
 
@@ -1190,9 +1253,9 @@ var blockReadSuffixes = []string{"ENDPOINT", "AUTH_TENANT_ID", "AUTH_TOKEN", "OT
 // a team that put content capture or guards in a shared file learns that
 // login left them out.
 func ignoredBlockKeys(block string) []string {
-	env, _ := dotenv.ParseDotenv(strings.NewReader(normalizePastedBlock(block)))
+	env := parseBlock(block)
 	read := map[string]bool{"OTEL_EXPORTER_OTLP_ENDPOINT": true, "OTEL_EXPORTER_OTLP_HEADERS": true}
-	for _, s := range blockReadSuffixes {
+	for _, s := range slices.Concat(blockReadSuffixes, blockPreferenceSuffixes) {
 		read[envconfig.PreferredKey(s)], read[envconfig.LegacyKey(s)] = true, true
 	}
 	var ignored []string
@@ -1239,7 +1302,8 @@ func validatePastedBlock(fixed fixedValues, s string) error {
 	if strings.TrimSpace(s) == "" {
 		return nil
 	}
-	if _, err := dotenv.ParseDotenv(strings.NewReader(normalizePastedBlock(s))); err != nil {
+	env, err := dotenv.ParseDotenv(strings.NewReader(normalizePastedBlock(s)))
+	if err != nil {
 		return fmt.Errorf("could not read the block: %w", err)
 	}
 	var probe formValues
@@ -1276,7 +1340,7 @@ func validatePastedBlock(fixed fixedValues, s string) error {
 			}
 		}
 	}
-	return nil
+	return validateBlockPreferences(env)
 }
 
 // looksLikePlaceholder reports whether a pasted value still carries a <…>
@@ -1688,6 +1752,11 @@ type formValues struct {
 	// only when it is set, so a promptless run driven by flags leaves
 	// whatever is on disk alone.
 	capturePrompted bool
+
+	// autoTagsFromBlock records that a block set an automatic-tag key (see
+	// presetAutoTags). The automatic-tag answers are then written even when
+	// the form did not run, because the block chose them.
+	autoTagsFromBlock bool
 }
 
 // buildUpdates maps the form values onto the dotenv keys WriteDotenv expects.
@@ -1699,7 +1768,9 @@ type formValues struct {
 // ran. A promptless run leaves them out: their values then come from seeds, and
 // a seed can be an AGENTO11Y_* variable exported in the current shell, so
 // writing them would turn a one-off `agento11y claude --tag session=demo` into
-// a permanent config entry the user never saw.
+// a permanent config entry the user never saw. The automatic-tag keys are
+// also written when autoTagsFromBlock is set, through the same lines, so an
+// environment block saves exactly what the form would for the same answers.
 //
 // Unless KeepLocalSetting is set, every Cloud setup writes LOCAL=false. A
 // submitted local-daemon answer writes LOCAL and LOCAL_FORWARD together.
@@ -1744,9 +1815,7 @@ func buildUpdates(v formValues, keepLocalSetting bool) map[string]string {
 		}
 		updates[envconfig.LegacyKey("LOCAL")] = strconv.FormatBool(localMode)
 	}
-	if v.capturePrompted {
-		updates["SIGIL_CONTENT_CAPTURE_MODE"] = normalizeContentMode(v.contentMode)
-		updates["SIGIL_TAGS"] = strings.TrimSpace(v.tags) // "" deletes
+	if v.capturePrompted || v.autoTagsFromBlock {
 		updates[envconfig.LegacyKey(envconfig.AutoTagsSuffix)] = strconv.FormatBool(v.autoTags)
 		// Writing no allowlist means every name, so a user who kept all of them
 		// also picks up a name a later version adds. A narrowed selection is
@@ -1757,6 +1826,10 @@ func buildUpdates(v formValues, keepLocalSetting bool) map[string]string {
 			names = autoTagNamesValue(v.autoTagNames)
 		}
 		updates[envconfig.LegacyKey(envconfig.AutoTagNamesSuffix)] = names
+	}
+	if v.capturePrompted {
+		updates["SIGIL_CONTENT_CAPTURE_MODE"] = normalizeContentMode(v.contentMode)
+		updates["SIGIL_TAGS"] = strings.TrimSpace(v.tags) // "" deletes
 		switch v.guards {
 		case guardsOpen, guardsClosed:
 			updates["SIGIL_GUARDS_ENABLED"] = "true"
