@@ -1,6 +1,7 @@
 package subagent
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -192,18 +193,12 @@ func TestBlockingCompletedKeysIgnoresSharedTranscriptDir(t *testing.T) {
 			Type:    "assistant",
 			Message: []byte(`{"content":[{"type":"tool_use","id":"tu_done","name":"Agent","input":{"subagent_type":"explore"}}]}`),
 		},
-		{
-			Type:    "user",
-			Message: []byte(`{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_done","content":"agentId: done\nTranscript dir: ` + subDir + `\n"}]}`),
-		},
+		toolResultLine(t, "tu_done", "agentId: done\nTranscript dir: "+subDir+"\n"),
 		{
 			Type:    "assistant",
 			Message: []byte(`{"content":[{"type":"tool_use","id":"tu_bg","name":"Agent","input":{"run_in_background":true,"subagent_type":"general-purpose"}}]}`),
 		},
-		{
-			Type:    "user",
-			Message: []byte(`{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_bg","content":"agentId: bg\nTranscript dir: ` + subDir + `\n"}]}`),
-		},
+		toolResultLine(t, "tu_bg", "agentId: bg\nTranscript dir: "+subDir+"\n"),
 	}
 	got := BlockingCompletedKeys(lines, []string{blocking, running})
 	if !got["done"] {
@@ -226,4 +221,20 @@ func TestIDsUniqueSuffixesCollisions(t *testing.T) {
 	if child[1].ID != "other" {
 		t.Fatalf("unique child ID = %q, want other", child[1].ID)
 	}
+}
+
+func toolResultLine(t *testing.T, toolUseID, content string) transcript.Line {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{
+		"role": "user",
+		"content": []map[string]any{{
+			"type":        "tool_result",
+			"tool_use_id": toolUseID,
+			"content":     content,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return transcript.Line{Type: "user", Message: raw}
 }
