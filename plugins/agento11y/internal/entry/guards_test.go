@@ -3,6 +3,7 @@ package entry
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -84,7 +85,13 @@ func guardsDecodeReport(t *testing.T, data []byte) guardsTestReport {
 	require.ErrorIs(t, decoder.Decode(&extra), io.EOF)
 	fields := guardsKeys(t, raw, "schema_version", "scope", "rules", "request", "response", "errors", "notices")
 	guardsKeys(t, fields["rules"], "path", "exists", "compiled", "enforcing")
-	guardsKeys(t, fields["request"], "command", "tool_name", "agent_name")
+	var request guardsTestRequest
+	require.NoError(t, json.Unmarshal(fields["request"], &request))
+	requestKeys := []string{"command", "tool_name", "agent_name"}
+	if request.Shell != "" {
+		requestKeys = append(requestKeys, "shell")
+	}
+	guardsKeys(t, fields["request"], requestKeys...)
 	for _, key := range []string{"errors", "notices"} {
 		require.True(t, bytes.HasPrefix(fields[key], []byte("[")), "%s must be an array: %s", key, fields[key])
 	}
@@ -159,6 +166,11 @@ func TestGuardsValidation(t *testing.T) {
 		{"stdin error", []string{"--stdin"}, guardsReadError{}, []string{"read stdin: stdin unavailable"}},
 		{"empty tool", []string{"--tool=", "echo"}, nil, []string{"tool name must not be blank"}},
 		{"blank tool", []string{"--tool", " \t", "echo"}, nil, []string{"tool name must not be blank"}},
+		{"empty shell", []string{"--shell=", "echo"}, nil, []string{"shell must not be blank"}},
+		{"blank shell", []string{"--shell", " \t", "echo"}, nil, []string{"shell must not be blank"}},
+		{"unsupported shell", []string{"--shell", "zsh", "echo"}, nil, []string{"unsupported shell: zsh; only bash is supported"}},
+		{"uppercase shell", []string{"--shell", "Bash", "echo"}, nil, []string{"unsupported shell: Bash; only bash is supported"}},
+		{"padded shell", []string{"--shell", " bash ", "echo"}, nil, []string{"unsupported shell:  bash ; only bash is supported"}},
 		{"empty rules", []string{"--rules=", "echo"}, nil, []string{"rules path must not be blank"}},
 		{"blank rules", []string{"--rules", " \t", "echo"}, nil, []string{"rules path must not be blank"}},
 		{"multiple errors", []string{"--rules=", "--tool=", ""}, nil, []string{"command must not be blank", "tool name must not be blank", "rules path must not be blank"}},
@@ -204,6 +216,9 @@ func TestGuardsParseErrorsAndHelp(t *testing.T) {
 		{"unknown verb", []string{"show"}, guardsUsage + "\n"},
 		{"unknown flag", []string{"test", "--json", "--unknown", "echo"}, "agento11y: flag provided but not defined: -unknown\n" + guardsUsage + "\n"},
 		{"missing flag value", []string{"test", "--rules"}, "agento11y: flag needs an argument: -rules\n" + guardsUsage + "\n"},
+		{"missing shell value", []string{"test", "--shell"}, "agento11y: flag needs an argument: -shell\n" + guardsUsage + "\n"},
+		{"unsupported dialect flag", []string{"test", "--dialect", "bash", "echo"}, "agento11y: flag provided but not defined: -dialect\n" + guardsUsage + "\n"},
+		{"unsupported metadata flag", []string{"test", "--shell-metadata", "bash", "echo"}, "agento11y: flag provided but not defined: -shell-metadata\n" + guardsUsage + "\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
@@ -225,6 +240,8 @@ func TestGuardsParseErrorsAndHelp(t *testing.T) {
 				"--stdin reads one command through EOF", "no model, tags, agent version, preflight messages, or system prompt",
 				"0 = completed allow", "1 = completed deny", "2 = input, file, compilation, evaluation, or output error",
 				"schema_version: 1", "Do not use real secrets in shared test output",
+				"--shell bash", "Without it, tests use regex matching", "only bash is supported",
+				"Tools other than Bash or bash still use regex matching", "optional shell",
 			} {
 				assert.Contains(t, stdout.String(), text)
 			}
@@ -235,18 +252,24 @@ func TestGuardsParseErrorsAndHelp(t *testing.T) {
 
 func TestGuardsSyntheticRequest(t *testing.T) {
 	for _, tc := range []struct {
-		name, command, tool, agent string
-		stdin                      bool
+		name, command, tool, agent, shell string
+		stdin                             bool
 	}{
-		{"quoted", `printf '%s' "a b"; echo '\\'`, "Bash", "", false},
-		{"multiline stdin", "echo \"first\"\necho 'second'\n", "shell", "pi", true},
-		{"dash command", "--not-a-flag", "terminal", "custom", false},
+		{"quoted", `printf '%s' "a b"; echo '\\'`, "Bash", "", "", false},
+		{"multiline stdin", "echo \"first\"\necho 'second'\n", "shell", "pi", "", true},
+		{"dash command", "--not-a-flag", "terminal", "custom", "", false},
+		{"declared bash", "echo safe", "Bash", "", "bash", false},
+		{"independent tool and stdin", "echo safe\n", "shell", "pi", "bash", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			isolateDotenvHome(t)
 			t.Setenv("AGENTO11Y_AGENT_NAME", "not-the-supplied-agent")
 			t.Setenv("AGENTO11Y_TAGS", "team=not-in-request")
+			t.Setenv("SHELL", "/bin/bash")
 			args := []string{"--tool", tc.tool, "--agent", tc.agent}
+			if tc.shell != "" {
+				args = append(args, "--shell", tc.shell)
+			}
 			var stdin io.Reader = guardsReadError{}
 			if tc.stdin {
 				args = append(args, "--stdin")
@@ -255,7 +278,7 @@ func TestGuardsSyntheticRequest(t *testing.T) {
 				args = append(args, "--", tc.command)
 			}
 			report, _ := guardsRunJSON(t, args, stdin, 0)
-			assert.Equal(t, guardsTestRequest{Command: tc.command, ToolName: tc.tool, AgentName: tc.agent}, report.Request)
+			assert.Equal(t, guardsTestRequest{Command: tc.command, ToolName: tc.tool, AgentName: tc.agent, Shell: tc.shell}, report.Request)
 			req, err := report.Request.hookRequest()
 			require.NoError(t, err)
 			arguments, err := json.Marshal(map[string]string{"command": tc.command})
@@ -554,12 +577,15 @@ func TestGuardsMainRunIsReadOnlyAndOffline(t *testing.T) {
 		name, contents string
 		explicit       bool
 		code           int
+		shell          string
 	}{
-		{"allow default", "# empty\n", false, 0},
-		{"deny explicit", guardsDenyRules, true, 1},
-		{"transform default", guardsRedactRules, false, 0},
-		{"legacy upgrade never writes", string(legacy), false, 0},
-		{"compilation error explicit", guardsBrokenRules + guardsDenyRules, true, 2},
+		{"allow default", "# empty\n", false, 0, ""},
+		{"deny explicit", guardsDenyRules, true, 1, ""},
+		{"transform default", guardsRedactRules, false, 0, ""},
+		{"legacy upgrade never writes", string(legacy), false, 0, ""},
+		{"compilation error explicit", guardsBrokenRules + guardsDenyRules, true, 2, ""},
+		{"declared bash allow never executes", string(legacy), false, 0, "bash"},
+		{"declared bash deny never executes", guardsDenyRules, true, 1, "bash"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home := isolateDotenvHome(t)
@@ -628,6 +654,9 @@ func TestGuardsMainRunIsReadOnlyAndOffline(t *testing.T) {
 			if tc.explicit {
 				args = append(args, "--rules", path)
 			}
+			if tc.shell != "" {
+				args = append(args, "--shell", tc.shell)
+			}
 			args = append(args, command)
 			beforeTree := guardsSnapshotTree(t, home)
 			beforeEnv := os.Environ()
@@ -639,6 +668,7 @@ func TestGuardsMainRunIsReadOnlyAndOffline(t *testing.T) {
 			assert.Empty(t, stderr.String())
 			report := guardsDecodeReport(t, stdout.Bytes())
 			assert.Equal(t, command, report.Request.Command)
+			assert.Equal(t, tc.shell, report.Request.Shell)
 			assert.Empty(t, report.Request.AgentName)
 			afterEnv := os.Environ()
 			sort.Strings(afterEnv)
@@ -653,6 +683,91 @@ func TestGuardsMainRunIsReadOnlyAndOffline(t *testing.T) {
 	}
 }
 
+func TestGuardsShellPolicies(t *testing.T) {
+	legacy, err := os.ReadFile("../local/testdata/guardpacks/afa354d4.toml")
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name, command, tool, ruleID string
+		legacyDeny, bashDeny        bool
+		bashFallback                bool
+	}{
+		{"quoted destructive text", `echo "rm -rf ./src"`, "Bash", "pack.destructive", true, false, false},
+		{"lowercase bash tool", `echo "rm -rf ./src"`, "bash", "pack.destructive", true, false, false},
+		{"generic shell fallback", `echo "rm -rf ./src"`, "shell", "pack.destructive", true, true, true},
+		{"generic terminal fallback", `echo "rm -rf ./src"`, "run_terminal_cmd", "pack.destructive", true, true, true},
+		{"command substitution", `echo "$(rm -rf ./src)"`, "Bash", "pack.destructive", true, true, false},
+		{"nested bash", `bash -c 'rm -rf ./src'`, "Bash", "pack.destructive", true, true, false},
+		{"quoted heredoc", "cat <<'EOF'\nrm -rf ./src\nEOF", "Bash", "pack.destructive", true, false, false},
+		{"quoted git text", `echo "git reset --hard"`, "Bash", "pack.git", true, false, false},
+		{"git reset", `git reset --hard`, "Bash", "pack.git", true, true, false},
+		{"git dry run", `git clean -n -f`, "Bash", "pack.git", true, false, false},
+		{"permissions command boundary", `chmod -R 755 /tmp; echo /`, "Bash", "pack.permissions", false, false, false},
+		{"permissions recursive root", `chmod -R 755 /`, "Bash", "pack.permissions", true, true, false},
+		{"disk command boundary", `dd if=/dev/zero of=/tmp/image; echo of=/dev/sda`, "Bash", "pack.disk", false, false, false},
+		{"disk device write", `dd if=/dev/zero of=/dev/sda`, "Bash", "pack.disk", true, true, false},
+		{"disk read only", `fdisk -l /dev/sda`, "Bash", "pack.disk", true, false, false},
+		{"syntax error fallback", `echo "rm -rf ./src`, "Bash", "pack.destructive", true, true, true},
+		{"unsupported interpreter fallback", `python -c 'print("rm -rf ./src")'`, "Bash", "pack.destructive", true, true, true},
+	} {
+		for _, shell := range []string{"", "bash"} {
+			t.Run(tc.name+"/shell="+shell, func(t *testing.T) {
+				isolateDotenvHome(t)
+				path := filepath.Join(t.TempDir(), "guards.toml")
+				guardsWriteFile(t, path, string(legacy))
+				args := []string{"--rules", path, "--tool", tc.tool}
+				deny, fallback := tc.legacyDeny, true
+				if shell != "" {
+					args = append(args, "--shell", shell)
+					deny, fallback = tc.bashDeny, tc.bashFallback
+				}
+				code := 0
+				if deny {
+					code = 1
+				}
+				report, _ := guardsRunJSON(t, append(args, tc.command), nil, code)
+				assert.Equal(t, shell, report.Request.Shell)
+				assert.Equal(t, tc.tool, report.Request.ToolName)
+				assert.Empty(t, report.Errors)
+				require.NotNil(t, report.Response)
+				found := false
+				for _, evaluation := range report.Response.Evaluations {
+					if evaluation.RuleID == tc.ruleID {
+						found = true
+						assert.Equal(t, !deny, evaluation.Passed)
+						assert.Equal(t, fallback, strings.Contains(evaluation.Explanation, "used legacy regex matching"), evaluation.Explanation)
+					}
+				}
+				assert.True(t, found, "stock rule must run")
+			})
+		}
+	}
+}
+
+func TestGuardsShellJSONDiagnostic(t *testing.T) {
+	for _, shell := range []string{"bash", "fish\n\x1b", ""} {
+		t.Run(shell, func(t *testing.T) {
+			isolateDotenvHome(t)
+			args := []string{"--shell=" + shell, "echo diagnostic"}
+			code := 0
+			if shell != "bash" {
+				code = 2
+			}
+			report, data := guardsRunJSON(t, args, nil, code)
+			assert.Equal(t, shell, report.Request.Shell)
+			assert.Equal(t, "echo diagnostic", report.Request.Command)
+			assert.Equal(t, "Bash", report.Request.ToolName)
+			assert.NotContains(t, string(data), "\x1b")
+			if code == 2 {
+				assert.Nil(t, report.Response)
+				require.Len(t, report.Errors, 1)
+			} else {
+				assert.Empty(t, report.Errors)
+				require.NotNil(t, report.Response)
+			}
+		})
+	}
+}
+
 func TestGuardsEngineParityAndJSON(t *testing.T) {
 	legacy, err := os.ReadFile("../local/testdata/guardpacks/afa354d4.toml")
 	require.NoError(t, err)
@@ -661,22 +776,46 @@ func TestGuardsEngineParityAndJSON(t *testing.T) {
 		code, compiled                          int
 		failedEffects                           []string
 		transformed                             bool
+		shell                                   string
 	}{
-		{"allow", "", "echo secret", "allow", "", 0, 0, nil, false},
-		{"warn then deny", guardsDenyRules + guardsWarnRules, "echo secret", "deny", "deny", 1, 2, []string{"warn", "deny"}, false},
-		{"warn only", guardsWarnRules, "echo secret", "allow", "", 0, 1, []string{"warn"}, false},
-		{"redaction then exception", guardsDenyRules + guardsExceptionRules + guardsRedactRules, "echo secret", "allow", "exception", 0, 3, []string{"allow"}, true},
-		{"redaction before deny checks original", guardsDenyRules + guardsRedactRules, "echo secret", "deny", "deny", 1, 2, []string{"deny"}, false},
-		{"successful transform", guardsRedactRules, "echo secret", "allow", "redact", 0, 1, nil, true},
-		{"dropped redaction", "[[rules]]\nrule_id='drop'\ntransform.patterns=[{regex='secret', replacement='broken\"'}]\n", "echo secret", "allow", "", 0, 1, []string{"deny"}, false},
-		{"legacy fixture upgraded", string(legacy), "git reset HEAD --hard", "deny", "pack.git", 1, 6, []string{"deny"}, false},
-		{"disabled legacy stays disabled", strings.ReplaceAll(string(legacy), "[[rules]]", "[[rules]]\nenabled = false"), "git reset HEAD --hard", "allow", "", 0, 0, nil, false},
+		{"allow", "", "echo secret", "allow", "", 0, 0, nil, false, ""},
+		{"warn then deny", guardsDenyRules + guardsWarnRules, "echo secret", "deny", "deny", 1, 2, []string{"warn", "deny"}, false, ""},
+		{"warn only", guardsWarnRules, "echo secret", "allow", "", 0, 1, []string{"warn"}, false, ""},
+		{"redaction then exception", guardsDenyRules + guardsExceptionRules + guardsRedactRules, "echo secret", "allow", "exception", 0, 3, []string{"allow"}, true, ""},
+		{"redaction before deny checks original", guardsDenyRules + guardsRedactRules, "echo secret", "deny", "deny", 1, 2, []string{"deny"}, false, ""},
+		{"successful transform", guardsRedactRules, "echo secret", "allow", "redact", 0, 1, nil, true, ""},
+		{"dropped redaction", "[[rules]]\nrule_id='drop'\ntransform.patterns=[{regex='secret', replacement='broken\"'}]\n", "echo secret", "allow", "", 0, 1, []string{"deny"}, false, ""},
+		{"legacy fixture upgraded", string(legacy), "git reset HEAD --hard", "deny", "pack.git", 1, 6, []string{"deny"}, false, ""},
+		{"disabled legacy stays disabled", strings.ReplaceAll(string(legacy), "[[rules]]", "[[rules]]\nenabled = false"), "git reset HEAD --hard", "allow", "", 0, 0, nil, false, ""},
+		{"default quoted text uses legacy", string(legacy), `echo "rm -rf ./src"`, "deny", "pack.destructive", 1, 6, []string{"deny"}, false, ""},
+		{"bash quoted text allows", string(legacy), `echo "rm -rf ./src"`, "allow", "", 0, 6, nil, false, "bash"},
+		{"bash substitution denies", string(legacy), `echo "$(rm -rf ./src)"`, "deny", "pack.destructive", 1, 6, []string{"deny"}, false, "bash"},
+		{"bash syntax error falls back", string(legacy), `echo "rm -rf ./src`, "deny", "pack.destructive", 1, 6, []string{"deny"}, false, "bash"},
+		{"bash negated short preview", string(legacy), `git clean -n -f --no-dry-run`, "deny", "pack.git", 1, 6, []string{"deny"}, false, "bash"},
+		{"bash negated long preview", string(legacy), `git clean --dry-run --force --no-dry-run`, "deny", "pack.git", 1, 6, []string{"deny"}, false, "bash"},
+		{"bash restored preview", string(legacy), `git clean --no-dry-run -f -n`, "allow", "", 0, 6, nil, false, "bash"},
+		{"bash dynamic short exclude", string(legacy), `pattern=; git clean -e $pattern -n -f`, "deny", "pack.git", 1, 6, []string{"deny"}, false, "bash"},
+		{"bash dynamic long exclude", string(legacy), `pattern=; git clean --exclude $pattern --dry-run --force`, "deny", "pack.git", 1, 6, []string{"deny"}, false, "bash"},
+		{"bash prompt transformation", string(legacy), `x='$(rm -rf ./src)'; echo "${x@P}"`, "deny", "pack.destructive", 1, 6, []string{"deny"}, false, "bash"},
+		{"bash negative execute mode", string(legacy), `chmod -R -x "$HOME"`, "deny", "pack.permissions", 1, 6, []string{"deny"}, false, "bash"},
+		{"bash negative write mode", string(legacy), `chmod -R -w /`, "deny", "pack.permissions", 1, 6, []string{"deny"}, false, "bash"},
+		{"bash numeric test", string(legacy), `[[ 'a[$(rm -rf ./src)]' -eq 0 ]]`, "deny", "pack.destructive", 1, 6, []string{"deny"}, false, "bash"},
+		{"bash indexed assignment", string(legacy), `x='a[$(rm -rf ./src)]'; a[x]=0`, "deny", "pack.destructive", 1, 6, []string{"deny"}, false, "bash"},
+		{"bash arithmetic loop", string(legacy), `a=(); x='a[$(rm -rf ./src)]'; for (( i=x; i<0; i++ )); do :; done`, "deny", "pack.destructive", 1, 6, []string{"deny"}, false, "bash"},
+		{"bash integer declaration", string(legacy), `declare -i x='a[$(rm -rf ./src)]'`, "deny", "pack.destructive", 1, 6, []string{"deny"}, false, "bash"},
+		{"bash printf destination", string(legacy), `printf -v 'a[$(rm -rf ./src)]' %s x`, "deny", "pack.destructive", 1, 6, []string{"deny"}, false, "bash"},
+		{"bash custom regex stays regex", "[[rules]]\nrule_id='custom'\n[[rules.evaluators]]\nkind='regex'\nconfig.patterns=['rm -rf']\nconfig.target='shell_command'\nconfig.reject=true\n", `echo "rm -rf ./src"`, "deny", "custom", 1, 1, []string{"deny"}, false, "bash"},
+		{"bash transform unchanged", guardsRedactRules, "echo secret", "allow", "redact", 0, 1, nil, true, "bash"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			isolateDotenvHome(t)
 			path := filepath.Join(t.TempDir(), "guards.toml")
 			guardsWriteFile(t, path, tc.contents)
-			args := []string{"--rules", path, tc.command}
+			args := []string{"--rules", path}
+			if tc.shell != "" {
+				args = append(args, "--shell", tc.shell)
+			}
+			args = append(args, tc.command)
 			report, data := guardsRunJSON(t, args, nil, tc.code)
 			for range 3 {
 				_, repeated := guardsRunJSON(t, args, nil, tc.code)
@@ -697,11 +836,47 @@ func TestGuardsEngineParityAndJSON(t *testing.T) {
 			assert.Equal(t, tc.failedEffects, effects)
 			// This is the same in-memory legacy-upgrading entrypoint the daemon uses.
 			engine := local.NewGuardsEngineFromContents(path, []byte(tc.contents), nil)
-			req, err := (guardsTestRequest{Command: tc.command, ToolName: "Bash"}).hookRequest()
+			req, err := report.Request.hookRequest()
 			require.NoError(t, err)
-			expected, _, err := engine.EvaluateWithTransform(context.Background(), req)
+			var metadata []guardeval.ShellMetadata
+			if tc.shell != "" {
+				metadata = []guardeval.ShellMetadata{{MessageIndex: 0, PartIndex: 0, Dialect: tc.shell}}
+			}
+			expected, _, err := engine.EvaluateWithShellMetadata(context.Background(), req, metadata)
 			require.NoError(t, err)
 			assert.Equal(t, expected, *report.Response)
+
+			body, err := json.Marshal(struct {
+				agento11y.HookEvaluateRequest
+				ShellMetadata []guardeval.ShellMetadata `json:"shell_metadata,omitempty"`
+			}{req, metadata})
+			require.NoError(t, err)
+			if tc.shell != "" {
+				assert.Contains(t, string(body), `"shell_metadata":[{"message_index":0,"part_index":0,"dialect":"bash"}]`)
+			} else {
+				assert.NotContains(t, string(body), `"shell_metadata"`)
+			}
+			server := local.NewServer(nil, nil, filepath.Join(filepath.Dir(path), "config.env"))
+			t.Cleanup(server.Close)
+			httpReq := httptest.NewRequest(http.MethodPost, "http://localhost/api/v1/hooks:evaluate", bytes.NewReader(body))
+			httpReq.Header.Set("Content-Type", "application/json")
+			recorder := httptest.NewRecorder()
+			server.ServeHTTP(recorder, httpReq)
+			require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+			var daemon guardeval.Response
+			require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &daemon))
+			if daemon.TransformedInput != nil {
+				// The daemon encodes tool arguments as base64; offline JSON uses raw JSON.
+				require.Len(t, daemon.TransformedInput.Output, 1)
+				require.Len(t, daemon.TransformedInput.Output[0].Parts, 1)
+				call := daemon.TransformedInput.Output[0].Parts[0].ToolCall
+				require.NotNil(t, call)
+				var encoded string
+				require.NoError(t, json.Unmarshal(call.InputJSON, &encoded))
+				call.InputJSON, err = base64.StdEncoding.DecodeString(encoded)
+				require.NoError(t, err)
+			}
+			assert.Equal(t, *report.Response, daemon, "daemon and offline evaluations must match")
 			if tc.transformed {
 				require.NotNil(t, report.Response.TransformedInput)
 				assert.Equal(t, `{"command":"echo SAFE"}`, string(report.Response.TransformedInput.Output[0].Parts[0].ToolCall.InputJSON))

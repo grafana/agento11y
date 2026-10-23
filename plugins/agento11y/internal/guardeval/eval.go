@@ -33,6 +33,10 @@ const (
 // non-deny results, the second return value lets callers reapply local patterns
 // to input rewritten from an unredacted relay. logger may be nil.
 func evaluateWithTransform(ctx context.Context, rules []CompiledRule, logger *log.Logger, req agento11y.HookEvaluateRequest) (Response, *Transform, error) {
+	return evaluateWithShellMetadata(ctx, rules, logger, req, nil)
+}
+
+func evaluateWithShellMetadata(ctx context.Context, rules []CompiledRule, logger *log.Logger, req agento11y.HookEvaluateRequest, metadata []ShellMetadata) (Response, *Transform, error) {
 	if logger == nil {
 		logger = log.New(io.Discard, "", 0)
 	}
@@ -45,6 +49,7 @@ func evaluateWithTransform(ctx context.Context, rules []CompiledRule, logger *lo
 		phase = hookPhasePostflight
 	}
 
+	shellCache := newShellRequestCache(ctx, metadata)
 	original := req.Input
 	working := req.Input
 	// Never nil: the SDKs decode evaluations as an array, so an allow with no
@@ -143,17 +148,20 @@ func evaluateWithTransform(ctx context.Context, rules []CompiledRule, logger *lo
 		// Inline evaluators read the original input. Only deterministic kinds
 		// compile, so this loop never calls a model or network service.
 		for _, ev := range rule.evaluators {
-			ran, passed, explanation := runEvaluator(ev, original)
+			ran, passed, explanation := ev.evaluate(original, shellCache)
+			if err := ctx.Err(); err != nil {
+				return Response{}, nil, err
+			}
 			if !ran {
 				continue
 			}
-			he := rule.evaluation(ev.kind, passed)
+			he := rule.evaluation(ev.kind(), passed)
 			he.Explanation = explanation
 			if passed {
 				out = append(out, he)
 				continue
 			}
-			what := fmt.Sprintf("%s evaluator failed", ev.kind)
+			what := fmt.Sprintf("%s evaluator failed", ev.kind())
 			if explanation != "" {
 				what += ": " + explanation
 			}

@@ -14,6 +14,41 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestRefreshStoredPackRuleUsesOriginalFields(t *testing.T) {
+	raw, err := guardeval.ParseRules(legacyGuardPacks)
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name string
+		edit func(map[string]any)
+	}{
+		{"nested_metadata", func(m map[string]any) { m["evaluators"].([]any)[0].(map[string]any)["note.key"] = "keep" }},
+		{"empty_match", func(m map[string]any) { m["match"] = map[string]any{} }},
+		{"empty_transform", func(m map[string]any) { m["transform"] = map[string]any{} }},
+		{"omitted_phase", func(m map[string]any) { delete(m, "phase") }},
+		{"padded_phase", func(m map[string]any) { m["phase"] = " postflight " }},
+		{"padded_action", func(m map[string]any) { m["action_on_fail"] = " deny " }},
+		{"dotted_metadata", func(m map[string]any) { m["owner.name"] = "keep" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var fields map[string]any
+			require.NoError(t, json.Unmarshal(raw[2], &fields))
+			tc.edit(fields)
+			input, err := json.Marshal(fields)
+			require.NoError(t, err)
+			rules, errs := guardeval.DecodeRules([]json.RawMessage{input})
+			require.Empty(t, errs)
+			refreshed, err := refreshStoredPackRule(rules[0])
+			require.NoError(t, err)
+			data, err := guardeval.EncodeRules([]guardeval.Rule{refreshed})
+			require.NoError(t, err)
+			saved, err := guardeval.ParseRules(data)
+			require.NoError(t, err)
+			require.Len(t, saved, 1)
+			assert.JSONEq(t, string(input), string(saved[0]))
+		})
+	}
+}
+
 func TestLegacyPackDefinitions(t *testing.T) {
 	raw, err := guardeval.ParseRules(legacyGuardPacks)
 	require.NoError(t, err)
@@ -227,7 +262,7 @@ func TestPackUpdatesPreserveActiveDuplicate(t *testing.T) {
 						}
 						rules = append(rules, rule)
 					}
-					wantRule := rules[len(rules)-1]
+					wantRule := rules[0]
 					if tc.active >= 0 {
 						wantRule = source.want
 						wantRule.Enabled = tc.states[tc.active]
@@ -263,12 +298,12 @@ func TestPackUpdatesPreserveActiveDuplicate(t *testing.T) {
 							if secrets {
 								wantRules = append([]guardeval.Rule{secretsPackRule()}, wantRules...)
 							}
-							assert.Equal(t, wantRules, got.Rules)
+							assertGuardModelsEqual(t, wantRules, got.Rules)
 							saved, _, exists, errs, err := readGuardRules(path)
 							require.NoError(t, err)
 							require.True(t, exists)
 							require.Empty(t, errs)
-							assert.Equal(t, wantRules, saved)
+							assertStoredGuardRulesEqual(t, wantRules, saved)
 						}
 					}
 					data, err := os.ReadFile(path)
@@ -346,7 +381,7 @@ func TestPackUpdatesPreserveEnabledState(t *testing.T) {
 						}
 						refreshed, err := refreshStoredPackRule(rule)
 						require.NoError(t, err)
-						assert.Equal(t, wantRule, refreshed)
+						assertStoredGuardRulesEqual(t, []guardeval.Rule{wantRule}, []guardeval.Rule{refreshed})
 
 						out, err := applyPackUpdates([]guardeval.Rule{rule}, update.packs)
 						require.NoError(t, err)
@@ -359,7 +394,7 @@ func TestPackUpdatesPreserveEnabledState(t *testing.T) {
 							if _, toggled := update.packs[packGit]; toggled {
 								wantRule.Enabled = nil
 							}
-							assert.Equal(t, wantRule, saved)
+							assertStoredGuardRulesEqual(t, []guardeval.Rule{wantRule}, []guardeval.Rule{saved})
 						}
 						wantPresent := true
 						if next, toggled := update.packs[packGit]; toggled {
@@ -373,9 +408,7 @@ func TestPackUpdatesPreserveEnabledState(t *testing.T) {
 						require.True(t, exists)
 						require.Empty(t, errs)
 						require.Len(t, saved, len(out))
-						for i := range out {
-							assert.Equal(t, out[i], saved[i])
-						}
+						assertStoredGuardRulesEqual(t, out, saved)
 						engine := NewGuardsEngineFromContents(path, data, nil)
 						require.Empty(t, engine.Status().Errors)
 						want := state.enabled == nil || *state.enabled

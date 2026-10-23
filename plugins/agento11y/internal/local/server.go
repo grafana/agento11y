@@ -697,13 +697,13 @@ func (s *Server) handleOTLP(w http.ResponseWriter, r *http.Request) {
 //
 // The decoder accepts three hook request spellings (see guardwire.go). Local
 // redactions apply to the decoded input before the request is re-encoded for
-// Cloud. Unchanged requests are relayed byte-for-byte.
+// Cloud. Requests without redactions or local shell metadata retain their bytes.
 func (s *Server) handleHookEvaluate(w http.ResponseWriter, r *http.Request) {
 	body, ok := s.readHookSizedBody(w, r)
 	if !ok {
 		return
 	}
-	req, err := decodeHookEvaluateRequest(body)
+	req, shellMetadata, err := decodeLocalHookEvaluateRequest(body)
 	if err != nil {
 		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
 		return
@@ -718,7 +718,7 @@ func (s *Server) handleHookEvaluate(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 
-	resp, localTransform, err := s.localEngine().EvaluateWithTransform(ctx, req)
+	resp, localTransform, err := s.localEngine().EvaluateWithShellMetadata(ctx, req, shellMetadata)
 	if err != nil {
 		if isCallerAbort(err) {
 			s.writeJSON(w, http.StatusOK, encodeHookEvaluateResponse(resp))
@@ -756,6 +756,10 @@ func (s *Server) handleHookEvaluate(w http.ResponseWriter, r *http.Request) {
 }
 
 func prepareHookRelayBody(body []byte, req agento11y.HookEvaluateRequest, localTransform *guardeval.Transform, logger *log.Logger) ([]byte, bool, error) {
+	body, err := stripShellMetadata(body)
+	if err != nil {
+		return nil, false, fmt.Errorf("strip local shell metadata: %w", err)
+	}
 	if localTransform == nil {
 		return body, false, nil
 	}

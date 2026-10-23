@@ -47,8 +47,12 @@ const (
 )
 
 // compiledEvaluator is a ready-to-run inline evaluator.
-type compiledEvaluator struct {
-	kind   string
+type compiledEvaluator interface {
+	kind() string
+	evaluate(agento11y.HookInput, *shellRequestCache) (ran, passed bool, explanation string)
+}
+
+type regexEvaluator struct {
 	target string
 	// shell is the shell_command projection config (tool names and command
 	// keys). Only the shell_command target reads it.
@@ -57,12 +61,14 @@ type compiledEvaluator struct {
 	reject  bool
 }
 
+func (*regexEvaluator) kind() string { return evaluatorKindRegex }
+
 // compileEvaluator compiles one inline evaluator spec. regex yields a runnable
 // evaluator; the Cloud kinds return (nil, nil) so the loader keeps the rule but
 // never runs them. A malformed regex config or an unrecognised kind returns an
 // error, which the PUT validation surfaces as a 400 and the loader reports as a
 // skipped rule.
-func compileEvaluator(spec EvaluatorSpec) (*compiledEvaluator, error) {
+func compileEvaluator(spec EvaluatorSpec) (compiledEvaluator, error) {
 	kind := strings.ToLower(strings.TrimSpace(spec.Kind))
 	switch kind {
 	case evaluatorKindRegex:
@@ -86,8 +92,7 @@ func compileEvaluator(spec EvaluatorSpec) (*compiledEvaluator, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &compiledEvaluator{
-			kind:    kind,
+		return &regexEvaluator{
 			target:  target,
 			shell:   shell,
 			regexes: res,
@@ -103,7 +108,7 @@ func compileEvaluator(spec EvaluatorSpec) (*compiledEvaluator, error) {
 	}
 }
 
-// runEvaluator runs one evaluator against the working input. ran is false when
+// evaluate runs one evaluator against the working input. ran is false when
 // the evaluator has nothing to judge, which the caller records as no evaluation
 // at all. passed and explanation are the outcome and the text for the deny
 // reason.
@@ -114,9 +119,9 @@ func compileEvaluator(spec EvaluatorSpec) (*compiledEvaluator, error) {
 // Several subjects still give one verdict: the evaluator answers on whether any
 // subject matched.
 //
-// Only compileEvaluator's regex branch builds a compiledEvaluator, so this runs
+// Only compileEvaluator's regex branch builds a regexEvaluator, so this runs
 // the patterns without asking which kind it holds.
-func runEvaluator(ce *compiledEvaluator, in agento11y.HookInput) (ran, passed bool, explanation string) {
+func (ce *regexEvaluator) evaluate(in agento11y.HookInput, _ *shellRequestCache) (ran, passed bool, explanation string) {
 	subjects := subjectsFor(ce.target, in, ce.shell)
 	if len(subjects) == 0 {
 		// shell_command and tool_arguments can project nothing. A rule written

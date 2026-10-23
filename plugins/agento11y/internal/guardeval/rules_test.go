@@ -24,6 +24,44 @@ func evaluateForTest(rules []CompiledRule, logger *log.Logger, req agento11y.Hoo
 	return resp
 }
 
+func TestRuleIdentitySelectionPreservesSource(t *testing.T) {
+	on, off := true, false
+	for _, tc := range []struct {
+		name   string
+		states []*bool
+		want   int
+	}{
+		{"enabled_twice", []*bool{nil, &on}, 0},
+		{"disabled_then_enabled", []*bool{&off, nil, &on}, 1},
+		{"disabled_twice", []*bool{&off, &off}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var rules []Rule
+			for i, enabled := range tc.states {
+				id := " shared "
+				if i > 0 {
+					id = "shared"
+				}
+				rules = append(rules, Rule{RuleID: id, Enabled: enabled, Priority: i + 1, ToolFilter: &ToolFilterConfig{BlockedNames: []string{"Bash"}}})
+			}
+			selected, errs := filterRuleIDs(rules)
+			require.Len(t, errs, len(rules)-1)
+			require.Len(t, selected, 1)
+			assert.Equal(t, rules[tc.want], selected[0])
+			data, err := EncodeRules(rules)
+			require.NoError(t, err)
+			engine := NewEngineFromContents("guards.toml", data, nil)
+			if tc.states[tc.want] != nil && !*tc.states[tc.want] {
+				assert.Empty(t, engine.rules)
+			} else {
+				require.Len(t, engine.rules, 1)
+				assert.Equal(t, tc.want+1, engine.rules[0].priority)
+				assert.Equal(t, "shared", engine.rules[0].id)
+			}
+		})
+	}
+}
+
 func TestCompileGuardRules_BadInlineRegexSkipsOnlyThatRule(t *testing.T) {
 	rules, errs := compileGuardRules([]Rule{
 		{

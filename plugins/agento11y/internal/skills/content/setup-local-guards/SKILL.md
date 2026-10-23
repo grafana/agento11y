@@ -68,12 +68,17 @@ Explain the trade-offs relevant to the user's request:
 - Git safety allows `--force-with-lease`; it does not block every history rewrite.
 - Destructive commands blocks recursive force deletion even for temporary build output, but does not block every deletion.
 - Permissions targets selected root and home spellings, not every directory.
-- Disk wipe uses broad command-name patterns that can also block read-only inspection.
+- Disk wipe can block read-only inspection. When parsing completes, the pack allows `fdisk` list options; regex matching does not.
 - High-risk prompt triage blocks explicit high-impact decisions about people in specified domains. It cannot judge discrimination, explanation quality, legality, or real human oversight, and it only works where the host submits prompt preflight checks.
 - PHI-like data egress blocks a narrow set of recognizable outbound tools and shell network commands carrying high-confidence health identifiers. It cannot identify every egress path or determine authorization, permitted purpose, or minimum necessary scope.
 
-State that text matching can miss indirect operations and can block harmless mentions.
+Current coding-agent integrations still use regex matching. Do not claim live parser protection.
+Offline tests can use Bash parsing for unmodified Git safety, Destructive commands, Permissions, and Disk wipe packs.
+Edited packs, custom regex rules, and older binaries use regex matching.
+The parser never executes input. Incomplete analysis falls back to regex matching and keeps any parser-detected denial.
+Incomplete analysis alone does not block a call. Regex matching can miss indirect operations and block harmless mentions.
 Unknown tools, unsupported hooks, and scripts that perform dangerous operations internally can escape these checks.
+See [Enforcement limits](https://github.com/grafana/agento11y/blob/main/docs/local-guards.md#enforcement-limits) for parser coverage, limits, and option exceptions.
 
 Explain any destination change before asking for approval.
 Local mode stores full session content locally.
@@ -155,6 +160,11 @@ It evaluates saved rules even when host guards are disabled.
 Exit `0` means allow, `1` means deny, and `2` means an error, including compilation errors.
 Read notices and errors: a missing default file or no enforceable rules can return allow.
 `--tool` changes the synthetic tool name, not its `{"command": ...}` argument shape; it does not replay arbitrary file-tool calls.
+Tests use regex matching by default. Add `--shell bash` to test Bash parsing; only `bash` is supported.
+The flag does not change `--tool` or verify the host shell. Tool names other than `Bash` or `bash` still use regex matching.
+For example: `agento11y guards test --shell bash --json 'git clean -nf'`.
+JSON output includes `request.shell` only when `--shell` is supplied.
+Check the JSON evaluation explanations for incomplete analysis, which falls back to regex matching.
 
 For unexpected results, compare the rules path, enabled rules, tool name, and exact input before changing policy.
 A malformed or unreadable file can leave no local rules enforcing.

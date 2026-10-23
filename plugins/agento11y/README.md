@@ -192,13 +192,19 @@ action_on_fail = "deny"
 
 `agento11y doctor` reports the file path, compile errors, and how many rules can enforce locally.
 
+Current coding-agent integrations still use regex matching.
+Offline tests can use Bash parsing for unmodified Git safety, Destructive commands, Permissions, and Disk wipe packs.
+Edited packs, custom regex rules, and older binaries use regex matching.
+Incomplete analysis falls back to regex matching and keeps any parser-detected denial; it does not block calls by itself.
+See [Enforcement limits](../../docs/local-guards.md#enforcement-limits) for coverage, limits, and the `git clean` and `fdisk` exceptions.
+
 #### Test local guards offline
 
 `agento11y guards test` evaluates saved local policy even when host guard requests are disabled. It does not execute the submitted command, contact endpoints, start a daemon, or write files. A local dry run does not predict host enforcement or Cloud decisions.
 
 ```sh
 agento11y guards test 'rm -rf ~/.ssh'
-agento11y guards test --json --rules ./guards.toml 'git reset --hard'
+agento11y guards test --json --shell bash --rules ./guards.toml 'git reset --hard'
 printf '%s\n' 'echo first' 'echo second' | agento11y guards test --stdin --tool shell --agent pi
 ```
 
@@ -208,13 +214,18 @@ Without `--rules`, the command reads `guards.toml` beside the resolved `config.e
 
 The synthetic request is postflight, with one assistant tool call, ID `guards-test`. `--tool` defaults to `Bash`; another name still receives `{"command": ...}` arguments. Conditional rules see only `--agent`, which defaults to empty. There is no model, tags, agent version, preflight history, or system prompt. This command does not replay arbitrary host payloads.
 
+Tests use regex matching by default. Add `--shell bash` to test Bash parsing; only `bash` is supported.
+The flag does not change `--tool` or verify the host shell. Tool names other than `Bash` or `bash` still use regex matching.
+For example, `agento11y guards test --shell bash --json 'git clean -nf'` tests parsing, not live host enforcement.
+Check the JSON evaluation explanations for incomplete analysis, which falls back to regex matching.
+
 Plain output starts with `allow (local dry run)`, `deny (local dry run)`, or `error (local dry run)`. It reports the rules path, enforceable count, rule-level results, diagnostics, and any transformed input. Failed evaluations can be warnings or dropped redactions, not just denials. A response rule ID does not identify every transform that ran.
 
 `--json` writes one deterministic document to stdout:
 
 - `schema_version: 1` and `scope: "local"` identify the contract.
 - `rules` contains `path`, `exists`, `compiled` (rule count), and `enforcing` (locally enforceable rule count).
-- `request` contains `command`, `tool_name`, and `agent_name`.
+- `request` contains `command`, `tool_name`, and `agent_name`, plus `shell` when explicitly declared.
 - `response` is the engine response, or null when no evaluation completed. Its `evaluations` array preserves engine order. `transformed_input` uses SDK JSON with raw JSON tool arguments, not the HTTP protobuf encoding.
 - `errors` and `notices` are arrays, including when empty.
 
