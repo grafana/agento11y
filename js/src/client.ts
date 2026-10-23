@@ -754,6 +754,22 @@ export class Agento11yClient {
     return resolveContentCaptureMode(seed.contentCapture ?? 'default', clientMode);
   }
 
+  /**
+   * Reports whether a framework chain or retriever span must leave the error
+   * text off. Its mode resolves the way the framework's generations resolve
+   * theirs: the resolver sees this run's metadata, then the client default
+   * applies. A
+   * generation sanitizer cannot redact a chain error, so with one configured
+   * the text stays off too.
+   */
+  internalShouldRedactFrameworkSpanErrors(metadata: Record<string, unknown>): boolean {
+    const resolverMode = callContentCaptureResolver(this.config.contentCaptureResolver, metadata);
+    const mode = resolveClientContentCaptureMode(resolveContentCaptureMode(resolverMode, this.config.contentCapture));
+    return (
+      mode === 'metadata_only' || mode === 'full_with_metadata_spans' || this.config.generationSanitizer !== undefined
+    );
+  }
+
   internalHasGenerationSanitizer(): boolean {
     return this.config.generationSanitizer !== undefined;
   }

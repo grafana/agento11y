@@ -122,7 +122,7 @@ const client = new Agento11yClient({
 });
 ```
 
-The resolver receives the recording's metadata (or `undefined` for recording types that have no metadata, like tool executions). Thrown errors are caught and treated as `"metadata_only"` (fail-closed).
+The resolver receives the recording's metadata (or `undefined` for recording types that have no metadata, like tool executions). When a framework chain or retriever span ends with an error, it also calls the resolver with that run's metadata, to decide whether the error text is shown. Thrown errors are caught and treated as `"metadata_only"` (fail-closed).
 
 Resolution precedence (highest to lowest):
 
