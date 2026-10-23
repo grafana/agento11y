@@ -127,10 +127,9 @@ func CoalesceUnmerged(lines []transcript.Line) []transcript.Line {
 // written. A tool_result can land in the middle of one Anthropic message
 // before the rest of the response exists. Exporting that prefix would send a
 // generation whose ID the finished message later reuses, and the first write
-// wins. The group is held (offset left before it) until a later real
-// assistant line arrives (a requestId and a model that is not
-// "<synthetic>") or the caller uses CoalesceSession because the subagent
-// has finished.
+// wins. The group is held (offset left before it) until a later assistant
+// line arrives or the caller uses CoalesceSession because the subagent has
+// finished.
 func CoalesceGrowing(lines []transcript.Line) ([]transcript.Line, int64) {
 	return coalesce(lines, coalesceGrowing)
 }
@@ -245,13 +244,6 @@ func coalesce(lines []transcript.Line, mode coalesceMode) ([]transcript.Line, in
 
 	for i, line := range lines {
 		if line.Type == "assistant" {
-			if mode == coalesceGrowing && !realAssistantTurn(line) {
-				// A <synthetic> or requestId-less line is not the next model
-				// turn; do not treat the open response as finished.
-				flush(false)
-				appendAssistant(line)
-				continue
-			}
 			if line.RequestID == "" {
 				flush(true)
 				appendAssistant(line)
@@ -271,7 +263,7 @@ func coalesce(lines []transcript.Line, mode coalesceMode) ([]transcript.Line, in
 			heldBreak = true
 			continue
 		}
-		flush(laterAssistantStarted(lines[i+1:], mode == coalesceGrowing))
+		flush(laterAssistant(lines[i+1:]))
 		result = append(result, line)
 	}
 	flush(false)
@@ -319,32 +311,13 @@ func assistantOutputTokens(line transcript.Line) int64 {
 	return msg.Usage.OutputTokens
 }
 
-func laterAssistantStarted(rest []transcript.Line, growing bool) bool {
+func laterAssistant(rest []transcript.Line) bool {
 	for _, line := range rest {
-		if line.Type != "assistant" {
-			continue
+		if line.Type == "assistant" {
+			return true
 		}
-		if growing && !realAssistantTurn(line) {
-			continue
-		}
-		return true
 	}
 	return false
-}
-
-func realAssistantTurn(line transcript.Line) bool {
-	if strings.TrimSpace(line.RequestID) == "" {
-		return false
-	}
-	return assistantModel(line) != "<synthetic>"
-}
-
-func assistantModel(line transcript.Line) string {
-	var msg transcript.AssistantMessage
-	if err := json.Unmarshal(line.Message, &msg); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(msg.Model)
 }
 
 // mergeAssistantGroup merges one request's assistant fragments into a single

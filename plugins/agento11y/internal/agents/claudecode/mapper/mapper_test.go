@@ -1136,48 +1136,43 @@ func TestCoalesceGrowing_HoldsOpenMessage(t *testing.T) {
 	}
 }
 
-func TestCoalesceGrowing_IgnoresSyntheticWhenDecidingFinished(t *testing.T) {
-	const messageID = "msg_open"
+// A subagent that dies on an API error ends its transcript with a <synthetic>
+// line that has no requestId. The response before it can no longer grow, so
+// growing Coalesce must export it instead of holding it forever.
+func TestCoalesceGrowing_ExportsResponseBeforeAPIError(t *testing.T) {
 	prompt := makeUserLine("inspect the repo")
 	prompt.EndOffset = 50
-	first := withAssistantMessageID(makeAssistantFragment("req-split", 3, []transcript.ContentBlock{
-		{Type: "thinking", Thinking: "plan"},
+	last := withAssistantMessageID(makeAssistantFragment("req-last", 16, []transcript.ContentBlock{
 		{Type: "tool_use", ID: "tu_a", Name: "Read", Input: json.RawMessage(`{"file_path":"a.go"}`)},
-	}, ""), messageID)
-	first.EndOffset = 150
+	}, ""), "msg_last")
+	last.EndOffset = 150
 	result := makeToolResultLine("tu_a", "package a")
 	result.EndOffset = 250
-	synthetic := withAssistantModel(withAssistantMessageID(makeAssistantFragment("req-synth", 1, []transcript.ContentBlock{
-		{Type: "text", Text: "progress"},
-	}, ""), "msg_synth"), "<synthetic>")
-	synthetic.EndOffset = 350
-
-	held, offset := CoalesceGrowing([]transcript.Line{prompt, first, result, synthetic})
-	if len(held) != 0 || offset != 0 {
-		t.Fatalf("growing Coalesce exported %d lines at offset %d; want the open message held past a <synthetic> decoy", len(held), offset)
+	raw, _ := json.Marshal(transcript.AssistantMessage{
+		Model:      "<synthetic>",
+		Content:    []transcript.ContentBlock{{Type: "text", Text: "API Error: Can't reach the API server"}},
+		StopReason: "stop_sequence",
+	})
+	apiError := transcript.Line{
+		Type:      "assistant",
+		SessionID: "sess-1",
+		Timestamp: "2025-06-01T12:00:00Z",
+		Version:   "1.0.0",
+		EndOffset: 350,
+		Message:   raw,
 	}
-}
 
-func TestCoalesceGrowing_IgnoresMissingRequestIDWhenDecidingFinished(t *testing.T) {
-	const messageID = "msg_open"
-	prompt := makeUserLine("inspect the repo")
-	prompt.EndOffset = 50
-	first := withAssistantMessageID(makeAssistantFragment("req-split", 3, []transcript.ContentBlock{
-		{Type: "thinking", Thinking: "plan"},
-		{Type: "tool_use", ID: "tu_a", Name: "Read", Input: json.RawMessage(`{"file_path":"a.go"}`)},
-	}, ""), messageID)
-	first.EndOffset = 150
-	result := makeToolResultLine("tu_a", "package a")
-	result.EndOffset = 250
-	decoy := withAssistantMessageID(makeAssistantFragment("req-decoy", 1, []transcript.ContentBlock{
-		{Type: "text", Text: "progress"},
-	}, ""), "msg_decoy")
-	decoy.RequestID = ""
-	decoy.EndOffset = 350
-
-	held, offset := CoalesceGrowing([]transcript.Line{prompt, first, result, decoy})
-	if len(held) != 0 || offset != 0 {
-		t.Fatalf("growing Coalesce exported %d lines at offset %d; want the open message held past a requestId-less decoy", len(held), offset)
+	ready, offset := CoalesceGrowing([]transcript.Line{prompt, last, result, apiError})
+	if offset < 250 {
+		t.Fatalf("offset = %d, want at least 250 so the response before the API error is not held", offset)
+	}
+	gens, _ := Process(ready, &state.Session{}, Options{SessionID: "sess-1"}, nil)
+	var output int64
+	for _, gen := range gens {
+		output += gen.Usage.OutputTokens
+	}
+	if output != 16 {
+		t.Fatalf("exported output tokens = %d, want 16 from the response before the API error", output)
 	}
 }
 
@@ -1211,20 +1206,6 @@ func withAssistantMessageID(line transcript.Line, id string) transcript.Line {
 		return line
 	}
 	msg.ID = id
-	raw, err := json.Marshal(msg)
-	if err != nil {
-		return line
-	}
-	line.Message = raw
-	return line
-}
-
-func withAssistantModel(line transcript.Line, model string) transcript.Line {
-	var msg transcript.AssistantMessage
-	if err := json.Unmarshal(line.Message, &msg); err != nil {
-		return line
-	}
-	msg.Model = model
 	raw, err := json.Marshal(msg)
 	if err != nil {
 		return line
