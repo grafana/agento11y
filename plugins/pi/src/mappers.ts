@@ -728,6 +728,43 @@ export function applyRedactedText(
   return true;
 }
 
+/**
+ * Maps each user message's text to the text a redact guard returned for it,
+ * for the user messages the guard changed. `forward` and `redacted` are the
+ * index-aligned arrays `applyRedactedText` accepted.
+ *
+ * The recorded input and the conversation title are captured at
+ * `message_end`, before the `context` hook redacts the outgoing messages, so
+ * the plugin uses this map to record what the model actually receives.
+ */
+export function userTextRedactions(
+  forward: Message[],
+  redacted: Message[],
+): Map<string, string> {
+  const out = new Map<string, string>();
+  for (let i = 0; i < forward.length && i < redacted.length; i++) {
+    const sent = forward[i];
+    const returned = redacted[i];
+    if (sent?.role !== "user" || !returned) continue;
+    const before = extractTextFromAgento11yMessage(sent);
+    const after = extractTextFromAgento11yMessage(returned);
+    if (before && after && before !== after) out.set(before, after);
+  }
+  return out;
+}
+
+/** Returns `message` with its text redacted when `redactions` has its text. */
+export function withRedactedUserText(
+  message: Message,
+  redactions: Map<string, string>,
+): Message {
+  if (message.role !== "user") return message;
+  const text = extractTextFromAgento11yMessage(message);
+  const redacted = text === null ? undefined : redactions.get(text);
+  if (redacted === undefined) return message;
+  return { ...message, parts: [{ type: "text", text: redacted }] };
+}
+
 function applyRedactedToMessage(pi: PiAgentMessage, sig: Message): boolean {
   const role = (pi as { role?: unknown }).role;
   if (role === "user") {
