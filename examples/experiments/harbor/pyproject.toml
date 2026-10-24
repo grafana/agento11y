@@ -9,5 +9,5 @@ agento11y = { path = "../../../python", editable = true }
 agento11y-harbor = { path = "../../../python-frameworks/harbor", editable = true }
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=84.1.0"]
 build-backend = "setuptools.build_meta"
