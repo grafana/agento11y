@@ -412,7 +412,7 @@ it enables all three names.
 
 | Name | Tag key | Resolved from |
 | --- | --- | --- |
-| `user` | `user` | `AGENTO11Y_USER_ID`, then Claude's selected config-directory account file, Codex's `auth.json` email, or Cursor's saved session email before current hook email, then the OS account name |
+| `user` | `user` | `AGENTO11Y_USER_ID`, then Claude's selected config-directory account file, Codex's `auth.json` email, or Cursor's saved session email before current hook email. Without either, the `user` key is left off |
 | `repo` | `repo` | Full namespace from the checkout's `origin` remote, or the checkout directory name |
 | `branch` | `git.branch` | Checked-out branch, or a short commit SHA on detached HEAD |
 
@@ -425,7 +425,7 @@ Warn the user before enabling this. For Claude Code, Codex, and Cursor, `user` c
 Each value combination creates a time series, and branch names are unbounded. Start with `user,repo`.
 Doctor shows repo and branch but cannot read a host's signed-in identity; set `AGENTO11Y_USER_ID` when the user value must be known before launch.
 
-Other hosts have no account-email lookup. Discovery makes no provider requests, refreshes no credentials, and runs no host account commands. See [local account identity sources](https://github.com/grafana/agento11y/blob/main/docs/concepts/tags-and-metadata.md#local-account-identity-sources). The OS fallback supplies only the optional tag; explicit tags never set identity. Account identity stays active when automatic tags are off. Use the same `AGENTO11Y_USER_ID` across plugins for consistent identity; arbitrary IDs, pseudonyms, and legacy `SIGIL_*` aliases remain supported.
+Other hosts have no account-email lookup. Discovery makes no provider requests, refreshes no credentials, and runs no host account commands. See [local account identity sources](https://github.com/grafana/agento11y/blob/main/docs/concepts/tags-and-metadata.md#local-account-identity-sources). Those hosts get a `user` tag only from `AGENTO11Y_USER_ID`, so an automatic `user` tag always equals the session's user ID. Explicit tags never set identity. Account identity stays active when automatic tags are off. Use the same `AGENTO11Y_USER_ID` across plugins for consistent identity; arbitrary IDs, pseudonyms, and legacy `SIGIL_*` aliases remain supported.
 
 ### Content capture
 

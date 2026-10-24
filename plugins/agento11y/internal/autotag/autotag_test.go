@@ -12,15 +12,6 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
 
-// stubUsername replaces the OS account lookup for one test so the last user
-// fallback is testable on any machine.
-func stubUsername(t *testing.T, name string) {
-	t.Helper()
-	prev := osUsername
-	osUsername = func() string { return name }
-	t.Cleanup(func() { osUsername = prev })
-}
-
 // checkout writes a git checkout fixture with an origin remote and a branch,
 // the same file-only shape internal/gitbranch tests use.
 func checkout(t *testing.T, name, remote, branch string) string {
@@ -61,42 +52,33 @@ func TestResolve(t *testing.T) {
 		enabled  map[envconfig.AutoTag]bool
 		env      map[string]string
 		agentID  string
-		osUser   string
 		cwd      func(t *testing.T) string
 		want     map[string]string
 		shadowed []envconfig.AutoTag
 	}{
 		{
-			name:   "no names enabled resolves nothing",
-			osUser: "alex",
-			env:    map[string]string{"USER_ID": "alice@example.com"},
-			want:   nil,
+			name: "no names enabled resolves nothing",
+			env:  map[string]string{"USER_ID": "alice@example.com"},
+			want: nil,
 		},
 		{
 			name:    "configured user id wins",
 			enabled: map[envconfig.AutoTag]bool{envconfig.AutoTagUser: true},
 			env:     map[string]string{"USER_ID": "alice@example.com"},
 			agentID: "bob@example.com",
-			osUser:  "alex",
 			want:    map[string]string{"user": "alice@example.com"},
 		},
 		{
 			name:    "agent user id is the second choice",
 			enabled: map[envconfig.AutoTag]bool{envconfig.AutoTagUser: true},
 			agentID: "bob@example.com",
-			osUser:  "alex",
 			want:    map[string]string{"user": "bob@example.com"},
 		},
 		{
-			name:    "os account name is the last choice",
+			// The process always runs as some OS account, so a fallback to it
+			// would make this case fail on any machine.
+			name:    "never falls back to the OS account name",
 			enabled: map[envconfig.AutoTag]bool{envconfig.AutoTagUser: true},
-			osUser:  "alex",
-			want:    map[string]string{"user": "alex"},
-		},
-		{
-			name:    "unresolved user leaves the key off",
-			enabled: map[envconfig.AutoTag]bool{envconfig.AutoTagUser: true},
-			osUser:  "",
 			want:    nil,
 		},
 		{
@@ -156,7 +138,6 @@ func TestResolve(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			stubUsername(t, tc.osUser)
 			cwd := ""
 			if tc.cwd != nil {
 				cwd = tc.cwd(t)
@@ -178,7 +159,6 @@ func TestResolve(t *testing.T) {
 // from the process environment, either spelling.
 func TestResolveReadsProcessEnvByDefault(t *testing.T) {
 	envconfig.PinAliasEnvBlank(t)
-	stubUsername(t, "alex")
 	t.Setenv("SIGIL_USER_ID", "alice@example.com")
 
 	got := Resolve(map[envconfig.AutoTag]bool{envconfig.AutoTagUser: true}, Inputs{})
@@ -192,7 +172,6 @@ func TestResolveReadsProcessEnvByDefault(t *testing.T) {
 // values row shows what each name resolved to even when an explicit tag stops
 // it from reaching the client.
 func TestDescribeValuesReportUnsuppressedResolution(t *testing.T) {
-	stubUsername(t, "alex")
 	root := checkout(t, "agento11y", "git@github.com:grafana/agento11y.git", "main")
 
 	res := Describe(
@@ -392,7 +371,6 @@ func TestFromEnv(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			envconfig.PinAliasEnvBlank(t)
-			stubUsername(t, "alex")
 			// Outside a checkout, so `repo` and `branch` resolve to nothing however
 			// the machine running the test is laid out.
 			t.Chdir(t.TempDir())

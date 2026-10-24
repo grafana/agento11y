@@ -1257,7 +1257,7 @@ func normalizePastedBlock(block string) string {
 // list has to be able to tell what leaves the machine.
 func autoTagOptions(selected []string) []huh.Option[string] {
 	labels := map[envconfig.AutoTag]string{
-		envconfig.AutoTagUser:   "user — configured user id, host agent account, or OS user",
+		envconfig.AutoTagUser:   "user — configured user id or host agent account",
 		envconfig.AutoTagRepo:   "repo — owner/name from the origin remote",
 		envconfig.AutoTagBranch: "branch — branch checked out in the session directory",
 	}
