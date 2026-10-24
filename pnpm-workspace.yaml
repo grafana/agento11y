@@ -62,3 +62,5 @@ minimumReleaseAgeExclude:
   - qs@6.16.0
   # Renovate security update: vitest@4.1.11
   - vitest@4.1.11
+  # Renovate security update: @strands-agents/sdk@1.5.0
+  - "@strands-agents/sdk@1.5.0"
