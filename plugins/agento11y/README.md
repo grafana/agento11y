@@ -311,7 +311,7 @@ agento11y login --endpoint https://agento11y-prod-<region>.grafana.net --tenant 
 | `--token value` | access-policy token with the `sigil:write` scope |
 | `--token-stdin` | read the token from stdin; requires `--endpoint` and `--tenant` |
 | `--otlp-endpoint url` | OTLP endpoint for SDK traces and metrics |
-| `--env-file path` | read the environment block from a file, or from stdin when the path is `-` |
+| `--env-file path` | read the environment block from a file, or from stdin when the path is `-`; it may set credentials, OTLP, and automatic tags |
 | `--no-verify` | write the file without checking the credentials |
 | `--yes` | save even when the check fails |
 
@@ -330,7 +330,7 @@ agento11y login --env-file team.env
 op document get agento11y-cloud-env | agento11y login --env-file -
 ```
 
-Login reads the same lines as a pasted block: the endpoint, instance ID, token, OTLP endpoint, and OTLP headers. Other keys in the file are ignored and named on stderr, so a shared file cannot change anyone's content capture, guards, or other settings. `export` prefixes and `#` comment lines are accepted, so the same file also works with `source`. A file of `op://` references must be resolved first, for example `op inject -i team.env | agento11y login --env-file -`. Flags still win over the values in the block, and a file that holds only the endpoint and instance ID can be combined with `--token-stdin`. A block larger than 64 KiB is refused.
+Login reads the same lines as a pasted block: the endpoint, instance ID, token, OTLP endpoint, and OTLP headers, plus `AGENTO11Y_AUTO_CODING_AGENT_TAGS` and `AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES` (or their `SIGIL_` spellings), so a team block decides which user, repository, and branch labels attach for everyone. Login saves those two keys as the interactive form saves the same answers, a key the block leaves out keeps its saved value, and a value the form would not accept stops login before anything is saved. Other keys in the file are ignored and named on stderr: a shared file cannot set anyone's content capture, guards, session tags, TLS, binary, web dir, or stack URL. `export` prefixes and `#` comment lines are accepted, so the same file also works with `source`. A file of `op://` references must be resolved first, for example `op inject -i team.env | agento11y login --env-file -`. Flags still win over the values in the block, and a file that holds only the endpoint and instance ID can be combined with `--token-stdin`. A block larger than 64 KiB is refused.
 
 ## Settings
 

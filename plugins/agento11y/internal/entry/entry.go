@@ -703,7 +703,7 @@ func newLoginFlags() (*flag.FlagSet, *loginFlags) {
 	fs.StringVar(&opts.otlpEndpoint, "otlp-endpoint", "", "OTLP endpoint")
 	fs.BoolVar(&opts.noVerify, "no-verify", false, "skip the credential check")
 	fs.BoolVar(&opts.assumeYes, "yes", false, "save even when the check fails")
-	fs.StringVar(&opts.envFile, "env-file", "", "read the environment block from `path`, or from stdin when path is -")
+	fs.StringVar(&opts.envFile, "env-file", "", "read the environment block from `path` (- for stdin); it may set credentials, OTLP and automatic tags")
 	return fs, opts
 }
 
