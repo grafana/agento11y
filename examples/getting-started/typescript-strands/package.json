@@ -15,7 +15,7 @@
     "@opentelemetry/sdk-metrics": "2.7.0",
     "@opentelemetry/sdk-trace-base": "2.7.0",
     "@opentelemetry/sdk-trace-node": "2.7.0",
-    "@strands-agents/sdk": "1.0.0-rc.5",
+    "@strands-agents/sdk": "1.5.0",
     "dotenv": "16.6.1",
     "openai": "6.35.0",
     "tsx": "4.23.13",
