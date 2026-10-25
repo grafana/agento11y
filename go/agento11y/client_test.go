@@ -19,6 +19,33 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+func TestToolExecutionResultCopy(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		code *int64
+	}{
+		{name: "absent"},
+		{name: "zero", code: new(int64(0))},
+		{name: "nonzero", code: new(int64(2))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &ToolExecutionRecorder{}
+			r.SetResult(ToolExecutionEnd{ProcessExitCode: tc.code})
+			if tc.code == nil {
+				if r.result.ProcessExitCode != nil {
+					t.Fatal("absent code became present")
+				}
+				return
+			}
+			want := *tc.code
+			*tc.code = 99
+			if r.result.ProcessExitCode == tc.code || *r.result.ProcessExitCode != want {
+				t.Fatal("result retains caller-owned code")
+			}
+		})
+	}
+}
+
 func TestDefaultConfigGenerationExportMessageAndPayloadLimits(t *testing.T) {
 	cfg := DefaultConfig()
 

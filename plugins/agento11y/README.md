@@ -158,6 +158,10 @@ Run `agento11y skills show setup-local-guards` and follow it to help me choose, 
 
 The skills for instrumenting your own application code are separate and ship with [`gcx`](https://github.com/grafana/gcx) instead: `gcx agent skills install agento11y-instrument`.
 
+Live skill-load detection covers native tools in [Claude Code](../claude-code/README.md#3-verify) and [OpenCode](../opencode/README.md#3-verify), and catalog-matched instruction reads in [Pi](../pi/README.md#3-verify). Recognized attempts add `gen_ai.skill.name` to existing tool-execution spans, including failures. They do not prove successful instruction loading or explain later actions. Validated names remain in reduced modes; secret-like names are omitted. Detection adds no descriptions, paths, URIs, or metric labels and changes no payload policy.
+
+Detection does not cover other hosts, history import, direct `/skill` prompt insertion, resource reads, scripts, or attribution of later activity. Skill visibility requires retained tool and generation spans in Tempo plus deployed Sigil consumer support; a conversation alone is insufficient.
+
 ## Local mode
 
 `agento11y <agent> --local` records the session to a JSONL store and starts the local Agent Observability app. The command prints the app URL (tries `http://127.0.0.1:8765`, then a higher port if needed).
@@ -283,9 +287,24 @@ AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana
 
 Find these values at `https://<your-grafana>.grafana.net/a/grafana-agento11y-app/setup-coding-agent`.
 
+### Experimental OTel generation export
+
+HTTP remains the default. To export generations as OpenTelemetry (OTel) spans, set these values in the environment or `~/.config/agento11y/config.env`:
+
+```dotenv
+AGENTO11Y_PROTOCOL=otel
+AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true
+```
+
+Configure `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_ENDPOINT`) and OTLP authentication. Use an endpoint that supports Agent Observability generation ingestion.
+
+OTel export supports Claude Code, Codex, Copilot, Cursor, Vibe, and Kiro. Local mode, history imports, and Claude plugin eval imports also support OTel. Pi and OpenCode live plugins still use HTTP.
+
+Guards, scores, and experiment APIs still need HTTP credentials.
+
 ### Content capture
 
-The shared `agento11y` binary defaults to `metadata_only`: only model, tokens, tool names, timing, and cost ship to Grafana Agent Observability. Prompts, responses, and tool I/O stay local unless guards are enabled. Guards send evaluated messages and tool arguments to `AGENTO11Y_ENDPOINT` in every capture mode. To send captured content, set `AGENTO11Y_CONTENT_CAPTURE_MODE` in `~/.config/agento11y/config.env`. The shared parser accepts every SDK mode:
+The shared `agento11y` binary defaults to `metadata_only`: model, tokens, tool names, recognized skill names, timing, and cost ship to Grafana Agent Observability. Prompts, responses, and tool I/O stay local unless guards are enabled. Guards send evaluated messages and tool arguments to `AGENTO11Y_ENDPOINT` in every capture mode. To send captured content, set `AGENTO11Y_CONTENT_CAPTURE_MODE` in `~/.config/agento11y/config.env`. The shared parser accepts every SDK mode:
 
 ```dotenv
 # valid values: full | no_tool_content | metadata_only | full_with_metadata_spans
@@ -330,7 +349,7 @@ agento11y login --env-file team.env
 op document get agento11y-cloud-env | agento11y login --env-file -
 ```
 
-Login reads the same lines as a pasted block: the endpoint, instance ID, token, OTLP endpoint, and OTLP headers, plus `AGENTO11Y_AUTO_CODING_AGENT_TAGS` and `AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES` (or their `SIGIL_` spellings), so a team block can turn on the same user, repository, and branch labels for everyone who logs in with it. Login saves those two keys as the interactive form saves the same answers. A key the block leaves out keeps its saved value, except that turning automatic tags off also deletes the saved names list, as answering No in the form does. Set both keys in a team block so every run ends the same way. A value the form would not accept stops login before anything is saved. Other keys in the file are ignored and named on stderr: a shared file cannot set anyone's content capture, guards, session tags, TLS, binary, web dir, or stack URL. Session tags stay out because `AGENTO11Y_TAGS` is one value, so a team value would replace each person's own tags. `export` prefixes and `#` comment lines are accepted, so the same file also works with `source`. A file of `op://` references must be resolved first, for example `op inject -i team.env | agento11y login --env-file -`. Flags still win over the values in the block, and a file that holds only the endpoint and instance ID can be combined with `--token-stdin`. A block larger than 64 KiB is refused.
+Login reads the same lines as a pasted block: the endpoint, instance ID, token, OTLP endpoint, and OTLP headers, plus `AGENTO11Y_AUTO_CODING_AGENT_TAGS` and `AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES` (or their `SIGIL_` spellings), so a team block can turn on the same user, repository, and branch labels for everyone who logs in with it. Login saves those two keys as the interactive form saves the same answers. A key the block leaves out keeps its saved value, except that turning automatic tags off also deletes the saved names list, as answering No in the form does. Set both keys in a team block so every run ends the same way. A value the form would not accept stops login before anything is saved. Other keys in the file are ignored and named on stderr: a shared file cannot set anyone's content capture, guards, protocol, session tags, TLS, binary, web dir, or stack URL. The setup page's own `AGENTO11Y_PROTOCOL=http` and `AGENTO11Y_AUTH_MODE=basic` lines are the defaults, so they are not named. Session tags stay out because `AGENTO11Y_TAGS` is one value, so a team value would replace each person's own tags. `export` prefixes and `#` comment lines are accepted, so the same file also works with `source`. A file of `op://` references must be resolved first, for example `op inject -i team.env | agento11y login --env-file -`. Flags still win over the values in the block, and a file that holds only the endpoint and instance ID can be combined with `--token-stdin`. A block larger than 64 KiB is refused.
 
 ## Settings
 
@@ -438,12 +457,14 @@ Run `agento11y doctor` first. It's a read-only diagnostic that reports both expo
 agento11y doctor
 ```
 
-The two pipelines are independent and fail independently:
+With default HTTP capture, conversations and analytics use separate pipelines. Experimental OTel generations share the trace route:
 
-- **Conversations** (the chat transcripts) export over `AGENTO11Y_ENDPOINT` + `AGENTO11Y_AUTH_TENANT_ID` + `AGENTO11Y_AUTH_TOKEN`. The token needs the `sigil:write` scope.
+- **Conversations** (the chat transcripts) use `AGENTO11Y_ENDPOINT` + `AGENTO11Y_AUTH_TENANT_ID` + `AGENTO11Y_AUTH_TOKEN` by default. The token needs `sigil:write`. With experimental OTel selected, Go producers use the configured OTLP trace route instead.
 - **Analytics** (the Agent Observability metrics and traces) export over `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_ENDPOINT`). The token needs `metrics:write` and `traces:write`.
 
-The common failure is conversations showing up while the analytics page stays empty: the OTLP endpoint is unset, or the token lacks the metrics/traces scopes. `agento11y doctor` flags that case explicitly and exits non-zero when a pipeline is broken.
+In OTel mode, doctor checks the selected transport, experimental opt-in, and trace route. A successful probe does not confirm storage in Agent Observability.
+
+With default HTTP capture, the common failure is conversations showing up while the analytics page stays empty: the OTLP endpoint is unset, or the token lacks the metrics/traces scopes. `agento11y doctor` flags that case explicitly and exits non-zero when a pipeline is broken.
 
 For onboarding checks and unattended rollout, require a complete healthy Cloud
 connection rather than accepting an unconfigured installation:

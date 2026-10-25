@@ -22,6 +22,16 @@ type Session struct {
 	// Model is captured from SessionStart so tool hooks can include model context
 	// when calling agento11y guards (PreToolUse events do not include model fields).
 	Model string `json:"model,omitempty"`
+	// SubagentOffsets is the byte offset already exported from each sibling
+	// subagent transcript, keyed by [subagent.FileKey]. Background agents keep
+	// writing after the first tool_result, so a later Stop must resume here
+	// instead of treating the file as done.
+	SubagentOffsets map[string]int64 `json:"subagent_offsets,omitempty"`
+	// SubagentParents and SubagentNames remember the spawning generation and
+	// agent suffix for a child run across hook invocations, so a nested
+	// subagent whose parent turn was exported earlier still links correctly.
+	SubagentParents map[string]string `json:"subagent_parents,omitempty"`
+	SubagentNames   map[string]string `json:"subagent_names,omitempty"`
 }
 
 func dir() string {

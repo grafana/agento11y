@@ -8,6 +8,14 @@ public final class ToolExecution {
     private String toolCallId = "";
     private String toolType = "";
     private String toolDescription = "";
+    private ToolExecutionKind executionKind;
+    private String skillName = "";
+    private String skillDescription = "";
+    private String skillSourceURI = "";
+    private String skillResourceName = "";
+    private String processExecutableName = "";
+    private String processExecutablePath = "";
+    private Long processExitCode;
     private String conversationId = "";
     private String agentName = "";
     private String agentVersion = "";
@@ -51,6 +59,78 @@ public final class ToolExecution {
 
     public ToolExecution setToolDescription(String toolDescription) {
         this.toolDescription = toolDescription == null ? "" : toolDescription;
+        return this;
+    }
+
+    public ToolExecutionKind getExecutionKind() {
+        return executionKind;
+    }
+
+    public ToolExecution setExecutionKind(ToolExecutionKind executionKind) {
+        this.executionKind = executionKind;
+        return this;
+    }
+
+    public String getSkillName() {
+        return skillName;
+    }
+
+    public ToolExecution setSkillName(String skillName) {
+        this.skillName = skillName == null ? "" : skillName;
+        return this;
+    }
+
+    public String getSkillDescription() {
+        return skillDescription;
+    }
+
+    public ToolExecution setSkillDescription(String skillDescription) {
+        this.skillDescription = skillDescription == null ? "" : skillDescription;
+        return this;
+    }
+
+    public String getSkillSourceURI() {
+        return skillSourceURI;
+    }
+
+    public ToolExecution setSkillSourceURI(String skillSourceURI) {
+        this.skillSourceURI = skillSourceURI == null ? "" : skillSourceURI;
+        return this;
+    }
+
+    public String getSkillResourceName() {
+        return skillResourceName;
+    }
+
+    public ToolExecution setSkillResourceName(String skillResourceName) {
+        this.skillResourceName = skillResourceName == null ? "" : skillResourceName;
+        return this;
+    }
+
+    public String getProcessExecutableName() {
+        return processExecutableName;
+    }
+
+    public ToolExecution setProcessExecutableName(String processExecutableName) {
+        this.processExecutableName = processExecutableName == null ? "" : processExecutableName;
+        return this;
+    }
+
+    public String getProcessExecutablePath() {
+        return processExecutablePath;
+    }
+
+    public ToolExecution setProcessExecutablePath(String processExecutablePath) {
+        this.processExecutablePath = processExecutablePath == null ? "" : processExecutablePath;
+        return this;
+    }
+
+    public Long getProcessExitCode() {
+        return processExitCode;
+    }
+
+    public ToolExecution setProcessExitCode(Long processExitCode) {
+        this.processExitCode = processExitCode;
         return this;
     }
 
@@ -141,6 +221,14 @@ public final class ToolExecution {
                 .setToolCallId(toolCallId)
                 .setToolType(toolType)
                 .setToolDescription(toolDescription)
+                .setExecutionKind(executionKind)
+                .setSkillName(skillName)
+                .setSkillDescription(skillDescription)
+                .setSkillSourceURI(skillSourceURI)
+                .setSkillResourceName(skillResourceName)
+                .setProcessExecutableName(processExecutableName)
+                .setProcessExecutablePath(processExecutablePath)
+                .setProcessExitCode(processExitCode)
                 .setConversationId(conversationId)
                 .setAgentName(agentName)
                 .setAgentVersion(agentVersion)

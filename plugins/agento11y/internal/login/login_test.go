@@ -2660,6 +2660,26 @@ func TestRun_ExplicitValues(t *testing.T) {
 			},
 		},
 		{
+			name: "experimental transport settings survive login",
+			file: existing + "AGENTO11Y_PROTOCOL=otel\nAGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true\nSIGIL_PROTOCOL=http\n",
+			opts: RunOpts{Endpoint: "https://new.example", TenantID: "222", Token: "new-token"},
+			want: map[string]string{
+				"AGENTO11Y_PROTOCOL":                     "otel",
+				"AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "true",
+				"SIGIL_PROTOCOL":                         "http",
+			},
+		},
+		{
+			name: "legacy transport setting survives login",
+			file: existing + "SIGIL_PROTOCOL=otel\nAGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=false\n",
+			opts: RunOpts{Endpoint: "https://new.example", TenantID: "222", Token: "new-token"},
+			want: map[string]string{
+				"SIGIL_PROTOCOL":                         "otel",
+				"AGENTO11Y_PROTOCOL":                     "",
+				"AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "false",
+			},
+		},
+		{
 			name: "otlp endpoint is persisted",
 			opts: RunOpts{
 				Endpoint:     "https://new.example",
@@ -2981,12 +3001,13 @@ func TestRun_Block(t *testing.T) {
 		"OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.block.example\n" +
 		"OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic abc\n"
 	cases := []struct {
-		name       string
-		existing   string // config.env before the run
-		opts       RunOpts
-		wantErr    string
-		wantStderr string
-		wantFile   map[string]string // "" means the key must be absent
+		name        string
+		existing    string // config.env before the run
+		opts        RunOpts
+		wantErr     string
+		wantStderr  string
+		notInStderr string
+		wantFile    map[string]string // "" means the key must be absent
 	}{
 		{
 			name: "block alone",
@@ -3028,6 +3049,27 @@ func TestRun_Block(t *testing.T) {
 				"AGENTO11Y_STACK_URL":                   "",
 				"SIGIL_STACK_URL":                       "",
 			},
+		},
+		{
+			// PROTOCOL=otel is a real setting, and login does not write it, so
+			// the user must hear that it was left out.
+			name:       "a non-default protocol is named",
+			existing:   "AGENTO11Y_PROTOCOL=http\n",
+			opts:       RunOpts{Block: block + "AGENTO11Y_PROTOCOL=otel\nAGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true\nSIGIL_AUTH_MODE=Tenant\n"},
+			wantStderr: "ignored AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES, AGENTO11Y_PROTOCOL, SIGIL_AUTH_MODE from the block",
+			wantFile: map[string]string{
+				"AGENTO11Y_PROTOCOL":                     "http",
+				"SIGIL_PROTOCOL":                         "",
+				"AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "",
+				"SIGIL_AUTH_MODE":                        "",
+				"AGENTO11Y_AUTH_MODE":                    "",
+			},
+		},
+		{
+			// The setup page's block always carries these defaults.
+			name:        "the default protocol and auth mode are not named",
+			opts:        RunOpts{Block: block + "AGENTO11Y_PROTOCOL= HTTP \nSIGIL_AUTH_MODE=basic\n"},
+			notInStderr: "ignored",
 		},
 		{
 			// The raw OTLP endpoint is a credential field login already
@@ -3095,6 +3137,9 @@ func TestRun_Block(t *testing.T) {
 			_, err := Run(context.Background(), c.opts)
 			if !strings.Contains(stderr.String(), c.wantStderr) {
 				t.Errorf("stderr missing %q:\n%s", c.wantStderr, stderr.String())
+			}
+			if c.notInStderr != "" && strings.Contains(stderr.String(), c.notInStderr) {
+				t.Errorf("stderr has %q:\n%s", c.notInStderr, stderr.String())
 			}
 			if c.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), c.wantErr) {

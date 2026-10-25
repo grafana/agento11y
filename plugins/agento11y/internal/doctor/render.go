@@ -127,14 +127,35 @@ func renderHuman(w io.Writer, r *Report, color bool) {
 
 	// Conversations pipeline.
 	writeSection(&b, p, "Conversations (generation export)", r.Conversations.Health)
+	protocol := r.Conversations.Protocol
+	if protocol == "" {
+		protocol = "http"
+	}
+	b.kv("transport", protocol)
 	b.kv("endpoint", describeEnv(p, r.Conversations.Endpoint))
 	b.kv("tenant id", describeEnv(p, r.Conversations.TenantID))
 	b.kv("auth token", describeToken(p, r.Conversations.Token))
 	if r.Conversations.Probe != nil {
 		b.kv("probe", describeProbeRow(p, r.Conversations.Probe))
 	}
+	if r.Conversations.LocalCapability != nil {
+		capability := "not verified"
+		if r.Conversations.LocalCapability.OK {
+			capability = "supported"
+		}
+		b.kv("local ingest", capability)
+	}
 	writeMessages(&b, p, r.Conversations.Messages)
 	b.textf("\n")
+
+	if r.HTTPAPIs != nil {
+		writeSection(&b, p, "HTTP APIs (guards, scores & experiments)", r.HTTPAPIs.Health)
+		b.kv("endpoint", describeEnv(p, r.HTTPAPIs.Endpoint))
+		b.kv("tenant id", describeEnv(p, r.HTTPAPIs.TenantID))
+		b.kv("auth token", describeToken(p, r.HTTPAPIs.Token))
+		writeMessages(&b, p, r.HTTPAPIs.Messages)
+		b.textf("\n")
+	}
 
 	// Analytics pipeline.
 	writeSection(&b, p, "Analytics (OTLP metrics & traces)", r.Analytics.Health)
@@ -165,6 +186,16 @@ func renderHuman(w io.Writer, r *Report, color bool) {
 		exists = "present"
 	}
 	b.kv("file", fmt.Sprintf("%s %s", r.Config.Path, p.faint("("+exists+")")))
+	requested := withTrailer("http", describeSource(p, "default"))
+	if r.Config.GenerationProtocol.Set {
+		requested = describeEnv(p, r.Config.GenerationProtocol)
+	}
+	b.kv("generation", requested)
+	experimental := withTrailer("false", describeSource(p, "default"))
+	if r.Config.ExperimentalFeatures.Set {
+		experimental = describeEnv(p, r.Config.ExperimentalFeatures)
+	}
+	b.kv("experimental", experimental)
 	b.kv("content capture", withTrailer(r.Config.ContentCaptureMode,
 		describeSource(p, provenanceParts(r.Config.ContentModeKey, r.Config.ContentModeSource)...)))
 	b.kv("prompt redaction", describeRedactInput(p, r.Config))

@@ -7,6 +7,7 @@ import copy
 import json
 import socket
 import threading
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -34,6 +35,7 @@ from agento11y import (
     TokenUsage,
     ToolCall,
     ToolDefinition,
+    ToolExecutionKind,
     ToolExecutionStart,
     ToolResult,
     validate_generation,
@@ -649,6 +651,50 @@ class TestToolContentCapture:
             if span.name.startswith("execute_tool"):
                 return span
         raise AssertionError("tool span not found")
+
+    @pytest.mark.parametrize("source", ["client", "resolver", "context", "tool"])
+    @pytest.mark.parametrize("mode", [ContentCaptureMode.METADATA_ONLY, ContentCaptureMode.FULL_WITH_METADATA_SPANS])
+    def test_reduced_effective_modes_omit_private_skill_process_content(self, source, mode):
+        client, span_exporter, provider = self._make_tool_client(
+            mode if source == "client" else ContentCaptureMode.FULL,
+            content_capture_resolver=(lambda _: mode) if source == "resolver" else None,
+        )
+        start = ToolExecutionStart(
+            tool_name="exec",
+            execution_kind=ToolExecutionKind.COMMAND,
+            skill_name="review",
+            skill_resource_name="check.py",
+            skill_description=_LEAK_MARKER,
+            skill_source_uri="file:///private/skills",
+            process_executable_name="python3",
+            process_executable_path="/private/python3",
+            content_capture=mode if source == "tool" else ContentCaptureMode.DEFAULT,
+            include_content=True,
+        )
+        original = copy.deepcopy(start)
+        private = ("gen_ai.skill.description", "gen_ai.skill.source.uri", "process.executable.path")
+        try:
+            with with_content_capture_mode(mode) if source == "context" else nullcontext():
+                with client.start_tool_execution(start) as rec:
+                    assert rec._content_capture_mode == mode
+                    assert rec.span.name == "execute_tool exec review check.py"
+                    assert all(key not in rec.span.attributes for key in private)
+                    rec.set_result(arguments=_LEAK_MARKER, result=_LEAK_MARKER, process_exit_code=3)
+                    rec.set_exec_error(RuntimeError(_LEAK_MARKER))
+            span = self._get_tool_span(span_exporter)
+            assert len(span_exporter.get_finished_spans()) == 1
+            assert all(key not in span.attributes for key in private)
+            assert "gen_ai.tool.call.arguments" not in span.attributes
+            assert "gen_ai.tool.call.result" not in span.attributes
+            assert span.attributes["gen_ai.skill.name"] == "review"
+            assert span.attributes["gen_ai.skill.resource.name"] == "check.py"
+            assert span.attributes["process.executable.name"] == "python3"
+            assert span.attributes["process.exit.code"] == 3
+            _assert_span_error_redacted(span, "tool_execution_error")
+            assert start == original
+        finally:
+            client.shutdown()
+            provider.shutdown()
 
     def test_client_full_includes_content(self):
         client, span_exporter, provider = self._make_tool_client(ContentCaptureMode.FULL)

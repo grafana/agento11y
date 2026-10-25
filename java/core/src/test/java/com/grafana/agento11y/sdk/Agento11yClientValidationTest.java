@@ -6,6 +6,50 @@ import org.junit.jupiter.api.Test;
 
 class Agento11yClientValidationTest {
     @Test
+    void executionKindAndSkillProcessFieldsDefaultToAbsentAndNormalizeNullStrings() {
+        ToolExecutionStart start = new ToolExecutionStart();
+        ToolExecution execution = new ToolExecution();
+        assertThat(start.getExecutionKind()).isNull();
+        assertThat(execution.getExecutionKind()).isNull();
+        assertThat(execution.getProcessExitCode()).isNull();
+        assertThat(new ToolExecutionResult().getProcessExitCode()).isNull();
+        assertThat(start.getSkillName()).isEmpty();
+        assertThat(start.getSkillDescription()).isEmpty();
+        assertThat(start.getSkillSourceURI()).isEmpty();
+        assertThat(start.getSkillResourceName()).isEmpty();
+        assertThat(start.getProcessExecutableName()).isEmpty();
+        assertThat(start.getProcessExecutablePath()).isEmpty();
+        assertThat(execution.getSkillName()).isEmpty();
+        assertThat(execution.getSkillDescription()).isEmpty();
+        assertThat(execution.getSkillSourceURI()).isEmpty();
+        assertThat(execution.getSkillResourceName()).isEmpty();
+        assertThat(execution.getProcessExecutableName()).isEmpty();
+        assertThat(execution.getProcessExecutablePath()).isEmpty();
+
+        ToolExecutionStart nullStart = new ToolExecutionStart()
+                .setExecutionKind(ToolExecutionKind.LOAD_SKILL).setExecutionKind(null)
+                .setSkillName(null)
+                .setSkillDescription(null)
+                .setSkillSourceURI(null)
+                .setSkillResourceName(null)
+                .setProcessExecutableName(null)
+                .setProcessExecutablePath(null);
+        assertThat(nullStart.copy()).usingRecursiveComparison().isEqualTo(start);
+        ToolExecution nullExecution = new ToolExecution()
+                .setExecutionKind(ToolExecutionKind.COMMAND).setExecutionKind(null)
+                .setSkillName(null)
+                .setSkillDescription(null)
+                .setSkillSourceURI(null)
+                .setSkillResourceName(null)
+                .setProcessExecutableName(null)
+                .setProcessExecutablePath(null)
+                .setProcessExitCode(0L).setProcessExitCode(null);
+        assertThat(nullExecution.copy()).usingRecursiveComparison().isEqualTo(execution);
+        assertThat(new ToolExecutionResult().setProcessExitCode(0L).setProcessExitCode(null).copy().getProcessExitCode())
+                .isNull();
+    }
+
+    @Test
     void rejectsRolePartCompatibilityViolations() {
         TestFixtures.CapturingExporter exporter = new TestFixtures.CapturingExporter();
         try (Agento11yClient client = TestFixtures.newClient(exporter)) {

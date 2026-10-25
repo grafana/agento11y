@@ -379,8 +379,8 @@ func TestTargetDestination(t *testing.T) {
 		t.Errorf("loopback destinations = %q, %q, want both %q", a, b, localDestination)
 	}
 	stack := cloud("https://agento11y-prod.grafana.net", "123")
-	if stack == localDestination || !strings.HasPrefix(stack, "cloud-") {
-		t.Fatalf("Cloud destination = %q", stack)
+	if stack != "cloud-7edac7c2342366cf" {
+		t.Fatalf("Cloud destination = %q, want existing base-URL ledger hash", stack)
 	}
 	// One endpoint spelled another way is one destination: a new ledger would
 	// send every turn again.
@@ -400,6 +400,38 @@ func TestTargetDestination(t *testing.T) {
 	}
 	if other := cloud("https://agento11y-prod.grafana.net", "456"); other == stack {
 		t.Error("two tenants on one endpoint share a destination")
+	}
+	prefixed := cloud("https://agento11y-prod.grafana.net/sigil", "123")
+	if prefixed != "cloud-0f5635f8706619e7" {
+		t.Fatalf("prefixed destination = %q, want existing base-URL ledger hash", prefixed)
+	}
+	for _, tc := range []struct {
+		endpoint, want string
+	}{
+		{"https://agento11y-prod.grafana.net/api/v1/generations:export", "cloud-4dcc23a7b7b6a7f7"},
+		{"https://Agento11y-Prod.grafana.net.:443/api/v1/generations:export/", "cloud-4dcc23a7b7b6a7f7"},
+		{"agento11y-prod.grafana.net/api/v1/generations:export//", "cloud-4dcc23a7b7b6a7f7"},
+		{"https://agento11y-prod.grafana.net/sigil/api/v1/generations:export/", "cloud-f2b6046daffffe8e"},
+	} {
+		if got := cloud(tc.endpoint, "123"); got != tc.want {
+			t.Errorf("%q gave %q, want existing full-URL ledger hash %q", tc.endpoint, got, tc.want)
+		}
+	}
+	for _, other := range []string{
+		"https://other.grafana.net/api/v1/generations:export",
+		"http://agento11y-prod.grafana.net/api/v1/generations:export",
+		"https://agento11y-prod.grafana.net:8443/api/v1/generations:export",
+		"https://agento11y-prod.grafana.net/sigil/api/v1/generations:export",
+		"https://agento11y-prod.grafana.net/API/v1/generations:export",
+		"https://agento11y-prod.grafana.net/api%2Fv1/generations:export",
+		"https://agento11y-prod.grafana.net/api/v1/generations:export?route=other",
+	} {
+		if got := cloud(other, "123"); got == stack {
+			t.Errorf("distinct destination %q shares the base-URL ledger", other)
+		}
+	}
+	if other := cloud("https://agento11y-prod.grafana.net/api/v1/generations:export", "456"); other == stack {
+		t.Error("two tenants on the full export URL share a destination")
 	}
 	if a, b := cloud("https://[2001:db8::1]:443/", "1"), cloud("https://[2001:db8::1]", "1"); a != b {
 		t.Errorf("one IPv6 endpoint gave %q and %q", a, b)

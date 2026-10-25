@@ -730,6 +730,117 @@ public sealed class ContentCaptureModeTests
         Assert.NotNull(span.GetTagItem(Agento11yClient.SpanAttrToolCallArguments));
     }
 
+    [Theory]
+    [InlineData(ContentCaptureMode.Default, false, true)]
+    [InlineData(ContentCaptureMode.Default, true, true)]
+    [InlineData(ContentCaptureMode.NoToolContent, false, true)]
+    [InlineData(ContentCaptureMode.NoToolContent, true, true)]
+    [InlineData(ContentCaptureMode.Full, false, true)]
+    [InlineData(ContentCaptureMode.MetadataOnly, true, false)]
+    [InlineData(ContentCaptureMode.FullWithMetadataSpans, true, false)]
+    public async Task SkillAndProcess_PrivateFieldsFollowToolContentCapture(
+        ContentCaptureMode mode, bool legacyInclude, bool expectPrivate)
+    {
+        await using var env = new ContentCaptureEnv(mode);
+#pragma warning disable CS0618
+        var start = new ToolExecutionStart
+        {
+            ToolName = "exec",
+            ExecutionKind = ToolExecutionKind.Command,
+            SkillName = " review ",
+            SkillResourceName = " check.py ",
+            SkillDescription = " private instructions ",
+            SkillSourceURI = "https://user:secret@skills.example.com/review?token=private#section",
+            ProcessExecutableName = " python3 ",
+            ProcessExecutablePath = " /private/python3 ",
+            IncludeContent = legacyInclude,
+        };
+#pragma warning restore CS0618
+        var recorder = env.Client.StartToolExecution(start);
+        recorder.SetResult(new ToolExecutionEnd { Arguments = "args", Result = "result", ProcessExitCode = 0 });
+        recorder.End();
+        await env.ShutdownAsync(TestContext.Current.CancellationToken);
+
+        var span = env.ToolSpan();
+        Assert.Equal("execute_tool exec review check.py", span.DisplayName);
+        Assert.Equal("review", span.GetTagItem("gen_ai.skill.name"));
+        Assert.Equal("check.py", span.GetTagItem("gen_ai.skill.resource.name"));
+        Assert.Equal("python3", span.GetTagItem("process.executable.name"));
+        Assert.Equal(0L, span.GetTagItem("process.exit.code"));
+        Assert.Equal(expectPrivate ? "private instructions" : null, span.GetTagItem("gen_ai.skill.description"));
+        Assert.Equal(expectPrivate ? "https://skills.example.com/review" : null, span.GetTagItem("gen_ai.skill.source.uri"));
+        Assert.Equal(expectPrivate ? "/private/python3" : null, span.GetTagItem("process.executable.path"));
+        var expectArguments = expectPrivate && (mode == ContentCaptureMode.Full || legacyInclude);
+        Assert.Equal(expectArguments, span.GetTagItem("gen_ai.tool.call.arguments") != null);
+        Assert.Equal(expectArguments, span.GetTagItem("gen_ai.tool.call.result") != null);
+        Assert.Equal(" private instructions ", start.SkillDescription);
+        Assert.Contains("user:secret@", start.SkillSourceURI);
+        Assert.Equal(" /private/python3 ", start.ProcessExecutablePath);
+    }
+
+    [Theory]
+    [InlineData("file:/opt/skills/review/SKILL.md", "file:///opt/skills/review/SKILL.md")]
+    [InlineData("file:///opt/skills/review/SKILL.md", "file:///opt/skills/review/SKILL.md")]
+    [InlineData("file:/opt/skills/code%20review/SKILL.md?token=secret#section", "file:///opt/skills/code%20review/SKILL.md")]
+    [InlineData("file://server/skills/review/SKILL.md", "file://server/skills/review/SKILL.md")]
+    [InlineData("https://user:secret@skills.example.com:8443/review?token=secret#section", "https://skills.example.com:8443/review")]
+    [InlineData("https://skills.example.com", "https://skills.example.com/")]
+    [InlineData("https://skills.example.com/code%20review/%53KILL%2f.md", "https://skills.example.com/code%20review/%53KILL%2f.md")]
+    [InlineData("https://[::1]:8443/review?token=secret", "https://[::1]:8443/review")]
+    [InlineData("s3://user:secret@skills/review%2FSKILL.md?version=private#section", "s3://skills/review%2FSKILL.md")]
+    [InlineData("gs://skills/review/SKILL.md?generation=private#section", "gs://skills/review/SKILL.md")]
+    [InlineData("az://skills/review/SKILL.md?token=private", "az://skills/review/SKILL.md")]
+    [InlineData("", null)]
+    [InlineData("file:", null)]
+    [InlineData("file:relative", null)]
+    [InlineData("file://", null)]
+    [InlineData("file://server", null)]
+    [InlineData("https:///path", null)]
+    [InlineData("https:/path", null)]
+    [InlineData("https:path", null)]
+    [InlineData("s3:///path", null)]
+    [InlineData("s3:/path", null)]
+    [InlineData("https://skills.example.com:invalid/path", null)]
+    [InlineData("https://skills.example.com:65536/path", null)]
+    [InlineData("s3://skills:invalid/path", null)]
+    [InlineData("s3://skills:65536/path", null)]
+    [InlineData("https://[broken/path", null)]
+    [InlineData("https://skills.example.com/review%", null)]
+    [InlineData("https://skills.example.com/review%2", null)]
+    [InlineData("https://skills.example.com/review%GG", null)]
+    [InlineData("https://user%GG:secret@skills.example.com/review", null)]
+    [InlineData("https://skills.example.com/review?token=%GG", null)]
+    [InlineData("https://skills.example.com/review#%GG", null)]
+    [InlineData("file:/opt/skills/review%GG", null)]
+    [InlineData(" https://skills.example.com/review", "https://skills.example.com/review")]
+    [InlineData("https://skills.example.com/review ", "https://skills.example.com/review")]
+    [InlineData("https://skills.example.com/code review", null)]
+    [InlineData("https://skills.example.com/review?token=has space", null)]
+    [InlineData("https://skills.example.com/review#has space", null)]
+    [InlineData("https://skills.example.com/re\tview", null)]
+    [InlineData("https://skills.example.com/review\n", "https://skills.example.com/review")]
+    [InlineData("https://skills.example.com/review\u0000", null)]
+    [InlineData("https://skills.example.com/review\u007f", null)]
+    [InlineData("https://skills.example.com/review\u00a0", "https://skills.example.com/review")]
+    [InlineData("https://skills.example.com\\review", null)]
+    [InlineData("/opt/skills/review/SKILL.md", null)]
+    public async Task SkillSourceUri_ValidatesBeforeScrubbing(string source, string? expected)
+    {
+        await using var env = new ContentCaptureEnv(ContentCaptureMode.Full);
+        var start = new ToolExecutionStart
+        {
+            ToolName = "load",
+            ExecutionKind = ToolExecutionKind.LoadSkill,
+            SkillSourceURI = source,
+        };
+        var recorder = env.Client.StartToolExecution(start);
+        recorder.End();
+        await env.ShutdownAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(expected, env.ToolSpan().GetTagItem("gen_ai.skill.source.uri"));
+        Assert.Equal(source, start.SkillSourceURI);
+    }
+
     [Fact]
     public async Task ContextPropagation_GenerationSetsContextForToolExecution()
     {

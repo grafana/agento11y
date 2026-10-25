@@ -20,7 +20,8 @@ assets, err := weavertest.Setup(ctx, os.Getenv("SEMCONV_GENAI_REF"))
 A cold run downloads that commit and its upstream semantic-conventions
 release. Older revisions name the release in `versions.env`. Newer revisions
 use a Git dependency in `model/manifest.yaml`. `Setup` accepts both layouts and
-rewrites the dependency to the local filtered registry.
+rewrites the dependency to the local filtered registry. When tool spans reference
+core process attributes, `Setup` imports the core process definitions too.
 
 ## Two runners
 
@@ -28,7 +29,7 @@ rewrites the dependency to the local filtered registry.
 `End`. Use it to check telemetry an SDK emits live.
 
 `LiveCheck` runs Weaver over recorded spans passed as `Sample` values and
-returns `Finding`s. Use it to check fixtures with no SDK in the loop. `Sample`
+returns `Finding`s. Use it for fixtures or SDK spans recorded in memory. `Sample`
 values come from `SampleFromSpan`, which converts an OTLP `tracepb.Span`.
 `Finding.Target` is empty for a span and uses these exact forms elsewhere:
 
@@ -39,7 +40,17 @@ values come from `SampleFromSpan`, which converts an OTLP `tracepb.Span`.
 - link attribute: `link[N]/<attribute>`
 
 Both need the `weaver` binary on `PATH` and report `ErrNotInstalled` when it is
-missing. Pin the version: this package is developed against Weaver 0.25.1.
+missing. The repository runs two pinned combinations:
+
+| Task | GenAI registry commit | Weaver | Signals |
+| --- | --- | --- | --- |
+| `test:go:conformance` | `1d85c963ea51e9c7d24cc330ff67057f6e90e6c5` | 0.25.1 | Existing spans, metrics, and events |
+| `test:go:tool-execution-kinds-conformance` | `771e3210f7518694666834f7243573b8018c7a4f` | 0.26.1 | Tool spans only |
+
+The second task enables `conformance,tool_execution_kinds` and selects only
+`TestToolExecutionKindsConformance`. The first task does not enable the new test.
+Each task selects its own Weaver version. The newer registry has unrelated metric
+changes, so the focused task never sends legacy metrics to it.
 
 ## Policies
 
@@ -55,8 +66,17 @@ operation name outside the registry fails the check.
 
 `Setup` generates `coverage-model.json` from the pinned registry with the
 pinned Weaver binary. Both runners load that model with the registry's content
-schemas as advice data. The policies add what the registry cannot express on
-its own:
+schemas as advice data. The model keeps the three selected tool execution kinds in
+`tool_execution_kinds`, keyed by registry ID, separate from base `spans`.
+Skill/process attributes do not become requirements for generic tools.
+
+Exported tool spans have no execution-kind discriminator. The name policy accepts
+the standard forms without inferring an execution kind from attributes or tool names.
+The focused SDK test checks exact names and attribute omissions against the
+shared cases in `conformance/tool-execution-kinds/cases.json`. An unavailable
+recommended agent name remains absent; the harness does not invent one.
+
+The policies add what the registry cannot express on its own:
 
 - `genai_span_validation.rego`: registry-derived attribute and span-kind
   expectations, plus explicit operation classification and span-name rules.

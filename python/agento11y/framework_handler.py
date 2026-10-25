@@ -17,6 +17,7 @@ from opentelemetry.trace import Span, SpanKind, Status, StatusCode
 
 from agento11y import (
     Client,
+    ContentCaptureMode,
     Generation,
     GenerationMode,
     GenerationStart,
@@ -30,6 +31,7 @@ from agento11y import (
     ToolExecutionStart,
     ToolResult,
     WorkflowStep,
+    content_capture_mode_from_context,
     user_text_message,
 )
 from agento11y.usage import map_usage
@@ -97,6 +99,15 @@ class _ToolRunState:
     recorder: Any
     arguments: Any
     capture_outputs: bool
+
+
+@dataclass(slots=True)
+class _FrameworkSpanState:
+    span: Span
+    # Kept so an error can resolve the run's capture mode the way its
+    # generations do.
+    metadata: dict[str, Any]
+    ctx_mode: ContentCaptureMode | None
 
 
 @dataclass(slots=True)
@@ -172,8 +183,8 @@ class Agento11yFrameworkHandlerBase:
         self._extra_metadata = dict(extra_metadata or {})
         self._runs: dict[str, _RunState] = {}
         self._tool_runs: dict[str, _ToolRunState] = {}
-        self._chain_spans: dict[str, Span] = {}
-        self._retriever_spans: dict[str, Span] = {}
+        self._chain_spans: dict[str, _FrameworkSpanState] = {}
+        self._retriever_spans: dict[str, _FrameworkSpanState] = {}
         self._workflow_step_runs: dict[str, _WorkflowStepState] = {}
 
         # Graph-level state for workflow step wiring. Keyed by the run_key of
@@ -772,7 +783,7 @@ class Agento11yFrameworkHandlerBase:
 
         if run_key in self._chain_spans:
             return
-        span = self._start_framework_span(
+        state = self._start_framework_span(
             run_key=run_key,
             parent_run_id=parent_run_id,
             serialized=serialized,
@@ -782,7 +793,7 @@ class Agento11yFrameworkHandlerBase:
             operation_name="framework_chain",
             fallback_component="chain",
         )
-        self._chain_spans[run_key] = span
+        self._chain_spans[run_key] = state
 
     def _on_chain_end(self, *, run_id: UUID, outputs: dict[str, Any] | None = None) -> None:
         run_key = str(run_id)
@@ -931,7 +942,7 @@ class Agento11yFrameworkHandlerBase:
         if run_key in self._retriever_spans:
             return
 
-        span = self._start_framework_span(
+        state = self._start_framework_span(
             run_key=run_key,
             parent_run_id=parent_run_id,
             serialized=serialized,
@@ -941,7 +952,7 @@ class Agento11yFrameworkHandlerBase:
             operation_name="framework_retriever",
             fallback_component="retriever",
         )
-        self._retriever_spans[run_key] = span
+        self._retriever_spans[run_key] = state
 
     def _on_retriever_end(self, *, run_id: UUID) -> None:
         self._end_framework_span(self._retriever_spans, run_id=run_id, error=None)
@@ -960,7 +971,7 @@ class Agento11yFrameworkHandlerBase:
         run_type: str,
         operation_name: str,
         fallback_component: str,
-    ) -> Span:
+    ) -> _FrameworkSpanState:
         conversation_id, thread_id = _resolve_framework_conversation_id(
             framework_name=self._framework_name,
             run_key=run_key,
@@ -1002,18 +1013,43 @@ class Agento11yFrameworkHandlerBase:
         if event_id != "":
             span.set_attribute(_span_attr_framework_event_id, event_id)
 
-        return span
+        # The same fields the handler's generations carry in their metadata.
+        metadata: dict[str, Any] = dict(self._extra_metadata)
+        metadata[_span_attr_framework_run_id] = run_key
+        metadata[_span_attr_framework_run_type] = run_type
+        if thread_id != "":
+            metadata[_span_attr_framework_thread_id] = thread_id
+        if parent_run_key != "":
+            metadata[_span_attr_framework_parent_run_id] = parent_run_key
+        if component_name != "":
+            metadata[_span_attr_framework_component_name] = component_name
+        callback_tags = _normalize_framework_tags(_read(callback_kwargs, "tags"))
+        if callback_tags:
+            metadata[_span_attr_framework_tags] = callback_tags
+        if retry_attempt is not None:
+            metadata[_span_attr_framework_retry_attempt] = retry_attempt
+        if langgraph_node != "":
+            metadata[_span_attr_framework_langgraph_node] = langgraph_node
+        if event_id != "":
+            metadata[_span_attr_framework_event_id] = event_id
+
+        return _FrameworkSpanState(
+            span=span,
+            metadata=_normalize_framework_metadata(metadata),
+            ctx_mode=content_capture_mode_from_context(),
+        )
 
     def _end_framework_span(
         self,
-        span_map: dict[str, Span],
+        span_map: dict[str, _FrameworkSpanState],
         *,
         run_id: UUID,
         error: BaseException | None,
     ) -> None:
-        span = span_map.pop(str(run_id), None)
-        if span is None:
+        state = span_map.pop(str(run_id), None)
+        if state is None:
             return
+        span = state.span
 
         if error is None:
             span.set_status(Status(StatusCode.OK))
@@ -1022,8 +1058,15 @@ class Agento11yFrameworkHandlerBase:
 
         span.set_attribute(_span_attr_error_type, "framework_error")
         span.set_attribute(_span_attr_error_category, "sdk_error")
-        span.record_exception(error)
-        span.set_status(Status(StatusCode.ERROR, str(error)))
+        # A chain error is often the provider error, secrets included, so its
+        # text stays off when this run's capture mode hides content or a
+        # sanitizer is configured. A client without the check hides it too.
+        should_redact = getattr(self._client, "_should_redact_framework_span_errors", None)
+        if should_redact is None or should_redact(state.metadata, state.ctx_mode):
+            span.set_status(Status(StatusCode.ERROR, "sdk_error"))
+        else:
+            span.record_exception(error)
+            span.set_status(Status(StatusCode.ERROR, str(error)))
         span.end()
 
     def _framework_tracer(self):

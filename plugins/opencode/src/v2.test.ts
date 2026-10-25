@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   telemetryShutdown: vi.fn(async () => {}),
   captureShutdown: vi.fn(async () => {}),
   handleEvent: vi.fn(),
+  observeToolExecution: vi.fn(),
+  stopObservingTools: vi.fn(),
   registerGuards: vi.fn(),
   registerFinalChecks: vi.fn(),
   finalChecksDispose: vi.fn(async () => {}),
@@ -60,12 +62,17 @@ function host() {
       });
     })();
   });
+  const observerDispose = vi.fn(async () => {});
+  const hook = vi.fn<Context["tool"]["hook"]>(async () => ({
+    dispose: observerDispose,
+  }));
   const context = {
+    tool: { hook },
     app: { name: "opencode", version: "2.0.29", channel: "latest" },
     location: { directory: "/repo", workspaceID: "workspace-1" },
     event: { subscribe },
   } as unknown as Context;
-  return { context, subscribe, signals };
+  return { context, subscribe, signals, hook, observerDispose };
 }
 
 describe("native setup ownership", () => {
@@ -82,6 +89,8 @@ describe("native setup ownership", () => {
     });
     mocks.createCapture.mockReturnValue({
       handleEvent: mocks.handleEvent,
+      observeToolExecution: mocks.observeToolExecution,
+      stopObservingTools: mocks.stopObservingTools,
       shutdown: mocks.captureShutdown,
     });
     mocks.registerGuards.mockResolvedValue(mocks.guardDispose);
@@ -309,6 +318,174 @@ describe("native setup ownership", () => {
     expect(mocks.copilotDispose.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.clientShutdown.mock.invocationCallOrder[0] ?? 0,
     );
+  });
+
+  it.each([
+    true,
+    false,
+  ])("observes final input independently of guards=%s", async (enabled) => {
+    mocks.loadConfig.mockResolvedValue(
+      baseConfig({ guards: { enabled, timeoutMs: 1, failOpen: false } }),
+    );
+    const { context, hook, observerDispose } = host();
+    Object.defineProperty(context, "session", {
+      get: () => {
+        throw new Error("no session lookup");
+      },
+    });
+    Object.defineProperty(context.tool, "list", {
+      get: () => {
+        throw new Error("no tool lookup");
+      },
+    });
+    const cleanup = await setupV2(context);
+    expect(hook).toHaveBeenCalledOnce();
+    expect(hook.mock.calls[0]?.[0]).toBe("execute.after");
+    const observe = (payload: unknown) =>
+      hook.mock.calls[0]?.[1](payload as never);
+    const ids = {
+      tool: "skill",
+      sessionID: "s",
+      messageID: "a",
+      id: "c",
+      agent: "build",
+    };
+    for (const status of ["completed", "error"]) {
+      const payload = Object.freeze({
+        ...ids,
+        status,
+        input: Object.freeze({ id: "final-skill", name: "v1-name" }),
+        get result() {
+          throw new Error("display name is not input");
+        },
+        get error() {
+          throw new Error("error is not input");
+        },
+      });
+      expect(observe(payload)).toBeUndefined();
+      expect(observe(payload)).toBeUndefined();
+    }
+    expect(mocks.observeToolExecution).toHaveBeenCalledTimes(4);
+    expect(mocks.observeToolExecution).toHaveBeenLastCalledWith({
+      ...ids,
+      skillName: "final-skill",
+    });
+    expect(
+      Object.keys(mocks.observeToolExecution.mock.calls[0]?.[0]).sort(),
+    ).toEqual(
+      ["tool", "sessionID", "messageID", "id", "agent", "skillName"].sort(),
+    );
+    for (const input of [
+      null,
+      {},
+      { name: "v1-only" },
+      { id: 42 },
+      { id: "" },
+    ]) {
+      expect(() =>
+        observe({ ...ids, status: "completed", input }),
+      ).not.toThrow();
+      expect(mocks.observeToolExecution).toHaveBeenLastCalledWith({
+        ...ids,
+        skillName: null,
+      });
+    }
+    expect(() =>
+      observe({
+        ...ids,
+        get input() {
+          throw new Error("malformed");
+        },
+      }),
+    ).not.toThrow();
+    expect(mocks.observeToolExecution).toHaveBeenLastCalledWith({
+      ...ids,
+      skillName: null,
+    });
+    for (const payload of [
+      undefined,
+      null,
+      Object.freeze({}),
+      new Proxy(
+        {},
+        {
+          get() {
+            throw new Error("malformed");
+          },
+        },
+      ),
+    ])
+      expect(() => observe(payload)).not.toThrow();
+    mocks.observeToolExecution.mockImplementationOnce(() => {
+      throw new Error("capture failure");
+    });
+    expect(() => observe({ ...ids, input: { id: "valid" } })).not.toThrow();
+    if (!cleanup) throw new Error("missing cleanup");
+    await cleanup();
+    expect(observerDispose).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    "success",
+    "disposal failure",
+  ])("disables observation synchronously before intake/disposal: %s", async (stage) => {
+    const { context, hook, observerDispose } = host();
+    let finishIntake!: () => void;
+    context.event.subscribe = vi.fn(() =>
+      (async function* () {
+        await new Promise<void>((resolve) => {
+          finishIntake = resolve;
+        });
+      })(),
+    );
+    const cleanup = await setupV2(context);
+    if (!cleanup) throw new Error("missing cleanup");
+    if (stage === "disposal failure")
+      observerDispose.mockRejectedValueOnce(new Error("dispose"));
+    const pending = cleanup();
+    expect(mocks.stopObservingTools).toHaveBeenCalledOnce();
+    expect(observerDispose).not.toHaveBeenCalled();
+    hook.mock.calls[0]?.[1]({
+      tool: "skill",
+      sessionID: "s",
+      messageID: "a",
+      id: "c",
+      agent: "build",
+      input: { id: "late" },
+    } as never);
+    expect(mocks.observeToolExecution).not.toHaveBeenCalled();
+    finishIntake();
+    await pending;
+    expect(observerDispose).toHaveBeenCalledOnce();
+    expect(mocks.captureShutdown).toHaveBeenCalledOnce();
+    expect(mocks.clientShutdown).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    "observer",
+    "guards",
+    "final checks",
+    "subscription",
+  ])("rolls back the passive observer after %s registration failure", async (stage) => {
+    const { context, hook, subscribe, observerDispose } = host();
+    const failure = new Error("registration failure");
+    if (stage === "observer") hook.mockRejectedValueOnce(failure);
+    if (stage === "guards") mocks.registerGuards.mockRejectedValueOnce(failure);
+    if (stage === "final checks")
+      mocks.registerFinalChecks.mockRejectedValueOnce(failure);
+    if (stage === "subscription")
+      subscribe.mockImplementationOnce(() => {
+        throw failure;
+      });
+    observerDispose.mockRejectedValueOnce(new Error("disposal failure"));
+    await expect(setupV2(context)).rejects.toBe(failure);
+    expect(mocks.stopObservingTools).toHaveBeenCalledOnce();
+    expect(observerDispose).toHaveBeenCalledTimes(stage === "observer" ? 0 : 1);
+    expect(mocks.captureShutdown).toHaveBeenCalledOnce();
+    expect(mocks.clientShutdown).toHaveBeenCalledOnce();
+    expect(mocks.telemetryShutdown).toHaveBeenCalledOnce();
+    hook.mock.calls[0]?.[1]({ tool: "skill", input: { id: "late" } } as never);
+    expect(mocks.observeToolExecution).not.toHaveBeenCalled();
   });
 
   it("does not remove the title agent with guards disabled", async () => {

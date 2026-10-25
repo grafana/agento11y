@@ -20,9 +20,12 @@ import (
 //	fetch_response                    no subject
 //	every other operation             RequestModel
 //
-// Except for fetch_response, invoke_agent, create_agent, and plan, an empty
-// operation-specific subject falls back to RequestModel. For invoke_agent,
-// create_agent, and plan, an empty AgentName makes the span name the operation alone.
+// An empty subject falls back to RequestModel except for fetch_response,
+// invoke_agent, create_agent, plan, and execute_tool with a recognized ExecutionKind.
+// Tool execution kinds add the skill for load_skill, resource with optional skill
+// for read_skill_resource, and resource with optional skill or an executable
+// fallback for command.
+// For invoke_agent, create_agent, and plan, an empty AgentName leaves no subject.
 type Operation string
 
 const (
@@ -37,6 +40,16 @@ const (
 	OperationInvokeWorkflow  Operation = "invoke_workflow"
 	OperationCreateAgent     Operation = "create_agent"
 	OperationPlan            Operation = "plan"
+)
+
+// ToolExecutionKind selects development GenAI tool conventions explicitly;
+// unset or unknown values retain generic execute_tool behavior.
+type ToolExecutionKind string
+
+const (
+	ToolExecutionKindLoadSkill         ToolExecutionKind = "load_skill"
+	ToolExecutionKindReadSkillResource ToolExecutionKind = "read_skill_resource"
+	ToolExecutionKindCommand           ToolExecutionKind = "command"
 )
 
 // Role is the author of a message in the conventions' message schema.
@@ -211,6 +224,17 @@ type Invocation struct {
 	ToolCallID      string
 	ToolType        string
 	ToolDescription string
+	// ExecutionKind applies only to execute_tool. Nonblank applicable identity at
+	// Start is preserved through end hooks; unknown fields can be completed later.
+	// Description, source URI, and executable path require span content capture.
+	ExecutionKind         ToolExecutionKind
+	SkillName             string
+	SkillDescription      string
+	SkillSourceURI        string
+	SkillResourceName     string
+	ProcessExecutableName string
+	ProcessExecutablePath string
+	ProcessExitCode       *int64
 
 	// ServerAddress and ServerPort locate the provider endpoint. The
 	// conventions treat them as sampling-relevant, so set them before Start.
@@ -266,7 +290,8 @@ type Invocation struct {
 
 	// Attributes are extra span attributes the caller attaches to this
 	// invocation. They are emitted after the semantic-convention attributes,
-	// so a caller can override one it disagrees with.
+	// so a caller can override one it disagrees with. These and hook-returned
+	// attributes can disagree with the typed identity supplied to the sampler.
 	Attributes []attribute.KeyValue
 
 	// MetricAttributes are extra dimensions for this invocation's metrics.
@@ -278,7 +303,8 @@ type Invocation struct {
 	// package never reads it.
 	Vendor any
 
-	span trace.Span
+	span         trace.Span
+	toolIdentity *toolIdentity
 	// spanStartedAt is the timestamp the span opened with. Metrics
 	// derive from it rather than from StartedAt, which a caller may rewrite
 	// between Start and End.
@@ -305,6 +331,9 @@ func (inv *Invocation) spanName() string {
 	var subject string
 	switch op {
 	case OperationExecuteTool:
+		if inv.toolExecutionKind() != "" {
+			return inv.toolExecutionKindSpanName()
+		}
 		subject = inv.ToolName
 	case OperationInvokeAgent, OperationCreateAgent, OperationPlan:
 		if inv.AgentName == "" {

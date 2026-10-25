@@ -83,7 +83,7 @@ A binary older than that command prints `agento11y: unknown agent "skills"` and 
 | [Codex](https://developers.openai.com/codex) | [`plugins/codex/`](https://github.com/grafana/agento11y/tree/main/plugins/codex) | Shared `agento11y` Go binary via hooks |
 | [Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) | [`plugins/copilot/`](https://github.com/grafana/agento11y/tree/main/plugins/copilot) | Shared `agento11y` Go binary via hooks |
 | [Cursor](https://cursor.com) | [`plugins/cursor/`](https://github.com/grafana/agento11y/tree/main/plugins/cursor) | Shared `agento11y` Go binary via hooks |
-| [OpenCode](https://opencode.ai) | [`plugins/opencode/`](https://github.com/grafana/agento11y/tree/main/plugins/opencode) | Shared `agento11y` Go binary, installs `@grafana/agento11y-opencode`; supports OpenCode 1.3.13 to 1.x and 2.0.22 to 2.x |
+| [OpenCode](https://opencode.ai) | [`plugins/opencode/`](https://github.com/grafana/agento11y/tree/main/plugins/opencode) | Independent npm package `@grafana/agento11y-opencode`, installed by `agento11y opencode`; supports OpenCode 1.3.13 to 1.x and 2.0.22 to 2.x |
 | [Pi](https://github.com/earendil-works/pi) | [`plugins/pi/`](https://github.com/grafana/agento11y/tree/main/plugins/pi) | Independent npm package `@grafana/agento11y-pi` |
 | [Kiro CLI 3 (experimental)](https://kiro.dev/cli/) | [`plugins/kiro/`](https://github.com/grafana/agento11y/tree/main/plugins/kiro) | Workspace hooks; prompts/tools only, no assistant text, model usage, or cost |
 | [Vibe](https://github.com/mistralai/mistral-vibe) | [`plugins/vibe/`](https://github.com/grafana/agento11y/tree/main/plugins/vibe) | Shared `agento11y` Go binary via `hooks.toml` |
@@ -110,7 +110,7 @@ To skip the prompt, pass the values as flags:
 agento11y login --endpoint <your-agento11y-api-url> --tenant <your-instance-id> --token glc_...
 ```
 
-`--endpoint`, `--tenant`, and a token together need no terminal, so this works over SSH, in a devcontainer, and from a script. `--token-stdin` reads the token from stdin instead of the command line and requires the other two flags. `--env-file <path>` reads the credential, OTLP, and automatic tag lines of an environment block from a file, or from stdin when the path is `-`, for example `op document get <name> | agento11y login --env-file -`. An automatic tag key the block leaves out keeps its saved value, except that turning automatic tags off also deletes the saved names list, as answering No in the form does, so set both keys in a team block. Other keys in the block, including content capture, guards, session tags, and TLS, are ignored and named on stderr. Flags still beat the block's values. `--otlp-endpoint` sets the OTLP endpoint, `--no-verify` skips the credential check, and `--yes` saves even when that check fails. If the check fails and stdin is a terminal, login still asks whether to save anyway, so pass `--yes` or `--no-verify` in a script that runs under a pty.
+`--endpoint`, `--tenant`, and a token together need no terminal, so this works over SSH, in a devcontainer, and from a script. `--token-stdin` reads the token from stdin instead of the command line and requires the other two flags. `--env-file <path>` reads the credential, OTLP, and automatic tag lines of an environment block from a file, or from stdin when the path is `-`, for example `op document get <name> | agento11y login --env-file -`. An automatic tag key the block leaves out keeps its saved value, except that turning automatic tags off also deletes the saved names list, as answering No in the form does, so set both keys in a team block. Other keys in the block, including content capture, guards, session tags, and TLS, are ignored and named on stderr, apart from the setup page's default `AGENTO11Y_PROTOCOL=http` and `AGENTO11Y_AUTH_MODE=basic`. Flags still beat the block's values. `--otlp-endpoint` sets the OTLP endpoint, `--no-verify` skips the credential check, and `--yes` saves even when that check fails. If the check fails and stdin is a terminal, login still asks whether to save anyway, so pass `--yes` or `--no-verify` in a script that runs under a pty.
 
 Or write the config file by hand:
 
@@ -123,6 +123,21 @@ AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT=<otlp-gateway-url>
 
 To re-enter credentials later, run `agento11y login`. It asks where sessions go first when no destination and no credentials are saved. A rerun with a complete saved Cloud connection first shows its Grafana stack. **Keep this connection** jumps to preferences without changing the connection. **Change connection** opens the Cloud questions. For Grafana Cloud it asks for your Grafana stack and prints that stack's coding-agent setup page (`https://<your-stack>.grafana.net/a/grafana-agento11y-app/setup-coding-agent`), trying to open it in a browser. Paste the environment block from that page into the next field, which is masked because the block carries a token. Login fills the endpoint, tenant ID, token, OTLP endpoint, and OTLP headers from it, and presets the automatic tag answers when the block sets them. It asks for missing values individually, followed by the local web UI, content capture mode, session tags, and guards. The stack is saved as `AGENTO11Y_STACK_URL` so a later run offers it back. It only builds the printed links and is never saved as `AGENTO11Y_ENDPOINT`, which points at a different host. Before writing the file, login sends one request to the endpoint with the credentials and reports what came back. Run `agento11y doctor` to repeat that check later.
 
+## Experimental OTel generation export
+
+HTTP remains the default. To export generations as OpenTelemetry (OTel) spans, set these values in the environment or `~/.config/agento11y/config.env`:
+
+```dotenv
+AGENTO11Y_PROTOCOL=otel
+AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true
+```
+
+Configure `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_ENDPOINT`) and OTLP authentication. Use an endpoint that supports Agent Observability generation ingestion.
+
+OTel export supports Claude Code, Codex, Copilot, Cursor, Vibe, and Kiro. Local mode, history imports, and Claude plugin eval imports also support OTel. Pi and OpenCode live plugins still use HTTP.
+
+Guards, scores, and experiment APIs still need HTTP credentials.
+
 ## Local mode
 
 `agento11y <agent> --local`, **Local only**, or **Local web UI = Yes** records full session content to a JSONL store on this machine and serves a local viewer. The launcher prints the viewer URL: it tries `http://127.0.0.1:8765` first and moves to a higher port when that one is taken. Manage the daemon with `agento11y local start|open|status|stop|restart`. Use `agento11y local open` to start the receiver if needed, print its address, and try to open the viewer. Local mode is available on every supported platform.
@@ -132,6 +147,8 @@ To re-enter credentials later, run `agento11y login`. It asks where sessions go 
 Separately from captured sessions, versioned builds of the binary report statistics about their own use (which subcommand ran, flag names, outcome, duration, a random per-installation ID) and never argument values, endpoints, tenant IDs, tokens, tags, hostnames, or file paths. Local development builds do not send usage statistics. `AGENTO11Y_ANONYMOUS_USAGE_STATS=disabled` or `DO_NOT_TRACK=1` turns it off; `=log` prints the event instead of sending it.
 
 The daemon always stores full generation content locally. It forwards full generation content only when `AGENTO11Y_CONTENT_CAPTURE_MODE=full`. Every other selected mode is reduced to `metadata_only` for the forwarded Cloud copy.
+
+Local tool-span sidecars can store optional `skill_name`, `skill_resource_name`, `process_executable_name`, and integer `process_exit_code` (int64). Zero differs from absent. The reader prefers nonblank `gen_ai.skill.name` and accepts legacy `agento11y.skill.name` as a fallback. Sidecars never store skill descriptions, source URIs, or executable paths. Old sidecars have no backfill; these fields add no UI or analytics.
 
 For local safety packs, run `agento11y skills show setup-local-guards` and follow its inspect, approve, configure, and test workflow. Ask before changing packs or destinations. The [local guard pack guide](docs/local-guards.md) documents pack coverage and limits. High-risk prompt triage and PHI-like data egress are deterministic text controls, not EU AI Act or HIPAA compliance determinations. These checks do not replace a sandbox, and an offline dry run does not prove host enforcement.
 
@@ -157,13 +174,17 @@ Exits: `0` for completed allow, including warnings or transforms; `1` for comple
 
 ## Content capture
 
-Coding-agent plugins default to `metadata_only`: only model, tokens, tool names, timing, and cost are sent. Prompts, responses, and tool I/O stay on the local machine. To opt into sending content, set `AGENTO11Y_CONTENT_CAPTURE_MODE` in `~/.config/agento11y/config.env`.
+Coding-agent plugins default to `metadata_only`: model, tokens, tool names, recognized skill names, timing, and cost are sent. Prompts, responses, and tool I/O stay local unless guards are enabled. Guards send evaluated messages and tool arguments to `AGENTO11Y_ENDPOINT` in every capture mode. To opt into captured content, set `AGENTO11Y_CONTENT_CAPTURE_MODE` in `~/.config/agento11y/config.env`.
 
 Accepted values depend on the plugin surface:
 
 - Claude Code, Codex, Copilot, Cursor, Vibe, Kiro (shared `agento11y` binary), OpenCode (`@grafana/agento11y-opencode`), and Pi (`@grafana/agento11y-pi`): `full`, `no_tool_content`, `metadata_only`, `full_with_metadata_spans`. `default` is accepted as an alias for `metadata_only`.
 
 Unknown values fall back to `metadata_only` with a warning. Capture modes choose which fields ship, not whether the shipped fields are scrubbed.
+
+Live skill-load detection covers native tools in [Claude Code](https://github.com/grafana/agento11y/tree/main/plugins/claude-code#3-verify) and [OpenCode](https://github.com/grafana/agento11y/tree/main/plugins/opencode#3-verify), and catalog-matched instruction reads in [Pi](https://github.com/grafana/agento11y/tree/main/plugins/pi#3-verify). Recognized attempts add `gen_ai.skill.name` to existing tool-execution spans, including failures. They do not prove successful instruction loading or explain later actions. Validated names remain in reduced modes; secret-like names are omitted. Detection adds no descriptions, paths, URIs, or metric labels and changes no payload policy.
+
+Detection does not cover other hosts, history import, direct `/skill` prompt insertion, resource reads, scripts, or attribution of later activity. Skill visibility requires retained tool and generation spans in Tempo plus deployed Sigil consumer support; a conversation alone is insufficient.
 
 When a plugin ships content, it redacts known secret formats first, using the same pattern table the SDKs use. This covers user prompts, system prompts, assistant text, thinking, conversation titles, error messages, tool arguments, and tool results, on the generation and on the tool-execution span. Set `AGENTO11Y_REDACT_INPUT_MESSAGES=false` to send prompts without redaction; everything else stays redacted. Prompts, system prompts and tool payloads also get the key/value heuristics (`PASSWORD=…`), which prose fields do not, so a prompt containing `sort key: name` comes out with the word after the colon replaced. Treat content capture as opt-in for shared/production machines.
 
@@ -230,6 +251,10 @@ To attach custom key/values, pick the mechanism by where it must show up. See [`
 - **`user_id`** (`AGENTO11Y_USER_ID` / per-call / context): sets the `user.id` span attribute (all SDKs) plus the export; not a metric label. Use this for end-user identity instead of a tag.
 
 Coding-agent plugins (Path A) add one opt-in switch on top: `AGENTO11Y_AUTO_CODING_AGENT_TAGS=true` resolves the session's user, repository, and branch and attaches them as **client tags**, so they do become metric labels (`agento11y_tag_user`, `agento11y_tag_repo`, `agento11y_tag_git_branch`). `AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=user,repo` narrows that to some of the names and defaults to all of them; on its own, with the switch off, it does nothing. The switch is off by default, a key already set in `AGENTO11Y_TAGS` wins, and neither variable exists in the SDKs. Two consequences to state before recommending it: the `user` value is commonly a work email address that then lives in Prometheus labels for the metric retention period, and cardinality is the product of users, repositories, and branches, with branch names growing without bound. Suggest `user,repo` before all three.
+
+Coding-agent account discovery is local-only. Claude uses its selected config-directory account file, Codex uses existing `auth.json` email fields, and Cursor uses saved session email before current hook email. Other hosts have no account-email lookup. Discovery makes no provider requests, refreshes no credentials, and runs no host account commands. See [local account identity sources](https://github.com/grafana/agento11y/blob/main/docs/concepts/tags-and-metadata.md#local-account-identity-sources).
+
+Automatic user-tag precedence is explicit `TAGS[user]`, explicit `USER_ID`, host account identity, then OS username. The OS fallback sets only the optional tag, never conversation identity. An explicit `user` tag stays independent of identity. Disabling automatic tags does not disable account identity. `AGENTO11Y_USER_ID` accepts arbitrary identifiers, including pseudonyms; set the same value across plugins to unify attribution. Legacy `SIGIL_*` aliases remain supported.
 
 Capture modes do not strip `tags`/`metadata`/`user_id`; do not put secrets there.
 
@@ -364,6 +389,48 @@ Framework adapters:
 - JS/TS: subpath exports like `@grafana/agento11y/langgraph`, `@grafana/agento11y/vercel-ai-sdk`; single npm package, multiple entry points.
 - Go: `go-frameworks/google-adk`.
 - Java: `java/frameworks/google-adk`.
+
+## Tracing skill loads, resource reads, and commands
+
+Use the OpenTelemetry conventions for loading skills, reading skill resources, and running commands from [GenAI #498](https://github.com/open-telemetry/semantic-conventions-genai/pull/498).
+These conventions have Development status. The global schema declaration stays on the legacy schema while other signals still use it.
+Each execution remains one `INTERNAL` span with `gen_ai.operation.name=execute_tool` and no new metric labels.
+The execution kind selects span naming and standard `gen_ai.skill.*` and `process.*` attributes.
+The SDK does not emit the execution kind as an attribute.
+
+| Execution kind | Use | Suffix after `execute_tool {tool}` |
+| --- | --- | --- |
+| `load_skill` | Load skill instructions. | Skill name when present. |
+| `read_skill_resource` | Read a skill resource. | Skill plus resource; resource alone; otherwise none. |
+| `command` | Execute commands, with or without a skill. | Skill plus resource; resource alone; executable name; otherwise none. |
+
+Resource reads and commands never append a skill name alone. Resource naming takes precedence over executable naming.
+Set Go `ToolExecutionStart.ExecutionKind`, Python `ToolExecutionStart.execution_kind` (`ToolExecutionKind` enum), or JS/TS `executionKind` (the string values above).
+Go `otelgenai.Invocation` uses `ExecutionKind`. Java uses `setExecutionKind(...)`; .NET uses `ExecutionKind`.
+Do not change `ToolType`; it still describes categories such as `function` or `extension`.
+Unset or unknown execution kinds stay generic and omit skill and process attributes, even when those fields are supplied.
+Core SDKs do not detect skills or infer execution kinds from tool names, arguments, paths, or results. Coding-agent plugins have the limited live detection described in Path A.
+Generic convenience loops remain generic and infer no exit codes.
+
+- All three execution kinds accept skill name, description, and source URI (`gen_ai.skill.name`, `gen_ai.skill.description`, `gen_ai.skill.source.uri`).
+- Resource reads and commands also accept `gen_ai.skill.resource.name`.
+- Commands alone accept `process.executable.name`, `process.executable.path`, and completion-time `process.exit.code`.
+- Only populate process fields for an actual, directly executed single process. Never guess or aggregate a pipeline outcome.
+- Report an optional integer exit code at completion: zero is reported success; absent is unknown. Go uses `*int64`.
+- Exit codes do not map to errors, span status, or `error.type`; keep using the existing execution-error API.
+- Applicable structural names reach samplers at span creation; typed private fields and completion exit codes do not.
+
+Typed skill and process fields follow the **effective** capture mode.
+`metadata_only` and `full_with_metadata_spans` exclude skill description, source URI, and executable path.
+Go/Python experimental OTel generation export resolves `full_with_metadata_spans` to `full`, so those clients can export the private fields.
+Skill source URIs exported from typed fields lose all user information, query parameters, and fragments.
+Malformed values are omitted without lookups.
+In Go `otelgenai`, raw `Invocation.Attributes` and attributes returned by end hooks bypass capture filtering and URI scrubbing.
+They can override typed attributes. Callers must filter private attributes and sanitize source URIs themselves.
+Core recorders can retain private inputs in memory. JS/Java completed-tool debug snapshots retain raw arguments, results, and error text even in reduced modes.
+The existing `no_tool_content` arguments/results opt-in remains unchanged and does not bypass reduced effective modes.
+SDKs emit the standard skill-name key, not `agento11y.skill.name`; a skill name does not by itself identify a load.
+See [field names and applicability](https://github.com/grafana/agento11y/blob/main/docs/concepts/tool-call-vs-tool-execution.md#api-fields-and-applicability) and [privacy rules](https://github.com/grafana/agento11y/blob/main/docs/concepts/content-capture-modes.md#skill-and-process-attribute-privacy).
 
 ## Telemetry fields to prioritize
 

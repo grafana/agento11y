@@ -321,6 +321,36 @@ func TestCollectConversations(t *testing.T) {
 		wantMsg    string
 	}{
 		{
+			name:       "OTel needs no generation API credentials",
+			osEnv:      map[string]string{"AGENTO11Y_PROTOCOL": "otel", "AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "true", "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:4318"},
+			wantHealth: HealthOK,
+			wantMsg:    "no HTTP fallback",
+		},
+		{
+			name:       "OTel requires experimental opt-in",
+			osEnv:      map[string]string{"AGENTO11Y_PROTOCOL": "otel", "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:4318"},
+			wantHealth: HealthError,
+			wantMsg:    "AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true",
+		},
+		{
+			name:       "legacy experimental key does not opt in",
+			osEnv:      map[string]string{"SIGIL_PROTOCOL": "otel", "SIGIL_ENABLE_EXPERIMENTAL_FEATURES": "true", "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:4318"},
+			wantHealth: HealthError,
+			wantMsg:    "AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true",
+		},
+		{
+			name:       "OTel requires an endpoint",
+			osEnv:      map[string]string{"AGENTO11Y_PROTOCOL": "otel", "AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "true"},
+			wantHealth: HealthError,
+			wantMsg:    "valid configured HTTP(S) OTLP base endpoint",
+		},
+		{
+			name:       "invalid protocol cannot use HTTP credentials",
+			osEnv:      map[string]string{"AGENTO11Y_PROTOCOL": "unsupported", "AGENTO11Y_ENDPOINT": "http://127.0.0.1:9000", "AGENTO11Y_AUTH_TENANT_ID": "1", "AGENTO11Y_AUTH_TOKEN": "token"},
+			wantHealth: HealthError,
+			wantMsg:    "unsupported AGENTO11Y_PROTOCOL",
+		},
+		{
 			name:       "all set",
 			osEnv:      map[string]string{"SIGIL_ENDPOINT": "https://x", "SIGIL_AUTH_TENANT_ID": "1", "SIGIL_AUTH_TOKEN": "glc_t"},
 			wantHealth: HealthOK,

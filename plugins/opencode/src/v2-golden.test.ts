@@ -440,9 +440,9 @@ describe("native v2 capture: real SDK golden and OTLP", () => {
       "gen_ai.token.semantics": "inclusive",
     });
     const tool = toolSpans[0];
-    // The plugin owns providers, not a global OTel context manager. Correlate
-    // independent tool spans by native call/session identity, not an invented parent.
-    expect(tool.traceId).toMatch(/^[0-9a-f]{32}$/);
+    // The plugin owns providers without registering a global OTel context manager.
+    expect(tool.traceId).toBe(generation.traceId);
+    expect(tool.parentSpanId).toBe(generation.spanId);
     expect(attributes(tool)).toMatchObject({
       "gen_ai.tool.name": "bash",
       "gen_ai.tool.call.id": nativeFixture.toolID,

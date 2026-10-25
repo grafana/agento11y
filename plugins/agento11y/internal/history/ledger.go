@@ -104,7 +104,10 @@ func (t Target) destination() string {
 	if t.Local() {
 		return localDestination
 	}
-	tenant := strings.TrimSpace(envconfig.Getenv("AUTH_TENANT_ID"))
+	tenant := strings.TrimSpace(t.effective().TenantID)
+	if t.resolved == nil && tenant == "" {
+		tenant = strings.TrimSpace(envconfig.Getenv("AUTH_TENANT_ID"))
+	}
 	sum := sha256.Sum256([]byte(normalizedEndpoint(t.endpoint()) + "\n" + tenant))
 	return "cloud-" + hex.EncodeToString(sum[:8])
 }

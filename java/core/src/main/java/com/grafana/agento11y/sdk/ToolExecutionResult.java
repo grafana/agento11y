@@ -7,6 +7,7 @@ public final class ToolExecutionResult {
     private Object arguments;
     private Object result;
     private Instant completedAt;
+    private Long processExitCode;
 
     public Object getArguments() {
         return arguments;
@@ -35,7 +36,20 @@ public final class ToolExecutionResult {
         return this;
     }
 
+    public Long getProcessExitCode() {
+        return processExitCode;
+    }
+
+    public ToolExecutionResult setProcessExitCode(Long processExitCode) {
+        this.processExitCode = processExitCode;
+        return this;
+    }
+
     public ToolExecutionResult copy() {
-        return new ToolExecutionResult().setArguments(arguments).setResult(result).setCompletedAt(completedAt);
+        return new ToolExecutionResult()
+                .setArguments(arguments)
+                .setResult(result)
+                .setCompletedAt(completedAt)
+                .setProcessExitCode(processExitCode);
     }
 }

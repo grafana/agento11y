@@ -1,7 +1,9 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
+using System.Reflection;
 using System.Text;
+using System.Text.Json;
 using Xunit;
 using Agento11yProto = Agento11y.V1;
 
@@ -497,6 +499,170 @@ public sealed class ConformanceTests
         Assert.DoesNotContain("gen_ai.client.time_to_first_token", env.MetricNames);
     }
 
+    private static JsonDocument LoadToolExecutionKinds()
+    {
+        var solutionRoot = typeof(ConformanceTests).Assembly
+            .GetCustomAttributes<AssemblyMetadataAttribute>()
+            .First(attribute => attribute.Key == "SolutionRoot").Value!;
+        return JsonDocument.Parse(File.ReadAllText(Path.Combine(
+            solutionRoot, "..", "conformance", "tool-execution-kinds", "cases.json")));
+    }
+
+    public static TheoryData<string, string> ToolExecutionKindCases()
+    {
+        using var fixture = LoadToolExecutionKinds();
+        Assert.Equal(1, fixture.RootElement.GetProperty("version").GetInt32());
+        var cases = new TheoryData<string, string>();
+        foreach (var testCase in fixture.RootElement.GetProperty("cases").EnumerateArray())
+        {
+            cases.Add(testCase.GetProperty("id").GetString()!, testCase.GetRawText());
+        }
+        return cases;
+    }
+
+    [Theory]
+    [MemberData(nameof(ToolExecutionKindCases))]
+    public async Task ToolExecutionKindSemantics(string id, string caseJson)
+    {
+        Assert.False(string.IsNullOrWhiteSpace(id));
+        using var fixture = LoadToolExecutionKinds();
+        using var document = JsonDocument.Parse(caseJson);
+        var testCase = document.RootElement;
+        var start = testCase.GetProperty("start");
+        static string Text(JsonElement element, string key) =>
+            element.TryGetProperty(key, out var value) ? value.GetString()! : string.Empty;
+        var skillProcessKeys = fixture.RootElement.GetProperty("skill_process_attributes")
+            .EnumerateArray().Select(value => value.GetString()!).ToHashSet(StringComparer.Ordinal);
+        var privateKeys = fixture.RootElement.GetProperty("private_attributes")
+            .EnumerateArray().Select(value => value.GetString()!).ToHashSet(StringComparer.Ordinal);
+
+        await using var env = new ConformanceEnv();
+#pragma warning disable CS0618 // Exercise the legacy opt-in from the shared contract.
+        var seed = new ToolExecutionStart
+        {
+            ToolName = Text(start, "tool_name"),
+            ToolCallId = "call-execution-kind",
+            ToolType = "function",
+            ToolDescription = "private tool description",
+            ExecutionKind = Text(start, "execution_kind") switch
+            {
+                "" => ToolExecutionKind.Unset,
+                "load_skill" => ToolExecutionKind.LoadSkill,
+                "read_skill_resource" => ToolExecutionKind.ReadSkillResource,
+                "command" => ToolExecutionKind.Command,
+                _ => (ToolExecutionKind)999,
+            },
+            SkillName = Text(start, "skill_name"),
+            SkillDescription = Text(start, "skill_description"),
+            SkillSourceURI = Text(start, "skill_source_uri"),
+            SkillResourceName = Text(start, "skill_resource_name"),
+            ProcessExecutableName = Text(start, "process_executable_name"),
+            ProcessExecutablePath = Text(start, "process_executable_path"),
+            ContentCapture = Text(testCase, "capture_mode") switch
+            {
+                "full" => ContentCaptureMode.Full,
+                "metadata_only" => ContentCaptureMode.MetadataOnly,
+                "full_with_metadata_spans" => ContentCaptureMode.FullWithMetadataSpans,
+                "" or "no_tool_content" => ContentCaptureMode.NoToolContent,
+                var mode => throw new InvalidOperationException($"unknown capture mode {mode}"),
+            },
+            IncludeContent = testCase.TryGetProperty("include_content", out var include) && include.GetBoolean(),
+        };
+#pragma warning restore CS0618
+        var recorder = env.Client.StartToolExecution(seed);
+        seed.SkillName = "mutated";
+        seed.SkillResourceName = "mutated";
+        seed.ProcessExecutableName = "mutated";
+        seed.ExecutionKind = ToolExecutionKind.Unset;
+        var result = new ToolExecutionEnd();
+        if (testCase.TryGetProperty("end", out var end) && end.TryGetProperty("process_exit_code", out var exit))
+        {
+            result.ProcessExitCode = exit.GetInt64();
+        }
+        // invalid_exit_code is intentionally left unset by statically typed consumers.
+        recorder.SetResult(result);
+        result.ProcessExitCode = 99;
+        var error = Text(testCase, "error");
+        if (error.Length > 0)
+        {
+            recorder.SetExecutionError(new InvalidOperationException(error));
+        }
+        recorder.End();
+        recorder.End();
+        await env.ShutdownAsync();
+
+        var span = Assert.Single(env.Spans);
+        var creation = Assert.Single(env.SpanCreations);
+        var expectedName = Text(testCase, "span_name");
+        Assert.Equal(expectedName, span.DisplayName);
+        Assert.Equal(expectedName, creation.Name);
+        Assert.Equal(ActivityKind.Internal, span.Kind);
+        Assert.Equal(ActivityKind.Internal, creation.Kind);
+        Assert.Equal("execute_tool", creation.Tags["gen_ai.operation.name"]);
+        Assert.Equal(Text(start, "tool_name").Trim(), creation.Tags["gen_ai.tool.name"]);
+        Assert.Equal("call-execution-kind", creation.Tags["gen_ai.tool.call.id"]);
+        Assert.Equal("function", creation.Tags["gen_ai.tool.type"]);
+        var expected = testCase.GetProperty("attributes").EnumerateObject().ToDictionary(
+            property => property.Name,
+            property => property.Value.ValueKind == JsonValueKind.Number
+                ? (object)property.Value.GetInt64() : property.Value.GetString());
+        var actual = span.TagObjects.Where(tag => skillProcessKeys.Contains(tag.Key))
+            .ToDictionary(tag => tag.Key, tag => tag.Value);
+        Assert.Equal(expected.OrderBy(pair => pair.Key), actual.OrderBy(pair => pair.Key));
+        var structural = expected.Where(pair => !privateKeys.Contains(pair.Key) && pair.Key != "process.exit.code")
+            .OrderBy(pair => pair.Key);
+        var sampled = creation.Tags.Where(pair => skillProcessKeys.Contains(pair.Key)).OrderBy(pair => pair.Key);
+        Assert.Equal(structural, sampled);
+        Assert.All(privateKeys.Append("process.exit.code").Append("gen_ai.tool.description"),
+            key => Assert.False(creation.Tags.ContainsKey(key)));
+        Assert.Null(span.GetTagItem("agento11y.skill.name"));
+        Assert.False(creation.Tags.ContainsKey("agento11y.skill.name"));
+        Assert.All(span.TagObjects.Where(tag => tag.Key.StartsWith("gen_ai.skill.", StringComparison.Ordinal)
+            || tag.Key.StartsWith("process.", StringComparison.Ordinal)), tag => Assert.Contains(tag.Key, skillProcessKeys));
+        if (expected.ContainsKey("process.exit.code"))
+        {
+            Assert.IsType<long>(span.GetTagItem("process.exit.code"));
+        }
+        Assert.Equal(error.Length > 0 ? ActivityStatusCode.Error : ActivityStatusCode.Ok, span.Status);
+        Assert.Equal(error.Length > 0 ? "tool_execution_error" : null, span.GetTagItem("error.type"));
+        Assert.Equal(error.Length > 0, recorder.Error != null);
+        Assert.Empty(env.Ingest.Requests);
+        var metric = Assert.Single(env.MetricMeasurements);
+        Assert.Equal("gen_ai.client.operation.duration", metric.Name);
+        Assert.Equal(new[]
+        {
+            "error.category", "error.type", "gen_ai.agent.name", "gen_ai.operation.name",
+            "gen_ai.provider.name", "gen_ai.request.model", "gen_ai.tool.name",
+        }, metric.Tags.Keys.OrderBy(key => key, StringComparer.Ordinal));
+        Assert.DoesNotContain(metric.Tags.Keys, key => key.Contains("skill", StringComparison.Ordinal)
+            || key.StartsWith("process.", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("load_skill")]
+    [InlineData("load_skill_resource")]
+    [InlineData("run_skill_script")]
+    public async Task ToolLoopNamesDoNotImplyExecutionKind(string toolName)
+    {
+        await using var env = new ConformanceEnv();
+        var messages = env.Client.ExecuteToolCalls(
+            [new Message
+            {
+                Role = MessageRole.Assistant,
+                Parts = [Part.ToolCallPart(new ToolCall { Name = toolName, Id = "call-generic" })],
+            }],
+            (_, _) => new { skill_name = "review", process_exit_code = 0 });
+        await env.ShutdownAsync();
+
+        Assert.Single(messages);
+        var span = Assert.Single(env.Spans);
+        Assert.Equal("execute_tool " + toolName, span.DisplayName);
+        Assert.Equal(span.DisplayName, Assert.Single(env.SpanCreations).Name);
+        using var fixture = LoadToolExecutionKinds();
+        Assert.All(fixture.RootElement.GetProperty("skill_process_attributes").EnumerateArray(),
+            key => Assert.Null(span.GetTagItem(key.GetString()!)));
+    }
+
     [Fact]
     public async Task EmbeddingSemantics()
     {
@@ -727,6 +893,7 @@ public sealed class ConformanceTests
         public RatingCaptureServer Rating { get; }
         public Agento11yClient Client { get; }
         public ConcurrentQueue<Activity> Spans { get; } = new();
+        public ConcurrentQueue<SpanCreation> SpanCreations { get; } = new();
         public ConcurrentDictionary<string, byte> MetricNames { get; } = new(StringComparer.Ordinal);
         public ConcurrentDictionary<string, (string? Description, string? Unit)> MetricMetadata { get; } =
             new(StringComparer.Ordinal);
@@ -737,7 +904,13 @@ public sealed class ConformanceTests
             _activityListener = new ActivityListener
             {
                 ShouldListenTo = source => source.Name == "github.com/grafana/sigil/sdks/dotnet",
-                Sample = static (ref _) => ActivitySamplingResult.AllDataAndRecorded,
+                Sample = (ref ActivityCreationOptions<ActivityContext> options) =>
+                {
+                    SpanCreations.Enqueue(new SpanCreation(options.Name, options.Kind,
+                        options.Tags?.ToDictionary(tag => tag.Key, tag => tag.Value)
+                            ?? new Dictionary<string, object?>()));
+                    return ActivitySamplingResult.AllDataAndRecorded;
+                },
                 ActivityStopped = activity =>
                 {
                     Spans.Enqueue(activity);
@@ -881,6 +1054,8 @@ public sealed class ConformanceTests
             await ShutdownAsync();
         }
     }
+
+    private sealed record SpanCreation(string Name, ActivityKind Kind, IReadOnlyDictionary<string, object?> Tags);
 
     private sealed record MetricMeasurement(string Name, IReadOnlyDictionary<string, object?> Tags);
 

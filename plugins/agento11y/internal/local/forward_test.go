@@ -41,6 +41,7 @@ import (
 func clearForwardEnv(t *testing.T) {
 	t.Helper()
 	envconfig.PinAliasEnvBlank(t)
+	t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "")
 	for _, suffix := range []string{"LOCAL_FORWARD", "GUARDS_ENABLED", "GUARDS_FAIL_OPEN", "GUARDS_TIMEOUT_MS"} {
 		require.Contains(t, envconfig.AliasSuffixes, suffix, "clearForwardEnv relies on PinAliasEnvBlank covering %s", suffix)
 	}
@@ -90,6 +91,9 @@ var traceContentKeys = []string{
 	"gen_ai.tool.description",
 	"gen_ai.tool.call.arguments",
 	"gen_ai.tool.call.result",
+	"gen_ai.skill.description",
+	"gen_ai.skill.source.uri",
+	"process.executable.path",
 }
 
 func TestForwardLoader_Resolve(t *testing.T) {
@@ -903,6 +907,94 @@ func TestForwardLoader_ForwardOTLP(t *testing.T) {
 	}
 }
 
+func TestForwardLoader_SkillAndProcessPrivacy(t *testing.T) {
+	for _, mode := range []string{"full", "full_with_metadata_spans", "metadata_only", "no_tool_content"} {
+		for _, contentType := range []string{wire.ContentTypeJSON, wire.ContentTypeProto} {
+			for _, compressed := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/gzip=%t", mode, contentType, compressed), func(t *testing.T) {
+					clearForwardEnv(t)
+					type capture struct {
+						body        []byte
+						contentType string
+						encoding    string
+					}
+					received := make(chan capture, 1)
+					cloud := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						body, _ := io.ReadAll(r.Body)
+						received <- capture{body, r.Header.Get("Content-Type"), r.Header.Get("Content-Encoding")}
+						w.WriteHeader(http.StatusOK)
+					}))
+					defer cloud.Close()
+					loader := newForwardLoader(writeConfigEnvFile(t, map[string]string{
+						"AGENTO11Y_LOCAL_FORWARD":               "true",
+						"AGENTO11Y_ENDPOINT":                    "https://cloud.example.test",
+						"AGENTO11Y_AUTH_TENANT_ID":              "t",
+						"AGENTO11Y_AUTH_TOKEN":                  "k",
+						"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": "https://otlp.example.test",
+						"AGENTO11Y_CONTENT_CAPTURE_MODE":        mode,
+					}), nil)
+					loader.client = cloud.Client()
+					cfg := loader.load()
+					require.True(t, cfg.enabled)
+					assert.Equal(t, mode != "full", cfg.strip)
+					cfg.otlpEndpoint = cloud.URL
+
+					attributes := []*commonpb.KeyValue{
+						stringKV("gen_ai.tool.name", "run_skill_script"),
+						stringKV("gen_ai.skill.name", "review:changes"),
+						stringKV("gen_ai.tool.call.id", "skill-call"),
+						stringKV("agento11y.skill.name", "legacy"),
+						stringKV("gen_ai.skill.resource.name", "scripts/check.py"),
+						stringKV("process.executable.name", "python3"),
+						intKeyValue("process.exit.code", 0),
+					}
+					structuralCount := len(attributes)
+					for _, key := range traceContentKeys {
+						attributes = append(attributes, stringKV(key, "secret "+key))
+					}
+					request := traceRequestForSpans(&tracepb.Span{
+						Name:       "execute_tool run_skill_script review:changes",
+						Attributes: attributes,
+						Events:     []*tracepb.Span_Event{{Name: "tool-completed", Attributes: attributes}},
+					})
+					body := marshalTraceRequest(t, request, contentType)
+					encoding := ""
+					if compressed {
+						body, encoding = gzipBytes(t, body), "gzip"
+					}
+					loader.forwardOTLP(cfg, "traces", contentType, encoding, body)
+					assert.Empty(t, loader.status().Failures)
+					require.Len(t, received, 1)
+					got := <-received
+					if mode == "full" {
+						assert.Equal(t, body, got.body)
+						assert.Equal(t, encoding, got.encoding)
+						return
+					}
+					assert.Empty(t, got.encoding)
+					assert.Equal(t, contentType, got.contentType)
+					forwarded, err := decodeTracePayload(got.body, got.contentType)
+					require.NoError(t, err)
+					span := forwarded.GetResourceSpans()[0].GetScopeSpans()[0].GetSpans()[0]
+					assert.Equal(t, "execute_tool run_skill_script review:changes", span.GetName())
+					require.Len(t, span.GetEvents(), 1)
+					assert.Equal(t, "tool-completed", span.GetEvents()[0].GetName())
+					for _, attrs := range [][]*commonpb.KeyValue{span.GetAttributes(), span.GetEvents()[0].GetAttributes()} {
+						require.Len(t, attrs, structuralCount)
+						for index, expected := range attributes[:structuralCount] {
+							assert.True(t, proto.Equal(expected, attrs[index]), "structural attribute %s", expected.GetKey())
+						}
+						for _, key := range traceContentKeys {
+							assert.NotContains(t, attributeKeys(attrs), key)
+						}
+					}
+					assert.NotContains(t, string(got.body), "secret")
+				})
+			}
+		}
+	}
+}
+
 // TestForwardLoader_OTLPHeaderParity covers the OTLP leg authenticating the way
 // the real exporter does: a dedicated OTEL_AUTH_TOKEN wins over AUTH_TOKEN, and
 // an explicit Authorization in OTEL_EXPORTER_OTLP_HEADERS wins over both.
@@ -985,7 +1077,9 @@ func TestForwardLoader_StatusReportsFailures(t *testing.T) {
 	var status int
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(status)
-		_, _ = w.Write([]byte(`{"error":"unknown field parts.media.url"}`))
+		if status != http.StatusOK {
+			_, _ = w.Write([]byte(`{"error":"unknown field parts.media.url"}`))
+		}
 	}))
 	defer srv.Close()
 
@@ -1167,8 +1261,14 @@ func TestStripTraceContent_RemovesContentKeepsStructure(t *testing.T) {
 				stringKV(key, "secret"),
 				stringKV("gen_ai.tool.name", "do_thing"),
 			}}
-			stripTraceContent(traceRequestForSpans(span))
+			event := &tracepb.Span_Event{Name: "structural-event", Attributes: []*commonpb.KeyValue{
+				stringKV(key, "secret"),
+				stringKV("gen_ai.tool.name", "do_thing"),
+			}}
+			span.Events = []*tracepb.Span_Event{event}
+			require.NoError(t, stripTraceContent(traceRequestForSpans(span)))
 			assert.Equal(t, []string{"gen_ai.tool.name"}, attributeKeys(span.GetAttributes()))
+			assert.Equal(t, []string{"gen_ai.tool.name"}, attributeKeys(event.GetAttributes()))
 		})
 	}
 
@@ -1178,7 +1278,7 @@ func TestStripTraceContent_RemovesContentKeepsStructure(t *testing.T) {
 			stringKV("gen_ai.tool.call.result", "secret result"),
 			stringKV("gen_ai.tool.name", "do_thing"),
 		}}
-		stripTraceContent(traceRequestForSpans(&tracepb.Span{Events: []*tracepb.Span_Event{event}}))
+		require.NoError(t, stripTraceContent(traceRequestForSpans(&tracepb.Span{Events: []*tracepb.Span_Event{event}})))
 		assert.Equal(t, []string{"gen_ai.tool.name"}, attributeKeys(event.GetAttributes()))
 	})
 
@@ -1291,7 +1391,7 @@ func TestStripTraceContent_RemovesContentKeepsStructure(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			stripTraceContent(traceRequestForSpans(tc.span))
+			require.NoError(t, stripTraceContent(traceRequestForSpans(tc.span)))
 			assert.Equal(t, tc.wantAttrs, attributeKeys(tc.span.GetAttributes()))
 			assert.Equal(t, tc.wantEvents, eventNames(tc.span.GetEvents()))
 			assert.Equal(t, tc.wantStatus, tc.span.GetStatus().GetMessage())

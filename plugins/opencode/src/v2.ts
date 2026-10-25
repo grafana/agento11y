@@ -4,6 +4,7 @@ import { createAgento11yClient } from "./client.js";
 import { loadConfig, resolveAutoTagValues } from "./config.js";
 import { LocalReceiverError } from "./local.js";
 import { createRedactor } from "./redaction.js";
+import { detectSkillName } from "./skills.js";
 import {
   createOwnedTelemetryProviders,
   type TelemetryProviders,
@@ -37,6 +38,7 @@ export const setupV2: Plugin.Plugin["setup"] = async (context) => {
   const cleanup = (): Promise<void> => {
     cleanupPromise ??= (async () => {
       stopped = true;
+      capture?.stopObservingTools();
       abort.abort();
       await intake;
       try {
@@ -91,6 +93,37 @@ export const setupV2: Plugin.Plugin["setup"] = async (context) => {
         if (config.debug) console.error(`[agento11y-opencode] ${message}`);
       },
     });
+
+    const observer = await context.tool.hook("execute.after", (payload) => {
+      if (stopped) return;
+      try {
+        const { sessionID, messageID, id, tool, agent } = payload;
+        if (
+          ![sessionID, messageID, id, tool, agent].every(
+            (value) => typeof value === "string" && value.length > 0,
+          )
+        )
+          return;
+        let skillName: string | null = null;
+        try {
+          // v2's built-in skill takes an id; durable called.input predates before hooks.
+          skillName = detectSkillName(tool, payload.input, "id") ?? null;
+        } catch {
+          // Malformed final input must also clear an earlier match.
+        }
+        capture?.observeToolExecution({
+          sessionID,
+          messageID,
+          id,
+          tool,
+          agent,
+          skillName,
+        });
+      } catch {
+        // Observation must never change the host tool's outcome.
+      }
+    });
+    registrations.push(() => observer.dispose());
 
     const titles = config.guards?.enabled
       ? await registerCopilotTitleProtection(context)

@@ -39,7 +39,7 @@ var inputs embed.FS
 
 const (
 	fetchTimeout          = 60 * time.Second
-	registryStampContents = "v2\n"
+	registryStampContents = "v3\n"
 )
 
 // maxEntryBytes limits the size of each extracted file. The registry's largest
@@ -312,6 +312,9 @@ func provisionRegistry(ctx context.Context, genAIRef string) (string, error) {
 	if err := rewriteManifestDependency(genAIRoot, filtered); err != nil {
 		return "", err
 	}
+	if err := importProcessDefinitions(genAIRoot); err != nil {
+		return "", err
+	}
 	if _, err := patchAdviceData(genAIRoot); err != nil {
 		return "", err
 	}
@@ -319,6 +322,23 @@ func provisionRegistry(ctx context.Context, genAIRef string) (string, error) {
 		return "", fmt.Errorf("write registry provision stamp: %w", err)
 	}
 	return genAIRoot, nil
+}
+
+// Weaver does not retain dependency attributes used only by span_refinements.
+// Import the core process group when the GenAI model references those attributes.
+func importProcessDefinitions(genAIRoot string) error {
+	spans, err := os.ReadFile(filepath.Join(genAIRoot, "model", "gen-ai", "spans.yaml"))
+	if err != nil {
+		return fmt.Errorf("read GenAI spans for process imports: %w", err)
+	}
+	if !strings.Contains(string(spans), "- ref: process.") {
+		return nil
+	}
+	const contents = "file_format: definition/2\nimports:\n  attribute_groups:\n    - registry.process\n"
+	if err := os.WriteFile(filepath.Join(genAIRoot, "model", "weavertest-process.yaml"), []byte(contents), 0o644); err != nil {
+		return fmt.Errorf("import core process definitions: %w", err)
+	}
+	return nil
 }
 
 func isProvisioned(genAIRoot string) bool {

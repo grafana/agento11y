@@ -132,7 +132,7 @@ Each message can wait up to `AGENTO11Y_GUARDS_TIMEOUT_MS` (1500 ms by default) b
 | `AGENTO11Y_TAGS` | — | `key=value,key=value` tags on every generation and as `agento11y.tag.<key>` on OTel spans/metrics (e.g. `project=my-app`). Built-ins (`git.branch`, `cwd`, `subagent`) win on generation-export tag collision. |
 | `AGENTO11Y_AUTO_CODING_AGENT_TAGS` | `false` | Opt in to client tags resolved for the session: the user, the repository, and the branch. Unlike the built-ins, these reach OTel metrics as `agento11y_tag_*` labels. See [Tags and Metadata](../../docs/concepts/tags-and-metadata.md#opt-in-automatic-tags-agento11y_auto_coding_agent_tags) for the cardinality and personal-data trade-offs. |
 | `AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES` | all names | Narrows the switch above to a comma-separated subset of `user`, `repo`, `branch` (`all` is also accepted). Does nothing while the switch is off. |
-| `AGENTO11Y_USER_ID` | from Cursor | Override the user id. |
+| `AGENTO11Y_USER_ID` | saved session email, then hook email | Override the user ID with any identifier, including a pseudonym. |
 | `AGENTO11Y_AGENT_NAME` | `cursor` | Override the exported `agent_name`. Avoid a `/` in the name: a slash marks a subagent generation, so every turn of the run is counted as one. Guard rules and dashboards that filter on `cursor` no longer match the generations this run exports. |
 | `AGENTO11Y_LOCAL` | `false` | Send Cursor hook captures to the local viewer at `http://127.0.0.1:8765` instead of Grafana Cloud. Local mode always stores full content. Cloud forwarding also requires `AGENTO11Y_LOCAL_FORWARD`. |
 | `AGENTO11Y_DEBUG` | `false` | Log to `~/.local/state/agento11y/logs/agento11y.log`. |
@@ -140,5 +140,11 @@ Each message can wait up to `AGENTO11Y_GUARDS_TIMEOUT_MS` (1500 ms by default) b
 | `AGENTO11Y_GUARDS_FAIL_OPEN` | `true` | On timeout, network error, or 5xx, send the message or run the tool call. Set `false` to block the message or call. |
 | `AGENTO11Y_GUARDS_TIMEOUT_MS` | `1500` | Guard timeout per message or tool call. Raise it for slow `llm_judge` evaluators. |
 | `AGENTO11Y_BIN` | auto | Override the binary path if you installed `agento11y` (or the legacy `sigil`) somewhere unusual. |
+
+Cursor uses the first nonblank identity: explicit `AGENTO11Y_USER_ID`, saved session email, then current hook email.
+That value supplies conversation identity and the optional automatic `user` tag; an explicit `user` tag stays independent.
+Without account identity, only the automatic tag can fall back to the OS username.
+Disabling automatic tags does not disable account identity.
+See [Local account identity sources](../../docs/concepts/tags-and-metadata.md#local-account-identity-sources) for supported sources across plugins.
 
 If your OTLP **Instance ID** (on the OpenTelemetry card) differs from your Agent Observability Instance ID, set `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(otlp-id:glc_token)>`.

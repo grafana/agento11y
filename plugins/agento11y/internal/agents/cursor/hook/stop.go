@@ -6,9 +6,11 @@ import (
 	"log"
 	"time"
 
+	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/config"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/fragment"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/mapper"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
 
 // Stop maps the accumulated fragment to an agento11y Generation and emits it.
@@ -21,7 +23,8 @@ func Stop(p Payload, cfg config.Config, logger *log.Logger) {
 		return
 	}
 
-	if !config.HasCredentials() {
+	protocol, transportErr := envconfig.ResolveGenerationTransport()
+	if transportErr == nil && protocol == agento11y.GenerationExportProtocolHTTP && !config.HasCredentials() {
 		logger.Print("stop: missing SIGIL_ENDPOINT/SIGIL_AUTH_TENANT_ID/SIGIL_AUTH_TOKEN — skipping emission")
 		if err := fragment.Delete(p.ConversationID, p.GenerationID); err != nil {
 			logger.Printf("stop: delete fragment: %v", err)
@@ -74,14 +77,32 @@ func Stop(p Payload, cfg config.Config, logger *log.Logger) {
 		logger.Printf("stop: save pending status: %v", err)
 	}
 
+	if transportErr != nil {
+		logger.Printf("stop: generation transport gen=%s (preserving fragment for sessionEnd retry): %v", p.GenerationID, transportErr)
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	providers := setupOTelIfConfigured(ctx, p.ConversationID, logger)
-	defer func() { _ = providers.Shutdown(ctx) }()
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		_ = providers.Shutdown(cleanupCtx)
+	}()
 
 	session := fragment.LoadSession(p.ConversationID, logger)
-	client := buildClient(p, session, cfg, providers, logger)
+	client, err := buildClient(p, session, cfg, providers, logger)
+	if err != nil {
+		logger.Printf("stop: build client gen=%s (preserving fragment for sessionEnd retry): %v", p.GenerationID, err)
+		return
+	}
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		_ = client.Shutdown(cleanupCtx)
+	}()
 
 	mapped := mapper.MapFragment(mapper.Inputs{
 		Fragment:            frag,
@@ -97,16 +118,13 @@ func Stop(p Payload, cfg config.Config, logger *log.Logger) {
 
 	if err := emitGeneration(ctx, client, frag, mapped, logger); err != nil {
 		logger.Printf("stop: emit gen=%s (preserving fragment for sessionEnd retry): %v", p.GenerationID, err)
-		_ = client.Shutdown(ctx)
 		return
 	}
 
 	if err := client.Flush(ctx); err != nil {
 		logger.Printf("stop: flush gen=%s (preserving fragment for sessionEnd retry): %v", p.GenerationID, err)
-		_ = client.Shutdown(ctx)
 		return
 	}
-	_ = client.Shutdown(ctx)
 
 	if err := providers.ForceFlush(); err != nil {
 		logger.Printf("stop: otel flush: %v", err)

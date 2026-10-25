@@ -52,6 +52,13 @@ public sealed partial class Agento11yClient : IAsyncDisposable
     internal const string SpanAttrToolDescription = "gen_ai.tool.description";
     internal const string SpanAttrToolCallArguments = "gen_ai.tool.call.arguments";
     internal const string SpanAttrToolCallResult = "gen_ai.tool.call.result";
+    internal const string SpanAttrSkillName = "gen_ai.skill.name";
+    internal const string SpanAttrSkillDescription = "gen_ai.skill.description";
+    internal const string SpanAttrSkillSourceUri = "gen_ai.skill.source.uri";
+    internal const string SpanAttrSkillResourceName = "gen_ai.skill.resource.name";
+    internal const string SpanAttrProcessExecutableName = "process.executable.name";
+    internal const string SpanAttrProcessExecutablePath = "process.executable.path";
+    internal const string SpanAttrProcessExitCode = "process.exit.code";
     internal const string SpanAttrTagPrefix = "agento11y.tag.";
     private const int MaxRatingConversationIdLen = 255;
     private const int MaxRatingIdLen = 128;
@@ -255,6 +262,9 @@ public sealed partial class Agento11yClient : IAsyncDisposable
 
         var seed = InternalUtils.DeepClone(start);
         seed.ToolName = (seed.ToolName ?? string.Empty).Trim();
+        seed.SkillName = (seed.SkillName ?? string.Empty).Trim();
+        seed.SkillResourceName = (seed.SkillResourceName ?? string.Empty).Trim();
+        seed.ProcessExecutableName = (seed.ProcessExecutableName ?? string.Empty).Trim();
         if (seed.ToolName.Length == 0)
         {
             return ToolExecutionRecorder.Noop;
@@ -322,11 +332,25 @@ public sealed partial class Agento11yClient : IAsyncDisposable
             seed.ConversationTitle = string.Empty;
         }
 
+        if (toolMode == ContentCaptureMode.MetadataOnly
+            || toolMode == ContentCaptureMode.FullWithMetadataSpans)
+        {
+            seed.SkillDescription = string.Empty;
+            seed.SkillSourceURI = string.Empty;
+            seed.ProcessExecutablePath = string.Empty;
+        }
+        else
+        {
+            seed.SkillDescription = (seed.SkillDescription ?? string.Empty).Trim();
+            seed.SkillSourceURI = SanitizeSkillSourceUri(seed.SkillSourceURI);
+            seed.ProcessExecutablePath = (seed.ProcessExecutablePath ?? string.Empty).Trim();
+        }
+
         var activity = _activitySource.StartActivity(
-            ToolSpanName(seed.ToolName),
+            ToolSpanName(seed),
             ActivityKind.Internal,
             default(ActivityContext),
-            tags: null,
+            tags: ToolStartTags(seed),
             links: null,
             seed.StartedAt!.Value
         );
@@ -1234,6 +1258,127 @@ public sealed partial class Agento11yClient : IAsyncDisposable
         return "execute_tool " + toolName;
     }
 
+    internal static string ToolSpanName(ToolExecutionStart tool)
+    {
+        var suffix = tool.ExecutionKind switch
+        {
+            ToolExecutionKind.LoadSkill => tool.SkillName,
+            ToolExecutionKind.ReadSkillResource or ToolExecutionKind.Command
+                when tool.SkillResourceName.Length > 0 =>
+                tool.SkillName.Length > 0 ? tool.SkillName + " " + tool.SkillResourceName : tool.SkillResourceName,
+            ToolExecutionKind.Command => tool.ProcessExecutableName,
+            _ => string.Empty,
+        };
+        return ToolSpanName(tool.ToolName) + (suffix.Length > 0 ? " " + suffix : string.Empty);
+    }
+
+    private static bool SupportsSkillAttributes(ToolExecutionStart tool) =>
+        tool.ExecutionKind is ToolExecutionKind.LoadSkill
+            or ToolExecutionKind.ReadSkillResource or ToolExecutionKind.Command;
+
+    // Only structural attributes belong in creation tags: samplers must never
+    // receive descriptions, source URIs, executable paths, or completion data.
+    private static ActivityTagsCollection ToolStartTags(ToolExecutionStart tool)
+    {
+        var tags = new ActivityTagsCollection
+        {
+            { SpanAttrOperationName, "execute_tool" },
+            { SpanAttrToolName, tool.ToolName },
+            { SpanAttrSdkName, SdkName },
+        };
+        Add(SpanAttrToolCallId, tool.ToolCallId);
+        Add(SpanAttrToolType, tool.ToolType);
+        if (SupportsSkillAttributes(tool))
+        {
+            Add(SpanAttrSkillName, tool.SkillName);
+            if (tool.ExecutionKind != ToolExecutionKind.LoadSkill)
+            {
+                Add(SpanAttrSkillResourceName, tool.SkillResourceName);
+            }
+            if (tool.ExecutionKind == ToolExecutionKind.Command)
+            {
+                Add(SpanAttrProcessExecutableName, tool.ProcessExecutableName);
+            }
+        }
+        return tags;
+
+        void Add(string key, string value)
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                tags.Add(key, value);
+            }
+        }
+    }
+
+    private static string SanitizeSkillSourceUri(string? source)
+    {
+        var value = (source ?? string.Empty).Trim();
+        // Validate even discarded components before Uri can repair malformed input.
+        for (var i = 0; i < value.Length; i++)
+        {
+            var character = value[i];
+            if (char.IsWhiteSpace(character) || char.IsControl(character)
+                || "\\\"<>^`{|}".IndexOf(character) >= 0)
+            {
+                return string.Empty;
+            }
+            if (character == '%')
+            {
+                if (i + 2 >= value.Length || !Uri.IsHexDigit(value[i + 1]) || !Uri.IsHexDigit(value[i + 2]))
+                {
+                    return string.Empty;
+                }
+                i += 2;
+            }
+        }
+
+        var schemeEnd = value.IndexOf(':');
+        if (schemeEnd <= 0 || !Uri.CheckSchemeName(value.Substring(0, schemeEnd)))
+        {
+            return string.Empty;
+        }
+        var isFile = value.Substring(0, schemeEnd).Equals("file", StringComparison.OrdinalIgnoreCase);
+        var location = value.Substring(schemeEnd + 1);
+        if (isFile && location.StartsWith("/", StringComparison.Ordinal)
+            && !location.StartsWith("//", StringComparison.Ordinal))
+        {
+            value = value.Insert(schemeEnd + 1, "//");
+            location = value.Substring(schemeEnd + 1);
+        }
+        if (!location.StartsWith("//", StringComparison.Ordinal))
+        {
+            return string.Empty;
+        }
+
+        var authorityStart = schemeEnd + 3;
+        var authorityEnd = value.IndexOfAny(new[] { '/', '?', '#' }, authorityStart);
+        if (authorityEnd < 0)
+        {
+            authorityEnd = value.Length;
+        }
+        var authority = value.Substring(authorityStart, authorityEnd - authorityStart);
+        var hasPath = authorityEnd < value.Length && value[authorityEnd] == '/';
+        if ((isFile && !hasPath) || (!isFile && authority.Length == 0)
+            || authority.EndsWith(":", StringComparison.Ordinal)
+            || !Uri.TryCreate(value, UriKind.Absolute, out var uri)
+            || (!isFile && uri.HostNameType == UriHostNameType.Unknown)
+            || (authority.Length == 0 && uri.Host.Length != 0))
+        {
+            return string.Empty;
+        }
+
+        var pathEnd = value.IndexOfAny(new[] { '?', '#' }, authorityEnd);
+        if (pathEnd < 0)
+        {
+            pathEnd = value.Length;
+        }
+        // Uri canonicalization can decode valid escapes (e.g. %53), so retain the
+        // original path while taking only the validated scheme/host/port from Uri.
+        var path = hasPath ? value.Substring(authorityEnd, pathEnd - authorityEnd) : "/";
+        return uri.GetComponents(UriComponents.SchemeAndServer, UriFormat.UriEscaped) + path;
+    }
+
     internal static void ApplyGenerationSpanAttributes(Activity activity, Generation generation)
     {
         activity.SetTag(SpanAttrOperationName, OperationName(generation));
@@ -1422,18 +1567,25 @@ public sealed partial class Agento11yClient : IAsyncDisposable
 
     internal static void ApplyToolSpanAttributes(Activity activity, ToolExecutionStart tool)
     {
-        activity.SetTag(SpanAttrOperationName, "execute_tool");
-        activity.SetTag(SpanAttrToolName, tool.ToolName);
-        activity.SetTag(SpanAttrSdkName, SdkName);
-
-        if (!string.IsNullOrWhiteSpace(tool.ToolCallId))
+        foreach (var tag in ToolStartTags(tool))
         {
-            activity.SetTag(SpanAttrToolCallId, tool.ToolCallId);
+            activity.SetTag(tag.Key, tag.Value);
         }
-
-        if (!string.IsNullOrWhiteSpace(tool.ToolType))
+        if (SupportsSkillAttributes(tool))
         {
-            activity.SetTag(SpanAttrToolType, tool.ToolType);
+            if (!string.IsNullOrWhiteSpace(tool.SkillDescription))
+            {
+                activity.SetTag(SpanAttrSkillDescription, tool.SkillDescription);
+            }
+            if (!string.IsNullOrWhiteSpace(tool.SkillSourceURI))
+            {
+                activity.SetTag(SpanAttrSkillSourceUri, tool.SkillSourceURI);
+            }
+            if (tool.ExecutionKind == ToolExecutionKind.Command
+                && !string.IsNullOrWhiteSpace(tool.ProcessExecutablePath))
+            {
+                activity.SetTag(SpanAttrProcessExecutablePath, tool.ProcessExecutablePath);
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(tool.ToolDescription))
@@ -2985,8 +3137,12 @@ public sealed class ToolExecutionRecorder
 
         if (_activity != null)
         {
-            _activity.DisplayName = Agento11yClient.ToolSpanName(_seed.ToolName);
+            _activity.DisplayName = Agento11yClient.ToolSpanName(_seed);
             Agento11yClient.ApplyToolSpanAttributes(_activity, _seed);
+            if (_seed.ExecutionKind == ToolExecutionKind.Command && result.ProcessExitCode.HasValue)
+            {
+                _activity.SetTag(Agento11yClient.SpanAttrProcessExitCode, result.ProcessExitCode.Value);
+            }
 
             if (_includeContent)
             {

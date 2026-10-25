@@ -96,7 +96,68 @@ try (ToolExecutionRecorder rec = client.startToolExecution(
 }
 ```
 
-This allows Agent Observability to correlate the model's request with your execution timing.
+This allows Agent Observability to correlate the model's request with your execution timing. `toolCallId` does not select the execution span's parent.
+
+In JS/TS, `GenerationRecorder.startToolExecution(...)` explicitly parents the tool span to that generation across `await`, without a global context manager. It does not change active context or inherit the generation's capture settings, identity, or request model. Set those tool options explicitly when they must match the generation, and call the returned tool recorder's `end()`. The client-level `startToolExecution(...)` still exists and uses the active OpenTelemetry context. See the [TypeScript example](../../js/README.md#tool-execution-example).
+
+## Tracing skill loads, resource reads, and commands
+
+The SDKs and Go `otelgenai` support the OpenTelemetry conventions for loading skills, reading skill resources, and running commands.
+These conventions come from [GenAI #498](https://github.com/open-telemetry/semantic-conventions-genai/pull/498) and have Development status.
+The global schema URL remains on the legacy schema because other signals still use it.
+Each execution still creates one `INTERNAL` span with `gen_ai.operation.name=execute_tool`, without new metric labels.
+
+Callers select an execution kind explicitly. The execution kind controls span naming and standard `gen_ai.skill.*` and `process.*` attributes.
+The SDK does not emit the execution kind as an attribute.
+`ToolType` still describes categories such as `function` or `extension`.
+Unset or unknown execution kinds keep generic behavior and omit skill and process attributes, even when callers supply those fields.
+The SDKs do not detect skills or infer execution kinds from tool names, arguments, paths, or results.
+Generic convenience loops (`execute_tool_calls` / `executeToolCalls` and the .NET tool loop) remain generic and infer no exit codes.
+
+| Execution kind | Use | Suffix after `execute_tool {tool}` |
+| --- | --- | --- |
+| `load_skill` | A dedicated tool loads skill instructions. | Skill name, if available. |
+| `read_skill_resource` | A dedicated tool reads a skill resource. | Skill and resource names; resource alone if no skill; otherwise no suffix. |
+| `command` | A tool executes commands, with or without a skill. | Skill and resource names; resource alone; executable name; otherwise no suffix, in that order. |
+
+Resource reads and commands never append a skill name alone. Resource naming takes precedence over executable naming.
+Names are trimmed; blank values are omitted. The SDKs do not resolve names or paths through filesystem or network lookups.
+
+### API fields and applicability
+
+Set `ExecutionKind` in Go and .NET, `execution_kind` in Python, `executionKind` in JS/TS, or `setExecutionKind(...)` in Java.
+Go constants are `ToolExecutionKindLoadSkill`, `ToolExecutionKindReadSkillResource`, and `ToolExecutionKindCommand`.
+Python exports `ToolExecutionKind.LOAD_SKILL`, `.READ_SKILL_RESOURCE`, and `.COMMAND`; JS/TS uses the string values above.
+Go `otelgenai.Invocation` uses `ExecutionKind` and its own `ToolExecutionKind` constants.
+
+| Go field | Python field | JS/TS field | Span attribute | Applies to |
+| --- | --- | --- | --- | --- |
+| `SkillName` | `skill_name` | `skillName` | `gen_ai.skill.name` | All three execution kinds |
+| `SkillDescription` | `skill_description` | `skillDescription` | `gen_ai.skill.description` | All three execution kinds |
+| `SkillSourceURI` | `skill_source_uri` | `skillSourceURI` | `gen_ai.skill.source.uri` | All three execution kinds |
+| `SkillResourceName` | `skill_resource_name` | `skillResourceName` | `gen_ai.skill.resource.name` | Resource reads and commands |
+| `ProcessExecutableName` | `process_executable_name` | `processExecutableName` | `process.executable.name` | Commands only |
+| `ProcessExecutablePath` | `process_executable_path` | `processExecutablePath` | `process.executable.path` | Commands only |
+| `ProcessExitCode` (completion) | `process_exit_code` (completion) | `processExitCode` (completion) | `process.exit.code` | Commands only |
+
+`SkillDescription` describes the skill, not the tool's existing `ToolDescription`.
+Only populate process fields for an actual, directly executed single process.
+Do not guess an executable or aggregate an exit code across a pipeline or several commands.
+Report the exit code at completion; zero means a reported success, while absent means unknown.
+The nullable types are Go `*int64`, Python `int | None` (not `bool`), Java `Long`, and .NET `long?`.
+JS/TS uses an optional safe integer. The SDKs do not map exit codes to errors, span status, or `error.type`.
+Keep reporting execution errors through the existing recorder error API.
+See the [compilable Go command example](../../go/agento11y/example_test.go).
+
+Applicable structural tool, skill, resource, and executable names reach the sampler at span creation.
+Exit codes arrive only at completion. Skill descriptions, source URIs, and executable paths never enter sampler inputs.
+In Go `otelgenai`, end hooks cannot change the execution kind or applicable identity fields published at start.
+Fields that were unknown at start can be supplied later.
+Explicit raw attributes and hook-returned attributes retain override precedence, so exported attributes can differ from sampler inputs.
+
+Skill descriptions, source URIs, and executable paths follow the [capture-mode privacy rules](./content-capture-modes.md#skill-and-process-attribute-privacy).
+SDKs emit `gen_ai.skill.name`, not the legacy `agento11y.skill.name`.
+A skill-name attribute alone does not identify a skill load: resource reads and commands use it too.
 
 ## Capturing Arguments and Results
 
@@ -115,6 +176,8 @@ try (ToolExecutionRecorder rec = client.startToolExecution(
 ```
 
 With content capture enabled, arguments appear as `gen_ai.tool.call.arguments` and results as `gen_ai.tool.call.result` in span attributes.
+The legacy `IncludeContent` / `include_content` / `includeContent` opt-in under `no_tool_content` remains unchanged.
+It does not bypass reduced effective modes.
 
 See [Content Capture Modes](./content-capture-modes.md) for the full mode matrix, defaults, and resolution precedence.
 

@@ -6,6 +6,7 @@ import (
 	"log"
 	"maps"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/grafana/agento11y/go/agento11y"
@@ -78,6 +79,9 @@ func LiveAgentName(id AgentID) string { return string(id) }
 // queue reached the endpoint. RunImport flushes in batches. A large import
 // therefore makes one request per hundred turns rather than one per turn.
 type Exporter struct {
+	// Target is the resolved destination used for both transport and ledger.
+	// NewExporter alone leaves it unset for callers that own client setup.
+	Target Target
 	// Record validates and enqueues one prepared generation through the SDK
 	// recorder. callErr is non-nil for a turn whose source recorded a call
 	// failure, so the span and metrics carry an error type. NewExporter wires
@@ -110,6 +114,9 @@ func NewExporter(client *agento11y.Client) *Exporter {
 // otherwise, so the forward marker, the ledger and the viewer's offer all
 // judge the URL the SDK sends to.
 func (t Target) endpoint() string {
+	if t.resolved != nil {
+		return t.resolved.Endpoint
+	}
 	endpoint := strings.TrimSpace(t.Endpoint)
 	if endpoint == "" {
 		endpoint = strings.TrimSpace(envconfig.Getenv("ENDPOINT"))
@@ -136,90 +143,76 @@ func (t Target) endpoint() string {
 // in-process import would change what the daemon forwards while the import
 // runs.
 func NewTargetExporter(ctx context.Context, target Target, logger *log.Logger) (*Exporter, func(context.Context) error, error) {
-	endpoint := target.endpoint()
-	if endpoint == "" {
-		return nil, nil, errors.New("history: no endpoint configured for import (set AGENTO11Y_ENDPOINT or use --local)")
+	resolved, err := ResolveTarget(target, logger)
+	if err != nil {
+		return nil, nil, err
 	}
-	tenantID, authToken := envconfig.LocalAuthPlaceholders(
-		endpoint,
-		envconfig.Getenv("AUTH_TENANT_ID"),
-		envconfig.Getenv("AUTH_TOKEN"),
-	)
-	// The SDK panics on a basic-auth config with no password, and a Cloud
-	// import with no credentials is a setup mistake rather than a bug. Say so.
-	if strings.TrimSpace(tenantID) == "" || strings.TrimSpace(authToken) == "" {
-		return nil, nil, errors.New("history: no credentials configured for import (run `agento11y login` or use --local)")
-	}
-
-	// The endpoint decides the loopback rules, not the caller. A configured
-	// AGENTO11Y_ENDPOINT can be the local daemon even when the user asked for a
-	// Cloud import, and a backfill posted there without the marker is one the
-	// daemon relays to Grafana Cloud.
-	localTarget := envconfig.IsLocalEndpoint(endpoint)
-	headers := maps.Clone(target.Headers)
-	if localTarget {
-		if headers == nil {
-			headers = map[string]string{}
-		}
-		headers[ForwardMarkerHeader] = "1"
-	}
-
+	t := resolved.effective()
 	var providers *otel.Providers
-	if otlp := strings.TrimSpace(target.OTLPEndpoint); otlp != "" {
-		var err error
+	if t.OTLPEndpoint != "" {
 		providers, err = otel.SetupWithOptions(ctx, otelInstancePrefix+uuid.NewString(), otel.Options{
-			Endpoint: otlp,
-			Headers:  otlpHeaders(headers),
+			GenerationProtocol:         t.Protocol,
+			EnableExperimentalFeatures: t.EnableExperimentalFeatures,
+			Endpoint:                   t.OTLPEndpoint,
+			Headers:                    otlpHeaders(t.OTLPHeaders),
 		})
 		if err != nil {
 			return nil, nil, err
 		}
 	}
-
-	contentMode := envconfig.ResolveContentMode(logger)
-	if strings.TrimSpace(target.ContentMode) != "" {
-		contentMode = envconfig.ResolveContentModeValue(logger, "", target.ContentMode)
-	}
-	if localTarget {
-		// Local capture is always full: CONTENT_CAPTURE_MODE governs the copy
-		// forwarded to Cloud, and an import forwards nothing.
-		contentMode = agento11y.ContentCaptureModeFull
+	shutdownProviders := func(ctx context.Context) error {
+		if providers == nil {
+			return nil
+		}
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+		defer cancel()
+		return providers.Shutdown(cleanupCtx)
 	}
 	cfg := agento11y.Config{
-		ContentCapture: contentMode,
-		Logger:         logger,
+		ContentCapture:             envconfig.ResolveContentModeValue(logger, "", t.ContentMode),
+		EnableExperimentalFeatures: t.EnableExperimentalFeatures,
+		Logger:                     logger,
 		GenerationExport: agento11y.GenerationExportConfig{
-			Protocol: agento11y.GenerationExportProtocolHTTP,
-			Endpoint: strings.TrimRight(endpoint, "/") + "/api/v1/generations:export",
-			Headers:  headers,
+			Protocol: t.Protocol,
+			Endpoint: emit.ExportEndpointFor(t.Endpoint),
+			Insecure: new(strings.HasPrefix(strings.ToLower(t.Endpoint), "http://")),
+			Headers:  maps.Clone(t.Headers),
 			Auth: agento11y.AuthConfig{
 				Mode:          agento11y.ExportAuthModeBasic,
-				TenantID:      tenantID,
-				BasicPassword: authToken,
+				TenantID:      t.TenantID,
+				BasicUser:     t.TenantID,
+				BasicPassword: t.AuthToken,
 			},
 		},
+	}
+	if envconfig.IsLocalEndpoint(t.Endpoint) {
+		// Even placeholder Basic auth is unnecessary on the local receiver.
+		cfg.GenerationExport.Auth = agento11y.AuthConfig{Mode: agento11y.ExportAuthModeNone}
 	}
 	if providers != nil {
 		cfg.Tracer = providers.Tracer("agento11y.history")
 		cfg.Meter = providers.Meter("agento11y.history")
 	}
+	if err := emit.ConfigureGenerationTransport(&cfg, providers, t.Protocol); err != nil {
+		return nil, nil, errors.Join(err, shutdownProviders(ctx))
+	}
 	client := agento11y.NewClient(cfg)
 	cleanup := func(ctx context.Context) error {
-		err := client.Shutdown(ctx)
-		if providers != nil {
-			if shutdownErr := providers.Shutdown(ctx); err == nil {
-				err = shutdownErr
-			}
-		}
-		return err
+		// A cancelled import must still drain the client before its providers.
+		// Each stage gets a fresh deadline, so one cannot exhaust the other.
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+		err := client.Shutdown(cleanupCtx)
+		cancel()
+		return errors.Join(err, shutdownProviders(ctx))
 	}
-	return NewExporter(client), cleanup, nil
+	exporter := NewExporter(client)
+	exporter.Target = resolved
+	return exporter, cleanup, nil
 }
 
 // otlpHeaders returns the header set for the OTLP leg. A non-nil result
 // replaces the environment-derived headers and so keeps a Cloud Authorization
-// header out of a loopback import. A nil result keeps them, as a Cloud import
-// needs.
+// header out of a loopback import. ResolveTarget freezes Cloud headers too.
 func otlpHeaders(headers map[string]string) map[string]string {
 	if headers == nil {
 		return nil

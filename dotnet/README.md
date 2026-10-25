@@ -129,6 +129,69 @@ Generation export transport protocols:
 - `GenerationExportProtocol.Http`
 - `GenerationExportProtocol.None` (instrumentation-only; no generation transport)
 
+### Tracing skill loads, resource reads, and commands
+
+Set `ToolExecutionStart.ExecutionKind` explicitly with `ToolExecutionKind`.
+The SDK does not infer the execution kind from tool names, paths, or arguments.
+These attributes follow the [OpenTelemetry GenAI conventions added in #498](https://github.com/open-telemetry/semantic-conventions-genai/pull/498).
+The conventions remain in development.
+
+| Execution kind | Meaning | Applicable fields |
+| --- | --- | --- |
+| `ToolExecutionKind.LoadSkill` | Load skill instructions | `SkillName`, `SkillDescription`, `SkillSourceURI` |
+| `ToolExecutionKind.ReadSkillResource` | Read a skill resource | Skill fields above, `SkillResourceName` |
+| `ToolExecutionKind.Command` | Execute a command, optionally for a skill | Skill/resource fields above, `ProcessExecutableName`, `ProcessExecutablePath`; completion `ProcessExitCode` |
+
+`ToolExecutionKind.Unset` (the default) and unrecognized values record generic tool spans without skill or process attributes.
+Inapplicable fields are ignored.
+Skill fields emit `gen_ai.skill.name`, `gen_ai.skill.description`, `gen_ai.skill.source.uri`, and `gen_ai.skill.resource.name`.
+Process fields emit `process.executable.name`, `process.executable.path`, and `process.exit.code`.
+The SDK does not dual-write `agento11y.skill.name`.
+
+Span names start with `execute_tool <tool>`.
+The SDK trims tool, skill, resource, and executable names and omits blank suffix values:
+
+- `LoadSkill` appends the skill name, when present.
+- `ReadSkillResource` appends `<skill> <resource>`, or just `<resource>` without a skill. Without a resource, it appends nothing.
+- `Command` uses the same resource suffix. Without a resource, it appends the executable name if present, otherwise nothing.
+
+`ReadSkillResource` and `Command` never use a skill-only suffix.
+The activity name, tool identity, and applicable skill, resource, and executable names are available to samplers at creation.
+Samplers do not receive descriptions, source URIs, executable paths, or process exit codes.
+
+Process fields describe one directly executed process. Do not infer them from shell text, pipelines, or command batches.
+`ToolExecutionEnd.ProcessExitCode` is a nullable integer (`long?`): `null` means unknown; zero records a successful process exit.
+The exit code does not set or clear an execution error.
+For example, record a known completion code as follows:
+
+```csharp
+var tool = client.StartToolExecution(new ToolExecutionStart
+{
+    ToolName = "exec",
+    ExecutionKind = ToolExecutionKind.Command,
+    SkillName = "review",
+    SkillResourceName = "scripts/check.py",
+    ProcessExecutableName = "python3",
+});
+try
+{
+    tool.SetResult(new ToolExecutionEnd { ProcessExitCode = 0L });
+}
+finally
+{
+    tool.End();
+}
+```
+
+`SkillDescription`, `SkillSourceURI`, and `ProcessExecutablePath` are private content.
+The SDK omits them from spans under effective `MetadataOnly` or `FullWithMetadataSpans`, after resolving overrides, inheritance, and the resolver.
+With `NoToolContent`, the SDK retains these private fields.
+Tool arguments and results still require `Full` or the legacy `IncludeContent` opt-in.
+Every exported skill source URI has userinfo, query, and fragment removed, even under `Full`.
+Invalid or relative URIs are omitted without network or filesystem lookup.
+
+Generic tool recording, `ExecuteToolCalls`, and existing metrics are unchanged. No skill/process metric dimensions are added.
+
 ## Generation export timeout
 
 `GenerationExportConfig.ExportTimeout` defaults to 30 seconds. It bounds one

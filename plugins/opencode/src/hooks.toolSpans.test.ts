@@ -1,5 +1,5 @@
 import { createServer, type Server } from "node:http";
-import type { Agento11yClient } from "@grafana/agento11y";
+import type { ToolExecutionStart } from "@grafana/agento11y";
 import type { Part } from "@opencode-ai/sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Agento11yOpencodeConfig } from "./config.js";
@@ -25,29 +25,27 @@ function mockAgento11yClient() {
     ended: boolean;
   }> = [];
 
-  const client = {
-    startToolExecution: vi.fn((start: Record<string, unknown>) => {
-      const rec = {
-        start,
-        result: undefined as Record<string, unknown> | undefined,
-        callError: undefined as unknown,
-        ended: false,
-      };
-      recorders.push(rec);
-      return {
-        setResult: vi.fn((r: Record<string, unknown>) => {
-          rec.result = r;
-        }),
-        setCallError: vi.fn((e: unknown) => {
-          rec.callError = e;
-        }),
-        end: vi.fn(() => {
-          rec.ended = true;
-        }),
-        getError: vi.fn(() => undefined),
-      };
-    }),
-  } as unknown as Agento11yClient;
+  const client = vi.fn((start: ToolExecutionStart) => {
+    const rec = {
+      start: { ...start },
+      result: undefined as Record<string, unknown> | undefined,
+      callError: undefined as unknown,
+      ended: false,
+    };
+    recorders.push(rec);
+    return {
+      setResult: vi.fn((r: Record<string, unknown>) => {
+        rec.result = r;
+      }),
+      setCallError: vi.fn((e: unknown) => {
+        rec.callError = e;
+      }),
+      end: vi.fn(() => {
+        rec.ended = true;
+      }),
+      getError: vi.fn(() => undefined),
+    };
+  });
 
   return { client, recorders };
 }
@@ -183,17 +181,56 @@ describe("emitToolSpans", () => {
   });
 
   it("swallows SDK errors so a span failure does not break the plugin", () => {
-    const failing = {
-      startToolExecution: () => {
-        throw new Error("nope");
-      },
-    } as unknown as Agento11yClient;
+    const failing = () => {
+      throw new Error("nope");
+    };
     expect(() =>
       emitToolSpans(failing, [makeRecord()], {
         ...defaultOpts(),
         contentCapture: "metadata_only",
       }),
     ).not.toThrow();
+  });
+});
+
+describe("skill span emission", () => {
+  it.each([
+    "full",
+    "no_tool_content",
+    "full_with_metadata_spans",
+    "metadata_only",
+  ] as const)("refines only recognized skills in %s", (contentCapture) => {
+    const { client, recorders } = mockAgento11yClient();
+    emitToolSpans(
+      client,
+      [
+        makeRecord({ toolName: "skill", skillName: "team:review" }),
+        makeRecord({ toolName: "skill", skillName: null }),
+        makeRecord({ toolName: "skill" }),
+        makeRecord({ toolName: "skill", skillName: "" }),
+      ],
+      { ...defaultOpts(), contentCapture },
+    );
+    expect(recorders).toHaveLength(4);
+    expect(recorders[0]!.start).toMatchObject({
+      toolName: "skill",
+      toolCallId: "call-1",
+      toolType: "function",
+      executionKind: "load_skill",
+      skillName: "team:review",
+    });
+    for (const record of recorders.slice(1)) {
+      expect(record.start).not.toHaveProperty("executionKind");
+      expect(record.start).not.toHaveProperty("skillName");
+    }
+    for (const record of recorders) {
+      expect(record.result?.arguments !== undefined).toBe(
+        contentCapture === "full",
+      );
+      expect(record.result?.result !== undefined).toBe(
+        contentCapture === "full",
+      );
+    }
   });
 });
 
@@ -274,6 +311,62 @@ describe("toolSpansFromParts", () => {
 });
 
 describe("mergeToolSpanRecords", () => {
+  it.each([
+    false,
+    true,
+  ])("detects a terminal-only skill (error=%s)", (isError) => {
+    const terminal = makeRecord({
+      toolName: "skill",
+      input: {
+        name: "team:terminal",
+        description: "private",
+        path: "/private",
+      },
+      isError,
+    });
+    expect(mergeToolSpanRecords([terminal], [])[0]).toEqual({
+      ...terminal,
+      skillName: "team:terminal",
+    });
+  });
+
+  it("does not inspect stale terminal arguments when hook identity was observed", () => {
+    const input = Object.defineProperty({}, "name", {
+      get() {
+        throw new Error("stale snapshot must not be inspected");
+      },
+    });
+    const terminal = makeRecord({ toolName: "skill", input });
+    for (const skillName of ["effective", null]) {
+      expect(
+        mergeToolSpanRecords([terminal], [makeRecord({ skillName })])[0]!
+          .skillName,
+      ).toBe(skillName);
+    }
+  });
+  it.each([
+    "team:effective",
+    null,
+    undefined,
+  ])("uses observed hook identity %s without replacing terminal state", (skillName) => {
+    const terminal = makeRecord({
+      skillName: "stale",
+      startedAt: 1,
+      completedAt: 2,
+      isError: true,
+      error: "native failure",
+    });
+    const hook = makeRecord({
+      skillName,
+      startedAt: 10,
+      completedAt: 20,
+      isError: false,
+    });
+    expect(mergeToolSpanRecords([terminal], [hook])).toEqual([
+      { ...terminal, skillName: skillName === undefined ? "stale" : skillName },
+    ]);
+    expect(terminal.skillName).toBe("stale");
+  });
   it("prefers terminal records, keeps unique hook records", () => {
     const term = [
       makeRecord({ toolCallId: "c1", startedAt: 1, completedAt: 2 }),
@@ -490,6 +583,119 @@ function closeServer(server: Server): Promise<void> {
     server.close((err) => (err ? reject(err) : resolve()));
   });
 }
+
+describe("effective skill hooks", () => {
+  beforeEach(() => _resetHookState());
+
+  it("prefers after-hook args over both before args and a stale terminal snapshot", async () => {
+    const hooks = await makeHooks(metadataOnlyConfig());
+    try {
+      const call = { sessionID: "skill-session", callID: "c1", tool: "skill" };
+      const args = { name: "old" };
+      await hooks.toolExecuteBefore(call, { args });
+      expect(_peekToolExecutionState().active[0]!.skillName).toBeUndefined();
+      args.name = "rewritten";
+      hooks.toolExecuteAfter(
+        { ...call, args: { name: "team:effective" } },
+        { title: "private", output: "private", metadata: { path: "/private" } },
+      );
+      const hook = _peekToolExecutionState().completed[0]!;
+      expect(hook.skillName).toBe("team:effective");
+      const terminal = makeRecord({
+        sessionID: call.sessionID,
+        toolCallId: call.callID,
+        toolName: "skill",
+        skillName: "old",
+        startedAt: 1,
+        completedAt: 2,
+      });
+      expect(mergeToolSpanRecords([terminal], [hook])[0]).toEqual({
+        ...terminal,
+        skillName: "team:effective",
+      });
+    } finally {
+      await hooks.dispose();
+    }
+  });
+
+  it.each([
+    {},
+    { name: "two words" },
+    { name: "glc_abcdefghijklmnopqrstuv" },
+    null,
+  ])("clears stale identity on an explicit after-hook nonmatch %#", async (args) => {
+    const hooks = await makeHooks(metadataOnlyConfig());
+    try {
+      const call = { sessionID: "skill-session", callID: "c1", tool: "skill" };
+      await hooks.toolExecuteBefore(call, { args: { name: "old" } });
+      hooks.toolExecuteAfter(
+        { ...call, args },
+        { title: "review", output: "ok", metadata: {} },
+      );
+      const hook = _peekToolExecutionState().completed[0]!;
+      expect(hook.skillName).toBeNull();
+      expect(
+        mergeToolSpanRecords(
+          [
+            makeRecord({
+              sessionID: call.sessionID,
+              toolCallId: call.callID,
+              skillName: "old",
+            }),
+          ],
+          [hook],
+        )[0]!.skillName,
+      ).toBeNull();
+    } finally {
+      await hooks.dispose();
+    }
+  });
+
+  it.each([
+    "team:late",
+    "glc_abcdefghijklmnopqrstuv",
+    "",
+  ])("inspects retained mutable args on failure drain: %s", async (name) => {
+    const hooks = await makeHooks(metadataOnlyConfig());
+    try {
+      const args = {
+        name: "old",
+        path: "/private/skill",
+        description: "private",
+      };
+      await hooks.toolExecuteBefore(
+        { sessionID: "s1", callID: "c1", tool: "skill" },
+        { args },
+      );
+      args.name = name;
+      const [record] = drainActiveToolExecutions("s1");
+      expect(record).toMatchObject({
+        isError: true,
+        skillName: name === "team:late" ? name : null,
+      });
+      expect(_peekToolExecutionState().active).toEqual([]);
+    } finally {
+      await hooks.dispose();
+    }
+  });
+
+  it("falls back to retained args only when after args are unavailable", async () => {
+    const hooks = await makeHooks(metadataOnlyConfig());
+    try {
+      const call = { sessionID: "s1", callID: "c1", tool: "skill" };
+      const args = { name: "old" };
+      await hooks.toolExecuteBefore(call, { args });
+      args.name = "late";
+      hooks.toolExecuteAfter(
+        { ...call, args: undefined },
+        { title: "", output: "", metadata: {} },
+      );
+      expect(_peekToolExecutionState().completed[0]!.skillName).toBe("late");
+    } finally {
+      await hooks.dispose();
+    }
+  });
+});
 
 describe("hook lifecycle records and guard denial", () => {
   const servers: Server[] = [];

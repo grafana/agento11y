@@ -2,7 +2,7 @@
 
 [Pi](https://github.com/earendil-works/pi) agent extension that sends LLM generations to [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/).
 
-By default only metadata is sent (token counts, cost, model, tool names, durations). Set `AGENTO11Y_CONTENT_CAPTURE_MODE` to `full`, `no_tool_content`, `metadata_only`, or `full_with_metadata_spans` to control what is sent. `default` is accepted as an alias for `metadata_only`. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md) for the full reference.
+By default only metadata is sent (token counts, cost, model, tool names, recognized skill names, durations). Set `AGENTO11Y_CONTENT_CAPTURE_MODE` to `full`, `no_tool_content`, `metadata_only`, or `full_with_metadata_spans` to control what is sent. `default` is accepted as an alias for `metadata_only`. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md) for the full reference.
 
 ## 1. Install and launch
 
@@ -89,6 +89,12 @@ AGENTO11Y_CONTENT_CAPTURE_MODE=full
 Run one pi turn, then open **Agent Observability → Conversations** in Grafana Cloud. A new generation should appear within a few seconds.
 
 If nothing shows up, set `AGENTO11Y_DEBUG=true` in `~/.config/agento11y/config.env`, run another turn, and check the debug log at `~/.local/state/agento11y/logs/agento11y.log` (honors `XDG_STATE_HOME`).
+
+Live capture recognizes `read` attempts for an exact instruction file in Pi's finalized skill catalog, including standalone Markdown skills. The catalog comes from `systemPromptOptions` after all `before_agent_start` handlers finish and is cleared at `agent_settled`. Runs without a fresh catalog, including custom-message runs that skip `before_agent_start`, produce no skill match. Detection requires input observed through `tool_call` or `tool_result`; calls blocked before those handlers run stay generic. Reads without matching execution start/end events produce no tool span. Detection assumes built-in-compatible local `read` behavior; custom or remote overrides can associate a read with the wrong skill.
+
+Recognized attempts add `gen_ai.skill.name` to existing tool-execution spans, including failures. They do not prove that instructions loaded successfully or guided later actions. Validated names remain in reduced modes, including `metadata_only` and `full_with_metadata_spans`; names that look like secrets are omitted. Detection adds no descriptions, paths, or URIs, changes no payload policy, and adds no metric labels.
+
+Skill visibility requires retained tool and generation spans in Tempo plus deployed Sigil consumer support. A conversation alone is insufficient. Detection excludes history import, direct `/skill` prompt insertion, resource reads, scripts, and attribution of later activity.
 
 ## Tagging sessions
 

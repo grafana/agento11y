@@ -348,6 +348,12 @@ class ExportWorkflowStepsResponse:
     results: list[ExportWorkflowStepResult]
 
 
+class ToolExecutionKind(str, Enum):
+    LOAD_SKILL = "load_skill"
+    READ_SKILL_RESOURCE = "read_skill_resource"
+    COMMAND = "command"
+
+
 @dataclass(slots=True)
 class ToolExecutionStart:
     """Seed fields for execute_tool span recording."""
@@ -365,6 +371,13 @@ class ToolExecutionStart:
     include_content: bool = False
     content_capture: ContentCaptureMode = ContentCaptureMode.DEFAULT
     started_at: datetime | None = None
+    execution_kind: ToolExecutionKind | None = None
+    skill_name: str = ""
+    skill_description: str = ""
+    skill_source_uri: str = ""
+    skill_resource_name: str = ""
+    process_executable_name: str = ""
+    process_executable_path: str = ""
 
 
 @dataclass(slots=True)
@@ -374,6 +387,13 @@ class ToolExecutionEnd:
     arguments: Any = None
     result: Any = None
     completed_at: datetime | None = None
+    process_exit_code: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.process_exit_code is not None and (
+            isinstance(self.process_exit_code, bool) or not isinstance(self.process_exit_code, int)
+        ):
+            raise ValueError("process_exit_code must be an int or None")
 
 
 @dataclass(slots=True)

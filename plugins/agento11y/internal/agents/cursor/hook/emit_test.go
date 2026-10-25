@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -66,7 +67,10 @@ func TestEmitGenerationSendsCursorUserAgent(t *testing.T) {
 	})
 
 	ctx := context.Background()
-	client := buildClient(Payload{}, nil, config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}, nil, log.New(io.Discard, "", 0))
+	client, err := buildClient(Payload{}, nil, config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}, nil, log.New(io.Discard, "", 0))
+	if err != nil {
+		t.Fatalf("buildClient: %v", err)
+	}
 	if err := emitGeneration(ctx, client, frag, mapped, nil); err != nil {
 		t.Fatalf("emitGeneration: %v", err)
 	}
@@ -88,6 +92,7 @@ func TestEmitGenerationSendsCursorUserAgent(t *testing.T) {
 // carry neither, so those read them back from the saved session.
 func TestBuildClientAttachesAutoTags(t *testing.T) {
 	var gotTags map[string]string
+	var gotMetadata map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -96,8 +101,9 @@ func TestBuildClientAttachesAutoTags(t *testing.T) {
 		}
 		var request struct {
 			Generations []struct {
-				ID   string            `json:"id"`
-				Tags map[string]string `json:"tags"`
+				ID       string            `json:"id"`
+				Tags     map[string]string `json:"tags"`
+				Metadata map[string]any    `json:"metadata"`
 			} `json:"generations"`
 		}
 		if err := json.Unmarshal(body, &request); err != nil {
@@ -107,6 +113,7 @@ func TestBuildClientAttachesAutoTags(t *testing.T) {
 		results := make([]map[string]any, 0, len(request.Generations))
 		for _, g := range request.Generations {
 			gotTags = g.Tags
+			gotMetadata = g.Metadata
 			results = append(results, map[string]any{"generation_id": g.ID, "accepted": true})
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -124,16 +131,25 @@ func TestBuildClientAttachesAutoTags(t *testing.T) {
 	writeGitFixture(t, workspace, "git@github.com:grafana/agento11y.git", "feature/auto-tags")
 
 	tests := []struct {
-		name    string
-		payload Payload
-		session *fragment.Session
+		name        string
+		payload     Payload
+		session     *fragment.Session
+		userID      string
+		envID       string
+		explicitTag string
+		disableAuto bool
+		osFallback  bool
+		wantID      string
+		wantUser    string
 	}{
 		{
-			name:    "payload carries the identity",
+			name:   "payload carries the identity",
+			wantID: "alice@example.com", wantUser: "alice@example.com",
 			payload: Payload{WorkspaceRoots: []string{workspace}, UserEmail: "alice@example.com"},
 		},
 		{
-			name:    "stop payload omits it, session supplies it",
+			name:   "stop payload omits it, session supplies it",
+			wantID: "alice@example.com", wantUser: "alice@example.com",
 			payload: Payload{ConversationID: "conv"},
 			session: &fragment.Session{
 				ConversationID: "conv",
@@ -142,14 +158,53 @@ func TestBuildClientAttachesAutoTags(t *testing.T) {
 			},
 		},
 		{
-			name:    "session without identity falls back to the payload",
+			name:   "session without identity falls back to the payload",
+			wantID: "alice@example.com", wantUser: "alice@example.com",
 			payload: Payload{ConversationID: "conv", WorkspaceRoots: []string{workspace}, UserEmail: "alice@example.com"},
 			session: &fragment.Session{ConversationID: "conv"},
+		},
+		{
+			name:    "whitespace session email falls back to payload",
+			payload: Payload{WorkspaceRoots: []string{workspace}, UserEmail: "  alice@example.com  "},
+			session: &fragment.Session{UserEmail: "  \t "},
+			wantID:  "alice@example.com", wantUser: "alice@example.com",
+		},
+		{
+			name:    "session email wins conflict",
+			payload: Payload{WorkspaceRoots: []string{workspace}, UserEmail: "payload@example.com"},
+			session: &fragment.Session{UserEmail: " session@example.com "},
+			wantID:  "session@example.com", wantUser: "session@example.com",
+		},
+		{
+			name:    "explicit identity wins",
+			payload: Payload{WorkspaceRoots: []string{workspace}, UserEmail: "payload@example.com"},
+			session: &fragment.Session{UserEmail: "session@example.com"},
+			userID:  " pseudonym ", envID: "pseudonym",
+			wantID: "pseudonym", wantUser: "pseudonym",
+		},
+		{
+			name:    "config override without environment",
+			payload: Payload{WorkspaceRoots: []string{workspace}, UserEmail: "payload@example.com"},
+			userID:  " pseudonym ", wantID: "pseudonym", wantUser: "pseudonym",
+		},
+		{
+			name:        "explicit tag differs from identity",
+			payload:     Payload{WorkspaceRoots: []string{workspace}, UserEmail: "alice@example.com"},
+			explicitTag: "metric-user", wantID: "alice@example.com", wantUser: "metric-user",
+		},
+		{
+			name:        "disabled tags preserve account identity",
+			payload:     Payload{WorkspaceRoots: []string{workspace}, UserEmail: "alice@example.com"},
+			disableAuto: true, wantID: "alice@example.com",
+		},
+		{
+			name:       "no identity uses OS tag only",
+			payload:    Payload{WorkspaceRoots: []string{workspace}},
+			osFallback: true,
 		},
 	}
 
 	want := map[string]string{
-		"user":       "alice@example.com",
 		"repo":       "grafana/agento11y",
 		"git.branch": "feature/auto-tags",
 	}
@@ -157,17 +212,33 @@ func TestBuildClientAttachesAutoTags(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			gotTags = nil
+			gotMetadata = nil
+			t.Setenv("AGENTO11Y_USER_ID", tc.envID)
+			t.Setenv("AGENTO11Y_TAGS", "")
+			if tc.explicitTag != "" {
+				t.Setenv("AGENTO11Y_TAGS", "user="+tc.explicitTag)
+			}
+			t.Setenv("AGENTO11Y_AUTO_CODING_AGENT_TAGS", "true")
+			if tc.disableAuto {
+				t.Setenv("AGENTO11Y_AUTO_CODING_AGENT_TAGS", "false")
+			}
+			cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly, UserIDOverride: tc.userID}
 
 			frag := &fragment.Fragment{ConversationID: "conv", GenerationID: "gen-1", Model: "gpt-5"}
 			mapped := mapper.MapFragment(mapper.Inputs{
 				Fragment:       frag,
+				Session:        tc.session,
+				UserIDOverride: cfg.UserIDOverride,
 				Stop:           &mapper.StopInput{Status: "completed"},
 				ContentCapture: agento11y.ContentCaptureModeMetadataOnly,
 				Now:            time.Now(),
 			})
 
 			ctx := context.Background()
-			client := buildClient(tc.payload, tc.session, config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}, nil, log.New(io.Discard, "", 0))
+			client, err := buildClient(tc.payload, tc.session, cfg, nil, log.New(io.Discard, "", 0))
+			if err != nil {
+				t.Fatalf("buildClient: %v", err)
+			}
 			if err := emitGeneration(ctx, client, frag, mapped, nil); err != nil {
 				t.Fatalf("emitGeneration: %v", err)
 			}
@@ -176,7 +247,32 @@ func TestBuildClientAttachesAutoTags(t *testing.T) {
 			}
 			_ = client.Shutdown(ctx)
 
+			if gotID, _ := gotMetadata["agento11y.user.id"].(string); gotID != tc.wantID {
+				t.Errorf("exported identity = %q, want %q", gotID, tc.wantID)
+			}
+			if tc.wantID == "" {
+				if _, ok := gotMetadata["agento11y.user.id"]; ok {
+					t.Error("identity metadata must be absent")
+				}
+			}
+			wantUser := tc.wantUser
+			if tc.osFallback {
+				if current, err := user.Current(); err == nil {
+					wantUser = strings.TrimSpace(current.Username)
+				}
+			}
+			if gotTags["user"] != wantUser {
+				t.Errorf("user tag = %q, want %q", gotTags["user"], wantUser)
+			}
+			if tc.disableAuto {
+				if _, ok := gotTags["user"]; ok {
+					t.Error("automatic user tag must be absent")
+				}
+			}
 			for key, value := range want {
+				if tc.disableAuto {
+					value = ""
+				}
 				if gotTags[key] != value {
 					t.Errorf("exported tag %s = %q, want %q (all tags: %v)", key, gotTags[key], value, gotTags)
 				}

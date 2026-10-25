@@ -3,7 +3,7 @@ import test from 'node:test';
 import { context, SpanStatusCode, trace } from '@opentelemetry/api';
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { Agento11yLangChainHandler } from '../.test-dist/frameworks/langchain/index.js';
-import { Agento11yClient, defaultConfig } from '../.test-dist/index.js';
+import { Agento11yClient, createSecretRedactionSanitizer, defaultConfig } from '../.test-dist/index.js';
 
 class CapturingExporter {
   requests = [];
@@ -686,6 +686,93 @@ test('langchain handler maps tool callbacks and emits chain/retriever spans', as
   } finally {
     await client.shutdown();
     await tracerProvider.shutdown();
+  }
+});
+
+test('langchain chain and retriever spans leave the error text off when content is hidden', async (t) => {
+  const apiKey = `sk-proj-${'a'.repeat(48)}`;
+  const cases = [
+    { name: 'default capture keeps the text', options: {}, hidden: false },
+    { name: 'metadata_only', options: { contentCapture: 'metadata_only' }, hidden: true },
+    { name: 'full_with_metadata_spans', options: { contentCapture: 'full_with_metadata_spans' }, hidden: true },
+    {
+      name: 'default capture with a generation sanitizer',
+      options: { generationSanitizer: createSecretRedactionSanitizer() },
+      hidden: true,
+    },
+    {
+      name: 'resolver picks metadata_only from the run metadata',
+      options: {
+        contentCapture: 'full',
+        contentCaptureResolver: (metadata) =>
+          metadata?.['agento11y.framework.component_name'] === 'PrivateChain' ? 'metadata_only' : 'default',
+      },
+      hidden: true,
+    },
+    {
+      name: 'resolver keeps the text for a run it does not pick',
+      options: {
+        contentCapture: 'full',
+        contentCaptureResolver: (metadata) =>
+          metadata?.['agento11y.framework.component_name'] === 'OtherChain' ? 'metadata_only' : 'default',
+      },
+      hidden: false,
+    },
+    {
+      name: 'resolver that throws',
+      options: {
+        contentCaptureResolver: () => {
+          throw new Error('resolver failed');
+        },
+      },
+      hidden: true,
+    },
+  ];
+
+  for (const tc of cases) {
+    await t.test(tc.name, async () => {
+      const spanExporter = new InMemorySpanExporter();
+      const tracerProvider = new BasicTracerProvider({
+        spanProcessors: [new SimpleSpanProcessor(spanExporter)],
+      });
+      const defaults = defaultConfig();
+      const client = new Agento11yClient({
+        generationExport: {
+          ...defaults.generationExport,
+          batchSize: 10,
+          flushIntervalMs: 60_000,
+        },
+        generationExporter: new CapturingExporter(),
+        tracer: tracerProvider.getTracer('agento11y-framework-test'),
+        ...tc.options,
+      });
+
+      try {
+        const handler = new Agento11yLangChainHandler(client);
+        await handler.handleChainStart({ name: 'PrivateChain' }, {}, 'chain-run');
+        await handler.handleChainError(new Error(`invalid key ${apiKey}`), 'chain-run');
+        await handler.handleRetrieverStart({ name: 'PrivateChain' }, 'query', 'retriever-run');
+        await handler.handleRetrieverError(new Error(`invalid key ${apiKey}`), 'retriever-run');
+
+        const spans = spanExporter.getFinishedSpans();
+        assert.equal(spans.length, 2);
+        for (const span of spans) {
+          assert.equal(span.status.code, SpanStatusCode.ERROR);
+          assert.equal(span.attributes['error.type'], 'framework_error');
+          if (tc.hidden) {
+            assert.equal(span.status.message, 'sdk_error');
+            assert.equal(span.events.length, 0);
+            assert.doesNotMatch(JSON.stringify([span.attributes, span.status, span.events]), /sk-proj-/);
+          } else {
+            assert.equal(span.status.message, `invalid key ${apiKey}`);
+            assert.equal(span.events.length, 1);
+          }
+        }
+      } finally {
+        await client.shutdown();
+        await tracerProvider.shutdown();
+      }
+    });
   }
 });
 

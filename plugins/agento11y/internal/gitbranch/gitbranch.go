@@ -23,7 +23,7 @@ var (
 	schemeRe          = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9+.-]*://`)
 )
 
-// Resolve walks up to 6 parent directories from workspaceRoot looking for a
+// Resolve walks from workspaceRoot to the filesystem root looking for a
 // `.git` entry, follows `gitdir:` indirection used by worktrees and
 // submodules, and reads HEAD from the resolved git directory.
 //
@@ -59,15 +59,18 @@ func Repo(workspaceRoot string) string {
 	return repoFromGitDir(commonDir)
 }
 
-// findGitDir walks up to 6 parent directories from workspaceRoot looking for a
+// findGitDir walks from workspaceRoot to the filesystem root looking for a
 // `.git` entry and returns the git directory it names, or "" when there is
 // none.
 func findGitDir(workspaceRoot string) string {
 	if workspaceRoot == "" {
 		return ""
 	}
-	current := workspaceRoot
-	for range 6 {
+	current, err := filepath.Abs(workspaceRoot)
+	if err != nil {
+		return ""
+	}
+	for {
 		if gitDir := resolveGitDir(filepath.Join(current, ".git")); gitDir != "" {
 			return gitDir
 		}

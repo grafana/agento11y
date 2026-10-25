@@ -93,6 +93,59 @@ Framework helpers:
   - `WithAgentName(ctx, name)`
   - `WithAgentVersion(ctx, version)`
 
+### Tracing skill loads, resource reads, and commands
+
+Set `ToolExecutionStart.ExecutionKind` explicitly. The SDK does not detect execution kinds from tool names, paths, or arguments.
+These additions follow [merged GenAI #498](https://github.com/open-telemetry/semantic-conventions-genai/pull/498), which remains in development.
+
+| Execution kind | Meaning | Applicable fields |
+| --- | --- | --- |
+| `ToolExecutionKindLoadSkill` (`load_skill`) | Load skill instructions | `SkillName`, `SkillDescription`, `SkillSourceURI` |
+| `ToolExecutionKindReadSkillResource` (`read_skill_resource`) | Read a skill resource | Skill fields above, `SkillResourceName` |
+| `ToolExecutionKindCommand` (`command`) | Execute a command, optionally for a skill | Skill/resource fields above, `ProcessExecutableName`, `ProcessExecutablePath`; completion `ProcessExitCode` |
+
+Unset or unrecognized execution kinds keep generic behavior and emit no skill or process attributes. Inapplicable fields are ignored.
+Skill fields emit `gen_ai.skill.name`, `gen_ai.skill.description`, `gen_ai.skill.source.uri`, and `gen_ai.skill.resource.name`.
+Process fields emit `process.executable.name`, `process.executable.path`, and `process.exit.code`.
+The SDK does not dual-write `agento11y.skill.name`.
+
+Span names start with `execute_tool <tool>` and use trimmed, nonblank identity:
+
+- `load_skill` appends the skill name, when present.
+- `read_skill_resource` appends `<skill> <resource>`, or just `<resource>` without a skill. Without a resource, it appends nothing.
+- `command` uses the same resource suffix, then falls back to the executable name, then no suffix.
+
+The `read_skill_resource` and `command` execution kinds never use a skill-only suffix.
+The span name and applicable structural names are available to samplers at creation.
+Private fields and the completion exit code are excluded from sampler attributes.
+
+Process fields describe one directly executed process. Do not infer them from shell text, pipelines, or command batches.
+`ToolExecutionEnd.ProcessExitCode` is a nullable integer (`*int64`): nil means unknown; a pointer to zero records successful completion.
+Exit codes are independent of recorded execution errors.
+For example, record a known completion code as follows:
+
+```go
+_, tool := client.StartToolExecution(ctx, agento11y.ToolExecutionStart{
+	ToolName:              "exec",
+	ExecutionKind:         agento11y.ToolExecutionKindCommand,
+	SkillName:             "review",
+	SkillResourceName:     "scripts/check.py",
+	ProcessExecutableName: "python3",
+})
+defer tool.End()
+exitCode := int64(0)
+tool.SetResult(agento11y.ToolExecutionEnd{ProcessExitCode: &exitCode})
+```
+
+`SkillDescription`, `SkillSourceURI`, and `ProcessExecutablePath` are private content.
+The SDK omits them from spans under effective `MetadataOnly` or `FullWithMetadataSpans`, after resolving overrides, inheritance, and the resolver.
+Core `NoToolContent` retains these private fields; arguments/results still require the existing content opt-in.
+Every exported skill source URI has userinfo, query, and fragment removed, even under `Full`.
+Invalid or relative URIs are omitted without network or filesystem lookup.
+With experimental OTel generation export, `FullWithMetadataSpans` resolves to `Full`; it does not protect private fields from spans.
+
+Generic tool recording, `ExecuteToolCalls`, and existing metrics are unchanged. No skill/process metric dimensions are added.
+
 ## Configuration
 
 The snippet below configures the SDK explicitly. As an alternative, set `AGENTO11Y_*` environment variables and pass an empty `agento11y.Config{}` — refer to the [Grafana Cloud setup guide](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/get-started/grafana-cloud/) for the variable names.

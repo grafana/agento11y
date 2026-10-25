@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import copy
 import time
 from datetime import timedelta
 
+import pytest
 from agento11y import (
     Client,
     ClientConfig,
@@ -23,8 +25,12 @@ from agento11y import (
     QueueFullError,
     TokenInputSemantics,
     TokenUsage,
+    ToolCall,
+    ToolExecutionEnd,
+    ToolExecutionKind,
     ToolExecutionStart,
     ValidationError,
+    tool_call_part,
     with_agent_name,
     with_agent_version,
     with_conversation_id,
@@ -627,6 +633,155 @@ def test_tool_execution_attributes_and_content_capture() -> None:
         assert span.attributes.get("gen_ai.provider.name") == "openai"
         assert span.attributes.get("gen_ai.request.model") == "gpt-5"
         assert span.attributes.get("agento11y.sdk.name") == "sdk-python"
+    finally:
+        client.shutdown()
+        provider.shutdown()
+
+
+@pytest.mark.parametrize("exit_code", [None, 0, 2])
+@pytest.mark.parametrize("convenience", [False, True])
+def test_tool_recorder_copies_skill_process_fields(exit_code, convenience) -> None:
+    spans = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(spans))
+    client = _new_client(CapturingGenerationExporter(), tracer=provider.get_tracer("test"))
+    try:
+        start = ToolExecutionStart(
+            tool_name=" exec ",
+            execution_kind=ToolExecutionKind.COMMAND,
+            skill_name=" review ",
+            skill_description=" Review code ",
+            skill_source_uri=" https://user:password@example.com/skill?secret=value#private ",  # trufflehog:ignore
+            skill_resource_name=" check.py ",
+            process_executable_name=" python3 ",
+            process_executable_path=" /bin/python3 ",
+            include_content=True,
+        )
+        original = copy.deepcopy(start)
+        rec = client.start_tool_execution(start)
+        assert start == original
+        start.execution_kind = None
+        start.skill_name = "changed"
+        start.skill_description = "changed"
+        start.skill_source_uri = "changed"
+        start.skill_resource_name = "changed"
+        start.process_executable_name = "changed"
+        start.process_executable_path = "changed"
+        end = ToolExecutionEnd(arguments={"args": ["original"]}, result=["original"], process_exit_code=exit_code)
+        original_end = copy.deepcopy(end)
+        if convenience:
+            rec.set_result(arguments=end.arguments, result=end.result, process_exit_code=end.process_exit_code)
+        else:
+            rec.set_result(end)
+        assert end == original_end
+        end.arguments["args"].append("changed")
+        end.result.append("changed")
+        end.process_exit_code = 99
+        rec.end()
+        rec.end()
+        assert rec.err() is None
+        assert len(spans.get_finished_spans()) == 1
+        span = spans.get_finished_spans()[0]
+        assert span.name == "execute_tool exec review check.py"
+        for key, value in {
+            "gen_ai.skill.name": "review",
+            "gen_ai.skill.description": "Review code",
+            "gen_ai.skill.source.uri": "https://example.com/skill",
+            "gen_ai.skill.resource.name": "check.py",
+            "process.executable.name": "python3",
+            "process.executable.path": "/bin/python3",
+        }.items():
+            assert span.attributes[key] == value
+        assert span.attributes.get("process.exit.code") == exit_code
+        assert ("process.exit.code" in span.attributes) is (exit_code is not None)
+        assert "changed" not in span.attributes["gen_ai.tool.call.arguments"]
+        assert "changed" not in span.attributes["gen_ai.tool.call.result"]
+    finally:
+        client.shutdown()
+        provider.shutdown()
+
+
+@pytest.mark.parametrize("value", [True, False, 1.5, "0"])
+@pytest.mark.parametrize("mutated", [False, True])
+def test_tool_recorder_rejects_invalid_exit_code(value, mutated) -> None:
+    spans = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(spans))
+    client = _new_client(CapturingGenerationExporter(), tracer=provider.get_tracer("test"))
+    try:
+        rec = client.start_tool_execution(
+            ToolExecutionStart(tool_name="exec", execution_kind=ToolExecutionKind.COMMAND)
+        )
+        with pytest.raises(ValueError, match="process_exit_code"):
+            if mutated:
+                end = ToolExecutionEnd()
+                end.process_exit_code = value
+                rec.set_result(end)
+            else:
+                rec.set_result(process_exit_code=value)
+        rec.set_exec_error(RuntimeError("command failed before exit code was available"))
+        rec.end()
+        span = spans.get_finished_spans()[0]
+        assert "process.exit.code" not in span.attributes
+        assert span.status.status_code.name == "ERROR"
+        assert rec.err() is not None
+    finally:
+        client.shutdown()
+        provider.shutdown()
+
+
+@pytest.mark.parametrize(
+    "uri, expected",
+    [
+        ("file:///opt/skills/review?secret=1#part", "file:///opt/skills/review"),
+        ("s3://user:secret@bucket/skill?secret=1#part", "s3://bucket/skill"),
+        ("https://user:secret@[::1]:8443/skill?secret=1#part", "https://[::1]:8443/skill"),
+        ("https://host:invalid/path", None),
+        ("https:///path", None),
+        ("file:relative/path", None),
+        ("//host/path", None),
+        ("/absolute/path", None),
+        ("https://host/\npath", None),
+    ],
+)
+def test_tool_source_uri_sanitization(uri, expected) -> None:
+    spans = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(spans))
+    client = _new_client(CapturingGenerationExporter(), tracer=provider.get_tracer("test"))
+    try:
+        with client.start_tool_execution(
+            ToolExecutionStart(
+                tool_name="load",
+                execution_kind=ToolExecutionKind.LOAD_SKILL,
+                skill_source_uri=uri,
+                include_content=True,
+            )
+        ):
+            pass
+        assert spans.get_finished_spans()[0].attributes.get("gen_ai.skill.source.uri") == expected
+    finally:
+        client.shutdown()
+        provider.shutdown()
+
+
+@pytest.mark.parametrize("name", ["load_skill", "load_skill_resource", "run_skill_script", "exec_command"])
+def test_tool_convenience_loop_does_not_infer_execution_kind(name) -> None:
+    spans = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(spans))
+    client = _new_client(CapturingGenerationExporter(), tracer=provider.get_tracer("test"))
+    try:
+        messages = [Message(role=MessageRole.ASSISTANT, parts=[tool_call_part(ToolCall(name=name))])]
+        client.execute_tool_calls(
+            messages,
+            lambda *_: {"skill_name": "review", "skill_resource_name": "check.py", "process_exit_code": 0},
+        )
+        assert len(spans.get_finished_spans()) == 1
+        span = spans.get_finished_spans()[0]
+        assert span.name == f"execute_tool {name}"
+        assert not any(key.startswith(("gen_ai.skill.", "process.")) for key in span.attributes)
+        assert "agento11y.skill.name" not in span.attributes
     finally:
         client.shutdown()
         provider.shutdown()

@@ -128,6 +128,15 @@ _internal_client_span(op, kind) if {
 	op in _memory_ops
 }
 
+# The newer tool convention recommends an agent name, but a standalone tool may
+# have no agent identity. Do not change expectations for the older registry.
+_unavailable_tool_agent(op, attr, level) if {
+	level == "recommended"
+	op == "execute_tool"
+	attr == "gen_ai.agent.name"
+	data["coverage-model"].tool_execution_kinds["gen_ai.execute_tool.load_skill.internal"]
+}
+
 _expected_for_op(op, kind) := expected if {
 	data["coverage-model"].spans
 	not _internal_client_span(op, kind)
@@ -137,6 +146,7 @@ _expected_for_op(op, kind) := expected if {
 	expected := { attr |
 		some attr, level in attrs
 		_level_expected(level, attr)
+		not _unavailable_tool_agent(op, attr, level)
 	}
 }
 
@@ -290,6 +300,47 @@ _attr_value(span, name) := value if {
 _valid_op_and_attr_span_name(span, op, attr_key) if {
 	span.name == op
 	not _has_attr(span, attr_key)
+}
+
+# Exported spans have no execution-kind discriminator. Accept the union of standard
+# tool forms, including the generic name even when skill attributes are present.
+_valid_op_and_attr_span_name(span, "execute_tool", "gen_ai.tool.name") if {
+	data["coverage-model"].tool_execution_kinds["gen_ai.execute_tool.load_skill.internal"]
+	_valid_skill_process_span_name(span)
+}
+
+_tool_span_name(span, suffix) := name if {
+	tool := _attr_value(span, "gen_ai.tool.name")
+	is_string(tool)
+	name := concat(" ", array.concat(["execute_tool", tool], suffix))
+}
+
+_valid_skill_process_span_name(span) if {
+	skill := _attr_value(span, "gen_ai.skill.name")
+	is_string(skill)
+	span.name == _tool_span_name(span, [skill])
+}
+
+_valid_skill_process_span_name(span) if {
+	skill := _attr_value(span, "gen_ai.skill.name")
+	resource := _attr_value(span, "gen_ai.skill.resource.name")
+	is_string(skill)
+	is_string(resource)
+	span.name == _tool_span_name(span, [skill, resource])
+}
+
+_valid_skill_process_span_name(span) if {
+	not _has_attr(span, "gen_ai.skill.name")
+	resource := _attr_value(span, "gen_ai.skill.resource.name")
+	is_string(resource)
+	span.name == _tool_span_name(span, [resource])
+}
+
+_valid_skill_process_span_name(span) if {
+	not _has_attr(span, "gen_ai.skill.resource.name")
+	executable := _attr_value(span, "process.executable.name")
+	is_string(executable)
+	span.name == _tool_span_name(span, [executable])
 }
 
 _valid_op_and_attr_span_name(span, op, attr_key) if {

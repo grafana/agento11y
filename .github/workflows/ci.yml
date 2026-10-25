@@ -127,6 +127,9 @@ jobs:
       - name: GenAI semantic-convention live check
         run: mise run test:go:conformance
 
+      - name: Skill-load, resource-read, and command semantic-convention live check
+        run: mise run test:go:tool-execution-kinds-conformance
+
       - name: OTel GenAI race tests
         run: mise run test:go:otelgenai-race
 
@@ -146,7 +149,7 @@ jobs:
           - go/otelgenai/weavertest
         include:
           - module: go/otelgenai/conformance
-            lint_args: --timeout=5m --build-tags=conformance
+            lint_args: --timeout=5m --build-tags=conformance,tool_execution_kinds
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
