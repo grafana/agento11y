@@ -349,7 +349,7 @@ agento11y login --env-file team.env
 op document get agento11y-cloud-env | agento11y login --env-file -
 ```
 
-Login reads the same lines as a pasted block: the endpoint, instance ID, token, OTLP endpoint, and OTLP headers. Other keys in the file are ignored and named on stderr, so a shared file cannot change anyone's content capture, guards, or other settings. `export` prefixes and `#` comment lines are accepted, so the same file also works with `source`. A file of `op://` references must be resolved first, for example `op inject -i team.env | agento11y login --env-file -`. Flags still win over the values in the block, and a file that holds only the endpoint and instance ID can be combined with `--token-stdin`. A block larger than 64 KiB is refused.
+Login reads the same lines as a pasted block: the endpoint, instance ID, token, OTLP endpoint, and OTLP headers. Other keys in the file are ignored and named on stderr, so a shared file cannot change anyone's content capture, guards, protocol, or other settings. The setup page's own `AGENTO11Y_PROTOCOL=http` and `AGENTO11Y_AUTH_MODE=basic` lines are the defaults, so they are not named. `export` prefixes and `#` comment lines are accepted, so the same file also works with `source`. A file of `op://` references must be resolved first, for example `op inject -i team.env | agento11y login --env-file -`. Flags still win over the values in the block, and a file that holds only the endpoint and instance ID can be combined with `--token-stdin`. A block larger than 64 KiB is refused.
 
 ## Settings
 

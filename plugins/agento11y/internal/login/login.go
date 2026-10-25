@@ -1182,9 +1182,14 @@ func applyPaste(v *formValues, fixed fixedValues, block string) pasteFilled {
 }
 
 // blockReadSuffixes are the branded keys login reads from a block (see
-// applyPaste), plus PROTOCOL and AUTH_MODE, which the setup page's block
-// always carries and login sets itself.
-var blockReadSuffixes = []string{"ENDPOINT", "AUTH_TENANT_ID", "AUTH_TOKEN", "OTEL_EXPORTER_OTLP_ENDPOINT", "PROTOCOL", "AUTH_MODE"}
+// applyPaste).
+var blockReadSuffixes = []string{"ENDPOINT", "AUTH_TENANT_ID", "AUTH_TOKEN", "OTEL_EXPORTER_OTLP_ENDPOINT"}
+
+// blockDefaultValues are the PROTOCOL and AUTH_MODE values the setup page's
+// block always carries. Login does not write either key, but these values are
+// the defaults, so leaving them out changes nothing and they are not named.
+// Any other value, such as PROTOCOL=otel, is named like any ignored key.
+var blockDefaultValues = map[string]string{"PROTOCOL": "http", "AUTH_MODE": "basic"}
 
 // ignoredBlockKeys names the keys in a block that login does not read, so
 // a team that put content capture or guards in a shared file learns that
@@ -1194,6 +1199,11 @@ func ignoredBlockKeys(block string) []string {
 	read := map[string]bool{"OTEL_EXPORTER_OTLP_ENDPOINT": true, "OTEL_EXPORTER_OTLP_HEADERS": true}
 	for _, s := range blockReadSuffixes {
 		read[envconfig.PreferredKey(s)], read[envconfig.LegacyKey(s)] = true, true
+	}
+	for s, def := range blockDefaultValues {
+		for _, k := range []string{envconfig.PreferredKey(s), envconfig.LegacyKey(s)} {
+			read[k] = strings.EqualFold(strings.TrimSpace(env[k]), def)
+		}
 	}
 	var ignored []string
 	for _, k := range slices.Sorted(maps.Keys(env)) {
