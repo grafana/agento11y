@@ -157,9 +157,9 @@ saved Cloud connection starts at step 2.
    creates the token when the user has permission and the stack supports it.
    Otherwise it links to Cloud Access Policies and accepts an existing token.
 5. **Paste from Grafana**: the whole block goes into this one masked field, which
-   fills the endpoint, instance ID, token, and OTLP settings. Login then asks
-   only for what the block did not carry. Pasting is optional: Enter on the empty
-   box types the values field by field instead.
+   fills the endpoint, instance ID, token, and OTLP settings, and presets the
+   automatic tag answers when it sets them. Login asks only for what is missing.
+   Pasting is optional: Enter on the empty box types the values one by one.
 6. **Preferences**: local web UI, content capture mode, session tags, guards and
    their timeout, and automatic tags. **Local web UI** starts on Yes by default
    and remembers an earlier answer. The web UI always stores full content locally.

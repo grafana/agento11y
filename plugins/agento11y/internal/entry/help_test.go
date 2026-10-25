@@ -39,7 +39,7 @@ func TestPublicHelpPages(t *testing.T) {
 					"access-policy token with the sigil:write scope",
 					"requires --endpoint and --tenant, or an --env-file that sets them. Cannot be combined with --token.",
 					"Prompt for missing values. Verify credentials before saving unless --no-verify is set.",
-					"read the environment block from path (- for stdin); it may set credentials, OTLP and automatic tags",
+					"read the environment block from path (- for stdin); it may set credentials, OTLP, and automatic tags",
 				} {
 					if !strings.Contains(out.String(), want) {
 						t.Errorf("missing login guidance %q in %q", want, out.String())

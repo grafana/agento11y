@@ -895,16 +895,19 @@ const blockCreds = "AGENTO11Y_ENDPOINT=https://block.example.com\n" +
 	"AGENTO11Y_AUTH_TOKEN=glc_block\n"
 
 // runBlockForTest runs a promptless login with block over a config.env that
-// holds existing, and returns the saved file and stderr. Run exports what it
-// saves and a shell value beats config.env, so every seeded family is cleared
-// first.
-func runBlockForTest(t *testing.T, existing string, opts RunOpts) (map[string]string, string, error) {
+// holds existing, with only shell exported, and returns the saved file and
+// stderr. Run exports what it saves and a shell value beats config.env, so
+// every seeded family is cleared first.
+func runBlockForTest(t *testing.T, existing string, shell map[string]string, opts RunOpts) (map[string]string, string, error) {
 	t.Helper()
 	for _, suffix := range append(slices.Clone(seededSuffixes), "OTEL_EXPORTER_OTLP_INSECURE") {
 		for _, k := range []string{envconfig.PreferredKey(suffix), envconfig.LegacyKey(suffix), "OTEL_EXPORTER_OTLP_ENDPOINT"} {
 			t.Setenv(k, "")
 			require.NoError(t, os.Unsetenv(k))
 		}
+	}
+	for k, v := range shell {
+		t.Setenv(k, v)
 	}
 	path := filepath.Join(t.TempDir(), "config.env")
 	if existing != "" {
@@ -925,7 +928,8 @@ func runBlockForTest(t *testing.T, existing string, opts RunOpts) (map[string]st
 func TestRun_BlockAutoTags(t *testing.T) {
 	cases := []struct {
 		name       string
-		existing   string // config.env before the run
+		existing   string            // config.env before the run
+		shell      map[string]string // exported for the run only
 		opts       RunOpts
 		wantErr    string
 		wantStderr string
@@ -978,13 +982,47 @@ func TestRun_BlockAutoTags(t *testing.T) {
 		{
 			// A list the switch cannot use would only make doctor warn, so the
 			// saved Off stays and no list is written, as in the form.
-			name:     "names alone under a saved Off write no list",
-			existing: "AGENTO11Y_AUTO_CODING_AGENT_TAGS=false\n",
-			opts:     RunOpts{Block: blockCreds + "AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=user,repo\n"},
+			name:       "names alone under a saved Off write no list",
+			existing:   "AGENTO11Y_AUTO_CODING_AGENT_TAGS=false\n",
+			opts:       RunOpts{Block: blockCreds + "SIGIL_AUTO_CODING_AGENT_TAGS_NAMES=user,repo\n"},
+			wantStderr: "agento11y login: automatic tags stay off, so the block's SIGIL_AUTO_CODING_AGENT_TAGS_NAMES was not saved; add AGENTO11Y_AUTO_CODING_AGENT_TAGS=true to the block to turn them on.\n",
 			wantFile: map[string]string{
 				"AGENTO11Y_AUTO_CODING_AGENT_TAGS":       "false",
 				"AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES": "",
 				"SIGIL_AUTO_CODING_AGENT_TAGS_NAMES":     "",
+			},
+		},
+		{
+			// The omitted key is written back, so it must be the saved value,
+			// or a one-off shell export would become permanent.
+			name:     "a shell list does not replace the saved one",
+			existing: "AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=user,repo\n",
+			shell:    map[string]string{"AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES": "branch"},
+			opts:     RunOpts{Block: blockCreds + "AGENTO11Y_AUTO_CODING_AGENT_TAGS=true\n"},
+			wantFile: map[string]string{
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS":       "true",
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES": "user,repo",
+			},
+		},
+		{
+			name:     "a shell switch does not replace the saved one",
+			existing: "AGENTO11Y_AUTO_CODING_AGENT_TAGS=true\n",
+			shell:    map[string]string{"SIGIL_AUTO_CODING_AGENT_TAGS": "false"},
+			opts:     RunOpts{Block: blockCreds + "AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=repo\n"},
+			wantFile: map[string]string{
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS":       "true",
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES": "repo",
+			},
+		},
+		{
+			// With nothing saved the switch starts On, as in the form, even
+			// when the shell exports Off.
+			name:  "a shell Off does not stop a fresh block list",
+			shell: map[string]string{"AGENTO11Y_AUTO_CODING_AGENT_TAGS": "false"},
+			opts:  RunOpts{Block: blockCreds + "AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=repo\n"},
+			wantFile: map[string]string{
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS":       "true",
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES": "repo",
 			},
 		},
 		{
@@ -1058,7 +1096,7 @@ func TestRun_BlockAutoTags(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, stderr, err := runBlockForTest(t, c.existing, c.opts)
+			got, stderr, err := runBlockForTest(t, c.existing, c.shell, c.opts)
 			if c.wantErr != "" {
 				require.ErrorContains(t, err, c.wantErr)
 			} else {
@@ -1096,7 +1134,7 @@ func TestBlockAutoTagsMatchTheForm(t *testing.T) {
 			if c.savedNames != "" {
 				existing += "AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=" + c.savedNames + "\n"
 			}
-			saved, _, err := runBlockForTest(t, existing, RunOpts{Block: blockCreds + c.block})
+			saved, _, err := runBlockForTest(t, existing, nil, RunOpts{Block: blockCreds + c.block})
 			require.NoError(t, err)
 
 			// The form seeds these two fields the way Run does, then the

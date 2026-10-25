@@ -432,9 +432,27 @@ func Run(ctx context.Context, opts RunOpts) (Result, error) {
 	if block.otlpHeadersPasted {
 		v.otlpHeaders, v.otlpHeadersPasted = block.otlpHeaders, true
 	}
-	// The block's automatic-tag keys go over the seeds here, as applyPaste
-	// puts them over the form's seeds, so both runs save the same answer.
-	v.autoTagsFromBlock = presetAutoTags(&v, parseBlock(opts.Block))
+	if opts.Block != "" {
+		// Both automatic-tag keys are written back below, so the one the
+		// block leaves out must be the saved one. Seeding it from the shell
+		// would make a one-off export permanent.
+		saved, err := dotenv.ReadDotenv(configPath, opts.Logger)
+		if err != nil {
+			return Result{}, fmt.Errorf("login: read config %q: %w", configPath, err)
+		}
+		_, savedOn := blockPreference(saved, envconfig.AutoTagsSuffix)
+		_, savedNames := blockPreference(saved, envconfig.AutoTagNamesSuffix)
+		v.autoTags, v.autoTagNames = seedAutoTags(savedOn), seedAutoTagNames(savedNames)
+
+		// The block's keys then go over those, as applyPaste puts them over
+		// the form's seeds, so both runs save the same answer.
+		env := parseBlock(opts.Block)
+		v.autoTagsFromBlock = presetAutoTags(&v, env)
+		_, on := blockPreference(env, envconfig.AutoTagsSuffix)
+		if key, names := blockPreference(env, envconfig.AutoTagNamesSuffix); names != "" && on == "" && !v.autoTags {
+			_, _ = fmt.Fprintf(opts.Stderr, "agento11y login: automatic tags stay off, so the block's %s was not saved; add AGENTO11Y_AUTO_CODING_AGENT_TAGS=true to the block to turn them on.\n", key)
+		}
+	}
 
 	if askUser {
 		if err := promptValues(ctx, &v, fixed, existingToken, opts.Stderr, offerLocal); err != nil {
@@ -1195,13 +1213,15 @@ func parseBlock(block string) map[string]string {
 // blockPreferenceSuffixes are the preferences a block may set: the automatic
 // tag switch and names, which decide the user, repository, and branch labels
 // on the Coding agents page. A block cannot set content capture, guards,
-// session tags, TLS, the binary, the web dir, or the stack URL.
+// session tags, TLS, the binary, the web dir, or the stack URL. Session tags
+// stay out because AGENTO11Y_TAGS is one value, so a team value would replace
+// each person's own tags.
 var blockPreferenceSuffixes = []string{envconfig.AutoTagsSuffix, envconfig.AutoTagNamesSuffix}
 
-// blockPreference resolves one preference family from a block: the
-// AGENTO11Y_ spelling when it holds a value, otherwise the SIGIL_ one. key is
-// the spelling that supplied the trimmed value, and both are "" when the block
-// sets neither. Validation and presetAutoTags both read through it, so they
+// blockPreference resolves one preference family from a block or the saved
+// file: the AGENTO11Y_ spelling when it holds a value, otherwise the SIGIL_
+// one. key is the spelling that supplied the trimmed value, and both are ""
+// when env sets neither. Validation and presetAutoTags both read through it, so they
 // cannot disagree about which spelling wins.
 func blockPreference(env map[string]string, suffix string) (key, value string) {
 	for _, k := range []string{envconfig.PreferredKey(suffix), envconfig.LegacyKey(suffix)} {
