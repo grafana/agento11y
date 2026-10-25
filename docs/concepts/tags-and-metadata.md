@@ -166,7 +166,7 @@ AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=user,repo   # `all` is also accepted
 
 | Name | Tag key | Value |
 | --- | --- | --- |
-| `user` | `user` | `AGENTO11Y_USER_ID` if set, then the identity the host agent knows (the signed-in Claude Code, Codex, or Cursor account). Without either, the `user` key is left off, so an automatic `user` tag always equals the session's user ID. |
+| `user` | `user` | `AGENTO11Y_USER_ID` if set, then the identity the host agent knows (the signed-in Claude Code, Codex, or Cursor account). Without either, the `user` key is left off, so an automatic `user` tag equals the session's user ID (tag values are capped at 128 characters). |
 | `repo` | `repo` | `owner/name` from the `origin` remote of the checkout. A nested namespace stays whole (`group/subgroup/name`). Without an origin remote, the name of the checkout directory. |
 | `branch` | `git.branch` | Branch checked out in the session's directory, or a short commit SHA on detached HEAD. |
 
