@@ -18,7 +18,9 @@ import (
 	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/mapper"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/skilldetect"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/state"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/subagent"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/transcript"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/userid"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/guard"
@@ -132,6 +134,12 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 		return nil
 	}
 
+	protocol, err := envconfig.ResolveGenerationTransport()
+	if err != nil {
+		logger.Printf("not exporting: %v", err)
+		return nil
+	}
+
 	endpoint := envconfig.Getenv("ENDPOINT")
 	tenantID := envconfig.Getenv("AUTH_TENANT_ID")
 	authToken := envconfig.Getenv("AUTH_TOKEN")
@@ -150,7 +158,7 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 			"AGENTO11Y_AUTH_TOKEN":     authToken,
 		},
 	)
-	if len(missing) > 0 {
+	if protocol == agento11y.GenerationExportProtocolHTTP && len(missing) > 0 {
 		fmt.Fprintf(os.Stderr, "agento11y claude-code: not exporting: missing %s\n", strings.Join(missing, ", "))
 		logger.Printf("not exporting: missing %s", strings.Join(missing, ", "))
 		return nil
@@ -165,34 +173,49 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 	defer cancel()
 	hookCtx = agento11y.WithUserID(hookCtx, userID)
 
-	otelProviders, err := otel.Setup(hookCtx, input.SessionID)
+	otelProviders, err := otel.SetupWithOptions(hookCtx, input.SessionID, otel.Options{GenerationProtocol: protocol})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agento11y claude-code: otel setup failed: %v\n", err)
 		logger.Printf("otel setup: %v", err)
+		if protocol == agento11y.GenerationExportProtocolOTel {
+			return nil
+		}
 	} else if otelProviders != nil {
 		logger.Printf("otel: endpoint=%s", otel.EndpointFromEnv())
 	}
-	defer func() { _ = otelProviders.Shutdown(hookCtx) }()
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = otelProviders.Shutdown(cleanupCtx)
+	}()
 
 	stop := strings.TrimSpace(input.HookEventName) == "Stop"
 	lines, safeOffset, rawCount, titles := readTranscriptSettled(hookCtx, input.TranscriptPath, st.Offset, stop, logger)
-	if rawCount == 0 {
-		return nil
-	}
-	logger.Printf("read %d raw lines", rawCount)
-
-	if safeOffset == 0 {
+	parentReady := rawCount > 0 && safeOffset > 0
+	switch {
+	case parentReady:
+		logger.Printf("read %d raw lines", rawCount)
+		logger.Printf("coalesced to %d lines, safe offset=%d", len(lines), safeOffset)
+	case rawCount > 0:
+		logger.Printf("read %d raw lines", rawCount)
 		logger.Printf("no completed assistant turn yet; keeping offset=%d", st.Offset)
-		return nil
+		lines = nil
+	default:
+		// Parent already exported; background and nested subagent files may
+		// still have new turns (or SessionEnd still has a trailing turn).
+		logger.Printf("no new parent turns; checking subagent transcripts")
+		lines = nil
 	}
-	logger.Printf("coalesced to %d lines, safe offset=%d", len(lines), safeOffset)
 
 	var r *redact.Redactor
 	if contentMode != agento11y.ContentCaptureModeMetadataOnly {
 		r = redact.New()
 	}
 
-	gens, toolResultAt := mapper.Process(lines, &st, mapper.Options{
+	// Mapping can redact or truncate arguments. Detect structural identities
+	// from the settled transcript, independent of content capture mode.
+	skillNames := buildSkillNameMap(lines)
+	opts := mapper.Options{
 		SessionID:           input.SessionID,
 		Titles:              titles,
 		Logger:              logger,
@@ -201,7 +224,25 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 		AgentVersion:        envconfig.ResolveAgentVersion(""),
 		SkipPromptRedaction: skipPromptRedaction,
 		TitleDropped:        contentMode == agento11y.ContentCaptureModeMetadataOnly,
-	}, r)
+	}
+	subFiles, err := liveSubagentFiles(input.TranscriptPath, logger)
+	if err != nil {
+		logger.Printf("list subagent transcripts: %v", err)
+	}
+
+	var (
+		parentGens   []agento11y.Generation
+		toolResultAt map[string]time.Time
+	)
+	if parentReady {
+		lines = subagent.DropCoveredSidechain(lines, subFiles, input.TranscriptPath)
+		opts.SuppressSyntheticSubagentToolCallIDs = subagent.SyntheticToolCallIDs(lines, subagent.RefsForFiles(subFiles))
+		parentGens, toolResultAt = mapper.Process(lines, &st, opts, r)
+	}
+	subGens := liveSubagentGens(input, lines, parentGens, subFiles, &st, opts, r, skillNames, logger)
+	gens := make([]agento11y.Generation, 0, len(parentGens)+len(subGens))
+	gens = append(gens, parentGens...)
+	gens = append(gens, subGens...)
 
 	if len(gens) == 0 {
 		logger.Printf("no generations produced; keeping offset=%d for next event", st.Offset)
@@ -223,25 +264,35 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 	}
 
 	cfg.ContentCapture = contentMode
+	if err := emit.ConfigureGenerationTransport(&cfg, otelProviders, protocol); err != nil {
+		logger.Printf("client setup: %v", err)
+		return nil
+	}
 	client := agento11y.NewClient(cfg)
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = client.Shutdown(cleanupCtx)
+	}()
 	t0 := time.Now()
 
 	toolResults := buildToolResultMap(gens)
 
 	for _, gen := range gens {
 		if err := emit.Record(hookCtx, client, generationStart(gen), gen, nil, func(genCtx context.Context) {
-			emitToolSpans(genCtx, client, gen, toolResults, toolResultAt)
+			emitToolSpans(genCtx, client, gen, toolResults, toolResultAt, skillNames)
 		}); err != nil {
 			logger.Printf("enqueue: %v", err)
+			if protocol == agento11y.GenerationExportProtocolOTel {
+				return nil
+			}
 		}
 	}
 
 	if err := client.Flush(hookCtx); err != nil {
 		logger.Printf("flush: %v", err)
-		_ = client.Shutdown(hookCtx)
 		return nil
 	}
-	_ = client.Shutdown(hookCtx)
 
 	if otelProviders != nil {
 		if err := otelProviders.ForceFlush(); err != nil {
@@ -249,7 +300,9 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 		}
 	}
 
-	st.Offset = safeOffset
+	if parentReady {
+		st.Offset = safeOffset
+	}
 	if err := state.Save(input.SessionID, st); err != nil {
 		logger.Printf("save state: %v", err)
 	}
@@ -459,6 +512,28 @@ func generationStart(gen agento11y.Generation) agento11y.GenerationStart {
 	}
 }
 
+func buildSkillNameMap(lines []transcript.Line) map[string]string {
+	names := make(map[string]string)
+	for _, line := range lines {
+		if line.Type != "assistant" {
+			continue
+		}
+		var msg transcript.AssistantMessage
+		if err := json.Unmarshal(line.Message, &msg); err != nil {
+			continue
+		}
+		for _, block := range msg.Content {
+			if block.Type != "tool_use" || block.ID == "" {
+				continue
+			}
+			if name, ok := skilldetect.Detect(block.Name, block.Input); ok {
+				names[block.ID] = name
+			}
+		}
+	}
+	return names
+}
+
 // buildToolResultMap indexes tool results by their call ID across all generations.
 // Tool results appear in the Input of the generation that follows the tool call.
 func buildToolResultMap(gens []agento11y.Generation) map[string]*agento11y.ToolResult {
@@ -502,7 +577,7 @@ func toolSpanWindow(genCompletedAt, resultAt time.Time) (startedAt, completedAt 
 // emitToolSpans creates execute_tool spans for each tool call in the generation
 // output, windowed by toolSpanWindow from the generation's completion and the
 // matching tool_result timestamp in resultAt.
-func emitToolSpans(ctx context.Context, client *agento11y.Client, gen agento11y.Generation, results map[string]*agento11y.ToolResult, resultAt map[string]time.Time) {
+func emitToolSpans(ctx context.Context, client *agento11y.Client, gen agento11y.Generation, results map[string]*agento11y.ToolResult, resultAt map[string]time.Time, skillNames map[string]string) {
 	for _, msg := range gen.Output {
 		for _, part := range msg.Parts {
 			if part.ToolCall == nil {
@@ -520,6 +595,10 @@ func emitToolSpans(ctx context.Context, client *agento11y.Client, gen agento11y.
 				RequestModel:    gen.Model.Name,
 				RequestProvider: gen.Model.Provider,
 				StartedAt:       startedAt,
+			}
+			if name := skillNames[tc.ID]; name != "" && tc.Name == "Skill" {
+				start.ExecutionKind = agento11y.ToolExecutionKindLoadSkill
+				start.SkillName = name
 			}
 			_, toolRec := client.StartToolExecution(ctx, start)
 

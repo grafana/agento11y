@@ -1,16 +1,11 @@
 // Package doctor implements `agento11y doctor`: a read-only diagnostic that
-// reports the health of the two export pipelines (conversations and
-// analytics), config validity, and installed host-agent plugins in one place.
+// reports generation export, analytics, config validity, and installed plugins.
 //
 // The command never installs, updates, or otherwise mutates host-agent
 // plugin state, and never writes update-check stamps. It only reads.
 //
-// The conversations pipeline (generation export) and the analytics pipeline
-// (OTLP metrics + traces) are independent: they use different endpoints and
-// different token scopes. A user can have conversations working while
-// analytics is silently dead because the OTLP endpoint is unset or the token
-// lacks metrics:write/traces:write. Doctor surfaces both pipelines separately
-// so that split is visible.
+// HTTP generation export and OTLP analytics use separate routes and scopes.
+// Experimental OTel generation export shares the OTLP trace route.
 package doctor
 
 import (
@@ -71,7 +66,9 @@ const agentUserPlaceholder = "<depends on the agent>"
 // Collect can tell where each effective value came from.
 var trackedSuffixes = []string{
 	"ENDPOINT",
+	"PROTOCOL",
 	"INSECURE",
+	"OTEL_EXPORTER_OTLP_INSECURE",
 	"AUTH_MODE",
 	"AUTH_TENANT_ID",
 	"AUTH_TOKEN",
@@ -106,7 +103,8 @@ var trackedKeys = func() []string {
 	for _, suffix := range trackedSuffixes {
 		keys = append(keys, envconfig.PreferredKey(suffix), envconfig.LegacyKey(suffix))
 	}
-	return append(keys, "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS")
+	return append(keys, "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS",
+		"OTEL_EXPORTER_OTLP_INSECURE", "AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES")
 }()
 
 // Options are the parsed doctor flags.
@@ -133,6 +131,7 @@ type Report struct {
 	Config        ConfigSection        `json:"config"`
 	Conversations ConversationsSection `json:"conversations"`
 	Analytics     AnalyticsSection     `json:"analytics"`
+	HTTPAPIs      *HTTPAPISection      `json:"http_apis,omitempty"`
 	UsageStats    UsageStatsSection    `json:"cli_usage_statistics"`
 	Agents        []AgentStatus        `json:"agents"`
 	// AutoUpdate is the resolved AUTO_UPDATE family. It carries provenance only:
@@ -182,10 +181,13 @@ type tokenValue struct {
 // ConfigSection reports config.env validity and the resolved feature settings
 // that every agent hook reads (content capture, guards, tags).
 type ConfigSection struct {
-	Path               string   `json:"path"`
-	Exists             bool     `json:"exists"`
-	DisallowedKeys     []string `json:"disallowed_keys,omitempty"`
-	ContentCaptureMode string   `json:"content_capture_mode"`
+	GenerationProtocol   envValue `json:"generation_protocol"`
+	ExperimentalFeatures envValue `json:"experimental_features"`
+	ExperimentalEnabled  bool     `json:"experimental_enabled"`
+	Path                 string   `json:"path"`
+	Exists               bool     `json:"exists"`
+	DisallowedKeys       []string `json:"disallowed_keys,omitempty"`
+	ContentCaptureMode   string   `json:"content_capture_mode"`
 	// ContentModeKey and ContentModeSource name where the effective mode came
 	// from. They are empty when no variable supplied it, which includes the case
 	// where a variable was set to a value envconfig rejected: the mode in force is
@@ -291,15 +293,20 @@ type HookForwardSection struct {
 
 // ConversationsSection reports the generation-export pipeline.
 type ConversationsSection struct {
-	Endpoint envValue     `json:"endpoint"`
-	TenantID envValue     `json:"tenant_id"`
-	Token    tokenValue   `json:"token"`
-	Health   Health       `json:"status"`
-	Messages []string     `json:"messages,omitempty"`
-	Probe    *ProbeResult `json:"probe,omitempty"`
+	Protocol        string       `json:"protocol,omitempty"`
+	LocalCapability *ProbeResult `json:"local_capability,omitempty"`
+	Endpoint        envValue     `json:"endpoint"`
+	TenantID        envValue     `json:"tenant_id"`
+	Token           tokenValue   `json:"token"`
+	Health          Health       `json:"status"`
+	Messages        []string     `json:"messages,omitempty"`
+	Probe           *ProbeResult `json:"probe,omitempty"`
 }
 
 func (s ConversationsSection) configured() bool {
+	if s.Protocol == "otel" {
+		return s.Endpoint.Set
+	}
 	return s.Endpoint.Set && s.TenantID.Set
 }
 
@@ -407,10 +414,8 @@ func (p *ProbeResult) unreachable() bool {
 	return p != nil && (p.NoResponse() || p.StatusCode >= 500)
 }
 
-// accepted reports the statuses that prove a pipeline can deliver. Ingest
-// answers the export POST itself: the generation-export route answers 202 and
-// the OTLP gateway answers 200. A 405 also counts, because a method-restricted
-// route still proves the request reached the service and passed auth.
+// Generation HTTP and analytics probes accept 2xx or 405. The generation
+// OTel probe requires 2xx. Neither rule confirms generation storage.
 func (p *ProbeResult) accepted() bool {
 	return p != nil && ((p.StatusCode >= 200 && p.StatusCode < 300) || p.StatusCode == http.StatusMethodNotAllowed)
 }
@@ -566,8 +571,11 @@ func Collect(ctx context.Context, opts Options, p Params) *Report {
 		r.UsageStats.Endpoint = endpoint
 	}
 	r.Config = collectConfig(osEnv, fileEnv)
+	if r.Conversations.Protocol == "otel" && managedLocalOnly(osEnv, fileEnv) {
+		r.Analytics = AnalyticsSection{Health: HealthOK, Messages: []string{"local capture is enabled; metrics and traces use the local daemon"}}
+	}
 	forward := daemonFamily("LOCAL_FORWARD", osEnv, fileEnv)
-	r.localCaptureConfigured = receiverSupported() &&
+	r.localCaptureConfigured = r.Conversations.Protocol == "http" && receiverSupported() &&
 		r.Config.Local.Set && envconfig.ParseBool(r.Config.Local.Value) &&
 		!envconfig.ParseBool(forward.value) &&
 		!r.Conversations.Endpoint.Set && !r.Conversations.TenantID.Set && !r.Conversations.Token.Set
@@ -580,11 +588,15 @@ func Collect(ctx context.Context, opts Options, p Params) *Report {
 		}
 	}
 	r.Agents = collectAgents(ctx, r.Binary.Version)
+	if r.Conversations.Protocol == "otel" {
+		r.HTTPAPIs = collectHTTPAPIs(osEnv, fileEnv)
+		diagnoseIndependentPlugins(r)
+	}
 	r.AutoUpdate = resolveFamily("AUTO_UPDATE", osEnv, fileEnv).envValue()
 	r.AutoUpdateDisabled = updatecheck.Disabled()
 
 	runProbes(ctx, r, osEnv, fileEnv)
-	if r.Conversations.configured() && !r.Conversations.Token.Set {
+	if r.Conversations.Protocol != "otel" && r.Conversations.configured() && !r.Conversations.Token.Set {
 		var needsToken []string
 		tenantOnlyAgent := false
 		unknownAgent := false
@@ -637,6 +649,9 @@ func (r *Report) exitCodeFor(opts Options) int {
 }
 
 func (r *Report) cloudReady() bool {
+	if r.Conversations.Protocol == "otel" && envconfig.IsLocalEndpoint(r.Conversations.Endpoint.Value) {
+		return false
+	}
 	return r.Conversations.configured() && r.Conversations.Health == HealthOK && r.Analytics.Endpoint.Set && r.Analytics.Health == HealthOK
 }
 
@@ -710,12 +725,20 @@ func endpointShapeMessage(key, target string) (msg string, fatal bool) {
 }
 
 func collectConversations(osEnv, fileEnv map[string]string) ConversationsSection {
+	protocol, err := resolveGenerationTransport(osEnv, fileEnv)
+	if err != nil {
+		return ConversationsSection{Protocol: requestedProtocol(osEnv, fileEnv), Health: HealthError, Messages: []string{err.Error(), "generation export is disabled; no HTTP fallback"}}
+	}
+	if protocol == "otel" {
+		return collectOTelConversations(osEnv, fileEnv)
+	}
 	endpoint := resolveFamily("ENDPOINT", osEnv, fileEnv)
 	tenant := resolveFamily("AUTH_TENANT_ID", osEnv, fileEnv)
 	token := resolveFamily("AUTH_TOKEN", osEnv, fileEnv)
 	authMode := resolveFamily("AUTH_MODE", osEnv, fileEnv)
 
 	sec := ConversationsSection{
+		Protocol: "http",
 		Endpoint: endpoint.envValue(),
 		TenantID: tenant.envValue(),
 		Token:    token.tokenValue(),
@@ -1156,6 +1179,16 @@ func collectConfig(osEnv, fileEnv map[string]string) ConfigSection {
 		sec.Messages = append(sec.Messages,
 			"local mode sends `agento11y <agent>` launches and agento11y hooks to the local viewer; Cloud forwarding still requires AGENTO11Y_LOCAL_FORWARD")
 	}
+	sec.GenerationProtocol = resolveFamily("PROTOCOL", osEnv, fileEnv).envValue()
+	sec.ExperimentalFeatures = resolveEnv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", osEnv, fileEnv).envValue()
+	sec.ExperimentalEnabled = envconfig.ParseBool(sec.ExperimentalFeatures.Value)
+	if _, err := resolveGenerationTransport(osEnv, fileEnv); err != nil {
+		sec.Health = HealthError
+		sec.Messages = append(sec.Messages, err.Error())
+	}
+	if protocol := resolveFamily("PROTOCOL", osEnv, fileEnv); protocol.conflict {
+		sec.Messages = append(sec.Messages, conflictMessage(protocol))
+	}
 	return sec
 }
 
@@ -1236,9 +1269,11 @@ func endpointKey(v envValue) string {
 func runProbes(ctx context.Context, r *Report, osEnv, fileEnv map[string]string) {
 	// An endpoint the offline check already rejected has nothing to probe:
 	// probing it would report the same fault a second and third time. Inside
-	// configured(), HealthError means a malformed endpoint or an app-page path,
-	// and probing would report that fault again.
-	if r.Conversations.configured() && r.Conversations.Health != HealthError {
+	// configured(), HealthError means rejected transport or endpoint settings.
+	if r.Conversations.Protocol == "otel" {
+		runGenerationOTelProbe(ctx, r, osEnv, fileEnv)
+	}
+	if r.Conversations.Protocol != "otel" && r.Conversations.configured() && r.Conversations.Health != HealthError {
 		token := resolveFamily("AUTH_TOKEN", osEnv, fileEnv).value
 		configuredMode := strings.ToLower(resolveFamily("AUTH_MODE", osEnv, fileEnv).value)
 		mode := "basic"

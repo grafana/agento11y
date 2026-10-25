@@ -122,7 +122,7 @@ const client = new Agento11yClient({
 });
 ```
 
-The resolver receives the recording's metadata (or `undefined` for recording types that have no metadata, like tool executions). Thrown errors are caught and treated as `"metadata_only"` (fail-closed).
+The resolver receives the recording's metadata (or `undefined` for recording types that have no metadata, like tool executions). When a framework chain or retriever span ends with an error, it also calls the resolver with that run's metadata, to decide whether the error text is shown. Thrown errors are caught and treated as `"metadata_only"` (fail-closed).
 
 Resolution precedence (highest to lowest):
 
@@ -257,7 +257,7 @@ metric exporter, and why analytics stays empty when this step is skipped.
 ## Core API
 
 - `startGeneration(...)` and `startStreamingGeneration(...)`
-- `startToolExecution(...)`
+- `client.startToolExecution(...)` and `GenerationRecorder.startToolExecution(...)`
 - Recorder methods: `setResult(...)`, `setCallError(...)`, `end()`, `getError()`
 - Lifecycle: `flush()`, `shutdown()`
 
@@ -325,20 +325,98 @@ TraceQL examples:
 
 ## Tool Execution Example
 
+Use `GenerationRecorder.startToolExecution(...)` to parent a tool span to that generation, including across `await`, without a global context manager. The method does not change active context or inherit generation capture settings, identity, or request model. Set those tool options explicitly when they must match the generation. `client.startToolExecution(...)` remains available and uses the active OpenTelemetry context.
+
 ```ts
-await client.startToolExecution(
+await client.startGeneration(
   {
-    toolName: "weather",
-    includeContent: true,
+    conversationId: "weather-session",
+    agentName: "weather-agent",
+    model: { provider: "openai", name: "gpt-5" },
+    tools: [{ name: "weather", type: "function" }],
+    contentCapture: "metadata_only",
   },
-  async (recorder) => {
-    recorder.setResult({
-      arguments: { city: "Paris" },
-      result: { temp_c: 18 },
+  async (generation) => {
+    const city = await Promise.resolve("Paris");
+    const tool = generation.startToolExecution({
+      toolName: "weather",
+      conversationId: "weather-session",
+      agentName: "weather-agent",
+      requestProvider: "openai",
+      requestModel: "gpt-5",
+      contentCapture: "metadata_only",
     });
+    try {
+      tool.setResult({ arguments: { city }, result: { tempC: 18 } });
+    } catch (error) {
+      tool.setCallError(error);
+      throw error;
+    } finally {
+      tool.end();
+    }
+    generation.setResult({ output: [{ role: "assistant", content: "18°C in Paris" }] });
   }
 );
 ```
+
+The generation callback ends the generation automatically. The tool factory returns a recorder; call its `end()` yourself. Both recordings above omit content under `metadata_only`. Configure OpenTelemetry providers to retain the spans; explicit parentage does not create exporters.
+
+### Tracing skill loads, resource reads, and commands
+
+Set `ToolExecutionStart.executionKind` explicitly to `"load_skill"`, `"read_skill_resource"`, or `"command"`.
+The `ToolExecutionKind` type defines these values. The SDK does not infer execution kinds from tool names, paths, or arguments.
+Skill and process attributes follow [merged GenAI #498](https://github.com/open-telemetry/semantic-conventions-genai/pull/498), which remains in development.
+
+| Execution kind | Meaning | Applicable fields |
+| --- | --- | --- |
+| `"load_skill"` | Load skill instructions | `skillName`, `skillDescription`, `skillSourceURI` |
+| `"read_skill_resource"` | Read a skill resource | Skill fields above, `skillResourceName` |
+| `"command"` | Execute a command, optionally for a skill | Skill/resource fields above, `processExecutableName`, `processExecutablePath`; completion `processExitCode` |
+
+Unset or unrecognized execution kinds keep generic tool behavior and emit no skill or process attributes. The SDK ignores inapplicable fields.
+Skill fields emit `gen_ai.skill.name`, `gen_ai.skill.description`, `gen_ai.skill.source.uri`, and `gen_ai.skill.resource.name`.
+Process fields emit `process.executable.name`, `process.executable.path`, and `process.exit.code`.
+The SDK does not dual-write `agento11y.skill.name`.
+
+Span names start with `execute_tool <tool>` and use trimmed, nonblank identity:
+
+- `load_skill` appends the skill name, when present.
+- `read_skill_resource` appends `<skill> <resource>`, or just `<resource>` without a skill. Without a resource, it appends nothing.
+- `command` uses the same resource suffix, then falls back to the executable name, then no suffix.
+
+Skill resource reads and commands never use a skill-only suffix.
+The span name and applicable structural names are available to samplers at creation.
+Private fields and the completion exit code are excluded from sampler attributes.
+
+Process fields describe one directly executed process. Do not infer them from shell text, pipelines, or command batches.
+`ToolExecutionResult.processExitCode` is an optional integer-valued `number`: omission means unknown; zero records successful completion.
+Only safe integers are emitted. Booleans, strings, and fractional values are not coerced into exit codes.
+Exit codes are independent of recorded execution errors.
+For example, record a known completion code as follows:
+
+```ts
+await client.startToolExecution(
+  {
+    toolName: "exec",
+    executionKind: "command",
+    skillName: "review",
+    skillResourceName: "scripts/check.py",
+    processExecutableName: "python3",
+  },
+  async (recorder) => {
+    recorder.setResult({ processExitCode: 0 });
+  }
+);
+```
+
+`skillDescription`, `skillSourceURI`, and `processExecutablePath` are private content.
+The SDK omits them from spans under effective `"metadata_only"` or `"full_with_metadata_spans"`, after resolving overrides and the resolver.
+Core `"no_tool_content"` retains these private fields; arguments/results still require the existing content opt-in.
+Every exported skill source URI has userinfo, query, and fragment removed, even under `"full"`.
+Invalid or relative URIs are omitted without network or filesystem lookup.
+Capture modes do not sanitize debug snapshots: raw tool arguments, results, and error text remain there.
+
+Generic tool recording, `executeToolCalls`, and existing metrics are unchanged. No skill/process metric dimensions are added.
 
 ## Provider Helpers
 

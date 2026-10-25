@@ -9,13 +9,13 @@ overrides:
   lodash-es: 4.18.1
   '@mikro-orm/knex': 6.6.14
   fast-uri: 3.1.8
-  hono: 4.13.7
+  hono: 4.13.11
   tar: 7.5.21
   ws: 8.21.0
   '@tootallnate/once': 2.0.1
   fast-xml-builder: 1.1.7
-  '@hono/node-server': 2.0.10
-  ip-address: 10.7.3
+  '@hono/node-server': 2.1.5
+  ip-address: 10.7.4
   qs: 6.16.0
   'form-data@<2.5.6': 2.5.6
   'brace-expansion@5': 5.0.12
@@ -50,12 +50,12 @@ minimumReleaseAgeExclude:
   - tar@7.5.21
   # Renovate security update: @hono/node-server@2.0.10
   - "@hono/node-server@2.0.10"
-  # Renovate security update: hono@4.12.34 || 4.13.5 || 4.13.7
-  - hono@4.12.34 || 4.13.5 || 4.13.7
+  # Renovate security update: hono@4.12.34 || 4.13.5 || 4.13.7 || 4.13.11
+  - hono@4.12.34 || 4.13.5 || 4.13.7 || 4.13.11
   # Renovate security update: undici@7.29.0
   - undici@7.29.0
-  # Renovate security update: ip-address@10.3.1
-  - ip-address@10.3.1
+  # Renovate security update: ip-address@10.3.1 || 10.7.4
+  - ip-address@10.3.1 || 10.7.4
   # Renovate security update: fast-uri@3.1.5
   - fast-uri@3.1.5
   # Renovate security update: qs@6.16.0

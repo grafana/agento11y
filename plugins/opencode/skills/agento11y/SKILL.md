@@ -173,6 +173,56 @@ On generation and tool spans, capture or preserve these when available:
   - `gen_ai.response.finish_reasons`
   - error classification fields (`error.type`, `error.category`)
 
+## Tracing skill loads, resource reads, and commands
+
+The SDKs and Go `otelgenai` support the OpenTelemetry conventions for loading skills, reading skill resources, and running commands.
+These conventions come from [GenAI #498](https://github.com/open-telemetry/semantic-conventions-genai/pull/498) and have Development status.
+The global schema declaration remains on the legacy schema while other signals still use it.
+Each execution creates one `INTERNAL` span with `gen_ai.operation.name=execute_tool`; no metric labels are added.
+The execution kind selects span naming and standard `gen_ai.skill.*` and `process.*` attributes.
+The SDK does not emit the execution kind as an attribute.
+
+| Execution kind | Use | Suffix after `execute_tool {tool}` |
+| --- | --- | --- |
+| `load_skill` | Load skill instructions. | Skill name when present. |
+| `read_skill_resource` | Read a skill resource. | Skill plus resource; resource alone; otherwise none. |
+| `command` | Execute commands, with or without a skill. | Skill plus resource; resource alone; executable name; otherwise none. |
+
+Resource reads and commands never append a skill name alone. Resource naming takes precedence over executable naming.
+Select Go `ToolExecutionStart.ExecutionKind`, Python `execution_kind` with `ToolExecutionKind`, or JS/TS `executionKind` with the string values above.
+Go `otelgenai.Invocation` uses `ExecutionKind`; Java uses `setExecutionKind(...)`; .NET uses `ExecutionKind`.
+`ToolType` remains a category such as `function` or `extension`.
+Unset or unknown execution kinds remain generic and omit skill and process attributes, even when those fields are supplied.
+Do not infer execution kinds from tool names, arguments, paths, or results. SDK support does not add automatic plugin detection.
+Generic convenience loops stay generic and infer no exit codes.
+
+Capture applicable fields only:
+
+- All three: `gen_ai.skill.name`, `gen_ai.skill.description`, `gen_ai.skill.source.uri`.
+- Resource reads and commands: also `gen_ai.skill.resource.name`.
+- Commands only: also `process.executable.name`, `process.executable.path`, and completion-time `process.exit.code`.
+
+Only populate process fields for an actual, directly executed single process, not a guessed executable or aggregated pipeline outcome.
+Report nullable integer exit codes at completion (Go `*int64`): zero is reported success; absent is unknown.
+Exit codes do not map to errors, span status, or `error.type`. Keep using the execution-error API.
+Applicable structural names reach samplers at creation; completion exit codes and typed private fields do not.
+Use the standard skill-name key, not `agento11y.skill.name`. A skill name alone does not identify a load.
+See the [API field table](https://github.com/grafana/agento11y/blob/main/docs/concepts/tool-call-vs-tool-execution.md#api-fields-and-applicability) for language spellings.
+
+Typed skill and process fields follow the effective capture mode.
+`metadata_only` and `full_with_metadata_spans` exclude skill description, source URI, and executable path.
+Go/Python experimental OTel generation export resolves `full_with_metadata_spans` to `full`, so those clients can export private fields.
+Skill source URIs exported from typed fields lose all user information, query parameters, and fragments.
+Malformed values are omitted without filesystem/network lookups.
+In Go `otelgenai`, raw `Invocation.Attributes` and attributes returned by end hooks bypass capture filtering and URI scrubbing.
+They can override typed attributes. Callers must filter private attributes and sanitize source URIs themselves.
+Core recorders can retain private inputs. JS/Java completed-tool debug snapshots retain raw arguments, results, and error text even in reduced modes.
+The `no_tool_content` arguments/results opt-in is unchanged and does not bypass reduced effective modes.
+See [capture-mode privacy](https://github.com/grafana/agento11y/blob/main/docs/concepts/content-capture-modes.md#skill-and-process-attribute-privacy).
+
+The shared local receiver stores optional skill/resource/executable names and int64 exit codes in tool-span sidecars, never the three private attributes.
+It prefers nonblank `gen_ai.skill.name` and accepts legacy `agento11y.skill.name`. Old sidecars have no backfill; no UI or analytics are added.
+
 ## Multi-agent dependency tracking
 
 When instrumenting multi-agent pipelines where one agent's output feeds into another:

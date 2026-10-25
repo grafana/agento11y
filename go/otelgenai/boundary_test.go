@@ -14,9 +14,9 @@ import (
 )
 
 // TestImportBoundary pins that the util stays usable outside agento11y: the
-// package may import the standard library, go.opentelemetry.io/otel/*, and its
-// own packages, and nothing else. That is also the set an upstream contrib
-// package is allowed to depend on.
+// package may import the standard library, go.opentelemetry.io/otel/*, its
+// own packages, and the shared skill URI scrubber. The scrubber is checked too
+// and must move with this package if it moves to upstream contrib.
 //
 // This test holds the package's own tests to the same rule. A test that
 // reached for agento11y would show the package needs it, and independence from
@@ -25,7 +25,7 @@ func TestImportBoundary(t *testing.T) {
 	t.Parallel()
 
 	fset := token.NewFileSet()
-	err := filepath.WalkDir(".", func(path string, entry fs.DirEntry, err error) error {
+	checkImports := func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -58,12 +58,14 @@ func TestImportBoundary(t *testing.T) {
 			if allowedImport(imported) {
 				continue
 			}
-			t.Errorf("%s imports %q; only the standard library, go.opentelemetry.io/otel/*, and this package are allowed", path, imported)
+			t.Errorf("%s imports %q; only the standard library, go.opentelemetry.io/otel/*, this package, and the shared skill URI scrubber are allowed", path, imported)
 		}
 		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk package: %v", err)
+	}
+	for _, root := range []string{".", "../internal/skilluri"} {
+		if err := filepath.WalkDir(root, checkImports); err != nil {
+			t.Fatalf("walk %s: %v", root, err)
+		}
 	}
 }
 
@@ -73,7 +75,7 @@ func allowedImport(path string) bool {
 	if path == "go.opentelemetry.io/otel" || strings.HasPrefix(path, "go.opentelemetry.io/otel/") {
 		return true
 	}
-	if path == modulePath || strings.HasPrefix(path, modulePath+"/") {
+	if path == modulePath || strings.HasPrefix(path, modulePath+"/") || path == "github.com/grafana/agento11y/go/internal/skilluri" {
 		return true
 	}
 	// A standard-library path's first element never contains a dot.

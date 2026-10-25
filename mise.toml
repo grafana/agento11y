@@ -110,7 +110,7 @@ while IFS= read -r moddir; do
   echo "==> golangci-lint ${moddir}"
   extra_args=()
   if [[ "${moddir}" == "./go/otelgenai/conformance" ]]; then
-    extra_args+=(--build-tags=conformance)
+    extra_args+=(--build-tags=conformance,tool_execution_kinds)
   fi
   (cd "${moddir}" && GOWORK=off golangci-lint run ${extra_args[@]+"${extra_args[@]}"} ./...)
 done < <(find . \\( -path './examples' -o -path './node_modules' \\) -prune -o -name go.mod -print | while IFS= read -r mod; do dirname "$mod"; done | sort)
@@ -278,6 +278,13 @@ tools."github:open-telemetry/weaver" = "0.25.1"
 # renovate: datasource=git-refs depName=open-telemetry/semantic-conventions-genai packageName=https://github.com/open-telemetry/semantic-conventions-genai.git versioning=git
 env.SEMCONV_GENAI_REF = "1d85c963ea51e9c7d24cc330ff67057f6e90e6c5"
 run = "GOWORK=off go test -count=1 -tags conformance ./..."
+
+[tasks."test:go:tool-execution-kinds-conformance"]
+description = "Check skill-load, resource-read, and command spans against the GenAI registry"
+dir = "go/otelgenai/conformance"
+tools."github:open-telemetry/weaver" = "0.26.1"
+env.SEMCONV_GENAI_REF = "771e3210f7518694666834f7243573b8018c7a4f"
+run = "GOWORK=off go test -count=1 -tags conformance,tool_execution_kinds -run '^TestToolExecutionKindsConformance$' ./..."
 
 [tasks."test:go:otelgenai-race"]
 description = "Run the otelgenai tests with the Go race detector"
@@ -716,6 +723,7 @@ set -euo pipefail
 mise run test:go:sdk-core
 mise run test:go:weavertest
 mise run test:go:conformance
+mise run test:go:tool-execution-kinds-conformance
 mise run test:go:sdk-anthropic
 mise run test:go:sdk-openai
 mise run test:go:sdk-gemini

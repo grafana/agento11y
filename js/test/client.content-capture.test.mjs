@@ -499,6 +499,121 @@ test('tool execution content capture modes', async () => {
   }
 });
 
+for (const tc of [
+  { name: 'legacy default', clientMode: 'default', expectedPrivate: true },
+  { name: 'no_tool_content', clientMode: 'no_tool_content', expectedPrivate: true },
+  { name: 'full', clientMode: 'full', expectedPrivate: true },
+  { name: 'metadata_only', clientMode: 'metadata_only', expectedPrivate: false },
+  { name: 'metadata spans', clientMode: 'full_with_metadata_spans', expectedPrivate: false },
+  {
+    name: 'resolver metadata overrides full',
+    clientMode: 'full',
+    resolver: () => 'metadata_only',
+    expectedPrivate: false,
+  },
+  {
+    name: 'resolver metadata spans overrides full',
+    clientMode: 'full',
+    resolver: () => 'full_with_metadata_spans',
+    expectedPrivate: false,
+  },
+  {
+    name: 'per-tool full overrides resolver',
+    clientMode: 'metadata_only',
+    resolver: () => 'metadata_only',
+    toolMode: 'full',
+    expectedPrivate: true,
+  },
+  {
+    name: 'per-tool metadata overrides full',
+    clientMode: 'full',
+    toolMode: 'metadata_only',
+    expectedPrivate: false,
+  },
+  {
+    name: 'per-tool metadata spans overrides full',
+    clientMode: 'full',
+    toolMode: 'full_with_metadata_spans',
+    expectedPrivate: false,
+  },
+  {
+    name: 'resolver failure closes privacy',
+    clientMode: 'full',
+    resolver: () => {
+      throw new Error('resolver failed');
+    },
+    expectedPrivate: false,
+  },
+]) {
+  test(`private skill and process fields use effective mode: ${tc.name}`, async () => {
+    const harness = newHarness({ contentCapture: tc.clientMode, contentCaptureResolver: tc.resolver });
+    const fields = {
+      executionKind: 'command',
+      skillName: 'review',
+      skillResourceName: 'check.py',
+      skillDescription: 'Private instructions',
+      skillSourceURI: 'https://user:secret@skills.example.com/review?token=secret#private',
+      processExecutableName: 'python3',
+      processExecutablePath: '/private/bin/python3',
+    };
+    try {
+      const recorder = harness.client.startToolExecution({
+        toolName: 'run',
+        ...fields,
+        contentCapture: tc.toolMode,
+        includeContent: true,
+      });
+      const rawArguments = { private: 'raw args' };
+      const rawResult = { private: 'raw result' };
+      recorder.setResult({ arguments: rawArguments, result: rawResult, processExitCode: 0 });
+      recorder.setCallError(new Error('raw execution error'));
+      recorder.end();
+
+      const span = singleToolSpan(harness.spanExporter);
+      assert.equal(span.name, 'execute_tool run review check.py');
+      assert.equal(span.attributes['gen_ai.skill.name'], 'review');
+      assert.equal(span.attributes['gen_ai.skill.resource.name'], 'check.py');
+      assert.equal(span.attributes['process.executable.name'], 'python3');
+      assert.equal(span.attributes['process.exit.code'], 0);
+      assert.equal(
+        span.attributes['gen_ai.skill.description'],
+        tc.expectedPrivate ? fields.skillDescription : undefined,
+      );
+      assert.equal(
+        span.attributes['gen_ai.skill.source.uri'],
+        tc.expectedPrivate ? 'https://skills.example.com/review' : undefined,
+      );
+      assert.equal(
+        span.attributes['process.executable.path'],
+        tc.expectedPrivate ? fields.processExecutablePath : undefined,
+      );
+      assert.equal(
+        span.attributes['gen_ai.tool.call.arguments'],
+        tc.expectedPrivate ? JSON.stringify(rawArguments) : undefined,
+      );
+      assert.equal(
+        span.attributes['gen_ai.tool.call.result'],
+        tc.expectedPrivate ? JSON.stringify(rawResult) : undefined,
+      );
+      if (!tc.expectedPrivate) {
+        assertSpanErrorRedacted(span, 'tool_execution_error');
+      }
+
+      // Capture modes do not sanitize completed-tool debug snapshots.
+      const execution = harness.client.debugSnapshot().toolExecutions[0];
+      for (const [key, value] of Object.entries(fields)) {
+        assert.equal(execution[key], value, key);
+      }
+      assert.equal(execution.processExitCode, 0);
+      assert.deepEqual(execution.arguments, rawArguments);
+      assert.deepEqual(execution.result, rawResult);
+      assert.equal(execution.callError, 'raw execution error');
+    } finally {
+      await shutdownHarness(harness);
+    }
+  });
+}
+
 test('tool execution with resolver overriding client mode', async () => {
   const harness = newHarness({
     contentCapture: 'full',

@@ -15,6 +15,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe/toolevents"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe/transcript"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/autotag"
+	sharedemit "github.com/grafana/agento11y/plugins/agento11y/internal/emit"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/otel"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/useragent"
@@ -46,6 +47,12 @@ func PostAgent(ctx context.Context, p Payload, logger *log.Logger) {
 	}
 	if p.TranscriptPath == "" {
 		logger.Print("post_agent: missing transcript_path")
+		return
+	}
+
+	protocol, err := envconfig.ResolveGenerationTransport()
+	if err != nil {
+		logger.Printf("post_agent: not exporting: %v", err)
 		return
 	}
 
@@ -81,12 +88,16 @@ func PostAgent(ctx context.Context, p Payload, logger *log.Logger) {
 			"AGENTO11Y_AUTH_TOKEN":     authToken,
 		},
 	)
-	if len(missing) > 0 {
+	if protocol == agento11y.GenerationExportProtocolHTTP && len(missing) > 0 {
 		logger.Printf("post_agent: not exporting: missing %s", strings.Join(missing, ", "))
 		return
 	}
 
 	contentMode := envconfig.ResolveContentMode(logger)
+	if protocol == agento11y.GenerationExportProtocolOTel && contentMode == agento11y.ContentCaptureModeFullWithMetadataSpans {
+		// The mapper must retain content before the SDK upgrades this mode.
+		contentMode = agento11y.ContentCaptureModeFull
+	}
 	skipPromptRedaction := !envconfig.ResolveRedactInput(logger)
 
 	// vibe persists the post_agent count as stats.steps. Using it
@@ -145,22 +156,37 @@ func PostAgent(ctx context.Context, p Payload, logger *log.Logger) {
 		return
 	}
 
+	confirmed := false
+	defer func() {
+		if !confirmed {
+			restoreState(p.SessionID, prior, priorFound, logger)
+		}
+	}()
+
 	exportCtx, cancel := context.WithTimeout(ctx, exportTimeout)
 	defer cancel()
 
-	// Tool-execution spans only leave the process through an OTel exporter,
-	// which the user configures via SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT. When
-	// unset, setupOTelIfConfigured returns nil and the spans are no-ops, the
-	// same as the generation export running without OTel.
-	providers := setupOTelIfConfigured(exportCtx, p.SessionID, logger)
-	if providers != nil {
-		defer func() {
-			if err := providers.Shutdown(exportCtx); err != nil {
-				logger.Printf("post_agent: otel shutdown: %v", err)
-			}
-		}()
+	providers, err := setupOTelIfConfigured(exportCtx, p.SessionID, protocol, logger)
+	if err != nil {
+		return
 	}
-	client := buildClient(contentMode, providers, endpoint, tenantID, authToken, p.CWD, logger)
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := providers.Shutdown(cleanupCtx); err != nil {
+			logger.Printf("post_agent: otel shutdown: %v", err)
+		}
+	}()
+	client, err := buildClient(contentMode, providers, protocol, endpoint, tenantID, authToken, p.CWD, logger)
+	if err != nil {
+		logger.Printf("post_agent: client setup: %v", err)
+		return
+	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = client.Shutdown(cleanupCtx)
+	}()
 
 	// Per-tool timing/status recorded by post_tool fires this turn. Empty
 	// when the user has not enabled the post_tool hook, in which case the
@@ -170,14 +196,10 @@ func PostAgent(ctx context.Context, p Payload, logger *log.Logger) {
 	logger.Printf("post_agent: export id=%s session=%s turn=%d", mapped.Generation.ID, p.SessionID, turnSeq)
 	if err := emit(exportCtx, client, mapped, toolEvents, logger); err != nil {
 		logger.Printf("post_agent: emit: %v", err)
-		_ = client.Shutdown(exportCtx)
-		restoreState(p.SessionID, prior, priorFound, logger)
 		return
 	}
 	if err := client.Flush(exportCtx); err != nil {
 		logger.Printf("post_agent: flush: %v", err)
-		_ = client.Shutdown(exportCtx)
-		restoreState(p.SessionID, prior, priorFound, logger)
 		return
 	}
 	if providers != nil {
@@ -185,8 +207,7 @@ func PostAgent(ctx context.Context, p Payload, logger *log.Logger) {
 			logger.Printf("post_agent: otel flush: %v", err)
 		}
 	}
-	_ = client.Shutdown(exportCtx)
-	// The turn is exported; its tool events have been consumed into spans.
+	confirmed = true
 	toolevents.Clear(p.SessionID)
 	logger.Printf("post_agent: done session=%s offset=%d", p.SessionID, newOffset)
 }
@@ -313,23 +334,22 @@ func toolSpanWindow(ev toolevents.Event, hasEvent bool, genCompletedAt time.Time
 	return startedAt, completedAt
 }
 
-func setupOTelIfConfigured(ctx context.Context, instanceID string, logger *log.Logger) *otel.Providers {
-	if otel.EndpointFromEnv() == "" {
-		return nil
-	}
-	providers, err := otel.Setup(ctx, instanceID)
+func setupOTelIfConfigured(ctx context.Context, instanceID string, protocol agento11y.GenerationExportProtocol, logger *log.Logger) (*otel.Providers, error) {
+	providers, err := otel.SetupWithOptions(ctx, instanceID, otel.Options{GenerationProtocol: protocol})
 	if err != nil {
 		logger.Printf("post_agent: otel setup: %v", err)
-		return nil
+		if protocol == agento11y.GenerationExportProtocolOTel {
+			return nil, err
+		}
 	}
-	return providers
+	return providers, nil
 }
 
 // buildClient constructs the agento11y client for one exported turn. cwd is
 // the turn's working directory, which auto-tags resolve the repository and
 // branch from; vibe payloads carry no user identity, so that falls back to the
 // configured AGENTO11Y_USER_ID or the OS account name.
-func buildClient(mode agento11y.ContentCaptureMode, providers *otel.Providers, endpoint, tenantID, authToken, cwd string, logger *log.Logger) *agento11y.Client {
+func buildClient(mode agento11y.ContentCaptureMode, providers *otel.Providers, protocol agento11y.GenerationExportProtocol, endpoint, tenantID, authToken, cwd string, logger *log.Logger) (*agento11y.Client, error) {
 	cfg := agento11y.Config{
 		ContentCapture:   mode,
 		Logger:           logger,
@@ -340,7 +360,10 @@ func buildClient(mode agento11y.ContentCaptureMode, providers *otel.Providers, e
 		cfg.Tracer = providers.Tracer(otelInstrumentationName)
 		cfg.Meter = providers.Meter(otelInstrumentationName)
 	}
-	return agento11y.NewClient(cfg)
+	if err := sharedemit.ConfigureGenerationTransport(&cfg, providers, protocol); err != nil {
+		return nil, err
+	}
+	return agento11y.NewClient(cfg), nil
 }
 
 func exportConfig(endpoint, tenantID, authToken string) agento11y.GenerationExportConfig {

@@ -3,6 +3,8 @@ import type {
   Agento11yClient,
   ContentCaptureMode,
   Message,
+  ToolExecutionRecorder,
+  ToolExecutionStart,
 } from "@grafana/agento11y";
 import { redactSecretText } from "@grafana/agento11y";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
@@ -52,6 +54,11 @@ import {
   type SessionHeaderSourceLike,
   type SessionOrigin,
 } from "./sessionOrigin.js";
+import {
+  matchSkillRead,
+  type SkillIdentity,
+  snapshotSkills,
+} from "./skills.js";
 import { buildBuiltinTags } from "./tags.js";
 import {
   createTelemetryProviders,
@@ -88,8 +95,40 @@ export default function (pi: ExtensionAPI) {
   // session shutdown in case a turn ends without a matching `turn_end`.
   let currentRequestControls: CachedRequestControls = {};
 
-  // Tool execution timing: toolCallId → start timestamp
-  const toolStarts = new Map<string, { toolName: string; startedAt: number }>();
+  // Keep the mutable prompt options only until agent_start sees the final catalog.
+  let pendingSkillOptions: { value: unknown } | undefined;
+  let skillCatalog: SkillIdentity[] = [];
+
+  const toolStarts = new Map<
+    string,
+    {
+      toolName: string;
+      startedAt: number;
+      skillName?: string;
+      skillInput?: { ref: WeakRef<object>; toolName: string; cwd: string };
+    }
+  >();
+
+  function updateSkillCandidate(
+    toolCallId: string,
+    toolName: string,
+    args: unknown,
+    cwd: string,
+    observeMutations = false,
+  ) {
+    const timing = toolStarts.get(toolCallId);
+    if (!timing) return;
+    timing.skillName = matchSkillRead(skillCatalog, toolName, args, cwd);
+    // Later handlers can rewrite and block without tool_result. A weak reference
+    // observes their input at execution end without retaining the payload.
+    timing.skillInput =
+      observeMutations &&
+      toolName === "read" &&
+      typeof args === "object" &&
+      args !== null
+        ? { ref: new WeakRef(args), toolName, cwd }
+        : undefined;
+  }
   const turnToolTimings: ToolTiming[] = [];
 
   // User messages observed since the previous turn_end. Consumed at the next
@@ -158,6 +197,8 @@ export default function (pi: ExtensionAPI) {
     firstUserText = undefined;
     lastSeenModel = null;
     currentSystemPrompt = undefined;
+    pendingSkillOptions = undefined;
+    skillCatalog = [];
     currentRequestControls = {};
     compactionStartedAt = undefined;
     branchSummaryStartedAt = undefined;
@@ -475,7 +516,11 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("before_agent_start", async (event, _ctx) => {
     if (!sigil || !config) return;
+    pendingSkillOptions = { value: undefined };
     try {
+      pendingSkillOptions.value = (
+        event as { systemPromptOptions?: unknown }
+      ).systemPromptOptions;
       // System prompts encode project conventions (CLAUDE.md, skill text,
       // etc.). Gate on contentCapture the same way `git.branch` is gated.
       if (config.contentCapture === "metadata_only") return;
@@ -486,6 +531,18 @@ export default function (pi: ExtensionAPI) {
     } catch (err) {
       logger.error("before_agent_start failed", err);
     }
+  });
+
+  pi.on("agent_start", async (_event, ctx) => {
+    if (!pendingSkillOptions) return;
+    const options = pendingSkillOptions.value;
+    pendingSkillOptions = undefined;
+    skillCatalog = [];
+    skillCatalog = snapshotSkills(options, ctx.cwd);
+  });
+
+  pi.on("agent_settled", async () => {
+    skillCatalog = [];
   });
 
   pi.on("agent_end", async (_event, _ctx) => {
@@ -605,7 +662,15 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("tool_call", async (event, ctx) => {
-    if (!sigil || !config?.guards.enabled) return;
+    if (!sigil) return;
+    updateSkillCandidate(
+      event.toolCallId,
+      event.toolName,
+      event.input,
+      ctx.cwd,
+      true,
+    );
+    if (!config?.guards.enabled) return;
     const res = await runToolCallGuard({
       client: sigil,
       agentName: config.agentName,
@@ -641,7 +706,24 @@ export default function (pi: ExtensionAPI) {
     } catch (err) {
       logger.warn(`tool_call transform apply failed: ${err}`);
     }
+    updateSkillCandidate(
+      event.toolCallId,
+      event.toolName,
+      event.input,
+      ctx.cwd,
+      true,
+    );
     return;
+  });
+
+  pi.on("tool_result", async (event, ctx) => {
+    if (!sigil || !("input" in event)) return;
+    updateSkillCandidate(
+      event.toolCallId,
+      event.toolName,
+      event.input,
+      ctx.cwd,
+    );
   });
 
   pi.on("tool_execution_start", async (event, _ctx) => {
@@ -664,10 +746,20 @@ export default function (pi: ExtensionAPI) {
       const start = toolStarts.get(event.toolCallId);
       if (!start) return;
       toolStarts.delete(event.toolCallId);
+      if (start.skillInput) {
+        const { ref, toolName, cwd } = start.skillInput;
+        const input = ref.deref();
+        // Collected input cannot invalidate the last observed candidate.
+        // Live input must still clear the candidate if a later handler rewrote it.
+        if (input !== undefined) {
+          start.skillName = matchSkillRead(skillCatalog, toolName, input, cwd);
+        }
+      }
 
       turnToolTimings.push({
         toolCallId: event.toolCallId,
         toolName: start.toolName,
+        skillName: start.skillName,
         startedAt: start.startedAt,
         completedAt: Date.now(),
         isError: event.isError,
@@ -839,7 +931,7 @@ export default function (pi: ExtensionAPI) {
 
           // sigil and config are guaranteed non-null by the guard at the top of this handler.
           emitToolSpans(
-            sigil as Agento11yClient,
+            (start) => recorder.startToolExecution(start),
             msg,
             toolResults,
             turnToolTimings,
@@ -1142,7 +1234,7 @@ function toPiUsage(value: unknown): PiUsageLike | undefined {
  * @internal Exported for testing.
  */
 export function emitToolSpans(
-  client: Agento11yClient,
+  startToolExecution: (start: ToolExecutionStart) => ToolExecutionRecorder,
   msg: PiAssistantMessage,
   toolResults: PiToolResult[],
   timings: ToolTiming[],
@@ -1177,7 +1269,10 @@ export function emitToolSpans(
 
   for (const timing of timings) {
     try {
-      const toolRec = client.startToolExecution({
+      const toolRec = startToolExecution({
+        ...(timing.skillName
+          ? { executionKind: "load_skill", skillName: timing.skillName }
+          : {}),
         toolName: timing.toolName,
         toolCallId: timing.toolCallId,
         toolType: "function",

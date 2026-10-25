@@ -2,9 +2,12 @@ package agento11y_test
 
 import (
 	"context"
+	"os/exec"
 	"strings"
 
 	"github.com/grafana/agento11y/go/agento11y"
+	metricnoop "go.opentelemetry.io/otel/metric/noop"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 )
 
 func ExampleClient_StartGeneration() {
@@ -75,6 +78,36 @@ func ExampleClient_StartToolExecution() {
 		Arguments: map[string]any{"city": "Paris"},
 		Result:    result,
 	})
+}
+
+func ExampleClient_StartToolExecution_command() {
+	// Disable export here; applications supply their configured OTel providers.
+	client := agento11y.NewClient(agento11y.Config{
+		GenerationExport: agento11y.GenerationExportConfig{Protocol: agento11y.GenerationExportProtocolNone},
+		TracerProvider:   tracenoop.NewTracerProvider(),
+		MeterProvider:    metricnoop.NewMeterProvider(),
+	})
+	defer func() { _ = client.Shutdown(context.Background()) }()
+
+	ctx, recorder := client.StartToolExecution(context.Background(), agento11y.ToolExecutionStart{
+		ToolName:              "run_skill_script",
+		ExecutionKind:         agento11y.ToolExecutionKindCommand,
+		SkillName:             "code-review",
+		SkillResourceName:     "scripts/check.py",
+		ProcessExecutableName: "python3",
+	})
+	defer recorder.End()
+
+	command := exec.CommandContext(ctx, "python3", "scripts/check.py")
+	// Report the runner's error independently of its exit code.
+	recorder.SetExecError(command.Run())
+
+	end := agento11y.ToolExecutionEnd{}
+	if command.ProcessState != nil && command.ProcessState.Exited() {
+		code := int64(command.ProcessState.ExitCode())
+		end.ProcessExitCode = &code // Zero is reported success; nil means unknown.
+	}
+	recorder.SetResult(end)
 }
 
 func ExampleClient_StartGeneration_metadataOnly() {

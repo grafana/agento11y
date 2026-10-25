@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using Xunit;
 
 namespace Grafana.Agento11y.Tests;
@@ -310,6 +311,105 @@ public sealed class RuntimeLifecycleTests
         Assert.Single(spans);
         var span = spans[0];
         Assert.Equal("sdk-dotnet", span.GetTagItem("agento11y.sdk.name"));
+    }
+
+    [Fact]
+    public void ToolExecutionModels_DefaultExecutionKindAndProcessExitCodeAreUnset()
+    {
+        var start = InternalUtils.DeepClone(new ToolExecutionStart());
+        var end = InternalUtils.DeepClone(new ToolExecutionEnd());
+
+        Assert.Equal(default, start.ExecutionKind);
+        Assert.Equal(ToolExecutionKind.Unset, start.ExecutionKind);
+        Assert.Empty(start.SkillName);
+        Assert.Empty(start.SkillDescription);
+        Assert.Empty(start.SkillSourceURI);
+        Assert.Empty(start.SkillResourceName);
+        Assert.Empty(start.ProcessExecutableName);
+        Assert.Empty(start.ProcessExecutablePath);
+        Assert.Null(end.ProcessExitCode);
+
+        var absent = JsonSerializer.Deserialize<ToolExecutionEnd>("{}")!;
+        Assert.Null(InternalUtils.DeepClone(absent).ProcessExitCode);
+    }
+
+    [Theory]
+    [InlineData(ToolExecutionKind.Unset)]
+    [InlineData(ToolExecutionKind.LoadSkill)]
+    [InlineData(ToolExecutionKind.ReadSkillResource)]
+    [InlineData(ToolExecutionKind.Command)]
+    public void ToolExecutionStart_DeepClonePreservesSkillProcessFieldsAndIsolatesCopies(ToolExecutionKind executionKind)
+    {
+        var start = new ToolExecutionStart
+        {
+            ExecutionKind = executionKind,
+            SkillName = "nono-sandbox",
+            SkillDescription = "Inspect sandbox permissions",
+            SkillSourceURI = "file:///skills/nono-sandbox/SKILL.md",
+            SkillResourceName = "references/permissions.md",
+            ProcessExecutableName = "nono",
+            ProcessExecutablePath = "/usr/local/bin/nono",
+        };
+
+        var clone = InternalUtils.DeepClone(start);
+        Assert.NotSame(start, clone);
+        using var json = JsonDocument.Parse(InternalUtils.SerializeJson(start));
+        Assert.Equal((int)executionKind, json.RootElement.GetProperty("executionKind").GetInt32());
+
+        start.ExecutionKind = ToolExecutionKind.Command;
+        start.SkillName = "changed skill";
+        start.SkillDescription = "changed description";
+        start.SkillSourceURI = "file:///changed/SKILL.md";
+        start.SkillResourceName = "changed resource";
+        start.ProcessExecutableName = "changed executable";
+        start.ProcessExecutablePath = "/changed/executable";
+
+        Assert.Equal(executionKind, clone.ExecutionKind);
+        Assert.Equal("nono-sandbox", clone.SkillName);
+        Assert.Equal("Inspect sandbox permissions", clone.SkillDescription);
+        Assert.Equal("file:///skills/nono-sandbox/SKILL.md", clone.SkillSourceURI);
+        Assert.Equal("references/permissions.md", clone.SkillResourceName);
+        Assert.Equal("nono", clone.ProcessExecutableName);
+        Assert.Equal("/usr/local/bin/nono", clone.ProcessExecutablePath);
+
+        clone.ExecutionKind = ToolExecutionKind.Unset;
+        clone.SkillName = string.Empty;
+        clone.SkillDescription = string.Empty;
+        clone.SkillSourceURI = string.Empty;
+        clone.SkillResourceName = string.Empty;
+        clone.ProcessExecutableName = string.Empty;
+        clone.ProcessExecutablePath = string.Empty;
+
+        Assert.Equal(ToolExecutionKind.Command, start.ExecutionKind);
+        Assert.Equal("changed skill", start.SkillName);
+        Assert.Equal("changed description", start.SkillDescription);
+        Assert.Equal("file:///changed/SKILL.md", start.SkillSourceURI);
+        Assert.Equal("changed resource", start.SkillResourceName);
+        Assert.Equal("changed executable", start.ProcessExecutableName);
+        Assert.Equal("/changed/executable", start.ProcessExecutablePath);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(0L)]
+    [InlineData(17L)]
+    [InlineData(-1L)]
+    [InlineData(long.MaxValue)]
+    public void ToolExecutionEnd_DeepClonePreservesProcessExitCodeAndIsolatesCopies(long? exitCode)
+    {
+        var end = new ToolExecutionEnd { ProcessExitCode = exitCode };
+        var clone = InternalUtils.DeepClone(end);
+        var secondClone = InternalUtils.DeepClone(clone);
+
+        Assert.NotSame(end, clone);
+        Assert.NotSame(clone, secondClone);
+        end.ProcessExitCode = 42;
+        Assert.Equal(exitCode, clone.ProcessExitCode);
+        Assert.Equal(exitCode, secondClone.ProcessExitCode);
+
+        clone.ProcessExitCode = 99;
+        Assert.Equal(42L, end.ProcessExitCode);
+        Assert.Equal(exitCode, secondClone.ProcessExitCode);
     }
 
     private static void EndSuccessfulGeneration(Agento11yClient client, string id)

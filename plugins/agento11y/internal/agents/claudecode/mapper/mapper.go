@@ -44,8 +44,8 @@ type Options struct {
 	SkipPromptRedaction bool
 	// SuppressSyntheticSubagentToolCallIDs skips the summary-only generation
 	// for an Agent tool result whose full subagent transcript is mapped
-	// separately. Live capture leaves it nil, so it keeps recording summaries
-	// when the parent transcript is the only record of the subagent run.
+	// separately. Live capture sets it when sibling subagent files exist, and
+	// leaves it nil when the parent transcript is the only record of the run.
 	SuppressSyntheticSubagentToolCallIDs map[string]bool
 	// Titles are the title lines the transcript read returned. Process records
 	// them in the session state, where a newer one replaces an older one, so
@@ -81,8 +81,15 @@ type userContext struct {
 	commandTitle string
 }
 
-// Coalesce merges consecutive assistant lines sharing the same RequestID
-// into a single line with merged content blocks and the final line's metadata.
+// Coalesce merges assistant lines sharing the same RequestID into a single
+// line with merged content blocks and the final line's metadata. Fragments of
+// one response (same RequestID and Anthropic message id) stay in that group
+// when a tool_result from a parallel tool call lands between them; Claude
+// Code writes that shape in subagent transcripts, and splitting there would
+// export two generations that both carry the full input. A later assistant
+// line that only reuses the RequestID, with no message id or a different
+// one, is a new turn.
+//
 // It returns only the safe prefix ending at the last complete assistant turn.
 // Trailing prompts, tool results, and incomplete assistant fragments are left
 // out so the next hook invocation re-reads them from the unchanged offset.
@@ -94,7 +101,7 @@ type userContext struct {
 // still does so in subagent transcripts, so without this rule those turns are
 // dropped.
 func Coalesce(lines []transcript.Line) ([]transcript.Line, int64) {
-	return coalesce(lines, false)
+	return coalesce(lines, coalesceLive)
 }
 
 // CoalesceSession is Coalesce for a session that is no longer being written,
@@ -103,14 +110,48 @@ func Coalesce(lines []transcript.Line) ([]transcript.Line, int64) {
 // assistant turn of a session is kept rather than left for a next read that
 // will never happen.
 func CoalesceSession(lines []transcript.Line) []transcript.Line {
-	out, _ := coalesce(lines, true)
+	out, _ := coalesce(lines, coalesceSession)
 	return out
 }
 
-func coalesce(lines []transcript.Line, wholeSession bool) ([]transcript.Line, int64) {
+// CoalesceUnmerged is CoalesceSession without merging fragments of one
+// Anthropic message across a tool_result. That is how main numbered turns;
+// import tests seed a ledger with it so a rerun after the merge keeps those
+// identities.
+func CoalesceUnmerged(lines []transcript.Line) []transcript.Line {
+	out, _ := coalesce(lines, coalesceUnmerged)
+	return out
+}
+
+// CoalesceGrowing is Coalesce for a subagent transcript that is still being
+// written. A tool_result can land in the middle of one Anthropic message
+// before the rest of the response exists. Exporting that prefix would send a
+// generation whose ID the finished message later reuses, and the first write
+// wins. The group is held (offset left before it) until a later assistant
+// line arrives or the caller uses CoalesceSession because the subagent has
+// finished.
+func CoalesceGrowing(lines []transcript.Line) ([]transcript.Line, int64) {
+	return coalesce(lines, coalesceGrowing)
+}
+
+type coalesceMode int
+
+const (
+	coalesceLive coalesceMode = iota
+	coalesceSession
+	coalesceGrowing
+	coalesceUnmerged
+)
+
+func coalesce(lines []transcript.Line, mode coalesceMode) ([]transcript.Line, int64) {
+	wholeSession := mode == coalesceSession || mode == coalesceUnmerged
+	mergeSameMessage := mode != coalesceUnmerged
 	var (
 		result         = make([]transcript.Line, 0, len(lines))
 		pending        []transcript.Line
+		held           []transcript.Line
+		legacyGroups   int
+		heldBreak      bool
 		lastSafeLen    int
 		lastSafeOffset int64
 		answered       = toolResultIDs(lines)
@@ -130,51 +171,102 @@ func coalesce(lines []transcript.Line, wholeSession bool) ([]transcript.Line, in
 		if msg.StopReason == "" && !wholeSession {
 			return
 		}
+		if line.LegacyGroups < 1 {
+			line.LegacyGroups = 1
+		}
 		result = append(result, line)
 		markSafe(line.EndOffset)
 	}
 
-	flush := func() {
+	notePending := func(line transcript.Line) {
+		if assistantOutputTokens(line) <= 0 {
+			pending = append(pending, line)
+			return
+		}
+		if legacyGroups == 0 || heldBreak {
+			legacyGroups++
+			heldBreak = false
+		}
+		pending = append(pending, line)
+	}
+
+	flush := func(nextStarted bool) {
 		if len(pending) == 0 {
+			held = nil
+			legacyGroups = 0
+			heldBreak = false
 			return
 		}
 		last := pending[len(pending)-1]
-		var msg transcript.AssistantMessage
+		var (
+			msg      transcript.AssistantMessage
+			merged   transcript.Line
+			complete bool
+		)
+		hasStop := json.Unmarshal(last.Message, &msg) == nil && msg.StopReason != ""
+		answeredGroup := groupAnswered(pending, answered)
 		switch {
-		case json.Unmarshal(last.Message, &msg) == nil && msg.StopReason != "":
-			result = append(result, mergeAssistantGroup(pending, ""))
-			markSafe(last.EndOffset)
-		case groupAnswered(pending, answered):
-			result = append(result, mergeAssistantGroup(pending, "tool_use"))
-			markSafe(last.EndOffset)
+		case hasStop:
+			merged = mergeAssistantGroup(pending, "")
+			complete = true
 		case wholeSession:
-			result = append(result, mergeAssistantGroup(pending, ""))
-			markSafe(last.EndOffset)
+			inferred := ""
+			if answeredGroup {
+				inferred = "tool_use"
+			}
+			merged = mergeAssistantGroup(pending, inferred)
+			complete = true
+		case answeredGroup && (mode == coalesceLive || nextStarted):
+			merged = mergeAssistantGroup(pending, "tool_use")
+			complete = true
 		}
-		// Incomplete group in a session still being written (no terminal
-		// stop_reason, and no answered tool_use): excluded, offset not advanced;
-		// will be re-read next invocation.
+		if !complete {
+			// Incomplete group, or a growing subagent's open message: excluded,
+			// offset not advanced; will be re-read next invocation.
+			pending = nil
+			held = nil
+			legacyGroups = 0
+			heldBreak = false
+			return
+		}
+		if legacyGroups < 1 {
+			legacyGroups = 1
+		}
+		merged.LegacyGroups = legacyGroups
+		result = append(result, merged)
+		result = append(result, held...)
+		markSafe(last.EndOffset)
 		pending = nil
+		held = nil
+		legacyGroups = 0
+		heldBreak = false
 	}
 
-	for _, line := range lines {
+	for i, line := range lines {
 		if line.Type == "assistant" {
 			if line.RequestID == "" {
-				flush()
+				flush(true)
 				appendAssistant(line)
 				continue
 			}
 			if len(pending) > 0 && pending[0].RequestID != line.RequestID {
-				flush()
+				flush(true)
 			}
-			pending = append(pending, line)
+			notePending(line)
 			continue
 		}
 
-		flush()
+		if mergeSameMessage && len(pending) > 0 && laterFragmentOfSameResponse(lines[i+1:], pending[0]) {
+			// A parallel tool_result (or other user line) landed in the
+			// middle of this response; keep gathering fragments.
+			held = append(held, line)
+			heldBreak = true
+			continue
+		}
+		flush(laterAssistant(lines[i+1:]))
 		result = append(result, line)
 	}
-	flush()
+	flush(false)
 
 	if wholeSession {
 		// Nothing is held back: there is no next read to pick up a trailing
@@ -183,6 +275,49 @@ func coalesce(lines []transcript.Line, wholeSession bool) ([]transcript.Line, in
 		return result, lastSafeOffset
 	}
 	return result[:lastSafeLen], lastSafeOffset
+}
+
+// laterFragmentOfSameResponse reports whether rest contains another assistant
+// fragment of the same Anthropic message. Request ID reuse alone is not
+// enough: Claude Code also continues a later turn under the same request ID
+// after a tool_result, and those are two generations.
+func laterFragmentOfSameResponse(rest []transcript.Line, pending transcript.Line) bool {
+	requestID := pending.RequestID
+	messageID := assistantMessageID(pending)
+	if requestID == "" || messageID == "" {
+		return false
+	}
+	for _, line := range rest {
+		if line.Type == "assistant" && line.RequestID == requestID && assistantMessageID(line) == messageID {
+			return true
+		}
+	}
+	return false
+}
+
+func assistantMessageID(line transcript.Line) string {
+	var msg transcript.AssistantMessage
+	if err := json.Unmarshal(line.Message, &msg); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(msg.ID)
+}
+
+func assistantOutputTokens(line transcript.Line) int64 {
+	var msg transcript.AssistantMessage
+	if err := json.Unmarshal(line.Message, &msg); err != nil {
+		return 0
+	}
+	return msg.Usage.OutputTokens
+}
+
+func laterAssistant(rest []transcript.Line) bool {
+	for _, line := range rest {
+		if line.Type == "assistant" {
+			return true
+		}
+	}
+	return false
 }
 
 // mergeAssistantGroup merges one request's assistant fragments into a single

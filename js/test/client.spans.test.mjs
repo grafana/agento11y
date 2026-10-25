@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { SpanStatusCode } from '@opentelemetry/api';
+import { context, SpanStatusCode, trace } from '@opentelemetry/api';
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { Agento11yClient, defaultConfig } from '../.test-dist/index.js';
 
@@ -17,6 +17,195 @@ class CapturingExporter {
     };
   }
 }
+
+test('overlapping async generations parent bound tools without an ambient context manager', async () => {
+  const harness = newHarness();
+  let release;
+  const ready = new Promise((resolve) => {
+    release = resolve;
+  });
+  const recorders = [];
+  const activeContext = context.active();
+
+  try {
+    const pending = ['startGeneration', 'startStreamingGeneration'].map((method, index) =>
+      harness.client[method](
+        { id: `generation-${index}`, model: { provider: 'openai', name: 'gpt-5' } },
+        async (generation) => {
+          recorders.push(generation);
+          await ready;
+          const tool = generation.startToolExecution({ toolName: `tool-${index}` });
+          await Promise.resolve();
+          tool.setResult({ result: index });
+          tool.end();
+          assert.equal(tool.getError(), undefined);
+          generation.setResult({ output: [{ role: 'assistant', content: `result-${index}` }] });
+        },
+      ),
+    );
+    assert.equal(recorders.length, 2);
+    assert.equal(context.active(), activeContext);
+    release();
+    await Promise.all(pending);
+    await harness.client.flush();
+
+    const generations = generationSpans(harness.spanExporter);
+    const tools = toolSpans(harness.spanExporter);
+    assert.equal(generations.length, 2);
+    assert.equal(tools.length, 2);
+    assert.notEqual(generations[0].spanContext().traceId, generations[1].spanContext().traceId);
+    for (const index of [0, 1]) {
+      const parent = generations.find((span) => span.attributes['agento11y.generation.id'] === `generation-${index}`);
+      const tool = tools.find((span) => span.attributes['gen_ai.tool.name'] === `tool-${index}`);
+      assert.equal(tool.spanContext().traceId, parent.spanContext().traceId);
+      assert.equal(tool.parentSpanContext?.spanId, parent.spanContext().spanId);
+      const exported = harness.generationExporter.requests.flatMap((request) => request.generations);
+      const generation = exported.find((item) => item.id === `generation-${index}`);
+      assert.equal(generation.traceId, parent.spanContext().traceId);
+      assert.equal(generation.spanId, parent.spanContext().spanId);
+    }
+    assert.equal(context.active(), activeContext);
+  } finally {
+    release();
+    await shutdownHarness(harness);
+  }
+});
+
+test('bound tools reuse tool semantics without inheriting generation identity or capture mode', async () => {
+  const harness = newHarness({ contentCapture: 'full', agentName: 'client-agent', agentVersion: 'client-version' });
+
+  try {
+    const generation = harness.client.startGeneration({
+      conversationId: 'generation-conversation',
+      conversationTitle: 'generation-title',
+      agentName: 'generation-agent',
+      agentVersion: 'generation-version',
+      contentCapture: 'metadata_only',
+      model: { provider: 'openai', name: 'gpt-5' },
+    });
+    const tool = generation.startToolExecution({ toolName: 'load', executionKind: 'load_skill', skillName: 'review' });
+    tool.setResult({ arguments: { input: 'visible' }, result: 'visible' });
+    tool.end();
+    tool.end();
+    generation.end();
+    assert.equal(tool.getError(), undefined);
+
+    const span = singleToolSpan(harness.spanExporter);
+    assert.equal(span.name, 'execute_tool load review');
+    assert.equal(span.attributes['gen_ai.skill.name'], 'review');
+    assert.equal(span.attributes['gen_ai.agent.name'], 'client-agent');
+    assert.equal(span.attributes['gen_ai.agent.version'], 'client-version');
+    for (const key of [
+      'gen_ai.conversation.id',
+      'agento11y.conversation.title',
+      'gen_ai.request.model',
+      'gen_ai.provider.name',
+    ]) {
+      assert.equal(span.attributes[key], undefined, key);
+    }
+    assert.equal(span.attributes['gen_ai.tool.call.arguments'], '{"input":"visible"}');
+    assert.equal(span.attributes['gen_ai.tool.call.result'], '"visible"');
+    assert.equal(harness.client.debugSnapshot().toolExecutions.length, 1);
+  } finally {
+    await shutdownHarness(harness);
+  }
+});
+
+test('valid nonrecording generation contexts are exported and explicitly passed to bound tool spans', async () => {
+  const spanContext = { traceId: '1234567890abcdef1234567890abcdef', spanId: '1234567890abcdef', traceFlags: 0 };
+  const starts = [];
+  const tracer = {
+    startSpan(name, options, parentContext) {
+      starts.push({ name, options, parentContext });
+      return trace.wrapSpanContext(spanContext);
+    },
+  };
+  const harness = newHarness({ tracer });
+
+  try {
+    const generation = harness.client.startGeneration({ model: { provider: 'openai', name: 'gpt-5' } });
+    const tool = generation.startToolExecution({ toolName: 'weather' });
+    tool.end();
+    generation.end();
+    await harness.client.flush();
+
+    assert.equal(starts.length, 2);
+    assert.ok(starts[1].parentContext);
+    assert.deepEqual(trace.getSpanContext(starts[1].parentContext), spanContext);
+    assert.equal(starts[1].options.attributes['gen_ai.tool.name'], 'weather');
+    const exported = harness.generationExporter.requests[0].generations[0];
+    assert.equal(exported.traceId, spanContext.traceId);
+    assert.equal(exported.spanId, spanContext.spanId);
+    assert.equal(singleGeneration(harness.client).traceId, spanContext.traceId);
+  } finally {
+    await shutdownHarness(harness);
+  }
+});
+
+for (const spanContext of [
+  { traceId: '0'.repeat(32), spanId: '0'.repeat(16), traceFlags: 0 },
+  { traceId: '1234567890abcdef1234567890abcdef', spanId: '0'.repeat(16), traceFlags: 0 },
+  { traceId: '0'.repeat(32), spanId: '1234567890abcdef', traceFlags: 0 },
+  { traceId: 'invalid', spanId: '1234567890abcdef', traceFlags: 0 },
+]) {
+  test(`invalid generation span context is not exported: ${spanContext.traceId}/${spanContext.spanId}`, async () => {
+    const harness = newHarness({ tracer: { startSpan: () => trace.wrapSpanContext(spanContext) } });
+    try {
+      const generation = harness.client.startGeneration({ model: { provider: 'openai', name: 'gpt-5' } });
+      generation.end();
+      await harness.client.flush();
+      for (const record of [singleGeneration(harness.client), harness.generationExporter.requests[0].generations[0]]) {
+        assert.equal(record.traceId, undefined);
+        assert.equal(record.spanId, undefined);
+      }
+    } finally {
+      await shutdownHarness(harness);
+    }
+  });
+}
+
+test('generation callback rejection finalizes its bound tool and generation once', async () => {
+  const harness = newHarness();
+  const failure = new Error('bound tool failed');
+  let generationRecorder;
+  let toolRecorder;
+  try {
+    await assert.rejects(
+      harness.client.startGeneration({ model: { provider: 'openai', name: 'gpt-5' } }, async (generation) => {
+        generationRecorder = generation;
+        const tool = generation.startToolExecution({ toolName: 'weather' });
+        toolRecorder = tool;
+        try {
+          await Promise.resolve();
+          throw failure;
+        } catch (error) {
+          tool.setCallError(error);
+          throw error;
+        } finally {
+          tool.end();
+        }
+      }),
+      (error) => error === failure,
+    );
+    generationRecorder.end();
+    toolRecorder.end();
+    assert.equal(generationRecorder.getError(), undefined);
+    assert.equal(toolRecorder.getError(), failure);
+    const generation = singleGenerationSpan(harness.spanExporter);
+    const tool = singleToolSpan(harness.spanExporter);
+    assert.equal(tool.parentSpanContext?.spanId, generation.spanContext().spanId);
+    assert.equal(tool.status.code, SpanStatusCode.ERROR);
+    assert.equal(tool.attributes['error.type'], 'tool_execution_error');
+    assert.equal(generation.status.code, SpanStatusCode.ERROR);
+    assert.equal(generation.attributes['error.type'], 'provider_call_error');
+    assert.equal(singleGeneration(harness.client).callError, failure.message);
+    assert.equal(harness.client.debugSnapshot().toolExecutions.length, 1);
+    await harness.client.flush();
+    assert.equal(harness.generationExporter.requests[0].generations.length, 1);
+  } finally {
+    await shutdownHarness(harness);
+  }
+});
 
 test('generation result fields override seed and update span operation name', async () => {
   const harness = newHarness();
@@ -397,6 +586,213 @@ test('tool execution includeContent controls argument/result attributes', async 
   }
 });
 
+for (const [executionKind, processExitCode] of [
+  ['load_skill', undefined],
+  ['read_skill_resource', undefined],
+  ['command', undefined],
+  ['command', 0],
+  ['command', 7],
+]) {
+  test(`tool execution snapshots preserve ${executionKind} with exit code ${processExitCode} and isolate clones`, async () => {
+    const harness = newHarness();
+    const fields = {
+      executionKind,
+      skillName: 'review',
+      skillDescription: 'Review code changes',
+      skillSourceURI: 'file:///skills/review/SKILL.md',
+      skillResourceName: 'references/checklist.md',
+      processExecutableName: 'node',
+      processExecutablePath: '/usr/local/bin/node',
+    };
+    const startedAt = new Date('2026-01-01T00:00:00Z');
+    const completedAt = new Date('2026-01-01T00:00:01Z');
+
+    try {
+      const start = { toolName: 'run', ...fields, startedAt: new Date(startedAt) };
+      const recorder = harness.client.startToolExecution(start);
+      for (const key of Object.keys(fields)) {
+        start[key] = 'changed';
+      }
+      start.startedAt.setTime(0);
+
+      const result = { completedAt: new Date(completedAt) };
+      if (processExitCode !== undefined) {
+        result.processExitCode = processExitCode;
+      }
+      recorder.setResult(result);
+      result.processExitCode = 99;
+      result.completedAt.setTime(0);
+      recorder.end();
+      assert.equal(recorder.getError(), undefined);
+
+      const snapshot = harness.client.debugSnapshot();
+      assert.equal(snapshot.toolExecutions.length, 1);
+      const execution = snapshot.toolExecutions[0];
+      for (const [key, value] of Object.entries(fields)) {
+        assert.equal(execution[key], value, key);
+      }
+      assert.equal(execution.processExitCode, processExitCode);
+      assert.deepEqual(execution.startedAt, startedAt);
+      assert.deepEqual(execution.completedAt, completedAt);
+
+      const expected = structuredClone(execution);
+      for (const key of Object.keys(fields)) {
+        execution[key] = 'changed';
+      }
+      execution.processExitCode = 99;
+      execution.startedAt.setTime(0);
+      execution.completedAt.setTime(0);
+      assert.deepEqual(harness.client.debugSnapshot().toolExecutions, [expected]);
+    } finally {
+      await shutdownHarness(harness);
+    }
+  });
+}
+
+test('tool execution snapshots leave optional execution-kind, skill, and process fields undefined', async () => {
+  const harness = newHarness();
+
+  try {
+    for (const result of [undefined, {}]) {
+      const recorder = harness.client.startToolExecution({ toolName: 'legacy' });
+      if (result !== undefined) {
+        recorder.setResult(result);
+      }
+      recorder.end();
+      assert.equal(recorder.getError(), undefined);
+    }
+
+    const executions = harness.client.debugSnapshot().toolExecutions;
+    assert.equal(executions.length, 2);
+    for (const execution of executions) {
+      for (const key of [
+        'executionKind',
+        'skillName',
+        'skillDescription',
+        'skillSourceURI',
+        'skillResourceName',
+        'processExecutableName',
+        'processExecutablePath',
+        'processExitCode',
+      ]) {
+        assert.equal(execution[key], undefined, key);
+      }
+    }
+  } finally {
+    await shutdownHarness(harness);
+  }
+});
+
+test('skill source URI projection validates absolute locations without resolving sources', async (t) => {
+  const harness = newHarness({ contentCapture: 'full' });
+  try {
+    const cases = [
+      [' file:///private/skills/review?secret=1#private ', 'file:///private/skills/review'],
+      ['https://user:secret@skills.example.com:443/a/../review?q=secret#private', 'https://skills.example.com/review'],
+      ['s3://user:secret@skills/review?secret=1#private', 's3://skills/review'],
+      ['file:/opt/skills/review/SKILL.md', 'file:///opt/skills/review/SKILL.md'],
+      ['file:///opt/skills/review%20guide/SKILL.md', 'file:///opt/skills/review%20guide/SKILL.md'],
+      ['file://skills.example.com/review%20guide', 'file://skills.example.com/review%20guide'],
+      [
+        'https://user:secret@skills.example.com:8443/review%20guide%2Fnotes?token=secret#private',
+        'https://skills.example.com:8443/review%20guide%2Fnotes',
+      ],
+      ['https://[::1]:8443/review%20guide', 'https://[::1]:8443/review%20guide'],
+      ['s3://user:secret@skills/review%20guide%2Fnotes?secret=1#private', 's3://skills/review%20guide%2Fnotes'],
+      ['gs://skills/review%20guide?secret=1#private', 'gs://skills/review%20guide'],
+      ['https://skills.example.com/review%', undefined],
+      ['https://skills.example.com/review%2', undefined],
+      ['https://skills.example.com/review%GG', undefined],
+      ['s3://skills/review%GG', undefined],
+      ['file:///opt/skills/review%GG', undefined],
+      ['https://skills.example.com/review?secret=%GG', undefined],
+      ['https://skills.example.com/review#%GG', undefined],
+      ['https://skills.example.com/review guide', undefined],
+      ['https://skills.example.com/re\tview', undefined],
+      ['https://skills.example.com/re\nview', undefined],
+      ['https://skills.example.com/re\rview', undefined],
+      ['https://skills.example.com/re\u0000view', undefined],
+      ['https://skills.example.com/re\u007fview', undefined],
+      ['s3://skills/review guide', undefined],
+      ['file:///opt/skills/review guide', undefined],
+      ['file:', undefined],
+      ['file:relative', undefined],
+      ['file://', undefined],
+      ['https:///path', undefined],
+      ['https:/path', undefined],
+      ['https://', undefined],
+      ['https://?secret=1', undefined],
+      ['https://:443/path', undefined],
+      ['https://skills.example.com:invalid/review', undefined],
+      ['https://skills.example.com:65536/review', undefined],
+      ['s3://skills:invalid/review', undefined],
+      ['s3://skills:65536/review', undefined],
+      ['https://skills.example.com:/review', undefined],
+      ['s3://skills:/review', undefined],
+      ['s3://user@@skills/review', undefined],
+      ['s3://skills%2Fother/review', undefined],
+      ['file://skills.example.com', undefined],
+      ['https://skills.example.com\\review', undefined],
+      ['s3:///review', undefined],
+      ['s3:/skills/review', undefined],
+      ['../skills/review', undefined],
+      ['/skills/review', undefined],
+      ['//skills.example.com/review', undefined],
+      ['https://[broken', undefined],
+      [' \t ', undefined],
+    ];
+    for (const [skillSourceURI, expected] of cases) {
+      await t.test(JSON.stringify(skillSourceURI), () => {
+        const recorder = harness.client.startToolExecution({
+          toolName: 'load',
+          executionKind: 'load_skill',
+          skillSourceURI,
+        });
+        recorder.end();
+        assert.equal(recorder.getError(), undefined);
+        assert.equal(toolSpans(harness.spanExporter).at(-1).attributes['gen_ai.skill.source.uri'], expected);
+        assert.equal(harness.client.debugSnapshot().toolExecutions.at(-1).skillSourceURI, skillSourceURI);
+      });
+    }
+  } finally {
+    await shutdownHarness(harness);
+  }
+});
+
+test('tool exit codes are completion-only safe integers on explicit command spans', async () => {
+  const harness = newHarness();
+  try {
+    for (const executionKind of [undefined, 'future', 'load_skill', 'read_skill_resource', 'command']) {
+      for (const processExitCode of [
+        undefined,
+        null,
+        true,
+        false,
+        '0',
+        1.5,
+        NaN,
+        Infinity,
+        -Infinity,
+        2 ** 53,
+        0,
+        -1,
+        Number.MAX_SAFE_INTEGER,
+        Number.MIN_SAFE_INTEGER,
+      ]) {
+        const recorder = harness.client.startToolExecution({ toolName: 'exec', executionKind });
+        recorder.setResult({ processExitCode });
+        recorder.end();
+        assert.equal(recorder.getError(), undefined);
+        const expected =
+          executionKind === 'command' && Number.isSafeInteger(processExitCode) ? processExitCode : undefined;
+        assert.equal(toolSpans(harness.spanExporter).at(-1).attributes['process.exit.code'], expected);
+      }
+    }
+  } finally {
+    await shutdownHarness(harness);
+  }
+});
+
 test('tool execution callError is surfaced locally and marks error span', async () => {
   const harness = newHarness();
 
@@ -480,7 +876,8 @@ function newHarness(overrides = {}) {
   const defaults = defaultConfig();
 
   const client = new Agento11yClient({
-    tracer,
+    ...overrides,
+    tracer: overrides.tracer ?? tracer,
     generationExport: {
       ...defaults.generationExport,
       batchSize: 100,
@@ -491,6 +888,7 @@ function newHarness(overrides = {}) {
       ...(overrides.generationExport ?? {}),
     },
     embeddingCapture: overrides.embeddingCapture,
+    contentCapture: overrides.contentCapture,
     generationExporter,
   });
 

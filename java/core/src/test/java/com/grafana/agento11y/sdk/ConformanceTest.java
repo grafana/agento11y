@@ -8,6 +8,9 @@ import io.grpc.Server;
 import io.grpc.ServerBuilder;
 import io.grpc.stub.StreamObserver;
 import io.opentelemetry.api.common.AttributeKey;
+import io.opentelemetry.api.common.Attributes;
+import io.opentelemetry.api.trace.SpanKind;
+import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.context.Scope;
 import io.opentelemetry.sdk.metrics.SdkMeterProvider;
 import io.opentelemetry.sdk.metrics.data.MetricData;
@@ -16,9 +19,16 @@ import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import io.opentelemetry.sdk.trace.data.SpanData;
 import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor;
+import io.opentelemetry.sdk.trace.data.LinkData;
+import io.opentelemetry.sdk.trace.samplers.Sampler;
+import io.opentelemetry.sdk.trace.samplers.SamplingResult;
+import io.opentelemetry.context.Context;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -36,6 +46,136 @@ import agento11y.v1.GenerationIngest;
 import agento11y.v1.GenerationIngestServiceGrpc;
 
 class ConformanceTest {
+    static Stream<Arguments> toolExecutionKindCases() throws IOException {
+        Path directory = Path.of(System.getProperty("user.dir")).toAbsolutePath();
+        while (directory != null) {
+            Path fixture = directory.resolve("conformance/tool-execution-kinds/cases.json");
+            if (Files.isRegularFile(fixture)) {
+                JsonNode root = Json.MAPPER.readTree(fixture.toFile());
+                assertThat(root.path("version").asInt()).isEqualTo(1);
+                List<Arguments> cases = new ArrayList<>();
+                root.path("cases").forEach(test -> cases.add(Arguments.of(test.path("id").asText(), test, root)));
+                return cases.stream();
+            }
+            directory = directory.getParent();
+        }
+        throw new IOException("conformance/tool-execution-kinds/cases.json not found");
+    }
+
+    @ParameterizedTest(name = "tool execution kind: {0}")
+    @MethodSource("toolExecutionKindCases")
+    @SuppressWarnings("deprecation")
+    void toolExecutionKindContract(String id, JsonNode test, JsonNode fixture) {
+        JsonNode start = test.path("start");
+        ToolExecutionKind executionKind = switch (start.path("execution_kind").asText()) {
+            case "load_skill" -> ToolExecutionKind.LOAD_SKILL;
+            case "read_skill_resource" -> ToolExecutionKind.READ_SKILL_RESOURCE;
+            case "command" -> ToolExecutionKind.COMMAND;
+            default -> null; // Unset and unknown execution kinds are generic in the typed API.
+        };
+        ContentCaptureMode mode = switch (test.path("capture_mode").asText("no_tool_content")) {
+            case "full" -> ContentCaptureMode.FULL;
+            case "metadata_only" -> ContentCaptureMode.METADATA_ONLY;
+            case "full_with_metadata_spans" -> ContentCaptureMode.FULL_WITH_METADATA_SPANS;
+            default -> ContentCaptureMode.NO_TOOL_CONTENT;
+        };
+        ToolExecutionStart seed = new ToolExecutionStart()
+                .setToolName(start.path("tool_name").asText())
+                .setToolCallId("call-1")
+                .setToolType("function")
+                .setExecutionKind(executionKind)
+                .setSkillName(start.path("skill_name").asText())
+                .setSkillDescription(start.path("skill_description").asText())
+                .setSkillSourceURI(start.path("skill_source_uri").asText())
+                .setSkillResourceName(start.path("skill_resource_name").asText())
+                .setProcessExecutableName(start.path("process_executable_name").asText())
+                .setProcessExecutablePath(start.path("process_executable_path").asText())
+                .setContentCapture(mode)
+                .setIncludeContent(test.path("include_content").asBoolean());
+        AtomicReference<Attributes> creationAttributes = new AtomicReference<>();
+        AtomicReference<String> creationName = new AtomicReference<>();
+        Sampler sampler = new Sampler() {
+            @Override
+            public SamplingResult shouldSample(Context parent, String traceId, String name, SpanKind kind,
+                                               Attributes attributes, List<LinkData> links) {
+                assertThat(creationAttributes.get()).isNull();
+                assertThat(kind).isEqualTo(SpanKind.INTERNAL);
+                // The SDK's Attributes implementation can share span storage;
+                // retain an immutable copy of exactly what the sampler saw.
+                creationAttributes.set(attributes.toBuilder().build());
+                creationName.set(name);
+                return SamplingResult.recordAndSample();
+            }
+
+            @Override
+            public String getDescription() {
+                return "tool execution kind conformance";
+            }
+        };
+        InMemorySpanExporter spans = InMemorySpanExporter.create();
+        InMemoryMetricReader metrics = InMemoryMetricReader.create();
+        try (SdkTracerProvider tracer = SdkTracerProvider.builder().setSampler(sampler)
+                    .addSpanProcessor(SimpleSpanProcessor.create(spans)).build();
+                SdkMeterProvider meter = SdkMeterProvider.builder().registerMetricReader(metrics).build();
+                Agento11yClient client = new Agento11yClient(new Agento11yClientConfig()
+                        .setTracer(tracer.get("tool-conformance"))
+                        .setMeter(meter.get("tool-conformance"))
+                        .setGenerationExporter(new TestFixtures.CapturingExporter()))) {
+            ToolExecutionRecorder recorder = client.startToolExecution(seed);
+            // Invalid dynamic-language inputs stay unset: Java accepts only nullable Long.
+            JsonNode code = test.path("end").path("process_exit_code");
+            recorder.setResult(new ToolExecutionResult().setProcessExitCode(code.isIntegralNumber() ? code.longValue() : null));
+            if (test.has("error")) {
+                recorder.setCallError(new IllegalStateException(test.path("error").asText()));
+            }
+            recorder.end();
+            recorder.end();
+            assertThat(spans.getFinishedSpanItems()).hasSize(1);
+            SpanData span = spans.getFinishedSpanItems().get(0);
+            assertThat(span.getName()).isEqualTo(test.path("span_name").asText());
+            assertThat(creationName.get()).isEqualTo(span.getName());
+            assertThat(span.getKind()).isEqualTo(SpanKind.INTERNAL);
+            assertThat(creationAttributes.get().get(AttributeKey.stringKey("gen_ai.tool.name")))
+                    .isEqualTo(seed.getToolName().trim());
+            assertThat(creationAttributes.get().get(AttributeKey.stringKey("gen_ai.tool.call.id"))).isEqualTo("call-1");
+            assertThat(creationAttributes.get().get(AttributeKey.stringKey("gen_ai.tool.type"))).isEqualTo("function");
+            List<String> privateKeys = new ArrayList<>();
+            fixture.path("private_attributes").forEach(key -> privateKeys.add(key.asText()));
+            for (JsonNode keyNode : fixture.path("skill_process_attributes")) {
+                String key = keyNode.asText();
+                JsonNode expected = test.path("attributes").path(key);
+                if (key.equals("process.exit.code")) {
+                    assertThat(span.getAttributes().get(AttributeKey.longKey(key)))
+                            .isEqualTo(expected.isMissingNode() ? null : expected.longValue());
+                    assertThat(creationAttributes.get().get(AttributeKey.longKey(key))).isNull();
+                } else {
+                    String value = expected.isMissingNode() ? null : expected.asText();
+                    assertThat(span.getAttributes().get(AttributeKey.stringKey(key))).as(key).isEqualTo(value);
+                    assertThat(creationAttributes.get().get(AttributeKey.stringKey(key))).as("creation %s", key)
+                            .isEqualTo(privateKeys.contains(key) ? null : value);
+                }
+            }
+            assertThat(span.getAttributes().get(AttributeKey.stringKey("agento11y.skill.name"))).isNull();
+            assertThat(creationAttributes.get().get(AttributeKey.stringKey("agento11y.skill.name"))).isNull();
+            assertThat(span.getStatus().getStatusCode()).isEqualTo(test.has("error") ? StatusCode.ERROR : StatusCode.OK);
+            if (test.has("error")) {
+                assertThat(span.getAttributes().get(AttributeKey.stringKey("error.type"))).isEqualTo("tool_execution_error");
+                assertThat(span.getEvents()).hasSize(1);
+                assertThat(recorder.error()).isPresent();
+            }
+            List<MetricData> recordedMetrics = new ArrayList<>(metrics.collectAllMetrics());
+            assertThat(recordedMetrics).extracting(MetricData::getName)
+                    .containsExactly(Agento11yClient.METRIC_OPERATION_DURATION);
+            assertThat(recordedMetrics.get(0).getHistogramData().getPoints()).singleElement().satisfies(point -> {
+                assertThat(point.getCount()).isEqualTo(1L);
+                assertThat(point.getAttributes().asMap().keySet()).extracting(AttributeKey::getKey)
+                        .containsExactlyInAnyOrder("gen_ai.provider.name", "gen_ai.request.model", "gen_ai.agent.name",
+                                "gen_ai.operation.name", "gen_ai.tool.name", "error.type", "error.category");
+            });
+            assertThat(client.debugSnapshot().getToolExecutions()).hasSize(1);
+        }
+    }
+
     @Test
     void syncRoundtripSemantics() throws Exception {
         try (ConformanceEnv env = new ConformanceEnv(1)) {

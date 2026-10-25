@@ -11,13 +11,16 @@ from collections.abc import Callable
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from typing import Any
 
 import grpc
+import pytest
 from agento11y import (
     ApiConfig,
     Client,
     ClientConfig,
+    ContentCaptureMode,
     ConversationRatingInput,
     ConversationRatingValue,
     EmbeddingResult,
@@ -49,6 +52,8 @@ from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.sdk.trace.sampling import Decision, Sampler, SamplingResult
+from opentelemetry.trace import SpanKind
 
 _metadata_conversation_title = "agento11y.conversation.title"
 _metadata_user_id = "agento11y.user.id"
@@ -812,6 +817,150 @@ def test_conformance_tool_execution_semantics() -> None:
         assert "gen_ai.client.time_to_first_token" not in metrics
     finally:
         env.shutdown()
+
+
+_TOOL_EXECUTION_KINDS = json.loads(
+    (Path(__file__).resolve().parents[2] / "conformance/tool-execution-kinds/cases.json").read_text()
+)
+
+
+class _ToolCreationSampler(Sampler):
+    def __init__(self):
+        self.calls = []
+
+    def should_sample(self, parent_context, trace_id, name, kind=None, attributes=None, links=None, trace_state=None):
+        self.calls.append((name, kind, dict(attributes or {})))
+        return SamplingResult(Decision.RECORD_AND_SAMPLE, attributes=attributes)
+
+    def get_description(self):
+        return "tool creation capture"
+
+
+@pytest.mark.parametrize("protocol", ["none", "otel"])
+@pytest.mark.parametrize("case", _TOOL_EXECUTION_KINDS["cases"], ids=lambda case: case["id"])
+def test_conformance_tool_execution_kinds(case, protocol, monkeypatch) -> None:
+    if protocol == "otel":
+        pytest.importorskip("opentelemetry.util.genai", reason="requires agento11y[otel]")
+    mode = ContentCaptureMode(case.get("capture_mode", "no_tool_content"))
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT",
+        case.get("otel_capture", "SPAN_ONLY" if mode == ContentCaptureMode.FULL else "NO_CONTENT"),
+    )
+    sampler = _ToolCreationSampler()
+    span_exporter = InMemorySpanExporter()
+    provider = TracerProvider(sampler=sampler)
+    provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    reader = InMemoryMetricReader()
+    meter_provider = MeterProvider(metric_readers=[reader])
+    client = Client(
+        ClientConfig(
+            tracer_provider=provider,
+            meter_provider=meter_provider,
+            generation_export=GenerationExportConfig(protocol=protocol),
+            content_capture=mode,
+        )
+    )
+    try:
+        start = ToolExecutionStart(
+            **case["start"],
+            include_content=case.get("include_content", False),
+            tool_call_id=" call-1 ",
+            tool_type=" function ",
+            tool_description="private tool description",
+        )
+        original = copy.deepcopy(start)
+        rec = client.start_tool_execution(start)
+        expected = dict(case["attributes"])
+        # The experimental transport resolves the split mode to FULL. The normal
+        # transport must keep the shared reduced-span expectations unchanged.
+        effective_mode = (
+            ContentCaptureMode.FULL
+            if protocol == "otel" and mode == ContentCaptureMode.FULL_WITH_METADATA_SPANS
+            else mode
+        )
+        assert rec._content_capture_mode == effective_mode
+        if effective_mode == ContentCaptureMode.FULL and mode == ContentCaptureMode.FULL_WITH_METADATA_SPANS:
+            expected.update(
+                {
+                    "gen_ai.skill.description": start.skill_description,
+                    "gen_ai.skill.source.uri": start.skill_source_uri,
+                    "process.executable.path": start.process_executable_path,
+                }
+            )
+        assert len(sampler.calls) == 1
+        name, kind, creation = sampler.calls[0]
+        assert name == case["span_name"]
+        assert kind == SpanKind.INTERNAL
+        assert creation["gen_ai.operation.name"] == "execute_tool"
+        assert creation["gen_ai.tool.name"] == start.tool_name.strip()
+        assert creation["gen_ai.tool.call.id"] == "call-1"
+        assert creation["gen_ai.tool.type"] == "function"
+        assert "gen_ai.tool.description" not in creation
+        structural = {
+            key: value
+            for key, value in expected.items()
+            if key not in [*_TOOL_EXECUTION_KINDS["private_attributes"], "process.exit.code"]
+        }
+        assert {
+            key: creation[key] for key in _TOOL_EXECUTION_KINDS["skill_process_attributes"] if key in creation
+        } == structural
+        assert "agento11y.skill.name" not in creation
+        assert "gen_ai.tool.call.arguments" not in creation
+        assert "gen_ai.tool.call.result" not in creation
+        assert not any(key in creation for key in [*_TOOL_EXECUTION_KINDS["private_attributes"], "process.exit.code"])
+
+        if "invalid_exit_code" in case and "python" in case.get("dynamic_languages", ["python"]):
+            with pytest.raises(ValueError, match="process_exit_code"):
+                rec.set_result(process_exit_code=case["invalid_exit_code"])
+        end = ToolExecutionEnd(arguments={"private": "arguments"}, result={"private": "result"}, **case.get("end", {}))
+        original_end = copy.deepcopy(end)
+        rec.set_result(end)
+        error = RuntimeError(case["error"]) if "error" in case else None
+        if error is not None:
+            rec.set_exec_error(error)
+        rec.end()
+        rec.end()
+        assert rec.err() is error
+        assert start == original
+        assert end == original_end
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        span = spans[0]
+        assert span.name == case["span_name"]
+        assert span.kind == SpanKind.INTERNAL
+        assert span.status.status_code.name == ("ERROR" if error else "OK")
+        assert {
+            key: span.attributes[key]
+            for key in _TOOL_EXECUTION_KINDS["skill_process_attributes"]
+            if key in span.attributes
+        } == expected
+        assert "agento11y.skill.name" not in span.attributes
+        content = effective_mode == ContentCaptureMode.FULL or (
+            effective_mode == ContentCaptureMode.NO_TOOL_CONTENT and case.get("include_content", False)
+        )
+        for key in ("gen_ai.tool.call.arguments", "gen_ai.tool.call.result"):
+            assert (key in span.attributes) is content
+        data = reader.get_metrics_data()
+        metrics = [
+            metric for resource in data.resource_metrics for scope in resource.scope_metrics for metric in scope.metrics
+        ]
+        assert [metric.name for metric in metrics] == ["gen_ai.client.operation.duration"]
+        points = list(metrics[0].data.data_points)
+        assert len(points) == 1
+        assert points[0].count == 1
+        assert dict(points[0].attributes) == {
+            "gen_ai.operation.name": "execute_tool",
+            "gen_ai.tool.name": start.tool_name.strip(),
+            "gen_ai.provider.name": "",
+            "gen_ai.request.model": "",
+            "gen_ai.agent.name": "",
+            "error.type": "tool_execution_error" if error else "",
+            "error.category": "sdk_error" if error else "",
+        }
+    finally:
+        client.shutdown()
+        provider.shutdown()
+        meter_provider.shutdown()
 
 
 def test_conformance_embedding_semantics() -> None:

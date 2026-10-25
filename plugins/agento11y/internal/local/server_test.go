@@ -27,6 +27,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/guardeval"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/localhealth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -37,6 +38,125 @@ func newLocalRequest(method, target string, body io.Reader) *http.Request {
 	req := httptest.NewRequest(method, target, body)
 	req.Host = "127.0.0.1:8765"
 	return req
+}
+
+func TestServer_OTLPGenerationHealthCapability(t *testing.T) {
+	s, _ := newTestServer(t)
+	rr := httptest.NewRecorder()
+	s.ServeHTTP(rr, newLocalRequest(http.MethodGet, "/healthz", nil))
+	require.Equal(t, http.StatusOK, rr.Code)
+	var health struct {
+		Status       string   `json:"status"`
+		Capabilities []string `json:"capabilities"`
+	}
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &health))
+	assert.Equal(t, "ok", health.Status)
+	assert.Contains(t, health.Capabilities, localhealth.OTelGenerationCapability)
+}
+
+func TestServer_OTLPBodyLimits(t *testing.T) {
+	for _, tc := range []struct {
+		name, path string
+		size       int
+		gzip       bool
+		status     int
+	}{
+		{name: "traces exact limit", path: otlpTracesPath, size: maxOTLPTraceBodyBytes, status: http.StatusOK},
+		{name: "traces wire over limit", path: otlpTracesPath, size: maxOTLPTraceBodyBytes + 1, status: http.StatusRequestEntityTooLarge},
+		{name: "traces expanded exact limit", path: otlpTracesPath, size: maxOTLPTraceBodyBytes, gzip: true, status: http.StatusOK},
+		{name: "traces expanded over limit", path: otlpTracesPath, size: maxOTLPTraceBodyBytes + 1, gzip: true, status: http.StatusRequestEntityTooLarge},
+		{name: "metrics exact limit", path: otlpMetricsPath, size: maxOTLPBodyBytes, status: http.StatusOK},
+		{name: "metrics wire over limit", path: otlpMetricsPath, size: maxOTLPBodyBytes + 1, status: http.StatusRequestEntityTooLarge},
+		{name: "metrics expanded exact limit", path: otlpMetricsPath, size: maxOTLPBodyBytes, gzip: true, status: http.StatusOK},
+		{name: "metrics expanded over limit", path: otlpMetricsPath, size: maxOTLPBodyBytes + 1, gzip: true, status: http.StatusRequestEntityTooLarge},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := newTestServer(t)
+			body := bytes.Repeat([]byte(" "), tc.size)
+			copy(body, "{}")
+			if tc.gzip {
+				body = gzipBytes(t, body)
+			}
+			req := newLocalRequest(http.MethodPost, tc.path, bytes.NewReader(body))
+			req.Header.Set("Content-Type", wire.ContentTypeJSON)
+			if tc.gzip {
+				req.Header.Set("Content-Encoding", "gzip")
+			}
+			rr := httptest.NewRecorder()
+			s.ServeHTTP(rr, req)
+			require.Equal(t, tc.status, rr.Code, rr.Body.String())
+		})
+	}
+}
+
+func TestServer_GenerationsExport_ValidatesCompleteBatch(t *testing.T) {
+	for _, tc := range []struct {
+		name, last string
+		status     int
+	}{
+		{name: "bad conversation", last: `{"id":"bad","conversation_id":"../escape"}`, status: http.StatusBadRequest},
+		// The request fits below 64 MiB but HTML escaping in the final JSONL
+		// record expands every '<' sixfold. No earlier conversation may write.
+		{name: "escaped record", last: `{"id":"large","conversation_id":"conv-b","extra":"` + strings.Repeat("<", maxJSONLRecordBytes/6) + `"}`, status: http.StatusRequestEntityTooLarge},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, storage, _ := newTestServerStorage(t)
+			opener := &countingOpener{}
+			storage.openAppend = opener.open
+			body := `{"generations":[{"id":"first","conversation_id":"conv-a"},` + tc.last + `]}`
+			require.Less(t, len(body), maxGenerationBodyBytes)
+			resp := post(t, s, "/api/v1/generations:export", wire.ContentTypeJSON, body)
+			defer resp.Body.Close()
+			require.Equal(t, tc.status, resp.StatusCode)
+			opens, _ := opener.counts()
+			assert.Zero(t, opens)
+			assertConversationDirEmpty(t, storage)
+		})
+	}
+}
+
+func TestJSONLRecordEncodedSizeLimit(t *testing.T) {
+	// A string record adds two quotes and one newline.
+	for _, tc := range []struct {
+		name     string
+		length   int
+		tooLarge bool
+	}{
+		{name: "one byte below", length: maxJSONLRecordBytes - 4},
+		{name: "equal", length: maxJSONLRecordBytes - 3, tooLarge: true},
+		{name: "above", length: maxJSONLRecordBytes - 2, tooLarge: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			encoded, err := encodeJSONLRecord(strings.Repeat("x", tc.length))
+			if tc.tooLarge {
+				require.ErrorIs(t, err, errJSONLRecordTooLarge)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, encoded, maxJSONLRecordBytes-1)
+			storage := newStorage(t)
+			path := storage.Path("boundary.jsonl")
+			require.NoError(t, os.WriteFile(path, encoded, 0o600))
+			visited := 0
+			skipped, err := scanJSONL(path, func(line []byte) (int, bool) {
+				return len(line), json.Valid(line)
+			}, func(n int) { visited++; assert.Equal(t, len(encoded)-1, n) })
+			require.NoError(t, err)
+			assert.Zero(t, skipped)
+			assert.Equal(t, 1, visited)
+		})
+	}
+}
+
+func TestAppendJSONLValidatesBatchBeforeOpen(t *testing.T) {
+	storage := newStorage(t)
+	opener := &countingOpener{}
+	storage.openAppend = opener.open
+	written, err := appendJSONL(storage, "bad.jsonl", []json.RawMessage{json.RawMessage(`{"valid":true}`), json.RawMessage(`{`)}, nil)
+	require.Error(t, err)
+	assert.Zero(t, written)
+	opens, _ := opener.counts()
+	assert.Zero(t, opens)
 }
 
 func TestServer_GenerationsExport_RecordsAndAccepts(t *testing.T) {
@@ -777,7 +897,7 @@ func TestServer_Routing(t *testing.T) {
 		{name: "PATCH text type refused", method: http.MethodPatch, path: "/api/v1/config", contentType: "text/plain", body: `{"theme":"light"}`, want: http.StatusUnsupportedMediaType},
 		{name: "PATCH absent type refused", method: http.MethodPatch, path: "/api/v1/config", body: `{"theme":"light"}`, want: http.StatusUnsupportedMediaType},
 		{name: "charset parameter accepted", method: http.MethodPost, path: "/api/v1/hooks:evaluate", contentType: "application/json; charset=utf-8", body: `{"phase":"postflight"}`, want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"action":"allow"`},
-		{name: "protobuf accepted on OTLP", method: http.MethodPost, path: otlpTracesPath, contentType: wire.ContentTypeProto, body: "protobuf", want: http.StatusOK},
+		{name: "protobuf accepted on OTLP", method: http.MethodPost, path: otlpTracesPath, contentType: wire.ContentTypeProto, body: "", want: http.StatusOK},
 		{name: "protobuf refused outside OTLP", method: http.MethodPost, path: "/api/v1/generations:export", contentType: wire.ContentTypeProto, body: "protobuf", want: http.StatusUnsupportedMediaType},
 		{name: "GET is not gated", method: http.MethodGet, path: "/api/v1/conversations", want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"conversations":[]`},
 	}
@@ -3556,8 +3676,11 @@ func TestServer_Forwarding_DoesNotRelayForwardedPayload(t *testing.T) {
 	})
 
 	for _, path := range []string{"/api/v1/generations:export", "/otlp/v1/traces"} {
-		req := newLocalRequest(http.MethodPost, path,
-			strings.NewReader(`{"generations":[{"id":"gen-1","conversation_id":"conv-A","model":{"name":"m"}}]}`))
+		body := `{"generations":[{"id":"gen-1","conversation_id":"conv-A","model":{"name":"m"}}]}`
+		if path == otlpTracesPath {
+			body = `{"resourceSpans":[]}`
+		}
+		req := newLocalRequest(http.MethodPost, path, strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set(ForwardMarkerHeader, "1")
 		rr := httptest.NewRecorder()

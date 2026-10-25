@@ -2,6 +2,14 @@ package agento11y
 
 import "time"
 
+type ToolExecutionKind string
+
+const (
+	ToolExecutionKindLoadSkill         ToolExecutionKind = "load_skill"
+	ToolExecutionKindReadSkillResource ToolExecutionKind = "read_skill_resource"
+	ToolExecutionKindCommand           ToolExecutionKind = "command"
+)
+
 // ToolExecutionStart seeds a tool execution span before the tool call runs.
 type ToolExecutionStart struct {
 	ToolName          string
@@ -24,12 +32,20 @@ type ToolExecutionStart struct {
 	IncludeContent bool
 	// ContentCapture overrides the parent generation's content capture mode for
 	// this tool execution. Default (zero value) inherits from context.
-	ContentCapture ContentCaptureMode
+	ContentCapture        ContentCaptureMode
+	ExecutionKind         ToolExecutionKind
+	SkillName             string
+	SkillDescription      string
+	SkillSourceURI        string
+	SkillResourceName     string
+	ProcessExecutableName string
+	ProcessExecutablePath string
 }
 
 // ToolExecutionEnd finalizes tool execution span attributes.
 type ToolExecutionEnd struct {
-	Arguments   any
-	Result      any
-	CompletedAt time.Time
+	Arguments       any
+	Result          any
+	CompletedAt     time.Time
+	ProcessExitCode *int64
 }

@@ -516,12 +516,21 @@ export interface WorkflowStep {
   metadata?: Record<string, unknown>;
 }
 
+export type ToolExecutionKind = 'load_skill' | 'read_skill_resource' | 'command';
+
 /** Tool execution start seed fields. */
 export interface ToolExecutionStart {
   toolName: string;
   toolCallId?: string;
   toolType?: string;
   toolDescription?: string;
+  executionKind?: ToolExecutionKind;
+  skillName?: string;
+  skillDescription?: string;
+  skillSourceURI?: string;
+  skillResourceName?: string;
+  processExecutableName?: string;
+  processExecutablePath?: string;
   conversationId?: string;
   conversationTitle?: string;
   agentName?: string;
@@ -559,6 +568,7 @@ export interface ExecuteToolCallsOptions {
 export interface ToolExecutionResult {
   arguments?: unknown;
   result?: unknown;
+  processExitCode?: number;
   completedAt?: Date;
 }
 
@@ -568,6 +578,14 @@ export interface ToolExecution {
   toolCallId?: string;
   toolType?: string;
   toolDescription?: string;
+  executionKind?: ToolExecutionKind;
+  skillName?: string;
+  skillDescription?: string;
+  skillSourceURI?: string;
+  skillResourceName?: string;
+  processExecutableName?: string;
+  processExecutablePath?: string;
+  processExitCode?: number;
   conversationId?: string;
   conversationTitle?: string;
   agentName?: string;
@@ -592,6 +610,12 @@ export interface EmbeddingRecorder {
 
 /** Recorder API for generation lifecycle. */
 export interface GenerationRecorder {
+  /**
+   * Starts a tool span parented to this generation without changing the active
+   * OTel context. Only trace parentage is bound; identity and content capture
+   * resolve as for client.startToolExecution. The caller must end the tool.
+   */
+  startToolExecution(start: ToolExecutionStart): ToolExecutionRecorder;
   setResult(result: GenerationResult): void;
   setCallError(error: unknown): void;
   setFirstTokenAt(firstTokenAt: Date): void;

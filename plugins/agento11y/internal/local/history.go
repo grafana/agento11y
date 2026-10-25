@@ -323,6 +323,7 @@ func (s *Server) handleHistoryImport(w http.ResponseWriter, r *http.Request) {
 	target := history.Target{
 		Endpoint:     endpoint,
 		OTLPEndpoint: endpoint + "/otlp",
+		Headers:      map[string]string{history.ForwardMarkerHeader: "1"},
 	}
 	go s.runImport(ctx, cancel, run.RunID, agent, filter, body.SourcePaths, body.Force, target)
 
@@ -471,7 +472,7 @@ func (s *Server) runImport(
 		Sessions:   selected,
 		Collisions: plan.Collisions,
 		Force:      force,
-		Target:     target,
+		Target:     exporter.Target,
 		Exporter:   exporter,
 		OnProgress: func(p history.Progress) {
 			updated, ok := s.applyImportRun(runID, func(run *ImportRun) {

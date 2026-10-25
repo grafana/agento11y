@@ -430,12 +430,9 @@ func (p *Plan) Export(ctx context.Context, client *experiments.Client, telemetry
 					return fmt.Errorf("export trajectory for %s: %w", trial.Create.TrialID, err)
 				}
 			}
-			result, err := client.ExportScores(ctx, trial.Scores)
-			if err != nil {
+			retryMissing := telemetry != nil && telemetry.protocol == agento11y.GenerationExportProtocolOTel
+			if err := exportScores(ctx, client.ExportScores, trial.Scores, retryMissing); err != nil {
 				return err
-			}
-			if result.AcceptedCount()+result.DuplicateCount() != len(trial.Scores) {
-				return errors.New("Claude eval score export rejected items; experiment left running for retry")
 			}
 			if _, err := client.UpdateTrial(ctx, run.Create.RunID, trial.Create.TrialID, trial.Update); err != nil {
 				return fmt.Errorf("update trial %s: %w", trial.Create.TrialID, err)

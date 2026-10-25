@@ -208,8 +208,16 @@ func Stop(p Payload, cfg config.Config, logger *log.Logger) {
 		logger.Printf("stop: update: %v", err)
 		return
 	}
-	envconfig.ApplyLocalAuthPlaceholders()
-	if !config.HasCredentials() {
+	protocol, err := envconfig.ResolveGenerationTransport()
+	if err != nil {
+		logger.Printf("stop: generation transport: %v", err)
+		markPendingRetry(p.SessionID, p.TurnID, logger)
+		return
+	}
+	if protocol == agento11y.GenerationExportProtocolHTTP {
+		envconfig.ApplyLocalAuthPlaceholders()
+	}
+	if protocol == agento11y.GenerationExportProtocolHTTP && !config.HasCredentials() {
 		logger.Print("stop: missing AGENTO11Y_ENDPOINT/AGENTO11Y_AUTH_TENANT_ID; discarding fragment")
 		if err := fragment.Delete(p.SessionID, p.TurnID); err != nil {
 			logger.Printf("stop: delete fragment: %v", err)
@@ -228,14 +236,25 @@ func Stop(p Payload, cfg config.Config, logger *log.Logger) {
 	providers := emit.SetupOTel(ctx, p.SessionID, logger)
 	if providers != nil {
 		defer func() {
-			if err := providers.Shutdown(ctx); err != nil {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cleanupCancel()
+			if err := providers.Shutdown(cleanupCtx); err != nil {
 				logger.Printf("otel: shutdown: %v", err)
 			}
 		}()
 	}
 	userID := userid.Resolve()
-	client := buildClient(cfg, frag.Cwd, userID, providers, logger)
-	defer func() { _ = client.Shutdown(ctx) }()
+	client, err := buildClient(cfg, frag.Cwd, userID, providers, logger)
+	if err != nil {
+		logger.Printf("stop: build client: %v", err)
+		markPendingRetry(p.SessionID, p.TurnID, logger)
+		return
+	}
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		_ = client.Shutdown(cleanupCtx)
+	}()
 
 	mapped := mapper.Map(mapper.Inputs{
 		Fragment:            frag,
@@ -523,7 +542,7 @@ func applySessionDefaults(f *fragment.Fragment, s *fragment.Session) {
 }
 
 // buildClient configures export auth and tags for a Codex turn.
-func buildClient(cfg config.Config, cwd, userID string, providers *otel.Providers, logger *log.Logger) *agento11y.Client {
+func buildClient(cfg config.Config, cwd, userID string, providers *otel.Providers, logger *log.Logger) (*agento11y.Client, error) {
 	return emit.NewClient(emit.ClientOptions{
 		InstrumentationName: otelInstrumentationName,
 		ContentCapture:      cfg.ContentCapture,

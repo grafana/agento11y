@@ -90,6 +90,14 @@ public class ToolExecutionRecorder implements AutoCloseable {
                 .setToolCallId(seed.getToolCallId())
                 .setToolType(seed.getToolType())
                 .setToolDescription(seed.getToolDescription())
+                .setExecutionKind(seed.getExecutionKind())
+                .setSkillName(seed.getSkillName())
+                .setSkillDescription(seed.getSkillDescription())
+                .setSkillSourceURI(seed.getSkillSourceURI())
+                .setSkillResourceName(seed.getSkillResourceName())
+                .setProcessExecutableName(seed.getProcessExecutableName())
+                .setProcessExecutablePath(seed.getProcessExecutablePath())
+                .setProcessExitCode(snapshotResult.getProcessExitCode())
                 .setConversationId(seed.getConversationId())
                 .setAgentName(seed.getAgentName())
                 .setAgentVersion(seed.getAgentVersion())
@@ -99,6 +107,11 @@ public class ToolExecutionRecorder implements AutoCloseable {
                 .setArguments(snapshotResult.getArguments())
                 .setResult(snapshotResult.getResult())
                 .setCallError(snapshotCallError == null ? "" : String.valueOf(snapshotCallError.getMessage()));
+
+        if (seed.getExecutionKind() == ToolExecutionKind.COMMAND
+                && snapshotResult.getProcessExitCode() != null) {
+            span.setAttribute(Agento11yClient.SPAN_ATTR_PROCESS_EXIT_CODE, snapshotResult.getProcessExitCode());
+        }
 
         if (includeContent) {
             try {

@@ -1,0 +1,10 @@
+{
+  "results": [
+    {"score_id": "score-accepted", "accepted": true, "status": "accepted"},
+    {"score_id": "score-pending", "accepted": false, "status": "rejected", "error": "generation_id was not found"},
+    {"score_id": "score-duplicate", "accepted": false, "status": "duplicate"}
+  ],
+  "accepted": 1,
+  "duplicates": 1,
+  "rejected": 1
+}

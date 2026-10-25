@@ -37,6 +37,7 @@ func TestRenderHumanGolden(t *testing.T) {
 		{name: "probed", report: goldenProbedReport()},
 		{name: "redirected", report: goldenRedirectedReport()},
 		{name: "broken-config", report: brokenConfigReport()},
+		{name: "otel", report: goldenOTelReport()},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -128,6 +129,33 @@ func goldenHealthyReport() *Report {
 			{Name: "cursor", OnPath: true, HookBased: true, Version: "v0.22.0", Note: "hook-based; configured in Cursor settings", Health: HealthOK},
 		},
 	}
+}
+
+func goldenOTelReport() *Report {
+	r := goldenMinimalReport()
+	env := map[string]string{
+		"AGENTO11Y_PROTOCOL":                     "otel",
+		"AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "true",
+		"OTEL_EXPORTER_OTLP_ENDPOINT":            "http://127.0.0.1:9000/otlp",
+		"AGENTO11Y_AUTH_TENANT_ID":               "12345",
+		"AGENTO11Y_OTEL_AUTH_TOKEN":              "glc_secret",
+	}
+	r.Conversations = collectConversations(env, nil)
+	r.Conversations.Probe = &ProbeResult{URL: "http://127.0.0.1:9000/otlp/v1/traces", StatusCode: 200, OK: true}
+	r.Conversations.LocalCapability = &ProbeResult{OK: true}
+	r.Conversations.Messages = append(r.Conversations.Messages, "OTLP transport/authentication verified; generation storage is not verified")
+	r.HTTPAPIs = collectHTTPAPIs(env, nil)
+	r.Analytics = collectAnalytics(env, nil, true)
+	r.Analytics.Probe = &AnalyticsProbe{
+		Metrics: &ProbeResult{URL: "http://127.0.0.1:9000/otlp/v1/metrics", StatusCode: 200, OK: true},
+		Traces:  r.Conversations.Probe,
+	}
+	r.Config.GenerationProtocol = resolveFamily("PROTOCOL", env, nil).envValue()
+	r.Config.ExperimentalFeatures = resolveEnv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", env, nil).envValue()
+	r.Config.ExperimentalEnabled = true
+	r.Agents = []AgentStatus{{Name: "pi", OnPath: true, Install: InstallStateInstalled, Health: HealthOK}, {Name: "opencode", OnPath: true, Install: InstallStateInstalled, Health: HealthOK}}
+	diagnoseIndependentPlugins(r)
+	return r
 }
 
 // goldenMinimalReport is a fresh install with nothing configured. It renders

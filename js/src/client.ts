@@ -1,6 +1,8 @@
 import {
+  type Context,
   context,
   type Histogram,
+  isSpanContextValid,
   type Meter,
   metrics,
   type Span,
@@ -405,9 +407,7 @@ export class Agento11yClient {
     start: ToolExecutionStart,
     callback?: RecorderCallback<ToolExecutionRecorder, TResult>,
   ): ToolExecutionRecorder | Promise<TResult> {
-    this.assertOpen();
-    const recorder: ToolExecutionRecorder =
-      start.toolName.trim().length === 0 ? new NoopToolExecutionRecorder() : new ToolExecutionRecorderImpl(this, start);
+    const recorder = this.internalStartToolExecution(start);
     if (callback === undefined) {
       return recorder;
     }
@@ -642,6 +642,16 @@ export class Agento11yClient {
     return this.nowFn();
   }
 
+  internalStartToolExecution(
+    start: ToolExecutionStart,
+    parentContext: Context = context.active(),
+  ): ToolExecutionRecorder {
+    this.assertOpen();
+    return start.toolName.trim().length === 0
+      ? new NoopToolExecutionRecorder()
+      : new ToolExecutionRecorderImpl(this, start, parentContext);
+  }
+
   internalAgentName(): string | undefined {
     return this.config.agentName;
   }
@@ -754,6 +764,22 @@ export class Agento11yClient {
     return resolveContentCaptureMode(seed.contentCapture ?? 'default', clientMode);
   }
 
+  /**
+   * Reports whether a framework chain or retriever span must leave the error
+   * text off. Its mode resolves the way the framework's generations resolve
+   * theirs: the resolver sees this run's metadata, then the client default
+   * applies. A
+   * generation sanitizer cannot redact a chain error, so with one configured
+   * the text stays off too.
+   */
+  internalShouldRedactFrameworkSpanErrors(metadata: Record<string, unknown>): boolean {
+    const resolverMode = callContentCaptureResolver(this.config.contentCaptureResolver, metadata);
+    const mode = resolveClientContentCaptureMode(resolveContentCaptureMode(resolverMode, this.config.contentCapture));
+    return (
+      mode === 'metadata_only' || mode === 'full_with_metadata_spans' || this.config.generationSanitizer !== undefined
+    );
+  }
+
   internalHasGenerationSanitizer(): boolean {
     return this.config.generationSanitizer !== undefined;
   }
@@ -822,24 +848,25 @@ export class Agento11yClient {
     return span;
   }
 
-  internalStartToolExecutionSpan(seed: ToolExecutionStart, startedAt: Date): Span {
-    const span = this.tracer.startSpan(toolSpanName(seed.toolName), {
-      kind: SpanKind.INTERNAL,
-      startTime: startedAt,
-    });
-
-    setToolSpanAttributes(span, seed);
+  internalStartToolExecutionSpan(seed: ToolExecutionStart, startedAt: Date, parentContext: Context): Span {
+    const span = this.tracer.startSpan(
+      toolSpanName(seed),
+      {
+        kind: SpanKind.INTERNAL,
+        startTime: startedAt,
+        attributes: { ...toolSpanAttributes(seed), ...skillProcessAttributes(seed) },
+      },
+      parentContext,
+    );
     setTagSpanAttributes(span, this.config.tags);
     return span;
   }
 
   internalApplyTraceContextFromSpan(span: Span, generation: Generation): void {
-    const context = span.spanContext();
-    if (context.traceId.length > 0) {
-      generation.traceId = context.traceId;
-    }
-    if (context.spanId.length > 0) {
-      generation.spanId = context.spanId;
+    const spanContext = span.spanContext();
+    if (isSpanContextValid(spanContext)) {
+      generation.traceId = spanContext.traceId;
+      generation.spanId = spanContext.spanId;
     }
   }
 
@@ -970,7 +997,18 @@ export class Agento11yClient {
     localError: Error | undefined,
     contentCaptureMode: ContentCaptureMode = 'default',
   ): Error | undefined {
-    setToolSpanAttributes(span, toolExecution);
+    const includePrivate = contentCaptureMode !== 'metadata_only' && contentCaptureMode !== 'full_with_metadata_spans';
+    span.setAttributes({
+      ...toolSpanAttributes(toolExecution),
+      ...skillProcessAttributes(toolExecution, includePrivate),
+    });
+    if (
+      toolExecution.executionKind === 'command' &&
+      typeof toolExecution.processExitCode === 'number' &&
+      Number.isSafeInteger(toolExecution.processExitCode)
+    ) {
+      span.setAttribute('process.exit.code', toolExecution.processExitCode);
+    }
 
     if (toolExecution.includeContent) {
       const argumentsResult = serializeToolContent(toolExecution.arguments);
@@ -1464,6 +1502,11 @@ class GenerationRecorderImpl implements GenerationRecorder {
     this.span = this.client.internalStartGenerationSpan(this.seed, this.mode, this.startedAt, this.contentCaptureMode);
   }
 
+  startToolExecution(start: ToolExecutionStart): ToolExecutionRecorder {
+    // Bind only parentage; suppression, baggage and sampler inputs belong to the tool caller.
+    return this.client.internalStartToolExecution(start, trace.setSpan(context.active(), this.span));
+  }
+
   setResult(result: GenerationResult): void {
     if (this.ended) {
       return;
@@ -1779,6 +1822,7 @@ class ToolExecutionRecorderImpl implements ToolExecutionRecorder {
   constructor(
     private readonly client: Agento11yClient,
     seed: ToolExecutionStart,
+    parentContext: Context,
   ) {
     this.seed = cloneToolExecutionStart(seed);
     if (!notEmpty(this.seed.conversationId)) {
@@ -1816,7 +1860,7 @@ class ToolExecutionRecorderImpl implements ToolExecutionRecorder {
     }
     this.resolvedIncludeContent = shouldIncludeToolContent(this.toolMode, this.seed.includeContent ?? false);
     this.startedAt = this.seed.startedAt ?? this.client.internalNow();
-    this.span = this.client.internalStartToolExecutionSpan(this.seed, this.startedAt);
+    this.span = this.client.internalStartToolExecutionSpan(this.seed, this.startedAt, parentContext);
   }
 
   setResult(result: ToolExecutionResult): void {
@@ -1845,6 +1889,14 @@ class ToolExecutionRecorderImpl implements ToolExecutionRecorder {
       toolCallId: this.seed.toolCallId,
       toolType: this.seed.toolType,
       toolDescription: this.seed.toolDescription,
+      executionKind: this.seed.executionKind,
+      skillName: this.seed.skillName,
+      skillDescription: this.seed.skillDescription,
+      skillSourceURI: this.seed.skillSourceURI,
+      skillResourceName: this.seed.skillResourceName,
+      processExecutableName: this.seed.processExecutableName,
+      processExecutablePath: this.seed.processExecutablePath,
+      processExitCode: this.result?.processExitCode,
       conversationId: this.seed.conversationId,
       conversationTitle: this.seed.conversationTitle,
       agentName: this.seed.agentName,
@@ -1929,12 +1981,94 @@ function embeddingSpanName(modelName: string): string {
   return `${defaultEmbeddingOperationName} ${model}`;
 }
 
-function toolSpanName(toolName: string): string {
-  const normalized = toolName.trim();
-  if (normalized.length === 0) {
-    return 'execute_tool unknown';
+function toolSpanName(tool: ToolExecutionStart): string {
+  const base = `execute_tool ${tool.toolName.trim() || 'unknown'}`;
+  let suffix: string | undefined;
+  switch (tool.executionKind) {
+    case 'load_skill':
+      suffix = tool.skillName?.trim();
+      break;
+    case 'read_skill_resource':
+    case 'command': {
+      const skill = tool.skillName?.trim();
+      const resource = tool.skillResourceName?.trim();
+      suffix = resource ? (skill ? `${skill} ${resource}` : resource) : undefined;
+      if (!suffix && tool.executionKind === 'command') {
+        suffix = tool.processExecutableName?.trim();
+      }
+      break;
+    }
   }
-  return `execute_tool ${normalized}`;
+  return suffix ? `${base} ${suffix}` : base;
+}
+
+// Private fields are added at completion, never to sampler inputs.
+function skillProcessAttributes(tool: ToolExecutionStart, includePrivate = false): Record<string, string> {
+  const attrs: Record<string, string> = {};
+  if (
+    tool.executionKind !== 'load_skill' &&
+    tool.executionKind !== 'read_skill_resource' &&
+    tool.executionKind !== 'command'
+  ) {
+    return attrs;
+  }
+  const add = (key: string, value: string | undefined): void => {
+    const normalized = value?.trim();
+    if (normalized) {
+      attrs[key] = normalized;
+    }
+  };
+  add('gen_ai.skill.name', tool.skillName);
+  if (tool.executionKind !== 'load_skill') {
+    add('gen_ai.skill.resource.name', tool.skillResourceName);
+  }
+  if (tool.executionKind === 'command') {
+    add('process.executable.name', tool.processExecutableName);
+    if (includePrivate) {
+      add('process.executable.path', tool.processExecutablePath);
+    }
+  }
+  if (includePrivate) {
+    add('gen_ai.skill.description', tool.skillDescription);
+    const uri = projectSkillSourceURI(tool.skillSourceURI);
+    if (uri) {
+      attrs['gen_ai.skill.source.uri'] = uri;
+    }
+  }
+  return attrs;
+}
+
+function projectSkillSourceURI(uri: string | undefined): string | undefined {
+  uri = uri?.replace(/^[\s\u0085]+|[\s\u0085]+$/gu, '');
+  if (!uri || /[\s\\]|\p{Cc}|%(?![\da-f]{2})/iu.test(uri)) {
+    return undefined;
+  }
+  // Validate the original location before URL can repair a missing host or absolute path.
+  const location = /^([a-z][a-z\d+.-]*):(?:\/\/([^/?#]*))?([^?#]*)/i.exec(uri);
+  if (!location) {
+    return undefined;
+  }
+  const [, scheme = '', authority, path = ''] = location;
+  if (scheme.toLowerCase() === 'file' ? !path.startsWith('/') : !authority) {
+    return undefined;
+  }
+  try {
+    if (authority) {
+      if (authority.split('@').length > 2 || authority.endsWith(':')) {
+        return undefined;
+      }
+      // Validate host and port even for schemes with opaque WHATWG hosts (e.g. s3).
+      new URL(`https://${authority}/`);
+    }
+    const url = new URL(uri);
+    url.username = '';
+    url.password = '';
+    url.search = '';
+    url.hash = '';
+    return url.toString();
+  } catch {
+    return undefined;
+  }
 }
 
 function tagMetricAttributes(tags: Record<string, string> | undefined): Record<string, string> {
@@ -2181,52 +2315,29 @@ function setEmbeddingEndSpanAttributes(
   }
 }
 
-function setToolSpanAttributes(
-  span: Span,
-  tool: {
-    toolName: string;
-    toolCallId?: string;
-    toolType?: string;
-    toolDescription?: string;
-    conversationId?: string;
-    conversationTitle?: string;
-    agentName?: string;
-    agentVersion?: string;
-    requestProvider?: string;
-    requestModel?: string;
-  },
-): void {
-  span.setAttribute(spanAttrOperationName, 'execute_tool');
-  span.setAttribute(spanAttrToolName, tool.toolName);
-  span.setAttribute(spanAttrSDKName, sdkName);
-
-  if (notEmpty(tool.toolCallId)) {
-    span.setAttribute(spanAttrToolCallID, tool.toolCallId);
+function toolSpanAttributes(tool: ToolExecutionStart): Record<string, string> {
+  const attrs: Record<string, string> = {
+    [spanAttrOperationName]: 'execute_tool',
+    [spanAttrToolName]: tool.toolName.trim(),
+    [spanAttrSDKName]: sdkName,
+  };
+  const optional = {
+    [spanAttrToolCallID]: tool.toolCallId,
+    [spanAttrToolType]: tool.toolType,
+    [spanAttrToolDescription]: tool.toolDescription,
+    [spanAttrConversationID]: tool.conversationId,
+    [spanAttrConversationTitle]: tool.conversationTitle,
+    [spanAttrAgentName]: tool.agentName,
+    [spanAttrAgentVersion]: tool.agentVersion,
+    [spanAttrProviderName]: tool.requestProvider,
+    [spanAttrRequestModel]: tool.requestModel,
+  };
+  for (const [key, value] of Object.entries(optional)) {
+    if (notEmpty(value)) {
+      attrs[key] = value;
+    }
   }
-  if (notEmpty(tool.toolType)) {
-    span.setAttribute(spanAttrToolType, tool.toolType);
-  }
-  if (notEmpty(tool.toolDescription)) {
-    span.setAttribute(spanAttrToolDescription, tool.toolDescription);
-  }
-  if (notEmpty(tool.conversationId)) {
-    span.setAttribute(spanAttrConversationID, tool.conversationId);
-  }
-  if (notEmpty(tool.conversationTitle)) {
-    span.setAttribute(spanAttrConversationTitle, tool.conversationTitle);
-  }
-  if (notEmpty(tool.agentName)) {
-    span.setAttribute(spanAttrAgentName, tool.agentName);
-  }
-  if (notEmpty(tool.agentVersion)) {
-    span.setAttribute(spanAttrAgentVersion, tool.agentVersion);
-  }
-  if (notEmpty(tool.requestProvider)) {
-    span.setAttribute(spanAttrProviderName, tool.requestProvider);
-  }
-  if (notEmpty(tool.requestModel)) {
-    span.setAttribute(spanAttrRequestModel, tool.requestModel);
-  }
+  return attrs;
 }
 
 function serializeToolContent(value: unknown): { value?: string; error?: Error } {

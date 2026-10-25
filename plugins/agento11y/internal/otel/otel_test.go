@@ -293,7 +293,7 @@ func TestResolveExporterConfigOptions(t *testing.T) {
 			envEndpoint:  envEndpoint,
 			envInsecure:  "true",
 			wantOK:       true,
-			wantURL:      envEndpoint,
+			wantURL:      "http://env.example:4318",
 			wantHeaders:  map[string]string{"Authorization": "Basic env-credential"},
 			wantInsecure: true,
 		},

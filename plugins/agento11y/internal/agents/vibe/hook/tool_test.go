@@ -12,6 +12,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe/meta"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe/state"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe/toolevents"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
 
 func discardLogger() *log.Logger { return log.New(io.Discard, "", 0) }
@@ -30,32 +31,35 @@ func TestPreTool_GuardsDisabledPassesThrough(t *testing.T) {
 }
 
 func TestPreTool_FailClosedDeniesOnMissingCreds(t *testing.T) {
-	t.Setenv("SIGIL_GUARDS_ENABLED", "true")
-	t.Setenv("SIGIL_GUARDS_FAIL_OPEN", "false")
-	t.Setenv("SIGIL_ENDPOINT", "")
-	t.Setenv("SIGIL_AUTH_TENANT_ID", "")
-	t.Setenv("SIGIL_AUTH_TOKEN", "")
+	for _, protocol := range []string{"", "http", "otel", "invalid"} {
+		t.Run("generation protocol="+protocol, func(t *testing.T) {
+			envconfig.PinAliasEnvBlank(t)
+			t.Setenv("AGENTO11Y_PROTOCOL", protocol)
+			t.Setenv("SIGIL_GUARDS_ENABLED", "true")
+			t.Setenv("SIGIL_GUARDS_FAIL_OPEN", "false")
 
-	var out bytes.Buffer
-	PreTool(context.Background(), &out, Payload{
-		HookEventName:  "pre_tool",
-		SessionID:      "s",
-		ToolNameValue:  "bash",
-		ToolInputValue: json.RawMessage(`{"command":"ls"}`),
-	}, discardLogger())
+			var out bytes.Buffer
+			PreTool(context.Background(), &out, Payload{
+				HookEventName:  "pre_tool",
+				SessionID:      "s",
+				ToolNameValue:  "bash",
+				ToolInputValue: json.RawMessage(`{"command":"ls"}`),
+			}, discardLogger())
 
-	var resp struct {
-		Decision string `json:"decision"`
-		Reason   string `json:"reason"`
-	}
-	if err := json.Unmarshal(out.Bytes(), &resp); err != nil {
-		t.Fatalf("stdout is not a JSON deny response: %v (got %q)", err, out.String())
-	}
-	if resp.Decision != "deny" {
-		t.Errorf("decision = %q, want deny (fail-closed with no creds)", resp.Decision)
-	}
-	if resp.Reason == "" {
-		t.Error("deny reason is empty")
+			var resp struct {
+				Decision string `json:"decision"`
+				Reason   string `json:"reason"`
+			}
+			if err := json.Unmarshal(out.Bytes(), &resp); err != nil {
+				t.Fatalf("stdout is not a JSON deny response: %v (got %q)", err, out.String())
+			}
+			if resp.Decision != "deny" {
+				t.Errorf("decision = %q, want deny (fail-closed with no creds)", resp.Decision)
+			}
+			if resp.Reason == "" {
+				t.Error("deny reason is empty")
+			}
+		})
 	}
 }
 

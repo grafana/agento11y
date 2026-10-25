@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/emit"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	pluginotel "github.com/grafana/agento11y/plugins/agento11y/internal/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -48,25 +50,37 @@ func (importIDs) NewSpanID(ctx context.Context, _ trace.TraceID) trace.SpanID {
 	return s
 }
 
-// Telemetry reuses the coding-agent SDK/OTLP configuration. Setup and flush
-// failures are fatal for a trajectory import, not silent loss of tracing.
+// Telemetry reuses the coding-agent SDK/OTLP configuration. Generation setup
+// and confirmation failures are fatal for a trajectory import.
 type Telemetry struct {
 	client    *agento11y.Client
 	providers *pluginotel.Providers
 	tracer    trace.Tracer
+	protocol  agento11y.GenerationExportProtocol
 }
 
 func NewTelemetry(ctx context.Context) (*Telemetry, error) {
-	providers, err := pluginotel.SetupWithOptions(ctx, "", pluginotel.Options{IDGenerator: importIDs{}})
+	protocol, err := envconfig.ResolveGenerationTransport()
+	if err != nil {
+		return nil, err
+	}
+	providers, err := pluginotel.SetupWithOptions(ctx, "", pluginotel.Options{IDGenerator: importIDs{}, GenerationProtocol: protocol})
 	if err != nil {
 		return nil, err
 	}
 	if providers == nil {
 		return nil, errors.New("trajectory import requires AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT")
 	}
+	client, err := emit.NewClient(emit.ClientOptions{InstrumentationName: "agento11y.claude-evals", Providers: providers, ContentCapture: agento11y.ContentCaptureModeMetadataOnly})
+	if err != nil {
+		// A canceled import must still release its providers.
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return nil, errors.Join(fmt.Errorf("setup telemetry client: %w", err), providers.Shutdown(cleanupCtx))
+	}
 	return &Telemetry{
 		providers: providers, tracer: providers.Tracer("agento11y.claude-evals"),
-		client: emit.NewClient(emit.ClientOptions{InstrumentationName: "agento11y.claude-evals", Providers: providers, ContentCapture: agento11y.ContentCaptureModeMetadataOnly}),
+		client: client, protocol: protocol,
 	}, nil
 }
 
@@ -74,7 +88,12 @@ func (t *Telemetry) Shutdown(ctx context.Context) error {
 	if t == nil {
 		return nil
 	}
-	return errors.Join(t.client.Shutdown(ctx), t.providers.Shutdown(ctx))
+	clientCtx, cancelClient := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	clientErr := t.client.Shutdown(clientCtx)
+	cancelClient()
+	providerCtx, cancelProviders := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancelProviders()
+	return errors.Join(clientErr, t.providers.Shutdown(providerCtx))
 }
 
 func (t *Telemetry) export(ctx context.Context, trajectory *Trajectory, includeContent bool) error {
@@ -159,7 +178,7 @@ func (t *Telemetry) export(ctx context.Context, trajectory *Trajectory, includeC
 	if err := t.client.Flush(ctx); err != nil {
 		return fmt.Errorf("flush conversation: %w", err)
 	}
-	if err := t.providers.ForceFlush(); err != nil {
+	if err := t.providers.ForceFlush(); err != nil && t.protocol != agento11y.GenerationExportProtocolOTel {
 		return fmt.Errorf("flush trace: %w", err)
 	}
 	return nil
