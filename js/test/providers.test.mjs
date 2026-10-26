@@ -1174,6 +1174,7 @@ function newEmbeddingHarness() {
   const defaults = defaultConfig();
 
   const client = new Agento11yClient({
+    debugBufferSize: 8,
     tracer,
     generationExport: {
       ...defaults.generationExport,

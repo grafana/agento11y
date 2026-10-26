@@ -50,6 +50,7 @@ test('validation rejects tool_call part for user role and reports input path', a
       recorder.getError()?.message ?? '',
       /generation\.input\[0\].parts\[0\].tool_call only allowed for assistant role/,
     );
+    assert.equal(client.debugSnapshot().generations.length, 1);
     await client.flush();
     assert.equal(exporter.requests.length, 0);
   } finally {
@@ -201,6 +202,7 @@ function newClient(generationExporter) {
   const defaults = defaultConfig();
   return new Agento11yClient({
     tracer: trace.getTracer('agento11y-sdk-js-test'),
+    debugBufferSize: 8,
     generationExport: {
       ...defaults.generationExport,
       batchSize: 100,

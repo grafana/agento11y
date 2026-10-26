@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Agento11yClient, configFromEnv, mergeConfig } from '../.test-dist/index.js';
+import { Agento11yClient, configFromEnv, defaultConfig, mergeConfig } from '../.test-dist/index.js';
 
 // configFromEnv table: env-only resolution with no caller-supplied config.
 const configFromEnvCases = [
@@ -18,6 +18,7 @@ const configFromEnvCases = [
       assert.equal(cfg.agentName, undefined);
       assert.equal(cfg.userId, undefined);
       assert.equal(cfg.debug, undefined);
+      assert.equal(cfg.debugBufferSize, 0);
     },
   },
   {
@@ -397,6 +398,41 @@ for (const { key, defaultValue, invalidValues, minimum } of [
       ]);
     });
   }
+}
+
+for (const [value, expectedCapacity, shouldWarn] of [
+  [undefined, 0, false],
+  [0, 0, false],
+  [1, 1, false],
+  [64, 64, false],
+  [2_147_483_647, 2_147_483_647, false],
+  [-1, 0, true],
+  [1.5, 0, true],
+  [Number.NaN, 0, true],
+  [Infinity, 0, true],
+  [-Infinity, 0, true],
+  [2_147_483_648, 0, true],
+  ['64', 0, true],
+  [null, 0, true],
+]) {
+  test(`mergeConfig: debugBufferSize ${String(value)}`, () => {
+    const warnings = [];
+    const cfg = mergeConfig(
+      { debugBufferSize: value, debug: true, logger: { warn: (message) => warnings.push(message) } },
+      { AGENTO11Y_DEBUG_BUFFER_SIZE: '100', SIGIL_DEBUG_BUFFER_SIZE: '100' },
+    );
+    assert.equal(defaultConfig().debugBufferSize, 0);
+    assert.equal(cfg.debugBufferSize, expectedCapacity);
+    assert.equal(cfg.debug, true);
+    assert.deepEqual(
+      warnings,
+      shouldWarn
+        ? [
+            `agento11y: ignoring invalid debugBufferSize: ${String(value)}; expected a whole number from 0 through 2147483647; debug history disabled`,
+          ]
+        : [],
+    );
+  });
 }
 
 for (const value of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2_147_483_648]) {

@@ -557,6 +557,13 @@ test('queue-full recorder local error is exposed and callback style throws', asy
       }),
       /queue is full/,
     );
+    assert.deepEqual(
+      client.debugSnapshot().generations.map(({ conversationId }) => conversationId),
+      ['conv-6', 'conv-7', 'conv-8'],
+    );
+    assert.equal(client.debugSnapshot().queueSize, 1);
+    await client.flush();
+    assert.equal(exporter.requests[0].generations.length, 1);
   } finally {
     await client.shutdown();
   }
@@ -607,6 +614,7 @@ test('workflow step queue full and payload size errors are surfaced locally', as
         }),
       /workflow step payload exceeds max bytes/,
     );
+    assert.deepEqual(payloadClient.debugSnapshot().workflowSteps, []);
   } finally {
     await payloadClient.shutdown();
   }
@@ -670,6 +678,7 @@ test('built-in HTTP exporter posts generation batches to configured endpoint', a
 test('built-in none exporter records generations without sending', async () => {
   const defaults = defaultConfig();
   const client = new Agento11yClient({
+    debugBufferSize: 1,
     tracer: trace.getTracer('agento11y-sdk-js-test'),
     generationExport: {
       ...defaults.generationExport,
@@ -796,10 +805,106 @@ test('embedding recorder does not enqueue generation exports', async () => {
   }
 });
 
+for (const debugBufferSize of [undefined, 0, 1, 3, 2_147_483_647]) {
+  test(`debug histories retain independently with capacity ${debugBufferSize}`, async () => {
+    let exportedGenerations = 0;
+    let exportedSteps = 0;
+    const exporter = {
+      async exportGenerations({ generations }) {
+        exportedGenerations += generations.length;
+        return { results: generations.map(({ id }) => ({ generationId: id, accepted: true })) };
+      },
+      async exportWorkflowSteps({ workflowSteps }) {
+        exportedSteps += workflowSteps.length;
+        return { results: workflowSteps.map(({ id }) => ({ stepId: id, accepted: true })) };
+      },
+    };
+    const config = {
+      debug: true,
+      generationExporter: exporter,
+      generationExport: { batchSize: 100, flushIntervalMs: 0 },
+      ...(debugBufferSize === undefined ? {} : { debugBufferSize }),
+    };
+    const client = new Agento11yClient(config);
+    config.debugBufferSize = 99;
+    const capacity = debugBufferSize ?? 0;
+    try {
+      for (let i = 0; i < 11; i++) {
+        const generation = client.startGeneration({ ...seedGeneration(i % 2), id: `gen-${i}` });
+        endWithSuccess(generation, i);
+        generation.end();
+        client.enqueueWorkflowStep({ id: `step-${i}`, conversationId: `conv-${i % 2}`, stepName: 'route' });
+        if (i % 2 === 0) {
+          const tool = client.startToolExecution({
+            toolName: `tool-${i}`,
+            conversationId: `conv-${Math.floor(i / 2) % 2}`,
+          });
+          tool.setResult({ result: i });
+          tool.end();
+          tool.end();
+          assert.equal(tool.getError(), undefined);
+        }
+        const snapshot = client.debugSnapshot();
+        assert.deepEqual(
+          snapshot.generations.map(({ id }) => id),
+          Array.from({ length: i + 1 }, (_, n) => `gen-${n}`).slice(Math.max(0, i + 1 - capacity)),
+        );
+        assert.deepEqual(
+          snapshot.workflowSteps.map(({ id }) => id),
+          Array.from({ length: i + 1 }, (_, n) => `step-${n}`).slice(Math.max(0, i + 1 - capacity)),
+        );
+        const toolNames = Array.from({ length: Math.floor(i / 2) + 1 }, (_, n) => `tool-${n * 2}`);
+        assert.deepEqual(
+          snapshot.toolExecutions.map(({ toolName }) => toolName),
+          toolNames.slice(Math.max(0, toolNames.length - capacity)),
+        );
+        assert.equal(snapshot.queueSize, i + 1);
+        assert.equal(snapshot.workflowStepQueueSize, i + 1);
+      }
+      await client.flush();
+      assert.equal(exportedGenerations, 11);
+      assert.equal(exportedSteps, 11);
+      assert.equal(client.debugSnapshot().queueSize, 0);
+      assert.equal(client.debugSnapshot().workflowStepQueueSize, 0);
+      const beforeShutdown = client.debugSnapshot();
+      await client.shutdown();
+      assert.deepEqual(client.debugSnapshot(), beforeShutdown);
+    } finally {
+      await client.shutdown();
+    }
+  });
+}
+
+test('debug snapshots preserve message isolation and shallow tool payloads', async () => {
+  const client = newClient(new MockGenerationExporter(), { flushIntervalMs: 0 }, { debugBufferSize: 2 });
+  try {
+    const generation = client.startGeneration(seedGeneration('copy'));
+    endWithSuccess(generation, 'copy');
+    const payload = { nested: { secret: 'raw' } };
+    const tool = client.startToolExecution({ toolName: 'lookup' });
+    tool.setResult({ arguments: payload, result: payload });
+    tool.setCallError(new Error('raw-error'));
+    tool.end();
+    const snapshot = client.debugSnapshot();
+    snapshot.generations[0].model.name = 'changed';
+    snapshot.generations[0].output[0].content = 'changed';
+    snapshot.toolExecutions[0].toolName = 'changed';
+    assert.equal(client.debugSnapshot().generations[0].model.name, 'gpt-5');
+    assert.equal(client.debugSnapshot().generations[0].output[0].content, 'ok-copy');
+    assert.equal(client.debugSnapshot().toolExecutions[0].toolName, 'lookup');
+    assert.equal(snapshot.toolExecutions[0].arguments, payload);
+    assert.equal(snapshot.toolExecutions[0].result, payload);
+    assert.equal(snapshot.toolExecutions[0].callError, 'raw-error');
+  } finally {
+    await client.shutdown();
+  }
+});
+
 function newClient(generationExporter, overrides, clientOverrides = {}) {
   const defaults = defaultConfig();
   return new Agento11yClient({
     tracer: trace.getTracer('agento11y-sdk-js-test'),
+    debugBufferSize: 64,
     ...clientOverrides,
     generationExport: {
       ...defaults.generationExport,

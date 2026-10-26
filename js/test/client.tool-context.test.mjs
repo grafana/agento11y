@@ -187,6 +187,7 @@ function newHarness(sampler) {
   const tracer = traceProvider.getTracer('agento11y-tool-context-test');
   const starts = [];
   const client = new Agento11yClient({
+    debugBufferSize: 8,
     tracer: {
       startSpan(name, options, parentContext) {
         const span = tracer.startSpan(name, options, parentContext);

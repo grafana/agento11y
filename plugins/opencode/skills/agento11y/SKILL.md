@@ -216,7 +216,15 @@ Skill source URIs exported from typed fields lose all user information, query pa
 Malformed values are omitted without filesystem/network lookups.
 In Go `otelgenai`, raw `Invocation.Attributes` and attributes returned by end hooks bypass capture filtering and URI scrubbing.
 They can override typed attributes. Callers must filter private attributes and sanitize source URIs themselves.
-Core recorders can retain private inputs. JS/Java completed-tool debug snapshots retain raw arguments, results, and error text even in reduced modes.
+Core recorders can retain private inputs. JS/Java completed debug history defaults to disabled (`debugBufferSize: 0`).
+To retain completed records in debug snapshots, use JS `new Agento11yClient({ debugBufferSize: 64 })` or Java `new Agento11yClientConfig().setDebugBufferSize(64)`.
+No environment variable sets `debugBufferSize`; verbose `debug` and `AGENTO11Y_DEBUG` do not control history.
+The client retains the newest `debugBufferSize` entries of each record type across all conversations.
+Snapshots return those entries oldest first by recording order, including after shutdown.
+Queue counters remain available with history disabled. Retention does not change exports, queue limits, spans, metrics, or capture policy.
+When enabled, tool snapshots retain raw arguments, results, and error text even in reduced modes.
+Arguments and results still reference the original payload objects.
+The capacity counts records, not bytes. Active recorders, pending exports, and caller-held snapshots can retain additional data.
 The `no_tool_content` arguments/results opt-in is unchanged and does not bypass reduced effective modes.
 See [capture-mode privacy](https://github.com/grafana/agento11y/blob/main/docs/concepts/content-capture-modes.md#skill-and-process-attribute-privacy).
 

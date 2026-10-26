@@ -1136,9 +1136,16 @@ function newHarness(overrides = {}) {
   const generationExporter = new CapturingExporter();
   const defaults = defaultConfig();
 
-  const { contentCapture, contentCaptureResolver, embeddingCapture, ...exportOverrides } = overrides;
+  const {
+    contentCapture,
+    contentCaptureResolver,
+    embeddingCapture,
+    debugBufferSize = 64,
+    ...exportOverrides
+  } = overrides;
 
   const client = new Agento11yClient({
+    debugBufferSize,
     tracer,
     generationExport: {
       ...defaults.generationExport,

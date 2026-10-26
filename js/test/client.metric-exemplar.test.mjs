@@ -97,6 +97,7 @@ test('generation metric recording has active span context', async () => {
     assert.equal(recorder.getError(), undefined);
 
     const span = singleGenerationSpan(harness.spanExporter);
+    assert.deepEqual(harness.client.debugSnapshot().generations, []);
     assert.ok(
       harness.capturingMeter.capturedTraceIds.length > 0,
       'histogram.record should have been called with active span',
@@ -147,6 +148,7 @@ test('tool execution metric recording has active span context', async () => {
     assert.equal(recorder.getError(), undefined);
 
     const span = singleToolSpan(harness.spanExporter);
+    assert.deepEqual(harness.client.debugSnapshot().toolExecutions, []);
     assert.ok(
       harness.capturingMeter.capturedTraceIds.length > 0,
       'histogram.record should have been called with active span',

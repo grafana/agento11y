@@ -47,6 +47,8 @@ class Agento11yClientMetricsTest {
             result.getUsage().setCacheWriteInputTokens(3);
             recorder.setResult(result);
             recorder.end();
+            assertThat(client.debugSnapshot().getGenerations()).isEmpty();
+            assertThat(client.debugSnapshot().getToolExecutions()).isEmpty();
         }
 
         Collection<MetricData> metrics = metricReader.collectAllMetrics();
