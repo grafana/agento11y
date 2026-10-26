@@ -205,7 +205,7 @@ export interface AutoTagInputs {
   cwd?: string;
   /**
    * Identity the caller already resolved, usually AGENTO11Y_USER_ID. Without
-   * it the user tag is left off.
+   * it no user tag is attached.
    */
   userId?: string;
   /**

@@ -1966,7 +1966,7 @@ func TestCollectConfig_AutoTags(t *testing.T) {
 			wantTags:        map[string]string{"user": agentUserPlaceholder},
 			wantSource:      sourceEnv,
 			wantNamesSource: sourceEnv,
-			wantMsg:         "the auto tag user depends on the coding agent",
+			wantMsg:         "the auto tag user depends on the coding agent: Claude Code, Codex, and Cursor attach the signed-in account when they have one, and other agents attach no user tag; set AGENTO11Y_USER_ID to tag every agent with the same value",
 		},
 		{
 			// An explicit tag supplies the value, so the agent never gets a say and

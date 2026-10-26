@@ -143,7 +143,7 @@ Each message can wait up to `AGENTO11Y_GUARDS_TIMEOUT_MS` (1500 ms by default) b
 
 Cursor uses the first nonblank identity: explicit `AGENTO11Y_USER_ID`, saved session email, then current hook email.
 That value supplies conversation identity and the optional automatic `user` tag; an explicit `user` tag stays independent.
-Without account identity, the automatic `user` tag is absent.
+Without account identity, no automatic `user` tag is attached.
 Disabling automatic tags does not disable account identity.
 See [Local account identity sources](../../docs/concepts/tags-and-metadata.md#local-account-identity-sources) for supported sources across plugins.
 

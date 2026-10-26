@@ -57,7 +57,7 @@ const (
 // agentUserPlaceholder stands in for the auto-tag `user` value when USER_ID is
 // unset. Doctor runs outside a session, so it cannot read the account a host
 // agent signs in to, and leaving the value off would hide that Claude Code,
-// Codex, and Cursor attach one.
+// Codex, and Cursor can attach one.
 const agentUserPlaceholder = "<depends on the agent>"
 
 // trackedSuffixes are the branded alias families doctor attributes to a
@@ -997,9 +997,9 @@ func collectConfig(osEnv, fileEnv map[string]string) ConfigSection {
 			sec.AutoTagNamesSource = autoTagNames.source
 		}
 		// `user` is the one name doctor cannot resolve the way a session will.
-		// With USER_ID unset, Claude Code, Codex, and Cursor attach the account
-		// they are signed in to, which doctor has no hook payload to read, and
-		// an agent that supplies no identity attaches no user tag. Feeding a
+		// With USER_ID unset, Claude Code, Codex, and Cursor attach the signed-in
+		// account when they have one, which doctor has no hook payload to read,
+		// and an agent that supplies no identity attaches no user tag. Feeding a
 		// placeholder through the same tier the adapters fill keeps the row from
 		// presenting one of those outcomes as the value; the message below names
 		// both.
@@ -1150,7 +1150,7 @@ func collectConfig(osEnv, fileEnv map[string]string) ConfigSection {
 	// value the session attaches depends on which agent runs it.
 	if sec.AutoTags[autotag.KeyUser] == agentUserPlaceholder {
 		sec.Messages = append(sec.Messages, fmt.Sprintf(
-			"the auto tag user depends on the coding agent: Claude Code, Codex, and Cursor attach the account they are signed in to, and the others attach no user tag; set %s to tag every agent with the same value",
+			"the auto tag user depends on the coding agent: Claude Code, Codex, and Cursor attach the signed-in account when they have one, and other agents attach no user tag; set %s to tag every agent with the same value",
 			envconfig.PreferredKey("USER_ID")))
 	}
 	if autoTags.conflict {
