@@ -272,10 +272,10 @@ type RunOpts struct {
 	OTLPEndpoint string
 
 	// Block is an environment block from `login --env-file`. Like a pasted
-	// block, only its credential and OTLP lines are
-	// read. Its values count as command-line values, a flag still beats the
-	// block, and together they must supply every required credential because
-	// nothing can be prompted for.
+	// block, only its credential and OTLP lines are read. Its values count as
+	// command-line values, a flag still beats the block, and together they
+	// must supply every required credential because nothing can be prompted
+	// for.
 	Block string
 
 	// ShowNextStep prints a `Try sigil claude or sigil pi.` hint after a
@@ -357,8 +357,8 @@ func Run(ctx context.Context, opts RunOpts) (Result, error) {
 	}
 	var block formValues
 	if opts.Block != "" {
-		// stdin carried the block, so nothing can be prompted for: the block
-		// and the flags must hold every required value between them.
+		// An --env-file run never prompts for a value: the block and the
+		// flags must hold every required value between them.
 		if err := validatePastedBlock(fixed, opts.Block); err != nil {
 			return Result{}, err
 		}
@@ -368,7 +368,11 @@ func Run(ctx context.Context, opts RunOpts) (Result, error) {
 		fixed.token = cmp.Or(fixed.token, block.token)
 		fixed.otelEndpoint = cmp.Or(fixed.otelEndpoint, block.otelEndpoint)
 		if keys, flags := fixed.missingCredentials(); len(keys) > 0 {
-			return Result{}, fmt.Errorf("the block does not set %s; add them to the block or pass %s", strings.Join(keys, " and "), strings.Join(flags, " and "))
+			pronoun := "them"
+			if len(keys) == 1 {
+				pronoun = "it"
+			}
+			return Result{}, fmt.Errorf("the block does not set %s; add %s to the block or pass %s", strings.Join(keys, " and "), pronoun, strings.Join(flags, " and "))
 		}
 		// The block's OTLP headers embed its own tenant and token, so a flag
 		// that replaces either one leaves them stale. Headers without the
@@ -541,7 +545,7 @@ func (f fixedValues) missingCredentials() (keys, flags []string) {
 	for _, c := range []struct{ key, flag, value string }{
 		{"AGENTO11Y_ENDPOINT", "--endpoint", f.endpoint},
 		{"AGENTO11Y_AUTH_TENANT_ID", "--tenant", f.tenantID},
-		{"AGENTO11Y_AUTH_TOKEN", "--token", f.token},
+		{"AGENTO11Y_AUTH_TOKEN", "--token-stdin", f.token},
 	} {
 		if c.value == "" {
 			keys = append(keys, c.key)
@@ -1252,11 +1256,13 @@ func validatePastedBlock(fixed fixedValues, s string) error {
 	if _, err := dotenv.ParseDotenv(strings.NewReader(normalizePastedBlock(s))); err != nil {
 		return fmt.Errorf("could not read the block: %w", err)
 	}
-	var probe formValues
-	filled := applyPaste(&probe, fixed, s)
-	if filled == (pasteFilled{}) {
+	// A block whose every line a flag overrode still carries credentials,
+	// so this check ignores the flags.
+	if applyPaste(&formValues{}, fixedValues{}, s) == (pasteFilled{}) {
 		return errors.New("no credentials in this block. Expected lines like AGENTO11Y_ENDPOINT=…, AGENTO11Y_AUTH_TENANT_ID=…, AGENTO11Y_AUTH_TOKEN=…")
 	}
+	var probe formValues
+	filled := applyPaste(&probe, fixed, s)
 	for _, c := range []struct {
 		supplied bool
 		name     string
@@ -1273,7 +1279,7 @@ func validatePastedBlock(fixed fixedValues, s string) error {
 			continue
 		}
 		if strings.HasPrefix(c.value, "op://") {
-			return fmt.Errorf("the %s is a 1Password reference. Resolve it first, for example: op inject -i team.env | agento11y login --env-file -", c.name)
+			return fmt.Errorf("the %s is a 1Password reference. Resolve it first, for example: op inject -i <file> | agento11y login --env-file -", c.name)
 		}
 		if looksLikePlaceholder(c.value) {
 			// The value is left out: it can sit next to a real secret, and
@@ -1305,7 +1311,7 @@ var pastedAssignmentRe = regexp.MustCompile(`(?:^|\s)(?:export\s+)?([A-Za-z_][A-
 // field is a single-line input, and a terminal paste into one of those arrives
 // with each newline replaced by a space, which the loader would read as one
 // unusable key. Cutting before every key the loader accepts restores the
-// lines. A block that kept its newlines loses only its comment lines.
+// lines. A block that kept its newlines loses only its comments.
 //
 // Only accepted keys cut, so a value keeps its spaces:
 // OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic …" holds no such key and
@@ -1313,14 +1319,17 @@ var pastedAssignmentRe = regexp.MustCompile(`(?:^|\s)(?:export\s+)?([A-Za-z_][A-
 // what keeps a leading `# copied from Grafana` from commenting out the block
 // once the newline after it is gone.
 func normalizePastedBlock(block string) string {
-	// In a block that kept its newlines, a commented-out line must stay
-	// dead: drop it before the regex below, which would otherwise start a
-	// live assignment at its `KEY=`. A flattened paste is one line, so a
-	// leading comment there is handled below instead.
+	// In a block that kept its newlines, a comment must stay dead: drop
+	// comment lines and ` #` tails before the regex below, which would
+	// otherwise start a live assignment at a `KEY=` inside them. A flattened
+	// paste is one line, so a leading comment there is handled below instead.
 	if strings.Contains(strings.TrimSpace(block), "\n") {
-		lines := slices.DeleteFunc(strings.Split(block, "\n"), func(line string) bool {
-			return strings.HasPrefix(strings.TrimSpace(line), "#")
-		})
+		var lines []string
+		for line := range strings.SplitSeq(block, "\n") {
+			if !strings.HasPrefix(strings.TrimSpace(line), "#") {
+				lines = append(lines, cutInlineComment(line))
+			}
+		}
 		block = strings.Join(lines, "\n")
 	}
 	var cuts []int
@@ -1350,6 +1359,27 @@ func normalizePastedBlock(block string) string {
 		lines = append(lines, strings.TrimSpace(block[start:end]))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// cutInlineComment drops a ` #` comment from the end of a line where the
+// loader would drop it: after the closing quote of a quoted value, or anywhere
+// in an unquoted one (see dotenv.ParseDotenv).
+func cutInlineComment(line string) string {
+	_, rest, ok := strings.Cut(line, "=")
+	if !ok {
+		return line
+	}
+	value := strings.TrimLeft(rest, " \t")
+	from := len(line) - len(value)
+	if len(value) >= 2 && (value[0] == '"' || value[0] == '\'') {
+		if end := strings.IndexByte(value[1:], value[0]); end >= 0 {
+			from += end + 2
+		}
+	}
+	if i := strings.Index(line[from:], " #"); i >= 0 {
+		return line[:from+i]
+	}
+	return line
 }
 
 // autoTagOptions lists the values the automatic-tag switch can attach, with
@@ -1935,12 +1965,9 @@ func requireURL(s string) error {
 	}
 	u, err := url.Parse(s)
 	if err != nil {
-		// A *url.Error quotes the whole input, which can carry a secret from
-		// a block; keep only the reason.
-		if ue, ok := errors.AsType[*url.Error](err); ok {
-			err = ue.Err
-		}
-		return fmt.Errorf("invalid URL: %w", err)
+		// The parse error quotes the input, or part of it such as the port,
+		// and the input can carry a secret from a block; say nothing of it.
+		return errors.New("invalid URL")
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return errors.New("endpoint URL must start with http:// or https://")
