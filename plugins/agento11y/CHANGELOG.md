@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.52.0] - 2026-10-26
+
+### Features
+
+- trace tool context and skill loads across agents (#925)
+- **plugins/agento11y**: add experimental OTel generation export (#921)
+- **sdk**: trace skill loads, resource reads, and commands (#920)
+- **plugins/agento11y**: resolve coding agent identity locally (#916)
+- **plugins/agento11y**: support opencode v2 history (#890)
+- **plugins/opencode**: support opencode v2 (#876)
+
+### Bug Fixes
+
+- **plugins/agento11y**: preserve Codex metadata and deep Git roots (#917)
+- **plugins/agento11y**: export Claude Code subagent transcript usage (#918)
+- **plugins/agento11y**: Codex tenant-only export auth and live conversation titles (#893)
+- **agento11y**: omit usage stats from development builds (#889)
+- **lint**: check the errors golangci-lint v2.15.0 now flags (#885)
+
 ## [0.51.0] - 2026-10-16
 
 ### Features
