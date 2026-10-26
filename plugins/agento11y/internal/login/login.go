@@ -1404,7 +1404,8 @@ var pastedAssignmentRe = regexp.MustCompile(`(?:^|\s)(?:export\s+)?([A-Za-z_][A-
 //
 // Only accepted keys cut, so a value keeps its spaces:
 // OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic …" holds no such key and
-// stays whole. Text before the first assignment becomes its own line, which is
+// stays whole. A key right after `#` is commented out and does not cut
+// either, so a block that is only `# KEY=…` stays dead. Text before the first assignment becomes its own line, which is
 // what keeps a leading `# copied from Grafana` from commenting out the block
 // once the newline after it is gone.
 func normalizePastedBlock(block string) string {
@@ -1430,6 +1431,9 @@ func normalizePastedBlock(block string) string {
 		// The regex opens with (?:^|\s); drop the whitespace byte it consumed.
 		if strings.IndexByte(" \t\n\f\r", block[start]) >= 0 {
 			start++
+		}
+		if strings.HasSuffix(strings.TrimRight(block[:start], " \t"), "#") {
+			continue
 		}
 		cuts = append(cuts, start)
 	}

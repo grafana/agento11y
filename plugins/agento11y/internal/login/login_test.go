@@ -262,6 +262,18 @@ func TestNormalizePastedBlock(t *testing.T) {
 			in:   "nothing to see here",
 			want: "nothing to see here",
 		},
+		{
+			// One line, so it takes the flattened path, where `#` must still
+			// comment the key out as the loader would.
+			name: "a commented assignment alone stays a comment",
+			in:   "\n# AGENTO11Y_AUTH_TOKEN=glc_test\n",
+			want: "\n# AGENTO11Y_AUTH_TOKEN=glc_test\n",
+		},
+		{
+			name: "a flattened commented assignment stays with the line before",
+			in:   "AGENTO11Y_ENDPOINT=https://api.example.invalid # export AGENTO11Y_AUTH_TOKEN=glc_test",
+			want: "AGENTO11Y_ENDPOINT=https://api.example.invalid # export AGENTO11Y_AUTH_TOKEN=glc_test",
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -1414,6 +1426,11 @@ func TestValidatePastedBlock(t *testing.T) {
 		{
 			name:    "a block with no credentials is rejected",
 			in:      "UNRELATED_SECRET=do-not-load\n",
+			wantErr: "no credentials",
+		},
+		{
+			name:    "a block that is only a commented token is rejected",
+			in:      "# AGENTO11Y_AUTH_TOKEN=glc_test",
 			wantErr: "no credentials",
 		},
 		{
