@@ -28,5 +28,5 @@ UPDATE_GOLDENS=1 go test -run TestCloudPacksFixture ./internal/local/
 ```
 
 The test checks every case against the local engine before it writes. Copy the
-result to sigil's `sigil/internal/eval/predefined/coding_agent_packs.json` and
-`apps/plugin/src/evaluation/codingAgentPacks.json`.
+result to sigil's `sigil/internal/eval/predefined/coding_agent_packs.json`, and to
+any other copy the comment in sigil's `coding_agent_packs.go` lists.

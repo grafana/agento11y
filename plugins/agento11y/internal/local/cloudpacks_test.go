@@ -13,10 +13,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// cloudPacksFixture is the canonical export of the shell guard packs for
-// Grafana Cloud. Sigil keeps a byte-for-byte snapshot and builds its coding
-// agent guard templates from it, so a Cloud guard denies exactly the commands
-// the local pack denies. Set UPDATE_GOLDENS=1 to regenerate it.
+// cloudPacksFixture is the canonical export of the coding agent guard packs
+// for Grafana Cloud. Sigil keeps a byte-for-byte snapshot and builds its coding
+// agent guard templates from it, so a Cloud guard denies the calls the local
+// pack denies, apart from the cases marked local_only. Set UPDATE_GOLDENS=1 to
+// regenerate it.
 const cloudPacksFixture = "../../../../conformance/guards/coding-agent-packs.json"
 
 // cloudPackMessages is what a Cloud guard tells the agent and the user when it
