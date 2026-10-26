@@ -23,7 +23,6 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/skills"
 	"github.com/muesli/termenv"
-	"github.com/stretchr/testify/require"
 )
 
 // nonTTYStdin returns a file that is guaranteed not to be a terminal.
@@ -903,7 +902,7 @@ func runBlockForTest(t *testing.T, existing string, shell map[string]string, opt
 	for _, suffix := range append(slices.Clone(seededSuffixes), "OTEL_EXPORTER_OTLP_INSECURE") {
 		for _, k := range []string{envconfig.PreferredKey(suffix), envconfig.LegacyKey(suffix), "OTEL_EXPORTER_OTLP_ENDPOINT"} {
 			t.Setenv(k, "")
-			require.NoError(t, os.Unsetenv(k))
+			_ = os.Unsetenv(k)
 		}
 	}
 	for k, v := range shell {
@@ -911,13 +910,17 @@ func runBlockForTest(t *testing.T, existing string, shell map[string]string, opt
 	}
 	path := filepath.Join(t.TempDir(), "config.env")
 	if existing != "" {
-		require.NoError(t, os.WriteFile(path, []byte(existing), 0o600))
+		if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	var stderr bytes.Buffer
 	opts.ConfigPath, opts.Stdin, opts.Stderr, opts.SkipVerify = path, nonTTYStdin(t), &stderr, true
 	_, err := Run(context.Background(), opts)
 	got, readErr := dotenv.ReadDotenv(path, nil)
-	require.NoError(t, readErr)
+	if readErr != nil {
+		t.Fatalf("read config: %v", readErr)
+	}
 	return got, stderr.String(), err
 }
 
@@ -1084,6 +1087,18 @@ func TestRun_BlockAutoTags(t *testing.T) {
 			},
 		},
 		{
+			// Writing back a list that seeds no names would save every name.
+			name:     "a saved list with no supported name is refused",
+			existing: "AGENTO11Y_AUTO_CODING_AGENT_TAGS=false\nAGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=team\n",
+			opts:     RunOpts{Block: blockCreds + "AGENTO11Y_AUTO_CODING_AGENT_TAGS=true\n"},
+			wantErr:  "the saved AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES in",
+			wantFile: map[string]string{
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS":       "false",
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES": "team",
+				"AGENTO11Y_ENDPOINT":                     "",
+			},
+		},
+		{
 			name:     "an invalid setting saves nothing",
 			existing: "AGENTO11Y_AUTO_CODING_AGENT_TAGS=false\n",
 			opts:     RunOpts{Block: blockCreds + "AGENTO11Y_AUTO_CODING_AGENT_TAGS=maybe\n"},
@@ -1098,13 +1113,19 @@ func TestRun_BlockAutoTags(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			got, stderr, err := runBlockForTest(t, c.existing, c.shell, c.opts)
 			if c.wantErr != "" {
-				require.ErrorContains(t, err, c.wantErr)
-			} else {
-				require.NoError(t, err)
+				if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+					t.Fatalf("Run err = %v, want %q", err, c.wantErr)
+				}
+			} else if err != nil {
+				t.Fatalf("Run: %v", err)
 			}
-			require.Contains(t, stderr, c.wantStderr)
+			if !strings.Contains(stderr, c.wantStderr) {
+				t.Errorf("stderr missing %q:\n%s", c.wantStderr, stderr)
+			}
 			for key, want := range c.wantFile {
-				require.Equal(t, want, got[key], key)
+				if got[key] != want {
+					t.Errorf("%s = %q, want %q", key, got[key], want)
+				}
 			}
 		})
 	}
@@ -1135,7 +1156,9 @@ func TestBlockAutoTagsMatchTheForm(t *testing.T) {
 				existing += "AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=" + c.savedNames + "\n"
 			}
 			saved, _, err := runBlockForTest(t, existing, nil, RunOpts{Block: blockCreds + c.block})
-			require.NoError(t, err)
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
 
 			// The form seeds these two fields the way Run does, then the
 			// paste presets them and the user submits without changes.
@@ -1147,7 +1170,9 @@ func TestBlockAutoTagsMatchTheForm(t *testing.T) {
 			form.capturePrompted = true
 			submitted := buildUpdates(form, false)
 			for _, key := range tagKeys {
-				require.Equal(t, submitted[key], saved[key], key)
+				if saved[key] != submitted[key] {
+					t.Errorf("%s = %q after --env-file, %q after the form", key, saved[key], submitted[key])
+				}
 			}
 		})
 	}
@@ -1451,11 +1476,13 @@ func TestValidatePastedBlock(t *testing.T) {
 			name:    "an automatic tag switch that is not a boolean",
 			in:      "AGENTO11Y_AUTH_TOKEN=glc_test\nSIGIL_AUTO_CODING_AGENT_TAGS=maybe\n",
 			wantErr: "SIGIL_AUTO_CODING_AGENT_TAGS is not usable",
+			notIn:   "maybe",
 		},
 		{
 			name:    "an automatic tag name outside the allow-list",
 			in:      "AGENTO11Y_AUTH_TOKEN=glc_test\nAGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=team\n",
 			wantErr: "AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES is not usable: use a comma-separated list of user, repo, and branch, or all",
+			notIn:   "team",
 		},
 		{
 			// A blank preferred spelling must not hide the legacy value from

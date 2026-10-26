@@ -272,10 +272,10 @@ type RunOpts struct {
 	OTLPEndpoint string
 
 	// Block is an environment block from `login --env-file`. Like a pasted
-	// block, only its credential and OTLP lines are read. Its values count as
-	// command-line values, a flag still beats the block, and together they
-	// must supply every required credential because nothing can be prompted
-	// for.
+	// block, only its credential, OTLP, and automatic tag lines are read. Its
+	// values count as command-line values, a flag still beats the block, and
+	// together they must supply every required credential because nothing
+	// can be prompted for.
 	Block string
 
 	// ShowNextStep prints a `Try sigil claude or sigil pi.` hint after a
@@ -445,7 +445,7 @@ func Run(ctx context.Context, opts RunOpts) (Result, error) {
 			return Result{}, fmt.Errorf("login: read config %q: %w", configPath, err)
 		}
 		_, savedOn := blockPreference(saved, envconfig.AutoTagsSuffix)
-		_, savedNames := blockPreference(saved, envconfig.AutoTagNamesSuffix)
+		savedNamesKey, savedNames := blockPreference(saved, envconfig.AutoTagNamesSuffix)
 		v.autoTags, v.autoTagNames = seedAutoTags(savedOn), seedAutoTagNames(savedNames)
 
 		// The block's keys then go over those, as applyPaste puts them over
@@ -455,6 +455,11 @@ func Run(ctx context.Context, opts RunOpts) (Result, error) {
 		_, on := blockPreference(env, envconfig.AutoTagsSuffix)
 		if key, names := blockPreference(env, envconfig.AutoTagNamesSuffix); names != "" && on == "" && !v.autoTags {
 			_, _ = fmt.Fprintf(opts.Stderr, "agento11y login: automatic tags stay off, so the block's %s was not saved; add AGENTO11Y_AUTO_CODING_AGENT_TAGS=true to the block to turn them on.\n", key)
+		}
+		// A saved list with no supported name seeds no names, and writing
+		// that back would save every name in its place.
+		if v.autoTagsFromBlock && v.autoTags && len(v.autoTagNames) == 0 {
+			return Result{}, fmt.Errorf("login: the saved %s in %q has no supported name; add AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES to the block", savedNamesKey, configPath)
 		}
 	}
 
@@ -1225,8 +1230,8 @@ var blockPreferenceSuffixes = []string{envconfig.AutoTagsSuffix, envconfig.AutoT
 // blockPreference resolves one preference family from a block or the saved
 // file: the AGENTO11Y_ spelling when it holds a value, otherwise the SIGIL_
 // one. key is the spelling that supplied the trimmed value, and both are ""
-// when env sets neither. Validation and presetAutoTags both read through it, so they
-// cannot disagree about which spelling wins.
+// when env sets neither. Validation and presetAutoTags both read through it,
+// so they cannot disagree about which spelling wins.
 func blockPreference(env map[string]string, suffix string) (key, value string) {
 	for _, k := range []string{envconfig.PreferredKey(suffix), envconfig.LegacyKey(suffix)} {
 		if value := strings.TrimSpace(env[k]); value != "" {
