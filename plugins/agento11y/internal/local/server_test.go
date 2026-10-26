@@ -4030,6 +4030,9 @@ func TestServer_Guards_FilePackDeniesEnvAcrossTools(t *testing.T) {
 		{"run_terminal_cmd", `{"command":"cat .env"}`},
 		{"execute_command", `{"command":"cat .env"}`},
 		{"run_command", `{"command":"cat .env"}`},
+		{"Grep", `{"pattern":"API_KEY","path":".env"}`},
+		{"grep", `{"pattern":"API_KEY","path":"/repo/.env.local"}`},
+		{"grep_search", `{"query":"API_KEY","include_pattern":".env"}`},
 	}
 	for _, tc := range denied {
 		status, out := postHook(t, s, hookToolJSON(tc.tool, tc.input), nil)
@@ -4043,6 +4046,8 @@ func TestServer_Guards_FilePackDeniesEnvAcrossTools(t *testing.T) {
 		{"Write", `{"path":"src/environment.ts"}`},
 		{"Bash", `{"command":"ls"}`},
 		{"Read", `{"file_path":"config.env"}`},
+		{"Grep", `{"pattern":"TODO","path":"src"}`},
+		{"Glob", `{"pattern":"**/.env*"}`},
 	}
 	for _, tc := range allowed {
 		status, out := postHook(t, s, hookToolJSON(tc.tool, tc.input), nil)

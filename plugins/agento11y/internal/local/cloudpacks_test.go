@@ -112,13 +112,19 @@ var cloudFileToolCases = []cloudPackCase{
 	{Pack: packFiles, Tool: "apply_patch", Input: json.RawMessage(`{"command":"*** Begin Patch\n*** Update File: .env\n@@\n-OLD=value\n+NEW=value\n*** End Patch"}`), Deny: true},
 	{Pack: packFiles, Tool: "apply_patch", Input: json.RawMessage(`{"command":"*** Begin Patch\r\n*** Add File: /repo/.env\r\n+NEW=value\r\n*** End Patch"}`), Deny: true},
 	{Pack: packFiles, Tool: "apply_patch", Input: json.RawMessage(`{"command":"*** Begin Patch\n*** Delete File: .env.local\n*** End Patch"}`), Deny: true},
+	{Pack: packFiles, Tool: "Grep", Input: json.RawMessage(`{"pattern":"API_KEY","path":"/repo/.env"}`), Deny: true},
+	{Pack: packFiles, Tool: "Grep", Input: json.RawMessage(`{"pattern":"API_KEY","glob":".env.production"}`), Deny: true},
+	{Pack: packFiles, Tool: "grep_search", Input: json.RawMessage(`{"query":"API_KEY","include_pattern":".env"}`), Deny: true},
 	{Pack: packFiles, Tool: "Write", Input: json.RawMessage(`{"file_path":"notes.md","content":"the keys live in .env here"}`), Deny: true, LocalOnly: true},
+	{Pack: packFiles, Tool: "Grep", Input: json.RawMessage(`{"pattern":"load .env","path":"src"}`), Deny: true, LocalOnly: true},
 	{Pack: packFiles, Tool: "Read", Input: json.RawMessage(`{"file_path":".environment"}`)},
 	{Pack: packFiles, Tool: "Read", Input: json.RawMessage(`{"file_path":".envrc"}`)},
 	{Pack: packFiles, Tool: "read_file", Input: json.RawMessage(`{"file_path":"config.env"}`)},
 	{Pack: packFiles, Tool: "Read", Input: json.RawMessage(`{"file_path":".env\nbackup"}`)},
 	{Pack: packFiles, Tool: "apply_patch", Input: json.RawMessage(`{"command":"*** Begin Patch\n*** Add File: .envrc\n+NEW=value\n*** End Patch"}`)},
 	{Pack: packFiles, Tool: "mcp__fs__read", Input: json.RawMessage(`{"path":".env"}`)},
+	{Pack: packFiles, Tool: "Grep", Input: json.RawMessage(`{"pattern":"TODO","path":"src"}`)},
+	{Pack: packFiles, Tool: "Glob", Input: json.RawMessage(`{"pattern":"**/.env*"}`)},
 }
 
 type cloudPack struct {

@@ -209,10 +209,47 @@
     },
     {
       "pack": "files",
+      "tool": "Grep",
+      "input": {
+        "pattern": "API_KEY",
+        "path": "/repo/.env"
+      },
+      "deny": true
+    },
+    {
+      "pack": "files",
+      "tool": "Grep",
+      "input": {
+        "pattern": "API_KEY",
+        "glob": ".env.production"
+      },
+      "deny": true
+    },
+    {
+      "pack": "files",
+      "tool": "grep_search",
+      "input": {
+        "query": "API_KEY",
+        "include_pattern": ".env"
+      },
+      "deny": true
+    },
+    {
+      "pack": "files",
       "tool": "Write",
       "input": {
         "file_path": "notes.md",
         "content": "the keys live in .env here"
+      },
+      "deny": true,
+      "local_only": true
+    },
+    {
+      "pack": "files",
+      "tool": "Grep",
+      "input": {
+        "pattern": "load .env",
+        "path": "src"
       },
       "deny": true,
       "local_only": true
@@ -262,6 +299,23 @@
       "tool": "mcp__fs__read",
       "input": {
         "path": ".env"
+      },
+      "deny": false
+    },
+    {
+      "pack": "files",
+      "tool": "Grep",
+      "input": {
+        "pattern": "TODO",
+        "path": "src"
+      },
+      "deny": false
+    },
+    {
+      "pack": "files",
+      "tool": "Glob",
+      "input": {
+        "pattern": "**/.env*"
       },
       "deny": false
     }
@@ -468,7 +522,15 @@
         "view_file(*/.env\"*)",
         "view_file(*/.env.*)",
         "view_file(*\".env\"*)",
-        "view_file(*\".env.*)"
+        "view_file(*\".env.*)",
+        "Grep(*/.env\"*)",
+        "Grep(*/.env.*)",
+        "Grep(*\".env\"*)",
+        "Grep(*\".env.*)",
+        "grep_search(*/.env\"*)",
+        "grep_search(*/.env.*)",
+        "grep_search(*\".env\"*)",
+        "grep_search(*\".env.*)"
       ],
       "fail_message": "Your organization's coding agent policy blocks reading or writing .env files."
     }

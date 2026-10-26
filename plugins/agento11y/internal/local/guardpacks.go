@@ -241,12 +241,15 @@ var filesPreview = []string{
 }
 
 // envFileToolNames are the host spellings File safety matches with a qualified
-// glob, so a .env path is blocked whether the call is a Read, a Write, or a
-// shell cat. Matching is case-insensitive at compile time.
+// glob, so a .env path is blocked whether the call is a Read, a Write, a content
+// search, or a shell cat. Matching is case-insensitive at compile time, so Grep
+// also covers the hosts that call it grep. Glob is left out: it returns file
+// names, not their contents.
 var envFileToolNames = []string{
 	"Bash", "shell", "run_terminal_cmd", "execute_command", "run_command",
 	"Write", "Edit", "MultiEdit", "str_replace_editor", "apply_patch", "create_file",
 	"Read", "read_file", "view_file",
+	"Grep", "grep_search",
 }
 
 func envFileBlockedNames() []string {

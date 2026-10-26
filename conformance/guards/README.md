@@ -6,7 +6,7 @@ from it, so a Cloud guard denies the calls the local pack denies.
 
 | Key | Contents |
 |-----|----------|
-| `packs` | Git safety, destructive commands, permissions, disk wipe, and File safety: each pack's title, description, priority, `shell_command` regex patterns, and the message a denial shows. File safety also has `blocked_names`, a tool filter for file tools. |
+| `packs` | Git safety, destructive commands, permissions, disk wipe, and File safety: each pack's title, description, priority, `shell_command` regex patterns, and the message a denial shows. File safety also has `blocked_names`, a tool filter for file and content search tools (`Grep`, `grep_search`). |
 | `cases` | Tool calls with the verdict both runtimes must give. A case without `tool` is a Bash call running `command`; any other case passes `input` as the tool's arguments. |
 
 ## File safety is narrower in Cloud
