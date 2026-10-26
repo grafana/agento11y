@@ -1413,6 +1413,13 @@ func TestValidatePastedBlock(t *testing.T) {
 			notIn:   "glc_SECRET",
 		},
 		{
+			// url.Parse quotes a bad port even inside its inner error.
+			name:    "a port error leaves the value out",
+			in:      "AGENTO11Y_ENDPOINT=https://api.example.invalid:glc_SECRET\n",
+			wantErr: "invalid URL",
+			notIn:   "glc_SECRET",
+		},
+		{
 			// A shell `#` comment line in a file that kept its newlines.
 			name: "a commented-out line is not read",
 			in:   "AGENTO11Y_AUTH_TOKEN=glc_test\n# AGENTO11Y_ENDPOINT=<old staging URL>\n",
@@ -3107,9 +3114,41 @@ func TestRun_Block(t *testing.T) {
 			},
 		},
 		{
+			// The loader drops a ` #` tail, so the endpoint inside it is not
+			// a live line either.
+			name: "an endpoint in a trailing comment stays dead",
+			opts: RunOpts{Block: "AGENTO11Y_ENDPOINT=https://block.example.com\n" +
+				"AGENTO11Y_AUTH_TENANT_ID=456\n" +
+				"AGENTO11Y_AUTH_TOKEN=glc_x # was: AGENTO11Y_ENDPOINT=https://staging.example\n"},
+			wantFile: map[string]string{
+				"SIGIL_ENDPOINT":   "https://block.example.com",
+				"SIGIL_AUTH_TOKEN": "glc_x",
+			},
+		},
+		{
+			// Every line the block carries is overridden, and the flags
+			// supply the rest.
+			name: "flags may override every line of the block",
+			opts: RunOpts{
+				Block:    "AGENTO11Y_ENDPOINT=https://block.example.com\nAGENTO11Y_AUTH_TENANT_ID=456\n",
+				Endpoint: "https://mine.example.com",
+				TenantID: "789",
+				Token:    "glc_mine",
+			},
+			wantFile: map[string]string{
+				"SIGIL_ENDPOINT":       "https://mine.example.com",
+				"SIGIL_AUTH_TENANT_ID": "789",
+			},
+		},
+		{
 			name:    "block without a token",
 			opts:    RunOpts{Block: "AGENTO11Y_ENDPOINT=https://block.example.com\nAGENTO11Y_AUTH_TENANT_ID=456\n"},
-			wantErr: "does not set AGENTO11Y_AUTH_TOKEN; add them to the block or pass --token",
+			wantErr: "does not set AGENTO11Y_AUTH_TOKEN; add it to the block or pass --token-stdin",
+		},
+		{
+			name:    "block with only a token",
+			opts:    RunOpts{Block: "AGENTO11Y_AUTH_TOKEN=glc_block\n"},
+			wantErr: "does not set AGENTO11Y_ENDPOINT and AGENTO11Y_AUTH_TENANT_ID; add them to the block or pass --endpoint and --tenant",
 		},
 		{
 			name:    "a 1Password reference is refused",

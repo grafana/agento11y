@@ -204,6 +204,11 @@ script the question is never asked, because a piped stdin is not a terminal:
 login writes nothing and exits 1. Pass `--yes` to save the values regardless, or
 `--no-verify` to skip the check. The preferences have no flags.
 
+`--env-file <file>` (`-` for a pipe) never prompts for a value either: the
+block and the flags must supply the endpoint, instance ID, and token, and the
+other preferences keep their saved values. Flags still win over the block's
+values, and `--token-stdin` can supply a token the file leaves out.
+
 Login writes to the resolved config path described above. An install that still
 has only the old `sigil/config.env` under the same config root keeps using that
 file. You can write it by hand instead:

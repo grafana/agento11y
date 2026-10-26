@@ -55,7 +55,7 @@ Verify with `agento11y --version`.
 
 ## Configure
 
-Run `agento11y login` to configure capture. On first run it asks where sessions go: **Local only**, or **Grafana Cloud**. **Local only** needs no Cloud credentials and does not forward sessions. **Grafana Cloud** prints your stack's coding-agent setup page and asks you to paste the connection block from that page.
+Run `agento11y login` to configure capture. On first run it asks where sessions go: **Local only**, or **Grafana Cloud**. **Local only** needs no Cloud credentials and does not forward sessions. **Grafana Cloud** prints your stack's coding-agent setup page and asks you to paste the environment block from that page.
 
 Interactive Cloud setup also asks for **Local web UI** in the preferences. The question starts on **Yes** by default and remembers an earlier answer. **Yes** keeps a full local copy and forwards a copy to Grafana Cloud. **No** sends directly to Grafana Cloud without a local copy. Complete credential flags also skip the preferences and keep direct Cloud behavior.
 
@@ -328,7 +328,7 @@ agento11y login --endpoint https://agento11y-prod-<region>.grafana.net --tenant 
 | `--endpoint url` | conversations API URL |
 | `--tenant id` | instance ID |
 | `--token value` | access-policy token with the `sigil:write` scope |
-| `--token-stdin` | read the token from stdin; requires `--endpoint` and `--tenant` |
+| `--token-stdin` | read the token from stdin; requires `--endpoint` and `--tenant`, or an `--env-file` that sets them |
 | `--otlp-endpoint url` | OTLP endpoint for SDK traces and metrics |
 | `--env-file path` | read the environment block from a file, or from stdin when the path is `-`; it may set credentials, OTLP, and automatic tags |
 | `--no-verify` | write the file without checking the credentials |
@@ -349,7 +349,7 @@ agento11y login --env-file team.env
 op document get agento11y-cloud-env | agento11y login --env-file -
 ```
 
-Login reads the same lines as a pasted block: the endpoint, instance ID, token, OTLP endpoint, and OTLP headers, plus `AGENTO11Y_AUTO_CODING_AGENT_TAGS` and `AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES` (or their `SIGIL_` spellings), so a team block can turn on the same user, repository, and branch labels for everyone who logs in with it. Login saves those two keys as the interactive form saves the same answers. A key the block leaves out keeps its saved value, except that turning automatic tags off also deletes the saved names list, as answering No in the form does. Set both keys in a team block so every run ends the same way. A value the form would not accept stops login before anything is saved. Other keys in the file are ignored and named on stderr: a shared file cannot set anyone's content capture, guards, protocol, session tags, TLS, binary, web dir, or stack URL. The setup page's own `AGENTO11Y_PROTOCOL=http` and `AGENTO11Y_AUTH_MODE=basic` lines are the defaults, so they are not named. Session tags stay out because `AGENTO11Y_TAGS` is one value, so a team value would replace each person's own tags. `export` prefixes and `#` comment lines are accepted, so the same file also works with `source`. A file of `op://` references must be resolved first, for example `op inject -i team.env | agento11y login --env-file -`. Flags still win over the values in the block, and a file that holds only the endpoint and instance ID can be combined with `--token-stdin`. A block larger than 64 KiB is refused.
+Login reads the same lines as a pasted block: the endpoint, instance ID, token, OTLP endpoint, and OTLP headers, plus `AGENTO11Y_AUTO_CODING_AGENT_TAGS` and `AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES` (or their `SIGIL_` spellings), so a team block can turn on the same user, repository, and branch labels for everyone who logs in with it. Login saves those two keys as the interactive form saves the same answers. `--env-file` never prompts for a value: the block and the flags must supply the endpoint, instance ID, and token, and a preference the block does not set keeps its saved value, except that turning automatic tags off also deletes the saved names list, as answering No in the form does. Set both automatic tag keys in a team block so every run ends the same way. A value the form would not accept stops login before anything is saved. Other `AGENTO11Y_*`, `SIGIL_*`, and `OTEL_*` keys that the config file accepts are ignored and named on stderr: a shared file cannot set anyone's content capture, guards, protocol, session tags, TLS, binary, web dir, or stack URL. The setup page's own `AGENTO11Y_PROTOCOL=http` and `AGENTO11Y_AUTH_MODE=basic` lines are the defaults, so they are not named. Lines with any other key are dropped without a notice. Session tags stay out because `AGENTO11Y_TAGS` is one value, so a team value would replace each person's own tags. `export` prefixes and `#` comment lines are accepted, so the same file also works with `source`. A file of `op://` references must be resolved first, for example `op inject -i <file> | agento11y login --env-file -`. Flags still win over the block's values, and a file that holds only the endpoint and instance ID can be combined with `--token-stdin`. A block larger than 64 KiB is refused.
 
 ## Settings
 
