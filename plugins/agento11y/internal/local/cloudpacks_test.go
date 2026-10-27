@@ -38,11 +38,21 @@ var cloudPackMessages = map[string]string{
 // backslash literally, so `\n` here is the two characters JSON escapes a
 // newline to. A .env after a space or a shell character elsewhere in the
 // arguments is denied only locally, and the cases mark it local_only.
+//
+// A search tool's glob can put a * on either side of .env. Cloud has no way to
+// name a literal *, so the search forms put ? there: .env* matches ".env?",
+// and *.env matches "?.env". That also blocks a one-character name in that
+// position, such as a glob of a.env, which the local pack allows.
 func cloudEnvFileBlockedNames() []string {
 	var out []string
 	for _, name := range envFileToolNames {
 		for _, arg := range []string{`*/.env"*`, `*/.env.*`, `*".env"*`, `*".env.*`} {
 			out = append(out, name+"("+arg+")")
+		}
+		if slices.Contains(envSearchToolNames, name) {
+			for _, arg := range []string{`*/.env?"*`, `*".env?"*`, `*/?.env"*`, `*"?.env"*`, `*/?.env?"*`, `*"?.env?"*`, `*/?.env.*`, `*"?.env.*`} {
+				out = append(out, name+"("+arg+")")
+			}
 		}
 		if name == "apply_patch" {
 			for _, arg := range []string{`*: .env\n*`, `*: .env\r*`, `*/.env\n*`, `*/.env\r*`, `*: .env.*`} {
@@ -115,6 +125,10 @@ var cloudFileToolCases = []cloudPackCase{
 	{Pack: packFiles, Tool: "Grep", Input: json.RawMessage(`{"pattern":"API_KEY","path":"/repo/.env"}`), Deny: true},
 	{Pack: packFiles, Tool: "Grep", Input: json.RawMessage(`{"pattern":"API_KEY","glob":".env.production"}`), Deny: true},
 	{Pack: packFiles, Tool: "grep_search", Input: json.RawMessage(`{"query":"API_KEY","include_pattern":".env"}`), Deny: true},
+	{Pack: packFiles, Tool: "Grep", Input: json.RawMessage(`{"pattern":"API_KEY","glob":".env*"}`), Deny: true},
+	{Pack: packFiles, Tool: "Grep", Input: json.RawMessage(`{"pattern":"API_KEY","glob":"**/.env*"}`), Deny: true},
+	{Pack: packFiles, Tool: "Grep", Input: json.RawMessage(`{"pattern":"API_KEY","glob":"*.env"}`), Deny: true},
+	{Pack: packFiles, Tool: "grep_search", Input: json.RawMessage(`{"query":"API_KEY","include_pattern":"**/*.env*"}`), Deny: true},
 	{Pack: packFiles, Tool: "Write", Input: json.RawMessage(`{"file_path":"notes.md","content":"the keys live in .env here"}`), Deny: true, LocalOnly: true},
 	{Pack: packFiles, Tool: "Grep", Input: json.RawMessage(`{"pattern":"load .env","path":"src"}`), Deny: true, LocalOnly: true},
 	{Pack: packFiles, Tool: "Read", Input: json.RawMessage(`{"file_path":".environment"}`)},
@@ -124,6 +138,9 @@ var cloudFileToolCases = []cloudPackCase{
 	{Pack: packFiles, Tool: "apply_patch", Input: json.RawMessage(`{"command":"*** Begin Patch\n*** Add File: .envrc\n+NEW=value\n*** End Patch"}`)},
 	{Pack: packFiles, Tool: "mcp__fs__read", Input: json.RawMessage(`{"path":".env"}`)},
 	{Pack: packFiles, Tool: "Grep", Input: json.RawMessage(`{"pattern":"TODO","path":"src"}`)},
+	{Pack: packFiles, Tool: "Grep", Input: json.RawMessage(`{"pattern":"API_KEY","glob":".envrc"}`)},
+	{Pack: packFiles, Tool: "Grep", Input: json.RawMessage(`{"pattern":"API_KEY","glob":"config.env"}`)},
+	{Pack: packFiles, Tool: "Grep", Input: json.RawMessage(`{"pattern":"API_KEY","glob":"*.environment"}`)},
 	{Pack: packFiles, Tool: "Glob", Input: json.RawMessage(`{"pattern":"**/.env*"}`)},
 }
 

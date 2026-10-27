@@ -18,6 +18,12 @@ dot, plus the `apply_patch` header form. A `.env` after a space or a shell chara
 elsewhere in the arguments, such as in a file's content, is denied only locally.
 The cases mark those calls `local_only`, and sigil expects Cloud to allow them.
 
+Content search tools (`Grep`, `grep_search`) take a glob, so a `*` can sit on either
+side of `.env`: `.env*`, `**/.env*`, `*.env`. Locally their filter adds `*` to both
+character classes. Cloud cannot name a literal `*`, so it puts `?` in that position,
+which also blocks a glob with one ordinary character there, such as `a.env` or
+`.env1`. That is the one place Cloud denies a call the local pack allows.
+
 ## Changing a pack
 
 Change the pack in `plugins/agento11y/internal/local/guardpacks.go`, then regenerate

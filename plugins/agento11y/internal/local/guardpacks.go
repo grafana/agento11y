@@ -3,6 +3,7 @@ package local
 import (
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/guardeval"
@@ -252,9 +253,18 @@ var envFileToolNames = []string{
 	"Grep", "grep_search",
 }
 
+// envSearchToolNames are the content search tools in envFileToolNames. They
+// take a glob as well as a path, so a * may sit on either side of .env
+// (.env*, **/.env*, *.env).
+var envSearchToolNames = []string{"Grep", "grep_search"}
+
 func envFileBlockedNames() []string {
 	out := make([]string, 0, len(envFileToolNames)+1)
 	for _, name := range envFileToolNames {
+		if slices.Contains(envSearchToolNames, name) {
+			out = append(out, name+`(*[/"' <>|;&()*].env[."' <>|;&()*]*)`)
+			continue
+		}
 		out = append(out, name+`(*[/"' <>|;&()].env[."' <>|;&()]*)`)
 		if name == "apply_patch" {
 			// Patch header delimiters are JSON-escaped; file tools can use them inside basenames.

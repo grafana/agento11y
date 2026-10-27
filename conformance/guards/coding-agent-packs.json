@@ -236,6 +236,42 @@
     },
     {
       "pack": "files",
+      "tool": "Grep",
+      "input": {
+        "pattern": "API_KEY",
+        "glob": ".env*"
+      },
+      "deny": true
+    },
+    {
+      "pack": "files",
+      "tool": "Grep",
+      "input": {
+        "pattern": "API_KEY",
+        "glob": "**/.env*"
+      },
+      "deny": true
+    },
+    {
+      "pack": "files",
+      "tool": "Grep",
+      "input": {
+        "pattern": "API_KEY",
+        "glob": "*.env"
+      },
+      "deny": true
+    },
+    {
+      "pack": "files",
+      "tool": "grep_search",
+      "input": {
+        "query": "API_KEY",
+        "include_pattern": "**/*.env*"
+      },
+      "deny": true
+    },
+    {
+      "pack": "files",
       "tool": "Write",
       "input": {
         "file_path": "notes.md",
@@ -308,6 +344,33 @@
       "input": {
         "pattern": "TODO",
         "path": "src"
+      },
+      "deny": false
+    },
+    {
+      "pack": "files",
+      "tool": "Grep",
+      "input": {
+        "pattern": "API_KEY",
+        "glob": ".envrc"
+      },
+      "deny": false
+    },
+    {
+      "pack": "files",
+      "tool": "Grep",
+      "input": {
+        "pattern": "API_KEY",
+        "glob": "config.env"
+      },
+      "deny": false
+    },
+    {
+      "pack": "files",
+      "tool": "Grep",
+      "input": {
+        "pattern": "API_KEY",
+        "glob": "*.environment"
       },
       "deny": false
     },
@@ -527,10 +590,26 @@
         "Grep(*/.env.*)",
         "Grep(*\".env\"*)",
         "Grep(*\".env.*)",
+        "Grep(*/.env?\"*)",
+        "Grep(*\".env?\"*)",
+        "Grep(*/?.env\"*)",
+        "Grep(*\"?.env\"*)",
+        "Grep(*/?.env?\"*)",
+        "Grep(*\"?.env?\"*)",
+        "Grep(*/?.env.*)",
+        "Grep(*\"?.env.*)",
         "grep_search(*/.env\"*)",
         "grep_search(*/.env.*)",
         "grep_search(*\".env\"*)",
-        "grep_search(*\".env.*)"
+        "grep_search(*\".env.*)",
+        "grep_search(*/.env?\"*)",
+        "grep_search(*\".env?\"*)",
+        "grep_search(*/?.env\"*)",
+        "grep_search(*\"?.env\"*)",
+        "grep_search(*/?.env?\"*)",
+        "grep_search(*\"?.env?\"*)",
+        "grep_search(*/?.env.*)",
+        "grep_search(*\"?.env.*)"
       ],
       "fail_message": "Your organization's coding agent policy blocks reading or writing .env files."
     }
