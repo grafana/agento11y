@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -27,6 +28,8 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/redact"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	colmetricpb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestSessionStartWithoutTurnIDSeedsLaterTurn(t *testing.T) {
@@ -830,48 +833,96 @@ func TestStopRetriesPendingFragmentsFromPriorTurns(t *testing.T) {
 // after client.Flush succeeds; if Flush fails they must remain on disk with
 // their PendingRetry flag set, so the next Stop sweeps them again.
 func TestStopFlushFailurePreservesSweptRetries(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
-	logger := log.New(io.Discard, "", 0)
+	for _, tc := range []struct {
+		name       string
+		separate   bool
+		failedTurn string
+	}{
+		{name: "shared client fails", failedTurn: "new-turn"},
+		{name: "current client fails", separate: true, failedTurn: "new-turn"},
+		{name: "retry client fails", separate: true, failedTurn: "old-turn"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			envconfig.PinAliasEnvBlank(t)
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+			logger := log.New(io.Discard, "", 0)
+			var failing atomic.Bool
+			failing.Store(true)
+			var mu sync.Mutex
+			accepted := map[string]int{}
+			server := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Error(err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				var request struct {
+					Generations []struct {
+						ID string `json:"id"`
+					} `json:"generations"`
+				}
+				if err := json.Unmarshal(body, &request); err != nil {
+					t.Error(err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				for _, g := range request.Generations {
+					if failing.Load() && g.ID == mapper.GenerationID("sess", tc.failedTurn) {
+						http.Error(w, "nope", http.StatusBadRequest)
+						return
+					}
+				}
+				mu.Lock()
+				for _, g := range request.Generations {
+					accepted[g.ID]++
+				}
+				mu.Unlock()
+				writeAcceptedGenerationResponse(t, w, body)
+			}))
+			defer server.Close()
+			t.Setenv("SIGIL_ENDPOINT", server.URL)
+			t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
+			t.Setenv("SIGIL_AUTH_TOKEN", "token")
 
-	server := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "nope", http.StatusInternalServerError)
-	}))
-	defer server.Close()
-	t.Setenv("SIGIL_ENDPOINT", server.URL)
-	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
-	t.Setenv("SIGIL_AUTH_TOKEN", "token")
+			cwd := t.TempDir()
+			for _, turn := range []string{"old-turn", "new-turn", "next-turn"} {
+				turnCWD := cwd
+				if tc.separate && turn == "old-turn" {
+					turnCWD = t.TempDir()
+				}
+				require.NoError(t, fragment.Update("sess", turn, logger, func(f *fragment.Fragment) bool {
+					f.Model = "gpt-5.5"
+					f.Cwd = turnCWD
+					f.PendingRetry = turn == "old-turn"
+					f.CompletedAt = "2026-05-15T09:00:00Z"
+					return true
+				}))
+			}
+			cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}
+			Stop(Payload{HookEventName: "Stop", SessionID: "sess", TurnID: "new-turn"}, cfg, logger)
 
-	if err := fragment.Update("sess", "old-turn", logger, func(f *fragment.Fragment) bool {
-		f.Model = "gpt-5.5"
-		f.PendingRetry = true
-		f.CompletedAt = "2026-05-15T09:00:00Z"
-		return true
-	}); err != nil {
-		t.Fatalf("seed prior turn: %v", err)
-	}
-	if err := fragment.Update("sess", "new-turn", logger, func(f *fragment.Fragment) bool {
-		f.Model = "gpt-5.5"
-		return true
-	}); err != nil {
-		t.Fatalf("seed new turn: %v", err)
-	}
+			for _, turn := range []string{"old-turn", "new-turn"} {
+				got := fragment.LoadTolerant("sess", turn, logger)
+				if !tc.separate || turn == tc.failedTurn {
+					if assert.NotNil(t, got, "%s must survive failed Flush", turn) {
+						assert.True(t, got.PendingRetry, "%s must be retried", turn)
+					}
+				} else {
+					assert.Nil(t, got, "%s must be deleted after its client succeeds", turn)
+				}
+			}
 
-	Stop(Payload{HookEventName: "Stop", SessionID: "sess", TurnID: "new-turn"}, config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}, logger)
-
-	old := fragment.LoadTolerant("sess", "old-turn", logger)
-	if old == nil {
-		t.Fatal("old-turn fragment was deleted despite Flush failure; swept retries must survive failed flush")
-	}
-	if !old.PendingRetry {
-		t.Error("old-turn fragment lost its PendingRetry flag after failed Flush")
-	}
-	newT := fragment.LoadTolerant("sess", "new-turn", logger)
-	if newT == nil {
-		t.Fatal("new-turn fragment was deleted despite Flush failure")
-	}
-	if !newT.PendingRetry {
-		t.Error("new-turn fragment missing PendingRetry flag after failed Flush")
+			failing.Store(false)
+			Stop(Payload{HookEventName: "Stop", SessionID: "sess", TurnID: "next-turn"}, cfg, logger)
+			mu.Lock()
+			defer mu.Unlock()
+			for _, turn := range []string{"old-turn", "new-turn", "next-turn"} {
+				assert.Nil(t, fragment.LoadTolerant("sess", turn, logger), "%s must be deleted after recovery", turn)
+				assert.Equal(t, 1, accepted[mapper.GenerationID("sess", turn)], "%s must be accepted once", turn)
+			}
+		})
 	}
 }
 
@@ -882,9 +933,44 @@ func TestStopFlushFailurePreservesSweptRetries(t *testing.T) {
 // edge and empty token usage, even though both signals were recoverable
 // from disk (subagent link file) and the fragment's TranscriptPath.
 func TestStopRetrySweepPreservesSubagentLinkAndTokenUsage(t *testing.T) {
+	envconfig.PinAliasEnvBlank(t)
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	t.Setenv("AGENTO11Y_AUTO_CODING_AGENT_TAGS", "true")
+	t.Setenv("AGENTO11Y_USER_ID", "retry@example.test")
 	logger := log.New(io.Discard, "", 0)
+
+	repositories := map[string]string{}
+	for _, turn := range []string{"old-turn", "new-turn"} {
+		dir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git"), 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "config"), []byte("[remote \"origin\"]\n url = https://github.com/example/"+turn+".git\n"), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "HEAD"), []byte("ref: refs/heads/"+turn+"\n"), 0o600))
+		repositories[turn] = dir
+	}
+	var mu sync.Mutex
+	var metricRequests []*colmetricpb.ExportMetricsServiceRequest
+	telemetry := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/metrics" {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Errorf("read metrics: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			var request colmetricpb.ExportMetricsServiceRequest
+			if err := proto.Unmarshal(body, &request); err != nil {
+				t.Errorf("decode metrics: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			mu.Lock()
+			metricRequests = append(metricRequests, &request)
+			mu.Unlock()
+		}
+		w.Header().Set("Content-Type", "application/x-protobuf")
+	}))
+	defer telemetry.Close()
+	t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", telemetry.URL)
 
 	var bodies [][]byte
 	server := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -894,7 +980,9 @@ func TestStopRetrySweepPreservesSubagentLinkAndTokenUsage(t *testing.T) {
 			http.Error(w, "read body", http.StatusBadRequest)
 			return
 		}
+		mu.Lock()
 		bodies = append(bodies, body)
+		mu.Unlock()
 		writeAcceptedGenerationResponse(t, w, body)
 	}))
 	defer server.Close()
@@ -936,14 +1024,25 @@ func TestStopRetrySweepPreservesSubagentLinkAndTokenUsage(t *testing.T) {
 	if err := fragment.Update("child", "old-turn", logger, func(f *fragment.Fragment) bool {
 		f.Model = "gpt-5.5"
 		f.TranscriptPath = transcript
+		f.Cwd = repositories["old-turn"]
 		f.PendingRetry = true
+		f.StartedAt = "2026-05-15T08:59:59Z"
 		f.CompletedAt = "2026-05-15T09:00:00Z"
 		return true
 	}); err != nil {
 		t.Fatalf("seed prior turn: %v", err)
 	}
+	currentTranscript := writeHookTranscript(t,
+		`{"type":"turn_context","payload":{"turn_id":"new-turn"}}`,
+		`{"type":"response_item","payload":{"type":"reasoning"}}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":29,"output_tokens":7,"total_tokens":36},"last_token_usage":{"input_tokens":29,"output_tokens":7,"total_tokens":36}}}}`,
+	)
 	if err := fragment.Update("child", "new-turn", logger, func(f *fragment.Fragment) bool {
 		f.Model = "gpt-5.5"
+		f.Cwd = repositories["new-turn"]
+		f.TranscriptPath = currentTranscript
+		f.StartedAt = "2026-05-15T09:00:01Z"
+		f.CompletedAt = "2026-05-15T09:00:02Z"
 		return true
 	}); err != nil {
 		t.Fatalf("seed new turn: %v", err)
@@ -952,14 +1051,18 @@ func TestStopRetrySweepPreservesSubagentLinkAndTokenUsage(t *testing.T) {
 	Stop(Payload{HookEventName: "Stop", SessionID: "child", TurnID: "new-turn"}, config.Config{ContentCapture: agento11y.ContentCaptureModeFull}, logger)
 
 	type exportedGen struct {
-		ID                  string         `json:"id"`
-		ConversationID      string         `json:"conversation_id"`
-		AgentName           string         `json:"agent_name"`
-		ParentGenerationIDs []string       `json:"parent_generation_ids"`
-		Usage               map[string]any `json:"usage"`
-		Metadata            map[string]any `json:"metadata"`
+		ID                  string            `json:"id"`
+		ConversationID      string            `json:"conversation_id"`
+		AgentName           string            `json:"agent_name"`
+		ParentGenerationIDs []string          `json:"parent_generation_ids"`
+		Usage               map[string]any    `json:"usage"`
+		Metadata            map[string]any    `json:"metadata"`
+		Tags                map[string]string `json:"tags"`
 	}
+	mu.Lock()
+	defer mu.Unlock()
 	oldGenID := mapper.GenerationID("child", "old-turn")
+	seenGenerations := map[string]bool{}
 	var retried *exportedGen
 	for _, body := range bodies {
 		var req struct {
@@ -971,12 +1074,22 @@ func TestStopRetrySweepPreservesSubagentLinkAndTokenUsage(t *testing.T) {
 			t.Fatalf("decode export body %s: %v", string(body), err)
 		}
 		for i := range req.Generations {
+			g := req.Generations[i]
+			seenGenerations[g.ID] = true
+			turn := "new-turn"
+			if g.ID == oldGenID {
+				turn = "old-turn"
+			}
+			assert.Equal(t, "example/"+turn, g.Tags["repo"], "repository for %s", turn)
+			assert.Equal(t, turn, g.Tags["git.branch"], "branch for %s", turn)
 			if req.Generations[i].ID == oldGenID {
 				g := req.Generations[i]
 				retried = &g
 			}
 		}
 	}
+	assert.Len(t, seenGenerations, 2)
+	assert.True(t, seenGenerations[mapper.GenerationID("child", "new-turn")], "missing current generation")
 	if retried == nil {
 		t.Fatalf("retry generation %s not exported; bodies=%q", oldGenID, bodies)
 	}
@@ -1002,6 +1115,36 @@ func TestStopRetrySweepPreservesSubagentLinkAndTokenUsage(t *testing.T) {
 	if retried.Metadata["codex.token_usage.source"] != "turn_context_delta" {
 		t.Errorf("retry token-usage metadata missing or wrong: %+v", retried.Metadata)
 	}
+	seenInputs := map[string]bool{}
+	for _, request := range metricRequests {
+		for _, resource := range request.ResourceMetrics {
+			for _, scope := range resource.ScopeMetrics {
+				for _, metric := range scope.Metrics {
+					if metric.Name != "gen_ai.client.token.usage" {
+						continue
+					}
+					for _, point := range metric.GetHistogram().GetDataPoints() {
+						attrs := map[string]string{}
+						for _, attr := range point.Attributes {
+							attrs[attr.Key] = attr.Value.GetStringValue()
+						}
+						if attrs["gen_ai.token.type"] != "input" {
+							continue
+						}
+						repo := attrs["agento11y.tag.repo"]
+						want, ok := map[string]float64{"example/old-turn": 17, "example/new-turn": 29}[repo]
+						assert.True(t, ok, "unexpected metric repository %q", repo)
+						assert.Equal(t, uint64(1), point.Count, "input count for %s", repo)
+						assert.Equal(t, want, point.GetSum(), "input usage for %s", repo)
+						assert.Equal(t, strings.TrimPrefix(repo, "example/"), attrs["agento11y.tag.git.branch"])
+						seenInputs[repo] = true
+					}
+				}
+			}
+		}
+	}
+	assert.True(t, seenInputs["example/old-turn"], "missing retried turn metric attribution")
+	assert.True(t, seenInputs["example/new-turn"], "missing current turn metric attribution")
 }
 
 func TestPreToolUseGuard(t *testing.T) {

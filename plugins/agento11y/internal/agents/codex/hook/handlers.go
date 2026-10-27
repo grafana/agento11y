@@ -250,10 +250,13 @@ func Stop(p Payload, cfg config.Config, logger *log.Logger) {
 		markPendingRetry(p.SessionID, p.TurnID, logger)
 		return
 	}
+	clients := map[string]*agento11y.Client{frag.Cwd: client}
 	defer func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cleanupCancel()
-		_ = client.Shutdown(cleanupCtx)
+		for _, client := range clients {
+			_ = client.Shutdown(cleanupCtx)
+		}
 	}()
 
 	mapped := mapper.Map(mapper.Inputs{
@@ -274,26 +277,36 @@ func Stop(p Payload, cfg config.Config, logger *log.Logger) {
 	}
 
 	// Retry any prior turns flagged for retry on a previous Stop failure.
-	// We enqueue them before the current turn's Flush so all queued
-	// generations drain together. Their on-disk fragments are deleted only
-	// after Flush succeeds; if Flush fails the fragments stay on disk with
-	// their PendingRetry flag set, ready for the next Stop to try again.
-	sweptPaths := sweepPendingRetries(ctx, client, cfg, p.SessionID, p.TurnID, userID, logger)
+	// We enqueue them before flushing the clients. Their on-disk fragments
+	// are deleted only after their client's Flush succeeds; failed retries
+	// stay on disk with PendingRetry set, ready for the next Stop to try again.
+	sweptPaths := sweepPendingRetries(ctx, clients, providers, cfg, p.SessionID, p.TurnID, userID, logger)
 
-	if err := client.Flush(ctx); err != nil {
-		logger.Printf("stop: agento11y flush: %v", err)
-		markPendingRetry(p.SessionID, p.TurnID, logger)
-		return
-	}
-	for _, path := range sweptPaths {
-		if err := fragment.DeleteFile(path); err != nil {
-			logger.Printf("stop: retry delete %s: %v", path, err)
+	currentFlushed := false
+	for cwd, client := range clients {
+		if err := client.Flush(ctx); err != nil {
+			logger.Printf("stop: agento11y flush: %v", err)
+			if cwd == frag.Cwd {
+				markPendingRetry(p.SessionID, p.TurnID, logger)
+			}
+			continue
+		}
+		for _, path := range sweptPaths[cwd] {
+			if err := fragment.DeleteFile(path); err != nil {
+				logger.Printf("stop: retry delete %s: %v", path, err)
+			}
+		}
+		if cwd == frag.Cwd {
+			currentFlushed = true
 		}
 	}
 	if providers != nil {
 		if err := providers.ForceFlush(); err != nil {
 			logger.Printf("stop: otel flush: %v", err)
 		}
+	}
+	if !currentFlushed {
+		return
 	}
 	if err := fragment.Delete(p.SessionID, p.TurnID); err != nil {
 		logger.Printf("stop: delete fragment: %v", err)
@@ -320,8 +333,8 @@ func markPendingRetry(sessionID, turnID string, logger *log.Logger) {
 }
 
 // sweepPendingRetries enqueues every turn fragment for the session that is
-// flagged for retry and returns the paths it enqueued. The caller deletes
-// those paths only after client.Flush succeeds; failed retries keep their
+// flagged for retry and returns the paths it enqueued by working directory.
+// The caller deletes paths only after their client.Flush succeeds; failed retries keep their
 // PendingRetry flag on disk so a later Stop sweeps them again until the 24h
 // cleanup expires the file. The current turn (currentTurnID) is skipped
 // because the caller emits it inline.
@@ -331,10 +344,10 @@ func markPendingRetry(sessionID, turnID string, logger *log.Logger) {
 // transcript path and turn id, which is enough for both helpers. Without
 // this, retried subagent turns would silently re-export as plain `codex`
 // turns with empty token usage.
-func sweepPendingRetries(ctx context.Context, client *agento11y.Client, cfg config.Config, sessionID, currentTurnID, userID string, logger *log.Logger) []string {
+func sweepPendingRetries(ctx context.Context, clients map[string]*agento11y.Client, providers *otel.Providers, cfg config.Config, sessionID, currentTurnID, userID string, logger *log.Logger) map[string][]string {
 	currentPath := fragment.FragmentFilePath(sessionID, currentTurnID)
 	paths := fragment.ListTurnFiles(sessionID, logger)
-	enqueued := make([]string, 0, len(paths))
+	enqueued := make(map[string][]string)
 	for _, path := range paths {
 		if path == currentPath {
 			continue
@@ -342,6 +355,16 @@ func sweepPendingRetries(ctx context.Context, client *agento11y.Client, cfg conf
 		f := fragment.LoadFile(path, logger)
 		if f == nil || !f.PendingRetry {
 			continue
+		}
+		client := clients[f.Cwd]
+		if client == nil {
+			var err error
+			client, err = buildClient(cfg, f.Cwd, userID, providers, logger)
+			if err != nil {
+				logger.Printf("stop: retry build client: %v", err)
+				continue
+			}
+			clients[f.Cwd] = client
 		}
 		retryPayload := Payload{
 			SessionID:      f.SessionID,
@@ -368,7 +391,7 @@ func sweepPendingRetries(ctx context.Context, client *agento11y.Client, cfg conf
 			logger.Printf("stop: retry emit session=%s turn=%s: %v", f.SessionID, f.TurnID, err)
 			continue
 		}
-		enqueued = append(enqueued, path)
+		enqueued[f.Cwd] = append(enqueued[f.Cwd], path)
 	}
 	return enqueued
 }

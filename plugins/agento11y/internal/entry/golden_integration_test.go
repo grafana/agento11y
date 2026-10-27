@@ -62,6 +62,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
@@ -169,7 +170,8 @@ func runGoldenScenario(t *testing.T, name string) {
 		eventOutput = append(eventOutput, fmt.Sprintf("event[%d] stdout=%q stderr=%q", i, stdoutText, stderrText))
 	}
 
-	bodies := checkExports(t, name, sc, stateDir, eventOutput, capture.snapshot())
+	registerExportDiagnostics(t, stateDir, eventOutput)
+	bodies := checkExports(t, name, sc, capture.snapshot())
 
 	goldenPath := filepath.Join(dir, "export.golden.json")
 	assertGoldenJSON(t, goldenPath, bodies)
@@ -184,6 +186,12 @@ func startHookExport(t *testing.T, sc scenario) (stateDir string, capture *expor
 	stateDir = t.TempDir()
 	t.Setenv("XDG_STATE_HOME", stateDir)
 	t.Setenv("HOME", stateDir)
+	t.Setenv("USERPROFILE", stateDir)
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(stateDir, ".claude"))
+	t.Setenv("CODEX_HOME", filepath.Join(stateDir, ".codex"))
+	if err := os.MkdirAll(os.Getenv("CODEX_HOME"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(stateDir, "config"))
 
 	capture = &exportCapture{}
@@ -196,11 +204,7 @@ func startHookExport(t *testing.T, sc scenario) (stateDir string, capture *expor
 	return stateDir, capture
 }
 
-// checkExports runs every check that does not need a golden file: the
-// secret-leak guard and the scenario invariants, with the debug log and
-// output (per-event hook output, or agent CLI output) dumped on failure. It
-// returns the normalized bodies for the golden comparison.
-func checkExports(t *testing.T, name string, sc scenario, stateDir string, output []string, captured []capturedRequest) []goldenExport {
+func registerExportDiagnostics(t *testing.T, stateDir string, output []string) {
 	t.Helper()
 	// On failure, surface the SIGIL_DEBUG log file and per-event hook output
 	// so the developer can see which dispatch path each event took without
@@ -217,7 +221,13 @@ func checkExports(t *testing.T, name string, sc scenario, stateDir string, outpu
 			t.Log(line)
 		}
 	})
+}
 
+// checkExports runs every check that does not need a golden file: the
+// secret-leak guard and the scenario invariants. It returns the normalized
+// bodies for the golden comparison.
+func checkExports(t *testing.T, name string, sc scenario, captured []capturedRequest) []goldenExport {
+	t.Helper()
 	bodies := normalizeCapturedBodies(t, captured)
 
 	// Secret-leak guard runs against the raw captured bodies so any
@@ -579,8 +589,7 @@ func newLoopbackServer(t *testing.T, handler http.Handler) *httptest.Server {
 	if err != nil {
 		t.Skipf("loopback listen unavailable: %v", err)
 	}
-	srv := httptest.NewUnstartedServer(handler)
-	srv.Listener = listener
+	srv := &httptest.Server{Listener: listener, Config: &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second}}
 	srv.Start()
 	t.Cleanup(srv.Close)
 	return srv
