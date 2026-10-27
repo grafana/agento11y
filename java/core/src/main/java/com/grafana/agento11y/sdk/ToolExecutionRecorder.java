@@ -98,6 +98,9 @@ public class ToolExecutionRecorder implements AutoCloseable {
                 .setProcessExecutableName(seed.getProcessExecutableName())
                 .setProcessExecutablePath(seed.getProcessExecutablePath())
                 .setProcessExitCode(snapshotResult.getProcessExitCode())
+                .setVerifiedSkillName(snapshotResult.getVerifiedSkillName())
+                .setVerifiedSkillResourceName(snapshotResult.getVerifiedSkillResourceName())
+                .setProcessExitCodeIsError(snapshotResult.getProcessExitCodeIsError())
                 .setConversationId(seed.getConversationId())
                 .setAgentName(seed.getAgentName())
                 .setAgentVersion(seed.getAgentVersion())
@@ -113,6 +116,8 @@ public class ToolExecutionRecorder implements AutoCloseable {
             span.setAttribute(Agento11yClient.SPAN_ATTR_PROCESS_EXIT_CODE, snapshotResult.getProcessExitCode());
         }
 
+        // Preserve execution outcome before SDK serialization can change legacy error semantics.
+        Throwable executionError = snapshotCallError;
         if (includeContent) {
             try {
                 if (snapshotResult.getArguments() != null) {
@@ -141,7 +146,8 @@ public class ToolExecutionRecorder implements AutoCloseable {
         }
 
         try (Scope metricsScope = span.makeCurrent()) {
-            client.recordToolExecutionMetrics(seed, startedAt, completedAt, snapshotCallError);
+            client.recordToolExecutionMetrics(seed, startedAt, completedAt, snapshotCallError,
+                    snapshotResult, executionError);
         }
         span.end(completedAt.toEpochMilli(), TimeUnit.MILLISECONDS);
         client.recordToolExecution(execution);

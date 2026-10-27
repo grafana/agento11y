@@ -1,4 +1,5 @@
 import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
+import type { Plugin } from "@opencode/plugin";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Agento11yOpencodeConfig } from "./config.js";
 import { _resetHookState, createAgento11yHooks } from "./hooks.js";
@@ -7,6 +8,12 @@ import {
   baseConfig,
   emitMessageUpdated,
 } from "./hooks.testutil.js";
+import { setupV2 } from "./v2.js";
+import {
+  type NativeFixtureEvent,
+  nativeFixture,
+  nativeTranscript,
+} from "./v2-testdata.js";
 
 const SIGIL_OPENCODE_SCOPE = "sigil-opencode";
 const SIGIL_OPERATION_DURATION_METRIC = "gen_ai.client.operation.duration";
@@ -619,6 +626,15 @@ describe("createAgento11yHooks OTLP wiring", () => {
       ]);
       expect(["skill", "bash"]).toContain(attributes["gen_ai.tool.name"]);
     }
+    const draft = metrics
+      .filter((metric) => metric.name === "gen_ai.execute_tool.duration")
+      .flatMap((metric) => metric.histogram?.dataPoints ?? []);
+    expect(draft.reduce((sum, point) => sum + Number(point.count), 0)).toBe(
+      specs.length,
+    );
+    expect(
+      draft.every((point) => attrs(point)["gen_ai.skill.name"] === undefined),
+    ).toBe(true);
     for (const metric of metrics) {
       const points =
         metric.histogram?.dataPoints ?? metric.sum?.dataPoints ?? [];
@@ -630,6 +646,297 @@ describe("createAgento11yHooks OTLP wiring", () => {
         }
       }
     }
+  });
+
+  it.each([
+    "full",
+    "no_tool_content",
+    "full_with_metadata_spans",
+    "metadata_only",
+  ] as const)("emits native catalog OTLP metrics by default in %s", async (contentCapture) => {
+    process.env.AGENTO11Y_ENDPOINT = sigil.baseUrl;
+    process.env.AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT = otlp.endpoint;
+    process.env.AGENTO11Y_CONTENT_CAPTURE_MODE = contentCapture;
+    const {
+      sessionID,
+      assistantMessageID: messageID,
+      location,
+    } = nativeFixture;
+    const specs = [
+      {
+        id: "one",
+        raw: "opaque/id",
+        verified: "catalog-review",
+        failed: false,
+      },
+      {
+        id: "two",
+        raw: "opaque/id",
+        verified: "catalog-review",
+        failed: false,
+      },
+      {
+        id: "three",
+        raw: "attempted",
+        verified: "catalog-other",
+        failed: true,
+      },
+      { id: "four", raw: " unknown ", verified: undefined, failed: false },
+      { id: "five", raw: "unsafe", verified: undefined, failed: false },
+    ];
+    let setupFinished = false;
+    let inCallback = false;
+    let release!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let transcriptFinished!: () => void;
+    const finished = new Promise<void>((resolve) => {
+      transcriptFinished = resolve;
+    });
+    let after!: (payload: never) => unknown;
+    const list = vi.fn(
+      async (input: unknown, options: { signal?: AbortSignal } | undefined) => {
+        expect(setupFinished).toBe(true);
+        expect(inCallback).toBe(false);
+        expect(input).toEqual({ location: { directory: location.directory } });
+        expect(options?.signal).toBeInstanceOf(AbortSignal);
+        return {
+          location: { directory: location.directory },
+          data: [
+            {
+              id: "opaque/id",
+              name: "catalog-review",
+              path: "/private/SKILL.md",
+              content: "CATALOG_CONTENT_MUST_NOT_EXPORT",
+            },
+            {
+              id: "attempted",
+              name: "catalog-other",
+              path: "/private/SKILL.md",
+              content: "CATALOG_CONTENT_MUST_NOT_EXPORT",
+            },
+            {
+              id: "unknown",
+              name: "normalized-wrong",
+              path: "/private/SKILL.md",
+              content: "CATALOG_CONTENT_MUST_NOT_EXPORT",
+            },
+            {
+              id: "unsafe",
+              name: "../private",
+              path: "/private/SKILL.md",
+              content: "CATALOG_CONTENT_MUST_NOT_EXPORT",
+            },
+          ],
+        };
+      },
+    );
+    const context = {
+      app: { name: "opencode", version: "2.0.22", channel: "latest" },
+      location,
+      tool: {
+        hook: vi.fn(async (_name: string, callback: typeof after) => {
+          after = callback;
+          return { dispose: async () => {} };
+        }),
+      },
+      skill: { list },
+      event: {
+        subscribe: ({ signal }: { signal: AbortSignal }) =>
+          (async function* () {
+            await ready;
+            const transcript = nativeTranscript();
+            yield transcript.find(
+              (entry) => entry.type === "session.step.started",
+            )!;
+            let seq = 100;
+            const event = (type: string, data: unknown, offset: number) =>
+              ({
+                id: `catalog-${seq}`,
+                type,
+                data,
+                location,
+                created: nativeFixture.started + offset,
+                durable: {
+                  aggregateID: sessionID,
+                  seq: seq++,
+                  version:
+                    type.endsWith("success") || type.endsWith("failed") ? 2 : 1,
+                },
+              }) as NativeFixtureEvent;
+            for (const spec of specs) {
+              const data = {
+                sessionID,
+                assistantMessageID: messageID,
+                id: spec.id,
+              };
+              yield event(
+                "session.tool.input.started",
+                { ...data, name: "skill" },
+                600,
+              );
+              yield event(
+                "session.tool.called",
+                { ...data, input: { id: "durable-old" }, executed: false },
+                800,
+              );
+              inCallback = true;
+              expect(
+                after({
+                  sessionID,
+                  messageID,
+                  id: spec.id,
+                  agent: "build",
+                  tool: "skill",
+                  input: { id: spec.raw },
+                } as never),
+              ).toBeUndefined();
+              inCallback = false;
+              yield event(
+                spec.failed ? "session.tool.failed" : "session.tool.success",
+                {
+                  ...data,
+                  executed: false,
+                  content: [],
+                  ...(spec.failed && {
+                    error: {
+                      type: "tool.execution",
+                      message: "private failure",
+                    },
+                  }),
+                },
+                1200,
+              );
+            }
+            yield transcript.find(
+              (entry) => entry.type === "session.step.ended",
+            )!;
+            transcriptFinished();
+            await new Promise<void>((resolve) =>
+              signal.addEventListener("abort", () => resolve(), { once: true }),
+            );
+          })(),
+      },
+    } as unknown as Plugin.Context;
+    const cleanup = await setupV2(context);
+    if (!cleanup) throw new Error("missing cleanup");
+    setupFinished = true;
+    release();
+    try {
+      await finished;
+      await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(specs.length));
+    } finally {
+      await cleanup();
+    }
+    expect(list).toHaveBeenCalledTimes(specs.length);
+    const attrs = (point: any) =>
+      Object.fromEntries(
+        (point.attributes ?? []).map((attr: any) => [
+          attr.key,
+          attr.value?.stringValue ?? attr.value?.intValue,
+        ]),
+      );
+    const metrics = otlp.requests
+      .filter((request) => request.url === "/otlp/v1/metrics")
+      .flatMap((request) => JSON.parse(request.body).resourceMetrics ?? [])
+      .flatMap((resource) => resource.scopeMetrics ?? [])
+      .flatMap((scope) => scope.metrics ?? []);
+    const draft = metrics.filter(
+      (metric) => metric.name === "gen_ai.execute_tool.duration",
+    );
+    expect(draft.length).toBeGreaterThan(0);
+    const points = draft.flatMap(
+      (metric) => metric.histogram?.dataPoints ?? [],
+    );
+    expect(draft.every((metric) => metric.unit === "s")).toBe(true);
+    expect(points.reduce((sum, point) => sum + Number(point.count), 0)).toBe(5);
+    expect(points.reduce((sum, point) => sum + point.sum, 0)).toBeCloseTo(2);
+    for (const point of points) {
+      const attributes = attrs(point);
+      expect(attributes).toMatchObject({
+        "gen_ai.tool.name": "skill",
+        "gen_ai.tool.type": "function",
+        "gen_ai.agent.name": "opencode:build",
+        "agento11y.tool.execution.kind": "load_skill",
+      });
+      expect(
+        point.bucketCounts.reduce(
+          (sum: number, value: string) => sum + Number(value),
+          0,
+        ),
+      ).toBe(Number(point.count));
+      expect(point.bucketCounts).toHaveLength(point.explicitBounds.length + 1);
+      expect(point.explicitBounds).toEqual([
+        0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12, 10.24,
+        20.48, 40.96, 81.92,
+      ]);
+      const bucket = point.explicitBounds.findIndex(
+        (bound: number) => bound >= 0.4,
+      );
+      expect(Number(point.bucketCounts[bucket])).toBe(Number(point.count));
+      expect(point.sum).toBeCloseTo(Number(point.count) * 0.4);
+      expect(Object.keys(attributes).sort()).toEqual(
+        [
+          "agento11y.tool.execution.kind",
+          "gen_ai.agent.name",
+          "gen_ai.agent.version",
+          "gen_ai.provider.name",
+          "gen_ai.request.model",
+          "gen_ai.tool.name",
+          "gen_ai.tool.type",
+          ...(attributes["gen_ai.skill.name"] ? ["gen_ai.skill.name"] : []),
+          ...(attributes["error.type"] ? ["error.type"] : []),
+        ].sort(),
+      );
+      expect(attributes["error.type"]).toBe(
+        attributes["gen_ai.skill.name"] === "catalog-other"
+          ? "tool_execution_error"
+          : undefined,
+      );
+    }
+    const verified = points.find(
+      (point) => attrs(point)["gen_ai.skill.name"] === "catalog-review",
+    );
+    expect(Number(verified?.count)).toBe(2);
+    expect(verified?.sum).toBeCloseTo(0.8);
+    expect(
+      points
+        .filter((point) => !attrs(point)["gen_ai.skill.name"])
+        .reduce((sum, point) => sum + Number(point.count), 0),
+    ).toBe(2);
+    const legacy = metrics
+      .filter((metric) => metric.name === SIGIL_OPERATION_DURATION_METRIC)
+      .flatMap((metric) => metric.histogram?.dataPoints ?? [])
+      .filter(
+        (point) => attrs(point)["gen_ai.operation.name"] === "execute_tool",
+      );
+    expect(legacy.reduce((sum, point) => sum + Number(point.count), 0)).toBe(5);
+    expect(legacy.every((point) => !attrs(point)["gen_ai.skill.name"])).toBe(
+      true,
+    );
+    const spans = otlp.requests
+      .filter((request) => request.url === "/otlp/v1/traces")
+      .flatMap((request) => JSON.parse(request.body).resourceSpans ?? [])
+      .flatMap((resource) => resource.scopeSpans ?? [])
+      .flatMap((scope) => scope.spans ?? []);
+    const tools = spans.filter(
+      (span) => attrs(span)["gen_ai.tool.name"] === "skill",
+    );
+    expect(tools).toHaveLength(5);
+    expect(tools.map((span) => span.name).sort()).toEqual(
+      [
+        "execute_tool skill",
+        "execute_tool skill",
+        "execute_tool skill attempted",
+        "execute_tool skill unknown",
+        "execute_tool skill unsafe",
+      ].sort(),
+    );
+    expect(JSON.stringify(otlp.requests)).not.toContain(
+      "CATALOG_CONTENT_MUST_NOT_EXPORT",
+    );
+    expect(JSON.stringify(otlp.requests)).not.toContain("/private/SKILL.md");
   });
 
   it("does not contact the OTLP endpoint when config.otlp is absent", async () => {

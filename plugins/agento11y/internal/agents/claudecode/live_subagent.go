@@ -2,7 +2,6 @@ package claudecode
 
 import (
 	"log"
-	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -54,9 +53,9 @@ func subagentSessionPath(path string) string {
 // and attaches new turns to the parent session. Each file resumes from the
 // byte offset stored in st so a background agent that keeps writing after its
 // first tool_result is not snapshotted once and then ignored.
-func liveSubagentGens(input *hookInput, parentLines []transcript.Line, parentGens []agento11y.Generation, files []string, st *state.Session, opts mapper.Options, r *redact.Redactor, skillNames map[string]string, logger *log.Logger) []agento11y.Generation {
+func liveSubagentGens(input *hookInput, parentLines []transcript.Line, parentGens []agento11y.Generation, files []string, st *state.Session, opts mapper.Options, r *redact.Redactor, logger *log.Logger) ([]agento11y.Generation, [][]*state.PendingTool) {
 	if len(files) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	sessionEnd := strings.TrimSpace(input.HookEventName) == "SessionEnd"
@@ -64,9 +63,9 @@ func liveSubagentGens(input *hookInput, parentLines []transcript.Line, parentGen
 		st.SubagentOffsets = map[string]int64{}
 	}
 
-	reads, files, blockingDone := readLiveSubagentFiles(files, parentLines, st, logger)
+	reads, files, blockingDone := readLiveSubagentFiles(files, blockingToolLines(st, input.TranscriptPath, parentLines), st, logger)
 	if len(reads) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	ids := subagent.NewIDs()
@@ -77,6 +76,7 @@ func liveSubagentGens(input *hookInput, parentLines []transcript.Line, parentGen
 		Gens:  parentGens,
 	}}
 
+	sources := map[string]map[int]transcript.Line{}
 	for _, item := range reads {
 		key := subagent.FileKey(item.path)
 		var (
@@ -94,15 +94,16 @@ func liveSubagentGens(input *hookInput, parentLines []transcript.Line, parentGen
 			}
 			newOffset = safe
 		}
-		coalesced = subagent.DropCoveredSidechain(coalesced, files, item.path)
+		coalesced = dropCoveredSidechain(coalesced, files, item.path)
 		if len(coalesced) == 0 {
 			st.SubagentOffsets[key] = newOffset
 			continue
 		}
 
-		maps.Copy(skillNames, buildSkillNameMap(coalesced))
 		subSt := *st
 		subOpts := opts
+		subOpts.GenerationSources = map[int]transcript.Line{}
+		sources[item.path] = subOpts.GenerationSources
 		subOpts.Titles = transcript.Titles{}
 		subOpts.SuppressSyntheticSubagentToolCallIDs = subagent.SyntheticToolCallIDs(coalesced, subagent.RefsForFiles(files))
 		subGens, _ := mapper.Process(coalesced, &subSt, subOpts, r)
@@ -114,7 +115,7 @@ func liveSubagentGens(input *hookInput, parentLines []transcript.Line, parentGen
 		}
 	}
 	if len(mapped) == 1 {
-		return nil
+		return nil, nil
 	}
 
 	parents := subagent.ParentMap(mapped, subagent.RefsForFiles(files)).
@@ -126,11 +127,13 @@ func liveSubagentGens(input *hookInput, parentLines []transcript.Line, parentGen
 		base = AgentName
 	}
 	var out []agento11y.Generation
+	var toolParents [][]*state.PendingTool
 	for _, p := range mapped[1:] {
 		subagent.Finalize(p.Path, p.Gens, parents, input.SessionID, base)
+		toolParents = append(toolParents, associateTools(st, p.Path, sources[p.Path], p.Gens)...)
 		out = append(out, p.Gens...)
 	}
-	return out
+	return out, toolParents
 }
 
 // readLiveSubagentFiles reads every file under the session's own subagents/
@@ -153,14 +156,15 @@ func readLiveSubagentFiles(files []string, parentLines []transcript.Line, st *st
 		}
 		seen[path] = true
 
-		raw, readPos, err := transcript.Read(path, st.SubagentOffsets[subagent.FileKey(path)])
+		raw, readPos, err := transcript.ReadComplete(path, st.SubagentOffsets[subagent.FileKey(path)])
 		if err != nil {
 			if logger != nil {
 				logger.Printf("read subagent transcript %s: %v", path, err)
 			}
 			continue
 		}
-		for k, done := range subagent.BlockingCompletedKeys(raw, files) {
+		raw = dropCoveredSidechain(raw, files, path)
+		for k, done := range subagent.BlockingCompletedKeys(blockingToolLines(st, path, raw), files) {
 			if done {
 				blockingDone[k] = true
 			}

@@ -8,6 +8,9 @@ public final class ToolExecutionResult {
     private Object result;
     private Instant completedAt;
     private Long processExitCode;
+    private String verifiedSkillName = "";
+    private String verifiedSkillResourceName = "";
+    private Boolean processExitCodeIsError;
 
     public Object getArguments() {
         return arguments;
@@ -45,11 +48,44 @@ public final class ToolExecutionResult {
         return this;
     }
 
+    /** Caller-confirmed identity for metrics; never inferred from attempted identity. */
+    public String getVerifiedSkillName() {
+        return verifiedSkillName;
+    }
+
+    public ToolExecutionResult setVerifiedSkillName(String verifiedSkillName) {
+        this.verifiedSkillName = verifiedSkillName == null ? "" : verifiedSkillName;
+        return this;
+    }
+
+    /** Caller-confirmed resource identity for resource-read and command metrics. */
+    public String getVerifiedSkillResourceName() {
+        return verifiedSkillResourceName;
+    }
+
+    public ToolExecutionResult setVerifiedSkillResourceName(String verifiedSkillResourceName) {
+        this.verifiedSkillResourceName = verifiedSkillResourceName == null ? "" : verifiedSkillResourceName;
+        return this;
+    }
+
+    /** False marks a nonzero command exit as benign; does not suppress explicit execution errors. */
+    public Boolean getProcessExitCodeIsError() {
+        return processExitCodeIsError;
+    }
+
+    public ToolExecutionResult setProcessExitCodeIsError(Boolean processExitCodeIsError) {
+        this.processExitCodeIsError = processExitCodeIsError;
+        return this;
+    }
+
     public ToolExecutionResult copy() {
         return new ToolExecutionResult()
                 .setArguments(arguments)
                 .setResult(result)
                 .setCompletedAt(completedAt)
-                .setProcessExitCode(processExitCode);
+                .setProcessExitCode(processExitCode)
+                .setVerifiedSkillName(verifiedSkillName)
+                .setVerifiedSkillResourceName(verifiedSkillResourceName)
+                .setProcessExitCodeIsError(processExitCodeIsError);
     }
 }

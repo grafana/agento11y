@@ -165,8 +165,11 @@ class ConformanceTest {
             }
             List<MetricData> recordedMetrics = new ArrayList<>(metrics.collectAllMetrics());
             assertThat(recordedMetrics).extracting(MetricData::getName)
-                    .containsExactly(Agento11yClient.METRIC_OPERATION_DURATION);
-            assertThat(recordedMetrics.get(0).getHistogramData().getPoints()).singleElement().satisfies(point -> {
+                    .containsExactlyInAnyOrder(Agento11yClient.METRIC_OPERATION_DURATION, Agento11yClient.METRIC_TOOL_DURATION);
+            MetricData legacyDuration = recordedMetrics.stream()
+                    .filter(metric -> metric.getName().equals(Agento11yClient.METRIC_OPERATION_DURATION))
+                    .findFirst().orElseThrow();
+            assertThat(legacyDuration.getHistogramData().getPoints()).singleElement().satisfies(point -> {
                 assertThat(point.getCount()).isEqualTo(1L);
                 assertThat(point.getAttributes().asMap().keySet()).extracting(AttributeKey::getKey)
                         .containsExactlyInAnyOrder("gen_ai.provider.name", "gen_ai.request.model", "gen_ai.agent.name",

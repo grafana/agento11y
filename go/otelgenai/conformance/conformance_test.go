@@ -1199,7 +1199,13 @@ func newProviders(ctx context.Context, endpoint string) (providers, error) {
 	}
 	reader := sdkmetric.NewPeriodicReader(metricExporter, sdkmetric.WithInterval(time.Hour))
 	metricReader := sdkmetric.NewManualReader()
-	metrics := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader), sdkmetric.WithReader(metricReader))
+	// Tool duration is checked against its separate draft registry.
+	metrics := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader), sdkmetric.WithReader(metricReader),
+		sdkmetric.WithView(sdkmetric.NewView(
+			sdkmetric.Instrument{Name: "gen_ai.execute_tool.duration"},
+			sdkmetric.Stream{Aggregation: sdkmetric.AggregationDrop{}},
+		)),
+	)
 
 	logExporter, err := otlploggrpc.New(ctx, otlploggrpc.WithEndpoint(endpoint), otlploggrpc.WithInsecure())
 	if err != nil {

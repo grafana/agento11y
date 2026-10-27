@@ -236,6 +236,11 @@ type Invocation struct {
 	ProcessExecutablePath string
 	ProcessExitCode       *int64
 
+	VerifiedSkillName         string
+	VerifiedSkillResourceName string
+
+	ProcessExitCodeIsError *bool
+
 	// ServerAddress and ServerPort locate the provider endpoint. The
 	// conventions treat them as sampling-relevant, so set them before Start.
 	ServerAddress string
@@ -295,8 +300,8 @@ type Invocation struct {
 	Attributes []attribute.KeyValue
 
 	// MetricAttributes are extra dimensions for this invocation's metrics.
-	// They land on every instrument the invocation records, so keep them
-	// low-cardinality.
+	// Every instrument records them, subject to key filtering and typed-field
+	// precedence for tool metrics. Keep them low-cardinality.
 	MetricAttributes []attribute.KeyValue
 
 	// Vendor carries instrumentation-specific data for end hooks. This

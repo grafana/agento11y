@@ -384,6 +384,15 @@ public sealed class ToolExecutionEnd
     public object? Arguments { get; set; }
     public object? Result { get; set; }
     public long? ProcessExitCode { get; set; }
+    /// <summary>Caller-confirmed metric identity; never inferred from attempted skill names.</summary>
+    public string VerifiedSkillName { get; set; } = string.Empty;
+    /// <summary>Caller-confirmed metric resource identity for resource reads and commands.</summary>
+    public string VerifiedSkillResourceName { get; set; } = string.Empty;
+    /// <summary>
+    /// False treats a nonzero command exit as benign for experimental metrics.
+    /// Does not suppress an explicit execution error or make a zero/missing exit an error.
+    /// </summary>
+    public bool? ProcessExitCodeIsError { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }
 }
 

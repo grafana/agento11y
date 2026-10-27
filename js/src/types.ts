@@ -569,6 +569,11 @@ export interface ToolExecutionResult {
   arguments?: unknown;
   result?: unknown;
   processExitCode?: number;
+  /** Caller-verified completion identities used only by experimental metrics. */
+  verifiedSkillName?: string;
+  verifiedSkillResourceName?: string;
+  /** False makes a nonzero command exit benign, but never suppresses an execution error. */
+  processExitCodeIsError?: boolean;
   completedAt?: Date;
 }
 
@@ -586,6 +591,9 @@ export interface ToolExecution {
   processExecutableName?: string;
   processExecutablePath?: string;
   processExitCode?: number;
+  verifiedSkillName?: string;
+  verifiedSkillResourceName?: string;
+  processExitCodeIsError?: boolean;
   conversationId?: string;
   conversationTitle?: string;
   agentName?: string;

@@ -627,8 +627,9 @@ public sealed class ConformanceTests
         Assert.Equal(error.Length > 0 ? "tool_execution_error" : null, span.GetTagItem("error.type"));
         Assert.Equal(error.Length > 0, recorder.Error != null);
         Assert.Empty(env.Ingest.Requests);
-        var metric = Assert.Single(env.MetricMeasurements);
-        Assert.Equal("gen_ai.client.operation.duration", metric.Name);
+        Assert.Equal(2, env.MetricMeasurements.Count);
+        Assert.Single(env.MetricMeasurements, measurement => measurement.Name == "gen_ai.execute_tool.duration");
+        var metric = Assert.Single(env.MetricMeasurements, measurement => measurement.Name == "gen_ai.client.operation.duration");
         Assert.Equal(new[]
         {
             "error.category", "error.type", "gen_ai.agent.name", "gen_ai.operation.name",
@@ -921,7 +922,8 @@ public sealed class ConformanceTests
             _meterListener = new MeterListener();
             _meterListener.InstrumentPublished += (instrument, listener) =>
             {
-                if (instrument.Name.StartsWith("gen_ai.client.", StringComparison.Ordinal))
+                if (instrument.Name.StartsWith("gen_ai.client.", StringComparison.Ordinal)
+                    || instrument.Name == "gen_ai.execute_tool.duration")
                 {
                     listener.EnableMeasurementEvents(instrument);
                 }

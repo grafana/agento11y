@@ -125,6 +125,7 @@ export interface ToolTiming {
   toolCallId: string;
   toolName: string;
   skillName?: string;
+  verifiedSkillName?: string;
   startedAt: number;
   completedAt: number;
   isError: boolean;

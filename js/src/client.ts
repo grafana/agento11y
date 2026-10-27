@@ -10,6 +10,7 @@ import {
   SpanStatusCode,
   type Tracer,
   trace,
+  ValueType,
 } from '@opentelemetry/api';
 import {
   CACHE_DIAGNOSTICS_MISS_REASON_KEY,
@@ -150,6 +151,7 @@ const maxRatingCommentBytes = 4096;
 const maxRatingMetadataBytes = 16 * 1024;
 
 const metricOperationDuration = 'gen_ai.client.operation.duration';
+const metricToolDuration = 'gen_ai.execute_tool.duration';
 const metricTokenUsage = 'gen_ai.client.token.usage';
 const metricTimeToFirstToken = 'gen_ai.client.time_to_first_token';
 const metricToolCallsPerOperation = 'gen_ai.client.tool_calls_per_operation';
@@ -237,6 +239,7 @@ export class Agento11yClient {
   private readonly tracer: Tracer;
   private readonly meter: Meter;
   private readonly operationDurationHistogram: Histogram;
+  private readonly toolDurationHistogram?: Histogram;
   private readonly tokenUsageHistogram: Histogram;
   private readonly ttftHistogram: Histogram;
   private readonly toolCallsHistogram: Histogram;
@@ -283,6 +286,16 @@ export class Agento11yClient {
       advice: { explicitBucketBoundaries: durationBucketsSeconds },
     });
     this.toolCallsHistogram = this.meter.createHistogram(metricToolCallsPerOperation, { unit: 'count' });
+    try {
+      this.toolDurationHistogram = this.meter.createHistogram(metricToolDuration, {
+        description: 'GenAI tool execution duration.',
+        unit: 's',
+        valueType: ValueType.DOUBLE,
+        advice: { explicitBucketBoundaries: durationBucketsSeconds },
+      });
+    } catch (error) {
+      this.logger.warn?.('agento11y: could not create tool duration histogram', error);
+    }
 
     if (this.config.generationExport.flushIntervalMs > 0) {
       this.flushTimer = setInterval(() => {
@@ -1193,6 +1206,22 @@ export class Agento11yClient {
       [spanAttrErrorType]: errorType,
       [spanAttrErrorCategory]: errorCategory,
     });
+
+    // Build independently of legacy span/finalization errors and attempted identity.
+    // Only allowlisted fields enter this metric: raw attributes cannot override
+    // identity, kind, error or process keys (nor leak private content).
+    this.toolDurationHistogram?.record(durationSeconds, {
+      ...nonEmptyAttributes(
+        metricIdentityAttributes(
+          toolExecution.requestProvider ?? '',
+          toolExecution.requestModel ?? '',
+          toolExecution.agentName,
+          toolExecution.agentVersion,
+        ),
+      ),
+      ...tagMetricAttributes(this.config.tags),
+      ...toolDurationAttributes(toolExecution),
+    });
   }
 
   private assertOpen(): void {
@@ -1897,6 +1926,9 @@ class ToolExecutionRecorderImpl implements ToolExecutionRecorder {
       processExecutableName: this.seed.processExecutableName,
       processExecutablePath: this.seed.processExecutablePath,
       processExitCode: this.result?.processExitCode,
+      verifiedSkillName: this.result?.verifiedSkillName,
+      verifiedSkillResourceName: this.result?.verifiedSkillResourceName,
+      processExitCodeIsError: this.result?.processExitCodeIsError,
       conversationId: this.seed.conversationId,
       conversationTitle: this.seed.conversationTitle,
       agentName: this.seed.agentName,
@@ -1979,6 +2011,38 @@ function embeddingSpanName(modelName: string): string {
     return defaultEmbeddingOperationName;
   }
   return `${defaultEmbeddingOperationName} ${model}`;
+}
+
+function toolDurationAttributes(tool: ToolExecution): Record<string, string | number> {
+  const kind =
+    tool.executionKind === 'load_skill' ||
+    tool.executionKind === 'read_skill_resource' ||
+    tool.executionKind === 'command'
+      ? tool.executionKind
+      : 'generic';
+  const attrs: Record<string, string | number> = {
+    [spanAttrToolName]: tool.toolName.trim(),
+    'agento11y.tool.execution.kind': kind,
+  };
+  if (tool.toolType?.trim()) attrs[spanAttrToolType] = tool.toolType.trim();
+  if (kind !== 'generic') {
+    const skill = tool.verifiedSkillName?.trim();
+    if (skill) attrs['gen_ai.skill.name'] = skill;
+    if (kind !== 'load_skill') {
+      const resource = tool.verifiedSkillResourceName?.trim();
+      if (resource) attrs['gen_ai.skill.resource.name'] = resource;
+    }
+  }
+  if (tool.callError !== undefined) {
+    attrs[spanAttrErrorType] = 'tool_execution_error';
+  }
+  if (kind === 'command' && typeof tool.processExitCode === 'number' && Number.isSafeInteger(tool.processExitCode)) {
+    attrs['process.exit.code'] = tool.processExitCode;
+    if (tool.callError === undefined && tool.processExitCode !== 0 && tool.processExitCodeIsError !== false) {
+      attrs[spanAttrErrorType] = String(tool.processExitCode);
+    }
+  }
+  return attrs;
 }
 
 function toolSpanName(tool: ToolExecutionStart): string {
@@ -2113,6 +2177,10 @@ function metricIdentityAttributes(
     attributes[spanAttrAgentVersion] = agentVersion.trim();
   }
   return attributes;
+}
+
+function nonEmptyAttributes(attributes: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(Object.entries(attributes).filter(([, value]) => value !== ''));
 }
 
 function setGenerationSpanAttributes(

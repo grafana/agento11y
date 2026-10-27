@@ -49,6 +49,7 @@ type Config struct {
 	// A non-nil value overrides EnvEnableExperimentalFeatures. When nil, each
 	// feature check reads the current environment value.
 	EnableExperimentalFeatures *bool
+
 	// ContentCapture controls the default content capture mode for all
 	// generations and tool executions. Per-recording overrides take precedence.
 	ContentCapture ContentCaptureMode
@@ -474,6 +475,7 @@ type ToolExecutionRecorder struct {
 }
 
 type telemetryInstruments struct {
+	toolDuration          metric.Float64Histogram
 	operationDuration     metric.Float64Histogram
 	tokenUsage            metric.Int64Histogram
 	timeToFirstToken      metric.Float64Histogram
@@ -572,6 +574,12 @@ func NewClient(config Config) *Client {
 		cfg.Logger.Printf("agento11y metric instrument init failed: %v", err)
 	} else {
 		client.instruments = instruments
+	}
+
+	client.instruments.toolDuration, err = newToolDurationHistogram(client.meter)
+	if err != nil {
+		client.instruments.toolDuration = nil
+		cfg.Logger.Printf("agento11y tool metric instrument init failed: %v", err)
 	}
 
 	// Build the otel handler before the exporter. Without
@@ -1458,6 +1466,7 @@ func (r *ToolExecutionRecorder) SetResult(end ToolExecutionEnd) {
 	}
 	r.mu.Lock()
 	end.ProcessExitCode = cloneInt64Ptr(end.ProcessExitCode)
+	end.ProcessExitCodeIsError = cloneBoolPtr(end.ProcessExitCodeIsError)
 	r.result = end
 	r.hasResult = true
 	r.mu.Unlock()
@@ -1548,6 +1557,7 @@ func (r *ToolExecutionRecorder) End() {
 		r.span.SetStatus(codes.Ok, "")
 	}
 	r.client.recordToolExecutionMetrics(r.ctx, r.seed, r.startedAt, completedAt, finalErr)
+	r.client.recordToolMetrics(r.ctx, r.seed, end, r.startedAt, completedAt, execErr)
 	r.span.End(trace.WithTimestamp(completedAt))
 
 	r.mu.Lock()

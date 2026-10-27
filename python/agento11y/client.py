@@ -134,6 +134,7 @@ _max_rating_comment_bytes = 4096
 _max_rating_metadata_bytes = 16 * 1024
 
 _metric_operation_duration = "gen_ai.client.operation.duration"
+_metric_tool_duration = "gen_ai.execute_tool.duration"
 _metric_token_usage = "gen_ai.client.token.usage"
 _metric_ttft = "gen_ai.client.time_to_first_token"
 _metric_tool_calls_per_operation = "gen_ai.client.tool_calls_per_operation"
@@ -429,6 +430,18 @@ class Client:
         self._tool_calls_histogram: Histogram = self._meter.create_histogram(
             _metric_tool_calls_per_operation, unit="count"
         )
+
+        self._tool_duration_histogram: Histogram | None = None
+        try:
+            self._tool_duration_histogram = self._meter.create_histogram(
+                _metric_tool_duration,
+                description="GenAI tool execution duration (draft compatibility).",
+                unit="s",
+                explicit_bucket_boundaries_advisory=_DURATION_BUCKETS_SECONDS,
+            )
+        except Exception:  # noqa: BLE001
+            # Tool histogram failures must not disable legacy telemetry.
+            self._log_warn("Could not create tool duration histogram.")
 
         if self._otel_handler is not None:
             from .otel_export import SCHEMA_URL
@@ -1490,6 +1503,8 @@ class Client:
         started_at: datetime,
         completed_at: datetime,
         final_error: Exception | None,
+        result: ToolExecutionEnd,
+        execution_error_type: str,
     ) -> None:
         duration_seconds = max((completed_at - started_at).total_seconds(), 0.0)
         error_type = ""
@@ -1514,6 +1529,18 @@ class Client:
                 _span_attr_error_category: error_category,
             },
         )
+
+        if self._tool_duration_histogram is not None:
+            try:
+                self._tool_duration_histogram.record(
+                    duration_seconds,
+                    attributes={
+                        **_tool_duration_attributes(seed, result, execution_error_type),
+                        **self._client_tag_attributes(),
+                    },
+                )
+            except Exception:  # noqa: BLE001
+                self._log_warn("Could not record tool duration histogram.")
 
 
 @dataclass(slots=True)
@@ -2194,6 +2221,8 @@ class ToolExecutionRecorder:
         if self.seed.execution_kind == ToolExecutionKind.COMMAND and result.process_exit_code is not None:
             self.span.set_attribute("process.exit.code", result.process_exit_code)
 
+        # Snapshot execution classification before SDK serialization can fail.
+        execution_error_type = "tool_execution_error" if exec_error is not None else ""
         content_error: Exception | None = None
         if self.include_content:
             try:
@@ -2237,7 +2266,9 @@ class ToolExecutionRecorder:
             self.span.set_status(Status(StatusCode.OK))
 
         with use_span(self.span, end_on_exit=False):
-            self.client._record_tool_execution_metrics(self.seed, self.started_at, completed_at, final_error)
+            self.client._record_tool_execution_metrics(
+                self.seed, self.started_at, completed_at, final_error, result, execution_error_type
+            )
 
         self.span.end(end_time=_datetime_to_ns(completed_at))
 
@@ -2360,6 +2391,47 @@ def _sanitize_skill_source_uri(value: str) -> str:
         return urllib_parse.urlunsplit((uri.scheme, authority, uri.path, "", ""))
     except ValueError:
         return ""
+
+
+def _tool_duration_attributes(
+    start: ToolExecutionStart, result: ToolExecutionEnd, execution_error_type: str
+) -> dict[str, Any]:
+    # Deliberate allowlist, not span/legacy/raw attributes: identity, kind, error,
+    # process and private keys cannot be supplied by content or attempted names.
+    # Client tags are separately namespaced as agento11y.tag.*.
+    kind = start.execution_kind
+    if kind not in (
+        ToolExecutionKind.LOAD_SKILL,
+        ToolExecutionKind.READ_SKILL_RESOURCE,
+        ToolExecutionKind.COMMAND,
+    ):
+        kind = "generic"
+    attrs: dict[str, Any] = {
+        _span_attr_tool_name: start.tool_name,
+        "agento11y.tool.execution.kind": kind.value if isinstance(kind, ToolExecutionKind) else kind,
+        **{
+            key: value
+            for key, value in _metric_identity_attributes(
+                start.request_provider, start.request_model, start.agent_name, start.agent_version
+            ).items()
+            if value
+        },
+    }
+    if start.tool_type:
+        attrs[_span_attr_tool_type] = start.tool_type
+    if kind != "generic" and result.verified_skill_name.strip():
+        attrs["gen_ai.skill.name"] = result.verified_skill_name.strip()
+    if kind in (ToolExecutionKind.READ_SKILL_RESOURCE, ToolExecutionKind.COMMAND):
+        if result.verified_skill_resource_name.strip():
+            attrs["gen_ai.skill.resource.name"] = result.verified_skill_resource_name.strip()
+    exit_code = result.process_exit_code
+    if kind == ToolExecutionKind.COMMAND and type(exit_code) is int and -(2**63) <= exit_code < 2**63:
+        attrs["process.exit.code"] = exit_code
+        if not execution_error_type and exit_code != 0 and result.process_exit_code_is_error is not False:
+            execution_error_type = str(exit_code)
+    if execution_error_type:
+        attrs[_span_attr_error_type] = execution_error_type
+    return attrs
 
 
 def _tool_skill_process_attributes(start: ToolExecutionStart, *, private: bool = False) -> dict[str, str]:

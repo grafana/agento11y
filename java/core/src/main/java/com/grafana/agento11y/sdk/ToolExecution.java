@@ -16,6 +16,9 @@ public final class ToolExecution {
     private String processExecutableName = "";
     private String processExecutablePath = "";
     private Long processExitCode;
+    private String verifiedSkillName = "";
+    private String verifiedSkillResourceName = "";
+    private Boolean processExitCodeIsError;
     private String conversationId = "";
     private String agentName = "";
     private String agentVersion = "";
@@ -134,6 +137,33 @@ public final class ToolExecution {
         return this;
     }
 
+    public String getVerifiedSkillName() {
+        return verifiedSkillName;
+    }
+
+    public ToolExecution setVerifiedSkillName(String verifiedSkillName) {
+        this.verifiedSkillName = verifiedSkillName == null ? "" : verifiedSkillName;
+        return this;
+    }
+
+    public String getVerifiedSkillResourceName() {
+        return verifiedSkillResourceName;
+    }
+
+    public ToolExecution setVerifiedSkillResourceName(String verifiedSkillResourceName) {
+        this.verifiedSkillResourceName = verifiedSkillResourceName == null ? "" : verifiedSkillResourceName;
+        return this;
+    }
+
+    public Boolean getProcessExitCodeIsError() {
+        return processExitCodeIsError;
+    }
+
+    public ToolExecution setProcessExitCodeIsError(Boolean processExitCodeIsError) {
+        this.processExitCodeIsError = processExitCodeIsError;
+        return this;
+    }
+
     public String getConversationId() {
         return conversationId;
     }
@@ -229,6 +259,9 @@ public final class ToolExecution {
                 .setProcessExecutableName(processExecutableName)
                 .setProcessExecutablePath(processExecutablePath)
                 .setProcessExitCode(processExitCode)
+                .setVerifiedSkillName(verifiedSkillName)
+                .setVerifiedSkillResourceName(verifiedSkillResourceName)
+                .setProcessExitCodeIsError(processExitCodeIsError)
                 .setConversationId(conversationId)
                 .setAgentName(agentName)
                 .setAgentVersion(agentVersion)

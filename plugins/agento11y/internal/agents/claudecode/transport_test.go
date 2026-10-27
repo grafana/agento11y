@@ -150,6 +150,7 @@ func TestHookRecordFailureTransport(t *testing.T) {
 					}
 				} else {
 					wantState.Offset = safeOffset
+					wantState.Tools = state.ToolState{Version: toolStateVersion, Offsets: map[string]int64{toolPath(path): int64(len(text))}}
 					wantHTTP = []string{gens[0].ID, gens[2].ID}
 				}
 				if got := state.Load(sessionID); !reflect.DeepEqual(got, wantState) {

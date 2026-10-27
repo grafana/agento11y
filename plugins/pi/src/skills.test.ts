@@ -12,7 +12,12 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { matchSkillRead, snapshotSkills, validateSkillName } from "./skills.js";
+import {
+  matchSkillRead,
+  snapshotSkills,
+  validateSkillName,
+  verifySkillRead,
+} from "./skills.js";
 
 async function nativeRead(path: string, cwd: string) {
   const moduleURL = new URL(
@@ -75,6 +80,56 @@ describe("skill read identities", () => {
     expect(validateSkillName(name)).toBeUndefined();
   });
 
+  it("requires a fresh regular file even for exact catalog paths", () => {
+    const catalog = snapshotSkills(
+      { skills: [{ name: "review", filePath: "guide.md" }] },
+      cwd,
+    );
+    const verify = () =>
+      verifySkillRead(catalog, "read", { path: "guide.md" }, cwd);
+    expect(matchSkillRead(catalog, "read", { path: "guide.md" }, cwd)).toBe(
+      "review",
+    );
+    expect(verify()).toBeUndefined();
+    writeFileSync(join(cwd, "guide.md"), "");
+    expect(verify()).toBe("review");
+    unlinkSync(join(cwd, "guide.md"));
+    mkdirSync(join(cwd, "guide.md"));
+    expect(verify()).toBeUndefined();
+  });
+
+  it.each([
+    "exact",
+    "symlink",
+    "hardlink",
+  ])("rejects ambiguous catalog identities via %s", (spelling) => {
+    writeFileSync(join(cwd, "guide.md"), "");
+    linkSync(join(cwd, "guide.md"), join(cwd, "other.md"));
+    symlinkSync("guide.md", join(cwd, "alias.md"));
+    const catalog = snapshotSkills(
+      {
+        skills: [
+          { name: "review", filePath: "guide.md" },
+          { name: "other", filePath: "other.md" },
+        ],
+      },
+      cwd,
+    );
+    const path =
+      spelling === "exact"
+        ? "guide.md"
+        : spelling === "symlink"
+          ? "alias.md"
+          : "other.md";
+    expect(verifySkillRead(catalog, "read", { path }, cwd)).toBeUndefined();
+    expect(
+      verifySkillRead([catalog[0]!, catalog[0]!], "read", { path }, cwd),
+    ).toBeUndefined();
+    expect(verifySkillRead(catalog.slice(0, 1), "read", { path }, cwd)).toBe(
+      "review",
+    );
+  });
+
   it("snapshots only final name and filePath, including standalone Markdown", () => {
     const options = {
       skills: [{ name: " old ", filePath: "guide.md", description: "private" }],
@@ -124,6 +179,7 @@ describe("skill read identities", () => {
       ],
     ] as const) {
       expect(matchSkillRead(catalog, tool, args, cwd)).toBeUndefined();
+      expect(verifySkillRead(catalog, tool, args, cwd)).toBeUndefined();
     }
     for (const path of [
       "guide.md",
@@ -186,6 +242,9 @@ describe("skill read identities", () => {
       { skills: [{ name: "review", filePath: selected }] },
       cwd,
     );
+    expect(verifySkillRead(catalog, "read", { path: original }, cwd)).toBe(
+      "review",
+    );
     expect(matchSkillRead(catalog, "read", { path: original }, cwd)).toBe(
       "review",
     );
@@ -225,6 +284,9 @@ describe("skill read identities", () => {
     expect(matchSkillRead(catalog, "read", { path: alias }, cwd)).toBe(
       "review",
     );
+    expect(verifySkillRead(catalog, "read", { path: alias }, cwd)).toBe(
+      "review",
+    );
   });
 
   it.for(
@@ -261,17 +323,22 @@ describe("skill read identities", () => {
   });
 
   it.each([
-    "alpha",
-    "beta",
-  ])("prefers the exact path for hardlinked native skill %s", async (name) => {
-    for (const directory of ["alpha", "beta"]) {
+    { name: "alpha", otherName: "beta" },
+    { name: "beta", otherName: "beta" },
+    { name: "alpha", otherName: "unsafe display" },
+    { name: "unsafe display", otherName: "unsafe display" },
+  ])("checks all hardlinked native skills: $name / $otherName", async ({
+    name,
+    otherName,
+  }) => {
+    for (const directory of ["alpha", otherName]) {
       mkdirSync(join(cwd, directory));
     }
     writeFileSync(
       join(cwd, "alpha/SKILL.md"),
       "---\ndescription: Review changes\n---\nShared instructions\n",
     );
-    linkSync(join(cwd, "alpha/SKILL.md"), join(cwd, "beta/SKILL.md"));
+    linkSync(join(cwd, "alpha/SKILL.md"), join(cwd, otherName, "SKILL.md"));
     const moduleURL = new URL(
       "../node_modules/@mariozechner/pi-coding-agent/dist/core/skills.js",
       import.meta.url,
@@ -280,11 +347,23 @@ describe("skill read identities", () => {
     const { skills } = loadSkills({
       cwd,
       agentDir: cwd,
-      skillPaths: [join(cwd, "alpha"), join(cwd, "beta")],
+      skillPaths: [join(cwd, "alpha"), join(cwd, otherName)],
       includeDefaults: false,
     });
     const catalog = snapshotSkills({ skills }, cwd);
-    expect(catalog.map((skill) => skill.name)).toEqual(["alpha", "beta"]);
+    expect(skills).toHaveLength(2);
+    expect(catalog.map((skill) => skill.name)).toEqual([
+      "alpha",
+      validateSkillName(otherName),
+    ]);
+    expect(
+      verifySkillRead(
+        catalog,
+        "read",
+        { path: join(cwd, name, "SKILL.md") },
+        cwd,
+      ),
+    ).toBeUndefined();
     expect(
       matchSkillRead(
         catalog,
@@ -292,7 +371,7 @@ describe("skill read identities", () => {
         { path: join(cwd, name, "SKILL.md") },
         cwd,
       ),
-    ).toBe(name);
+    ).toBe(validateSkillName(name) ?? "alpha");
   });
 
   it("does not match an unrelated file with identical contents", async () => {
@@ -367,7 +446,13 @@ describe("skill read identities", () => {
     expect(
       matchSkillRead(catalog, "read", { path: original }, cwd),
     ).toBeUndefined();
+    expect(
+      verifySkillRead(catalog, "read", { path: original }, cwd),
+    ).toBeUndefined();
     unlinkSync(join(cwd, original));
+    expect(verifySkillRead(catalog, "read", { path: original }, cwd)).toBe(
+      "review",
+    );
     expect((await nativeRead(original, cwd)).content).toEqual([
       { type: "text", text: "instruction" },
     ]);
@@ -408,9 +493,18 @@ describe("skill read identities", () => {
     expect(matchSkillRead(catalog, "read", { path: "two.md" }, cwd)).toBe(
       "review",
     );
+    expect(
+      verifySkillRead(catalog, "read", { path: "one.md" }, cwd),
+    ).toBeUndefined();
+    expect(verifySkillRead(catalog, "read", { path: "two.md" }, cwd)).toBe(
+      "review",
+    );
     unlinkSync(join(cwd, "two.md"));
     expect(matchSkillRead(catalog, "read", { path: "alias.md" }, cwd)).toBe(
       "review",
     );
+    expect(
+      verifySkillRead(catalog, "read", { path: "alias.md" }, cwd),
+    ).toBeUndefined();
   });
 });

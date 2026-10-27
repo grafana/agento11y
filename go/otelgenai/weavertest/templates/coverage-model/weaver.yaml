@@ -14,6 +14,10 @@ templates:
         [.attributes[]? | {key: .key, value: (.requirement_level | level)}]
         | from_entries;
 
+      def metric_definition:
+        {name, instrument, unit, value_type: .annotations.code_generation.metric_value_type,
+         attributes: ([.attributes[]? | {key: .key, value: {type, requirement_level}}] | from_entries)};
+
       def enums:
         [
           .registry.attributes[]? | select(.type | type == "object" and .members) | {
@@ -50,6 +54,12 @@ templates:
           key: .name,
           value: {attributes: attributes},
         }) | from_entries),
+        tool_metric_base: ([.refinements.metrics[]? | select(.id == "gen_ai.execute_tool.duration")
+          | metric_definition] | first // null),
+        tool_metric_refinements: ([.refinements.metrics[]? | select(.id ==
+          "gen_ai.execute_tool.load_skill.duration" or .id ==
+          "gen_ai.execute_tool.read_skill_resource" or .id ==
+          "gen_ai.execute_tool.command")] | map({key: .id, value: metric_definition}) | from_entries),
         enums: enums,
         entities: ([.refinements.entities[]? | select(.id == .type)] | map({
           key: .type,

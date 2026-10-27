@@ -12,18 +12,19 @@ import (
 
 // Line represents a single JSONL line from a Claude Code transcript.
 type Line struct {
-	Type        string          `json:"type"`
-	UUID        string          `json:"uuid"`
-	ParentUUID  string          `json:"parentUuid"`
-	Timestamp   string          `json:"timestamp"`
-	SessionID   string          `json:"sessionId"`
-	Version     string          `json:"version"`
-	GitBranch   string          `json:"gitBranch"`
-	CWD         string          `json:"cwd"`
-	Entrypoint  string          `json:"entrypoint"`
-	RequestID   string          `json:"requestId"`
-	IsSidechain bool            `json:"isSidechain"`
-	Message     json.RawMessage `json:"message"`
+	Type          string          `json:"type"`
+	UUID          string          `json:"uuid"`
+	ParentUUID    string          `json:"parentUuid"`
+	Timestamp     string          `json:"timestamp"`
+	SessionID     string          `json:"sessionId"`
+	Version       string          `json:"version"`
+	GitBranch     string          `json:"gitBranch"`
+	CWD           string          `json:"cwd"`
+	Entrypoint    string          `json:"entrypoint"`
+	RequestID     string          `json:"requestId"`
+	IsSidechain   bool            `json:"isSidechain"`
+	Message       json.RawMessage `json:"message"`
+	ToolUseResult json.RawMessage `json:"toolUseResult,omitempty"`
 
 	// AgentID identifies the subagent that produced a sidechain line. Claude
 	// Code names the subagent's own transcript file after it
@@ -47,7 +48,9 @@ type Line struct {
 
 	// EndOffset is the byte position after this line in the transcript file.
 	// Set by Read(), not deserialized from JSON.
-	EndOffset int64 `json:"-"`
+	// StartOffset locates the record for deferred content export.
+	StartOffset int64 `json:"-"`
+	EndOffset   int64 `json:"-"`
 	// LegacyGroups is how many pre-merge assistant generations this line
 	// represents. Coalesce sets it; 1 is a normal turn, 2+ means fragments of
 	// one message were merged across a tool_result. History import uses it so
@@ -187,6 +190,10 @@ func Read(path string, offset int64) ([]Line, int64, error) {
 // range. The title records are not returned as lines, for the same reason no
 // other non-turn line is.
 func ReadWithTitles(path string, offset int64) ([]Line, int64, Titles, error) {
+	return readWithTitles(path, offset, false)
+}
+
+func readWithTitles(path string, offset int64, completeOnly bool) ([]Line, int64, Titles, error) {
 	var titles Titles
 	f, err := os.Open(path)
 	if err != nil {
@@ -206,13 +213,14 @@ func ReadWithTitles(path string, offset int64) ([]Line, int64, Titles, error) {
 	pos := offset
 
 	for {
-		data, consumed, tooLong, err := readLine(r, maxLineBytes)
+		data, consumed, tooLong, err := readLine(r, maxLineBytes, completeOnly)
 		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
 			return lines, pos, titles, err
 		}
+		start := pos
 		pos += consumed
 		if tooLong {
 			continue
@@ -232,6 +240,7 @@ func ReadWithTitles(path string, offset int64) ([]Line, int64, Titles, error) {
 			continue
 		}
 
+		line.StartOffset = start
 		line.EndOffset = pos
 		lines = append(lines, line)
 	}
@@ -239,13 +248,23 @@ func ReadWithTitles(path string, offset int64) ([]Line, int64, Titles, error) {
 	return lines, pos, titles, nil
 }
 
+// ReadComplete leaves an unterminated tail unread so a later hook can resume its record.
+func ReadComplete(path string, offset int64) ([]Line, int64, error) {
+	lines, pos, _, err := ReadCompleteWithTitles(path, offset)
+	return lines, pos, err
+}
+
+func ReadCompleteWithTitles(path string, offset int64) ([]Line, int64, Titles, error) {
+	return readWithTitles(path, offset, true)
+}
+
 // readLine returns the next line without its trailing newline, and the bytes
 // consumed including the newline. A line longer than max is discarded as it
 // streams past, never buffered, and reported through tooLong, so one oversized
 // line costs itself and nothing after it. This is the behavior bufio.Scanner
 // cannot give: its ErrTooLong is terminal and abandons the rest of the file.
-// io.EOF is returned only when nothing remains.
-func readLine(r *bufio.Reader, max int) (line []byte, consumed int64, tooLong bool, err error) {
+// With requireNewline, io.EOF also leaves an incomplete record unread.
+func readLine(r *bufio.Reader, max int, requireNewline bool) (line []byte, consumed int64, tooLong bool, err error) {
 	var buf []byte
 	for {
 		chunk, rerr := r.ReadSlice('\n')
@@ -265,7 +284,7 @@ func readLine(r *bufio.Reader, max int) (line []byte, consumed int64, tooLong bo
 			continue
 		}
 		if errors.Is(rerr, io.EOF) {
-			if consumed == 0 {
+			if consumed == 0 || requireNewline {
 				return nil, 0, false, io.EOF
 			}
 			break

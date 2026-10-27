@@ -4,7 +4,7 @@ import { createAgento11yClient } from "./client.js";
 import { loadConfig, resolveAutoTagValues } from "./config.js";
 import { LocalReceiverError } from "./local.js";
 import { createRedactor } from "./redaction.js";
-import { detectSkillName } from "./skills.js";
+import { detectSkillName, verifyNativeSkill } from "./skills.js";
 import {
   createOwnedTelemetryProviders,
   type TelemetryProviders,
@@ -26,6 +26,11 @@ export const setupV2: Plugin.Plugin["setup"] = async (context) => {
     return;
   }
   if (!config) return;
+  let initialized!: () => void;
+  const verificationReady = new Promise<void>((resolve) => {
+    initialized = resolve;
+  });
+  let initializationTimer: ReturnType<typeof setTimeout> | undefined;
 
   let telemetry: TelemetryProviders | undefined;
   let client: ReturnType<typeof createAgento11yClient>;
@@ -38,6 +43,7 @@ export const setupV2: Plugin.Plugin["setup"] = async (context) => {
   const cleanup = (): Promise<void> => {
     cleanupPromise ??= (async () => {
       stopped = true;
+      clearTimeout(initializationTimer);
       capture?.stopObservingTools();
       abort.abort();
       await intake;
@@ -89,6 +95,16 @@ export const setupV2: Plugin.Plugin["setup"] = async (context) => {
       directory: context.location.directory,
       workspaceID: context.location.workspaceID,
       hostVersion: context.app.version,
+      verificationReady,
+      verifySkill: async (rawID, signal) =>
+        verifyNativeSkill(
+          rawID,
+          await context.skill.list(
+            { location: { directory: context.location.directory } },
+            { signal },
+          ),
+          context.location.directory,
+        ),
       debugLog: (message) => {
         if (config.debug) console.error(`[agento11y-opencode] ${message}`);
       },
@@ -105,11 +121,24 @@ export const setupV2: Plugin.Plugin["setup"] = async (context) => {
         )
           return;
         let skillName: string | null = null;
+        let rawSkillID: string | null = null;
         try {
           // v2's built-in skill takes an id; durable called.input predates before hooks.
-          skillName = detectSkillName(tool, payload.input, "id") ?? null;
+          const input = payload.input;
+          if (
+            tool === "skill" &&
+            input &&
+            typeof input === "object" &&
+            !Array.isArray(input)
+          ) {
+            const value = (input as Record<string, unknown>).id;
+            if (typeof value === "string") rawSkillID = value;
+          }
+          skillName = detectSkillName(tool, { id: rawSkillID }, "id") ?? null;
         } catch {
           // Malformed final input must also clear an earlier match.
+          rawSkillID = null;
+          skillName = null;
         }
         capture?.observeToolExecution({
           sessionID,
@@ -118,6 +147,7 @@ export const setupV2: Plugin.Plugin["setup"] = async (context) => {
           tool,
           agent,
           skillName,
+          rawSkillID,
         });
       } catch {
         // Observation must never change the host tool's outcome.
@@ -159,6 +189,8 @@ export const setupV2: Plugin.Plugin["setup"] = async (context) => {
         }
       }
     })();
+    // A timer runs after setup returns, unlike a microtask during registration.
+    initializationTimer = setTimeout(initialized, 0);
     return cleanup;
   } catch (error) {
     await cleanup();

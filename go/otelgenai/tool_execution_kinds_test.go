@@ -189,6 +189,9 @@ func TestToolExecutionKindFixtures(t *testing.T) {
 			for _, m := range metrics {
 				for _, point := range metricPointAttributes(t, m) {
 					for key := range point {
+						if m.Name == draftToolDuration && key == "process.exit.code" {
+							continue
+						}
 						if strings.HasPrefix(key, "gen_ai.skill.") || strings.HasPrefix(key, "process.") || key == "agento11y.skill.name" {
 							t.Errorf("metric %s has skill/process dimension %s", m.Name, key)
 						}

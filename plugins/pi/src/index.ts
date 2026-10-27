@@ -58,6 +58,7 @@ import {
   matchSkillRead,
   type SkillIdentity,
   snapshotSkills,
+  verifySkillRead,
 } from "./skills.js";
 import { buildBuiltinTags } from "./tags.js";
 import {
@@ -106,6 +107,11 @@ export default function (pi: ExtensionAPI) {
       startedAt: number;
       skillName?: string;
       skillInput?: { ref: WeakRef<object>; toolName: string; cwd: string };
+      verificationInput?: {
+        ref: WeakRef<object>;
+        toolName: string;
+        cwd: string;
+      };
     }
   >();
 
@@ -126,6 +132,10 @@ export default function (pi: ExtensionAPI) {
       toolName === "read" &&
       typeof args === "object" &&
       args !== null
+        ? { ref: new WeakRef(args), toolName, cwd }
+        : undefined;
+    timing.verificationInput =
+      toolName === "read" && typeof args === "object" && args !== null
         ? { ref: new WeakRef(args), toolName, cwd }
         : undefined;
   }
@@ -717,7 +727,13 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("tool_result", async (event, ctx) => {
-    if (!sigil || !("input" in event)) return;
+    if (!sigil) return;
+    const toolCallId = event.toolCallId;
+    if (!("input" in event)) {
+      const timing = toolStarts.get(toolCallId);
+      if (timing) timing.verificationInput = undefined;
+      return;
+    }
     updateSkillCandidate(
       event.toolCallId,
       event.toolName,
@@ -756,7 +772,17 @@ export default function (pi: ExtensionAPI) {
         }
       }
 
+      const effective = start.verificationInput;
+      const verifiedSkillName = effective
+        ? verifySkillRead(
+            skillCatalog,
+            effective.toolName,
+            effective.ref.deref(),
+            effective.cwd,
+          )
+        : undefined;
       turnToolTimings.push({
+        verifiedSkillName,
         toolCallId: event.toolCallId,
         toolName: start.toolName,
         skillName: start.skillName,
@@ -1270,7 +1296,7 @@ export function emitToolSpans(
   for (const timing of timings) {
     try {
       const toolRec = startToolExecution({
-        ...(timing.skillName
+        ...(timing.skillName || timing.verifiedSkillName
           ? { executionKind: "load_skill", skillName: timing.skillName }
           : {}),
         toolName: timing.toolName,
@@ -1289,8 +1315,10 @@ export function emitToolSpans(
       const end: {
         arguments?: unknown;
         result?: unknown;
+        verifiedSkillName?: string;
         completedAt: Date;
       } = {
+        verifiedSkillName: timing.verifiedSkillName,
         completedAt: new Date(timing.completedAt),
       };
 

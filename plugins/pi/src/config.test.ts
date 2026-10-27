@@ -643,6 +643,23 @@ describe("loadConfig reads ~/.config/agento11y/config.env", () => {
     });
   });
 
+  it.each([
+    "AGENTO11Y_EXPERIMENTAL_TOOL_METRICS=true",
+    "AGENTO11Y_EXPERIMENTAL_TOOL_METRICS=false",
+    "AGENTO11Y_EXPERIMENTAL_TOOL_METRICS=invalid",
+    "SIGIL_EXPERIMENTAL_TOOL_METRICS=true",
+  ])("ignores removed metric setting in dotenv: %s", async (setting) => {
+    const cfgDir = join(dir, "agento11y");
+    mkdirSync(cfgDir, { recursive: true });
+    writeFileSync(
+      join(cfgDir, "config.env"),
+      `AGENTO11Y_ENDPOINT=http://127.0.0.1:1\n${setting}\n`,
+    );
+    const config = await loadConfig();
+    expect(config?.endpoint).toBe("http://127.0.0.1:1");
+    expect(config).not.toHaveProperty("experimentalToolMetrics");
+  });
+
   it("ignores a stray ~/.config/sigil-pi/config.json on disk", async () => {
     const legacyDir = join(dir, "sigil-pi");
     mkdirSync(legacyDir, { recursive: true });

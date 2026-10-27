@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "proposal_revision": "fb436c99dbe30d445c1fa952d67fdb74ce35dd4d",
+  "instrument": "gen_ai.execute_tool.duration",
+  "unit": "s",
+  "reserved_attributes": ["gen_ai.skill.name", "gen_ai.skill.resource.name", "agento11y.tool.execution.kind", "error.type", "process.exit.code", "gen_ai.skill.description", "gen_ai.skill.source.uri", "process.executable.name", "process.executable.path"],
+  "cases": [
+    {"id":"default_generic","start":{"tool_name":"read"},"count":1,"attributes":{"gen_ai.tool.name":"read","agento11y.tool.execution.kind":"generic"}},
+    {"id":"unverified_load","start":{"tool_name":"Skill","execution_kind":"load_skill","skill_name":"attempted"},"count":1,"attributes":{"gen_ai.tool.name":"Skill","agento11y.tool.execution.kind":"load_skill"}},
+    {"id":"verified_load","start":{"tool_name":"Skill","execution_kind":"load_skill","skill_name":"attempted"},"end":{"verified_skill_name":"review"},"count":1,"attributes":{"gen_ai.tool.name":"Skill","agento11y.tool.execution.kind":"load_skill","gen_ai.skill.name":"review"}},
+    {"id":"verified_failure","start":{"tool_name":"Skill","execution_kind":"load_skill"},"end":{"verified_skill_name":"review"},"error":"execution failed","count":1,"attributes":{"gen_ai.tool.name":"Skill","agento11y.tool.execution.kind":"load_skill","gen_ai.skill.name":"review","error.type":"tool_execution_error"}},
+    {"id":"resource_only","start":{"tool_name":"read","execution_kind":"read_skill_resource"},"end":{"verified_skill_resource_name":"notes.md"},"count":1,"attributes":{"gen_ai.tool.name":"read","agento11y.tool.execution.kind":"read_skill_resource","gen_ai.skill.resource.name":"notes.md"}},
+    {"id":"unknown_kind","start":{"tool_name":"read","execution_kind":"future"},"end":{"verified_skill_name":"review","verified_skill_resource_name":"notes.md","process_exit_code":2},"count":1,"attributes":{"gen_ai.tool.name":"read","agento11y.tool.execution.kind":"generic"}},
+    {"id":"generic_verified_ignored","start":{"tool_name":"read"},"end":{"verified_skill_name":"review","verified_skill_resource_name":"notes.md"},"count":1,"attributes":{"gen_ai.tool.name":"read","agento11y.tool.execution.kind":"generic"}},
+    {"id":"load_resource_ignored","start":{"tool_name":"Skill","execution_kind":"load_skill"},"end":{"verified_skill_name":" review ","verified_skill_resource_name":"notes.md","process_exit_code":2},"count":1,"attributes":{"gen_ai.tool.name":"Skill","agento11y.tool.execution.kind":"load_skill","gen_ai.skill.name":"review"}},
+    {"id":"blank_verified","start":{"tool_name":"Skill","execution_kind":"load_skill","skill_name":"attempted"},"end":{"verified_skill_name":"  "},"count":1,"attributes":{"gen_ai.tool.name":"Skill","agento11y.tool.execution.kind":"load_skill"}},
+    {"id":"command_exit","start":{"tool_name":"exec","execution_kind":"command"},"end":{"verified_skill_name":"review","verified_skill_resource_name":"check.py","process_exit_code":2},"count":1,"attributes":{"gen_ai.tool.name":"exec","agento11y.tool.execution.kind":"command","gen_ai.skill.name":"review","gen_ai.skill.resource.name":"check.py","process.exit.code":2,"error.type":"2"}},
+    {"id":"benign_exit","start":{"tool_name":"exec","execution_kind":"command"},"end":{"process_exit_code":2,"process_exit_code_is_error":false},"count":1,"attributes":{"gen_ai.tool.name":"exec","agento11y.tool.execution.kind":"command","process.exit.code":2}},
+    {"id":"override_does_not_hide_error","start":{"tool_name":"exec","execution_kind":"command"},"end":{"process_exit_code":2,"process_exit_code_is_error":false},"error":"execution failed","count":1,"attributes":{"gen_ai.tool.name":"exec","agento11y.tool.execution.kind":"command","process.exit.code":2,"error.type":"tool_execution_error"}},
+    {"id":"zero_exit","start":{"tool_name":"exec","execution_kind":"command"},"end":{"process_exit_code":0,"process_exit_code_is_error":true},"count":1,"attributes":{"gen_ai.tool.name":"exec","agento11y.tool.execution.kind":"command","process.exit.code":0}},
+    {"id":"missing_exit","start":{"tool_name":"exec","execution_kind":"command"},"end":{"process_exit_code_is_error":true},"count":1,"attributes":{"gen_ai.tool.name":"exec","agento11y.tool.execution.kind":"command"}},
+    {"id":"repeat_end","start":{"tool_name":"read"},"end_calls":2,"count":1,"attributes":{"gen_ai.tool.name":"read","agento11y.tool.execution.kind":"generic"}},
+    {"id":"repeat_loads","start":{"tool_name":"Skill","execution_kind":"load_skill"},"end":{"verified_skill_name":"review"},"executions":3,"count":3,"attributes":{"gen_ai.tool.name":"Skill","agento11y.tool.execution.kind":"load_skill","gen_ai.skill.name":"review"}}
+  ]
+}

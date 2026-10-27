@@ -59,8 +59,9 @@ const (
 // it: a hook that died partway through may have redacted some of the content
 // and left the rest raw.
 //
-// A panic drops Attributes and MetricAttributes, including values added by
-// later hooks, because their redaction may be incomplete. Later hooks receive
+// A panic drops Attributes, MetricAttributes, VerifiedSkillName and
+// VerifiedSkillResourceName, including values added by later hooks, because
+// their redaction or verification may be incomplete. Later hooks receive
 // CaptureNoContent.
 //
 // A hook may set the invocation's exported fields, including replacing the
@@ -257,6 +258,12 @@ func NewHandler(opts ...Option) *Handler {
 		otel.Handle(fmt.Errorf("otelgenai: create metric instruments: %w", err))
 	}
 
+	inst.toolDuration, err = newToolDurationHistogram(meter)
+	if err != nil {
+		inst.toolDuration = nil
+		otel.Handle(fmt.Errorf("otelgenai: create tool duration instrument: %w", err))
+	}
+
 	tracer := tracerProvider.Tracer(
 		ScopeName,
 		trace.WithInstrumentationVersion(version),
@@ -408,6 +415,7 @@ func (h *Handler) End(ctx context.Context, inv *Invocation) {
 		inv.CompletedAt = now()
 	}
 	inv.toolIdentity.restore(inv)
+	inv.snapshotToolCompletion()
 	capture := h.captureFor(inv)
 	emitEvent := h.shouldEmitEvent(capture)
 
@@ -421,6 +429,7 @@ func (h *Handler) End(ctx context.Context, inv *Invocation) {
 	spanStartedAt := inv.spanStartedAt
 	completedAt := inv.CompletedAt
 
+	h.instruments.recordToolDuration(ctx, inv)
 	if span != nil {
 		span.SetName(inv.spanName())
 		attrs := h.requestAttributes(inv)
@@ -466,7 +475,10 @@ func (h *Handler) runHooks(ctx context.Context, inv *Invocation, capture Capture
 		if panicked {
 			inv.Attributes = nil
 			inv.MetricAttributes = nil
+			inv.VerifiedSkillName = ""
+			inv.VerifiedSkillResourceName = ""
 		}
+		inv.snapshotToolCompletion()
 	}
 	if panicked {
 		return nil, true

@@ -35,6 +35,13 @@ describe("createAgento11yClient", () => {
     });
   });
 
+  it("uses SDK metric defaults without an opt-in", () => {
+    createAgento11yClient(makeConfig());
+    expect(Agento11yClientMock.mock.calls[0]![0]).not.toHaveProperty(
+      "experimentalToolMetrics",
+    );
+  });
+
   it("passes contentCapture to the SDK client", () => {
     createAgento11yClient(makeConfig({ contentCapture: "full" }));
 

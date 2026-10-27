@@ -1,5 +1,59 @@
 import { describe, expect, it } from "vitest";
-import { detectSkillName } from "./skills.js";
+import { detectSkillName, verifyNativeSkill } from "./skills.js";
+
+describe("native catalog verification", () => {
+  it.each([
+    ["opaque/id", "opaque/id", "review", "/repo", "review"],
+    [" id ", "id", "review", "/repo", undefined],
+    ["ID", "id", "review", "/repo", undefined],
+    ["unknown", "id", "review", "/repo", undefined],
+    ["id", "id", "../review", "/repo", undefined],
+    ["id", "id", " review ", "/repo", undefined],
+    [
+      "id",
+      "id",
+      "ghp_1234567890abcdefghijklmnopqrstuvwxyz",
+      "/repo",
+      undefined,
+    ],
+    ["id", "id", "review", "/other", undefined],
+  ])("matches raw %s against catalog %s name %s location %s", (raw, id, name, directory, expected) => {
+    expect(
+      verifyNativeSkill(
+        raw,
+        {
+          location: { directory },
+          data: [
+            {
+              id,
+              name,
+              path: "/private/SKILL.md",
+              get content() {
+                throw new Error("must not read content");
+              },
+            },
+          ],
+        },
+        "/repo",
+      ),
+    ).toBe(expected);
+  });
+
+  it.each([
+    null,
+    {},
+    [],
+    {
+      location: { directory: "/repo" },
+      data: [
+        { id: "id", name: "one" },
+        { id: "id", name: "two" },
+      ],
+    },
+  ])("rejects missing or ambiguous catalogs %#", (catalog) => {
+    expect(verifyNativeSkill("id", catalog, "/repo")).toBeUndefined();
+  });
+});
 
 describe("detectSkillName", () => {
   it.each([

@@ -651,6 +651,26 @@ describe("loadConfig reads ~/.config/agento11y/config.env", () => {
     clearAgento11yEnv();
   });
 
+  it.each([
+    ["AGENTO11Y", undefined],
+    ["AGENTO11Y", "false"],
+    ["SIGIL", undefined],
+  ])("ignores removed metric setting in dotenv prefix=%s shell=%s", async (prefix, shell) => {
+    const cfgDir = join(dir, "agento11y");
+    mkdirSync(cfgDir, { recursive: true });
+    writeFileSync(
+      join(cfgDir, "config.env"),
+      `AGENTO11Y_ENDPOINT=http://127.0.0.1:1\n${prefix}_EXPERIMENTAL_TOOL_METRICS=true\n`,
+    );
+    if (shell !== undefined)
+      process.env.AGENTO11Y_EXPERIMENTAL_TOOL_METRICS = shell;
+    const cfg = await loadConfig();
+    expect(cfg?.endpoint).toBe("http://127.0.0.1:1");
+    expect(cfg).not.toHaveProperty("experimentalToolMetrics");
+    if (prefix === "AGENTO11Y")
+      expect(process.env.SIGIL_EXPERIMENTAL_TOOL_METRICS).toBeUndefined();
+  });
+
   it("returns null when config.env is missing and no shell env is set", async () => {
     const cfg = await loadConfig();
     expect(cfg).toBeNull();

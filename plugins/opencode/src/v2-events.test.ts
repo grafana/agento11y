@@ -27,8 +27,8 @@ import {
   stableOpencodeGenerationId,
 } from "./lineage.js";
 import { createRedactor } from "./redaction.js";
-import { detectSkillName } from "./skills.js";
-import { createNativeCapture } from "./v2-events.js";
+import { detectSkillName, verifyNativeSkill } from "./skills.js";
+import { createNativeCapture, type NativeCaptureOptions } from "./v2-events.js";
 import type {
   NativeEvent,
   NativeEventOf,
@@ -243,6 +243,7 @@ function harness(
   location = home,
   overrides: Partial<Agento11yOpencodeConfig> = {},
   createCapture = createNativeCapture,
+  verification: Partial<NativeCaptureOptions> = {},
 ) {
   const generations: Recorded[] = [];
   const toolResults: unknown[] = [];
@@ -291,6 +292,7 @@ function harness(
     ...location,
     hostVersion: "2.0.29",
     debugLog,
+    ...verification,
   });
   return {
     capture,
@@ -372,9 +374,192 @@ function observation(
     tool: "skill",
     agent: "build",
     skillName: "final-id",
+    rawSkillID: "opaque/id",
     ...overrides,
   };
 }
+
+describe("native catalog settlement", () => {
+  it.each([
+    "success",
+    "failure",
+    "timeout",
+    "reverse",
+    "older first",
+    "post settlement",
+    "invalidate",
+    "resolved invalidation",
+    "shutdown",
+    "supersede",
+    "move",
+    "delete",
+  ])("settles latest verification once: %s", async (kind) => {
+    vi.useFakeTimers();
+    const pending: ((name?: string) => void)[] = [];
+    const signals: AbortSignal[] = [];
+    const verifySkill = vi.fn((_id: string, signal: AbortSignal) => {
+      signals.push(signal);
+      return new Promise<string | undefined>((resolve, reject) => {
+        pending.push(
+          kind === "failure"
+            ? () => reject(new Error("PRIVATE_CATALOG"))
+            : resolve,
+        );
+      });
+    });
+    const h = harness(home, {}, createNativeCapture, { verifySkill });
+    try {
+      h.capture.handleEvent(start());
+      h.capture.observeToolExecution(observation({ skillName: null }));
+      expect(verifySkill).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(verifySkill).toHaveBeenCalledExactlyOnceWith(
+        "opaque/id",
+        expect.any(AbortSignal),
+      );
+      if (
+        [
+          "reverse",
+          "older first",
+          "invalidate",
+          "resolved invalidation",
+        ].includes(kind)
+      ) {
+        if (kind === "resolved invalidation") {
+          pending[0]?.("stale");
+          await Promise.resolve();
+        }
+        h.capture.observeToolExecution(
+          observation({
+            skillName: null,
+            rawSkillID: ["reverse", "older first"].includes(kind)
+              ? "second/id"
+              : null,
+          }),
+        );
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      skillTools().forEach(h.capture.handleEvent);
+      if (kind === "supersede") h.capture.handleEvent(start("s", "b"));
+      else if (kind === "move") h.capture.handleEvent(move());
+      else if (kind === "delete")
+        h.capture.handleEvent(event("session.deleted", { sessionID: "s" }));
+      else if (kind === "shutdown") await h.capture.shutdown();
+      else h.capture.handleEvent(end());
+      h.capture.handleEvent(end());
+      await Promise.resolve();
+      if (kind === "post settlement")
+        h.capture.observeToolExecution(
+          observation({ skillName: null, rawSkillID: null }),
+        );
+      if (kind === "reverse") pending[1]?.("latest");
+      if (!["timeout", "shutdown"].includes(kind)) pending[0]?.("review");
+      if (kind === "older first") {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(h.client.startToolExecution).not.toHaveBeenCalled();
+        pending[1]?.("latest");
+      }
+      await vi.advanceTimersByTimeAsync(250);
+      await h.capture.drain();
+      expect(h.client.startToolExecution).toHaveBeenCalledOnce();
+      expect(
+        vi.mocked(h.client.startToolExecution).mock.calls[0]?.[0],
+      ).toMatchObject({ executionKind: "load_skill" });
+      const expected = [
+        "timeout",
+        "invalidate",
+        "resolved invalidation",
+        "failure",
+        "shutdown",
+      ].includes(kind)
+        ? undefined
+        : ["reverse", "older first"].includes(kind)
+          ? "latest"
+          : "review";
+      expect(h.toolResults).toEqual([
+        expect.objectContaining({ verifiedSkillName: expected }),
+      ]);
+      pending.forEach((resolve) => {
+        resolve("late");
+      });
+      await vi.advanceTimersByTimeAsync(500);
+      expect(h.toolResults).toEqual([
+        expect.objectContaining({ verifiedSkillName: expected }),
+      ]);
+      expect(JSON.stringify(h.debugLog.mock.calls)).not.toContain(
+        "PRIVATE_CATALOG",
+      );
+      await h.capture.shutdown();
+      expect(signals.every((signal) => signal.aborted)).toBe(true);
+    } finally {
+      await h.capture.shutdown();
+      vi.useRealTimers();
+    }
+  });
+
+  it("shares one export-only 250ms budget across all calls and never waits for unresolved catalogs on shutdown", async () => {
+    vi.useFakeTimers();
+    const verifySkill = vi.fn(() => new Promise<string | undefined>(() => {}));
+    const h = harness(home, {}, createNativeCapture, { verifySkill });
+    try {
+      h.capture.handleEvent(start());
+      for (const id of ["c", "d", "e"]) {
+        h.capture.observeToolExecution(observation({ id }));
+        skillTools()
+          .map(
+            (entry) =>
+              ({ ...entry, data: { ...entry.data, id } }) as NativeEvent,
+          )
+          .forEach(h.capture.handleEvent);
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      h.capture.handleEvent(end());
+      await vi.advanceTimersByTimeAsync(249);
+      expect(h.client.startToolExecution).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await h.capture.drain();
+      expect(h.client.startToolExecution).toHaveBeenCalledTimes(3);
+      await h.capture.shutdown();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    "ready",
+    "stop",
+    "shutdown",
+  ])("waits for initialization outside callbacks: %s", async (kind) => {
+    vi.useFakeTimers();
+    let ready!: () => void;
+    const verificationReady = new Promise<void>((resolve) => {
+      ready = resolve;
+    });
+    const verifySkill = vi.fn(async () => "review");
+    const h = harness(home, {}, createNativeCapture, {
+      verifySkill,
+      verificationReady,
+    });
+    try {
+      h.capture.handleEvent(start());
+      h.capture.observeToolExecution(observation());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(verifySkill).not.toHaveBeenCalled();
+      if (kind === "stop") h.capture.stopObservingTools();
+      if (kind === "shutdown") await h.capture.shutdown();
+      ready();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(verifySkill).toHaveBeenCalledTimes(kind === "ready" ? 1 : 0);
+      h.capture.stopObservingTools();
+      h.capture.observeToolExecution(observation({ id: "new" }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(verifySkill).toHaveBeenCalledTimes(kind === "ready" ? 1 : 0);
+    } finally {
+      await h.capture.shutdown();
+      vi.useRealTimers();
+    }
+  });
+});
 
 describe("native final-input observation join", () => {
   it.each(
@@ -426,7 +611,7 @@ describe("native final-input observation join", () => {
     await replay(capture, [...skillTools(), end()]);
     const seed = vi.mocked(client.startToolExecution).mock.calls[0]?.[0];
     expect(seed?.skillName).toBe(skillName ?? undefined);
-    expect(seed?.executionKind).toBe(skillName ? "load_skill" : undefined);
+    expect(seed?.executionKind).toBe("load_skill");
     await capture.shutdown();
   });
 
@@ -450,7 +635,12 @@ describe("native final-input observation join", () => {
     "missing tool",
     "late",
   ])("keeps uncorrelated observations generic: %s", async (kind) => {
-    const { capture, client } = harness();
+    const { capture, client, toolResults } = harness(
+      home,
+      {},
+      createNativeCapture,
+      { verifySkill: async () => "catalog-name" },
+    );
     if (kind === "before owner") capture.observeToolExecution(observation());
     if (kind === "before active") {
       capture.handleEvent(created("s"));
@@ -507,6 +697,8 @@ describe("native final-input observation join", () => {
       expect(seed.executionKind).toBeUndefined();
       expect(seed.skillName).toBeUndefined();
     }
+    for (const result of toolResults)
+      expect(result).toMatchObject({ verifiedSkillName: undefined });
     await capture.shutdown();
   });
 
@@ -534,7 +726,12 @@ describe("native final-input observation join", () => {
   });
 
   it("isolates repeated call/message IDs across active sessions", async () => {
-    const { capture, client } = harness();
+    const { capture, client, toolResults } = harness(
+      home,
+      {},
+      createNativeCapture,
+      { verifySkill: async () => "catalog-name" },
+    );
     capture.handleEvent(start("one"));
     capture.handleEvent(start("two"));
     capture.observeToolExecution(observation({ sessionID: "one" }));
@@ -548,6 +745,10 @@ describe("native final-input observation join", () => {
     expect(calls).toHaveLength(2);
     expect(calls[0]?.[0].skillName).toBeUndefined();
     expect(calls[1]?.[0].skillName).toBe("final-id");
+    expect(toolResults).toEqual([
+      expect.objectContaining({ verifiedSkillName: undefined }),
+      expect.objectContaining({ verifiedSkillName: "catalog-name" }),
+    ]);
     await capture.shutdown();
   });
 
@@ -570,7 +771,10 @@ describe("native final-input observation join", () => {
     "no called",
     "no terminal",
   ])("observations never create records: %s", async (kind) => {
-    const { capture, client } = harness();
+    const verifySkill = vi.fn(async () => "catalog-name");
+    const { capture, client } = harness(home, {}, createNativeCapture, {
+      verifySkill,
+    });
     capture.handleEvent(start());
     const observed = Object.freeze(observation());
     capture.observeToolExecution(observed);
@@ -583,6 +787,7 @@ describe("native final-input observation join", () => {
       end(),
     ]);
     expect(client.startToolExecution).not.toHaveBeenCalled();
+    expect(verifySkill).not.toHaveBeenCalled();
     await capture.shutdown();
   });
 
@@ -2748,6 +2953,22 @@ describe("native tools and real SDK capture modes", () => {
         contentCapture,
         guards: { enabled: true, timeoutMs: 1, failOpen: false },
       },
+      verifySkill: async (rawID) =>
+        verifyNativeSkill(
+          rawID,
+          {
+            location: { directory: home.directory },
+            data: [
+              {
+                id: "requested-skill",
+                name: "catalog-name",
+                path: "/private/SKILL.md",
+                content: "CATALOG_PRIVATE",
+              },
+            ],
+          },
+          home.directory,
+        ),
       redactor: createRedactor(),
       ...home,
       debugLog: vi.fn(),
@@ -2766,9 +2987,15 @@ describe("native tools and real SDK capture modes", () => {
         extra: "FINAL_INPUT_ONLY_DO_NOT_EXPORT",
       });
       const skillName = detectSkillName("skill", finalInput, "id") ?? null;
-      capture.observeToolExecution(observation({ skillName }));
       capture.observeToolExecution(
-        observation({ id: "outer-code-call", skillName }),
+        observation({ skillName, rawSkillID: finalInput.id }),
+      );
+      capture.observeToolExecution(
+        observation({
+          id: "outer-code-call",
+          skillName,
+          rawSkillID: finalInput.id,
+        }),
       );
       await replay(capture, [
         ...skillTools("s", "a", failed),
@@ -2814,6 +3041,7 @@ describe("native tools and real SDK capture modes", () => {
       expect(snapshotTools[1]).toMatchObject({
         executionKind: "load_skill",
         skillName: "requested-skill",
+        verifiedSkillName: "catalog-name",
         toolName: "skill",
         toolCallId: "c",
       });
@@ -2899,6 +3127,44 @@ describe("native tools and real SDK capture modes", () => {
           "requested-skill",
         );
       }
+      const draft = metrics
+        .filter(
+          (metric) => metric.descriptor.name === "gen_ai.execute_tool.duration",
+        )
+        .flatMap((metric) =>
+          metric.dataPointType === DataPointType.HISTOGRAM
+            ? metric.dataPoints
+            : [],
+        );
+      expect(draft.reduce((count, point) => count + point.value.count, 0)).toBe(
+        2,
+      );
+      const skillPoint = draft.find(
+        (point) => point.attributes["gen_ai.tool.name"] === "skill",
+      );
+      expect(skillPoint?.attributes).toMatchObject({
+        "gen_ai.skill.name": "catalog-name",
+        "agento11y.tool.execution.kind": "load_skill",
+      });
+      expect(skillPoint?.attributes["error.type"]).toBe(
+        failed ? "tool_execution_error" : undefined,
+      );
+      expect(skillPoint?.value.count).toBe(1);
+      expect(skillPoint?.value.sum).toBe(0.06);
+      expect(
+        skillPoint?.value.buckets.counts.reduce((sum, count) => sum + count, 0),
+      ).toBe(1);
+      expect(
+        draft.find((point) => point.attributes["gen_ai.tool.name"] === "code")
+          ?.attributes["gen_ai.skill.name"],
+      ).toBeUndefined();
+      expect(
+        JSON.stringify({
+          exported,
+          spans: spans.map((span) => span.attributes),
+          metrics,
+        }),
+      ).not.toContain("CATALOG_PRIVATE");
       const toolSpans = spans.filter(
         (span) => span.attributes["gen_ai.tool.name"] === "code",
       );

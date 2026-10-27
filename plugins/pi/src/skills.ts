@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { redactSecretText } from "@grafana/agento11y";
 
 export interface SkillIdentity {
-  name: string;
+  name?: string;
   filePath: string;
 }
 
@@ -66,9 +66,9 @@ export function snapshotSkills(options: unknown, cwd: string): SkillIdentity[] {
     for (const skill of skills) {
       if (!skill || typeof skill !== "object") continue;
       const name = validateSkillName(skill.name);
-      if (!name) continue;
       const filePath = skill.filePath;
       if (typeof filePath !== "string" || !filePath) continue;
+      // Unsafe names still make shared file identities ambiguous for verification.
       catalog.push({ name, filePath: resolvePath(filePath, cwd) });
     }
     return catalog;
@@ -116,6 +116,46 @@ function fileIdentity(path: string): BigIntStats | undefined {
   }
 }
 
+/** Verify local file identity without reading instruction contents. */
+export function verifySkillRead(
+  catalog: readonly SkillIdentity[],
+  toolName: string,
+  args: unknown,
+  cwd: string,
+): string | undefined {
+  try {
+    if (
+      catalog.length === 0 ||
+      toolName !== "read" ||
+      !args ||
+      typeof args !== "object" ||
+      Array.isArray(args)
+    )
+      return undefined;
+    const path = (args as { path?: unknown }).path;
+    if (typeof path !== "string" || !path || path.includes("\0"))
+      return undefined;
+    const selected = fileIdentity(resolveReadPath(path, cwd));
+    if (!selected?.isFile()) return undefined;
+    let match: SkillIdentity | undefined;
+    for (const skill of catalog) {
+      const candidate = fileIdentity(skill.filePath);
+      if (
+        !candidate?.isFile() ||
+        candidate.dev !== selected.dev ||
+        candidate.ino !== selected.ino
+      )
+        continue;
+      // Exact paths cannot disambiguate catalog entries that share an inode.
+      if (match) return undefined;
+      match = skill;
+    }
+    return match?.name;
+  } catch {
+    return undefined;
+  }
+}
+
 // Missing files still identify failed load attempts.
 export function matchSkillRead(
   catalog: readonly SkillIdentity[],
@@ -136,11 +176,14 @@ export function matchSkillRead(
     if (typeof path !== "string" || !path || path.includes("\0"))
       return undefined;
     const resolved = resolveReadPath(path, cwd);
-    const exact = catalog.find((skill) => skill.filePath === resolved);
+    const exact = catalog.find(
+      (skill) => skill.name && skill.filePath === resolved,
+    );
     if (exact) return exact.name;
     const selected = fileIdentity(resolved);
     if (!selected) return undefined;
     return catalog.find((skill) => {
+      if (!skill.name) return false;
       const candidate = fileIdentity(skill.filePath);
       return candidate?.dev === selected.dev && candidate.ino === selected.ino;
     })?.name;

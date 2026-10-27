@@ -268,10 +268,12 @@ func TestRead_EndOffset(t *testing.T) {
 		t.Fatalf("got %d lines, want 2", len(lines))
 	}
 	// Each line should have a non-zero EndOffset
+	var previousEnd int64
 	for i, line := range lines {
-		if line.EndOffset <= 0 {
-			t.Errorf("line[%d].EndOffset = %d, want > 0", i, line.EndOffset)
+		if line.StartOffset != previousEnd || line.EndOffset <= line.StartOffset {
+			t.Errorf("line[%d] offsets = [%d,%d), want start %d and positive length", i, line.StartOffset, line.EndOffset, previousEnd)
 		}
+		previousEnd = line.EndOffset
 	}
 	// Second line's EndOffset should be greater than first
 	if lines[1].EndOffset <= lines[0].EndOffset {
@@ -295,12 +297,12 @@ func TestRead_EndOffset_CRLF(t *testing.T) {
 
 	// With \r\n each line ending is 2 bytes
 	wantFirst := int64(len(line1) + 2)
-	if lines[0].EndOffset != wantFirst {
-		t.Errorf("line[0].EndOffset = %d, want %d", lines[0].EndOffset, wantFirst)
+	if lines[0].StartOffset != 0 || lines[0].EndOffset != wantFirst {
+		t.Errorf("line[0] offsets = [%d,%d), want [0,%d)", lines[0].StartOffset, lines[0].EndOffset, wantFirst)
 	}
 	wantSecond := int64(len(line1) + 2 + len(line2) + 2)
-	if lines[1].EndOffset != wantSecond {
-		t.Errorf("line[1].EndOffset = %d, want %d", lines[1].EndOffset, wantSecond)
+	if lines[1].StartOffset != wantFirst || lines[1].EndOffset != wantSecond {
+		t.Errorf("line[1] offsets = [%d,%d), want [%d,%d)", lines[1].StartOffset, lines[1].EndOffset, wantFirst, wantSecond)
 	}
 	if finalOffset != int64(len(content)) {
 		t.Errorf("finalOffset = %d, want %d", finalOffset, len(content))
@@ -316,6 +318,9 @@ func TestRead_EndOffset_CRLF(t *testing.T) {
 	}
 	if lines2[0].Type != "assistant" {
 		t.Errorf("re-read line type = %q, want assistant", lines2[0].Type)
+	}
+	if lines2[0].StartOffset != wantFirst || lines2[0].EndOffset != wantSecond {
+		t.Errorf("re-read offsets = [%d,%d), want [%d,%d)", lines2[0].StartOffset, lines2[0].EndOffset, wantFirst, wantSecond)
 	}
 }
 

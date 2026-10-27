@@ -48,6 +48,23 @@ public sealed class HistogramBucketAdviceTests
             recorder.SetResult(result);
             recorder.End();
 
+            for (var i = 0; i < 3; i++)
+            {
+                var tool = client.StartToolExecution(new ToolExecutionStart
+                {
+                    ToolName = "Skill",
+                    ExecutionKind = ToolExecutionKind.LoadSkill,
+                    StartedAt = start.StartedAt,
+                });
+                tool.SetResult(new ToolExecutionEnd
+                {
+                    VerifiedSkillName = "review",
+                    CompletedAt = start.StartedAt!.Value.AddSeconds(0.32),
+                });
+                tool.End();
+                tool.End();
+            }
+
             await client.ShutdownAsync(TestContext.Current.CancellationToken);
         }
 
@@ -57,6 +74,13 @@ public sealed class HistogramBucketAdviceTests
             captured.TryGetValue("gen_ai.client.operation.duration", out var durationBounds),
             "expected gen_ai.client.operation.duration data point");
         Assert.Equal(ExpectedDurationBuckets, durationBounds);
+
+        Assert.True(captured.TryGetValue("gen_ai.execute_tool.duration", out var toolBounds));
+        Assert.Equal(ExpectedDurationBuckets, toolBounds);
+        Assert.Equal(3, exporter.ToolCount);
+        Assert.Equal(0.96, exporter.ToolSum, precision: 8);
+        Assert.Equal(ExpectedDurationBuckets.Length + 1, exporter.ToolBucketCounts.Count);
+        Assert.All(exporter.ToolBucketCounts, bucket => Assert.Equal(bucket.Key == 0.32 ? 3L : 0L, bucket.Value));
 
         Assert.True(
             captured.TryGetValue("gen_ai.client.time_to_first_token", out var ttftBounds),
@@ -72,6 +96,9 @@ public sealed class HistogramBucketAdviceTests
     private sealed class CapturingMetricExporter : BaseExporter<Metric>
     {
         private readonly ConcurrentDictionary<string, double[]> _captured;
+        public long ToolCount { get; private set; }
+        public double ToolSum { get; private set; }
+        public Dictionary<double, long> ToolBucketCounts { get; } = [];
 
         public CapturingMetricExporter(ConcurrentDictionary<string, double[]> captured)
         {
@@ -89,9 +116,19 @@ public sealed class HistogramBucketAdviceTests
 
                 foreach (ref readonly var point in metric.GetMetricPoints())
                 {
+                    if (metric.Name == "gen_ai.execute_tool.duration")
+                    {
+                        Assert.Equal("s", metric.Unit);
+                        ToolCount = point.GetHistogramCount();
+                        ToolSum = point.GetHistogramSum();
+                    }
                     var buckets = new List<double>();
                     foreach (var bucket in point.GetHistogramBuckets())
                     {
+                        if (metric.Name == "gen_ai.execute_tool.duration")
+                        {
+                            ToolBucketCounts[bucket.ExplicitBound] = bucket.BucketCount;
+                        }
                         if (!double.IsPositiveInfinity(bucket.ExplicitBound))
                         {
                             buckets.Add(bucket.ExplicitBound);

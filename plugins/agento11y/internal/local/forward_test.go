@@ -820,7 +820,10 @@ func TestForwardLoader_ForwardOTLP(t *testing.T) {
 	l := newForwardLoader(filepath.Join(t.TempDir(), "config.env"), nil)
 	l.client = srv.Client()
 
-	metricsBody := []byte("\x00\x01\x02metrics-protobuf-bytes")
+	metricsBody, err := proto.Marshal(toolHistogramRequest())
+	require.NoError(t, err)
+	metricsJSON, err := protojson.Marshal(toolHistogramRequest())
+	require.NoError(t, err)
 	tracesBody, err := proto.Marshal(traceRequestWithContent())
 	require.NoError(t, err)
 	tracesJSON, err := protojson.Marshal(traceRequestWithContent())
@@ -850,6 +853,16 @@ func TestForwardLoader_ForwardOTLP(t *testing.T) {
 		{
 			name:   "gzip_metrics_keeps_encoding",
 			signal: "metrics", strip: true, contentType: "application/x-protobuf", gzip: true, body: metricsBody,
+			wantPath: "/v1/metrics", wantVerbatim: true,
+		},
+		{
+			name:   "json_tool_histogram",
+			signal: "metrics", strip: true, contentType: wire.ContentTypeJSON, body: metricsJSON,
+			wantPath: "/v1/metrics", wantVerbatim: true,
+		},
+		{
+			name:   "gzip_json_tool_histogram",
+			signal: "metrics", strip: true, contentType: wire.ContentTypeJSON, gzip: true, body: metricsJSON,
 			wantPath: "/v1/metrics", wantVerbatim: true,
 		},
 		{
@@ -896,6 +909,9 @@ func TestForwardLoader_ForwardOTLP(t *testing.T) {
 				assert.Equal(t, body, c.body)
 				assert.Equal(t, encoding, c.contentEncoding)
 				assert.Equal(t, tc.contentType, c.contentType)
+				if tc.signal == "metrics" {
+					assertToolHistogramRelay(t, c.body, c.contentType, c.contentEncoding)
+				}
 				return
 			}
 			// The stripped payload is re-marshaled uncompressed, so the gzip

@@ -48,6 +48,7 @@ import type {
   PiToolResult,
   ToolTiming,
 } from "./mappers.js";
+import * as skills from "./skills.js";
 
 const fakeStartToolExecution = vi.fn(() => ({
   setResult: vi.fn(),
@@ -4697,6 +4698,8 @@ describe("skill catalog and tool lifecycle", () => {
     createTelemetryProvidersMock.mockReset();
     resolveGitBranchMock.mockReturnValue(undefined);
     cwd = mkdtempSync(join(tmpdir(), "pi-skill-lifecycle-"));
+    for (const file of ["guide.md", "other.md", "one.md", "two.md"])
+      writeFileSync(join(cwd, file), "");
     ctx = { ...defaultCtx, cwd };
     startTool = vi.fn(() => ({
       setResult: vi.fn(),
@@ -4783,7 +4786,12 @@ describe("skill catalog and tool lifecycle", () => {
     await call();
     await end();
     await flush();
-    return startTool.mock.calls.at(-1)![0];
+    const seed = startTool.mock.calls.at(-1)![0];
+    expect(
+      startTool.mock.results.at(-1)!.value.setResult.mock.calls[0][0]
+        .verifiedSkillName,
+    ).toBe(seed.skillName);
+    return seed;
   }
 
   it("snapshots the final catalog in metadata_only and retains it until settlement", async () => {
@@ -4915,6 +4923,10 @@ describe("skill catalog and tool lifecycle", () => {
     await flush();
     expect(startTool.mock.calls[0]![0].skillName).toBe(expected);
     expect(evaluateHook).not.toHaveBeenCalled();
+    expect(
+      startTool.mock.results[0]!.value.setResult.mock.calls[0][0]
+        .verifiedSkillName,
+    ).toBe(expected);
   });
 
   it.each([
@@ -4935,11 +4947,16 @@ describe("skill catalog and tool lifecycle", () => {
     await end();
     await flush();
     expect(startTool.mock.calls[0]![0].skillName).toBe(expected);
+    expect(
+      startTool.mock.results[0]!.value.setResult.mock.calls[0][0]
+        .verifiedSkillName,
+    ).toBe(expected);
   });
 
   it.each([
     "blocked",
     "legacy result",
+    "effective result",
   ] as const)("retains the latest candidate when weak input is collected: %s", async (completion) => {
     const config = await loadConfigMock();
     loadConfigMock.mockResolvedValue({
@@ -4963,7 +4980,13 @@ describe("skill catalog and tool lifecycle", () => {
     } else {
       await pi.emit(
         "tool_result",
-        { toolCallId: "call", toolName: "read" },
+        {
+          toolCallId: "call",
+          toolName: "read",
+          ...(completion === "effective result"
+            ? { input: { path: "guide.md" } }
+            : {}),
+        },
         ctx,
       );
     }
@@ -4972,13 +4995,17 @@ describe("skill catalog and tool lifecycle", () => {
       .spyOn(WeakRef.prototype, "deref")
       .mockReturnValue(undefined);
     await end("call", completion === "blocked");
-    expect(deref).toHaveBeenCalledOnce();
+    expect(deref).toHaveBeenCalledTimes(completion === "blocked" ? 2 : 1);
     await flush();
     expect(startTool).toHaveBeenCalledOnce();
     expect(startTool.mock.calls[0]![0]).toMatchObject({
       executionKind: "load_skill",
       skillName: "org:review",
     });
+    expect(
+      startTool.mock.results[0]!.value.setResult.mock.calls[0][0]
+        .verifiedSkillName,
+    ).toBeUndefined();
   });
 
   it.each([
@@ -5004,6 +5031,10 @@ describe("skill catalog and tool lifecycle", () => {
     await flush();
     expect(startTool).toHaveBeenCalledOnce();
     expect(startTool.mock.calls[0]![0].skillName).toBe(expected);
+    expect(
+      startTool.mock.results[0]!.value.setResult.mock.calls[0][0]
+        .verifiedSkillName,
+    ).toBe(expected);
   });
 
   it("retains the latest candidate when older runtimes omit tool_result.input", async () => {
@@ -5060,6 +5091,10 @@ describe("skill catalog and tool lifecycle", () => {
     await end();
     await flush();
     expect(startTool.mock.calls[0]![0].skillName).toBe(expected);
+    expect(
+      startTool.mock.results[0]!.value.setResult.mock.calls[0][0]
+        .verifiedSkillName,
+    ).toBe(expected);
   });
 
   it("uses tool_result.input after a later tool_call handler mutates a guard transform", async () => {
@@ -5116,6 +5151,10 @@ describe("skill catalog and tool lifecycle", () => {
     expect(
       startTool.mock.results[0]!.value.setCallError,
     ).toHaveBeenCalledOnce();
+    expect(
+      startTool.mock.results[0]!.value.setResult.mock.calls[0][0]
+        .verifiedSkillName,
+    ).toBe("org:review");
     await pi.emit("turn_start", {}, ctx);
     await end("no-end");
     await flush();
@@ -5155,6 +5194,134 @@ describe("skill catalog and tool lifecycle", () => {
         (result) => result.value.setResult.mock.calls[0][0].completedAt,
       ),
     ).toEqual([new Date(3000), new Date(4000)]);
+    expect(
+      startTool.mock.results.map(
+        (result) => result.value.setResult.mock.calls[0][0].verifiedSkillName,
+      ),
+    ).toEqual(["second", "first"]);
+  });
+
+  it.each([
+    [undefined, undefined],
+    ["true", undefined],
+    ["false", undefined],
+    ["invalid", "true"],
+    [undefined, "true"],
+  ] as const)("verifies skills automatically despite removed settings: %s / %s", async (env, legacy) => {
+    vi.stubEnv("AGENTO11Y_EXPERIMENTAL_TOOL_METRICS", env);
+    vi.stubEnv("SIGIL_EXPERIMENTAL_TOOL_METRICS", legacy);
+    try {
+      await pi.emit("session_start", {}, ctx);
+      expect(
+        createAgento11yClientMock.mock.calls.at(-1)![0],
+      ).not.toHaveProperty("experimentalToolMetrics");
+      const verify = vi.spyOn(skills, "verifySkillRead");
+      await catalog();
+      await pi.emit("turn_start", {}, ctx);
+      await start();
+      await call();
+      await end();
+      await flush();
+      expect(verify).toHaveBeenCalledOnce();
+      expect(startTool.mock.calls[0]![0].skillName).toBe("org:review");
+      expect(
+        startTool.mock.results[0]!.value.setResult.mock.calls[0][0]
+          .verifiedSkillName,
+      ).toBe("org:review");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.each([
+    "missing",
+    "removed-before-end",
+  ])("retains attempted identity without verification for %s files", async (state) => {
+    await catalog([{ name: "missing", filePath: "missing.md" }]);
+    if (state === "removed-before-end")
+      writeFileSync(join(cwd, "missing.md"), "");
+    await pi.emit("turn_start", {}, ctx);
+    await start("call", "missing.md");
+    await call("call", "missing.md");
+    rmSync(join(cwd, "missing.md"), { force: true });
+    await end("call", true);
+    await flush();
+    expect(startTool.mock.calls[0]![0].skillName).toBe("missing");
+    expect(
+      startTool.mock.results[0]!.value.setResult.mock.calls[0][0]
+        .verifiedSkillName,
+    ).toBeUndefined();
+  });
+
+  it("does not verify start args without an effective input observation", async () => {
+    await catalog();
+    await pi.emit("turn_start", {}, ctx);
+    await start();
+    await end();
+    await flush();
+    expect(
+      startTool.mock.results[0]!.value.setResult.mock.calls[0][0]
+        .verifiedSkillName,
+    ).toBeUndefined();
+  });
+
+  it("clears verification when a later result omits input but preserves attempted fallback", async () => {
+    await catalog();
+    await pi.emit("turn_start", {}, ctx);
+    await start();
+    await call();
+    await pi.emit("tool_result", { toolCallId: "call", toolName: "read" }, ctx);
+    await end();
+    await flush();
+    expect(startTool.mock.calls[0]![0].skillName).toBe("org:review");
+    expect(
+      startTool.mock.results[0]!.value.setResult.mock.calls[0][0]
+        .verifiedSkillName,
+    ).toBeUndefined();
+  });
+
+  it("clears verification when the catalog disappears before completion", async () => {
+    await catalog();
+    await pi.emit("turn_start", {}, ctx);
+    await start();
+    await call();
+    await pi.emit(
+      "tool_result",
+      { toolCallId: "call", toolName: "read", input: { path: "guide.md" } },
+      ctx,
+    );
+    await pi.emit("agent_settled", {}, ctx);
+    await end();
+    await flush();
+    expect(startTool.mock.calls[0]![0].skillName).toBe("org:review");
+    expect(
+      startTool.mock.results[0]!.value.setResult.mock.calls[0][0]
+        .verifiedSkillName,
+    ).toBeUndefined();
+  });
+
+  it.each([
+    ["ordinary.md", "guide.md", undefined, "org:review"],
+    ["guide.md", "ordinary.md", "org:review", undefined],
+  ])("rechecks the live result input after later result handlers mutate %s -> %s", async (initial, final, attempted, verified) => {
+    await catalog();
+    await pi.emit("turn_start", {}, ctx);
+    await start();
+    await call("call", "ordinary.md");
+    const input = { path: initial };
+    await pi.emit(
+      "tool_result",
+      { toolCallId: "call", toolName: "read", input },
+      ctx,
+    );
+    input.path = final!;
+    await end();
+    await flush();
+    expect(startTool.mock.calls[0]![0].skillName).toBe(attempted);
+    expect(
+      startTool.mock.results[0]!.value.setResult.mock.calls[0][0]
+        .verifiedSkillName,
+    ).toBe(verified);
   });
 
   it("keeps catalogs across cancelled switches but clears on actual replacement and shutdown", async () => {
@@ -5435,6 +5602,26 @@ describe("local mode session_start", () => {
     loggerMock.debug.mockReset();
     loggerMock.warn.mockReset();
     loggerMock.error.mockReset();
+  });
+
+  it("keeps local capture enabled with inherited SDK basic auth and no Cloud token", async () => {
+    vi.stubEnv("AGENTO11Y_AUTH_MODE", "basic");
+    vi.stubEnv("AGENTO11Y_AUTH_TOKEN", undefined);
+    loadConfigMock.mockResolvedValue(localConfig());
+    createAgento11yClientMock.mockReturnValue(fakeClient());
+    const pi = new FakePi();
+    registerExtension(pi as any);
+    try {
+      await pi.emit("session_start", {}, uiCtx(false));
+      expect(createAgento11yClientMock).toHaveBeenCalledOnce();
+      expect(createAgento11yClientMock.mock.calls[0]?.[0]).toMatchObject({
+        auth: localConfig().auth,
+      });
+      expect(loggerMock.error).not.toHaveBeenCalled();
+    } finally {
+      await pi.emit("session_shutdown", {}, uiCtx(false));
+      vi.unstubAllEnvs();
+    }
   });
 
   it("names the receiver the session records to", async () => {

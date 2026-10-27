@@ -1,9 +1,16 @@
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  linkSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { ContentCaptureMode } from "@grafana/agento11y";
+import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http";
 import {
   AggregationTemporality,
   InMemoryMetricExporter,
@@ -57,6 +64,7 @@ describe("pi skill executions: actual SDK telemetry", () => {
   let server: Server;
   let endpoint: string;
   let generations: any[];
+  let otlpMetrics: any[];
   let spans: InMemorySpanExporter;
   let metrics: InMemoryMetricExporter;
   let tracerProvider: BasicTracerProvider;
@@ -68,6 +76,7 @@ describe("pi skill executions: actual SDK telemetry", () => {
     savedEnv = snapshotAndClearTestEnv();
     cwd = mkdtempSync(join(tmpdir(), "pi-skill-otlp-"));
     generations = [];
+    otlpMetrics = [];
     server = createServer((req, res) => {
       let raw = "";
       req.on("data", (chunk) => {
@@ -75,6 +84,12 @@ describe("pi skill executions: actual SDK telemetry", () => {
       });
       req.on("end", () => {
         const body = JSON.parse(raw);
+        if (req.url === "/v1/metrics") {
+          otlpMetrics.push(body);
+          res.setHeader("Content-Type", "application/json");
+          res.end("{}");
+          return;
+        }
         if (req.url === "/api/v1/hooks:evaluate") {
           const call = body.input.output[0].parts[0].tool_call;
           const path =
@@ -154,6 +169,10 @@ describe("pi skill executions: actual SDK telemetry", () => {
           exporter: metrics,
           exportIntervalMillis: 60_000,
         }),
+        new PeriodicExportingMetricReader({
+          exporter: new OTLPMetricExporter({ url: `${endpoint}/v1/metrics` }),
+          exportIntervalMillis: 60_000,
+        }),
       ],
     });
     telemetryFactory.mockReturnValue({
@@ -191,8 +210,238 @@ describe("pi skill executions: actual SDK telemetry", () => {
 
   it.each(
     MODES,
+  )("exports verified local identity independently of attempted spans in %s", async (mode) => {
+    process.env.AGENTO11Y_CONTENT_CAPTURE_MODE = mode;
+    writeFileSync(
+      join(cwd, "guide.md"),
+      "private instructions must not enter metrics",
+    );
+    writeFileSync(join(cwd, "ambiguous.md"), "");
+    linkSync(join(cwd, "ambiguous.md"), join(cwd, "hardlink.md"));
+    await pi.emit("session_start", {}, ctx);
+    const options = { skills: [{ name: "old", filePath: "guide.md" }] };
+    await pi.emit("before_agent_start", { systemPromptOptions: options }, ctx);
+    options.skills = [
+      { name: "review", filePath: "guide.md" },
+      { name: "missing", filePath: "missing.md" },
+      { name: "ambiguous", filePath: "ambiguous.md" },
+      { name: "hardlink", filePath: "hardlink.md" },
+    ];
+    await pi.emit("agent_start", {}, ctx);
+    await pi.emit("turn_start", {}, ctx);
+    const cases = [
+      {
+        id: "load",
+        path: "guide.md",
+        final: "guide.md",
+        attempted: "review",
+        verified: "review",
+        error: false,
+      },
+      {
+        id: "repeat",
+        path: "guide.md",
+        final: "guide.md",
+        attempted: "review",
+        verified: "review",
+        error: false,
+      },
+      {
+        id: "failed",
+        path: "guide.md",
+        final: "guide.md",
+        attempted: "review",
+        verified: "review",
+        error: true,
+      },
+      {
+        id: "missing",
+        path: "missing.md",
+        final: "missing.md",
+        attempted: "missing",
+        verified: undefined,
+        error: true,
+      },
+      {
+        id: "ambiguous",
+        path: "ambiguous.md",
+        final: "ambiguous.md",
+        attempted: "ambiguous",
+        verified: undefined,
+        error: false,
+      },
+      {
+        id: "transform-in",
+        path: "ordinary.md",
+        final: "guide.md",
+        attempted: "review",
+        verified: "review",
+        error: false,
+      },
+      {
+        id: "transform-out",
+        path: "guide.md",
+        final: "ordinary.md",
+        attempted: undefined,
+        verified: undefined,
+        error: false,
+      },
+      {
+        id: "later-result-mutation",
+        path: "ordinary.md",
+        final: "ordinary.md",
+        mutated: "guide.md",
+        attempted: undefined,
+        verified: "review",
+        error: false,
+      },
+      {
+        id: "no-final",
+        path: "guide.md",
+        final: undefined,
+        attempted: "review",
+        verified: undefined,
+        error: false,
+      },
+    ];
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const message: PiAssistantMessage = {
+      role: "assistant",
+      provider: "synthetic",
+      model: "local-model",
+      stopReason: "toolUse",
+      timestamp: now,
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+      },
+      content: cases.map((c) => ({
+        type: "toolCall",
+        id: c.id,
+        name: "read",
+        arguments: { path: c.path },
+      })),
+    };
+    for (const c of cases) {
+      await pi.emit(
+        "tool_execution_start",
+        { toolCallId: c.id, toolName: "read", args: { path: c.path } },
+        ctx,
+      );
+      await pi.emit(
+        "tool_call",
+        { toolCallId: c.id, toolName: "read", input: { path: c.path } },
+        ctx,
+      );
+    }
+    now += 500;
+    for (const c of [...cases].reverse()) {
+      const input = { path: c.final };
+      await pi.emit(
+        "tool_result",
+        {
+          toolCallId: c.id,
+          toolName: "read",
+          ...(c.final ? { input } : {}),
+        },
+        ctx,
+      );
+      if (c.mutated) input.path = c.mutated;
+      await pi.emit(
+        "tool_execution_end",
+        { toolCallId: c.id, toolName: "read", isError: c.error },
+        ctx,
+      );
+    }
+    await pi.emit("turn_end", { message, toolResults: [] }, ctx);
+    clock.mockRestore();
+    await pi.emit("session_shutdown", {}, ctx);
+    const tools = spans
+      .getFinishedSpans()
+      .filter((s) => s.attributes["gen_ai.operation.name"] === "execute_tool");
+    for (const c of cases) {
+      const tool = tools.find(
+        (s) => s.attributes["gen_ai.tool.call.id"] === c.id,
+      )!;
+      expect(tool.name).toBe(
+        `execute_tool read${c.attempted ? ` ${c.attempted}` : ""}`,
+      );
+      expect(tool.attributes["gen_ai.skill.name"]).toBe(c.attempted);
+    }
+    const exported = otlpMetrics.flatMap((b) =>
+      b.resourceMetrics.flatMap((r: any) =>
+        r.scopeMetrics.flatMap((s: any) => s.metrics),
+      ),
+    );
+    const draft = exported.find(
+      (m) => m.name === "gen_ai.execute_tool.duration",
+    );
+    expect(draft).toBeDefined();
+    expect(draft.unit).toBe("s");
+    const points = draft.histogram.dataPoints;
+    const attrs = (p: any) =>
+      Object.fromEntries(
+        p.attributes.map((a: any) => [a.key, a.value.stringValue]),
+      );
+    expect(points.reduce((n: number, p: any) => n + Number(p.count), 0)).toBe(
+      cases.length,
+    );
+    expect(points.reduce((n: number, p: any) => n + p.sum, 0)).toBe(
+      cases.length * 0.5,
+    );
+    const verified = points.filter(
+      (p: any) => attrs(p)["gen_ai.skill.name"] === "review",
+    );
+    expect(verified.reduce((n: number, p: any) => n + Number(p.count), 0)).toBe(
+      cases.filter((c) => c.verified === "review").length,
+    );
+    expect(
+      verified.some(
+        (p: any) => attrs(p)["error.type"] === "tool_execution_error",
+      ),
+    ).toBe(true);
+    for (const p of points) {
+      expect(p.explicitBounds.length).toBeGreaterThan(0);
+      expect(
+        p.bucketCounts.reduce(
+          (n: number, count: string) => n + Number(count),
+          0,
+        ),
+      ).toBe(Number(p.count));
+      expect(attrs(p)["gen_ai.tool.name"]).toBe("read");
+      expect(attrs(p)["agento11y.tool.execution.kind"]).toMatch(
+        /^(load_skill|generic)$/,
+      );
+      expect(Object.keys(attrs(p))).not.toContain("gen_ai.tool.call.id");
+      expect(JSON.stringify(attrs(p))).not.toMatch(
+        /missing|ambiguous|hardlink|\.md|private instructions/,
+      );
+    }
+    const legacy = exported.find(
+      (m) => m.name === "gen_ai.client.operation.duration",
+    );
+    const legacyTools = legacy.histogram.dataPoints.filter(
+      (p: any) => attrs(p)["gen_ai.operation.name"] === "execute_tool",
+    );
+    expect(
+      legacyTools.reduce((n: number, p: any) => n + Number(p.count), 0),
+    ).toBe(cases.length);
+    expect(
+      legacyTools.every(
+        (p: any) => attrs(p)["gen_ai.skill.name"] === undefined,
+      ),
+    ).toBe(true);
+  });
+
+  it.each(
+    MODES,
   )("retains failed skill loads and their generation parent in %s", async (mode) => {
     process.env.AGENTO11Y_CONTENT_CAPTURE_MODE = mode;
+    writeFileSync(join(cwd, "guide.md"), "private skill instructions");
     await pi.emit("session_start", {}, ctx);
     const secret = "glc_abcdefghijklmnopqrstuvwxyz";
     const description = "private catalog description must not escape";
@@ -371,11 +620,31 @@ describe("pi skill executions: actual SDK telemetry", () => {
     }
     const metricBatches = metrics.getMetrics();
     expect(metricBatches.length).toBeGreaterThan(0);
+    const draft = metricBatches
+      .flatMap((b) => b.scopeMetrics.flatMap((s) => s.metrics))
+      .find((m) => m.descriptor.name === "gen_ai.execute_tool.duration");
+    expect(draft).toBeDefined();
+    expect(draft!.dataPoints.map((point) => point.attributes)).toContainEqual(
+      expect.objectContaining({
+        "gen_ai.skill.name": "standalone",
+        "agento11y.tool.execution.kind": "load_skill",
+      }),
+    );
+    expect(
+      draft!.dataPoints.some(
+        (point) => point.attributes["gen_ai.skill.name"] === "org:review",
+      ),
+    ).toBe(false);
     const dimensions = metricBatches.flatMap((batch) =>
       batch.scopeMetrics.flatMap((scope) =>
-        scope.metrics.flatMap((metric) =>
-          metric.dataPoints.map((point) => point.attributes),
-        ),
+        scope.metrics
+          .filter(
+            (metric) =>
+              metric.descriptor.name !== "gen_ai.execute_tool.duration",
+          )
+          .flatMap((metric) =>
+            metric.dataPoints.map((point) => point.attributes),
+          ),
       ),
     );
     expect(dimensions.length).toBeGreaterThan(0);
@@ -751,6 +1020,16 @@ describe("pi skill executions: actual SDK telemetry", () => {
       generation.spanContext().spanId,
     );
     expect(resultEvents).toBe(0);
+    const draft = metrics
+      .getMetrics()
+      .flatMap((b) => b.scopeMetrics.flatMap((s) => s.metrics))
+      .find((m) => m.descriptor.name === "gen_ai.execute_tool.duration")!;
+    expect(draft).toBeDefined();
+    expect(draft.dataPoints).toHaveLength(1);
+    expect(draft.dataPoints[0]!.attributes["gen_ai.skill.name"]).toBe(skill);
+    expect(draft.dataPoints[0]!.attributes["error.type"]).toBe(
+      "tool_execution_error",
+    );
     expect(generations).toHaveLength(1);
   });
 

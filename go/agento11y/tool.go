@@ -48,4 +48,9 @@ type ToolExecutionEnd struct {
 	Result          any
 	CompletedAt     time.Time
 	ProcessExitCode *int64
+
+	VerifiedSkillName         string
+	VerifiedSkillResourceName string
+
+	ProcessExitCodeIsError *bool
 }

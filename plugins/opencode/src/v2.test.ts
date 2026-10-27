@@ -1,9 +1,12 @@
+import { createRequire } from "node:module";
 import type { Plugin } from "@opencode/plugin";
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { baseConfig } from "./hooks.testutil.js";
+import { baseConfig, makeAgento11yMock } from "./hooks.testutil.js";
 import { LocalReceiverError } from "./local.js";
+import { effectV2 } from "./v2-effect.js";
+import { nativeFixture, nativeTranscript } from "./v2-testdata.js";
 
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
@@ -68,6 +71,19 @@ function host() {
   }));
   const context = {
     tool: { hook },
+    skill: {
+      list: vi.fn(async () => ({
+        location: { directory: "/repo" },
+        data: [
+          {
+            id: "opaque/id",
+            name: "review",
+            path: "/private/SKILL.md",
+            content: "PRIVATE_CATALOG",
+          },
+        ],
+      })),
+    },
     app: { name: "opencode", version: "2.0.29", channel: "latest" },
     location: { directory: "/repo", workspaceID: "workspace-1" },
     event: { subscribe },
@@ -99,6 +115,264 @@ describe("native setup ownership", () => {
       dispose: mocks.copilotDispose,
       refresh: mocks.copilotRefresh,
     });
+  });
+
+  it("verifies skills by default using only the supplied skill domain", async () => {
+    mocks.loadConfig.mockResolvedValue(baseConfig());
+    const { context } = host();
+    const cleanup = await setupV2(context);
+    const options = mocks.createCapture.mock.calls[0]?.[0];
+    expect(options.config).not.toHaveProperty("experimentalToolMetrics");
+    expect(mocks.createClient.mock.calls[0]?.[0]).not.toHaveProperty(
+      "experimentalToolMetrics",
+    );
+    expect(context.skill.list).not.toHaveBeenCalled();
+    await options.verificationReady;
+    const abort = new AbortController();
+    expect(await options.verifySkill("opaque/id", abort.signal)).toBe("review");
+    expect(context.skill.list).toHaveBeenCalledExactlyOnceWith(
+      { location: { directory: "/repo" } },
+      { signal: abort.signal },
+    );
+    await cleanup?.();
+  });
+
+  it("never starts lookup during callbacks or incomplete setup registrations", async () => {
+    vi.useFakeTimers();
+    const { createNativeCapture } =
+      await vi.importActual<typeof import("./v2-events.js")>("./v2-events.js");
+    mocks.loadConfig.mockResolvedValue(baseConfig());
+    const { context, hook } = host();
+    let release!: (dispose: () => Promise<void>) => void;
+    mocks.registerGuards.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    let capture!: ReturnType<typeof createNativeCapture>;
+    mocks.createCapture.mockImplementation((options) => {
+      capture = createNativeCapture(options);
+      const started = nativeTranscript().find(
+        (entry) => entry.type === "session.step.started",
+      )!;
+      capture.handleEvent({ ...started, location: context.location });
+      return capture;
+    });
+    try {
+      const setup = setupV2(context);
+      await vi.waitFor(() =>
+        expect(mocks.registerGuards).toHaveBeenCalledOnce(),
+      );
+      const started = nativeTranscript().find(
+        (entry) => entry.type === "session.step.started",
+      )!;
+      if (!("assistantMessageID" in started.data))
+        throw new Error("missing message");
+      const observe = hook.mock.calls[0]?.[1];
+      expect(
+        observe?.({
+          sessionID: started.data.sessionID,
+          messageID: started.data.assistantMessageID,
+          id: "c",
+          agent: "build",
+          tool: "skill",
+          input: { id: "opaque/id" },
+        } as never),
+      ).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(context.skill.list).not.toHaveBeenCalled();
+      release(mocks.guardDispose);
+      const cleanup = await setup;
+      expect(context.skill.list).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(context.skill.list).toHaveBeenCalledOnce();
+      await cleanup?.();
+    } finally {
+      await capture?.shutdown();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    [undefined, undefined],
+    ["true", undefined],
+    ["false", undefined],
+    [undefined, "true"],
+  ])("ignores removed metric env=%s and legacy alias=%s", async (value, legacy) => {
+    const keys = [
+      "AGENTO11Y_EXPERIMENTAL_TOOL_METRICS",
+      "SIGIL_EXPERIMENTAL_TOOL_METRICS",
+    ];
+    const saved = keys.map((key) => process.env[key]);
+    try {
+      for (const [index, setting] of [value, legacy].entries()) {
+        const key = keys[index]!;
+        if (setting === undefined) delete process.env[key];
+        else process.env[key] = setting;
+      }
+      const { context } = host();
+      const cleanup = await setupV2(context);
+      const options = mocks.createCapture.mock.calls[0]?.[0];
+      expect(options.config).not.toHaveProperty("experimentalToolMetrics");
+      expect(mocks.createClient.mock.calls[0]?.[0]).not.toHaveProperty(
+        "experimentalToolMetrics",
+      );
+      await options.verificationReady;
+      expect(
+        await options.verifySkill("opaque/id", new AbortController().signal),
+      ).toBe("review");
+      await cleanup?.();
+    } finally {
+      keys.forEach((key, index) => {
+        if (saved[index] === undefined) delete process.env[key];
+        else process.env[key] = saved[index];
+      });
+    }
+  });
+
+  it.each([
+    "local",
+    "tenant",
+    "none",
+  ] as const)("ignores unrelated SDK auth during %s capture setup", async (mode) => {
+    vi.stubEnv("AGENTO11Y_AUTH_MODE", "basic");
+    vi.stubEnv("AGENTO11Y_AUTH_TOKEN", undefined);
+    mocks.loadConfig.mockResolvedValue(
+      baseConfig({
+        local: mode === "local",
+        auth:
+          mode === "local"
+            ? {
+                mode: "basic",
+                basicUser: "local",
+                basicPassword: "local",
+                tenantId: "local",
+              }
+            : mode === "tenant"
+              ? { mode: "tenant", tenantId: "fixture" }
+              : { mode: "none" },
+      }),
+    );
+    try {
+      const cleanup = await setupV2(host().context);
+      expect(mocks.createClient).toHaveBeenCalledOnce();
+      expect(mocks.createClient.mock.calls[0]?.[0].auth).toEqual(
+        (await mocks.loadConfig()).auth,
+      );
+      await cleanup?.();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.each([
+    "timeout",
+    "replacement",
+    "plugin cleanup",
+  ])("cancels native catalog work after capture %s with the installed Promise adapter", async (kind) => {
+    const { Effect, Stream } = createRequire(
+      import.meta.resolve("@opencode/plugin"),
+    )("effect");
+    const { createNativeCapture } =
+      await vi.importActual<typeof import("./v2-events.js")>("./v2-events.js");
+    const { sigil } = makeAgento11yMock();
+    mocks.createClient.mockReturnValue(sigil);
+    mocks.loadConfig.mockResolvedValue(baseConfig());
+    let capture!: ReturnType<typeof createNativeCapture>;
+    mocks.createCapture.mockImplementation((options) => {
+      capture = createNativeCapture(options);
+      return capture;
+    });
+    let started = 0;
+    let interrupted = 0;
+    const location = { directory: "/repo", workspaceID: "w1" };
+    const stub = new Proxy(() => Effect.void, {
+      get: (_target, key) => (key === "then" ? undefined : stub),
+    });
+    const nativeHost = new Proxy(
+      {},
+      {
+        get: (_target, key) => {
+          if (key === "location") return location;
+          if (key === "app") return { name: "opencode", version: "2.0.22" };
+          if (key === "event") return { subscribe: () => Stream.never };
+          if (key === "tool")
+            return { hook: () => Effect.succeed({ dispose: Effect.void }) };
+          if (key === "skill")
+            return {
+              list: () =>
+                Effect.callback(() => {
+                  started++;
+                  return Effect.sync(() => {
+                    interrupted++;
+                  });
+                }),
+            };
+          return stub;
+        },
+      },
+    );
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.andThen(
+          effectV2(nativeHost),
+          Effect.promise(async () => {
+            const events = nativeTranscript().map((entry) => ({
+              ...entry,
+              location,
+            }));
+            for (const entry of events) {
+              if (
+                entry.type === "session.step.ended" ||
+                entry.type === "session.execution.succeeded"
+              )
+                continue;
+              if (entry.type === "session.tool.input.started") {
+                capture.handleEvent({
+                  ...entry,
+                  data: { ...entry.data, name: "skill" },
+                });
+              } else capture.handleEvent(entry);
+            }
+            const observation = {
+              sessionID: nativeFixture.sessionID,
+              messageID: nativeFixture.assistantMessageID,
+              id: nativeFixture.toolID,
+              tool: "skill",
+              agent: "build",
+              skillName: "review",
+              rawSkillID: "opaque/id",
+            };
+            capture.observeToolExecution(observation);
+            await vi.waitFor(() => expect(started).toBe(1));
+            if (kind === "replacement") {
+              capture.observeToolExecution({
+                ...observation,
+                rawSkillID: "second/id",
+              });
+              await vi.waitFor(() => {
+                expect(started).toBe(2);
+                expect(interrupted).toBe(1);
+              });
+            } else if (kind === "timeout") {
+              capture.handleEvent(
+                events.find((entry) => entry.type === "session.step.ended")!,
+              );
+              await capture.drain();
+              await vi.waitFor(() => expect(interrupted).toBe(1));
+              expect(sigil.startToolExecution).toHaveBeenCalledOnce();
+              expect(
+                sigil.startToolExecution.mock.results[0].value.setResult.mock
+                  .calls[0][0].verifiedSkillName,
+              ).toBeUndefined();
+            }
+          }),
+        ),
+      ),
+    );
+    expect(interrupted).toBe(started);
+    expect(sigil.shutdown).toHaveBeenCalledOnce();
   });
 
   it("starts intake without waiting for host initialization and cleans up once", async () => {
@@ -369,11 +643,20 @@ describe("native setup ownership", () => {
     expect(mocks.observeToolExecution).toHaveBeenLastCalledWith({
       ...ids,
       skillName: "final-skill",
+      rawSkillID: "final-skill",
     });
     expect(
       Object.keys(mocks.observeToolExecution.mock.calls[0]?.[0]).sort(),
     ).toEqual(
-      ["tool", "sessionID", "messageID", "id", "agent", "skillName"].sort(),
+      [
+        "tool",
+        "sessionID",
+        "messageID",
+        "id",
+        "agent",
+        "skillName",
+        "rawSkillID",
+      ].sort(),
     );
     for (const input of [
       null,
@@ -388,6 +671,7 @@ describe("native setup ownership", () => {
       expect(mocks.observeToolExecution).toHaveBeenLastCalledWith({
         ...ids,
         skillName: null,
+        rawSkillID: typeof input?.id === "string" ? input.id : null,
       });
     }
     expect(() =>
@@ -401,6 +685,7 @@ describe("native setup ownership", () => {
     expect(mocks.observeToolExecution).toHaveBeenLastCalledWith({
       ...ids,
       skillName: null,
+      rawSkillID: null,
     });
     for (const payload of [
       undefined,

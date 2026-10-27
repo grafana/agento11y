@@ -3,6 +3,7 @@ using System.Diagnostics.Metrics;
 using System.Globalization;
 using System.Net;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -72,6 +73,8 @@ public sealed partial class Agento11yClient : IAsyncDisposable
     internal const string MetricTokenUsage = "gen_ai.client.token.usage";
     internal const string MetricTimeToFirstToken = "gen_ai.client.time_to_first_token";
     internal const string MetricToolCallsPerOperation = "gen_ai.client.tool_calls_per_operation";
+    internal const string MetricExecuteToolDuration = "gen_ai.execute_tool.duration";
+    internal const string MetricAttrExecutionKind = "agento11y.tool.execution.kind";
     // Marks token-usage telemetry (metric series and generation spans) whose
     // input already follows the OTel GenAI contract: input_tokens includes both
     // cache buckets. Absence means provider-raw or legacy telemetry.
@@ -116,6 +119,7 @@ public sealed partial class Agento11yClient : IAsyncDisposable
     private readonly Histogram<double> _tokenUsageHistogram;
     private readonly Histogram<double> _ttftHistogram;
     private readonly Histogram<double> _toolCallsHistogram;
+    private readonly Histogram<double>? _executeToolDurationHistogram;
     private readonly EmbeddingCaptureConfig _embeddingCapture;
     private readonly Action<string> _log;
     private readonly HttpClient _ratingHttpClient = new(new HttpClientHandler
@@ -190,6 +194,18 @@ public sealed partial class Agento11yClient : IAsyncDisposable
             unit: "s",
             advice: new InstrumentAdvice<double> { HistogramBucketBoundaries = DurationBucketsSeconds });
         _toolCallsHistogram = _meter.CreateHistogram<double>(MetricToolCallsPerOperation, "count");
+        try
+        {
+            _executeToolDurationHistogram = _meter.CreateHistogram<double>(
+                MetricExecuteToolDuration,
+                unit: "s",
+                description: "Tool execution duration.",
+                advice: new InstrumentAdvice<double> { HistogramBucketBoundaries = DurationBucketsSeconds });
+        }
+        catch (Exception)
+        {
+            // Instrument creation failure must not disable the existing instruments.
+        }
 
         _timerTask = Task.Run(RunFlushTimerAsync);
     }
@@ -1729,7 +1745,9 @@ public sealed partial class Agento11yClient : IAsyncDisposable
         ToolExecutionStart seed,
         DateTimeOffset startedAt,
         DateTimeOffset completedAt,
-        Exception? finalError
+        Exception? finalError,
+        ToolExecutionEnd result,
+        Exception? executionError
     )
     {
         var durationSeconds = Math.Max(0d, (completedAt - startedAt).TotalSeconds);
@@ -1747,6 +1765,71 @@ public sealed partial class Agento11yClient : IAsyncDisposable
                 new(SpanAttrErrorType, errorType),
                 new(SpanAttrErrorCategory, errorCategory),
             ]));
+
+        if (_executeToolDurationHistogram == null)
+        {
+            return;
+        }
+
+        // Do not merge attempted identities or private span attributes into this metric.
+        // Client tags must stay namespaced so they cannot override reserved keys.
+        var kind = seed.ExecutionKind switch
+        {
+            ToolExecutionKind.LoadSkill => "load_skill",
+            ToolExecutionKind.ReadSkillResource => "read_skill_resource",
+            ToolExecutionKind.Command => "command",
+            _ => "generic",
+        };
+        var attributes = new List<KeyValuePair<string, object?>>
+        {
+            new(SpanAttrToolName, seed.ToolName),
+            new(MetricAttrExecutionKind, kind),
+        };
+        Add(SpanAttrToolType, seed.ToolType);
+        Add(SpanAttrAgentName, seed.AgentName);
+        Add(SpanAttrProviderName, seed.RequestProvider);
+        Add(SpanAttrRequestModel, seed.RequestModel);
+        if (SupportsSkillAttributes(seed))
+        {
+            Add(SpanAttrSkillName, result.VerifiedSkillName);
+            if (seed.ExecutionKind != ToolExecutionKind.LoadSkill)
+            {
+                Add(SpanAttrSkillResourceName, result.VerifiedSkillResourceName);
+            }
+        }
+        if (seed.ExecutionKind == ToolExecutionKind.Command && result.ProcessExitCode.HasValue)
+        {
+            attributes.Add(new(SpanAttrProcessExitCode, result.ProcessExitCode.Value));
+        }
+        if (executionError != null)
+        {
+            Add(SpanAttrErrorType, "tool_execution_error");
+        }
+        else if (seed.ExecutionKind == ToolExecutionKind.Command
+            && result.ProcessExitCode.HasValue && result.ProcessExitCode.Value != 0
+            && result.ProcessExitCodeIsError != false)
+        {
+            Add(SpanAttrErrorType, result.ProcessExitCode.Value.ToString(CultureInfo.InvariantCulture));
+        }
+
+        try
+        {
+            // Still inside the tool activity's lifetime, preserving exemplars.
+            _executeToolDurationHistogram.Record(durationSeconds, WithMetricTags(seed.AgentVersion, attributes.ToArray()));
+        }
+        catch (Exception)
+        {
+            // Recording failure must not change tool completion or legacy telemetry.
+        }
+
+        void Add(string key, string? value)
+        {
+            var trimmed = (value ?? string.Empty).Trim();
+            if (trimmed.Length > 0)
+            {
+                attributes.Add(new(key, trimmed));
+            }
+        }
     }
 
     internal static string ErrorCategoryFromException(Exception? error, bool fallbackSdk)
@@ -3059,7 +3142,10 @@ public sealed class ToolExecutionRecorder
 
     private bool _ended;
     private Exception? _executionError;
+    private Exception? _metricExecutionError;
     private ToolExecutionEnd _result = new();
+    private Exception? _resultSnapshotError;
+    private ConditionalWeakTable<Exception, object>? _snapshotErrors;
 
     public Exception? Error { get; private set; }
 
@@ -3092,6 +3178,11 @@ public sealed class ToolExecutionRecorder
         lock (_gate)
         {
             _executionError = error;
+            // Callers can report a cloning exception after replacing the result.
+            if (_snapshotErrors?.TryGetValue(error, out _) != true)
+            {
+                _metricExecutionError = error;
+            }
         }
     }
 
@@ -3104,7 +3195,31 @@ public sealed class ToolExecutionRecorder
 
         lock (_gate)
         {
-            _result = InternalUtils.DeepClone(result);
+            // Snapshot completion metadata independently of user content. A
+            // serialization failure must not discard verified identity/outcome
+            // or keep a reference to mutable caller-owned content.
+            var snapshot = new ToolExecutionEnd
+            {
+                VerifiedSkillName = result.VerifiedSkillName,
+                VerifiedSkillResourceName = result.VerifiedSkillResourceName,
+                ProcessExitCode = result.ProcessExitCode,
+                ProcessExitCodeIsError = result.ProcessExitCodeIsError,
+                CompletedAt = result.CompletedAt,
+            };
+            _resultSnapshotError = null;
+            try
+            {
+                snapshot.Arguments = InternalUtils.DeepClone(result.Arguments);
+                snapshot.Result = InternalUtils.DeepClone(result.Result);
+            }
+            catch (Exception ex)
+            {
+                _resultSnapshotError = ex;
+                (_snapshotErrors ??= new()).GetValue(ex, static _ => new object());
+                _result = snapshot;
+                throw;
+            }
+            _result = snapshot;
         }
     }
 
@@ -3116,6 +3231,8 @@ public sealed class ToolExecutionRecorder
         }
 
         Exception? executionError;
+        Exception? metricExecutionError;
+        Exception? snapshotError;
         ToolExecutionEnd result;
 
         lock (_gate)
@@ -3127,7 +3244,9 @@ public sealed class ToolExecutionRecorder
 
             _ended = true;
             executionError = _executionError;
-            result = InternalUtils.DeepClone(_result);
+            metricExecutionError = _metricExecutionError;
+            snapshotError = _resultSnapshotError;
+            result = _result;
         }
 
         var finalError = executionError;
@@ -3148,6 +3267,10 @@ public sealed class ToolExecutionRecorder
             {
                 try
                 {
+                    if (snapshotError != null)
+                    {
+                        throw snapshotError;
+                    }
                     var arguments = InternalUtils.SerializeJson(result.Arguments);
                     if (!string.IsNullOrWhiteSpace(arguments))
                     {
@@ -3162,7 +3285,10 @@ public sealed class ToolExecutionRecorder
                 }
                 catch (Exception ex)
                 {
-                    finalError = finalError != null ? new AggregateException(finalError, ex) : ex;
+                    if (!ReferenceEquals(finalError, ex))
+                    {
+                        finalError = finalError != null ? new AggregateException(finalError, ex) : ex;
+                    }
                 }
             }
 
@@ -3180,7 +3306,7 @@ public sealed class ToolExecutionRecorder
             }
         }
 
-        _client!.RecordToolExecutionMetrics(_seed, _startedAt, completedAt, finalError);
+        _client!.RecordToolExecutionMetrics(_seed, _startedAt, completedAt, finalError, result, metricExecutionError);
         _activity?.SetEndTime(completedAt.UtcDateTime);
         _activity?.Stop();
 

@@ -1,6 +1,8 @@
 import type {
   ContentCaptureMode,
+  ToolExecutionKind,
   ToolExecutionRecorder,
+  ToolExecutionResult,
   ToolExecutionStart,
 } from "@grafana/agento11y";
 import type { Redactor } from "./mappers.js";
@@ -11,6 +13,8 @@ export type ToolExecutionRecord = {
   toolCallId: string;
   // undefined: unobserved; null: observed nonmatch; string: recognized skill.
   skillName?: string | null;
+  executionKind?: ToolExecutionKind;
+  verifiedSkillName?: string;
   startedAt: number;
   completedAt: number;
   input?: unknown;
@@ -50,10 +54,10 @@ export function emitToolSpans(
         toolName: record.toolName,
         toolCallId: record.toolCallId,
         toolType: "function",
-        ...(record.skillName && {
-          executionKind: "load_skill",
-          skillName: record.skillName,
+        ...((record.executionKind || record.skillName) && {
+          executionKind: record.executionKind ?? "load_skill",
         }),
+        ...(record.skillName && { skillName: record.skillName }),
         conversationId: opts.conversationId,
         conversationTitle: opts.conversationTitle,
         agentName: opts.agentName,
@@ -68,12 +72,9 @@ export function emitToolSpans(
         rec.setCallError(new Error(record.error || "tool returned error"));
       }
 
-      const end: {
-        arguments?: unknown;
-        result?: unknown;
-        completedAt: Date;
-      } = {
+      const end: ToolExecutionResult = {
         completedAt: new Date(record.completedAt),
+        verifiedSkillName: record.verifiedSkillName,
       };
 
       if (includeContent && record.input !== undefined) {

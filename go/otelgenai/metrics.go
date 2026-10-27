@@ -39,6 +39,7 @@ const (
 // instruments holds the spec metric instruments. The genaiconv constructors
 // append their own unit and description to the bucket advice passed here.
 type instruments struct {
+	toolDuration       metric.Float64Histogram
 	operationDuration  genaiconv.ClientOperationDuration
 	tokenUsage         genaiconv.ClientTokenUsage
 	timeToFirstChunk   genaiconv.ClientOperationTimeToFirstChunk

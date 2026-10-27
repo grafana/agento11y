@@ -85,15 +85,17 @@ func TestNewHandlerReportsInstrumentErrorsAndRecordsSpans(t *testing.T) {
 	if handler == nil {
 		t.Fatal("NewHandler returned nil")
 	}
-	if failingMeter.calls != 4 {
-		t.Errorf("histogram constructor calls = %d, want 4", failingMeter.calls)
+	if failingMeter.calls != 5 {
+		t.Errorf("histogram constructor calls = %d, want 5", failingMeter.calls)
 	}
 	reported := testOTelErrors.read()
-	if len(reported) != 1 {
-		t.Fatalf("error handler calls = %d, want 1", len(reported))
+	if len(reported) != 2 {
+		t.Fatalf("error handler calls = %d, want 2", len(reported))
 	}
-	if !errors.Is(reported[0], instrumentErr) {
-		t.Fatalf("reported error = %v, want wrapped %v", reported[0], instrumentErr)
+	for _, err := range reported {
+		if !errors.Is(err, instrumentErr) {
+			t.Fatalf("reported error = %v, want wrapped %v", err, instrumentErr)
+		}
 	}
 
 	inv := chatInvocation()

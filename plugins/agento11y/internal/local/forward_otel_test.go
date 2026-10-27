@@ -19,6 +19,7 @@ import (
 	colmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -268,6 +269,50 @@ func TestForwardStatusGenerationTransport(t *testing.T) {
 		require.True(t, loader.status().Generations)
 		require.Empty(t, loader.status().Reason)
 	})
+}
+
+func toolHistogramRequest() *colmetricspb.ExportMetricsServiceRequest {
+	sum := 0.35
+	return &colmetricspb.ExportMetricsServiceRequest{ResourceMetrics: []*metricspb.ResourceMetrics{{
+		ScopeMetrics: []*metricspb.ScopeMetrics{{
+			Scope: &commonpb.InstrumentationScope{Name: "agento11y.test"},
+			Metrics: []*metricspb.Metric{{
+				Name: "gen_ai.execute_tool.duration", Unit: "s",
+				Data: &metricspb.Metric_Histogram{Histogram: &metricspb.Histogram{
+					AggregationTemporality: metricspb.AggregationTemporality_AGGREGATION_TEMPORALITY_CUMULATIVE,
+					DataPoints: []*metricspb.HistogramDataPoint{{
+						StartTimeUnixNano: 1, TimeUnixNano: 2, Count: 2, Sum: &sum,
+						ExplicitBounds: []float64{0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12, 10.24, 20.48, 40.96, 81.92},
+						BucketCounts:   []uint64{0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+						Attributes: []*commonpb.KeyValue{
+							stringKV("gen_ai.tool.name", "Bash"),
+							stringKV("agento11y.tool.execution.kind", "command"),
+							stringKV("gen_ai.skill.name", "review"),
+							stringKV("gen_ai.skill.resource.name", "scripts/check.py"),
+							intKeyValue("process.exit.code", 2),
+							stringKV("error.type", "2"),
+						},
+					}},
+				}},
+			}},
+		}},
+	}}}
+}
+
+func assertToolHistogramRelay(t *testing.T, body []byte, contentType, encoding string) {
+	t.Helper()
+	if encoding == "gzip" {
+		var err error
+		body, err = gunzipLimited(body, maxOTLPBodyBytes)
+		require.NoError(t, err)
+	}
+	var got colmetricspb.ExportMetricsServiceRequest
+	if contentType == wire.ContentTypeJSON {
+		require.NoError(t, protojson.Unmarshal(body, &got))
+	} else {
+		require.NoError(t, proto.Unmarshal(body, &got))
+	}
+	require.True(t, proto.Equal(toolHistogramRequest(), &got), "histogram attributes, aggregation, bounds and buckets must survive forwarding")
 }
 
 type forwardErrorReader struct{}

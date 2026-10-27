@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/state"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/transcript"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/emit"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/useragent"
@@ -831,90 +832,39 @@ func TestReadTranscriptSettled_LonePromptWaitsForReply(t *testing.T) {
 	}
 }
 
-func TestBuildToolResultMap(t *testing.T) {
-	tests := []struct {
-		name     string
-		gens     []agento11y.Generation
-		wantIDs  []string
-		wantErrs map[string]bool
+func TestRawToolResultCollection(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		blocks []transcript.UserContentBlock
+		want   map[string]bool
 	}{
-		{name: "empty generations", gens: nil, wantIDs: nil},
-		{
-			name: "no tool results in input",
-			gens: []agento11y.Generation{{
-				Input: []agento11y.Message{{
-					Role:  agento11y.RoleUser,
-					Parts: []agento11y.Part{{Kind: agento11y.PartKindText, Text: "hello"}},
-				}},
-			}},
-			wantIDs: nil,
-		},
-		{
-			name: "single tool result",
-			gens: []agento11y.Generation{{
-				Input: []agento11y.Message{{
-					Role: agento11y.RoleTool,
-					Parts: []agento11y.Part{{
-						Kind: agento11y.PartKindToolResult,
-						ToolResult: &agento11y.ToolResult{
-							ToolCallID: "tc_1",
-							Content:    "file contents",
-						},
-					}},
-				}},
-			}},
-			wantIDs: []string{"tc_1"},
-		},
-		{
-			name: "multiple tool results across generations",
-			gens: []agento11y.Generation{
-				{Input: []agento11y.Message{{
-					Role: agento11y.RoleTool,
-					Parts: []agento11y.Part{
-						{Kind: agento11y.PartKindToolResult, ToolResult: &agento11y.ToolResult{ToolCallID: "tc_1", Content: "result1"}},
-						{Kind: agento11y.PartKindToolResult, ToolResult: &agento11y.ToolResult{ToolCallID: "tc_2", Content: "result2"}},
-					},
-				}}},
-				{Input: []agento11y.Message{{
-					Role: agento11y.RoleTool,
-					Parts: []agento11y.Part{
-						{Kind: agento11y.PartKindToolResult, ToolResult: &agento11y.ToolResult{ToolCallID: "tc_3", Content: "result3", IsError: true}},
-					},
-				}}},
-			},
-			wantIDs:  []string{"tc_1", "tc_2", "tc_3"},
-			wantErrs: map[string]bool{"tc_3": true},
-		},
-		{
-			name: "skips parts without tool call ID",
-			gens: []agento11y.Generation{{
-				Input: []agento11y.Message{{
-					Role: agento11y.RoleTool,
-					Parts: []agento11y.Part{
-						{Kind: agento11y.PartKindToolResult, ToolResult: &agento11y.ToolResult{ToolCallID: "", Content: "orphan"}},
-						{Kind: agento11y.PartKindToolResult, ToolResult: &agento11y.ToolResult{ToolCallID: "tc_1", Content: "ok"}},
-					},
-				}},
-			}},
-			wantIDs: []string{"tc_1"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			m := buildToolResultMap(tt.gens)
-
-			if len(m) != len(tt.wantIDs) {
-				t.Fatalf("got %d entries, want %d", len(m), len(tt.wantIDs))
+		{name: "empty"},
+		{name: "text only", blocks: []transcript.UserContentBlock{{Type: "text", Text: "hello"}}},
+		{name: "single result", blocks: []transcript.UserContentBlock{{Type: "tool_result", ToolUseID: "one"}}, want: map[string]bool{"one": false}},
+		{name: "parallel results", blocks: []transcript.UserContentBlock{{Type: "tool_result", ToolUseID: "one"}, {Type: "tool_result", ToolUseID: "two", IsError: true}}, want: map[string]bool{"one": false, "two": true}},
+		{name: "missing ID", blocks: []transcript.UserContentBlock{{Type: "tool_result"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "transcript.jsonl")
+			raw, err := json.Marshal(map[string]any{"type": "user", "sessionId": "raw", "timestamp": "2025-06-01T12:00:03Z", "message": map[string]any{"content": tc.blocks}})
+			if err != nil {
+				t.Fatal(err)
 			}
-			for _, id := range tt.wantIDs {
-				tr, ok := m[id]
-				if !ok {
-					t.Errorf("missing key %q", id)
-					continue
-				}
-				if tt.wantErrs[id] && !tr.IsError {
-					t.Errorf("key %q: IsError = false, want true", id)
+			if err := os.WriteFile(path, append(raw, '\n'), 0600); err != nil {
+				t.Fatal(err)
+			}
+			st := state.Session{}
+			initToolState(&st, path, nil)
+			if err := collectTools(&st, path, nil, nil); err != nil {
+				t.Fatal(err)
+			}
+			if len(st.Tools.Pending) != len(tc.want) {
+				t.Fatalf("pending=%d, want %d", len(st.Tools.Pending), len(tc.want))
+			}
+			for _, p := range st.Tools.Pending {
+				want, ok := tc.want[p.ID]
+				if !ok || p.Result == nil || p.Result.IsError != want || p.Call != nil {
+					t.Errorf("raw result=%+v", p)
 				}
 			}
 		})
@@ -1049,7 +999,7 @@ func TestRecord_GenerationSpanWindowNotInverted(t *testing.T) {
 // TestHook_SpanWindowsFromTranscript runs Hook itself over a transcript with
 // distinct timestamps and asserts the recorded span windows. It covers the
 // wiring the helper-level tests cannot: re-inlining the GenerationStart literal
-// in Hook, or dropping the tool-result timestamps on the way to emitToolSpans,
+// in Hook, or dropping the raw timestamps before tool emission,
 // fails here.
 func TestHook_SpanWindowsFromTranscript(t *testing.T) {
 	const (
@@ -1290,9 +1240,8 @@ func TestHook_NativeSkillDetectionFromTranscript(t *testing.T) {
 				}
 				start, _ := time.Parse(time.RFC3339Nano, callAt)
 				end, _ := time.Parse(time.RFC3339Nano, resultAt)
-				if tt.source != "parent" {
-					// Subagent tool-result timestamps are not propagated to the emitter.
-					end = start
+				if call.id == "native" {
+					start, _ = time.Parse(time.RFC3339Nano, promptAt)
 				}
 				if !s.StartTime().Equal(start) || !s.EndTime().Equal(end) {
 					t.Errorf("call %q: changed span window %v to %v", call.id, s.StartTime(), s.EndTime())
@@ -1410,10 +1359,8 @@ func TestEmitToolSpans(t *testing.T) {
 					}},
 				}},
 			},
-			contentMode:   agento11y.ContentCaptureModeMetadataOnly,
-			wantSpans:     1,
-			wantNames:     []string{"Read"},
-			wantDurations: map[string]time.Duration{"Read": 0},
+			contentMode: agento11y.ContentCaptureModeMetadataOnly,
+			wantSpans:   0,
 		},
 		{
 			name: "multiple tool calls with full content and results",
@@ -1439,6 +1386,7 @@ func TestEmitToolSpans(t *testing.T) {
 				"tc_1": {ToolCallID: "tc_1", Content: "package main"},
 				"tc_2": {ToolCallID: "tc_2", Content: "found 3 matches"},
 			},
+			resultAt:    map[string]time.Time{"tc_1": ts, "tc_2": ts},
 			contentMode: agento11y.ContentCaptureModeFull,
 			wantSpans:   2,
 			wantNames:   []string{"Read", "Grep"},
@@ -1468,6 +1416,7 @@ func TestEmitToolSpans(t *testing.T) {
 			results: map[string]*agento11y.ToolResult{
 				"tc_1": {ToolCallID: "tc_1", ContentJSON: json.RawMessage(`{"files":["a","b"]}`)},
 			},
+			resultAt:    map[string]time.Time{"tc_1": ts},
 			contentMode: agento11y.ContentCaptureModeFull,
 			wantSpans:   1,
 			wantNames:   []string{"Bash"},
@@ -1492,6 +1441,7 @@ func TestEmitToolSpans(t *testing.T) {
 			results: map[string]*agento11y.ToolResult{
 				"tc_1": {ToolCallID: "tc_1", Content: "permission denied", IsError: true},
 			},
+			resultAt:    map[string]time.Time{"tc_1": ts},
 			contentMode: agento11y.ContentCaptureModeMetadataOnly,
 			wantSpans:   1,
 			wantNames:   []string{"Write"},
@@ -1508,6 +1458,7 @@ func TestEmitToolSpans(t *testing.T) {
 					}},
 				}},
 			},
+			results:       map[string]*agento11y.ToolResult{"tc_1": {ToolCallID: "tc_1"}},
 			resultAt:      map[string]time.Time{"tc_1": ts.Add(1200 * time.Millisecond)},
 			contentMode:   agento11y.ContentCaptureModeMetadataOnly,
 			wantSpans:     1,
@@ -1515,7 +1466,7 @@ func TestEmitToolSpans(t *testing.T) {
 			wantDurations: map[string]time.Duration{"Bash": 1200 * time.Millisecond},
 		},
 		{
-			name: "zero result timestamp collapses to zero width",
+			name: "missing result timestamp never emits",
 			gen: agento11y.Generation{
 				CompletedAt: ts,
 				Output: []agento11y.Message{{
@@ -1526,19 +1477,13 @@ func TestEmitToolSpans(t *testing.T) {
 					}},
 				}},
 			},
-			// The mapper drops unparseable timestamps rather than storing the
-			// zero value, so this pins the window against a caller that does not.
-			resultAt:      map[string]time.Time{"tc_1": {}},
-			contentMode:   agento11y.ContentCaptureModeMetadataOnly,
-			wantSpans:     1,
-			wantNames:     []string{"Bash"},
-			wantDurations: map[string]time.Duration{"Bash": 0},
+			results:     map[string]*agento11y.ToolResult{"tc_1": {ToolCallID: "tc_1"}},
+			resultAt:    map[string]time.Time{"tc_1": {}},
+			contentMode: agento11y.ContentCaptureModeMetadataOnly,
+			wantSpans:   0,
 		},
 		{
-			// A zero generation completion is the case that used to invert the
-			// span: the SDK stamps the start with the current time, which is
-			// after every transcript timestamp. Both ends move to the result.
-			name: "zero generation completion anchors on the result",
+			name: "missing call timestamp never emits",
 			gen: agento11y.Generation{
 				Output: []agento11y.Message{{
 					Role: agento11y.RoleAssistant,
@@ -1548,12 +1493,10 @@ func TestEmitToolSpans(t *testing.T) {
 					}},
 				}},
 			},
-			resultAt:      map[string]time.Time{"tc_1": ts},
-			contentMode:   agento11y.ContentCaptureModeMetadataOnly,
-			wantSpans:     1,
-			wantNames:     []string{"Bash"},
-			wantStarts:    map[string]time.Time{"Bash": ts},
-			wantDurations: map[string]time.Duration{"Bash": 0},
+			results:     map[string]*agento11y.ToolResult{"tc_1": {ToolCallID: "tc_1"}},
+			resultAt:    map[string]time.Time{"tc_1": ts},
+			contentMode: agento11y.ContentCaptureModeMetadataOnly,
+			wantSpans:   0,
 		},
 		{
 			name: "result before the call clamps to zero width",
@@ -1567,6 +1510,7 @@ func TestEmitToolSpans(t *testing.T) {
 					}},
 				}},
 			},
+			results:       map[string]*agento11y.ToolResult{"tc_1": {ToolCallID: "tc_1"}},
 			resultAt:      map[string]time.Time{"tc_1": ts.Add(-time.Second)},
 			contentMode:   agento11y.ContentCaptureModeMetadataOnly,
 			wantSpans:     1,
@@ -1585,6 +1529,7 @@ func TestEmitToolSpans(t *testing.T) {
 					},
 				}},
 			},
+			results: map[string]*agento11y.ToolResult{"tc_1": {ToolCallID: "tc_1"}, "tc_2": {ToolCallID: "tc_2"}},
 			resultAt: map[string]time.Time{
 				"tc_1": ts.Add(500 * time.Millisecond),
 				"tc_2": ts.Add(1200 * time.Millisecond),
@@ -1607,7 +1552,7 @@ func TestEmitToolSpans(t *testing.T) {
 				results = map[string]*agento11y.ToolResult{}
 			}
 
-			emitToolSpans(context.Background(), client, tt.gen, results, tt.resultAt, nil)
+			emitToolFixture(t, client, tt.gen, results, tt.resultAt, tt.contentMode)
 			_ = client.Shutdown(context.Background())
 
 			toolSpans := spansByName(recorder.Ended(), "execute_tool")
@@ -1616,7 +1561,16 @@ func TestEmitToolSpans(t *testing.T) {
 			}
 
 			for i, wantName := range tt.wantNames {
-				s := toolSpans[i]
+				var s sdktrace.ReadOnlySpan
+				for _, candidate := range toolSpans {
+					if spanAttr(candidate, "gen_ai.tool.name") == wantName {
+						s = candidate
+						break
+					}
+				}
+				if s == nil {
+					t.Fatalf("missing tool %q", wantName)
+				}
 				gotName := spanAttr(s, "gen_ai.tool.name")
 				if gotName != wantName {
 					t.Errorf("span[%d] gen_ai.tool.name = %q, want %q", i, gotName, wantName)
@@ -1673,7 +1627,7 @@ func TestEmitToolSpans_ErrorStatus(t *testing.T) {
 		"tc_err": {ToolCallID: "tc_err", Content: "denied", IsError: true},
 	}
 
-	emitToolSpans(context.Background(), client, gen, results, nil, nil)
+	emitToolFixture(t, client, gen, results, map[string]time.Time{"tc_err": ts}, agento11y.ContentCaptureModeMetadataOnly)
 	_ = client.Shutdown(context.Background())
 
 	spans := spansByName(recorder.Ended(), "execute_tool")

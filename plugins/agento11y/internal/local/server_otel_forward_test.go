@@ -13,10 +13,16 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/go/proto/agento11y/wire"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	"go.opentelemetry.io/otel/trace/noop"
+	colmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
@@ -258,6 +264,120 @@ func TestReceiverOTelGenerationForwarding(t *testing.T) {
 			if tc.rejected {
 				require.Len(t, receiver.forward.status().Failures, 1, "HTTP success must not clear the OTLP rejection")
 			}
+		})
+	}
+}
+
+func TestReceiverToolMetricExport(t *testing.T) {
+	for _, mode := range []agento11y.ContentCaptureMode{agento11y.ContentCaptureModeFull, agento11y.ContentCaptureModeNoToolContent, agento11y.ContentCaptureModeMetadataOnly, agento11y.ContentCaptureModeFullWithMetadataSpans} {
+		t.Run(mode.String(), func(t *testing.T) {
+			clearForwardEnv(t)
+			type delivery struct {
+				path, marker, contentType, encoding string
+				body                                []byte
+			}
+			received := make(chan delivery, 1)
+			cloud := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				received <- delivery{r.URL.Path, r.Header.Get(ForwardMarkerHeader), r.Header.Get("Content-Type"), r.Header.Get("Content-Encoding"), body}
+				w.Header().Set("Content-Type", wire.ContentTypeProto)
+			}))
+			defer cloud.Close()
+			storage, err := NewStorage(t.TempDir())
+			require.NoError(t, err)
+			path := writeConfigEnvFile(t, map[string]string{
+				"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": cloud.URL,
+				"AGENTO11Y_AUTH_TENANT_ID": "test", "AGENTO11Y_AUTH_TOKEN": "test",
+				"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": cloud.URL,
+				"AGENTO11Y_CONTENT_CAPTURE_MODE":        mode.String(),
+			})
+			receiver := NewServer(storage, log.New(io.Discard, "", 0), path)
+			defer receiver.Close()
+			receiver.forward.client = cloud.Client()
+			local := httptest.NewServer(receiver)
+			defer local.Close()
+			ctx := context.Background()
+			reader := sdkmetric.NewManualReader()
+			provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+			defer func() { require.NoError(t, provider.Shutdown(ctx)) }()
+			client := agento11y.NewClient(agento11y.Config{
+				ContentCapture: mode,
+				Meter:          provider.Meter("agento11y.relay.test"), Tracer: noop.NewTracerProvider().Tracer("agento11y.relay.test"),
+				GenerationExport: agento11y.GenerationExportConfig{Protocol: agento11y.GenerationExportProtocolNone},
+			})
+			defer func() { require.NoError(t, client.Shutdown(ctx)) }()
+			start := time.Date(2026, 10, 27, 0, 0, 0, 0, time.UTC)
+			exit := int64(2)
+			for _, duration := range []time.Duration{120 * time.Millisecond, 230 * time.Millisecond} {
+				_, recorder := client.StartToolExecution(ctx, agento11y.ToolExecutionStart{
+					ToolName: "Bash", ToolType: "function", ExecutionKind: agento11y.ToolExecutionKindCommand,
+					SkillName: "attempted", SkillDescription: "private description", SkillSourceURI: "file:///private",
+					ProcessExecutableName: "sh", ProcessExecutablePath: "/private/bin/sh", StartedAt: start,
+				})
+				recorder.SetResult(agento11y.ToolExecutionEnd{
+					VerifiedSkillName: "review", VerifiedSkillResourceName: "scripts/check.py", ProcessExitCode: &exit,
+					Arguments: "private arguments", Result: "private result", CompletedAt: start.Add(duration),
+				})
+				recorder.End()
+				recorder.End()
+			}
+			var snapshot metricdata.ResourceMetrics
+			require.NoError(t, reader.Collect(ctx, &snapshot))
+			exporter, err := otlpmetrichttp.New(ctx, otlpmetrichttp.WithEndpointURL(local.URL), otlpmetrichttp.WithURLPath(otlpMetricsPath), otlpmetrichttp.WithCompression(otlpmetrichttp.GzipCompression))
+			require.NoError(t, err)
+			defer func() { require.NoError(t, exporter.Shutdown(ctx)) }()
+			require.NoError(t, exporter.Export(ctx, &snapshot))
+			receiver.forward.wait()
+			require.Empty(t, receiver.forward.status().Failures)
+			require.Len(t, received, 1)
+			got := <-received
+			require.Equal(t, "/v1/metrics", got.path)
+			require.Equal(t, "1", got.marker)
+			require.Equal(t, wire.ContentTypeProto, got.contentType)
+			require.Equal(t, "gzip", got.encoding)
+			body, err := gunzipLimited(got.body, maxOTLPBodyBytes)
+			require.NoError(t, err)
+			var request colmetricspb.ExportMetricsServiceRequest
+			require.NoError(t, proto.Unmarshal(body, &request))
+			found := false
+			legacy := false
+			for _, resource := range request.ResourceMetrics {
+				for _, scope := range resource.ScopeMetrics {
+					for _, metric := range scope.Metrics {
+						if metric.Name == "gen_ai.client.operation.duration" {
+							legacy = true
+							require.EqualValues(t, 2, metric.GetHistogram().DataPoints[0].Count)
+						}
+						if metric.Name != "gen_ai.execute_tool.duration" {
+							continue
+						}
+						found = true
+						require.Equal(t, "s", metric.Unit)
+						require.Len(t, metric.GetHistogram().DataPoints, 1)
+						point := metric.GetHistogram().DataPoints[0]
+						require.EqualValues(t, 2, point.Count)
+						require.InDelta(t, 0.35, point.GetSum(), 1e-12)
+						require.Equal(t, toolHistogramRequest().ResourceMetrics[0].ScopeMetrics[0].Metrics[0].GetHistogram().DataPoints[0].ExplicitBounds, point.ExplicitBounds)
+						require.Equal(t, toolHistogramRequest().ResourceMetrics[0].ScopeMetrics[0].Metrics[0].GetHistogram().DataPoints[0].BucketCounts, point.BucketCounts)
+						require.Equal(t, "review", stringAttribute(point.Attributes, "gen_ai.skill.name"))
+						require.Equal(t, "scripts/check.py", stringAttribute(point.Attributes, "gen_ai.skill.resource.name"))
+						require.Equal(t, "command", stringAttribute(point.Attributes, "agento11y.tool.execution.kind"))
+						require.Equal(t, "2", stringAttribute(point.Attributes, "error.type"))
+						require.Contains(t, attributeKeys(point.Attributes), "process.exit.code")
+						for _, attr := range point.Attributes {
+							if attr.Key == "process.exit.code" {
+								require.IsType(t, &commonpb.AnyValue_IntValue{}, attr.Value.Value)
+								require.EqualValues(t, 2, attr.Value.GetIntValue())
+							}
+						}
+						for _, key := range []string{"gen_ai.skill.description", "gen_ai.skill.source.uri", "process.executable.name", "process.executable.path", "gen_ai.tool.call.arguments", "gen_ai.tool.call.result", "gen_ai.conversation.id", "gen_ai.tool.call.id"} {
+							require.NotContains(t, attributeKeys(point.Attributes), key)
+						}
+					}
+				}
+			}
+			require.True(t, legacy)
+			require.True(t, found)
 		})
 	}
 }

@@ -197,6 +197,9 @@ func TestConformanceToolExecutionKinds(t *testing.T) {
 			points := 0
 			for _, scope := range metrics.ScopeMetrics {
 				for _, metric := range scope.Metrics {
+					if metric.Name != metricOperationDuration {
+						continue
+					}
 					if histogram, ok := metric.Data.(metricdata.Histogram[float64]); ok {
 						for _, point := range histogram.DataPoints {
 							points++

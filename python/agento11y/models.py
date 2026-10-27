@@ -388,6 +388,10 @@ class ToolExecutionEnd:
     result: Any = None
     completed_at: datetime | None = None
     process_exit_code: int | None = None
+    # Caller-confirmed metric identities, independent of attempted span names.
+    verified_skill_name: str = ""
+    verified_skill_resource_name: str = ""
+    process_exit_code_is_error: bool | None = None
 
     def __post_init__(self) -> None:
         if self.process_exit_code is not None and (

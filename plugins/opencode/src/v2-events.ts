@@ -40,12 +40,19 @@ interface Assistant {
   input: Message[];
   systemPrompt?: string;
   blocks: NativeBlock[];
-  toolObservations: Map<string, string | null>;
+  toolObservations: Map<string, ToolObservation>;
   parent?: string;
   subagent: boolean;
   conversationId: string;
   title?: string;
   lineage?: Record<string, string>;
+}
+interface ToolObservation {
+  revision: number;
+  skillName: string | null;
+  task: Promise<void>;
+  verifiedSkillName?: string;
+  close(): void;
 }
 interface SessionState {
   history: Message[];
@@ -68,6 +75,7 @@ export interface NativeToolObservation {
   tool: string;
   agent: string;
   skillName: string | null;
+  rawSkillID?: string | null;
 }
 
 export interface NativeCaptureOptions {
@@ -79,6 +87,11 @@ export interface NativeCaptureOptions {
   /** Running OpenCode version, the default when no agent version is configured. */
   hostVersion?: string;
   debugLog: (message: string, ...args: unknown[]) => void;
+  verifySkill?: (
+    rawID: string,
+    signal: AbortSignal,
+  ) => Promise<string | undefined>;
+  verificationReady?: Promise<void>;
 }
 
 interface CompactionGroup {
@@ -107,6 +120,8 @@ export function createNativeCapture({
   workspaceID,
   hostVersion,
   debugLog,
+  verifySkill,
+  verificationReady = Promise.resolve(),
 }: NativeCaptureOptions): {
   handleEvent(event: NativeEvent): void;
   observeToolExecution(observation: NativeToolObservation): void;
@@ -146,6 +161,67 @@ export function createNativeCapture({
   const agentVersion = config.agentVersion || hostVersion;
   let closed = false;
   let observingTools = true;
+  let observationRevision = 0;
+  const verifications = new Set<ToolObservation>();
+  const observe = (
+    skillName: string | null,
+    rawID?: string | null,
+  ): ToolObservation => {
+    let finish!: () => void;
+    const task = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const abort = new AbortController();
+    let done = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const entry: ToolObservation = {
+      revision: ++observationRevision,
+      skillName,
+      task,
+      close: () => {
+        done = true;
+        clearTimeout(timer);
+        abort.abort();
+        finish();
+        verifications.delete(entry);
+      },
+    };
+    if (!verifySkill || rawID == null) {
+      finish();
+      return entry;
+    }
+    verifications.add(entry);
+    // Host callbacks only capture evidence. Catalog calls run in a later task after setup.
+    timer = setTimeout(() => {
+      void (async () => {
+        await verificationReady;
+        if (done || !observingTools) return;
+        try {
+          const name = await verifySkill(rawID, abort.signal);
+          if (!done) entry.verifiedSkillName = name;
+        } catch {
+          // Catalog failures affect label coverage, never the host tool outcome.
+        } finally {
+          finish();
+        }
+      })();
+    }, 0);
+    return entry;
+  };
+  const awaitVerification = async (observations: ToolObservation[]) => {
+    if (!observations.length) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        Promise.all(observations.map((entry) => entry.task)),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, 250);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
   // After location.shutdown a replacement instance owns new work; running steps finish here.
   let draining = false;
   let shutdownTask: Promise<void> | undefined;
@@ -184,13 +260,8 @@ export function createNativeCapture({
   ) => {
     const assistant = session.assistant;
     if (!assistant) return;
-    session.assistant = undefined;
-    if (draining && !session.compaction) sessions.delete(sessionID);
     const id = stableOpencodeGenerationId(sessionID, assistant.id);
-    if (settled.has(id)) {
-      assistant.toolObservations.clear();
-      return;
-    }
+    if (settled.has(id)) return;
     settled.add(id); // Commit before scheduling any asynchronous export.
     session.lastGeneration = id;
     session.history.push(...nativeOutput(assistant.blocks));
@@ -209,13 +280,21 @@ export function createNativeCapture({
       config.redactInputMessages,
     );
     const records = nativeToolRecords(sessionID, assistant.blocks);
-    for (const record of records) {
+    const verification = records.flatMap((record) => {
       // Code Mode inner hooks can share an outer call ID, but not its tool name.
       const key = JSON.stringify([record.toolCallId, record.toolName]);
-      if (assistant.toolObservations.has(key))
-        record.skillName = assistant.toolObservations.get(key);
-    }
+      const entry = assistant.toolObservations.get(key);
+      if (!entry) return [];
+      record.skillName = entry.skillName;
+      if (record.toolName === "skill") record.executionKind = "load_skill";
+      return [{ record, entry, revision: entry.revision }];
+    });
+    const retained = new Set(verification.map(({ entry }) => entry));
+    for (const entry of assistant.toolObservations.values())
+      if (!retained.has(entry)) entry.close();
     assistant.toolObservations.clear();
+    session.assistant = undefined;
+    if (draining && !session.compaction) sessions.delete(sessionID);
     const seed = {
       id,
       conversationId: assistant.conversationId,
@@ -257,6 +336,12 @@ export function createNativeCapture({
           ? undefined
           : `opencode.${reason}`;
     enqueue(async () => {
+      await awaitVerification(verification.map(({ entry }) => entry));
+      for (const { record, entry, revision } of verification) {
+        if (entry.revision === revision)
+          record.verifiedSkillName = entry.verifiedSkillName;
+        entry.close(); // No lookup can change a record after emission begins.
+      }
       await client.startStreamingGeneration(seed, async (recorder) => {
         if (assistant.firstAt !== undefined)
           recorder.setFirstTokenAt(new Date(assistant.firstAt));
@@ -679,7 +764,8 @@ export function createNativeCapture({
   }
   function observeToolExecution(observation: NativeToolObservation): void {
     if (closed || !observingTools) return;
-    const { sessionID, messageID, id, tool, agent, skillName } = observation;
+    const { sessionID, messageID, id, tool, agent, skillName, rawSkillID } =
+      observation;
     if (
       ![sessionID, messageID, id, tool, agent].every(
         (value) => typeof value === "string" && value.length > 0,
@@ -690,10 +776,16 @@ export function createNativeCapture({
     const assistant = sessions.get(sessionID)?.assistant;
     if (!assistant || assistant.id !== messageID || assistant.agent !== agent)
       return;
-    assistant.toolObservations.set(JSON.stringify([id, tool]), skillName);
+    const key = JSON.stringify([id, tool]);
+    assistant.toolObservations.get(key)?.close();
+    assistant.toolObservations.set(
+      key,
+      observe(skillName, tool === "skill" ? rawSkillID : null),
+    );
   }
   function stopObservingTools(): void {
     observingTools = false;
+    for (const entry of verifications) entry.close();
   }
   async function drain(): Promise<void> {
     while (tasks.size) await Promise.all([...tasks]);

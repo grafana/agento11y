@@ -94,6 +94,8 @@ public final class Agento11yClient implements AutoCloseable {
     private static final int MAX_RATING_COMMENT_BYTES = 4096;
     private static final int MAX_RATING_METADATA_BYTES = 16 * 1024;
 
+    static final String METRIC_TOOL_DURATION = "gen_ai.execute_tool.duration";
+    static final String METRIC_ATTR_TOOL_EXECUTION_KIND = "agento11y.tool.execution.kind";
     static final String METRIC_OPERATION_DURATION = "gen_ai.client.operation.duration";
     static final String METRIC_TOKEN_USAGE = "gen_ai.client.token.usage";
     static final String METRIC_TTFT = "gen_ai.client.time_to_first_token";
@@ -136,6 +138,7 @@ public final class Agento11yClient implements AutoCloseable {
     private final DoubleHistogram tokenUsageHistogram;
     private final DoubleHistogram ttftHistogram;
     private final DoubleHistogram toolCallsHistogram;
+    private final DoubleHistogram toolDurationHistogram;
     private final EmbeddingCaptureConfig embeddingCaptureConfig;
     private final Logger logger;
     private final Clock clock;
@@ -219,6 +222,18 @@ public final class Agento11yClient implements AutoCloseable {
         this.toolCallsHistogram = meter.histogramBuilder(METRIC_TOOL_CALLS_PER_OPERATION)
                 .setUnit("count")
                 .build();
+
+        DoubleHistogram toolHistogram = null;
+        try {
+            toolHistogram = meter.histogramBuilder(METRIC_TOOL_DURATION)
+                    .setDescription("Tool execution duration.")
+                    .setUnit("s")
+                    .setExplicitBucketBoundariesAdvice(DURATION_BUCKETS_SECONDS)
+                    .build();
+        } catch (RuntimeException exception) {
+            logger.log(Level.WARNING, "agento11y: could not create tool duration histogram", exception);
+        }
+        this.toolDurationHistogram = toolHistogram;
 
         Duration interval = exportConfig.getFlushInterval();
         if (!interval.isNegative() && !interval.isZero()) {
@@ -1505,7 +1520,8 @@ public final class Agento11yClient implements AutoCloseable {
         tokenUsageHistogram.record((double) value, attrs.build());
     }
 
-    void recordToolExecutionMetrics(ToolExecutionStart seed, Instant startedAt, Instant completedAt, Throwable finalError) {
+    void recordToolExecutionMetrics(ToolExecutionStart seed, Instant startedAt, Instant completedAt,
+                                    Throwable finalError, ToolExecutionResult result, Throwable executionError) {
         if (seed == null || startedAt == null || completedAt == null) {
             return;
         }
@@ -1528,6 +1544,42 @@ public final class Agento11yClient implements AutoCloseable {
                         .put(SPAN_ATTR_ERROR_CATEGORY, errorCategory)
                         .build()
         );
+
+        if (toolDurationHistogram != null) {
+            // An allowlist, independent of legacy attributes. Java exposes no raw metric
+            // overrides; client tags are always namespaced under agento11y.tag.*.
+            AttributesBuilder attrs = Attributes.builder()
+                    .put(SPAN_ATTR_TOOL_NAME, seed.getToolName().trim())
+                    .putAll(clientTagAttributes());
+            putToolAttribute(attrs, SPAN_ATTR_PROVIDER_NAME, seed.getRequestProvider());
+            putToolAttribute(attrs, SPAN_ATTR_REQUEST_MODEL, seed.getRequestModel());
+            putToolAttribute(attrs, SPAN_ATTR_AGENT_NAME, seed.getAgentName());
+            putToolAttribute(attrs, SPAN_ATTR_AGENT_VERSION, seed.getAgentVersion());
+            putToolAttribute(attrs, SPAN_ATTR_TOOL_TYPE, seed.getToolType());
+            ToolExecutionKind kind = seed.getExecutionKind();
+            String kindLabel = kind == null ? "generic" : switch (kind) {
+                case LOAD_SKILL -> "load_skill";
+                case READ_SKILL_RESOURCE -> "read_skill_resource";
+                case COMMAND -> "command";
+            };
+            attrs.put(METRIC_ATTR_TOOL_EXECUTION_KIND, kindLabel);
+            if (kind != null) {
+                putToolAttribute(attrs, SPAN_ATTR_SKILL_NAME, result.getVerifiedSkillName());
+                if (kind == ToolExecutionKind.READ_SKILL_RESOURCE || kind == ToolExecutionKind.COMMAND) {
+                    putToolAttribute(attrs, SPAN_ATTR_SKILL_RESOURCE_NAME, result.getVerifiedSkillResourceName());
+                }
+            }
+            if (kind == ToolExecutionKind.COMMAND && result.getProcessExitCode() != null) {
+                attrs.put(SPAN_ATTR_PROCESS_EXIT_CODE, result.getProcessExitCode());
+            }
+            if (executionError != null) {
+                attrs.put(SPAN_ATTR_ERROR_TYPE, "tool_execution_error");
+            } else if (kind == ToolExecutionKind.COMMAND && result.getProcessExitCode() != null
+                    && result.getProcessExitCode() != 0 && !Boolean.FALSE.equals(result.getProcessExitCodeIsError())) {
+                attrs.put(SPAN_ATTR_ERROR_TYPE, Long.toString(result.getProcessExitCode()));
+            }
+            toolDurationHistogram.record(durationSeconds, attrs.build());
+        }
     }
 
     static String errorCategoryFromThrowable(Throwable error, boolean fallbackSdk) {

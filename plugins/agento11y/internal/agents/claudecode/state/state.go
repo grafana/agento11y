@@ -11,7 +11,8 @@ import (
 
 // Session holds the persisted state for a single session.
 type Session struct {
-	Offset int64 `json:"offset"`
+	Offset int64     `json:"offset"`
+	Tools  ToolState `json:"tools,omitzero"`
 	// Title is the first prompt the user typed, the fallback when Claude Code
 	// has written no title of its own.
 	Title string `json:"title,omitempty"`
