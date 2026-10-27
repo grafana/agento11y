@@ -124,6 +124,7 @@ export interface PiToolResult {
 export interface ToolTiming {
   toolCallId: string;
   toolName: string;
+  skillName?: string;
   startedAt: number;
   completedAt: number;
   isError: boolean;

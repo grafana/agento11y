@@ -1,8 +1,10 @@
 package gitbranch
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -34,7 +36,95 @@ func setGOOS(t *testing.T, value string) {
 	t.Cleanup(func() { goos = restore })
 }
 
+type discoveryCase struct {
+	name       string
+	setup      func(t *testing.T) string
+	wantRepo   string
+	wantBranch string
+}
+
+func discoveryCases() []discoveryCase {
+	var cases []discoveryCase
+	for _, depth := range []int{5, 6, 12} {
+		for _, pathKind := range []string{"absolute", "relative", "dot"} {
+			cases = append(cases, discoveryCase{
+				name: fmt.Sprintf("depth %d %s", depth, pathKind),
+				setup: func(t *testing.T) string {
+					root := t.TempDir()
+					writeFile(t, filepath.Join(root, ".git/HEAD"), "ref: refs/heads/deep-branch\n")
+					writeFile(t, filepath.Join(root, ".git/config"), gitConfig("git@github.com:fixture/deep.git"))
+					relative := filepath.FromSlash(strings.Repeat("nested/", depth))
+					deep := filepath.Join(root, relative)
+					if err := os.MkdirAll(deep, 0o755); err != nil {
+						t.Fatal(err)
+					}
+					switch pathKind {
+					case "relative":
+						t.Chdir(root)
+						return relative
+					case "dot":
+						t.Chdir(deep)
+						return "."
+					default:
+						return deep
+					}
+				},
+				wantRepo: "fixture/deep", wantBranch: "deep-branch",
+			})
+		}
+	}
+	return append(cases,
+		discoveryCase{
+			name: "nearest nested checkout",
+			setup: func(t *testing.T) string {
+				root := t.TempDir()
+				writeFile(t, filepath.Join(root, ".git/HEAD"), "ref: refs/heads/outer\n")
+				writeFile(t, filepath.Join(root, ".git/config"), gitConfig("git@github.com:fixture/outer.git"))
+				inner := filepath.Join(root, "inner")
+				writeFile(t, filepath.Join(inner, ".git/HEAD"), "ref: refs/heads/inner\n")
+				writeFile(t, filepath.Join(inner, ".git/config"), gitConfig("git@github.com:fixture/inner.git"))
+				deep := filepath.Join(inner, filepath.FromSlash(strings.Repeat("nested/", 12)))
+				if err := os.MkdirAll(deep, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				return deep
+			},
+			wantRepo: "fixture/inner", wantBranch: "inner",
+		},
+		discoveryCase{
+			name: "deep linked worktree",
+			setup: func(t *testing.T) string {
+				root := t.TempDir()
+				main := filepath.Join(root, "main")
+				writeFile(t, filepath.Join(main, ".git/HEAD"), "ref: refs/heads/main\n")
+				writeFile(t, filepath.Join(main, ".git/config"), gitConfig("git@github.com:fixture/main.git"))
+				writeFile(t, filepath.Join(main, ".git/worktrees/feature/HEAD"), "ref: refs/heads/worktree-branch\n")
+				writeFile(t, filepath.Join(main, ".git/worktrees/feature/commondir"), "../..\n")
+				wt := filepath.Join(root, "worktree")
+				writeFile(t, filepath.Join(wt, ".git"), "gitdir: ../main/.git/worktrees/feature\n")
+				deep := filepath.Join(wt, filepath.FromSlash(strings.Repeat("nested/", 12)))
+				if err := os.MkdirAll(deep, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				return deep
+			},
+			wantRepo: "fixture/main", wantBranch: "worktree-branch",
+		},
+		discoveryCase{
+			name: "filesystem root",
+			setup: func(t *testing.T) string {
+				root := filepath.VolumeName(t.TempDir()) + string(filepath.Separator)
+				if _, err := os.Stat(filepath.Join(root, ".git")); !os.IsNotExist(err) {
+					t.Skip("filesystem root is not a fixture without .git")
+				}
+				return root
+			},
+		},
+	)
+}
+
 func TestRepo(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
 	cases := []struct {
 		name  string
 		setup func(t *testing.T) (workspaceRoot string)
@@ -58,6 +148,69 @@ func TestRepo(t *testing.T) {
 				return root
 			},
 			want: "grafana/agento11y",
+		},
+		{
+			name: "https remote drops query token",
+			setup: func(t *testing.T) string {
+				root := t.TempDir()
+				writeFile(t, filepath.Join(root, ".git/config"), gitConfig("https://fixture-user:fixture-password@git.example.com/group/subgroup/repo.git?token=synthetic-query-token&next=/private/path"))
+				return root
+			},
+			want: "group/subgroup/repo",
+		},
+		{
+			name: "ssh url with port drops query token",
+			setup: func(t *testing.T) string {
+				root := t.TempDir()
+				writeFile(t, filepath.Join(root, ".git/config"), gitConfig("ssh://git@git.example.com:2222/group/subgroup/repo.git?token=synthetic-query-token"))
+				return root
+			},
+			want: "group/subgroup/repo",
+		},
+		{
+			name: "quoted url drops fragment token",
+			setup: func(t *testing.T) string {
+				root := t.TempDir()
+				writeFile(t, filepath.Join(root, ".git/config"), gitConfig(`"https://git.example.com/group/repo.git#synthetic-fragment-token?next=/private/path"`))
+				return root
+			},
+			want: "group/repo",
+		},
+		{
+			name: "file url drops query and fragment tokens",
+			setup: func(t *testing.T) string {
+				root := t.TempDir()
+				writeFile(t, filepath.Join(root, ".git/config"), gitConfig(`"file:///srv/git/repo.git?token=synthetic-query-token#synthetic-fragment-token"`))
+				return root
+			},
+			want: "repo",
+		},
+		{
+			name: "url keeps encoded path delimiters but drops query token",
+			setup: func(t *testing.T) string {
+				root := t.TempDir()
+				writeFile(t, filepath.Join(root, ".git/config"), gitConfig("https://git.example.com/group%2Fsubgroup/repo%3Fname%23pin.git?token=synthetic-query-token"))
+				return root
+			},
+			want: "group%2Fsubgroup/repo%3Fname%23pin",
+		},
+		{
+			name: "scp remote keeps question mark and hash in filename",
+			setup: func(t *testing.T) string {
+				root := t.TempDir()
+				writeFile(t, filepath.Join(root, ".git/config"), gitConfig(`"git@git.example.com:group/repo?name#pin.git"`))
+				return root
+			},
+			want: "group/repo?name#pin",
+		},
+		{
+			name: "filesystem remote keeps question mark and hash in filename",
+			setup: func(t *testing.T) string {
+				root := t.TempDir()
+				writeFile(t, filepath.Join(root, ".git/config"), gitConfig(`"/srv/git/repo?name#pin.git"`))
+				return root
+			},
+			want: "repo?name#pin",
 		},
 		{
 			name: "ssh url remote without .git suffix",
@@ -203,6 +356,14 @@ func TestRepo(t *testing.T) {
 			want:  "",
 		},
 	}
+	for _, dc := range discoveryCases() {
+		cases = append(cases, struct {
+			name  string
+			setup func(t *testing.T) string
+			goos  string
+			want  string
+		}{name: dc.name, setup: dc.setup, want: dc.wantRepo})
+	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.goos != "" {
@@ -276,6 +437,7 @@ func TestConfigValue(t *testing.T) {
 }
 
 func TestResolve(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
 	cases := []struct {
 		name  string
 		setup func(t *testing.T) (workspaceRoot string)
@@ -351,6 +513,13 @@ func TestResolve(t *testing.T) {
 			},
 			want: "",
 		},
+	}
+	for _, dc := range discoveryCases() {
+		cases = append(cases, struct {
+			name  string
+			setup func(t *testing.T) string
+			want  string
+		}{name: dc.name, setup: dc.setup, want: dc.wantBranch})
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

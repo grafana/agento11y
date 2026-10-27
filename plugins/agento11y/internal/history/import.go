@@ -5,27 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"time"
-)
 
-// Target is the destination for one import run. An empty Endpoint falls back to
-// the configured AGENTO11Y_ENDPOINT.
-//
-// The loopback rules are not set here: [NewTargetExporter] decides them from
-// the resolved endpoint, so an import that reaches the local daemon carries the
-// forward marker and full content whether or not the caller expected a local
-// destination.
-type Target struct {
-	Endpoint     string
-	OTLPEndpoint string
-	// ContentMode overrides the resolved CONTENT_CAPTURE_MODE for this import
-	// only. Empty falls back to the resolved environment value; a loopback
-	// endpoint always captures full content regardless.
-	ContentMode string
-	// Headers are sent with every generation-export and OTLP request this
-	// import makes. A non-nil map also replaces the ambient OTLP header set, so
-	// an import cannot leak a Cloud Authorization header to another endpoint.
-	Headers map[string]string
-}
+	"github.com/grafana/agento11y/go/agento11y"
+)
 
 // TurnExporter is the boundary between orchestration and the export pipeline.
 // Handing over a turn and confirming it arrived are separate calls so an import
@@ -153,8 +135,8 @@ type ImportOptions struct {
 const exportBatchSize = 100
 
 // RunImport reads the selected sessions, sanitizes each turn, exports it, and
-// records the outcome in the private ledger. It continues past a per-turn
-// failure so a rerun resumes from the ledger.
+// records the outcome in the private ledger. HTTP continues past per-turn
+// failures. OTel stops on unconfirmed delivery so a new run can replay it.
 //
 // Turns are consumed lazily, one at a time, and are not retained after export.
 // A Codex rollout of several hundred megabytes therefore costs one turn plus
@@ -190,9 +172,17 @@ func RunImport(ctx context.Context, opts ImportOptions) (ImportResult, error) {
 		now = func() time.Time { return time.Now().UTC() }
 	}
 
+	// A production exporter owns the snapshot it was constructed with. Never
+	// reopen its ledger from environment values that changed after setup.
+	target := opts.Target
+	if exporter, ok := opts.Exporter.(*Exporter); ok && exporter.Target.resolved != nil {
+		target = exporter.Target
+	}
+	otelImport := target.effective().Protocol == agento11y.GenerationExportProtocolOTel
+
 	ledger := opts.Ledger
 	if ledger == nil {
-		opened, err := OpenLedger(opts.Agent, opts.Target.destination())
+		opened, err := OpenLedger(opts.Agent, target.destination())
 		if err != nil {
 			return result, err
 		}
@@ -224,15 +214,12 @@ func RunImport(ctx context.Context, opts ImportOptions) (ImportResult, error) {
 	}
 	var pending []pendingTurn
 
-	// flush confirms delivery of the turns handed over since the last flush.
-	//
-	// stopping says the run is already ending, so the flush skips the run's
-	// context; a flush the cancellation cut short takes the same detached
-	// retry. The turns are with the exporter either way, and Flush confirms
-	// what it holds rather than sending it again, so the retry duplicates
-	// nothing. Without this a cancelled run would report every turn of its
-	// last batch as failed and export them again on the next run.
+	// HTTP retains its detached confirmation retry on cancellation. OTel
+	// cannot confirm a consumed batch by flushing again and fails it instead.
 	flush := func(stopping bool) error {
+		if otelImport {
+			return opts.Exporter.Flush(ctx)
+		}
 		if !stopping {
 			err := opts.Exporter.Flush(ctx)
 			if err == nil || ctx.Err() == nil {
@@ -244,15 +231,12 @@ func RunImport(ctx context.Context, opts ImportOptions) (ImportResult, error) {
 		return opts.Exporter.Flush(flushCtx)
 	}
 
-	// confirm flushes the batch and records each turn's outcome. A flush
-	// failure fails the whole batch: the SDK sends it as one request, so a
-	// turn's fate is the batch's. The ledger keeps those failures for a rerun to
-	// retry.
-	confirm := func(stopping bool) error {
+	// A delivery failure fails every pending turn. The ledger keeps those
+	// failures for a later run to retry with the same generation identities.
+	markPending := func(flushErr error) error {
 		if len(pending) == 0 {
 			return nil
 		}
-		flushErr := flush(stopping)
 		status, errorClass := StatusExported, ""
 		if flushErr != nil {
 			status, errorClass = StatusFailed, "export_failed"
@@ -274,7 +258,17 @@ func RunImport(ctx context.Context, opts ImportOptions) (ImportResult, error) {
 			result.Imported += len(pending)
 		}
 		pending = nil
+		if flushErr != nil && otelImport {
+			return fmt.Errorf("history: generation delivery unconfirmed: %w", flushErr)
+		}
 		return nil
+	}
+
+	confirm := func(stopping bool) error {
+		if len(pending) == 0 {
+			return nil
+		}
+		return markPending(flush(stopping))
 	}
 
 	// confirmFinal flushes the last batch of a run that is stopping early.
@@ -333,6 +327,14 @@ func RunImport(ctx context.Context, opts ImportOptions) (ImportResult, error) {
 					fmt.Sprintf("session %s: export turn: %v", sessionLabel(sess), exportErr))
 				if mErr := ledger.Mark(id, StatusFailed, gen.Source.GenerationID(), "export_failed", now().Unix()); mErr != nil {
 					return result, fmt.Errorf("history: record failed turn: %w", mErr)
+				}
+				if otelImport {
+					// Recording can fail after a span was queued. Stop without
+					// flushing or trusting any earlier unconfirmed turns.
+					if err := markPending(exportErr); err != nil {
+						return result, err
+					}
+					return result, fmt.Errorf("history: record generation: %w", exportErr)
 				}
 				continue
 			}

@@ -56,6 +56,10 @@ const (
 	// ToolDescriptionAttributeKey holds a tool's description text.
 	ToolDescriptionAttributeKey = "gen_ai.tool.description"
 
+	SkillDescriptionAttributeKey      = "gen_ai.skill.description"
+	SkillSourceURIAttributeKey        = "gen_ai.skill.source.uri"
+	ProcessExecutablePathAttributeKey = "process.executable.path"
+
 	// ToolCallArgumentsAttributeKey holds the arguments a tool was called with.
 	ToolCallArgumentsAttributeKey = "gen_ai.tool.call.arguments"
 
@@ -135,6 +139,9 @@ func IsTraceContentAttribute(key string) bool {
 		LegacyConversationTitleKey,
 		EmbeddingInputTextsAttributeKey,
 		ToolDescriptionAttributeKey,
+		SkillDescriptionAttributeKey,
+		SkillSourceURIAttributeKey,
+		ProcessExecutablePathAttributeKey,
 		ToolCallArgumentsAttributeKey,
 		ToolCallResultAttributeKey,
 		SystemInstructionsAttributeKey,

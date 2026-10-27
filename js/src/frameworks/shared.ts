@@ -95,11 +95,17 @@ interface FrameworkContext {
   eventId: string;
 }
 
+interface FrameworkSpan {
+  span: Span;
+  // The run's metadata, kept so an error can resolve its capture mode.
+  metadata: Record<string, unknown>;
+}
+
 export class Agento11yFrameworkHandler {
   private readonly runs = new Map<string, RunState>();
   private readonly toolRuns = new Map<string, ToolRunState>();
-  private readonly chainSpans = new Map<string, Span>();
-  private readonly retrieverSpans = new Map<string, Span>();
+  private readonly chainSpans = new Map<string, FrameworkSpan>();
+  private readonly retrieverSpans = new Map<string, FrameworkSpan>();
   private readonly agentName?: string;
   private readonly agentVersion?: string;
   private readonly providerResolver: 'auto' | ProviderResolverFn;
@@ -472,7 +478,7 @@ export class Agento11yFrameworkHandler {
       : `${this.frameworkName}.chain`;
     const span = this.getFrameworkTracer().startSpan(spanName, { kind: SpanKind.INTERNAL });
     this.setFrameworkSpanAttributes(span, context, 'framework_chain');
-    this.chainSpans.set(runKey, span);
+    this.chainSpans.set(runKey, { span, metadata: context.metadata });
   }
 
   protected onChainEnd(runId: string): void {
@@ -514,7 +520,7 @@ export class Agento11yFrameworkHandler {
       : `${this.frameworkName}.retriever`;
     const span = this.getFrameworkTracer().startSpan(spanName, { kind: SpanKind.INTERNAL });
     this.setFrameworkSpanAttributes(span, context, 'framework_retriever');
-    this.retrieverSpans.set(runKey, span);
+    this.retrieverSpans.set(runKey, { span, metadata: context.metadata });
   }
 
   protected onRetrieverEnd(runId: string): void {
@@ -590,13 +596,14 @@ export class Agento11yFrameworkHandler {
     }
   }
 
-  private endFrameworkSpan(spans: Map<string, Span>, runId: string, error: unknown): void {
+  private endFrameworkSpan(spans: Map<string, FrameworkSpan>, runId: string, error: unknown): void {
     const runKey = String(runId);
-    const span = spans.get(runKey);
-    if (span === undefined) {
+    const entry = spans.get(runKey);
+    if (entry === undefined) {
       return;
     }
     spans.delete(runKey);
+    const { span, metadata } = entry;
     if (error === undefined) {
       span.setStatus({ code: SpanStatusCode.OK });
       span.end();
@@ -605,8 +612,15 @@ export class Agento11yFrameworkHandler {
 
     span.setAttribute(spanAttrErrorType, 'framework_error');
     span.setAttribute(spanAttrErrorCategory, 'sdk_error');
-    span.recordException(asError(error));
-    span.setStatus({ code: SpanStatusCode.ERROR, message: asError(error).message });
+    // A chain error is often the provider error, secrets included, so its
+    // text stays off when this run's capture mode hides content or a
+    // sanitizer is configured.
+    if (this.client.internalShouldRedactFrameworkSpanErrors(metadata)) {
+      span.setStatus({ code: SpanStatusCode.ERROR, message: 'sdk_error' });
+    } else {
+      span.recordException(asError(error));
+      span.setStatus({ code: SpanStatusCode.ERROR, message: asError(error).message });
+    }
     span.end();
   }
 

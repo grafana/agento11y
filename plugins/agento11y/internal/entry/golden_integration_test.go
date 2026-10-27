@@ -62,6 +62,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
@@ -153,21 +154,8 @@ func runGoldenScenario(t *testing.T, name string) {
 	dir := filepath.Join("testdata", "golden", name)
 	sc := loadScenario(t, dir)
 
-	stateDir := t.TempDir()
-	t.Setenv("XDG_STATE_HOME", stateDir)
-	t.Setenv("HOME", stateDir)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(stateDir, "config"))
-
+	stateDir, capture := startHookExport(t, sc)
 	transcriptPaths := writeTranscripts(t, sc.Transcripts, sc.SiblingFiles)
-
-	capture := &exportCapture{}
-	server := newGoldenServer(t, capture)
-	defer server.Close()
-
-	setHookExportEnv(t, server.URL)
-	for k, v := range sc.Env {
-		t.Setenv(k, v)
-	}
 
 	eventOutput := make([]string, 0, len(sc.Events))
 	for i, raw := range sc.Events {
@@ -182,8 +170,42 @@ func runGoldenScenario(t *testing.T, name string) {
 		eventOutput = append(eventOutput, fmt.Sprintf("event[%d] stdout=%q stderr=%q", i, stdoutText, stderrText))
 	}
 
-	captured := capture.snapshot()
+	registerExportDiagnostics(t, stateDir, eventOutput)
+	bodies := checkExports(t, name, sc, capture.snapshot())
 
+	goldenPath := filepath.Join(dir, "export.golden.json")
+	assertGoldenJSON(t, goldenPath, bodies)
+}
+
+// startHookExport isolates the plugin's state under a fresh HOME and points
+// its exporter at a capture server, the setup every scenario shares whether
+// the hook events are replayed from scenario.json or produced by a real agent
+// (TestAgentIntegration).
+func startHookExport(t *testing.T, sc scenario) (stateDir string, capture *exportCapture) {
+	t.Helper()
+	stateDir = t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateDir)
+	t.Setenv("HOME", stateDir)
+	t.Setenv("USERPROFILE", stateDir)
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(stateDir, ".claude"))
+	t.Setenv("CODEX_HOME", filepath.Join(stateDir, ".codex"))
+	if err := os.MkdirAll(os.Getenv("CODEX_HOME"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(stateDir, "config"))
+
+	capture = &exportCapture{}
+	server := newGoldenServer(t, capture)
+
+	setHookExportEnv(t, server.URL)
+	for k, v := range sc.Env {
+		t.Setenv(k, v)
+	}
+	return stateDir, capture
+}
+
+func registerExportDiagnostics(t *testing.T, stateDir string, output []string) {
+	t.Helper()
 	// On failure, surface the SIGIL_DEBUG log file and per-event hook output
 	// so the developer can see which dispatch path each event took without
 	// having to re-run by hand.
@@ -195,11 +217,17 @@ func runGoldenScenario(t *testing.T, name string) {
 		if data, err := os.ReadFile(logPath); err == nil {
 			t.Logf("agento11y debug log (%s):\n%s", logPath, data)
 		}
-		for _, line := range eventOutput {
+		for _, line := range output {
 			t.Log(line)
 		}
 	})
+}
 
+// checkExports runs every check that does not need a golden file: the
+// secret-leak guard and the scenario invariants. It returns the normalized
+// bodies for the golden comparison.
+func checkExports(t *testing.T, name string, sc scenario, captured []capturedRequest) []goldenExport {
+	t.Helper()
 	bodies := normalizeCapturedBodies(t, captured)
 
 	// Secret-leak guard runs against the raw captured bodies so any
@@ -256,9 +284,7 @@ func runGoldenScenario(t *testing.T, name string) {
 			}
 		}
 	}
-
-	goldenPath := filepath.Join(dir, "export.golden.json")
-	assertGoldenJSON(t, goldenPath, bodies)
+	return bodies
 }
 
 // loadScenario parses scenario.json. The file is allowed to be missing the
@@ -537,16 +563,11 @@ func (c *exportCapture) snapshot() []capturedRequest {
 	return out
 }
 
-// newGoldenServer starts a 127.0.0.1 httptest server. We bind to
-// 127.0.0.1 explicitly so the kontora/agent-safehouse sandbox accepts the
-// listen, matching the pattern in codex/hook/handlers_test.go.
+// newGoldenServer starts the capture server that records every export
+// request.
 func newGoldenServer(t *testing.T, capture *exportCapture) *httptest.Server {
 	t.Helper()
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		t.Skipf("loopback listen unavailable: %v", err)
-	}
-	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return newLoopbackServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			http.Error(w, "read body", http.StatusBadRequest)
@@ -557,8 +578,20 @@ func newGoldenServer(t *testing.T, capture *exportCapture) *httptest.Server {
 		capture.mu.Unlock()
 		writeAcceptedGenerationResponse(w, body)
 	}))
-	srv.Listener = listener
+}
+
+// newLoopbackServer starts a 127.0.0.1 httptest server. We bind to
+// 127.0.0.1 explicitly so the kontora/agent-safehouse sandbox accepts the
+// listen, matching the pattern in codex/hook/handlers_test.go.
+func newLoopbackServer(t *testing.T, handler http.Handler) *httptest.Server {
+	t.Helper()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("loopback listen unavailable: %v", err)
+	}
+	srv := &httptest.Server{Listener: listener, Config: &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second}}
 	srv.Start()
+	t.Cleanup(srv.Close)
 	return srv
 }
 

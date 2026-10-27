@@ -2,7 +2,7 @@
 
 [OpenCode](https://opencode.ai) plugin that sends LLM generations to [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/).
 
-By default only metadata is sent (token counts, cost, model, tool names, durations). Set `AGENTO11Y_CONTENT_CAPTURE_MODE` to `full`, `no_tool_content`, `metadata_only`, or `full_with_metadata_spans` to control what is sent. `default` is accepted as an alias for `metadata_only`. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md) for the full reference.
+By default only metadata is sent (token counts, cost, model, tool names, recognized skill names, durations). Set `AGENTO11Y_CONTENT_CAPTURE_MODE` to `full`, `no_tool_content`, `metadata_only`, or `full_with_metadata_spans` to control what is sent. `default` is accepted as an alias for `metadata_only`. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md) for the full reference.
 
 ## 1. Install and launch
 
@@ -94,6 +94,17 @@ OpenCode redacts known secret formats out of assistant text, the system prompt, 
 Run one OpenCode turn, then open **Agent Observability → Conversations** in Grafana Cloud. A new generation should appear within a few seconds.
 
 If nothing shows up, set `AGENTO11Y_DEBUG=true` in `~/.config/agento11y/config.env`, run another turn, and check OpenCode stderr.
+
+Live capture recognizes the standard `skill` tool with version-specific input:
+
+- OpenCode 1 uses `{ name }`. Effective inputs observed by execution hooks take precedence over stored inputs.
+- OpenCode 2 (pinned API 2.0.22) uses `{ id }`, not `{ name }`. Detection reports the requested identifier, which can differ from the skill's display name. It requires final `execute.after` input correlated with an active assistant step owned by this plugin. Without that observation and correlation, the tool span stays generic. Interrupted calls without terminal events remain absent. Skill activation events create no spans.
+
+Custom tools named `skill` can match the same signature. Detection does not verify that the tool is built in.
+
+Recognized attempts add `gen_ai.skill.name` to existing tool-execution spans, including failed attempts. They do not prove that instructions loaded successfully or guided later actions. Validated names remain in reduced modes, including `metadata_only` and `full_with_metadata_spans`; names that look like secrets are omitted. Detection adds no descriptions, paths, or URIs, changes no payload policy, and adds no metric labels.
+
+Skill visibility requires retained tool and generation spans in Tempo plus deployed Sigil consumer support. A conversation alone is insufficient. Detection excludes history import, direct `/skill` prompt insertion, resource reads, scripts, and attribution of later activity.
 
 ## OpenCode 2
 

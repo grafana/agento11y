@@ -38,6 +38,10 @@ const (
 	// RepairLockFile guards that pass across processes, because more than
 	// one daemon can share a store.
 	RepairLockFile = "repair.lock"
+
+	// maxJSONLRecordBytes is also the scanner buffer limit. A complete encoded
+	// record, including its newline, must be strictly smaller than this.
+	maxJSONLRecordBytes = 64 * 1024 * 1024
 )
 
 // StateDir returns the root directory for local capture data.
@@ -187,24 +191,47 @@ func newestActivity(activities []time.Time, n int) time.Time {
 	return newest
 }
 
-// writeJSONL is the write half of appendJSONL, split out so the file is
-// closed before the stamp is applied to it.
+var errJSONLRecordTooLarge = errors.New("encoded JSONL record too large")
+
+func encodeJSONLRecord(record any) ([]byte, error) {
+	data, err := json.Marshal(record)
+	if err != nil {
+		return nil, err
+	}
+	if len(data)+1 >= maxJSONLRecordBytes {
+		return nil, fmt.Errorf("%w: %d bytes including newline (must be < %d)", errJSONLRecordTooLarge, len(data)+1, maxJSONLRecordBytes)
+	}
+	return append(data, '\n'), nil
+}
+
+// Validate the whole batch so a bad later record cannot leave an accepted prefix.
 func writeJSONL[T any](s *Storage, path, name string, records []T) (int, error) {
+	encoded := make([][]byte, len(records))
+	for i, record := range records {
+		data, err := encodeJSONLRecord(record)
+		if err != nil {
+			return 0, fmt.Errorf("local storage: marshal %s: %w", name, err)
+		}
+		encoded[i] = data
+	}
 	f, err := s.openForAppend(path)
 	if err != nil {
 		return 0, err
 	}
-	defer f.Close()
-
-	for i, record := range records {
-		data, err := json.Marshal(record)
-		if err != nil {
-			return i, fmt.Errorf("local storage: marshal %s: %w", name, err)
+	for i, data := range encoded {
+		n, err := f.Write(data)
+		if err == nil && n != len(data) {
+			err = io.ErrShortWrite
 		}
-		data = append(data, '\n')
-		if _, err := f.Write(data); err != nil {
+		if err != nil {
+			_ = f.Close()
 			return i, fmt.Errorf("local storage: write %s: %w", path, err)
 		}
+	}
+	if err := f.Close(); err != nil {
+		// A failed close cannot promise any record is durable. A retry may
+		// duplicate records, which generation reads reconcile by identity.
+		return 0, fmt.Errorf("local storage: close %s: %w", path, err)
 	}
 	return len(records), nil
 }

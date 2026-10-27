@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
+import { SpanKind, SpanStatusCode } from '@opentelemetry/api';
 import {
   AggregationTemporality,
   DataPointType,
@@ -12,7 +14,12 @@ import {
   MeterProvider,
   PeriodicExportingMetricReader,
 } from '@opentelemetry/sdk-metrics';
-import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
+import {
+  BasicTracerProvider,
+  InMemorySpanExporter,
+  SamplingDecision,
+  SimpleSpanProcessor,
+} from '@opentelemetry/sdk-trace-base';
 import {
   Agento11yClient,
   defaultConfig,
@@ -517,6 +524,142 @@ test('conformance tool execution semantics', async () => {
   }
 });
 
+const toolExecutionKinds = JSON.parse(
+  readFileSync(new URL('../../conformance/tool-execution-kinds/cases.json', import.meta.url), 'utf8'),
+);
+
+function skillProcessAttributes(attributes) {
+  return Object.fromEntries(
+    Object.entries(attributes).filter(([key]) => toolExecutionKinds.skill_process_attributes.includes(key)),
+  );
+}
+
+for (const fixture of toolExecutionKinds.cases) {
+  test(`conformance tool execution-kind: ${fixture.id}`, async () => {
+    const env = await createConformanceEnv({
+      clientConfig: { contentCapture: fixture.capture_mode ?? 'no_tool_content' },
+    });
+    try {
+      const start = fixture.start;
+      const recorder = env.client.startToolExecution({
+        toolName: start.tool_name,
+        toolCallId: 'call-execution-kind',
+        toolType: 'function',
+        executionKind: start.execution_kind,
+        skillName: start.skill_name,
+        skillDescription: start.skill_description,
+        skillSourceURI: start.skill_source_uri,
+        skillResourceName: start.skill_resource_name,
+        processExecutableName: start.process_executable_name,
+        processExecutablePath: start.process_executable_path,
+        includeContent: fixture.include_content ?? false,
+      });
+      const testInvalidExit =
+        Object.hasOwn(fixture, 'invalid_exit_code') &&
+        (!fixture.dynamic_languages || fixture.dynamic_languages.includes('js'));
+      const processExitCode = testInvalidExit ? fixture.invalid_exit_code : fixture.end?.process_exit_code;
+      recorder.setResult({ processExitCode, arguments: { input: 'args' }, result: { output: 'result' } });
+      if (fixture.error) {
+        recorder.setCallError(new Error(fixture.error));
+      }
+      recorder.end();
+      recorder.end();
+      assert.equal(recorder.getError()?.message, fixture.error);
+
+      const spans = env.finishedSpans();
+      assert.equal(spans.length, 1);
+      const span = spans[0];
+      assert.equal(span.kind, SpanKind.INTERNAL);
+      assert.equal(span.name, fixture.span_name);
+      assert.deepEqual(skillProcessAttributes(span.attributes), fixture.attributes);
+      assert.equal(span.attributes['agento11y.skill.name'], undefined);
+      assert.equal(span.attributes['gen_ai.operation.name'], 'execute_tool');
+      assert.equal(span.attributes['gen_ai.tool.name'], start.tool_name.trim());
+
+      const structural = Object.fromEntries(
+        Object.entries(fixture.attributes).filter(
+          ([key]) => !toolExecutionKinds.private_attributes.includes(key) && key !== 'process.exit.code',
+        ),
+      );
+      assert.equal(env.sampledStarts.length, 1);
+      assert.equal(env.createdSpans.length, 1);
+      for (const created of [env.sampledStarts[0], env.createdSpans[0]]) {
+        assert.equal(created.name, fixture.span_name);
+        assert.equal(created.kind, SpanKind.INTERNAL);
+        assert.deepEqual(skillProcessAttributes(created.attributes), structural);
+        assert.equal(created.attributes['agento11y.skill.name'], undefined);
+        assert.equal(created.attributes['gen_ai.operation.name'], 'execute_tool');
+        assert.equal(created.attributes['gen_ai.tool.name'], start.tool_name.trim());
+        assert.equal(created.attributes['gen_ai.tool.call.id'], 'call-execution-kind');
+        assert.equal(created.attributes['gen_ai.tool.type'], 'function');
+        assert.equal(created.attributes['gen_ai.tool.call.arguments'], undefined);
+        assert.equal(created.attributes['gen_ai.tool.call.result'], undefined);
+      }
+
+      const reduced = ['metadata_only', 'full_with_metadata_spans'].includes(fixture.capture_mode);
+      const hasContent = !reduced && (fixture.capture_mode === 'full' || fixture.include_content === true);
+      assert.equal(span.attributes['gen_ai.tool.call.arguments'], hasContent ? '{"input":"args"}' : undefined);
+      assert.equal(span.attributes['gen_ai.tool.call.result'], hasContent ? '{"output":"result"}' : undefined);
+      assert.equal(span.status.code, fixture.error ? SpanStatusCode.ERROR : SpanStatusCode.OK);
+      assert.equal(span.attributes['error.type'], fixture.error ? 'tool_execution_error' : undefined);
+      if (fixture.error) {
+        assert.equal(span.status.message, reduced ? 'sdk_error' : fixture.error);
+        assert.equal(span.events.filter((event) => event.name === 'exception').length, reduced ? 0 : 1);
+      }
+
+      const metrics = await env.metricData();
+      assert.deepEqual(
+        metrics.map((metric) => metric.descriptor.name),
+        ['gen_ai.client.operation.duration'],
+      );
+      assert.equal(metrics[0].dataPoints.length, 1);
+      const point = metrics[0].dataPoints[0];
+      assert.equal(point.value.count, 1);
+      assert.deepEqual(point.attributes, {
+        'gen_ai.operation.name': 'execute_tool',
+        'gen_ai.tool.name': start.tool_name.trim(),
+        'gen_ai.provider.name': '',
+        'gen_ai.request.model': '',
+        'gen_ai.agent.name': '',
+        'error.type': fixture.error ? 'tool_execution_error' : '',
+        'error.category': fixture.error ? 'sdk_error' : '',
+      });
+      assert.equal(env.receivedRequests.length, 0);
+    } finally {
+      await env.close();
+    }
+  });
+}
+
+test('conformance generic tool loop does not infer execution kinds from names or payloads', async () => {
+  const env = await createConformanceEnv();
+  try {
+    const names = ['load_skill', 'read_skill_resource', 'run_skill_script', 'exec_command'];
+    const messages = [
+      {
+        role: 'assistant',
+        parts: names.map((name) => ({
+          type: 'tool_call',
+          toolCall: { id: name, name, inputJSON: '{"skill_name":"review","process_executable_name":"bash"}' },
+        })),
+      },
+    ];
+    const results = await env.client.executeToolCalls(messages, () => ({ process_exit_code: 0 }));
+    assert.equal(results.length, names.length);
+    const spans = env.finishedSpans();
+    assert.deepEqual(
+      spans.map((span) => span.name),
+      names.map((name) => `execute_tool ${name}`),
+    );
+    for (const span of [...spans, ...env.sampledStarts]) {
+      assert.deepEqual(skillProcessAttributes(span.attributes), {});
+      assert.equal(span.attributes['agento11y.skill.name'], undefined);
+    }
+  } finally {
+    await env.close();
+  }
+});
+
 test('conformance embedding semantics', async () => {
   const env = await createConformanceEnv();
 
@@ -862,8 +1005,27 @@ async function createConformanceEnv(options = {}) {
   }
 
   const spanExporter = new InMemorySpanExporter();
+  const sampledStarts = [];
+  const createdSpans = [];
   const tracerProvider = new BasicTracerProvider({
-    spanProcessors: [new SimpleSpanProcessor(spanExporter)],
+    sampler: {
+      shouldSample(_context, _traceId, name, kind, attributes) {
+        sampledStarts.push({ name, kind, attributes: { ...attributes } });
+        return { decision: SamplingDecision.RECORD_AND_SAMPLED };
+      },
+      toString: () => 'ConformanceSampler',
+    },
+    spanProcessors: [
+      {
+        onStart(span) {
+          createdSpans.push({ name: span.name, kind: span.kind, attributes: { ...span.attributes } });
+        },
+        onEnd() {},
+        async forceFlush() {},
+        async shutdown() {},
+      },
+      new SimpleSpanProcessor(spanExporter),
+    ],
   });
   const metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
   const metricReader = new PeriodicExportingMetricReader({
@@ -901,6 +1063,16 @@ async function createConformanceEnv(options = {}) {
     client,
     receivedRequests,
     receivedWorkflowStepRequests,
+    sampledStarts,
+    createdSpans,
+    finishedSpans: () => spanExporter.getFinishedSpans(),
+    async metricData() {
+      await meterProvider.forceFlush();
+      return metricExporter
+        .getMetrics()
+        .flatMap((resourceMetrics) => resourceMetrics.scopeMetrics)
+        .flatMap((scopeMetrics) => scopeMetrics.metrics);
+    },
     get ratingPath() {
       return ratingPath;
     },

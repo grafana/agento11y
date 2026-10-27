@@ -1,9 +1,12 @@
 package local
 
 import (
+	"net/http"
 	"testing"
 
+	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseSettings(t *testing.T) {
@@ -399,6 +402,33 @@ func TestSettingsConnection(t *testing.T) {
 		_, ok := cleared["OTEL_EXPORTER_OTLP_HEADERS"]
 		assert.False(t, ok)
 	})
+}
+
+func TestSettingsPreserveExperimentalTransport(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		keys map[string]string
+	}{
+		{name: "preferred protocol and opt-in", keys: map[string]string{
+			"AGENTO11Y_PROTOCOL": "otel", "SIGIL_PROTOCOL": "http", "AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "true",
+		}},
+		{name: "legacy protocol and disabled opt-in", keys: map[string]string{
+			"SIGIL_PROTOCOL": "otel", "AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "false",
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server, dir := newTestServer(t)
+			path := configPathFor(dir)
+			require.NoError(t, dotenv.WriteDotenv(path, tc.keys, nil))
+			response := putConfig(t, server, Settings{Theme: themeLight, Guards: guardsOff, AutoUpdate: true})
+			defer response.Body.Close()
+			require.Equal(t, http.StatusOK, response.StatusCode)
+			saved := dotenv.LoadDotenv(path, nil)
+			for key, value := range tc.keys {
+				assert.Equal(t, value, saved[key], key)
+			}
+		})
+	}
 }
 
 // TestSettingsRoundTrip confirms parsing the keys Updates writes yields back

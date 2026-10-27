@@ -128,6 +128,43 @@ func TestCodexPreviewFallsBackToTheFilenameSessionID(t *testing.T) {
 	}
 }
 
+func TestCodexTurnsUsePreviewWorkspace(t *testing.T) {
+	for _, source := range []string{"cli", "exec"} {
+		t.Run(source, func(t *testing.T) {
+			root := t.TempDir()
+			workspace := filepath.Join(t.TempDir(), "session-checkout")
+			writeFile(t, filepath.Join(workspace, ".git", "HEAD"), "ref: refs/heads/session-branch\n")
+			writeFile(t, filepath.Join(workspace, ".git", "config"), "[remote \"origin\"]\n\turl = git@github.com:session/repo.git\n")
+			importerCWD := t.TempDir()
+			writeFile(t, filepath.Join(importerCWD, ".git", "HEAD"), "ref: refs/heads/importer-branch\n")
+			writeFile(t, filepath.Join(importerCWD, ".git", "config"), "[remote \"origin\"]\n\turl = git@github.com:importer/repo.git\n")
+			t.Chdir(importerCWD)
+			t.Setenv("AGENTO11Y_AUTO_CODING_AGENT_TAGS", "true")
+			t.Setenv("AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES", "repo,branch")
+			path := writeFile(t, filepath.Join(root, "rollout-2026-01-10T12-00-00-019a4a49-979a-7382-abb5-a9a4e8740114.jsonl"),
+				codexRecord("2026-01-10T12:00:00Z", "session_meta", map[string]any{"id": "metadata-id", "cwd": workspace, "source": source})+
+					codexRecord("2026-01-10T12:00:01Z", "turn_context", map[string]any{"turn_id": "turn-1", "model": "gpt-5.5"})+
+					codexRecord("2026-01-10T12:00:02Z", "response_item", map[string]any{"type": "message", "role": "assistant", "content": "done"}))
+			imp := codexImporterAt(root)
+			preview := codexPreview(t, imp, path)
+			if preview.SessionID != "metadata-id" || preview.Workspace != workspace {
+				t.Errorf("preview ID = %q, workspace = %q; want metadata-id at %q", preview.SessionID, preview.Workspace, workspace)
+			}
+			turns := collectTurns(t, imp, preview)
+			if len(turns) != 1 {
+				t.Fatalf("got %d turns, want 1", len(turns))
+			}
+			gen := turns[0].Gen
+			if gen.ConversationID != "metadata-id" || gen.Tags["cwd"] != workspace || gen.Tags["git.branch"] != "session-branch" {
+				t.Errorf("conversation = %q, tags = %v; want metadata-id, cwd %q, branch session-branch", gen.ConversationID, gen.Tags, workspace)
+			}
+			if _, ok := gen.Tags["repo"]; ok {
+				t.Errorf("history resolved automatic repository tag: %v", gen.Tags)
+			}
+		})
+	}
+}
+
 func TestCodexTurnsMapThroughTheLiveMapper(t *testing.T) {
 	root := t.TempDir()
 	path := writeCodexRollout(t, root, "019a4a49-979a-7382-abb5-a9a4e8740114")
@@ -323,12 +360,27 @@ func TestCodexTurnWithoutTokenUsageIsMarkedApproximate(t *testing.T) {
 // writeCodexSubagentPair writes a parent rollout that spawns one subagent plus
 // the subagent's own rollout, and returns both paths along with the parent
 // session ID.
-func writeCodexSubagentPair(t *testing.T, root string) (parentPath, childPath, parentID string) {
+func writeCodexSubagentPair(t *testing.T, root, parentSource string) (parentPath, childPath, parentID string) {
 	t.Helper()
 	parentID = "019a4a49-979a-7382-abb5-a9a4e8740114"
 	childID := "019a4a50-1111-7382-abb5-a9a4e8740115"
+	parentFilenameID := parentID
+	parentMeta := map[string]any{"id": parentID, "cwd": "/work/repo"}
+	childMeta := map[string]any{
+		"id": childID, "thread_source": "subagent",
+		"agent_role": "explorer", "agent_nickname": "scout", "cwd": "/work/repo",
+	}
+	if parentSource == "" {
+		childMeta["parent_session_id"] = parentID
+	} else {
+		parentMeta["source"] = parentSource
+		parentFilenameID = "019a4a51-2222-7382-abb5-a9a4e8740116"
+		childMeta["source"] = map[string]any{
+			"subagent": map[string]any{"thread_spawn": map[string]any{"parent_thread_id": parentID}},
+		}
+	}
 
-	parentBody := codexRecord("2026-01-10T12:00:00Z", "session_meta", map[string]any{"id": parentID, "cwd": "/work/repo"}) +
+	parentBody := codexRecord("2026-01-10T12:00:00Z", "session_meta", parentMeta) +
 		codexRecord("2026-01-10T12:00:01Z", "turn_context", map[string]any{"turn_id": "turn-1", "model": "gpt-5.5"}) +
 		codexRecord("2026-01-10T12:00:02Z", "event_msg", map[string]any{"type": "user_message", "message": "delegate this"}) +
 		codexRecord("2026-01-10T12:00:03Z", "response_item", map[string]any{
@@ -339,12 +391,9 @@ func writeCodexSubagentPair(t *testing.T, root string) (parentPath, childPath, p
 			"type": "function_call_output", "call_id": "call-spawn",
 			"output": fmt.Sprintf(`{"agent_id":%q,"nickname":"scout"}`, childID),
 		})
-	parentPath = writeFile(t, filepath.Join(root, "rollout-2026-01-10T12-00-00-"+parentID+".jsonl"), parentBody)
+	parentPath = writeFile(t, filepath.Join(root, "rollout-2026-01-10T12-00-00-"+parentFilenameID+".jsonl"), parentBody)
 
-	childBody := codexRecord("2026-01-10T12:00:05Z", "session_meta", map[string]any{
-		"id": childID, "thread_source": "subagent", "parent_session_id": parentID,
-		"agent_role": "explorer", "agent_nickname": "scout", "cwd": "/work/repo",
-	}) +
+	childBody := codexRecord("2026-01-10T12:00:05Z", "session_meta", childMeta) +
 		codexRecord("2026-01-10T12:00:06Z", "turn_context", map[string]any{"turn_id": "turn-c1", "model": "gpt-5.5"}) +
 		codexRecord("2026-01-10T12:00:06Z", "event_msg", map[string]any{"type": "user_message", "message": "explore files"}) +
 		codexRecord("2026-01-10T12:00:07Z", "response_item", map[string]any{
@@ -359,34 +408,38 @@ func writeCodexSubagentPair(t *testing.T, root string) (parentPath, childPath, p
 // parent generation ID must be the deterministic import ID of the parent's
 // spawning turn, so the two sessions join up in the viewer.
 func TestCodexSubagentTurnsLinkToTheParentTurn(t *testing.T) {
-	root := t.TempDir()
-	parentPath, childPath, parentID := writeCodexSubagentPair(t, root)
+	for _, source := range []string{"", "cli", "exec"} {
+		t.Run("parent source="+source, func(t *testing.T) {
+			root := t.TempDir()
+			parentPath, childPath, parentID := writeCodexSubagentPair(t, root, source)
 
-	imp := codexImporterAt(root)
-	parentTurns := collectTurns(t, imp, codexPreview(t, imp, parentPath))
-	if len(parentTurns) != 1 {
-		t.Fatalf("got %d parent turns, want 1", len(parentTurns))
-	}
-	childTurns := collectTurns(t, imp, codexPreview(t, imp, childPath))
-	if len(childTurns) != 1 {
-		t.Fatalf("got %d child turns, want 1", len(childTurns))
-	}
-	child := childTurns[0]
-	if child.Gen.AgentName != "codex/subagent" {
-		t.Fatalf("AgentName = %q, want codex/subagent", child.Gen.AgentName)
-	}
-	want := []string{parentTurns[0].Gen.ID}
-	if !slices.Equal(child.Gen.ParentGenerationIDs, want) {
-		t.Fatalf("ParentGenerationIDs = %v, want %v", child.Gen.ParentGenerationIDs, want)
-	}
-	if child.Gen.ConversationID != parentID {
-		t.Fatalf("ConversationID = %q, want the parent session %q", child.Gen.ConversationID, parentID)
-	}
-	if child.Gen.ConversationTitle != parentTurns[0].Gen.ConversationTitle {
-		t.Fatalf("ConversationTitle = %q, want parent title %q", child.Gen.ConversationTitle, parentTurns[0].Gen.ConversationTitle)
-	}
-	if child.Gen.Metadata["codex.spawn_call_id"] != "call-spawn" {
-		t.Fatalf("metadata = %+v, want the spawn call ID", child.Gen.Metadata)
+			imp := codexImporterAt(root)
+			childTurns := collectTurns(t, imp, codexPreview(t, imp, childPath))
+			parentTurns := collectTurns(t, imp, codexPreview(t, imp, parentPath))
+			if len(parentTurns) != 1 {
+				t.Fatalf("got %d parent turns, want 1", len(parentTurns))
+			}
+			if len(childTurns) != 1 {
+				t.Fatalf("got %d child turns, want 1", len(childTurns))
+			}
+			child := childTurns[0]
+			if child.Gen.AgentName != "codex/subagent" {
+				t.Fatalf("AgentName = %q, want codex/subagent", child.Gen.AgentName)
+			}
+			want := []string{parentTurns[0].Gen.ID}
+			if !slices.Equal(child.Gen.ParentGenerationIDs, want) {
+				t.Fatalf("ParentGenerationIDs = %v, want %v", child.Gen.ParentGenerationIDs, want)
+			}
+			if child.Gen.ConversationID != parentID {
+				t.Fatalf("ConversationID = %q, want the parent session %q", child.Gen.ConversationID, parentID)
+			}
+			if child.Gen.ConversationTitle != parentTurns[0].Gen.ConversationTitle {
+				t.Fatalf("ConversationTitle = %q, want parent title %q", child.Gen.ConversationTitle, parentTurns[0].Gen.ConversationTitle)
+			}
+			if child.Gen.Metadata["codex.spawn_call_id"] != "call-spawn" {
+				t.Fatalf("metadata = %+v, want the spawn call ID", child.Gen.Metadata)
+			}
+		})
 	}
 }
 
@@ -576,7 +629,7 @@ func TestCodexImportIgnoresTheAgentNameOverride(t *testing.T) {
 
 	root := t.TempDir()
 	plainPath := writeCodexRollout(t, root, "019a4a60-2222-7382-abb5-a9a4e8740116")
-	parentPath, childPath, _ := writeCodexSubagentPair(t, root)
+	parentPath, childPath, _ := writeCodexSubagentPair(t, root, "")
 	imp := codexImporterAt(root)
 
 	for _, tc := range []struct {
@@ -604,7 +657,7 @@ func TestCodexImportIgnoresTheAgentNameOverride(t *testing.T) {
 
 func TestCodexSubagentInheritsInputItemTitle(t *testing.T) {
 	root := t.TempDir()
-	parentPath, childPath, _ := writeCodexSubagentPair(t, root)
+	parentPath, childPath, _ := writeCodexSubagentPair(t, root, "")
 	body, err := os.ReadFile(parentPath)
 	if err != nil {
 		t.Fatal(err)

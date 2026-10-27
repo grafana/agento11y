@@ -337,15 +337,44 @@ func TestScanRecordsStopsWhenVisitIsDone(t *testing.T) {
 }
 
 func TestParseSessionMetaReadsWorkspace(t *testing.T) {
-	meta, ok := ParseSessionMeta([]byte(`{"id":"sess-1","cwd":"/work/repo"}`))
-	if !ok {
-		t.Fatal("ParseSessionMeta reported no metadata")
+	workspace := SessionMeta{SessionID: "sess-1", Cwd: "/work/repo"}
+	tests := []struct {
+		name string
+		raw  string
+		want SessionMeta
+		ok   bool
+	}{
+		{"absent source", `{"id":"sess-1","cwd":"/work/repo"}`, workspace, true},
+		{"cli source", `{"id":"sess-1","cwd":"/work/repo","source":"cli"}`, workspace, true},
+		{"exec source", `{"id":"sess-1","cwd":"/work/repo","source":"exec"}`, workspace, true},
+		{"null source", `{"id":"sess-1","cwd":"/work/repo","source":null}`, workspace, true},
+		{"unknown source", `{"id":"sess-1","cwd":"/work/repo","source":{"unknown":true}}`, workspace, true},
+		{"numeric source", `{"id":"sess-1","cwd":"/work/repo","source":42}`, workspace, true},
+		{"array source", `{"id":"sess-1","cwd":"/work/repo","source":[]}`, workspace, true},
+		{"boolean source", `{"id":"sess-1","cwd":"/work/repo","source":true}`, workspace, true},
+		{"invalid subagent", `{"id":"sess-1","cwd":"/work/repo","source":{"subagent":"other"}}`, workspace, true},
+		{"invalid spawn", `{"id":"sess-1","cwd":"/work/repo","source":{"subagent":{"thread_spawn":[]}}}`, workspace, true},
+		{"no partial linkage", `{"id":"sess-1","cwd":"/work/repo","source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent","agent_role":"reviewer","agent_nickname":"scout","depth":"bad"}}}}`, workspace, true},
+		{"id alias", `{"session_id":"sess-2"}`, SessionMeta{SessionID: "sess-2"}, true},
+		{"id precedence", `{"id":"sess-1","session_id":"sess-2"}`, SessionMeta{SessionID: "sess-1"}, true},
+		{"top-level precedence", `{"id":"child","parent_session_id":"parent","parent_thread_id":"alias","agent_role":"top-role","agent_nickname":"top-name","agent_depth":3,"depth":2,"thread_source":"explicit","source":{"subagent":{"thread_spawn":{"parent_thread_id":"nested","agent_role":"nested-role","agent_nickname":"nested-name","depth":1}}}}`, SessionMeta{SessionID: "child", ParentSessionID: "parent", AgentRole: "top-role", AgentNickname: "top-name", AgentDepth: 3, ThreadSource: "explicit"}, true},
+		{"parent and depth aliases", `{"parent_thread_id":"alias","depth":2,"source":{"subagent":{"thread_spawn":{"parent_thread_id":"nested","depth":1}}}}`, SessionMeta{ParentSessionID: "alias", AgentDepth: 2, ThreadSource: "subagent"}, true},
+		{"nested linkage", `{"source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent","agent_role":"reviewer","agent_nickname":"scout","depth":1}}}}`, SessionMeta{ParentSessionID: "parent", AgentRole: "reviewer", AgentNickname: "scout", AgentDepth: 1, ThreadSource: "subagent"}, true},
+		{"explicit thread source only", `{"thread_source":"cli"}`, SessionMeta{ThreadSource: "cli"}, true},
+		{"workspace alone is not success", `{"cwd":"/work/repo","source":"cli"}`, SessionMeta{Cwd: "/work/repo"}, false},
+		{"empty", `{}`, SessionMeta{}, false},
+		{"malformed", `{"id":"sess-1",`, SessionMeta{}, false},
+		{"numeric id", `{"id":1,"cwd":"/work/repo"}`, SessionMeta{}, false},
+		{"numeric cwd", `{"id":"sess-1","cwd":1}`, SessionMeta{}, false},
+		{"invalid outer depth", `{"id":"sess-1","agent_depth":"bad"}`, SessionMeta{}, false},
 	}
-	if meta.SessionID != "sess-1" || meta.Cwd != "/work/repo" {
-		t.Fatalf("meta = %+v, want sess-1 at /work/repo", meta)
-	}
-	if meta, ok := ParseSessionMeta([]byte(`{"session_id":"sess-2"}`)); !ok || meta.SessionID != "sess-2" {
-		t.Fatalf("meta = %+v ok=%v, want the session_id spelling to resolve", meta, ok)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			meta, ok := ParseSessionMeta([]byte(tt.raw))
+			if meta != tt.want || ok != tt.ok {
+				t.Fatalf("ParseSessionMeta = %+v, %v; want %+v, %v", meta, ok, tt.want, tt.ok)
+			}
+		})
 	}
 }
 

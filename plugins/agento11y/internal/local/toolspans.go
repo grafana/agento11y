@@ -23,32 +23,39 @@ import (
 const (
 	ToolSpansDir = "tool-spans"
 
-	spanAttrOperationName  = "gen_ai.operation.name"
-	spanAttrConversationID = "gen_ai.conversation.id"
-	spanAttrToolName       = "gen_ai.tool.name"
-	spanAttrToolCallID     = "gen_ai.tool.call.id"
-	spanAttrErrorType      = "error.type"
-	spanAttrErrorCategory  = "error.category"
-	spanAttrSkillName      = "agento11y.skill.name"
+	spanAttrOperationName         = "gen_ai.operation.name"
+	spanAttrConversationID        = "gen_ai.conversation.id"
+	spanAttrToolName              = "gen_ai.tool.name"
+	spanAttrToolCallID            = "gen_ai.tool.call.id"
+	spanAttrErrorType             = "error.type"
+	spanAttrErrorCategory         = "error.category"
+	spanAttrSkillName             = "gen_ai.skill.name"
+	spanAttrLegacySkillName       = "agento11y.skill.name"
+	spanAttrSkillResourceName     = "gen_ai.skill.resource.name"
+	spanAttrProcessExecutableName = "process.executable.name"
+	spanAttrProcessExitCode       = "process.exit.code"
 )
 
 // toolSpanRecord is the metadata-only projection retained from an execute_tool
 // span. It deliberately has no field capable of holding tool content or error
 // text.
 type toolSpanRecord struct {
-	TraceID        string    `json:"trace_id"`
-	SpanID         string    `json:"span_id"`
-	ParentSpanID   string    `json:"parent_span_id,omitempty"`
-	ConversationID string    `json:"conversation_id"`
-	ToolCallID     string    `json:"tool_call_id,omitempty"`
-	ToolName       string    `json:"tool_name"`
-	StartedAt      time.Time `json:"started_at"`
-	CompletedAt    time.Time `json:"completed_at"`
-	Failed         bool      `json:"failed,omitempty"`
-	ErrorType      string    `json:"error_type,omitempty"`
-	ErrorCategory  string    `json:"error_category,omitempty"`
-	SkillName      string    `json:"skill_name,omitempty"`
-	DeliveryOrder  uint64    `json:"delivery_order,omitempty"`
+	TraceID               string    `json:"trace_id"`
+	SpanID                string    `json:"span_id"`
+	ParentSpanID          string    `json:"parent_span_id,omitempty"`
+	ConversationID        string    `json:"conversation_id"`
+	ToolCallID            string    `json:"tool_call_id,omitempty"`
+	ToolName              string    `json:"tool_name"`
+	StartedAt             time.Time `json:"started_at"`
+	CompletedAt           time.Time `json:"completed_at"`
+	Failed                bool      `json:"failed,omitempty"`
+	ErrorType             string    `json:"error_type,omitempty"`
+	ErrorCategory         string    `json:"error_category,omitempty"`
+	SkillName             string    `json:"skill_name,omitempty"`
+	SkillResourceName     string    `json:"skill_resource_name,omitempty"`
+	ProcessExecutableName string    `json:"process_executable_name,omitempty"`
+	ProcessExitCode       *int64    `json:"process_exit_code,omitempty"`
+	DeliveryOrder         uint64    `json:"delivery_order,omitempty"`
 }
 
 type toolSpanFile struct {
@@ -256,7 +263,7 @@ func projectToolSpans(body []byte, contentType, contentEncoding string) ([]toolS
 	decoded := body
 	if isGzipEncoding(contentEncoding) {
 		var err error
-		decoded, err = gunzipLimited(body, maxOTLPBodyBytes)
+		decoded, err = gunzipLimited(body, maxOTLPTraceBodyBytes)
 		if err != nil {
 			return nil, err
 		}
@@ -267,6 +274,25 @@ func projectToolSpans(body []byte, contentType, contentEncoding string) ([]toolS
 	}
 	return toolSpanRecords(request), nil
 }
+
+// traceHasGenerationMarker checks keys as well as values: malformed markers
+// must not silently pass through the unsupported JSON generation transport.
+func traceHasGenerationMarker(request *coltracepb.ExportTraceServiceRequest) bool {
+	for _, resource := range request.GetResourceSpans() {
+		for _, scope := range resource.GetScopeSpans() {
+			for _, span := range scope.GetSpans() {
+				for _, attr := range span.GetAttributes() {
+					if attr.GetKey() == "agento11y.record" {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+var errExpandedOTLPTooLarge = errors.New("expanded OTLP payload too large")
 
 func gunzipLimited(body []byte, limit int64) ([]byte, error) {
 	zr, err := gzip.NewReader(bytes.NewReader(body))
@@ -279,7 +305,7 @@ func gunzipLimited(body []byte, limit int64) ([]byte, error) {
 		return nil, err
 	}
 	if int64(len(out)) > limit {
-		return nil, fmt.Errorf("decompressed trace payload exceeds %d bytes", limit)
+		return nil, fmt.Errorf("%w: decompressed payload exceeds %d bytes", errExpandedOTLPTooLarge, limit)
 	}
 	return out, nil
 }
@@ -313,18 +339,25 @@ func toolSpanRecordFromProto(span *tracepb.Span) (toolSpanRecord, bool) {
 	}
 	errorType := strings.TrimSpace(attrs[spanAttrErrorType])
 	errorCategory := strings.TrimSpace(attrs[spanAttrErrorCategory])
+	skillName := strings.TrimSpace(attrs[spanAttrSkillName])
+	if skillName == "" {
+		skillName = strings.TrimSpace(attrs[spanAttrLegacySkillName])
+	}
 	record := toolSpanRecord{
-		TraceID:        hex.EncodeToString(span.GetTraceId()),
-		SpanID:         hex.EncodeToString(span.GetSpanId()),
-		ConversationID: conversationID,
-		ToolCallID:     strings.TrimSpace(attrs[spanAttrToolCallID]),
-		ToolName:       toolName,
-		StartedAt:      unixNanoTime(span.GetStartTimeUnixNano()),
-		CompletedAt:    unixNanoTime(span.GetEndTimeUnixNano()),
-		Failed:         span.GetStatus().GetCode() == tracepb.Status_STATUS_CODE_ERROR || errorType != "" || errorCategory != "",
-		ErrorType:      errorType,
-		ErrorCategory:  errorCategory,
-		SkillName:      strings.TrimSpace(attrs[spanAttrSkillName]),
+		TraceID:               hex.EncodeToString(span.GetTraceId()),
+		SpanID:                hex.EncodeToString(span.GetSpanId()),
+		ConversationID:        conversationID,
+		ToolCallID:            strings.TrimSpace(attrs[spanAttrToolCallID]),
+		ToolName:              toolName,
+		StartedAt:             unixNanoTime(span.GetStartTimeUnixNano()),
+		CompletedAt:           unixNanoTime(span.GetEndTimeUnixNano()),
+		Failed:                span.GetStatus().GetCode() == tracepb.Status_STATUS_CODE_ERROR || errorType != "" || errorCategory != "",
+		ErrorType:             errorType,
+		ErrorCategory:         errorCategory,
+		SkillName:             skillName,
+		SkillResourceName:     strings.TrimSpace(attrs[spanAttrSkillResourceName]),
+		ProcessExecutableName: strings.TrimSpace(attrs[spanAttrProcessExecutableName]),
+		ProcessExitCode:       spanInt64Attribute(span.GetAttributes(), spanAttrProcessExitCode),
 	}
 	if len(span.GetParentSpanId()) == 8 {
 		record.ParentSpanID = hex.EncodeToString(span.GetParentSpanId())
@@ -340,6 +373,20 @@ func spanStringAttributes(attributes []*commonpb.KeyValue) map[string]string {
 		}
 		if _, ok := attribute.GetValue().GetValue().(*commonpb.AnyValue_StringValue); ok {
 			out[attribute.GetKey()] = attribute.GetValue().GetStringValue()
+		}
+	}
+	return out
+}
+
+func spanInt64Attribute(attributes []*commonpb.KeyValue, key string) *int64 {
+	var out *int64
+	for _, attribute := range attributes {
+		if attribute.GetKey() != key {
+			continue
+		}
+		if value, ok := attribute.GetValue().GetValue().(*commonpb.AnyValue_IntValue); ok {
+			code := value.IntValue
+			out = &code
 		}
 	}
 	return out

@@ -682,6 +682,10 @@ func TestHistoryResolveDestination(t *testing.T) {
 		localEnvKey     string
 		endpoint        string
 		credentials     bool
+		protocol        string
+		optIn           string
+		collector       string
+		tenantOnly      bool
 		interactive     bool
 		loginResult     login.Result
 		loginErr        error
@@ -717,6 +721,42 @@ func TestHistoryResolveDestination(t *testing.T) {
 			name:        "saved credentials select Cloud",
 			credentials: true,
 			interactive: true,
+		},
+		{
+			name:        "OTel Cloud identity needs no HTTP token",
+			endpoint:    "https://127.0.0.1:8765",
+			protocol:    "otel",
+			optIn:       "true",
+			collector:   "http://127.0.0.1:4318",
+			tenantOnly:  true,
+			interactive: true,
+		},
+		{
+			name:        "OTel missing ledger identity does not ask for an HTTP token",
+			protocol:    "otel",
+			optIn:       "true",
+			collector:   "http://127.0.0.1:4318",
+			interactive: true,
+		},
+		{
+			name:        "OTel without opt-in does not prompt or fall back",
+			protocol:    "otel",
+			collector:   "http://127.0.0.1:4318",
+			interactive: true,
+			wantErr:     "AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true",
+		},
+		{
+			name:        "OTel without collector does not prompt or fall back",
+			protocol:    "otel",
+			optIn:       "true",
+			interactive: true,
+			wantErr:     "OTLP base endpoint",
+		},
+		{
+			name:        "invalid protocol does not prompt or fall back",
+			protocol:    "unsupported",
+			interactive: true,
+			wantErr:     "expected http or otel",
 		},
 		{
 			name:        "loopback endpoint needs no setup",
@@ -806,6 +846,13 @@ func TestHistoryResolveDestination(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			isolateDotenvHome(t)
+			t.Setenv("AGENTO11Y_PROTOCOL", tt.protocol)
+			t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", tt.optIn)
+			t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", tt.collector)
+			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+			if tt.tenantOnly {
+				t.Setenv("AGENTO11Y_AUTH_TENANT_ID", "test-tenant")
+			}
 			localKey := tt.localEnvKey
 			if localKey == "" {
 				localKey = envconfig.PreferredKey("LOCAL")
@@ -1123,7 +1170,7 @@ func TestHistoryImportNonInteractiveMissingCredentialsDoesNotPrompt(t *testing.T
 	if code == nil || *code != 1 {
 		t.Fatalf("exit = %v, want 1 (stderr=%q)", code, stderr)
 	}
-	want := "history: no credentials configured for import (run `agento11y login` or use --local)"
+	want := "history: no credentials configured for import (Cloud requires tenant identity; HTTP also requires an API token; run `agento11y login` or use --local)"
 	if !strings.Contains(stderr, want) {
 		t.Fatalf("stderr = %q, want it to contain %q", stderr, want)
 	}

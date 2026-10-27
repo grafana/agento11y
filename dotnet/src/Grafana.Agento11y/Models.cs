@@ -31,6 +31,14 @@ public enum ArtifactKind
     ProviderEvent
 }
 
+public enum ToolExecutionKind
+{
+    Unset = 0,
+    LoadSkill = 1,
+    ReadSkillResource = 2,
+    Command = 3,
+}
+
 public enum ConversationRatingValue
 {
     Good,
@@ -349,6 +357,13 @@ public sealed class ToolExecutionStart
     public string ToolCallId { get; set; } = string.Empty;
     public string ToolType { get; set; } = string.Empty;
     public string ToolDescription { get; set; } = string.Empty;
+    public ToolExecutionKind ExecutionKind { get; set; } = ToolExecutionKind.Unset;
+    public string SkillName { get; set; } = string.Empty;
+    public string SkillDescription { get; set; } = string.Empty;
+    public string SkillSourceURI { get; set; } = string.Empty;
+    public string SkillResourceName { get; set; } = string.Empty;
+    public string ProcessExecutableName { get; set; } = string.Empty;
+    public string ProcessExecutablePath { get; set; } = string.Empty;
     public string ConversationId { get; set; } = string.Empty;
     public string ConversationTitle { get; set; } = string.Empty;
     public string AgentName { get; set; } = string.Empty;
@@ -368,6 +383,7 @@ public sealed class ToolExecutionEnd
 {
     public object? Arguments { get; set; }
     public object? Result { get; set; }
+    public long? ProcessExitCode { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }
 }
 

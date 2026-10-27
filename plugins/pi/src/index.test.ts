@@ -49,10 +49,18 @@ import type {
   ToolTiming,
 } from "./mappers.js";
 
+const fakeStartToolExecution = vi.fn(() => ({
+  setResult: vi.fn(),
+  setCallError: vi.fn(),
+  end: vi.fn(),
+  getError: vi.fn(),
+}));
+
 interface RecorderLike {
   setResult: (value: unknown) => void;
   setCallError: (error: Error) => void;
   setFirstTokenAt?: (firstTokenAt: Date) => void;
+  startToolExecution: Agento11yClient["startToolExecution"];
 }
 
 interface ToolRecorderLike {
@@ -250,7 +258,7 @@ describe("extension lifecycle", () => {
     const sigil: Agento11yLike = {
       startStreamingGeneration: vi.fn(async (seed, run) => {
         capturedSeed = seed as { startedAt: Date };
-        await run(recorder);
+        await run({ ...recorder, startToolExecution: fakeStartToolExecution });
       }),
       startToolExecution: vi.fn(() => ({
         setResult: vi.fn(),
@@ -324,7 +332,7 @@ describe("extension lifecycle", () => {
 
     const sigil: Agento11yLike = {
       startStreamingGeneration: vi.fn(async (_seed, run) => {
-        await run(recorder);
+        await run({ ...recorder, startToolExecution: fakeStartToolExecution });
       }),
       startToolExecution: vi.fn(() => ({
         setResult: vi.fn(),
@@ -375,7 +383,7 @@ describe("extension lifecycle", () => {
     const sigil: Agento11yLike = {
       startStreamingGeneration: vi.fn(async (seed, run) => {
         capturedSeed = seed as { startedAt: Date };
-        await run(recorder);
+        await run({ ...recorder, startToolExecution: fakeStartToolExecution });
       }),
       startToolExecution: vi.fn(() => ({
         setResult: vi.fn(),
@@ -426,7 +434,7 @@ describe("extension lifecycle", () => {
     const sigil = {
       startGeneration: vi.fn(),
       startStreamingGeneration: vi.fn(async (_seed, run) => {
-        await run(recorder);
+        await run({ ...recorder, startToolExecution: fakeStartToolExecution });
       }),
       startToolExecution: vi.fn(() => ({
         setResult: vi.fn(),
@@ -473,7 +481,7 @@ describe("extension lifecycle", () => {
 
     const sigil: Agento11yLike = {
       startStreamingGeneration: vi.fn(async (_seed, run) => {
-        await run(recorder);
+        await run({ ...recorder, startToolExecution: fakeStartToolExecution });
       }),
       startToolExecution: vi.fn(() => ({
         setResult: vi.fn(),
@@ -512,7 +520,7 @@ describe("extension lifecycle", () => {
 
     const sigil: Agento11yLike = {
       startStreamingGeneration: vi.fn(async (_seed, run) => {
-        await run(recorder);
+        await run({ ...recorder, startToolExecution: fakeStartToolExecution });
       }),
       startToolExecution: vi.fn(() => ({
         setResult: vi.fn(),
@@ -555,7 +563,7 @@ describe("extension lifecycle", () => {
 
     const sigil: Agento11yLike = {
       startStreamingGeneration: vi.fn(async (_seed, run) => {
-        await run(recorder);
+        await run({ ...recorder, startToolExecution: fakeStartToolExecution });
       }),
       startToolExecution: vi.fn(() => ({
         setResult: vi.fn(),
@@ -616,7 +624,7 @@ describe("extension lifecycle", () => {
 
     const sigil: Agento11yLike = {
       startStreamingGeneration: vi.fn(async (_seed, run) => {
-        await run(recorder);
+        await run({ ...recorder, startToolExecution: fakeStartToolExecution });
       }),
       startToolExecution: vi.fn(() => ({
         setResult: vi.fn(),
@@ -675,7 +683,7 @@ describe("extension lifecycle", () => {
 
     const sigil: Agento11yLike = {
       startStreamingGeneration: vi.fn(async (_seed, run) => {
-        await run(recorder);
+        await run({ ...recorder, startToolExecution: fakeStartToolExecution });
       }),
       startToolExecution: vi.fn(() => ({
         setResult: vi.fn(),
@@ -735,7 +743,7 @@ describe("extension lifecycle", () => {
 
     const sigil: Agento11yLike = {
       startStreamingGeneration: vi.fn(async (_seed, run) => {
-        await run(recorder);
+        await run({ ...recorder, startToolExecution: fakeStartToolExecution });
       }),
       startToolExecution: vi.fn(() => ({
         setResult: vi.fn(),
@@ -790,7 +798,7 @@ describe("extension lifecycle", () => {
     const sigil: Agento11yLike = {
       startStreamingGeneration: vi.fn(async (seed, run) => {
         capturedSeed = seed;
-        await run(recorder);
+        await run({ ...recorder, startToolExecution: fakeStartToolExecution });
       }),
       startToolExecution: vi.fn(() => ({
         setResult: vi.fn(),
@@ -838,7 +846,10 @@ describe("extension lifecycle", () => {
 
     const sigil: Agento11yLike = {
       startStreamingGeneration: vi.fn(async (_seed, run) => {
-        await run(recorder);
+        await run({
+          ...recorder,
+          startToolExecution: sigil.startToolExecution,
+        });
       }),
       startToolExecution: vi.fn(() => {
         const tr: ToolRecorderLike = {
@@ -986,7 +997,7 @@ describe("extension lifecycle", () => {
     };
     const sigil: Agento11yLike = {
       startStreamingGeneration: vi.fn(async (_seed, run) => {
-        await run(recorder);
+        await run({ ...recorder, startToolExecution: fakeStartToolExecution });
       }),
       startToolExecution: vi.fn(),
       shutdown: vi.fn(async () => {}),
@@ -1026,7 +1037,7 @@ describe("extension lifecycle", () => {
     const sigil: Agento11yLike = {
       startStreamingGeneration: vi.fn(async (seed, run) => {
         seeds.push(seed as { conversationId?: string });
-        await run(recorder);
+        await run({ ...recorder, startToolExecution: fakeStartToolExecution });
       }),
       startToolExecution: vi.fn(() => ({
         setResult: vi.fn(),
@@ -1100,7 +1111,7 @@ describe("extension lifecycle", () => {
     const sigil: Agento11yLike = {
       startStreamingGeneration: vi.fn(async (seed, run) => {
         seeds.push(seed as { conversationId?: string });
-        await run(recorder);
+        await run({ ...recorder, startToolExecution: fakeStartToolExecution });
       }),
       startToolExecution: vi.fn(() => ({
         setResult: vi.fn(),
@@ -1166,7 +1177,7 @@ describe("extension lifecycle", () => {
     const sigil: Agento11yLike = {
       startStreamingGeneration: vi.fn(async (seed, run) => {
         capturedSeed = seed as { conversationId?: string };
-        await run(recorder);
+        await run({ ...recorder, startToolExecution: fakeStartToolExecution });
       }),
       startToolExecution: vi.fn(() => ({
         setResult: vi.fn(),
@@ -1220,7 +1231,10 @@ describe("extension lifecycle", () => {
       const recorder = makeRecorder();
       return {
         startStreamingGeneration: vi.fn(async (_seed, run) => {
-          await run(recorder);
+          await run({
+            ...recorder,
+            startToolExecution: fakeStartToolExecution,
+          });
         }),
         startToolExecution: vi.fn(() => ({
           setResult: vi.fn(),
@@ -1555,7 +1569,10 @@ describe("extension lifecycle", () => {
       const recorder = makeRecorder();
       return {
         startStreamingGeneration: vi.fn(async (_seed, run) => {
-          await run(recorder);
+          await run({
+            ...recorder,
+            startToolExecution: fakeStartToolExecution,
+          });
         }),
         startToolExecution: vi.fn(() => ({
           setResult: vi.fn(),
@@ -1932,7 +1949,10 @@ describe("extension lifecycle", () => {
       const sigil: Agento11yLike = {
         startStreamingGeneration: vi.fn(async (seed, run) => {
           capturedSeed = seed as { tags?: Record<string, string> };
-          await run(recorder);
+          await run({
+            ...recorder,
+            startToolExecution: fakeStartToolExecution,
+          });
         }),
         startToolExecution: vi.fn(() => ({
           setResult: vi.fn(),
@@ -1981,7 +2001,7 @@ describe("extension lifecycle", () => {
     const sigil: Agento11yLike = {
       startStreamingGeneration: vi.fn(async (seed, run) => {
         capturedSeed = seed as { tags?: Record<string, string> };
-        await run(recorder);
+        await run({ ...recorder, startToolExecution: fakeStartToolExecution });
       }),
       startToolExecution: vi.fn(() => ({
         setResult: vi.fn(),
@@ -2025,7 +2045,10 @@ describe("extension lifecycle", () => {
       const sigil: Agento11yLike = {
         startStreamingGeneration: vi.fn(async (seed, run) => {
           seeds.push(seed as { systemPrompt?: string });
-          await run(recorder);
+          await run({
+            ...recorder,
+            startToolExecution: fakeStartToolExecution,
+          });
         }),
         startToolExecution: vi.fn(() => ({
           setResult: vi.fn(),
@@ -2181,7 +2204,10 @@ describe("extension lifecycle", () => {
       const sigil: Agento11yLike = {
         startStreamingGeneration: vi.fn(async (seed, run) => {
           seeds.push(seed as { tools?: unknown[] });
-          await run(recorder);
+          await run({
+            ...recorder,
+            startToolExecution: fakeStartToolExecution,
+          });
         }),
         startToolExecution: vi.fn(() => ({
           setResult: vi.fn(),
@@ -2450,7 +2476,10 @@ describe("extension lifecycle", () => {
       const sigil: Agento11yLike = {
         startStreamingGeneration: vi.fn(async (seed, run) => {
           seeds.push(seed as Record<string, unknown>);
-          await run(recorder);
+          await run({
+            ...recorder,
+            startToolExecution: fakeStartToolExecution,
+          });
         }),
         startToolExecution: vi.fn(() => ({
           setResult: vi.fn(),
@@ -2724,7 +2753,10 @@ describe("extension lifecycle", () => {
       const sigil: Agento11yLike = {
         startStreamingGeneration: vi.fn(async (seed, run) => {
           seeds.push(seed as { id?: string; parentGenerationIds?: string[] });
-          await run(recorder);
+          await run({
+            ...recorder,
+            startToolExecution: fakeStartToolExecution,
+          });
         }),
         startToolExecution: vi.fn(() => ({
           setResult: vi.fn(),
@@ -2984,6 +3016,7 @@ describe("extension lifecycle", () => {
         startStreamingGeneration: vi.fn(async (seed, run) => {
           turnSeeds.push(seed as Record<string, unknown>);
           await run({
+            startToolExecution: fakeStartToolExecution,
             setResult: (value: unknown) => {
               turnResults.push(value as Record<string, unknown>);
             },
@@ -2995,6 +3028,7 @@ describe("extension lifecycle", () => {
           if (opts?.startGenerationError) throw opts.startGenerationError;
           seeds.push(seed as CapturedSeed);
           await run({
+            startToolExecution: fakeStartToolExecution,
             setResult: (value: unknown) => {
               results.push(value as CapturedResult);
             },
@@ -3955,7 +3989,11 @@ describe("extension lifecycle", () => {
             throw new Error("transient");
           }
           seeds.push(seed as CapturedSeed);
-          await run({ setResult: vi.fn(), setCallError: vi.fn() });
+          await run({
+            startToolExecution: fakeStartToolExecution,
+            setResult: vi.fn(),
+            setCallError: vi.fn(),
+          });
         }),
         startToolExecution: vi.fn(),
         shutdown: vi.fn(async () => {}),
@@ -4102,11 +4140,17 @@ describe("extension lifecycle", () => {
       const sigil: Agento11yLike = {
         startStreamingGeneration: vi.fn(async (seed, run) => {
           seeds.push(seed as ForkSeed);
-          await run(recorder);
+          await run({
+            ...recorder,
+            startToolExecution: fakeStartToolExecution,
+          });
         }),
         startGeneration: vi.fn(async (seed, run) => {
           seeds.push(seed as ForkSeed);
-          await run(recorder);
+          await run({
+            ...recorder,
+            startToolExecution: fakeStartToolExecution,
+          });
         }),
         startToolExecution: vi.fn(() => ({
           setResult: vi.fn(),
@@ -4639,13 +4683,527 @@ function mockAgento11yClient() {
   return { client, recorders };
 }
 
+describe("skill catalog and tool lifecycle", () => {
+  let cwd: string;
+  let pi: FakePi;
+  let ctx: any;
+  let client: Agento11yLike;
+  let startTool: ReturnType<typeof vi.fn>;
+  let evaluateHook: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    loadConfigMock.mockReset();
+    createAgento11yClientMock.mockReset();
+    createTelemetryProvidersMock.mockReset();
+    resolveGitBranchMock.mockReturnValue(undefined);
+    cwd = mkdtempSync(join(tmpdir(), "pi-skill-lifecycle-"));
+    ctx = { ...defaultCtx, cwd };
+    startTool = vi.fn(() => ({
+      setResult: vi.fn(),
+      setCallError: vi.fn(),
+      end: vi.fn(),
+      getError: vi.fn(),
+    }));
+    evaluateHook = vi.fn().mockResolvedValue({ action: "allow" });
+    client = {
+      startStreamingGeneration: vi.fn(async (_seed, run) => {
+        await run({
+          setResult: vi.fn(),
+          setCallError: vi.fn(),
+          startToolExecution: startTool,
+        });
+      }),
+      startToolExecution: vi.fn(() => {
+        throw new Error("must use generation recorder");
+      }),
+      shutdown: vi.fn(async () => {}),
+      ...{ evaluateHook },
+    };
+    loadConfigMock.mockResolvedValue({
+      endpoint: "http://127.0.0.1:1",
+      auth: { mode: "none" },
+      agentName: "pi",
+      contentCapture: "metadata_only",
+      guards: { enabled: false, failOpen: true, timeoutMs: 1500 },
+    });
+    createAgento11yClientMock.mockReturnValue(client);
+    pi = new FakePi();
+    registerExtension(pi as any);
+    await pi.emit("session_start", {}, ctx);
+  });
+
+  afterEach(async () => {
+    await pi.emit("session_shutdown", {}, ctx);
+    rmSync(cwd, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  async function catalog(
+    skills: unknown = [{ name: "org:review", filePath: "guide.md" }],
+  ) {
+    await pi.emit(
+      "before_agent_start",
+      { systemPromptOptions: { skills } },
+      ctx,
+    );
+    await pi.emit("agent_start", {}, ctx);
+  }
+  async function start(id = "call", path = "guide.md") {
+    await pi.emit(
+      "tool_execution_start",
+      { toolCallId: id, toolName: "read", args: { path } },
+      ctx,
+    );
+  }
+  async function call(id = "call", path = "guide.md") {
+    await pi.emit(
+      "tool_call",
+      { toolCallId: id, toolName: "read", input: { path } },
+      ctx,
+    );
+  }
+  async function end(id = "call", isError = false) {
+    await pi.emit(
+      "tool_execution_end",
+      { toolCallId: id, toolName: "read", isError },
+      ctx,
+    );
+  }
+  async function flush() {
+    await pi.emit(
+      "turn_end",
+      { message: assistantMessage(), toolResults: [] },
+      ctx,
+    );
+    expect(client.startToolExecution).not.toHaveBeenCalled();
+  }
+  async function read() {
+    await pi.emit("turn_start", {}, ctx);
+    await start();
+    await call();
+    await end();
+    await flush();
+    return startTool.mock.calls.at(-1)![0];
+  }
+
+  it("snapshots the final catalog in metadata_only and retains it until settlement", async () => {
+    const options = { skills: [{ name: "old", filePath: "old.md" }] };
+    await pi.emit("before_agent_start", { systemPromptOptions: options }, ctx);
+    options.skills = [{ name: " org:review ", filePath: "guide.md" }];
+    await pi.emit("agent_start", {}, ctx);
+    options.skills[0]!.name = "changed-after-snapshot";
+    expect(await read()).toMatchObject({
+      executionKind: "load_skill",
+      skillName: "org:review",
+      toolName: "read",
+      toolCallId: "call",
+    });
+    await pi.emit("turn_start", {}, ctx);
+    await start("removed", "old.md");
+    await call("removed", "old.md");
+    await end("removed");
+    await flush();
+    expect(startTool.mock.calls.at(-1)![0].skillName).toBeUndefined();
+    await pi.emit("agent_end", {}, ctx);
+    // Additional low-level loops do not run before_agent_start.
+    await pi.emit("agent_start", {}, ctx);
+    expect(await read()).toMatchObject({ skillName: "org:review" });
+    await pi.emit("agent_before_settle", {}, ctx);
+    await pi.emit("agent_start", {}, ctx);
+    expect((await read()).skillName).toBe("org:review");
+    await pi.emit("agent_end", {}, ctx);
+    await pi.emit("agent_settled", {}, ctx);
+    await pi.emit("agent_start", {}, ctx);
+    expect((await read()).skillName).toBeUndefined();
+    await catalog();
+    expect((await read()).skillName).toBe("org:review");
+  });
+
+  it.each([
+    ["empty", (): unknown => ({ skills: [] })],
+    ["missing skills", (): unknown => ({})],
+    ["unavailable options", (): unknown => undefined],
+    ["invalid skills", (): unknown => ({ skills: null })],
+    [
+      "throwing API",
+      (): unknown => ({
+        get skills(): unknown {
+          throw new Error("unavailable");
+        },
+      }),
+    ],
+  ] as const)("replaces the previous catalog when final options are %s", async (_label, options) => {
+    await catalog();
+    expect((await read()).skillName).toBe("org:review");
+    await pi.emit(
+      "before_agent_start",
+      { systemPromptOptions: options() },
+      ctx,
+    );
+    await pi.emit("agent_start", {}, ctx);
+    expect((await read()).skillName).toBeUndefined();
+  });
+
+  it("observes a later handler removing all skills and does not retain an older catalog", async () => {
+    await catalog();
+    const options = { skills: [{ name: "org:review", filePath: "guide.md" }] };
+    await pi.emit("before_agent_start", { systemPromptOptions: options }, ctx);
+    options.skills.length = 0;
+    await pi.emit("agent_start", {}, ctx);
+    expect((await read()).skillName).toBeUndefined();
+  });
+
+  it("fails safe when the prompt options API throws before agent_start", async () => {
+    await catalog();
+    await pi.emit(
+      "before_agent_start",
+      {
+        get systemPromptOptions() {
+          throw new Error("unavailable");
+        },
+      },
+      ctx,
+    );
+    await pi.emit("agent_start", {}, ctx);
+    expect((await read()).skillName).toBeUndefined();
+  });
+
+  it("does not infer a catalog from command discovery, prompts, or SKILL.md names", async () => {
+    const getCommands = vi.fn(() => [
+      { name: "skill:review", filePath: join(cwd, "guide.md") },
+    ]);
+    Object.assign(pi, { getCommands });
+    await pi.emit(
+      "before_agent_start",
+      { systemPrompt: "skill review at guide.md" },
+      ctx,
+    );
+    await pi.emit("agent_start", {}, ctx);
+    expect((await read()).skillName).toBeUndefined();
+    expect(getCommands).not.toHaveBeenCalled();
+  });
+
+  it("uses ctx.cwd for exact standalone Markdown paths, not process.cwd", async () => {
+    await catalog([{ name: "standalone", filePath: join(cwd, "guide.md") }]);
+    expect((await read()).skillName).toBe("standalone");
+    await pi.emit("turn_start", {}, ctx);
+    await start("resource", "guide.md/resource.md");
+    await call("resource", "guide.md/resource.md");
+    await end("resource");
+    await start("different-directory", join(process.cwd(), "guide.md"));
+    await call("different-directory", join(process.cwd(), "guide.md"));
+    await end("different-directory");
+    await flush();
+    expect(
+      startTool.mock.calls.slice(-2).map(([seed]) => seed.skillName),
+    ).toEqual([undefined, undefined]);
+  });
+
+  it.each([
+    ["guide.md", "ordinary.md", undefined],
+    ["ordinary.md", "guide.md", "org:review"],
+  ])("updates candidates at tool_call with guards disabled: %s -> %s", async (initial, latest, expected) => {
+    await catalog();
+    await pi.emit("turn_start", {}, ctx);
+    await start("call", initial);
+    await pi.emit(
+      "tool_call",
+      { toolCallId: "call", toolName: "read", input: { path: latest } },
+      ctx,
+    );
+    await end();
+    await flush();
+    expect(startTool.mock.calls[0]![0].skillName).toBe(expected);
+    expect(evaluateHook).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ path: "ordinary.md" }, undefined],
+    [{ path: "guide.md" }, "org:review"],
+    [undefined, undefined],
+    [null, undefined],
+  ])("prefers the observed tool_result.input and clears stale matches: %s", async (input, expected) => {
+    await catalog();
+    await pi.emit("turn_start", {}, ctx);
+    await start();
+    await call();
+    await pi.emit(
+      "tool_result",
+      { toolCallId: "call", toolName: "read", input },
+      ctx,
+    );
+    await end();
+    await flush();
+    expect(startTool.mock.calls[0]![0].skillName).toBe(expected);
+  });
+
+  it.each([
+    "blocked",
+    "legacy result",
+  ] as const)("retains the latest candidate when weak input is collected: %s", async (completion) => {
+    const config = await loadConfigMock();
+    loadConfigMock.mockResolvedValue({
+      ...config,
+      guards: { ...config.guards, enabled: true },
+    });
+    await pi.emit("session_start", {}, ctx);
+    await catalog();
+    if (completion === "blocked") {
+      evaluateHook.mockResolvedValue({ action: "deny", reason: "blocked" });
+    }
+    await pi.emit("turn_start", {}, ctx);
+    await start();
+    const verdict = await pi.handlers.get("tool_call")!(
+      { toolCallId: "call", toolName: "read", input: { path: "guide.md" } },
+      ctx,
+    );
+    if (completion === "blocked") {
+      expect(verdict).toMatchObject({ block: true });
+      // Pi skips tool_result for blocked calls.
+    } else {
+      await pi.emit(
+        "tool_result",
+        { toolCallId: "call", toolName: "read" },
+        ctx,
+      );
+    }
+    // Simulate collection without depending on garbage-collector timing.
+    const deref = vi
+      .spyOn(WeakRef.prototype, "deref")
+      .mockReturnValue(undefined);
+    await end("call", completion === "blocked");
+    expect(deref).toHaveBeenCalledOnce();
+    await flush();
+    expect(startTool).toHaveBeenCalledOnce();
+    expect(startTool.mock.calls[0]![0]).toMatchObject({
+      executionKind: "load_skill",
+      skillName: "org:review",
+    });
+  });
+
+  it.each([
+    ["ordinary.md", undefined],
+    [undefined, undefined],
+    ["other.md", "other"],
+  ])("rechecks readable input after a later handler rewrites and blocks: %s", async (path, expected) => {
+    await catalog([
+      { name: "org:review", filePath: "guide.md" },
+      { name: "other", filePath: "other.md" },
+    ]);
+    await pi.emit("turn_start", {}, ctx);
+    await start();
+    const input: { path?: string } = { path: "guide.md" };
+    await pi.emit(
+      "tool_call",
+      { toolCallId: "call", toolName: "read", input },
+      ctx,
+    );
+    // A later tool_call handler mutates the shared input and blocks execution.
+    input.path = path;
+    await end("call", true);
+    await flush();
+    expect(startTool).toHaveBeenCalledOnce();
+    expect(startTool.mock.calls[0]![0].skillName).toBe(expected);
+  });
+
+  it("retains the latest candidate when older runtimes omit tool_result.input", async () => {
+    await catalog();
+    await pi.emit("turn_start", {}, ctx);
+    await start();
+    await call();
+    await pi.emit("tool_result", { toolCallId: "call", toolName: "read" }, ctx);
+    await end();
+    await flush();
+    expect(startTool.mock.calls[0]![0].skillName).toBe("org:review");
+  });
+
+  it.each([
+    ["ordinary.md", "guide.md", "org:review"],
+    ["guide.md", "ordinary.md", undefined],
+  ])("recomputes after its own guard transform: %s -> %s", async (initial, transformed, expected) => {
+    const config = await loadConfigMock();
+    loadConfigMock.mockResolvedValue({
+      ...config,
+      guards: { ...config.guards, enabled: true },
+    });
+    await pi.emit("session_start", {}, ctx);
+    await catalog();
+    evaluateHook.mockResolvedValue({
+      action: "allow",
+      transformedInput: {
+        output: [
+          {
+            role: "assistant",
+            parts: [
+              {
+                type: "tool_call",
+                toolCall: {
+                  id: "call",
+                  name: "read",
+                  inputJSON: JSON.stringify({ path: transformed }),
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    await pi.emit("turn_start", {}, ctx);
+    await start("call", initial);
+    const input = { path: initial };
+    await pi.emit(
+      "tool_call",
+      { toolCallId: "call", toolName: "read", input },
+      ctx,
+    );
+    expect(input.path).toBe(transformed);
+    await end();
+    await flush();
+    expect(startTool.mock.calls[0]![0].skillName).toBe(expected);
+  });
+
+  it("uses tool_result.input after a later tool_call handler mutates a guard transform", async () => {
+    await catalog();
+    await pi.emit("turn_start", {}, ctx);
+    await start();
+    const input = { path: "guide.md" };
+    await pi.emit(
+      "tool_call",
+      { toolCallId: "call", toolName: "read", input },
+      ctx,
+    );
+    input.path = "ordinary.md";
+    await pi.emit(
+      "tool_result",
+      { toolCallId: "call", toolName: "read", input },
+      ctx,
+    );
+    await end();
+    await flush();
+    expect(startTool.mock.calls[0]![0].skillName).toBeUndefined();
+  });
+
+  it("preserves blocked and failed timings without adding spans for missing boundaries", async () => {
+    const config = await loadConfigMock();
+    loadConfigMock.mockResolvedValue({
+      ...config,
+      guards: { ...config.guards, enabled: true },
+    });
+    await pi.emit("session_start", {}, ctx);
+    await catalog();
+    evaluateHook.mockResolvedValue({ action: "deny", reason: "blocked" });
+    await pi.emit("turn_start", {}, ctx);
+    await start("blocked");
+    const verdict = await pi.handlers.get("tool_call")!(
+      { toolCallId: "blocked", toolName: "read", input: { path: "guide.md" } },
+      ctx,
+    );
+    expect(verdict).toMatchObject({ block: true });
+    await end("blocked", true);
+    await end("no-start", true);
+    await start("no-end");
+    await pi.emit(
+      "tool_result",
+      { toolCallId: "no-start", toolName: "read", input: { path: "guide.md" } },
+      ctx,
+    );
+    await flush();
+    expect(startTool).toHaveBeenCalledTimes(1);
+    expect(startTool.mock.calls[0]![0]).toMatchObject({
+      toolCallId: "blocked",
+      skillName: "org:review",
+    });
+    expect(
+      startTool.mock.results[0]!.value.setCallError,
+    ).toHaveBeenCalledOnce();
+    await pi.emit("turn_start", {}, ctx);
+    await end("no-end");
+    await flush();
+    expect(startTool).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps parallel tool identities and timestamps by ID in reverse completion order", async () => {
+    await catalog([
+      { name: "first", filePath: "one.md" },
+      { name: "second", filePath: "two.md" },
+    ]);
+    let now = 1000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    await pi.emit("turn_start", {}, ctx);
+    await start("one", "one.md");
+    await call("one", "one.md");
+    now = 2000;
+    await start("two", "two.md");
+    await call("two", "two.md");
+    now = 3000;
+    await end("two", true);
+    now = 4000;
+    await end("one");
+    await flush();
+    expect(
+      startTool.mock.calls.map(([seed]) => [
+        seed.toolCallId,
+        seed.skillName,
+        seed.startedAt,
+      ]),
+    ).toEqual([
+      ["two", "second", new Date(2000)],
+      ["one", "first", new Date(1000)],
+    ]);
+    expect(
+      startTool.mock.results.map(
+        (result) => result.value.setResult.mock.calls[0][0].completedAt,
+      ),
+    ).toEqual([new Date(3000), new Date(4000)]);
+  });
+
+  it("keeps catalogs across cancelled switches but clears on actual replacement and shutdown", async () => {
+    await catalog();
+    await pi.emit("session_before_switch", { reason: "new" }, ctx);
+    // A later extension cancels; pi emits no session_start or shutdown.
+    expect((await read()).skillName).toBe("org:review");
+    const priorExecutions = startTool.mock.calls.length;
+    await pi.emit("turn_start", {}, ctx);
+    await start("pending");
+    await pi.emit(
+      "session_start",
+      { reason: "new" },
+      { ...ctx, sessionManager: { getSessionId: () => "replacement" } },
+    );
+    await end("pending");
+    await flush();
+    expect(startTool).toHaveBeenCalledTimes(priorExecutions);
+    expect((await read()).skillName).toBeUndefined();
+    await catalog();
+    await pi.emit(
+      "before_agent_start",
+      {
+        systemPromptOptions: {
+          skills: [{ name: "pending", filePath: "guide.md" }],
+        },
+      },
+      ctx,
+    );
+    await pi.emit("session_shutdown", {}, ctx);
+    await pi.emit("session_start", {}, ctx);
+    await pi.emit("agent_start", {}, ctx);
+    expect((await read()).skillName).toBeUndefined();
+  });
+});
+
 describe("emitToolSpans", () => {
   it("does nothing when no timings", () => {
     const { client, recorders } = mockAgento11yClient();
-    emitToolSpans(client, makePiMsg(), [], [], {
-      agentName: "pi",
-      contentCapture: "metadata_only",
-    });
+    emitToolSpans(
+      (start) => client.startToolExecution(start),
+      makePiMsg(),
+      [],
+      [],
+      {
+        agentName: "pi",
+        contentCapture: "metadata_only",
+      },
+    );
     expect(recorders).toHaveLength(0);
   });
 
@@ -4664,7 +5222,7 @@ describe("emitToolSpans", () => {
     });
 
     emitToolSpans(
-      client,
+      (start) => client.startToolExecution(start),
       msg,
       [],
       [
@@ -4691,7 +5249,7 @@ describe("emitToolSpans", () => {
   it("passes model and agent context", () => {
     const { client, recorders } = mockAgento11yClient();
     emitToolSpans(
-      client,
+      (start) => client.startToolExecution(start),
       makePiMsg(),
       [],
       [makePiTiming({ toolCallId: "c1" })],
@@ -4727,7 +5285,7 @@ describe("emitToolSpans", () => {
     ];
 
     emitToolSpans(
-      client,
+      (start) => client.startToolExecution(start),
       msg,
       toolResults,
       [makePiTiming({ toolCallId: "c1" })],
@@ -4750,7 +5308,7 @@ describe("emitToolSpans", () => {
     });
 
     emitToolSpans(
-      client,
+      (start) => client.startToolExecution(start),
       msg,
       [makePiToolResult({ toolCallId: "c1" })],
       [makePiTiming({ toolCallId: "c1" })],
@@ -4767,7 +5325,7 @@ describe("emitToolSpans", () => {
   it("marks error tool executions", () => {
     const { client, recorders } = mockAgento11yClient();
     emitToolSpans(
-      client,
+      (start) => client.startToolExecution(start),
       makePiMsg(),
       [],
       [makePiTiming({ toolCallId: "c1", isError: true })],
@@ -4780,7 +5338,7 @@ describe("emitToolSpans", () => {
   it("uses real start/end times", () => {
     const { client, recorders } = mockAgento11yClient();
     emitToolSpans(
-      client,
+      (start) => client.startToolExecution(start),
       makePiMsg(),
       [],
       [makePiTiming({ startedAt: 1000, completedAt: 5000 })],
@@ -4814,7 +5372,7 @@ describe("emitToolSpans", () => {
     ];
 
     emitToolSpans(
-      client,
+      (start) => client.startToolExecution(start),
       msg,
       toolResults,
       [makePiTiming({ toolCallId: "c1" })],

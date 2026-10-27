@@ -104,6 +104,7 @@ Without any of these, each run becomes its own conversation.
 - `handleToolStart` / `handleToolEnd` / `handleToolError` maps into `startToolExecution(...)`.
 - `handleChainStart` / `handleChainEnd` / `handleChainError` emits framework chain spans.
 - `handleRetrieverStart` / `handleRetrieverEnd` / `handleRetrieverError` emits framework retriever spans.
+- A chain or retriever span that ends with an error leaves the error text off under `metadata_only` and `full_with_metadata_spans`, and when a `generationSanitizer` is configured. Its status then reads `sdk_error`.
 
 Framework tags and metadata are always injected:
 

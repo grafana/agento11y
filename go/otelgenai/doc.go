@@ -21,10 +21,9 @@
 //	inv.CompletedAt = time.Now()
 //	handler.End(ctx, inv)
 //
-// The generated attributes come from semconv v1.41.0, the last core release
-// with Go bindings for gen_ai.*. v1.42.0 dropped the namespace from the core
-// registry, because the GenAI conventions moved to
-// open-telemetry/semantic-conventions-genai, which generates no Go package.
-// The names v1.41.0 defines are still current; attributes that registry added
-// after the split are declared by hand in genai.go.
+// The global schema URL remains semconv v1.41.0 because other emitted signals
+// still use that legacy schema. Newer GenAI conventions exist in
+// open-telemetry/semantic-conventions-genai; additions are declared locally,
+// including skill and process attributes from merged #498 (development). The global URL
+// does not fully describe those additions.
 package otelgenai

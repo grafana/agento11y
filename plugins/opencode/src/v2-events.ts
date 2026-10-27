@@ -41,6 +41,7 @@ interface Assistant {
   input: Message[];
   systemPrompt?: string;
   blocks: NativeBlock[];
+  toolObservations: Map<string, string | null>;
   parent?: string;
   subagent: boolean;
   conversationId: string;
@@ -58,6 +59,16 @@ interface SessionState {
   parentSession?: string;
   spawningGeneration?: string;
   conversationId: string;
+}
+
+/** Derived final-input observation only; never retain the host hook payload. */
+export interface NativeToolObservation {
+  sessionID: string;
+  messageID: string;
+  id: string;
+  tool: string;
+  agent: string;
+  skillName: string | null;
 }
 
 export interface NativeCaptureOptions {
@@ -102,6 +113,8 @@ export function createNativeCapture({
   redactions,
 }: NativeCaptureOptions): {
   handleEvent(event: NativeEvent): void;
+  observeToolExecution(observation: NativeToolObservation): void;
+  stopObservingTools(): void;
   shutdown(): Promise<void>;
   drain(): Promise<void>;
 } {
@@ -136,6 +149,7 @@ export function createNativeCapture({
   const tasks = new Set<Promise<void>>();
   const agentVersion = config.agentVersion || hostVersion;
   let closed = false;
+  let observingTools = true;
   // After location.shutdown a replacement instance owns new work; running steps finish here.
   let draining = false;
   let shutdownTask: Promise<void> | undefined;
@@ -177,7 +191,10 @@ export function createNativeCapture({
     session.assistant = undefined;
     if (draining && !session.compaction) sessions.delete(sessionID);
     const id = stableOpencodeGenerationId(sessionID, assistant.id);
-    if (settled.has(id)) return;
+    if (settled.has(id)) {
+      assistant.toolObservations.clear();
+      return;
+    }
     settled.add(id); // Commit before scheduling any asynchronous export.
     session.lastGeneration = id;
     session.history.push(...nativeOutput(assistant.blocks));
@@ -212,6 +229,13 @@ export function createNativeCapture({
       config.redactInputMessages,
     );
     const records = nativeToolRecords(sessionID, assistant.blocks);
+    for (const record of records) {
+      // Code Mode inner hooks can share an outer call ID, but not its tool name.
+      const key = JSON.stringify([record.toolCallId, record.toolName]);
+      if (assistant.toolObservations.has(key))
+        record.skillName = assistant.toolObservations.get(key);
+    }
+    assistant.toolObservations.clear();
     const seed = {
       id,
       conversationId: assistant.conversationId,
@@ -258,7 +282,7 @@ export function createNativeCapture({
           recorder.setFirstTokenAt(new Date(assistant.firstAt));
         recorder.setResult(result);
         if (error) recorder.setCallError(new Error(error));
-        emitToolSpans(client, records, {
+        emitToolSpans((start) => recorder.startToolExecution(start), records, {
           conversationId: assistant.conversationId,
           conversationTitle: exported.title,
           agentName: seed.agentName,
@@ -550,6 +574,7 @@ export function createNativeCapture({
             ? session.instructions.join("\n\n")
             : undefined,
           blocks: [],
+          toolObservations: new Map(),
           parent: session.lastGeneration ?? session.spawningGeneration,
           subagent: session.parentSession !== undefined,
           conversationId: session.conversationId,
@@ -677,12 +702,31 @@ export function createNativeCapture({
       }
     }
   }
+  function observeToolExecution(observation: NativeToolObservation): void {
+    if (closed || !observingTools) return;
+    const { sessionID, messageID, id, tool, agent, skillName } = observation;
+    if (
+      ![sessionID, messageID, id, tool, agent].every(
+        (value) => typeof value === "string" && value.length > 0,
+      ) ||
+      !owns(locations.get(sessionID))
+    )
+      return;
+    const assistant = sessions.get(sessionID)?.assistant;
+    if (!assistant || assistant.id !== messageID || assistant.agent !== agent)
+      return;
+    assistant.toolObservations.set(JSON.stringify([id, tool]), skillName);
+  }
+  function stopObservingTools(): void {
+    observingTools = false;
+  }
   async function drain(): Promise<void> {
     while (tasks.size) await Promise.all([...tasks]);
   }
   function shutdown(): Promise<void> {
     if (shutdownTask) return shutdownTask;
     closed = true;
+    stopObservingTools();
     const at = Date.now();
     for (const [id, session] of sessions) settle(id, session, at, "shutdown");
     for (const sessionID of group.owners.keys()) releaseCompaction(sessionID);
@@ -693,5 +737,11 @@ export function createNativeCapture({
     shutdownTask = drain();
     return shutdownTask;
   }
-  return { handleEvent, shutdown, drain };
+  return {
+    handleEvent,
+    observeToolExecution,
+    stopObservingTools,
+    shutdown,
+    drain,
+  };
 }

@@ -25,16 +25,13 @@ const ScopeName = "github.com/grafana/agento11y/go/otelgenai"
 
 // SchemaURL is the semantic-convention schema the emitted telemetry follows.
 //
-// v1.41.0 is the last core semconv release that carried the GenAI conventions.
-// They now live in open-telemetry/semantic-conventions-genai, which has no
-// release and whose own README leaves its schema URL open, so there is no newer
-// URL to point at. The two attributes below are therefore conventions the
-// declared schema does not describe.
+// The global URL remains v1.41.0 because other emitted signals still use that
+// legacy schema. Newer GenAI conventions exist; additions here follow the
+// separate GenAI registry, including merged #498 (development), and are not
+// fully described by this URL.
 const SchemaURL = semconv.SchemaURL
 
-// These attributes were added to the GenAI conventions after semconv v1.41.0,
-// the last core release with Go bindings for gen_ai.*. No generated helpers
-// exist for them.
+// These newer GenAI attributes have no helpers in the pinned semconv package.
 const (
 	genAIRequestStreamCursorKey attribute.Key = "gen_ai.request.stream_cursor"
 	genAIResponseStatusKey      attribute.Key = "gen_ai.response.status"
@@ -69,7 +66,11 @@ const (
 // A hook may set the invocation's exported fields, including replacing the
 // whole struct: End reads the span handle, the timestamps and the Stream flag
 // it needs before the hooks run, and restores them afterwards. A hook cannot
-// change those fields.
+// change those fields. Tool invocations with recognized execution kinds also retain
+// their Start operation, execution kind, and published nonblank tool/skill/resource/
+// executable identity. Attempts to change each field go to the OTel error handler;
+// fields unknown at Start may be completed. Raw Attributes and hook-returned
+// attributes still override typed attributes and can disagree with sampling.
 type EndHook interface {
 	OnEnd(ctx context.Context, inv *Invocation, capture CaptureMode) []attribute.KeyValue
 }
@@ -317,6 +318,7 @@ func (h *Handler) Start(ctx context.Context, inv *Invocation) context.Context {
 		inv.StartedAt = now()
 	}
 
+	inv.toolIdentity = snapshotToolIdentity(inv)
 	ctx, span := h.tracer.Start(ctx, inv.spanName(),
 		trace.WithSpanKind(inv.spanKind()),
 		trace.WithTimestamp(inv.StartedAt),
@@ -405,6 +407,7 @@ func (h *Handler) End(ctx context.Context, inv *Invocation) {
 	if inv.CompletedAt.IsZero() {
 		inv.CompletedAt = now()
 	}
+	inv.toolIdentity.restore(inv)
 	capture := h.captureFor(inv)
 	emitEvent := h.shouldEmitEvent(capture)
 
@@ -481,6 +484,7 @@ type invocationLifecycle struct {
 	stream        bool
 	ttfcRecorded  bool
 	ended         bool
+	toolIdentity  *toolIdentity
 }
 
 func snapshotLifecycle(inv *Invocation) invocationLifecycle {
@@ -494,6 +498,7 @@ func snapshotLifecycle(inv *Invocation) invocationLifecycle {
 		stream:        inv.Stream,
 		ttfcRecorded:  inv.ttfcRecorded,
 		ended:         inv.ended,
+		toolIdentity:  inv.toolIdentity,
 	}
 }
 
@@ -507,6 +512,8 @@ func (state invocationLifecycle) restore(inv *Invocation) {
 	inv.Stream = state.stream
 	inv.ttfcRecorded = state.ttfcRecorded
 	inv.ended = state.ended
+	inv.toolIdentity = state.toolIdentity
+	state.toolIdentity.restore(inv)
 }
 
 // runHook calls one hook and contains its panic. Instrumentation must not
@@ -539,7 +546,13 @@ func samplingKeys(inv *Invocation) []attribute.Key {
 	endpoint := []attribute.Key{semconv.GenAIProviderNameKey, semconv.ServerAddressKey, semconv.ServerPortKey}
 	switch inv.operation() {
 	case OperationExecuteTool:
-		return []attribute.Key{semconv.GenAIToolNameKey, semconv.GenAIToolTypeKey}
+		identity := inv.toolIdentityAttributes()
+		keys := make([]attribute.Key, 0, 2+len(identity))
+		keys = append(keys, semconv.GenAIToolNameKey, semconv.GenAIToolTypeKey)
+		for _, kv := range identity {
+			keys = append(keys, kv.Key)
+		}
+		return keys
 	case OperationInvokeWorkflow, OperationPlan, OperationRetrieval:
 		return nil
 	case OperationInvokeAgent:
@@ -630,9 +643,10 @@ func (h *Handler) requestAttributes(inv *Invocation) []attribute.KeyValue {
 	if inv.DimensionCount != nil {
 		attrs = append(attrs, semconv.GenAIEmbeddingsDimensionCount(int(*inv.DimensionCount)))
 	}
-	if inv.ToolName != "" {
-		attrs = append(attrs, semconv.GenAIToolName(inv.ToolName))
+	if name := inv.toolName(); name != "" {
+		attrs = append(attrs, semconv.GenAIToolName(name))
 	}
+	attrs = append(attrs, inv.toolIdentityAttributes()...)
 	if inv.ToolCallID != "" {
 		attrs = append(attrs, semconv.GenAIToolCallID(inv.ToolCallID))
 	}
@@ -655,6 +669,9 @@ func (h *Handler) requestAttributes(inv *Invocation) []attribute.KeyValue {
 // invocation finishes.
 func (h *Handler) responseAttributes(inv *Invocation) []attribute.KeyValue {
 	var attrs []attribute.KeyValue
+	if inv.toolExecutionKind() == ToolExecutionKindCommand && inv.ProcessExitCode != nil {
+		attrs = append(attrs, processExitCodeKey.Int64(*inv.ProcessExitCode))
+	}
 	if inv.ResponseID != "" {
 		attrs = append(attrs, semconv.GenAIResponseID(inv.ResponseID))
 	}
@@ -702,7 +719,7 @@ func (h *Handler) contentAttributes(inv *Invocation, capture CaptureMode) []attr
 	if !capture.SpanContent() {
 		return nil
 	}
-	var attrs []attribute.KeyValue
+	attrs := inv.toolPrivateAttributes()
 	encode := func(key attribute.Key, encoder func() (string, error), populated bool) {
 		if !populated {
 			return

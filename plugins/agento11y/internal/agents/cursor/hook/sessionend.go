@@ -11,6 +11,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/config"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/fragment"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/mapper"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
 
 // SessionEnd sweeps any stranded fragments left by crashed or aborted turns,
@@ -25,6 +26,12 @@ func SessionEnd(p Payload, cfg config.Config, logger *log.Logger) {
 		return
 	}
 
+	protocol, err := envconfig.ResolveGenerationTransport()
+	if err != nil {
+		logger.Printf("sessionEnd: generation transport conv=%s (preserving conversation for retry): %v", p.ConversationID, err)
+		return
+	}
+
 	ids := fragment.ListFragmentIDs(p.ConversationID, logger)
 
 	if len(ids) == 0 {
@@ -32,7 +39,7 @@ func SessionEnd(p Payload, cfg config.Config, logger *log.Logger) {
 		return
 	}
 
-	if !config.HasCredentials() {
+	if protocol == agento11y.GenerationExportProtocolHTTP && !config.HasCredentials() {
 		logger.Print("sessionEnd: missing credentials — wiping conversation dir without emission")
 		removeAndLog(p.ConversationID, logger)
 		return
@@ -42,15 +49,34 @@ func SessionEnd(p Payload, cfg config.Config, logger *log.Logger) {
 	defer cancel()
 
 	providers := setupOTelIfConfigured(ctx, p.ConversationID, logger)
-	defer func() { _ = providers.Shutdown(ctx) }()
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		_ = providers.Shutdown(cleanupCtx)
+	}()
 
 	session := fragment.LoadSession(p.ConversationID, logger)
-	client := buildClient(p, session, cfg, providers, logger)
+	client, err := buildClient(p, session, cfg, providers, logger)
+	if err != nil {
+		logger.Printf("sessionEnd: build client conv=%s (preserving conversation for retry): %v", p.ConversationID, err)
+		return
+	}
+
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		_ = client.Shutdown(cleanupCtx)
+	}()
 
 	allEmitted := true
+	var emittedIDs []string
 	for _, gid := range ids {
-		if !emitOneStranded(ctx, client, session, p.ConversationID, gid, cfg, logger) {
+		emitted, ok := emitOneStranded(ctx, client, session, p.ConversationID, gid, cfg, logger)
+		if !ok {
 			allEmitted = false
+		}
+		if emitted {
+			emittedIDs = append(emittedIDs, gid)
 		}
 	}
 
@@ -59,7 +85,14 @@ func SessionEnd(p Payload, cfg config.Config, logger *log.Logger) {
 		flushOK = false
 		logger.Printf("sessionEnd: flush: %v", err)
 	}
-	_ = client.Shutdown(ctx)
+	if flushOK {
+		for _, gid := range emittedIDs {
+			if err := fragment.Delete(p.ConversationID, gid); err != nil {
+				logger.Printf("sessionEnd: delete gen=%s: %v", gid, err)
+				allEmitted = false
+			}
+		}
+	}
 
 	if err := providers.ForceFlush(); err != nil {
 		logger.Printf("sessionEnd: otel flush: %v", err)
@@ -73,11 +106,7 @@ func SessionEnd(p Payload, cfg config.Config, logger *log.Logger) {
 	}
 }
 
-// emitOneStranded loads, maps, and emits one stranded fragment and deletes
-// it on success. Returns true when the fragment reached the export path
-// successfully (or was unreadable and quarantined out of the way), false
-// when emission failed and the conversation dir should be preserved for
-// retry.
+// Emitted fragments must remain on disk until the caller confirms the batch.
 func emitOneStranded(
 	ctx context.Context,
 	client *agento11y.Client,
@@ -85,7 +114,7 @@ func emitOneStranded(
 	conversationID, generationID string,
 	cfg config.Config,
 	logger *log.Logger,
-) bool {
+) (emitted, ok bool) {
 	frag := fragment.LoadTolerant(conversationID, generationID, logger)
 	if frag == nil {
 		// Tolerant loader already logged the failure. Quarantine the
@@ -96,9 +125,9 @@ func emitOneStranded(
 		} else {
 			logger.Printf("sessionEnd: quarantined unreadable gen=%s", generationID)
 		}
-		// Treat as emitted so the dir cleanup proceeds — the corrupt file
+		// Treat as successfully processed so the dir cleanup proceeds — the corrupt file
 		// has been moved out of the sweep path.
-		return true
+		return false, true
 	}
 
 	// Thought-only leftovers come from older afterAgentThought handlers that
@@ -111,7 +140,7 @@ func emitOneStranded(
 		} else {
 			logger.Printf("sessionEnd: dropped thought-only gen=%s", generationID)
 		}
-		return true
+		return false, true
 	}
 
 	// Prefer the status that handleStop saw if it preserved the fragment on
@@ -137,16 +166,11 @@ func emitOneStranded(
 
 	if err := emitGeneration(ctx, client, frag, mapped, logger); err != nil {
 		logger.Printf("sessionEnd: emit gen=%s: %v", generationID, err)
-		return false
+		return false, false
 	}
 
-	// Delete on per-fragment success so a later sweep doesn't re-emit it as
-	// a duplicate if a sibling generation later fails.
-	if err := fragment.Delete(conversationID, generationID); err != nil {
-		logger.Printf("sessionEnd: delete gen=%s: %v", generationID, err)
-	}
-	logger.Printf("sessionEnd: swept gen=%s stopReason=%s", generationID, mapped.StopStatus)
-	return true
+	logger.Printf("sessionEnd: recorded gen=%s stopReason=%s", generationID, mapped.StopStatus)
+	return true, true
 }
 
 // isThoughtOnlyFragment reports leftovers from the old afterAgentThought

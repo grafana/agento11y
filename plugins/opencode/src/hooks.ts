@@ -32,6 +32,7 @@ import {
   type Redactor,
 } from "./mappers.js";
 import { createRedactor } from "./redaction.js";
+import { detectSkillName } from "./skills.js";
 import { buildBuiltinTags } from "./tags.js";
 import {
   createTelemetryProviders,
@@ -908,8 +909,8 @@ async function recordAssistantMessage(
   // Tools that started but never fired `tool.execute.after` (errored, denied,
   // or interrupted) become error records here, so they surface as spans even
   // in metadata_only and stop leaking from activeToolExecutions. termRecords
-  // win on key collision, so a native tool with an error part keeps the
-  // accurate terminal record while the active entry is still deleted.
+  // win on timing/status collisions; observed hook identity still overrides
+  // a stale terminal snapshot. Draining also deletes the active entry.
   const drainedRecords = drainActiveToolExecutions(assistantMsg.sessionID);
   const spanRecords = mergeToolSpanRecords(termRecords, [
     ...hookRecords,
@@ -1012,13 +1013,21 @@ async function recordAssistantMessage(
         if (firstAt !== undefined) recorder.setFirstTokenAt(new Date(firstAt));
         recorder.setResult(result);
         recorder.setCallError(mapError(error));
-        emitToolSpans(sigil, spanRecords, spanOpts);
+        emitToolSpans(
+          (start) => recorder.startToolExecution(start),
+          spanRecords,
+          spanOpts,
+        );
       });
     } else {
       await sigil.startStreamingGeneration(seed, async (recorder) => {
         if (firstAt !== undefined) recorder.setFirstTokenAt(new Date(firstAt));
         recorder.setResult(result);
-        emitToolSpans(sigil, spanRecords, spanOpts);
+        emitToolSpans(
+          (start) => recorder.startToolExecution(start),
+          spanRecords,
+          spanOpts,
+        );
       });
     }
   } catch (err) {
@@ -1401,6 +1410,11 @@ function handleToolExecuteAfter(
 
   const completed: ToolExecutionRecord = {
     ...active,
+    skillName:
+      detectSkillName(
+        active.toolName,
+        input.args !== undefined ? input.args : active.input,
+      ) ?? null,
     completedAt: Date.now(),
     output: output.output,
   };
@@ -1581,6 +1595,7 @@ export function drainActiveToolExecutions(
     activeToolExecutions.delete(key);
     drained.push({
       ...record,
+      skillName: detectSkillName(record.toolName, record.input) ?? null,
       completedAt: now,
       isError: true,
       error: "tool did not complete (errored, denied, or interrupted)",
@@ -1591,8 +1606,8 @@ export function drainActiveToolExecutions(
 
 /**
  * Merge tool execution records from terminal `ToolPart` values with
- * hook-recorded records, preferring terminal-part timing and state. Hook
- * records survive only when the terminal parts don't already cover them.
+ * hook-recorded records. Terminal timing and status win; observed hook
+ * identity wins even when it explicitly clears a stale terminal identity.
  *
  * @internal Exported for testing.
  */
@@ -1600,7 +1615,23 @@ export function mergeToolSpanRecords(
   termRecords: ToolExecutionRecord[],
   hookRecords: ToolExecutionRecord[],
 ): ToolExecutionRecord[] {
-  const merged: ToolExecutionRecord[] = [...termRecords];
+  const hooksByKey = new Map(
+    hookRecords.map((r) => [toolExecutionKey(r.sessionID, r.toolCallId), r]),
+  );
+  const merged = termRecords.map((record) => {
+    const hook = hooksByKey.get(
+      toolExecutionKey(record.sessionID, record.toolCallId),
+    );
+    if (hook?.skillName !== undefined) {
+      return { ...record, skillName: hook.skillName };
+    }
+    return record.skillName !== undefined
+      ? record
+      : {
+          ...record,
+          skillName: detectSkillName(record.toolName, record.input) ?? null,
+        };
+  });
   const seen = new Set(
     termRecords.map((r) => toolExecutionKey(r.sessionID, r.toolCallId)),
   );

@@ -56,6 +56,7 @@ export function makeAgento11yMock(): {
       setFirstTokenAt: (d: Date) => {
         entry.firstTokenAt = d;
       },
+      startToolExecution: (start: unknown) => sigil.startToolExecution(start),
       setCacheDiagnostics: vi.fn(),
       end: vi.fn(),
       getError: () => undefined,
@@ -69,7 +70,7 @@ export function makeAgento11yMock(): {
     // it cares about. Guard paths that need a real HTTP round trip live in
     // hooks.guard.test.ts, which builds a client instead of mocking one.
     evaluateHook: vi.fn(async () => ({ action: "allow" })),
-    startToolExecution: vi.fn(() => ({
+    startToolExecution: vi.fn((_start: unknown) => ({
       setResult: vi.fn(),
       setCallError: vi.fn(),
       end: vi.fn(),

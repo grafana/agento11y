@@ -11,6 +11,10 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class Agento11yClientRuntimeTest {
     @Test
@@ -289,6 +293,83 @@ class Agento11yClientRuntimeTest {
             Agento11yDebugSnapshot snapshot = client.debugSnapshot();
             assertThat(snapshot.getGenerations()).hasSize(1);
             assertThat(snapshot.getToolExecutions()).hasSize(1);
+        }
+    }
+
+    @ParameterizedTest
+    @EnumSource(ToolExecutionKind.class)
+    void toolExecutionKindSurvivesStartCompletionAndSnapshotCopies(ToolExecutionKind executionKind) {
+        ToolExecutionStart start = new ToolExecutionStart()
+                .setToolName("tool")
+                .setExecutionKind(executionKind)
+                .setSkillName("review")
+                .setSkillDescription("Review changes")
+                .setSkillSourceURI("file:///skills/review/SKILL.md")
+                .setSkillResourceName("references/checklist.md")
+                .setProcessExecutableName("git")
+                .setProcessExecutablePath("/usr/bin/git");
+        ToolExecutionStart startCopy = start.copy();
+        assertThat(startCopy).isNotSameAs(start).usingRecursiveComparison().isEqualTo(start);
+
+        TestFixtures.CapturingExporter exporter = new TestFixtures.CapturingExporter();
+        try (Agento11yClient client = TestFixtures.newClient(exporter)) {
+            ToolExecutionRecorder recorder = client.startToolExecution(start);
+            start.setExecutionKind(null)
+                    .setSkillName("changed")
+                    .setSkillDescription("changed")
+                    .setSkillSourceURI("changed")
+                    .setSkillResourceName("changed")
+                    .setProcessExecutableName("changed")
+                    .setProcessExecutablePath("changed");
+            recorder.end();
+
+            ToolExecution execution = client.debugSnapshot().getToolExecutions().get(0);
+            assertThat(execution.getExecutionKind()).isEqualTo(executionKind);
+            assertThat(execution.getSkillName()).isEqualTo(startCopy.getSkillName());
+            assertThat(execution.getSkillDescription()).isEqualTo(startCopy.getSkillDescription());
+            assertThat(execution.getSkillSourceURI()).isEqualTo(startCopy.getSkillSourceURI());
+            assertThat(execution.getSkillResourceName()).isEqualTo(startCopy.getSkillResourceName());
+            assertThat(execution.getProcessExecutableName()).isEqualTo(startCopy.getProcessExecutableName());
+            assertThat(execution.getProcessExecutablePath()).isEqualTo(startCopy.getProcessExecutablePath());
+            assertThat(execution.getProcessExitCode()).isNull();
+
+            ToolExecution copy = execution.copy();
+            assertThat(copy).isNotSameAs(execution).usingRecursiveComparison().isEqualTo(execution);
+            execution.setExecutionKind(null)
+                    .setSkillName("changed")
+                    .setSkillDescription("changed")
+                    .setSkillSourceURI("changed")
+                    .setSkillResourceName("changed")
+                    .setProcessExecutableName("changed")
+                    .setProcessExecutablePath("changed");
+            assertThat(client.debugSnapshot().getToolExecutions().get(0))
+                    .isNotSameAs(execution).usingRecursiveComparison().isEqualTo(copy);
+        }
+    }
+
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(longs = {0L, 17L, -1L})
+    void toolExitCodeSurvivesResultCompletionAndSnapshotCopies(Long exitCode) {
+        ToolExecutionResult result = new ToolExecutionResult().setProcessExitCode(exitCode);
+        ToolExecutionResult resultCopy = result.copy();
+        assertThat(resultCopy).isNotSameAs(result).usingRecursiveComparison().isEqualTo(result);
+
+        TestFixtures.CapturingExporter exporter = new TestFixtures.CapturingExporter();
+        try (Agento11yClient client = TestFixtures.newClient(exporter)) {
+            ToolExecutionRecorder recorder = client.startToolExecution(new ToolExecutionStart().setToolName("command"));
+            recorder.setResult(result);
+            result.setProcessExitCode(99L);
+            recorder.end();
+
+            ToolExecution execution = client.debugSnapshot().getToolExecutions().get(0);
+            assertThat(execution.getProcessExitCode()).isEqualTo(exitCode);
+            ToolExecution copy = execution.copy();
+            assertThat(copy).isNotSameAs(execution).usingRecursiveComparison().isEqualTo(execution);
+            execution.setProcessExitCode(99L);
+            assertThat(copy.getProcessExitCode()).isEqualTo(exitCode);
+            assertThat(client.debugSnapshot().getToolExecutions().get(0).getProcessExitCode()).isEqualTo(exitCode);
+            assertThat(recorder.error()).isEmpty();
         }
     }
 

@@ -781,4 +781,20 @@ describe("native Promise payload mapping", () => {
       completedAt: 20,
     });
   });
+
+  it("never classifies a skill from durable input or its result display name", () => {
+    const records = nativeToolRecords("s", [
+      {
+        type: "tool",
+        id: "c",
+        name: "skill",
+        input: { id: "old-id", name: "v1-name" },
+        calledAt: 10,
+        completedAt: 20,
+        output: "Skill loaded: display-name",
+      },
+    ]);
+    expect(records).toHaveLength(1);
+    expect(records[0]).not.toHaveProperty("skillName");
+  });
 });

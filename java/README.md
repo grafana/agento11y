@@ -133,6 +133,59 @@ try (ToolExecutionRecorder rec = client.startToolExecution(
 
 See [Tool Calls vs Tool Executions](../docs/concepts/tool-call-vs-tool-execution.md) for the full conceptual guide, and [Content Capture Modes](../docs/concepts/content-capture-modes.md) for the modes and defaults.
 
+### Tracing skill loads, resource reads, and commands
+
+Set `ToolExecutionStart.setExecutionKind(...)` explicitly with `ToolExecutionKind`.
+The SDK does not detect the execution kind from tool names, paths, or arguments.
+These additions follow [merged GenAI #498](https://github.com/open-telemetry/semantic-conventions-genai/pull/498), which remains in development.
+
+| Execution kind | Meaning | Applicable start setters |
+| --- | --- | --- |
+| `ToolExecutionKind.LOAD_SKILL` (`load_skill`) | Load skill instructions | `setSkillName`, `setSkillDescription`, `setSkillSourceURI` |
+| `ToolExecutionKind.READ_SKILL_RESOURCE` (`read_skill_resource`) | Read a skill resource | Skill setters above, `setSkillResourceName` |
+| `ToolExecutionKind.COMMAND` (`command`) | Execute a command, optionally for a skill | Skill/resource setters above, `setProcessExecutableName`, `setProcessExecutablePath`; completion `setProcessExitCode` |
+
+An unset execution kind keeps generic behavior and emits no skill or process attributes. The SDK ignores inapplicable fields.
+Skill fields emit `gen_ai.skill.name`, `gen_ai.skill.description`, `gen_ai.skill.source.uri`, and `gen_ai.skill.resource.name`.
+Process fields emit `process.executable.name`, `process.executable.path`, and `process.exit.code`.
+The SDK does not dual-write `agento11y.skill.name`.
+
+Span names start with `execute_tool <tool>` and use trimmed, nonblank identity:
+
+- `load_skill` appends the skill name, when present.
+- `read_skill_resource` appends `<skill> <resource>`, or just `<resource>` without a skill. Without a resource, it appends nothing.
+- `command` uses the same resource suffix, then falls back to the executable name, then no suffix.
+
+Resource reads and commands never use a skill-only suffix.
+The span name and applicable structural names are available to samplers at creation.
+Private fields and the completion exit code are excluded from sampler attributes.
+
+Process fields describe one directly executed process. Do not infer them from shell text, pipelines, or command batches.
+`ToolExecutionResult.setProcessExitCode(Long)` accepts a nullable integer: `null` means unknown; `0L` records successful completion.
+Exit codes are independent of recorded execution errors.
+For example, record a known completion code as follows:
+
+```java
+try (ToolExecutionRecorder rec = client.startToolExecution(
+        new ToolExecutionStart()
+            .setToolName("exec")
+            .setExecutionKind(ToolExecutionKind.COMMAND)
+            .setSkillName("review")
+            .setSkillResourceName("scripts/check.py")
+            .setProcessExecutableName("python3"))) {
+    rec.setResult(new ToolExecutionResult().setProcessExitCode(0L));
+}
+```
+
+Skill description, skill source URI, and executable path are private content.
+The SDK omits them from spans under effective `METADATA_ONLY` or `FULL_WITH_METADATA_SPANS`, after resolving overrides, inheritance, and the resolver.
+Core `NO_TOOL_CONTENT` retains these private fields; arguments/results still require the existing content opt-in.
+Every exported skill source URI has userinfo, query, and fragment removed, even under `FULL`.
+Invalid or relative URIs are omitted without network or filesystem lookup.
+Capture modes do not sanitize debug snapshots: raw tool arguments, results, and error text remain there.
+
+Generic tool recording, `executeToolCalls`, and existing metrics are unchanged. No skill/process metric dimensions are added.
+
 ## Content Capture
 
 `ContentCaptureMode` controls what content the SDK includes in exported generation payloads and OTel span attributes. See [Content Capture Modes](../docs/concepts/content-capture-modes.md) for the canonical mode matrix; the snippets below show how to wire it up in Java.
