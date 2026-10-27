@@ -807,3 +807,170 @@ async function captureGenerations(run, onGeneration) {
     await client.shutdown();
   }
 }
+
+// Drops keys whose value is undefined, which the client leaves on normalized messages.
+const plain = (value) => JSON.parse(JSON.stringify(value));
+
+async function captureToolSpans(run) {
+  const spanExporter = new InMemorySpanExporter();
+  const tracerProvider = new BasicTracerProvider({
+    spanProcessors: [new SimpleSpanProcessor(spanExporter)],
+  });
+  const defaults = defaultConfig();
+  const client = new Agento11yClient({
+    generationExport: { ...defaults.generationExport, batchSize: 10, flushIntervalMs: 60_000 },
+    generationExporter: new CapturingExporter(),
+    tracer: tracerProvider.getTracer('agento11y-framework-test'),
+  });
+  try {
+    await run(new Agento11yLangChainHandler(client));
+    return spanExporter
+      .getFinishedSpans()
+      .filter((span) => span.attributes['gen_ai.operation.name'] === 'execute_tool');
+  } finally {
+    await client.shutdown();
+    await tracerProvider.shutdown();
+  }
+}
+
+test('langchain tool span carries the tool call id and omits an empty one', async () => {
+  const spans = await captureToolSpans(async (handler) => {
+    await handler.handleToolStart({ name: 'weather' }, '{}', 'run-1', undefined, [], {}, 'weather', 'call_1');
+    await handler.handleToolEnd('sunny', 'run-1');
+    await handler.handleToolStart({ name: 'weather' }, '{}', 'run-2', undefined, [], {}, 'weather', '');
+    await handler.handleToolEnd('sunny', 'run-2');
+  });
+
+  assert.equal(spans.length, 2);
+  assert.equal(spans[0].attributes['gen_ai.tool.call.id'], 'call_1');
+  assert.equal('gen_ai.tool.call.id' in spans[1].attributes, false);
+});
+
+test('langchain tool span takes the tool name from the run name when the serialized tool has none', async () => {
+  // A `tool()` serializes as its class id path only.
+  const spans = await captureToolSpans(async (handler) => {
+    await handler.handleToolStart(
+      { lc: 1, type: 'not_implemented', id: ['langchain', 'tools', 'DynamicStructuredTool'] },
+      '{"city":"Paris"}',
+      'run-1',
+      undefined,
+      [],
+      {},
+      'get_weather',
+      'call_1',
+    );
+    await handler.handleToolEnd('sunny', 'run-1');
+  });
+
+  assert.equal(spans[0].attributes['gen_ai.tool.name'], 'get_weather');
+});
+
+test('langchain records the tool calls the model asked for as tool_call output parts', async () => {
+  const generation = await captureSingleGeneration(async (client) => {
+    const handler = new Agento11yLangChainHandler(client);
+    await handler.handleChatModelStart({ name: 'ChatOpenAI' }, [[{ type: 'human', content: 'weather?' }]], 'run-1');
+    await handler.handleLLMEnd(
+      {
+        generations: [
+          [
+            {
+              text: '',
+              message: {
+                type: 'ai',
+                content: '',
+                tool_calls: [
+                  { id: 'call_1', name: 'get_weather', args: { city: 'Paris' }, type: 'tool_call' },
+                  { id: 'call_2', name: '', args: {} },
+                ],
+              },
+            },
+          ],
+        ],
+        llm_output: { model_name: 'gpt-5' },
+      },
+      'run-1',
+    );
+  });
+
+  assert.deepEqual(plain(generation.output), [
+    {
+      role: 'assistant',
+      parts: [{ type: 'tool_call', toolCall: { name: 'get_weather', id: 'call_1', inputJSON: '{"city":"Paris"}' } }],
+    },
+  ]);
+});
+
+test('langchain keeps the text next to the tool calls in output', async () => {
+  const generation = await captureSingleGeneration(async (client) => {
+    const handler = new Agento11yLangChainHandler(client);
+    await handler.handleChatModelStart({ name: 'ChatOpenAI' }, [[{ type: 'human', content: 'weather?' }]], 'run-1');
+    await handler.handleLLMEnd(
+      {
+        generations: [
+          [
+            {
+              text: 'Checking.',
+              message: {
+                type: 'ai',
+                content: 'Checking.',
+                tool_calls: [{ id: 'call_1', name: 'get_weather', args: {} }],
+              },
+            },
+          ],
+        ],
+      },
+      'run-1',
+    );
+  });
+
+  assert.deepEqual(
+    generation.output[0].parts.map((part) => part.type),
+    ['text', 'tool_call'],
+  );
+  assert.equal(generation.output[0].parts[0].text, 'Checking.');
+});
+
+test('langchain maps tool messages and earlier tool calls in the input', async () => {
+  const generation = await captureSingleGeneration(async (client) => {
+    const handler = new Agento11yLangChainHandler(client);
+    await handler.handleChatModelStart(
+      { name: 'ChatOpenAI' },
+      [
+        [
+          { type: 'human', content: 'weather in Paris and Rome?' },
+          {
+            type: 'ai',
+            content: '',
+            tool_calls: [
+              { id: 'call_1', name: 'get_weather', args: { city: 'Paris' } },
+              { id: 'call_2', name: 'get_weather', args: { city: 'Rome' } },
+            ],
+          },
+          { type: 'tool', content: 'sunny', tool_call_id: 'call_1', name: 'get_weather', status: 'success' },
+          { type: 'tool', content: 'city not found', tool_call_id: 'call_2', status: 'error' },
+        ],
+      ],
+      'run-1',
+    );
+    await handler.handleLLMEnd({ generations: [[{ text: 'Sunny in Paris.' }]] }, 'run-1');
+  });
+
+  assert.deepEqual(plain(generation.input), [
+    { role: 'user', content: 'weather in Paris and Rome?' },
+    {
+      role: 'assistant',
+      parts: [
+        { type: 'tool_call', toolCall: { name: 'get_weather', id: 'call_1', inputJSON: '{"city":"Paris"}' } },
+        { type: 'tool_call', toolCall: { name: 'get_weather', id: 'call_2', inputJSON: '{"city":"Rome"}' } },
+      ],
+    },
+    {
+      role: 'tool',
+      parts: [{ type: 'tool_result', toolResult: { toolCallId: 'call_1', name: 'get_weather', content: 'sunny' } }],
+    },
+    {
+      role: 'tool',
+      parts: [{ type: 'tool_result', toolResult: { toolCallId: 'call_2', content: 'city not found', isError: true } }],
+    },
+  ]);
+});

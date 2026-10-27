@@ -657,6 +657,9 @@ class Agento11yFrameworkHandlerBase:
         recorder = self._client.start_tool_execution(
             ToolExecutionStart(
                 tool_name=tool_name,
+                # LangChain passes the model's call id; Sigil matches the run
+                # to the request by it.
+                tool_call_id=_as_str(_read(callback_kwargs, "tool_call_id")),
                 tool_description=_resolve_tool_description(serialized),
                 conversation_id=conversation_id,
                 agent_name=self._agent_name,

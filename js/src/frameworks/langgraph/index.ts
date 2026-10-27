@@ -58,8 +58,9 @@ export class Agento11yLangGraphHandler extends Agento11yFrameworkHandler {
     tags?: string[],
     metadata?: Record<string, unknown>,
     runName?: string,
+    toolCallId?: string,
   ): Promise<void> {
-    this.onToolStart(serialized, input, runId, parentRunId, tags, metadata, runName);
+    this.onToolStart(serialized, input, runId, parentRunId, tags, metadata, runName, toolCallId);
   }
 
   async handleToolEnd(output: unknown, runId: string): Promise<void> {

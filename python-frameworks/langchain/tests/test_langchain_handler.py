@@ -1018,3 +1018,53 @@ def test_langchain_attach_helpers_do_not_duplicate_existing_agento11y_handler() 
         assert callbacks[0] is existing
     finally:
         client.shutdown()
+
+
+def _tool_spans(run) -> list:
+    span_exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    client = _new_client(_CapturingExporter(), tracer=provider.get_tracer("agento11y-test"))
+    try:
+        run(Agento11yLangChainHandler(client=client))
+    finally:
+        client.shutdown()
+    return [
+        span
+        for span in span_exporter.get_finished_spans()
+        if span.attributes.get("gen_ai.operation.name") == "execute_tool"
+    ]
+
+
+def test_langchain_tool_span_carries_the_tool_call_id_and_omits_an_empty_one() -> None:
+    def run(handler) -> None:
+        first, second = uuid4(), uuid4()
+        handler.on_tool_start({"name": "weather"}, "{}", run_id=first, tool_call_id="call_1")
+        handler.on_tool_end("sunny", run_id=first)
+        handler.on_tool_start({"name": "weather"}, "{}", run_id=second, tool_call_id="  ")
+        handler.on_tool_end("sunny", run_id=second)
+
+    spans = _tool_spans(run)
+
+    assert spans[0].attributes.get("gen_ai.tool.call.id") == "call_1"
+    assert "gen_ai.tool.call.id" not in spans[1].attributes
+
+
+def test_langchain_tool_span_gets_the_call_id_from_a_real_langchain_tool() -> None:
+    from langchain_core.tools import tool
+
+    @tool
+    def get_weather(city: str) -> str:
+        """Get the weather for a city."""
+        return f"sunny in {city}"
+
+    def run(handler) -> None:
+        get_weather.invoke(
+            {"name": "get_weather", "args": {"city": "Paris"}, "id": "call_1", "type": "tool_call"},
+            config={"callbacks": [handler]},
+        )
+
+    spans = _tool_spans(run)
+
+    assert spans[0].attributes.get("gen_ai.tool.name") == "get_weather"
+    assert spans[0].attributes.get("gen_ai.tool.call.id") == "call_1"

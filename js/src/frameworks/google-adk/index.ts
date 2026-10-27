@@ -162,8 +162,9 @@ export class Agento11yGoogleAdkHandler extends Agento11yFrameworkHandler {
     tags?: string[],
     metadata?: Record<string, unknown>,
     runName?: string,
+    toolCallId?: string,
   ): Promise<void> {
-    this.onToolStart(serialized, input, runId, parentRunId, tags, metadata, runName);
+    this.onToolStart(serialized, input, runId, parentRunId, tags, metadata, runName, toolCallId);
   }
 
   async handleToolEnd(output: unknown, runId: string): Promise<void> {
@@ -493,6 +494,7 @@ class Agento11yGoogleAdkPlugin implements GoogleAdkPlugin {
         event_id: callId,
       }),
       asString(params.tool?.name),
+      callId,
     );
 
     return undefined;

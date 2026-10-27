@@ -4,6 +4,7 @@ import type {
   GenerationRecorder,
   GenerationResult,
   Message,
+  MessagePart,
   ModelRef,
   TokenUsage,
   ToolDefinition,
@@ -365,6 +366,7 @@ export class Agento11yFrameworkHandler {
     callbackTags?: string[],
     callbackMetadata?: AnyRecord,
     runName?: string,
+    toolCallId?: string,
     extraParams?: AnyRecord,
   ): void {
     const runKey = String(runId);
@@ -384,9 +386,12 @@ export class Agento11yFrameworkHandler {
       callbackTags,
       callbackMetadata,
     });
-    const toolName = resolveToolName(serialized, context.componentName);
+    const toolName = resolveToolName(serialized, runName, context.componentName);
+    const callId = asString(toolCallId);
     const recorder = this.client.startToolExecution({
       toolName,
+      // Sigil matches the run to the model's request by this id.
+      toolCallId: callId.length > 0 ? callId : undefined,
       toolDescription: resolveToolDescription(serialized),
       conversationId: context.conversationId,
       agentName: this.agentName,
@@ -1113,10 +1118,14 @@ function normalizeRunID(runId: string | undefined): string {
   return runId.trim();
 }
 
-function resolveToolName(serialized: unknown, componentName: string): string {
+// LangChain serializes a `tool()` without a name (only its class id path), so
+// the run name, which LangChain sets to the tool's name, comes before the
+// component name that would otherwise read `langchain.tools.DynamicStructuredTool`.
+function resolveToolName(serialized: unknown, runName: string | undefined, componentName: string): string {
   const candidates = [
     asString(read(serialized, 'name')),
     asString(read(serialized, 'tool_name')),
+    asString(runName),
     componentName,
     'framework_tool',
   ];
@@ -1193,18 +1202,35 @@ function mapChatInputs(messages: unknown): { input: Message[]; systemPrompt: str
     }
 
     for (const message of batch) {
+      const role = extractMessageRole(message);
       const text = extractMessageText(message);
+      if (isSystemRole(role)) {
+        if (text.length > 0) {
+          systemChunks.push(text);
+        }
+        continue;
+      }
+
+      const toolResult = toolResultPart(message, role, text);
+      if (toolResult !== undefined) {
+        output.push({ role: 'tool', parts: [toolResult] });
+        continue;
+      }
+
+      const parts = toolCallParts(message);
+      if (parts.length > 0) {
+        output.push({
+          role: normalizeRole(role),
+          parts: text.length > 0 ? [{ type: 'text', text }, ...parts] : parts,
+        });
+        continue;
+      }
+
       if (text.length === 0) {
         continue;
       }
-
-      if (isSystemRole(extractMessageRole(message))) {
-        systemChunks.push(text);
-        continue;
-      }
-
       output.push({
-        role: normalizeRole(extractMessageRole(message)),
+        role: normalizeRole(role),
         content: text,
       });
     }
@@ -1220,6 +1246,7 @@ function mapOutputMessages(output: unknown): Message[] {
   }
 
   const texts: string[] = [];
+  const toolCalls: MessagePart[] = [];
   for (const candidates of generations) {
     if (!Array.isArray(candidates)) {
       continue;
@@ -1229,14 +1256,69 @@ function mapOutputMessages(output: unknown): Message[] {
       if (text.length > 0) {
         texts.push(text);
       }
+      toolCalls.push(...toolCallParts(read(candidate, 'message')));
     }
   }
 
+  if (toolCalls.length > 0) {
+    const text = texts.join('\n');
+    return [{ role: 'assistant', parts: text.length > 0 ? [{ type: 'text', text }, ...toolCalls] : toolCalls }];
+  }
   if (texts.length === 0) {
     return [];
   }
 
   return [{ role: 'assistant', content: texts.join('\n') }];
+}
+
+// The tool calls an AI message asks for (`AIMessage.tool_calls`), as tool_call
+// parts. Calls without a name are dropped: there is nothing to run.
+function toolCallParts(message: unknown): MessagePart[] {
+  const toolCalls = read(message, 'tool_calls');
+  if (!Array.isArray(toolCalls)) {
+    return [];
+  }
+  const parts: MessagePart[] = [];
+  for (const call of toolCalls) {
+    const name = asString(read(call, 'name'));
+    if (name.length === 0) {
+      continue;
+    }
+    const id = asString(read(call, 'id'));
+    const args = read(call, 'args');
+    const inputJSON = args === undefined ? undefined : stableJSONString(args);
+    parts.push({
+      type: 'tool_call',
+      toolCall: {
+        name,
+        ...(id.length > 0 ? { id } : {}),
+        ...(inputJSON !== undefined ? { inputJSON } : {}),
+      },
+    });
+  }
+  return parts;
+}
+
+// A LangChain `ToolMessage` answers one tool call by `tool_call_id`; map it to
+// a tool_result part so the call and its result can be joined.
+function toolResultPart(message: unknown, role: string, text: string): MessagePart | undefined {
+  if (role.trim().toLowerCase() !== 'tool') {
+    return undefined;
+  }
+  const toolCallId = asString(read(message, 'tool_call_id'));
+  if (toolCallId.length === 0) {
+    return undefined;
+  }
+  const name = asString(read(message, 'name'));
+  return {
+    type: 'tool_result',
+    toolResult: {
+      toolCallId,
+      ...(name.length > 0 ? { name } : {}),
+      ...(text.length > 0 ? { content: text } : {}),
+      ...(asString(read(message, 'status')) === 'error' ? { isError: true } : {}),
+    },
+  };
 }
 
 // Returns the first generation's `message` object, mirroring the Python

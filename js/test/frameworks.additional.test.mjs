@@ -1010,6 +1010,91 @@ test('createAgento11yGoogleAdkPlugin exposes the ADK callback surface', () => {
   }
 });
 
+// Each adapter hands the framework's call id to the shared handler, which puts
+// it on the execute_tool span as gen_ai.tool.call.id.
+function recordToolCallIds(handler) {
+  const ids = [];
+  const original = handler.handleToolStart.bind(handler);
+  handler.handleToolStart = async (...args) => {
+    ids.push(args[7]);
+    await original(...args);
+  };
+  return ids;
+}
+
+test('openai agents hooks pass the tool call id to the tool run', async () => {
+  await captureGenerations(
+    async (client) => {
+      const hooks = new FakeHookEmitter();
+      const registration = withAgento11yOpenAIAgentsHooks(hooks, client);
+      const ids = recordToolCallIds(registration.handler);
+      const context = { context: { conversationId: 'oa-ids' } };
+      const agent = { name: 'triage', model: 'gpt-5' };
+      hooks.emit(
+        'agent_tool_start',
+        context,
+        agent,
+        { name: 'weather_tool' },
+        {
+          toolCall: { callId: 'call-1', name: 'weather_tool', arguments: '{}' },
+        },
+      );
+      hooks.emit('agent_tool_end', context, agent, { name: 'weather_tool' }, '{}', {
+        toolCall: { callId: 'call-1', name: 'weather_tool' },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      assert.deepEqual(ids, ['call-1']);
+      registration.detach();
+    },
+    () => undefined,
+  );
+});
+
+test('llamaindex callbacks pass the tool call id to the tool run', async () => {
+  await captureGenerations(
+    async (client) => {
+      const callbackManager = new FakeCallbackManager();
+      const registration = attachAgento11yLlamaIndexCallbacks(callbackManager, client);
+      const ids = recordToolCallIds(registration.handler);
+      callbackManager.emit('llm-tool-call', {
+        detail: { toolCall: { id: 'call-1', name: 'weather_tool', input: { city: 'Paris' } } },
+      });
+      callbackManager.emit('llm-tool-result', {
+        detail: { toolCall: { id: 'call-1', name: 'weather_tool' }, toolResult: { temp_c: 18 } },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      assert.deepEqual(ids, ['call-1']);
+      registration.detach();
+    },
+    () => undefined,
+  );
+});
+
+test('google adk plugin passes the function call id to the tool run', async () => {
+  await captureGenerations(
+    async (client) => {
+      const plugin = createAgento11yGoogleAdkPlugin(client);
+      const ids = recordToolCallIds(plugin.handler);
+      const invocationContext = {
+        invocationId: 'inv-tool-ids',
+        session: { id: 'conversation-tool-ids' },
+        agent: { name: 'tool-agent' },
+      };
+      await plugin.beforeToolCallback({
+        tool: { name: 'weather_tool' },
+        toolArgs: { city: 'Paris' },
+        toolContext: { invocationContext, functionCallId: 'adk-call-1' },
+      });
+      await plugin.afterToolCallback({
+        toolContext: { invocationContext, functionCallId: 'adk-call-1' },
+        result: { temp_c: 18 },
+      });
+      assert.deepEqual(ids, ['adk-call-1']);
+    },
+    () => undefined,
+  );
+});
+
 class FakeHookEmitter {
   listeners = new Map();
 
