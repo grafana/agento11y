@@ -474,6 +474,11 @@ func TestMapSetsUsageFromTokenSnapshot(t *testing.T) {
 		got.Generation.Usage.TotalTokens != 190 {
 		t.Fatalf("unexpected usage: %+v", got.Generation.Usage)
 	}
+	// input_tokens already counts the cached tokens, so the usage must say so
+	// or they are priced twice.
+	if got.Generation.Usage.InputSemantics != agento11y.TokenInputSemanticsInclusive {
+		t.Fatalf("InputSemantics = %v, want inclusive", got.Generation.Usage.InputSemantics)
+	}
 	if got.Generation.Metadata["codex.token_usage.total.input_tokens"] != int64(260) ||
 		got.Generation.Metadata["codex.token_usage.total.cached_input_tokens"] != int64(140) ||
 		got.Generation.Metadata["codex.token_usage.total.output_tokens"] != int64(40) ||
