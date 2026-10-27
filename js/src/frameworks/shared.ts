@@ -366,8 +366,9 @@ export class Agento11yFrameworkHandler {
     callbackTags?: string[],
     callbackMetadata?: AnyRecord,
     runName?: string,
-    toolCallId?: string,
     extraParams?: AnyRecord,
+    // Appended last, so subclasses that pass extraParams positionally keep working.
+    toolCallId?: string,
   ): void {
     const runKey = String(runId);
     if (runKey.length === 0 || this.toolRuns.has(runKey)) {
@@ -1121,6 +1122,8 @@ function normalizeRunID(runId: string | undefined): string {
 // LangChain serializes a `tool()` without a name (only its class id path), so
 // the run name, which LangChain sets to the tool's name, comes before the
 // component name that would otherwise read `langchain.tools.DynamicStructuredTool`.
+// The run name is user-overridable: a custom `runName` on the invoke wins over
+// the class path, and is what the span records.
 function resolveToolName(serialized: unknown, runName: string | undefined, componentName: string): string {
   const candidates = [
     asString(read(serialized, 'name')),
@@ -1221,7 +1224,7 @@ function mapChatInputs(messages: unknown): { input: Message[]; systemPrompt: str
       if (parts.length > 0) {
         output.push({
           role: normalizeRole(role),
-          parts: text.length > 0 ? [{ type: 'text', text }, ...parts] : parts,
+          parts: withLeadingText(text, parts),
         });
         continue;
       }
@@ -1245,30 +1248,32 @@ function mapOutputMessages(output: unknown): Message[] {
     return [];
   }
 
+  // A candidate that calls tools keeps its own message, as in the Python
+  // handler: with n > 1, merging would credit one candidate with another's
+  // calls. Text-only candidates are joined, as before.
   const texts: string[] = [];
-  const toolCalls: MessagePart[] = [];
+  const toolCallMessages: Message[] = [];
   for (const candidates of generations) {
     if (!Array.isArray(candidates)) {
       continue;
     }
     for (const candidate of candidates) {
       const text = extractGenerationText(candidate);
-      if (text.length > 0) {
+      const toolCalls = toolCallParts(read(candidate, 'message'));
+      if (toolCalls.length > 0) {
+        toolCallMessages.push({ role: 'assistant', parts: withLeadingText(text, toolCalls) });
+      } else if (text.length > 0) {
         texts.push(text);
       }
-      toolCalls.push(...toolCallParts(read(candidate, 'message')));
     }
   }
 
-  if (toolCalls.length > 0) {
-    const text = texts.join('\n');
-    return [{ role: 'assistant', parts: text.length > 0 ? [{ type: 'text', text }, ...toolCalls] : toolCalls }];
-  }
-  if (texts.length === 0) {
-    return [];
-  }
+  const textMessages: Message[] = texts.length > 0 ? [{ role: 'assistant', content: texts.join('\n') }] : [];
+  return [...textMessages, ...toolCallMessages];
+}
 
-  return [{ role: 'assistant', content: texts.join('\n') }];
+function withLeadingText(text: string, parts: MessagePart[]): MessagePart[] {
+  return text.length > 0 ? [{ type: 'text', text }, ...parts] : parts;
 }
 
 // The tool calls an AI message asks for (`AIMessage.tool_calls`), as tool_call
@@ -1302,7 +1307,7 @@ function toolCallParts(message: unknown): MessagePart[] {
 // A LangChain `ToolMessage` answers one tool call by `tool_call_id`; map it to
 // a tool_result part so the call and its result can be joined.
 function toolResultPart(message: unknown, role: string, text: string): MessagePart | undefined {
-  if (role.trim().toLowerCase() !== 'tool') {
+  if (normalizeRole(role) !== 'tool') {
     return undefined;
   }
   const toolCallId = asString(read(message, 'tool_call_id'));
@@ -1316,7 +1321,7 @@ function toolResultPart(message: unknown, role: string, text: string): MessagePa
       toolCallId,
       ...(name.length > 0 ? { name } : {}),
       ...(text.length > 0 ? { content: text } : {}),
-      ...(asString(read(message, 'status')) === 'error' ? { isError: true } : {}),
+      ...(asString(read(message, 'status')).toLowerCase() === 'error' ? { isError: true } : {}),
     },
   };
 }

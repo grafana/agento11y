@@ -152,6 +152,7 @@ class Agento11yStrandsHookProvider:
             metadata=metadata,
             run_name=tool_name,
             inputs=tool_input,
+            tool_call_id=tool_use_id,
         )
 
     def after_tool_call(self, event: Any) -> None:

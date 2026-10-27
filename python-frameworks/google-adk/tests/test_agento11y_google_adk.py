@@ -13,6 +13,7 @@ from agento11y_google_adk import (
     Agento11yGoogleAdkCallbacks,
     Agento11yGoogleAdkHandler,
     Agento11yGoogleAdkPlugin,
+    create_agento11y_google_adk_callbacks,
     create_agento11y_google_adk_handler,
     create_agento11y_google_adk_plugin,
     with_agento11y_google_adk_callbacks,
@@ -772,3 +773,37 @@ def test_agento11y_google_adk_plugin_tracks_nested_agent_chain_runs() -> None:
 
     end_run_ids = [entry["kwargs"]["run_id"] for entry in capture.ends]
     assert end_run_ids == [child_agent_run_id, parent_agent_run_id, invocation_run_id]
+
+
+def test_agento11y_google_adk_tool_span_carries_the_function_call_id() -> None:
+    exporter = _CapturingExporter()
+    span_exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    client = _new_client(exporter, tracer=provider.get_tracer("agento11y-google-adk-tool-ids"))
+
+    class _ToolContext:
+        def __init__(self, function_call_id: str) -> None:
+            self.invocation_id = "adk-tool-ids-42"
+            self.function_call_id = function_call_id
+
+    try:
+        callbacks = create_agento11y_google_adk_callbacks(client=client)
+
+        async def _run() -> None:
+            for call_id in ("adk-call-1", ""):
+                context = _ToolContext(call_id)
+                await callbacks.before_tool_callback({"name": "weather_tool"}, {"city": "Paris"}, context)
+                await callbacks.after_tool_callback({"name": "weather_tool"}, {"city": "Paris"}, context, {"ok": True})
+
+        asyncio.run(_run())
+
+        spans = [
+            span
+            for span in span_exporter.get_finished_spans()
+            if span.attributes.get("gen_ai.operation.name") == "execute_tool"
+        ]
+        assert [span.attributes.get("gen_ai.tool.call.id") for span in spans] == ["adk-call-1", None]
+    finally:
+        client.shutdown()
+        provider.shutdown()

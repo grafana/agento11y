@@ -899,3 +899,56 @@ def test_agento11y_pydantic_ai_handler_explicitly_has_no_embedding_lifecycle() -
         assert not hasattr(handler, "on_embedding_error")
     finally:
         client.shutdown()
+
+
+def test_agento11y_pydantic_ai_capability_tool_span_carries_the_tool_call_id() -> None:
+    exporter = _CapturingExporter()
+    span_exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    client = _new_client(exporter, tracer=provider.get_tracer("agento11y-pydantic-ai-tool-ids"))
+
+    class _RunContext:
+        run_id = "pydantic-tool-ids-42"
+        deps = None
+        metadata = None
+        model = None
+        agent = None
+
+    class _ToolCall:
+        tool_name = "weather_tool"
+
+        def __init__(self, tool_call_id: str) -> None:
+            self.tool_call_id = tool_call_id
+
+    class _ToolDef:
+        name = "weather_tool"
+        description = "Get weather info"
+
+    try:
+        capability = create_agento11y_pydantic_ai_capability(client=client)
+
+        async def _run() -> None:
+            async def handler(args: Any) -> Any:
+                return {"temperature": 22}
+
+            for call_id in ("call-1", ""):
+                await capability.wrap_tool_execute(
+                    ctx=_RunContext(),
+                    call=_ToolCall(call_id),
+                    tool_def=_ToolDef(),
+                    args={"city": "Paris"},
+                    handler=handler,
+                )
+
+        asyncio.run(_run())
+
+        spans = [
+            span
+            for span in span_exporter.get_finished_spans()
+            if span.attributes.get("gen_ai.operation.name") == "execute_tool"
+        ]
+        assert [span.attributes.get("gen_ai.tool.call.id") for span in spans] == ["call-1", None]
+    finally:
+        client.shutdown()
+        provider.shutdown()

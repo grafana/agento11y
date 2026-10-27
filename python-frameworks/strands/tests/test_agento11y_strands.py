@@ -19,6 +19,9 @@ from agento11y_strands import (
     create_agento11y_strands_hook_provider,
     with_agento11y_strands_hooks,
 )
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 
 class _CapturingExporter:
@@ -677,3 +680,45 @@ def test_strands_cache_token_usage_is_preserved() -> None:
         assert generation.usage.cache_write_input_tokens == 10
     finally:
         client.shutdown()
+
+
+def test_strands_tool_span_carries_the_tool_use_id() -> None:
+    span_exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    client = Client(
+        ClientConfig(
+            generation_export=GenerationExportConfig(batch_size=10, flush_interval=timedelta(seconds=60)),
+            generation_exporter=_CapturingExporter(),
+            tracer=provider.get_tracer("agento11y-strands-tool-ids"),
+        )
+    )
+
+    try:
+        hooks = create_agento11y_strands_hook_provider(client=client)
+        agent = _agent()
+        invocation_state = {"conversation_id": "conv-tool-ids"}
+        for tool_use_id in ("toolu_1", ""):
+            tool_use = {"toolUseId": tool_use_id, "name": "lookup", "input": {"query": "hello"}}
+            hooks.before_tool_call(
+                SimpleNamespace(agent=agent, invocation_state=invocation_state, tool_use=tool_use, selected_tool=None)
+            )
+            hooks.after_tool_call(
+                SimpleNamespace(
+                    agent=agent,
+                    invocation_state=invocation_state,
+                    tool_use=tool_use,
+                    result={"ok": True},
+                    exception=None,
+                )
+            )
+
+        spans = [
+            span
+            for span in span_exporter.get_finished_spans()
+            if span.attributes.get("gen_ai.operation.name") == "execute_tool"
+        ]
+        assert [span.attributes.get("gen_ai.tool.call.id") for span in spans] == ["toolu_1", None]
+    finally:
+        client.shutdown()
+        provider.shutdown()

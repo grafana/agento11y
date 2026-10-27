@@ -212,6 +212,9 @@ class Agento11yOpenAIAgentsRunHooks(RunHooks):
             metadata=_context_metadata(context),
             run_name=tool_name,
             inputs=tool_input,
+            # Function tools run with a ToolContext that carries the model's call
+            # id; hosted tools get a plain context without one.
+            tool_call_id=_as_string(_read(context, "tool_call_id")),
         )
 
     async def on_tool_end(self, context: Any, agent: Any, tool: Any, result: Any) -> None:

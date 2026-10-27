@@ -83,7 +83,7 @@ export class Agento11yLlamaIndexHandler extends Agento11yFrameworkHandler {
     runName?: string,
     toolCallId?: string,
   ): Promise<void> {
-    this.onToolStart(serialized, input, runId, parentRunId, tags, metadata, runName, toolCallId);
+    this.onToolStart(serialized, input, runId, parentRunId, tags, metadata, runName, undefined, toolCallId);
   }
 
   async handleToolEnd(output: unknown, runId: string): Promise<void> {

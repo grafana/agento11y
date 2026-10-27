@@ -172,6 +172,7 @@ class Agento11yGoogleAdkCallbacks:
             metadata=metadata,
             run_name=tool_name,
             inputs=args,
+            tool_call_id=function_call_id,
         )
         return None
 

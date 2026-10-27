@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
+import { tool } from '@langchain/core/tools';
 import { context, SpanStatusCode, trace } from '@opentelemetry/api';
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { Agento11yLangChainHandler } from '../.test-dist/frameworks/langchain/index.js';
@@ -971,6 +973,113 @@ test('langchain maps tool messages and earlier tool calls in the input', async (
     {
       role: 'tool',
       parts: [{ type: 'tool_result', toolResult: { toolCallId: 'call_2', content: 'city not found', isError: true } }],
+    },
+  ]);
+});
+
+test('langchain records a real tool() run with its name and call id', async () => {
+  const getWeather = tool(async ({ city }) => `sunny in ${city}`, {
+    name: 'get_weather',
+    description: 'Weather for a city',
+    schema: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] },
+  });
+  const spans = await captureToolSpans(async (handler) => {
+    await getWeather.invoke(
+      { id: 'call_1', name: 'get_weather', args: { city: 'Paris' }, type: 'tool_call' },
+      { callbacks: [handler] },
+    );
+  });
+
+  assert.equal(spans.length, 1);
+  assert.equal(spans[0].attributes['gen_ai.tool.name'], 'get_weather');
+  assert.equal(spans[0].attributes['gen_ai.tool.call.id'], 'call_1');
+});
+
+test('langchain maps real AIMessage and ToolMessage instances', async () => {
+  const generation = await captureSingleGeneration(async (client) => {
+    const handler = new Agento11yLangChainHandler(client);
+    await handler.handleChatModelStart(
+      { name: 'ChatOpenAI' },
+      [
+        [
+          new HumanMessage('weather in Paris?'),
+          new AIMessage({
+            content: '',
+            tool_calls: [{ id: 'call_1', name: 'get_weather', args: { city: 'Paris' }, type: 'tool_call' }],
+          }),
+          new ToolMessage({ content: 'sunny', tool_call_id: 'call_1', name: 'get_weather' }),
+          new ToolMessage({ content: 'boom', tool_call_id: 'call_0', status: 'error' }),
+        ],
+      ],
+      'run-1',
+    );
+    await handler.handleLLMEnd(
+      {
+        generations: [
+          [
+            {
+              text: '',
+              message: new AIMessage({
+                content: '',
+                tool_calls: [{ id: 'call_2', name: 'get_forecast', args: { city: 'Paris' }, type: 'tool_call' }],
+              }),
+            },
+          ],
+        ],
+      },
+      'run-1',
+    );
+  });
+
+  assert.deepEqual(plain(generation.input), [
+    { role: 'user', content: 'weather in Paris?' },
+    {
+      role: 'assistant',
+      parts: [{ type: 'tool_call', toolCall: { name: 'get_weather', id: 'call_1', inputJSON: '{"city":"Paris"}' } }],
+    },
+    {
+      role: 'tool',
+      parts: [{ type: 'tool_result', toolResult: { toolCallId: 'call_1', name: 'get_weather', content: 'sunny' } }],
+    },
+    {
+      role: 'tool',
+      parts: [{ type: 'tool_result', toolResult: { toolCallId: 'call_0', content: 'boom', isError: true } }],
+    },
+  ]);
+  assert.deepEqual(plain(generation.output), [
+    {
+      role: 'assistant',
+      parts: [{ type: 'tool_call', toolCall: { name: 'get_forecast', id: 'call_2', inputJSON: '{"city":"Paris"}' } }],
+    },
+  ]);
+});
+
+test('langchain keeps each candidate that calls tools in its own message', async () => {
+  const candidate = (text, id) => ({
+    text,
+    message: { type: 'ai', content: text, tool_calls: [{ id, name: 'get_weather', args: {} }] },
+  });
+  const generation = await captureSingleGeneration(async (client) => {
+    const handler = new Agento11yLangChainHandler(client);
+    await handler.handleChatModelStart({ name: 'ChatOpenAI' }, [[{ type: 'human', content: 'weather?' }]], 'run-1');
+    await handler.handleLLMEnd(
+      { generations: [[candidate('', 'call_a'), candidate('Checking.', 'call_b'), { text: 'Plain answer.' }]] },
+      'run-1',
+    );
+  });
+
+  assert.deepEqual(plain(generation.output), [
+    { role: 'assistant', content: 'Plain answer.' },
+    {
+      role: 'assistant',
+      parts: [{ type: 'tool_call', toolCall: { name: 'get_weather', id: 'call_a', inputJSON: '{}' } }],
+    },
+    {
+      role: 'assistant',
+      parts: [
+        { type: 'text', text: 'Checking.' },
+        { type: 'tool_call', toolCall: { name: 'get_weather', id: 'call_b', inputJSON: '{}' } },
+      ],
     },
   ]);
 });

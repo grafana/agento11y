@@ -161,6 +161,7 @@ class Agento11yPydanticAICapability(AbstractCapability):
             metadata=metadata,
             run_name=tool_name,
             inputs=args,
+            tool_call_id=_as_string(_read(call, "tool_call_id")),
         )
 
         try:

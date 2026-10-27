@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import timedelta
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -14,6 +15,7 @@ from agento11y_openai_agents import (
     Agento11yOpenAIAgentsHandler,
     Agento11yOpenAIAgentsRunHooks,
     create_agento11y_openai_agents_handler,
+    create_agento11y_openai_agents_hooks,
     with_agento11y_openai_agents_hooks,
 )
 from agents import RunHooks
@@ -361,3 +363,37 @@ def test_agento11y_openai_agents_handler_explicitly_has_no_embedding_lifecycle()
         assert not hasattr(handler, "on_embedding_error")
     finally:
         client.shutdown()
+
+
+def test_agento11y_openai_agents_tool_span_carries_the_tool_call_id() -> None:
+    exporter = _CapturingExporter()
+    span_exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    client = _new_client(exporter, tracer=provider.get_tracer("agento11y-openai-agents-tool-ids"))
+
+    try:
+        hooks = create_agento11y_openai_agents_hooks(client=client)
+        agent = SimpleNamespace(name="triage")
+        tool = SimpleNamespace(name="weather_tool")
+
+        async def _run() -> None:
+            # Function tools get a ToolContext carrying the call id; hosted tools get none.
+            for context in (
+                SimpleNamespace(tool_call_id="call-1", tool_input={"city": "Paris"}),
+                SimpleNamespace(tool_input={"city": "Rome"}),
+            ):
+                await hooks.on_tool_start(context, agent, tool)
+                await hooks.on_tool_end(context, agent, tool, "sunny")
+
+        asyncio.run(_run())
+
+        spans = [
+            span
+            for span in span_exporter.get_finished_spans()
+            if span.attributes.get("gen_ai.operation.name") == "execute_tool"
+        ]
+        assert [span.attributes.get("gen_ai.tool.call.id") for span in spans] == ["call-1", None]
+    finally:
+        client.shutdown()
+        provider.shutdown()
