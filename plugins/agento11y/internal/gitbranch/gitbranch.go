@@ -192,6 +192,10 @@ func repoFromRemoteURL(raw string) string {
 	if s == "" {
 		return ""
 	}
+	if schemeRe.MatchString(s) {
+		s, _, _ = strings.Cut(s, "?")
+		s, _, _ = strings.Cut(s, "#")
+	}
 	var path string
 	switch {
 	case strings.HasPrefix(s, "file://"):

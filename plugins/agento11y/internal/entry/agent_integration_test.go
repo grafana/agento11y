@@ -41,15 +41,7 @@ func TestAgentIntegration(t *testing.T) {
 	// A CLI started from inside another agent session inherits that session's
 	// variables, and they change the run: CLAUDE_CODE_EAGER_FLUSH alone hides
 	// the Stop-before-transcript race. Start every CLI without them.
-	for _, kv := range os.Environ() {
-		key, _, _ := strings.Cut(kv, "=")
-		for _, prefix := range []string{"CLAUDE", "ANTHROPIC_", "CODEX_", "OPENAI_"} {
-			if strings.HasPrefix(key, prefix) {
-				t.Setenv(key, "") // restores the value after the test
-				_ = os.Unsetenv(key)
-			}
-		}
-	}
+	clearAgentEnvironment(t)
 
 	binDir := t.TempDir()
 	build := exec.Command("go", "build", "-o", filepath.Join(binDir, "agento11y"), "github.com/grafana/agento11y/plugins/agento11y/cmd/agento11y")
@@ -148,20 +140,50 @@ func TestAgentIntegration(t *testing.T) {
 			if !strings.Contains(","+selected+",", ","+cli.name+",") {
 				t.Skipf("%s not in AGENT_CLI_TESTS", cli.name)
 			}
-			stateDir, capture := startHookExport(t, cli.sc)
-			workDir := t.TempDir()
-			model.reset()
+			for _, mode := range []string{"full", "metadata_only", "default"} {
+				t.Run(mode, func(t *testing.T) {
+					sc := cli.sc
+					if mode != "full" {
+						sc.Invariants.AnyGeneration = nil
+					}
+					stateDir, capture := startHookExport(t, sc)
+					workDir := t.TempDir()
+					var telemetry *agentOTLPCapture
+					if mode != "full" {
+						telemetry = newAgentOTLPCapture(t)
+						t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", telemetry.server.URL)
+						t.Setenv("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf")
+						workDir = setupAgentMetadataFixture(t)
+						unsetTestEnv(t, "AGENTO11Y_CONTENT_CAPTURE_MODE", "SIGIL_CONTENT_CAPTURE_MODE")
+						if mode != "default" {
+							t.Setenv("AGENTO11Y_CONTENT_CAPTURE_MODE", mode)
+						}
+					}
+					model.reset()
 
-			var output []string
-			for _, argv := range cli.commands {
-				output = append(output, runAgentCommand(t, workDir, argv))
-			}
-			output = append(output, model.requestLog()...)
-			bodies := checkExports(t, cli.name, cli.sc, stateDir, output, capture.snapshot())
-			if cli.name == "codex" {
-				if err := validateCodexToolResult(bodies); err != nil {
-					t.Fatal(err)
-				}
+					var output []string
+					for _, argv := range cli.commands {
+						output = append(output, runAgentCommand(t, workDir, argv))
+					}
+					output = append(output, model.requestLog()...)
+					registerExportDiagnostics(t, stateDir, output)
+					captured := capture.snapshot()
+					if mode != "full" {
+						checkAgentAccounts(t)
+						if err := validateMetadataExports(captured, sc.Agent); err != nil {
+							t.Fatal(err)
+						}
+						if err := telemetry.validate(sc.Agent); err != nil {
+							t.Fatal(err)
+						}
+					}
+					bodies := checkExports(t, cli.name, sc, captured)
+					if cli.name == "codex" && mode == "full" {
+						if err := validateCodexToolResult(bodies); err != nil {
+							t.Fatal(err)
+						}
+					}
+				})
 			}
 		})
 	}
@@ -237,7 +259,7 @@ func newAgentCommand(ctx context.Context, dir string, argv []string) *exec.Cmd {
 }
 
 const (
-	fakeModelName  = "fake-model"
+	fakeModelName  = "gpt-fake-model"
 	fakeToolOutput = "hello-from-fake"
 	fakeToolCallID = "call_fake"
 )
