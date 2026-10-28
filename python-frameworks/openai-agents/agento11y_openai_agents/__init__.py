@@ -73,7 +73,7 @@ class Agento11yOpenAIAgentsRunHooks(RunHooks):
         self._llm_run_stacks: dict[tuple[int, int], list[UUID]] = {}
         self._tool_run_stacks: dict[tuple[int, int, str | None], list[UUID]] = {}
         self._agent_runs_by_usage: dict[int, list[UUID]] = {}
-        self._tool_runs_by_usage: dict[int, dict[UUID, bool]] = {}
+        self._tool_runs_by_usage: dict[tuple[int, int], dict[UUID, bool]] = {}
 
     async def on_agent_start(self, context: Any, agent: Any) -> None:
         await _invoke_delegate(self._delegate, "on_agent_start", context, agent)
@@ -86,10 +86,10 @@ class Agento11yOpenAIAgentsRunHooks(RunHooks):
         parent_run_id = stack[-1][1] if stack else None
         if not stack:
             # Nested agent tools have their own run key but share outer Usage.
-            # AgentHookContext loses the invoking tool's call ID, so under
-            # concurrency claim the oldest unclaimed active tool as a heuristic.
+            # AgentHookContext loses the invoking tool's call ID, so claim the
+            # oldest unclaimed active agent tool targeting this agent only.
             # Without one, use the oldest active agent in the shared usage group.
-            tools = self._tool_runs_by_usage.get(usage_key, {})
+            tools = self._tool_runs_by_usage.get((usage_key, id(agent)), {})
             for tool_run_id, claimed in tools.items():
                 if not claimed:
                     parent_run_id = tool_run_id
@@ -219,7 +219,10 @@ class Agento11yOpenAIAgentsRunHooks(RunHooks):
         tool_stack = self._tool_run_stacks.setdefault(tool_key, [])
         run_id = uuid4()
         tool_stack.append(run_id)
-        self._tool_runs_by_usage.setdefault(_usage_context_key(context), {})[run_id] = False
+        agent_instance = getattr(tool, "_agent_instance", None)
+        if getattr(tool, "_is_agent_tool", False) and agent_instance is not None:
+            agent_tool_key = (_usage_context_key(context), id(agent_instance))
+            self._tool_runs_by_usage.setdefault(agent_tool_key, {})[run_id] = False
 
         llm_stack = self._llm_run_stacks.get((context_key, id(agent)), [])
         if llm_stack:
@@ -246,11 +249,11 @@ class Agento11yOpenAIAgentsRunHooks(RunHooks):
         tool_stack = self._tool_run_stacks.get(tool_key, [])
         run_id = tool_stack.pop() if tool_stack else None
         if run_id is not None:
-            usage_key = _usage_context_key(context)
-            tools = self._tool_runs_by_usage.get(usage_key, {})
+            agent_tool_key = (_usage_context_key(context), id(getattr(tool, "_agent_instance", None)))
+            tools = self._tool_runs_by_usage.get(agent_tool_key, {})
             tools.pop(run_id, None)
             if not tools:
-                self._tool_runs_by_usage.pop(usage_key, None)
+                self._tool_runs_by_usage.pop(agent_tool_key, None)
             await _invoke_handler(self._agento11y_handler, "on_tool_end", result, run_id=run_id)
         if not tool_stack:
             self._tool_run_stacks.pop(tool_key, None)

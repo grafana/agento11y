@@ -548,7 +548,7 @@ def test_parallel_runs_of_same_agent_tool_keep_their_own_lineage(end_order, pare
     hooks = Agento11yOpenAIAgentsRunHooks(agento11y_handler=handler)
     parent = SimpleNamespace(name="parent", model="gpt-4o-mini")
     agent = SimpleNamespace(name="child", model="gpt-4o-mini")
-    tool = SimpleNamespace(name="child_tool")
+    tool = SimpleNamespace(name="child_tool", _is_agent_tool=True, _agent_instance=agent)
     inner_tool = SimpleNamespace(name="lookup")
     context = RunContextWrapper(context=None)
     tool_contexts = [
@@ -640,6 +640,96 @@ def test_parallel_runs_of_same_agent_tool_keep_their_own_lineage(end_order, pare
     finally:
         client.shutdown()
         provider.shutdown()
+
+
+@pytest.mark.parametrize("start_second_tool_early", [False, True])
+def test_sibling_agent_tools_keep_their_parents_when_inner_tools_overlap(start_second_tool_early) -> None:
+    handler = Mock()
+    hooks = Agento11yOpenAIAgentsRunHooks(agento11y_handler=handler)
+    context = RunContextWrapper(context=None)
+    parent = SimpleNamespace(name="parent")
+    agents = [SimpleNamespace(name=f"child-{index}") for index in range(2)]
+    tools = [
+        SimpleNamespace(name=f"child_tool_{index}", _is_agent_tool=True, _agent_instance=agent)
+        for index, agent in enumerate(agents)
+    ]
+    tool_contexts = [
+        ToolContext.from_agent_context(context, tool_call_id=f"call-{index}", tool_name=tool.name, tool_arguments="{}")
+        for index, tool in enumerate(tools)
+    ]
+    contexts = [RunContextWrapper(context=None, usage=context.usage) for _ in agents]
+    first, second = (1, 0) if start_second_tool_early else (0, 1)
+    inner_tool = SimpleNamespace(name="lookup")
+    inner_context = ToolContext.from_agent_context(
+        contexts[first], tool_call_id="lookup", tool_name=inner_tool.name, tool_arguments="{}"
+    )
+
+    async def run() -> None:
+        await hooks.on_agent_start(_agent_hook_context(context), parent)
+        await hooks.on_tool_start(tool_contexts[0], parent, tools[0])
+        if start_second_tool_early:
+            await hooks.on_tool_start(tool_contexts[1], parent, tools[1])
+        await hooks.on_agent_start(_agent_hook_context(contexts[first]), agents[first])
+        await hooks.on_tool_start(inner_context, agents[first], inner_tool)
+        if not start_second_tool_early:
+            await hooks.on_tool_start(tool_contexts[1], parent, tools[1])
+        # The sibling starts while its cousin's ordinary tool is still active.
+        await hooks.on_agent_start(_agent_hook_context(contexts[second]), agents[second])
+        await hooks.on_tool_end(inner_context, agents[first], inner_tool, "Found.")
+        for index in (first, second):
+            await hooks.on_agent_end(_agent_hook_context(contexts[index]), agents[index], "Done.")
+            await hooks.on_tool_end(tool_contexts[index], parent, tools[index], "Done.")
+        await hooks.on_agent_end(_agent_hook_context(context), parent, "Done.")
+
+    asyncio.run(run())
+    tool_starts = {call.kwargs["run_name"]: call.kwargs["run_id"] for call in handler.on_tool_start.call_args_list}
+    agent_starts = {call.kwargs["run_name"]: call for call in handler.on_chain_start.call_args_list}
+    for index in range(2):
+        assert agent_starts[f"child-{index}"].kwargs["parent_run_id"] == tool_starts[f"child_tool_{index}"]
+    inner_start = next(call for call in handler.on_tool_start.call_args_list if call.kwargs["run_name"] == "lookup")
+    assert inner_start.kwargs["parent_run_id"] == agent_starts[f"child-{first}"].kwargs["run_id"]
+    assert not hooks._agent_run_stacks
+    assert not hooks._llm_run_stacks
+    assert not hooks._tool_run_stacks
+    assert not hooks._agent_runs_by_usage
+    assert not hooks._tool_runs_by_usage
+
+
+@pytest.mark.parametrize("tool_metadata", ["legacy", "marker_only", "instance_only", "ended"])
+def test_nested_agent_falls_back_when_no_agent_tool_is_claimable(tool_metadata) -> None:
+    handler = Mock()
+    hooks = Agento11yOpenAIAgentsRunHooks(agento11y_handler=handler)
+    context = RunContextWrapper(context=None)
+    child_context = RunContextWrapper(context=None, usage=context.usage)
+    parent = SimpleNamespace(name="parent")
+    child = SimpleNamespace(name="child")
+    tool = SimpleNamespace(name="child_tool")
+    if tool_metadata in ("marker_only", "ended"):
+        tool._is_agent_tool = True
+    if tool_metadata in ("instance_only", "ended"):
+        tool._agent_instance = child
+
+    async def run() -> None:
+        await hooks.on_agent_start(_agent_hook_context(context), parent)
+        await hooks.on_tool_start(context, parent, tool)
+        if tool_metadata == "ended":
+            await hooks.on_tool_end(context, parent, tool, "Done.")
+        assert not hooks._tool_runs_by_usage
+        await hooks.on_agent_start(_agent_hook_context(child_context), child)
+        await hooks.on_agent_end(_agent_hook_context(child_context), child, "Done.")
+        if tool_metadata != "ended":
+            await hooks.on_tool_end(context, parent, tool, "Done.")
+        # Unmatched end callbacks must also be harmless.
+        await hooks.on_tool_end(context, parent, tool, "Done.")
+        await hooks.on_agent_end(_agent_hook_context(context), parent, "Done.")
+
+    asyncio.run(run())
+    starts = handler.on_chain_start.call_args_list
+    assert starts[1].kwargs["parent_run_id"] == starts[0].kwargs["run_id"]
+    assert not hooks._agent_run_stacks
+    assert not hooks._tool_run_stacks
+    assert not hooks._agent_runs_by_usage
+    assert not hooks._tool_runs_by_usage
 
 
 @pytest.mark.parametrize("shared_usage", [False, True])
