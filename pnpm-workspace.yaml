@@ -15,7 +15,7 @@ overrides:
   '@tootallnate/once': 2.0.1
   fast-xml-builder: 1.1.7
   '@hono/node-server': 2.1.5
-  ip-address: 10.7.4
+  ip-address: 10.7.5
   qs: 6.16.1
   'form-data@<2.5.6': 2.5.6
   'brace-expansion@5': 5.0.12
