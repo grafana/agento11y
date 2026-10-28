@@ -616,8 +616,7 @@ func (s *Server) handleOTLP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "decode traces: "+decodeErr.Error(), http.StatusBadRequest)
 			return
 		}
-		// protojson uses base64 byte IDs, not standard OTLP JSON hex IDs.
-		// Never acknowledge generation records through that lossy decoder.
+		// Generation ingestion currently supports only protobuf.
 		if strings.Contains(strings.ToLower(contentType), "json") && traceHasGenerationMarker(request) {
 			http.Error(w, "generation traces require protobuf", http.StatusBadRequest)
 			return
