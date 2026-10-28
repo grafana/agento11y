@@ -26,7 +26,6 @@ import com.openai.models.responses.ResponseCreateParams;
 import com.openai.models.responses.ResponseStreamEvent;
 import io.opentelemetry.api.GlobalOpenTelemetry;
 import java.io.IOException;
-import java.lang.reflect.Field;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -38,7 +37,7 @@ class OpenAiConformanceTest {
     @Test
     void chatSyncWrapperSetsSyncModeAndRawArtifactsOffByDefault() throws Exception {
         CapturingExporter exporter = new CapturingExporter();
-        try (Agento11yClient client = newClient(exporter)) {
+        try (Agento11yClient client = newClient(exporter, 1)) {
             ChatCompletion response = OpenAiChatCompletions.create(
                     client,
                     chatRequestFixture(),
@@ -55,7 +54,7 @@ class OpenAiConformanceTest {
     @Test
     void chatStreamWrapperSetsStreamModeAndRawArtifactsOnlyWithOptIn() throws Exception {
         CapturingExporter exporter = new CapturingExporter();
-        try (Agento11yClient client = newClient(exporter)) {
+        try (Agento11yClient client = newClient(exporter, 1)) {
             OpenAiChatCompletions.createStreaming(
                     client,
                     chatRequestFixture(),
@@ -74,7 +73,7 @@ class OpenAiConformanceTest {
     @Test
     void responsesSyncWrapperMapsUsageAndStopReason() throws Exception {
         CapturingExporter exporter = new CapturingExporter();
-        try (Agento11yClient client = newClient(exporter)) {
+        try (Agento11yClient client = newClient(exporter, 1)) {
             Response response = OpenAiResponses.create(
                     client,
                     responsesRequestFixture(),
@@ -95,7 +94,7 @@ class OpenAiConformanceTest {
     @Test
     void responsesStreamWrapperFallsBackToEventsWhenFinalResponseMissing() throws Exception {
         CapturingExporter exporter = new CapturingExporter();
-        try (Agento11yClient client = newClient(exporter)) {
+        try (Agento11yClient client = newClient(exporter, 1)) {
             OpenAiResponses.createStreaming(
                     client,
                     responsesRequestFixture(),
@@ -113,7 +112,7 @@ class OpenAiConformanceTest {
     @Test
     void providerErrorsPopulateCallErrorForChatAndResponses() throws Exception {
         CapturingExporter chatExporter = new CapturingExporter();
-        try (Agento11yClient client = newClient(chatExporter)) {
+        try (Agento11yClient client = newClient(chatExporter, 1)) {
             assertThatThrownBy(() -> OpenAiChatCompletions.create(
                     client,
                     chatRequestFixture(),
@@ -125,7 +124,7 @@ class OpenAiConformanceTest {
         }
 
         CapturingExporter responsesExporter = new CapturingExporter();
-        try (Agento11yClient client = newClient(responsesExporter)) {
+        try (Agento11yClient client = newClient(responsesExporter, 1)) {
             assertThatThrownBy(() -> OpenAiResponses.create(
                     client,
                     responsesRequestFixture(),
@@ -139,7 +138,7 @@ class OpenAiConformanceTest {
 
     @Test
     void wrappersTolerateMissingProviderPayloadFields() throws Exception {
-        try (Agento11yClient client = newClient(new CapturingExporter())) {
+        try (Agento11yClient client = newClient(new CapturingExporter(), 1)) {
             OpenAiChatCompletions.create(
                     client,
                     chatRequestFixture(),
@@ -163,7 +162,7 @@ class OpenAiConformanceTest {
             assertThat(chatGeneration.getStopReason()).isEmpty();
         }
 
-        try (Agento11yClient client = newClient(new CapturingExporter())) {
+        try (Agento11yClient client = newClient(new CapturingExporter(), 1)) {
             OpenAiResponses.createStreaming(
                     client,
                     responsesRequestFixture(),
@@ -245,7 +244,12 @@ class OpenAiConformanceTest {
     }
 
     private static Agento11yClient newClient(CapturingExporter exporter) {
+        return newClient(exporter, 0);
+    }
+
+    private static Agento11yClient newClient(CapturingExporter exporter, int debugBufferSize) {
         return new Agento11yClient(new Agento11yClientConfig()
+                .setDebugBufferSize(debugBufferSize)
                 .setTracer(GlobalOpenTelemetry.getTracer("test"))
                 .setGenerationExporter(exporter)
                 .setGenerationExport(new GenerationExportConfig()
@@ -523,11 +527,8 @@ class OpenAiConformanceTest {
         }
     }
 
-    @SuppressWarnings("unchecked")
-    private static Generation singleDebugGeneration(Agento11yClient client) throws Exception {
-        Field field = Agento11yClient.class.getDeclaredField("generations");
-        field.setAccessible(true);
-        List<Generation> generations = (List<Generation>) field.get(client);
+    private static Generation singleDebugGeneration(Agento11yClient client) {
+        List<Generation> generations = client.debugSnapshot().getGenerations();
         assertThat(generations).hasSize(1);
         return generations.get(0);
     }

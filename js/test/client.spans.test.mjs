@@ -19,7 +19,7 @@ class CapturingExporter {
 }
 
 test('overlapping async generations parent bound tools without an ambient context manager', async () => {
-  const harness = newHarness();
+  const harness = newHarness({ debugBufferSize: 0 });
   let release;
   const ready = new Promise((resolve) => {
     release = resolve;
@@ -65,6 +65,8 @@ test('overlapping async generations parent bound tools without an ambient contex
       assert.equal(generation.spanId, parent.spanContext().spanId);
     }
     assert.equal(context.active(), activeContext);
+    assert.deepEqual(harness.client.debugSnapshot().generations, []);
+    assert.deepEqual(harness.client.debugSnapshot().toolExecutions, []);
   } finally {
     release();
     await shutdownHarness(harness);
@@ -876,6 +878,7 @@ function newHarness(overrides = {}) {
   const defaults = defaultConfig();
 
   const client = new Agento11yClient({
+    debugBufferSize: 64,
     ...overrides,
     tracer: overrides.tracer ?? tracer,
     generationExport: {

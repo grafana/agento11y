@@ -227,6 +227,31 @@ function buildToolResultMessage(
   };
 }
 
+class DebugBuffer<T> {
+  private readonly items: T[] = [];
+  private next = 0;
+
+  constructor(
+    private readonly capacity: number,
+    private readonly clone: (value: T) => T,
+  ) {}
+
+  push(value: T): void {
+    if (this.capacity === 0) return;
+    const copy = this.clone(value);
+    if (this.items.length < this.capacity) {
+      this.items.push(copy);
+    } else {
+      this.items[this.next] = copy;
+      this.next = (this.next + 1) % this.capacity;
+    }
+  }
+
+  snapshot(): T[] {
+    return this.items.map((_, index) => this.clone(this.items[(this.next + index) % this.items.length] as T));
+  }
+}
+
 export class Agento11yClient {
   private readonly config: Agento11ySdkConfig;
   private readonly nowFn: () => Date;
@@ -240,9 +265,9 @@ export class Agento11yClient {
   private readonly tokenUsageHistogram: Histogram;
   private readonly ttftHistogram: Histogram;
   private readonly toolCallsHistogram: Histogram;
-  private readonly generations: Generation[] = [];
-  private readonly workflowSteps: WorkflowStep[] = [];
-  private readonly toolExecutions: ToolExecution[] = [];
+  private readonly generations: DebugBuffer<Generation>;
+  private readonly workflowSteps: DebugBuffer<WorkflowStep>;
+  private readonly toolExecutions: DebugBuffer<ToolExecution>;
   private readonly pendingGenerations: Generation[] = [];
   private readonly pendingWorkflowSteps: WorkflowStep[] = [];
 
@@ -261,6 +286,10 @@ export class Agento11yClient {
    */
   constructor(inputConfig: Agento11ySdkConfigInput = {}) {
     this.config = mergeConfig(inputConfig);
+    const debugBufferSize = this.config.debugBufferSize ?? 0;
+    this.generations = new DebugBuffer(debugBufferSize, cloneGeneration);
+    this.workflowSteps = new DebugBuffer(debugBufferSize, cloneWorkflowStep);
+    this.toolExecutions = new DebugBuffer(debugBufferSize, cloneToolExecution);
     this.nowFn = this.config.now ?? (() => new Date());
     this.sleepFn = this.config.sleep ?? defaultSleep;
     this.logger = this.config.logger ?? defaultLogger;
@@ -309,7 +338,7 @@ export class Agento11yClient {
     // debug buffer only after a successful enqueue keeps debugSnapshot from
     // listing a step the caller was told failed to enqueue.
     this.internalEnqueueWorkflowStep(normalized);
-    this.workflowSteps.push(cloneWorkflowStep(normalized));
+    this.workflowSteps.push(normalized);
   }
 
   /**
@@ -630,9 +659,9 @@ export class Agento11yClient {
   /** Returns a cloned in-memory snapshot for debugging and tests. */
   debugSnapshot(): Agento11yDebugSnapshot {
     return {
-      generations: this.generations.map(cloneGeneration),
-      workflowSteps: this.workflowSteps.map(cloneWorkflowStep),
-      toolExecutions: this.toolExecutions.map(cloneToolExecution),
+      generations: this.generations.snapshot(),
+      workflowSteps: this.workflowSteps.snapshot(),
+      toolExecutions: this.toolExecutions.snapshot(),
       queueSize: this.pendingGenerations.length,
       workflowStepQueueSize: this.pendingWorkflowSteps.length,
     };
@@ -669,11 +698,11 @@ export class Agento11yClient {
   }
 
   internalRecordGeneration(generation: Generation): void {
-    this.generations.push(cloneGeneration(generation));
+    this.generations.push(generation);
   }
 
   internalRecordToolExecution(toolExecution: ToolExecution): void {
-    this.toolExecutions.push(cloneToolExecution(toolExecution));
+    this.toolExecutions.push(toolExecution);
   }
 
   internalEnqueueGeneration(generation: Generation): void {

@@ -120,6 +120,7 @@ class ConformanceTest {
                 Agento11yClient client = new Agento11yClient(new Agento11yClientConfig()
                         .setTracer(tracer.get("tool-conformance"))
                         .setMeter(meter.get("tool-conformance"))
+                        .setDebugBufferSize(1)
                         .setGenerationExporter(new TestFixtures.CapturingExporter()))) {
             ToolExecutionRecorder recorder = client.startToolExecution(seed);
             // Invalid dynamic-language inputs stay unset: Java accepts only nullable Long.

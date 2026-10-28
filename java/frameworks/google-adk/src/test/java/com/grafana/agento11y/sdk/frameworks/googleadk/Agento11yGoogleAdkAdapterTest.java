@@ -42,8 +42,13 @@ import org.junit.jupiter.api.Test;
 
 class Agento11yGoogleAdkAdapterTest {
     private static Agento11yClient newClient() {
+        return newClient(0);
+    }
+
+    private static Agento11yClient newClient(int debugBufferSize) {
         return new Agento11yClient(
                 new Agento11yClientConfig()
+                        .setDebugBufferSize(debugBufferSize)
                         .setGenerationExport(
                                 new GenerationExportConfig()
                                         .setProtocol(GenerationExportProtocol.NONE)));
@@ -301,6 +306,7 @@ class Agento11yGoogleAdkAdapterTest {
         Agento11yClient client = new Agento11yClient(
                 new Agento11yClientConfig()
                         .setTracer(tracerProvider.get("agento11y-framework-test"))
+                        .setDebugBufferSize(1)
                         .setGenerationExport(
                                 new GenerationExportConfig()
                                         .setProtocol(GenerationExportProtocol.NONE)));
@@ -356,7 +362,7 @@ class Agento11yGoogleAdkAdapterTest {
 
     @Test
     void onRunEndDropsOutputsWhenCaptureOutputsDisabled() {
-        Agento11yClient client = newClient();
+        Agento11yClient client = newClient(1);
         try {
             Agento11yGoogleAdkAdapter adapter = new Agento11yGoogleAdkAdapter(client, new Agento11yGoogleAdkAdapter.Options()
                     .setCaptureInputs(true)
@@ -381,7 +387,7 @@ class Agento11yGoogleAdkAdapterTest {
 
     @Test
     void onToolEndDropsArgumentsWhenCaptureInputsDisabled() {
-        Agento11yClient client = newClient();
+        Agento11yClient client = newClient(1);
         try {
             Agento11yGoogleAdkAdapter adapter = new Agento11yGoogleAdkAdapter(client, new Agento11yGoogleAdkAdapter.Options()
                     .setCaptureInputs(false)
@@ -405,7 +411,7 @@ class Agento11yGoogleAdkAdapterTest {
 
     @Test
     void onRunTokenConcurrentCallbacksPreserveChunkedOutput() throws InterruptedException {
-        Agento11yClient client = newClient();
+        Agento11yClient client = newClient(1);
         try {
             Agento11yGoogleAdkAdapter adapter = new Agento11yGoogleAdkAdapter(client, new Agento11yGoogleAdkAdapter.Options()
                     .setCaptureInputs(true)
@@ -541,7 +547,7 @@ class Agento11yGoogleAdkAdapterTest {
 
     @Test
     void createCallbacksProvidesOneTimeLifecycleWiring() {
-        Agento11yClient client = newClient();
+        Agento11yClient client = newClient(1);
         try {
             Agento11yGoogleAdkAdapter.Callbacks callbacks = Agento11yGoogleAdkAdapter.createCallbacks(
                     client,

@@ -262,6 +262,8 @@ export interface Agento11ySdkConfig {
    * own log-file plumbing on top of it.
    */
   debug?: boolean;
+  /** Maximum retained records per type across all conversations. Zero (default) disables history, independently of verbose debug logging. */
+  debugBufferSize?: number;
 }
 
 /** Partial SDK configuration passed by callers. */
@@ -285,6 +287,8 @@ export interface Agento11ySdkConfigInput {
   userId?: string;
   tags?: Record<string, string>;
   debug?: boolean;
+  /** See {@link Agento11ySdkConfig.debugBufferSize}. */
+  debugBufferSize?: number;
 }
 
 /** Provider/model identity. */

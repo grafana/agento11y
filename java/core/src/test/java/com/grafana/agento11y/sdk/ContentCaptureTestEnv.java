@@ -68,6 +68,7 @@ final class ContentCaptureTestEnv implements AutoCloseable {
         Agento11yClientConfig config = new Agento11yClientConfig()
                 .setTracer(tracerProvider.get("agento11y-content-capture-test"))
                 .setContentCapture(builder.contentCapture)
+                .setDebugBufferSize(builder.debugBufferSize)
                 .setContentCaptureResolver(builder.contentCaptureResolver)
                 .setGenerationExport(new GenerationExportConfig()
                         .setProtocol(GenerationExportProtocol.GRPC)
@@ -148,6 +149,7 @@ final class ContentCaptureTestEnv implements AutoCloseable {
         private final ContentCaptureMode contentCapture;
         private ContentCaptureResolver contentCaptureResolver;
         private EmbeddingCaptureConfig embeddingCapture;
+        private int debugBufferSize = 0;
 
         private Builder(ContentCaptureMode contentCapture) {
             this.contentCapture = contentCapture;
@@ -160,6 +162,11 @@ final class ContentCaptureTestEnv implements AutoCloseable {
 
         Builder embeddingCapture(EmbeddingCaptureConfig embeddingCapture) {
             this.embeddingCapture = embeddingCapture;
+            return this;
+        }
+
+        Builder debugBufferSize(int debugBufferSize) {
+            this.debugBufferSize = debugBufferSize;
             return this;
         }
 

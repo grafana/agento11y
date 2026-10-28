@@ -81,8 +81,12 @@ Capture modes decide *which fields ship*, not what's inside them. To sanitize th
 
 `full_with_metadata_spans` only protects spans, subject to the Go/Python experimental OTel resolution caveat above. Generation content still flows through the SDK's generation export channel. Use `metadata_only` if you also want the ingest channel to receive no content.
 
-JS and Java completed-tool debug snapshots retain raw arguments, results, error text, and private skill and process fields even in reduced modes.
-Do not treat those snapshots as sanitized or safe to export.
+JS and Java completed debug history is disabled by default (`debugBufferSize: 0`).
+Opt in programmatically with `new Agento11yClient({ debugBufferSize: 64 })` in JS or `new Agento11yClientConfig().setDebugBufferSize(64)` in Java.
+The capacity limits each record type independently across all conversations. It does not change export queues, telemetry, or capture policy.
+When enabled, completed-tool snapshots retain raw arguments, results, error text, and private skill and process fields even in reduced modes.
+Do not treat those snapshots as sanitized or safe to export. Tool arguments and results still reference the original payload objects.
+The capacity counts records, not bytes; active recorders, pending exports, and caller-held snapshots can retain additional data.
 
 ## Defaults
 

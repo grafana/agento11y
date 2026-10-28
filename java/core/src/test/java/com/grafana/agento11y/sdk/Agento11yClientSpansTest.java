@@ -52,6 +52,8 @@ class Agento11yClientSpansTest {
             recorder.setResult(result);
             recorder.setCallError(new RuntimeException("provider exploded"));
             recorder.end();
+            assertThat(client.debugSnapshot().getGenerations()).isEmpty();
+            assertThat(client.debugSnapshot().getToolExecutions()).isEmpty();
         }
 
         List<SpanData> spans = spanExporter.getFinishedSpanItems();
@@ -103,6 +105,8 @@ class Agento11yClientSpansTest {
                     .setRequestModel("gpt-5"));
             recorder.setResult(new ToolExecutionResult().setArguments(java.util.Map.of("city", "Paris")).setResult("18C"));
             recorder.end();
+            assertThat(client.debugSnapshot().getGenerations()).isEmpty();
+            assertThat(client.debugSnapshot().getToolExecutions()).isEmpty();
         }
 
         List<SpanData> spans = spanExporter.getFinishedSpanItems();
@@ -243,7 +247,8 @@ class Agento11yClientSpansTest {
                     .addSpanProcessor(SimpleSpanProcessor.create(spans)).build();
                 Agento11yClient client = new Agento11yClient(new Agento11yClientConfig()
                         .setTracer(provider.get("test"))
-                        .setGenerationExporter(new TestFixtures.CapturingExporter()))) {
+                        .setGenerationExporter(new TestFixtures.CapturingExporter())
+                        .setDebugBufferSize(1))) {
             try (ToolExecutionRecorder recorder = client.startToolExecution(new ToolExecutionStart()
                     .setToolName("load")
                     .setExecutionKind(ToolExecutionKind.LOAD_SKILL)
@@ -266,7 +271,8 @@ class Agento11yClientSpansTest {
                     .addSpanProcessor(SimpleSpanProcessor.create(spans)).build();
                 Agento11yClient client = new Agento11yClient(new Agento11yClientConfig()
                         .setTracer(provider.get("test"))
-                        .setGenerationExporter(new TestFixtures.CapturingExporter()))) {
+                        .setGenerationExporter(new TestFixtures.CapturingExporter())
+                        .setDebugBufferSize(2))) {
             for (boolean failed : List.of(false, true)) {
                 ToolExecutionRecorder recorder = client.startToolExecution(new ToolExecutionStart()
                         .setToolName("exec").setExecutionKind(ToolExecutionKind.COMMAND));
@@ -284,7 +290,7 @@ class Agento11yClientSpansTest {
             assertThat(spans.getFinishedSpanItems().get(0).getStatus().getStatusCode()).isEqualTo(StatusCode.OK);
             assertThat(spans.getFinishedSpanItems().get(1).getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
             assertThat(spans.getFinishedSpanItems().get(1).getEvents()).hasSize(1);
-            assertThat(client.debugSnapshot().getToolExecutions()).allSatisfy(execution ->
+            assertThat(client.debugSnapshot().getToolExecutions()).hasSize(2).allSatisfy(execution ->
                     assertThat(execution.getProcessExitCode()).isEqualTo(code));
         }
     }

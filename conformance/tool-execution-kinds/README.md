@@ -41,4 +41,5 @@ Consumers testing those transports must apply the effective mode, rather than th
 The normal Python transport uses the fixture expectations unchanged.
 
 Copy/clone tests supplement these cases. They verify start fields and absent, zero, and nonzero completion codes.
-Java and JavaScript completed debug snapshots preserve the added scalar fields; their existing raw payloads are not sanitized by capture modes.
+Java and JavaScript snapshot checks must explicitly enable finite debug history (`debugBufferSize`), which defaults to zero (disabled).
+Enabled completed snapshots preserve the added scalar fields; their existing raw payloads are not sanitized by capture modes.

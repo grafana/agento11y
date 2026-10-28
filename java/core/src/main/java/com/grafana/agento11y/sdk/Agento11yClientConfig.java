@@ -26,6 +26,7 @@ public final class Agento11yClientConfig {
     private String userId = "";
     private Map<String, String> tags = new LinkedHashMap<>();
     private Boolean debug;
+    private int debugBufferSize = 0;
 
     public GenerationExportConfig getGenerationExport() {
         return generationExport;
@@ -211,6 +212,22 @@ public final class Agento11yClientConfig {
         return this;
     }
 
+    /**
+     * Maximum retained records per type across all conversations. Defaults to {@code 0} (disabled).
+     * Programmatic-only and independent of {@link #getDebug()}.
+     */
+    public int getDebugBufferSize() {
+        return debugBufferSize;
+    }
+
+    /**
+     * Negative values log a warning at client construction and disable history.
+     */
+    public Agento11yClientConfig setDebugBufferSize(int debugBufferSize) {
+        this.debugBufferSize = debugBufferSize;
+        return this;
+    }
+
     public Agento11yClientConfig copy() {
         return new Agento11yClientConfig()
                 .setGenerationExport(generationExport.copy())
@@ -227,6 +244,7 @@ public final class Agento11yClientConfig {
                 .setAgentVersion(agentVersion)
                 .setUserId(userId)
                 .setTags(tags)
-                .setDebug(debug);
+                .setDebug(debug)
+                .setDebugBufferSize(debugBufferSize);
     }
 }

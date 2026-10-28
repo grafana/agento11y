@@ -2727,6 +2727,7 @@ describe("native tools and real SDK capture modes", () => {
       hooks: { enabled: false },
       tracer: provider.getTracer("native-test"),
       meter: meter.getMeter("native-test"),
+      debugBufferSize: 8,
       generationExport: { protocol: "none" },
       generationExporter: {
         exportGenerations: async ({ generations }) => {

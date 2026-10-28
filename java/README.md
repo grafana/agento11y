@@ -182,7 +182,7 @@ The SDK omits them from spans under effective `METADATA_ONLY` or `FULL_WITH_META
 Core `NO_TOOL_CONTENT` retains these private fields; arguments/results still require the existing content opt-in.
 Every exported skill source URI has userinfo, query, and fragment removed, even under `FULL`.
 Invalid or relative URIs are omitted without network or filesystem lookup.
-Capture modes do not sanitize debug snapshots: raw tool arguments, results, and error text remain there.
+When debug history is enabled, capture modes do not sanitize tool snapshots: raw arguments, results, and error text remain there.
 
 Generic tool recording, `executeToolCalls`, and existing metrics are unchanged. No skill/process metric dimensions are added.
 
