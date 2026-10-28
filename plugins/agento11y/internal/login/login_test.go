@@ -948,20 +948,46 @@ func runBlockForTest(t *testing.T, existing string, shell map[string]string, opt
 	return got, stderr.String(), err
 }
 
+// blockRunCase is one login run from a block, against a saved config.env.
+type blockRunCase struct {
+	name        string
+	existing    string            // config.env before the run
+	shell       map[string]string // exported for the run only
+	opts        RunOpts
+	wantErr     string
+	wantStderr  string
+	notInStderr string
+	wantFile    map[string]string // "" means the key must be absent
+}
+
+func (c blockRunCase) run(t *testing.T) {
+	got, stderr, err := runBlockForTest(t, c.existing, c.shell, c.opts)
+	if c.wantErr != "" {
+		if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+			t.Fatalf("Run err = %v, want %q", err, c.wantErr)
+		}
+	} else if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(stderr, c.wantStderr) {
+		t.Errorf("stderr missing %q:\n%s", c.wantStderr, stderr)
+	}
+	if c.notInStderr != "" && strings.Contains(stderr, c.notInStderr) {
+		t.Errorf("stderr has %q:\n%s", c.notInStderr, stderr)
+	}
+	for key, want := range c.wantFile {
+		if got[key] != want {
+			t.Errorf("%s = %q, want %q", key, got[key], want)
+		}
+	}
+}
+
 // TestRun_BlockAutoTags covers the preferences a block may set. A team's
 // shared block is the source of truth for which labels attach on the Coding
 // agents page, so --env-file saves its automatic tag keys as the form would
 // save the same answers, and leaves every other preference as it was.
 func TestRun_BlockAutoTags(t *testing.T) {
-	cases := []struct {
-		name       string
-		existing   string            // config.env before the run
-		shell      map[string]string // exported for the run only
-		opts       RunOpts
-		wantErr    string
-		wantStderr string
-		wantFile   map[string]string // "" means the key must be absent
-	}{
+	cases := []blockRunCase{
 		{
 			name: "automatic tags are written in both spellings",
 			opts: RunOpts{Block: blockCreds +
@@ -1012,7 +1038,7 @@ func TestRun_BlockAutoTags(t *testing.T) {
 			name:       "names alone under a saved Off write no list",
 			existing:   "AGENTO11Y_AUTO_CODING_AGENT_TAGS=false\n",
 			opts:       RunOpts{Block: blockCreds + "SIGIL_AUTO_CODING_AGENT_TAGS_NAMES=user,repo\n"},
-			wantStderr: "agento11y login: automatic tags stay off, so the block's SIGIL_AUTO_CODING_AGENT_TAGS_NAMES was not saved; add AGENTO11Y_AUTO_CODING_AGENT_TAGS=true to the block to turn them on.\n",
+			wantStderr: "agento11y login: did not set SIGIL_AUTO_CODING_AGENT_TAGS_NAMES from the block: automatic tags are off; add AGENTO11Y_AUTO_CODING_AGENT_TAGS=true to the block to turn them on.\n",
 			wantFile: map[string]string{
 				"AGENTO11Y_AUTO_CODING_AGENT_TAGS":       "false",
 				"AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES": "",
@@ -1140,24 +1166,7 @@ func TestRun_BlockAutoTags(t *testing.T) {
 		},
 	}
 	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			got, stderr, err := runBlockForTest(t, c.existing, c.shell, c.opts)
-			if c.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), c.wantErr) {
-					t.Fatalf("Run err = %v, want %q", err, c.wantErr)
-				}
-			} else if err != nil {
-				t.Fatalf("Run: %v", err)
-			}
-			if !strings.Contains(stderr, c.wantStderr) {
-				t.Errorf("stderr missing %q:\n%s", c.wantStderr, stderr)
-			}
-			for key, want := range c.wantFile {
-				if got[key] != want {
-					t.Errorf("%s = %q, want %q", key, got[key], want)
-				}
-			}
-		})
+		t.Run(c.name, c.run)
 	}
 }
 
@@ -3574,16 +3583,7 @@ func padBlock(block string, size int) string {
 // login, and a key that could run code, redirect requests, or weaken a
 // protection must not be saved under any spelling.
 func TestRun_BlockEdgeCases(t *testing.T) {
-	cases := []struct {
-		name        string
-		existing    string            // config.env before the run
-		shell       map[string]string // exported for the run only
-		opts        RunOpts
-		wantErr     string
-		wantStderr  string
-		notInStderr string
-		wantFile    map[string]string // "" means the key must be absent
-	}{
+	cases := []blockRunCase{
 		{
 			name: "CRLF line endings",
 			opts: RunOpts{Block: strings.ReplaceAll(blockCreds+"AGENTO11Y_DEBUG=true\n", "\n", "\r\n")},
@@ -3876,6 +3876,32 @@ func TestRun_BlockEdgeCases(t *testing.T) {
 			wantFile:    map[string]string{"AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE": "", "SIGIL_OTEL_EXPORTER_OTLP_INSECURE": ""},
 		},
 		{
+			name:     "a block's plain http stack URL on another host stops login",
+			opts:     RunOpts{Block: blockCreds + "AGENTO11Y_STACK_URL=http://evil.example.com\n"},
+			wantErr:  "use the https stack URL",
+			wantFile: map[string]string{"AGENTO11Y_ENDPOINT": ""},
+		},
+		{
+			name:    "the http check reads the scheme without case",
+			opts:    RunOpts{Block: blockCreds + "AGENTO11Y_STACK_URL=HTTP://stack.grafana.net\n"},
+			wantErr: "use the https stack URL",
+		},
+		{name: "an https stack URL is saved", opts: RunOpts{Block: blockCreds + "AGENTO11Y_STACK_URL=https://stack.grafana.net\n"}},
+		{name: "a bare stack host is saved as https", opts: RunOpts{Block: blockCreds + "AGENTO11Y_STACK_URL=stack.grafana.net\n"}},
+		{name: "a plain http stack URL on this machine is saved", opts: RunOpts{Block: blockCreds + "AGENTO11Y_STACK_URL=http://localhost:3000\n"}},
+		{
+			name:     "a block's plain http endpoint on another host saves nothing",
+			existing: "AGENTO11Y_ENDPOINT=https://a.example.com\nAGENTO11Y_AUTH_TENANT_ID=123\nAGENTO11Y_AUTH_TOKEN=saved_token_a\nAGENTO11Y_TAGS=team=a\n",
+			opts:     RunOpts{Block: "AGENTO11Y_ENDPOINT=http://stack.example.com\nAGENTO11Y_AUTH_TENANT_ID=456\nAGENTO11Y_AUTH_TOKEN=block_token\nAGENTO11Y_TAGS=team=b\n"},
+			wantErr:  "must use https",
+			wantFile: map[string]string{
+				"AGENTO11Y_ENDPOINT":       "https://a.example.com",
+				"AGENTO11Y_AUTH_TENANT_ID": "123",
+				"AGENTO11Y_AUTH_TOKEN":     "saved_token_a",
+				"AGENTO11Y_TAGS":           "team=a",
+			},
+		},
+		{
 			name:        "a key that is only the prefix is dropped",
 			opts:        RunOpts{Block: blockCreds + "AGENTO11Y_=x\nSIGIL_=y\n"},
 			notInStderr: "from the block",
@@ -3883,27 +3909,7 @@ func TestRun_BlockEdgeCases(t *testing.T) {
 		},
 	}
 	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			got, stderr, err := runBlockForTest(t, c.existing, c.shell, c.opts)
-			if c.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), c.wantErr) {
-					t.Fatalf("Run err = %v, want %q", err, c.wantErr)
-				}
-			} else if err != nil {
-				t.Fatalf("Run: %v", err)
-			}
-			if !strings.Contains(stderr, c.wantStderr) {
-				t.Errorf("stderr missing %q:\n%s", c.wantStderr, stderr)
-			}
-			if c.notInStderr != "" && strings.Contains(stderr, c.notInStderr) {
-				t.Errorf("stderr has %q:\n%s", c.notInStderr, stderr)
-			}
-			for key, want := range c.wantFile {
-				if got[key] != want {
-					t.Errorf("%s = %q, want %q", key, got[key], want)
-				}
-			}
-		})
+		t.Run(c.name, c.run)
 	}
 }
 
@@ -3929,11 +3935,21 @@ func TestBlockKeysRefusesDowngrades(t *testing.T) {
 		{name: "TLS off as on", key: "OTEL_EXPORTER_OTLP_INSECURE", value: "on", wantRefused: true},
 		{name: "TLS on as false", key: "OTEL_EXPORTER_OTLP_INSECURE", value: "false"},
 		{name: "TLS on as 0", key: "AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE", value: "0"},
+		{name: "usage stats on", key: "AGENTO11Y_ANONYMOUS_USAGE_STATS", value: "enabled", wantRefused: true},
+		{name: "usage stats on as 1", key: "SIGIL_ANONYMOUS_USAGE_STATS", value: "1", wantRefused: true},
+		{name: "usage stats on as YES", key: "AGENTO11Y_ANONYMOUS_USAGE_STATS", value: "YES", wantRefused: true},
+		{name: "usage stats off", key: "AGENTO11Y_ANONYMOUS_USAGE_STATS", value: "disabled"},
+		{name: "usage stats to log, which sends nothing", key: "AGENTO11Y_ANONYMOUS_USAGE_STATS", value: "log"},
+		{name: "usage stats off as 0", key: "SIGIL_ANONYMOUS_USAGE_STATS", value: "0"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			settings, refused := blockKeys(map[string]string{c.key: c.value}, true, false)
-			wasRefused := slices.Contains(refused, blockRefusal{c.key, blockReasonDowngrade})
+			reason := blockReasonDowngrade
+			if strings.HasSuffix(c.key, "ANONYMOUS_USAGE_STATS") {
+				reason = blockReasonUsageStats
+			}
+			wasRefused := slices.Contains(refused, blockRefusal{c.key, reason})
 			if wasRefused != c.wantRefused {
 				t.Errorf("%s=%q refused = %v, want %v (refused %v)", c.key, c.value, wasRefused, c.wantRefused, refused)
 			}
@@ -3942,6 +3958,65 @@ func TestBlockKeysRefusesDowngrades(t *testing.T) {
 			}
 			if !c.wantRefused && len(settings) != 1 {
 				t.Errorf("%s=%q should be saved once, got %v", c.key, c.value, settings)
+			}
+		})
+	}
+}
+
+// TestBlockKeysRefusesRedirectsAndSharedUser covers settings that would send
+// the user's requests or links elsewhere, or give everyone the same user.
+func TestBlockKeysRefusesRedirectsAndSharedUser(t *testing.T) {
+	for _, key := range []string{
+		"AGENTO11Y_GRAFANA_URL", "SIGIL_GRAFANA_URL",
+		"AGENTO11Y_EXPERIMENT_URL_TEMPLATE", "SIGIL_EXPERIMENT_URL_TEMPLATE",
+		"AGENTO11Y_USER_ID", "SIGIL_USER_ID",
+	} {
+		t.Run(key, func(t *testing.T) {
+			settings, refused := blockKeys(map[string]string{key: "https://elsewhere.example"}, true, false)
+			if len(settings) > 0 {
+				t.Errorf("%s was saved: %v", key, settings)
+			}
+			if len(refused) != 1 || refused[0].key != key || refused[0].reason != blockRefusalReasons[brandSuffix(key)] {
+				t.Errorf("%s refused = %v, want it named with its reason", key, refused)
+			}
+		})
+	}
+}
+
+// TestValidatePastedBlockRefusesPlainHTTPEndpoint covers an http endpoint in a
+// block, which would send the block's credentials and every session in
+// cleartext. One on this machine is a local stack, and a flag is the user's
+// own choice.
+func TestValidatePastedBlockRefusesPlainHTTPEndpoint(t *testing.T) {
+	creds := "AGENTO11Y_AUTH_TENANT_ID=123\nAGENTO11Y_AUTH_TOKEN=v_test_token\n"
+	cases := []struct {
+		name    string
+		fixed   fixedValues
+		in      string
+		wantErr string
+	}{
+		{name: "remote http endpoint", in: creds + "AGENTO11Y_ENDPOINT=http://stack.example.com\n", wantErr: "the block's endpoint is not usable: a block's endpoint must use https"},
+		{name: "remote http endpoint, legacy spelling", in: creds + "SIGIL_ENDPOINT=HTTP://stack.example.com\n", wantErr: "must use https"},
+		{name: "remote http OTLP endpoint", in: creds + "AGENTO11Y_ENDPOINT=https://stack.example.com\nOTEL_EXPORTER_OTLP_ENDPOINT=http://otlp.example.com/otlp\n", wantErr: "the block's OTLP endpoint is not usable: a block's endpoint must use https"},
+		{name: "remote http OTLP endpoint, branded", in: creds + "AGENTO11Y_ENDPOINT=https://stack.example.com\nAGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT=http://otlp.example.com/otlp\n", wantErr: "must use https"},
+		{name: "a lookalike of localhost", in: creds + "AGENTO11Y_ENDPOINT=http://localhost.example.com\n", wantErr: "must use https"},
+		{name: "https endpoint", in: creds + "AGENTO11Y_ENDPOINT=https://stack.example.com\n"},
+		{name: "http on localhost", in: creds + "AGENTO11Y_ENDPOINT=http://localhost:8080\n"},
+		{name: "http on 127.0.0.1", in: creds + "AGENTO11Y_ENDPOINT=http://127.0.0.1:28080\nOTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318\n"},
+		{name: "http on ::1", in: creds + "AGENTO11Y_ENDPOINT=http://[::1]:8080\n"},
+		{name: "a flag replaces the http endpoint", fixed: fixedValues{endpoint: "http://stack.example.com"}, in: creds + "AGENTO11Y_ENDPOINT=http://other.example.com\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := validatePastedBlock(c.fixed, c.in)
+			if c.wantErr == "" {
+				if err != nil {
+					t.Fatalf("validatePastedBlock = %v, want no error", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+				t.Fatalf("validatePastedBlock = %v, want a message containing %q", err, c.wantErr)
 			}
 		})
 	}
@@ -4035,5 +4110,101 @@ func TestRun_BlockReportLeavesValuesOut(t *testing.T) {
 		if strings.Contains(stderr, secret) {
 			t.Errorf("stderr leaks %q:\n%s", secret, stderr)
 		}
+	}
+}
+
+// TestRun_DropsSavedCredentialCopies covers the saved HEADERS and
+// OTEL_AUTH_TOKEN, which carry a copy of the export credential. A login that
+// moves to another stack or token must not keep sending that copy there.
+func TestRun_DropsSavedCredentialCopies(t *testing.T) {
+	saved := "AGENTO11Y_ENDPOINT=https://a.example.com\n" +
+		"AGENTO11Y_AUTH_TENANT_ID=123\n" +
+		"AGENTO11Y_AUTH_TOKEN=saved_token_a\n" +
+		"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.a.example.com/otlp\n" +
+		"AGENTO11Y_HEADERS=Authorization=Bearer saved_header_a\n" +
+		"SIGIL_HEADERS=Authorization=Bearer saved_header_a\n" +
+		"AGENTO11Y_OTEL_AUTH_TOKEN=saved_otlp_a\n" +
+		"SIGIL_OTEL_AUTH_TOKEN=saved_otlp_a\n"
+	copies := []string{"AGENTO11Y_HEADERS", "SIGIL_HEADERS", "AGENTO11Y_OTEL_AUTH_TOKEN", "SIGIL_OTEL_AUTH_TOKEN"}
+	cases := []struct {
+		name     string
+		shell    map[string]string
+		opts     RunOpts
+		wantKept map[string]string // the copies' values after the run; absent means deleted
+	}{
+		{
+			// The shell already points at stack B, but the file still holds
+			// stack A's copies, so they must go.
+			name:  "a new endpoint the shell already exports",
+			shell: map[string]string{"AGENTO11Y_ENDPOINT": "https://b.example.com"},
+			opts:  RunOpts{Endpoint: "https://b.example.com", TenantID: "123", Token: "saved_token_a"},
+		},
+		{
+			name: "a block for another stack",
+			opts: RunOpts{Block: blockCreds + "OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.b.example.com/otlp\n"},
+		},
+		{
+			name: "a flag with a new token",
+			opts: RunOpts{Endpoint: "https://a.example.com", TenantID: "123", Token: "new_token_a"},
+		},
+		{
+			name:     "a block that brings its own OTLP token",
+			opts:     RunOpts{Block: blockCreds + "OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.b.example.com/otlp\nAGENTO11Y_OTEL_AUTH_TOKEN=block_otlp_b\n"},
+			wantKept: map[string]string{"AGENTO11Y_OTEL_AUTH_TOKEN": "block_otlp_b", "SIGIL_OTEL_AUTH_TOKEN": "block_otlp_b"},
+		},
+		{
+			name: "the same stack and token again",
+			opts: RunOpts{Endpoint: "https://a.example.com", TenantID: "123", Token: "saved_token_a"},
+			wantKept: map[string]string{
+				"AGENTO11Y_HEADERS": "Authorization=Bearer saved_header_a", "SIGIL_HEADERS": "Authorization=Bearer saved_header_a",
+				"AGENTO11Y_OTEL_AUTH_TOKEN": "saved_otlp_a", "SIGIL_OTEL_AUTH_TOKEN": "saved_otlp_a",
+			},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, stderr, err := runBlockForTest(t, saved, c.shell, c.opts)
+			if err != nil {
+				t.Fatalf("Run: %v (stderr %q)", err, stderr)
+			}
+			for _, key := range copies {
+				want, keep := c.wantKept[key]
+				if value, present := got[key]; present != keep || value != want {
+					t.Errorf("%s = %q (present %v), want %q (present %v)", key, value, present, want, keep)
+				}
+			}
+			if len(c.wantKept) < len(copies) && !strings.Contains(stderr, "carried the previous credential") {
+				t.Errorf("stderr %q does not say the saved copies were removed", stderr)
+			}
+		})
+	}
+}
+
+// TestRun_CredentialCopiesReportedOnlyWhenSaved checks that login does not
+// say it removed the saved copies when the endpoint rejects the credentials
+// and nothing is written.
+func TestRun_CredentialCopiesReportedOnlyWhenSaved(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.env")
+	saved := "AGENTO11Y_ENDPOINT=https://a.example.com\n" +
+		"AGENTO11Y_AUTH_TENANT_ID=123\n" +
+		"AGENTO11Y_AUTH_TOKEN=saved_token_a\n" +
+		"AGENTO11Y_HEADERS=Authorization=Bearer saved_header_a\n"
+	if err := os.WriteFile(path, []byte(saved), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rejected := func(context.Context, string, string, string, bool) *doctor.ProbeResult {
+		return &doctor.ProbeResult{URL: "https://b.example.com/api/v1/generations:export", StatusCode: 401}
+	}
+	stderr, err := runNonInteractive(t, RunOpts{
+		ConfigPath: path, Endpoint: "https://b.example.com", TenantID: "456", Token: "new_token_b", Probe: rejected,
+	})
+	if !errors.Is(err, ErrNotVerified) {
+		t.Fatalf("Run err = %v, want ErrNotVerified", err)
+	}
+	if strings.Contains(stderr, "carried the previous credential") {
+		t.Errorf("stderr %q says the copies were removed, but nothing was written", stderr)
+	}
+	if data, _ := os.ReadFile(path); string(data) != saved {
+		t.Errorf("config.env changed:\n%s", data)
 	}
 }

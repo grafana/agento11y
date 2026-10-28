@@ -705,7 +705,7 @@ func newLoginFlags() (*flag.FlagSet, *loginFlags) {
 	fs.StringVar(&opts.otlpEndpoint, "otlp-endpoint", "", "OTLP endpoint")
 	fs.BoolVar(&opts.noVerify, "no-verify", false, "skip the credential check")
 	fs.BoolVar(&opts.assumeYes, "yes", false, "save even when the check fails")
-	fs.StringVar(&opts.envFile, "env-file", "", "read the environment block from `path` (- for stdin); it sets every setting except what agento11y runs or loads, where it sends anything but the stack's data, the agent name, and the local mode")
+	fs.StringVar(&opts.envFile, "env-file", "", "read an environment block from `path` (- for stdin) and save its settings; login names on stderr any key it does not take")
 	return fs, opts
 }
 
