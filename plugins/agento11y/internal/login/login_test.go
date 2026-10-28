@@ -274,6 +274,18 @@ func TestNormalizePastedBlock(t *testing.T) {
 			in:   "AGENTO11Y_ENDPOINT=https://api.example.invalid # export AGENTO11Y_AUTH_TOKEN=glc_test",
 			want: "AGENTO11Y_ENDPOINT=https://api.example.invalid # export AGENTO11Y_AUTH_TOKEN=glc_test",
 		},
+		{
+			name: "CRLF line endings lose their carriage returns",
+			in:   "AGENTO11Y_ENDPOINT=https://api.example.invalid\r\nAGENTO11Y_AUTH_TOKEN=glc_test\r\n",
+			want: "AGENTO11Y_ENDPOINT=https://api.example.invalid\nAGENTO11Y_AUTH_TOKEN=glc_test",
+		},
+		{
+			// TAGS holds `=` and `,` but no key the loader accepts, and a
+			// lower-case key is not one either.
+			name: "a flattened block splits only before accepted keys",
+			in:   "AGENTO11Y_AUTH_TOKEN=glc_a=b#c AGENTO11Y_TAGS=team=core,env=dev otel_exporter_otlp_insecure=true AGENTO11Y_DEBUG=true",
+			want: "AGENTO11Y_AUTH_TOKEN=glc_a=b#c\nAGENTO11Y_TAGS=team=core,env=dev otel_exporter_otlp_insecure=true\nAGENTO11Y_DEBUG=true",
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -1078,7 +1090,7 @@ func TestRun_BlockAutoTags(t *testing.T) {
 			wantFile: map[string]string{"AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES": "repo"},
 		},
 		{
-			name: "content capture, guards and TLS are set from the block",
+			name: "content capture and guards are set, and TLS stays on",
 			opts: RunOpts{Block: blockCreds +
 				"AGENTO11Y_AUTO_CODING_AGENT_TAGS=true\n" +
 				"SIGIL_CONTENT_CAPTURE_MODE=full\n" +
@@ -1086,7 +1098,8 @@ func TestRun_BlockAutoTags(t *testing.T) {
 				"SIGIL_GUARDS_FAIL_OPEN=false\n" +
 				"OTEL_EXPORTER_OTLP_INSECURE=true\n" +
 				"AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE=true\n"},
-			wantStderr: "set AGENTO11Y_CONTENT_CAPTURE_MODE, AGENTO11Y_GUARDS_ENABLED, AGENTO11Y_GUARDS_FAIL_OPEN, AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE, OTEL_EXPORTER_OTLP_INSECURE from the block.",
+			wantStderr: "set AGENTO11Y_AUTO_CODING_AGENT_TAGS, AGENTO11Y_CONTENT_CAPTURE_MODE, AGENTO11Y_GUARDS_ENABLED, AGENTO11Y_GUARDS_FAIL_OPEN from the block.\n" +
+				"agento11y login: did not set AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE, OTEL_EXPORTER_OTLP_INSECURE from the block: a block cannot turn off redaction or TLS.",
 			wantFile: map[string]string{
 				"AGENTO11Y_AUTO_CODING_AGENT_TAGS":      "true",
 				"AGENTO11Y_CONTENT_CAPTURE_MODE":        "full",
@@ -1094,8 +1107,8 @@ func TestRun_BlockAutoTags(t *testing.T) {
 				"AGENTO11Y_GUARDS_ENABLED":              "true",
 				"SIGIL_GUARDS_ENABLED":                  "true",
 				"AGENTO11Y_GUARDS_FAIL_OPEN":            "false",
-				"OTEL_EXPORTER_OTLP_INSECURE":           "true",
-				"AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE": "true",
+				"OTEL_EXPORTER_OTLP_INSECURE":           "",
+				"AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE": "",
 			},
 		},
 		{
@@ -1243,7 +1256,7 @@ func TestApplyPaste(t *testing.T) {
 				guardTimeout:  "900",
 				stackURL:      "https://team.grafana.net",
 				blockSettings: map[string]string{"AGENTO11Y_DEBUG": "true"},
-				blockRefused:  []string{"AGENTO11Y_BIN"},
+				blockRefused:  []blockRefusal{{"AGENTO11Y_BIN", "a block cannot choose what agento11y runs, loads, or answers"}},
 			},
 			wantFilled: pasteFilled{token: true},
 		},
@@ -1369,6 +1382,62 @@ func TestApplyPaste(t *testing.T) {
 			seed:       formValues{endpoint: "https://seeded.example"},
 			want:       formValues{endpoint: "https://seeded.example"},
 			wantFilled: pasteFilled{},
+		},
+		{
+			// The loader keeps the last line, as `source` would, and
+			// --env-file reads the block through the same parser.
+			name: "a repeated key keeps its last value",
+			block: "AGENTO11Y_AUTH_TOKEN=glc_first\nAGENTO11Y_DEBUG=true\n" +
+				"AGENTO11Y_AUTH_TOKEN=glc_second\nAGENTO11Y_DEBUG=false\n",
+			want:       formValues{token: "glc_second", blockSettings: map[string]string{"AGENTO11Y_DEBUG": "false"}},
+			wantFilled: pasteFilled{token: true},
+		},
+		{
+			name:       "CRLF line endings",
+			block:      "AGENTO11Y_AUTH_TOKEN=glc_test\r\nAGENTO11Y_DEBUG=true\r\n",
+			want:       formValues{token: "glc_test", blockSettings: map[string]string{"AGENTO11Y_DEBUG": "true"}},
+			wantFilled: pasteFilled{token: true},
+		},
+		{
+			// A flattened paste still refuses what a block cannot set, and the
+			// commas and inner `=` of a tag list do not split it.
+			name: "a flattened block with settings beyond the credentials",
+			block: "AGENTO11Y_AUTH_TOKEN=glc_test AGENTO11Y_DEBUG=true " +
+				"AGENTO11Y_TAGS=team=core,env=dev SIGIL_BIN=/tmp/evil AGENTO11Y_REDACT_INPUT_MESSAGES=off",
+			want: formValues{
+				token:         "glc_test",
+				tags:          "team=core,env=dev",
+				blockSettings: map[string]string{"AGENTO11Y_DEBUG": "true"},
+				blockRefused: []blockRefusal{
+					{"AGENTO11Y_REDACT_INPUT_MESSAGES", "a block cannot turn off redaction or TLS"},
+					{"SIGIL_BIN", "a block cannot choose what agento11y runs, loads, or answers"},
+				},
+			},
+			wantFilled: pasteFilled{token: true},
+		},
+		{
+			// The tenant flag leaves the block's export credentials stale, as
+			// it does its OTLP headers.
+			name: "a tenant flag drops the block's export credentials",
+			block: "AGENTO11Y_AUTH_TOKEN=glc_test\n" +
+				"OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.example.invalid\n" +
+				"AGENTO11Y_OTEL_AUTH_TOKEN=glc_team\nAGENTO11Y_HEADERS=Authorization=Bearer team\n",
+			fixed:      fixedValues{tenantID: "789"},
+			seed:       formValues{tenantID: "789"},
+			want:       formValues{tenantID: "789", token: "glc_test", otelEndpoint: "https://otlp.example.invalid"},
+			wantFilled: pasteFilled{token: true, otelEndpoint: true},
+		},
+		{
+			// The user's own collector must not get the block's Grafana Cloud
+			// credentials, as with --env-file.
+			name: "--otlp-endpoint drops the block's export credentials",
+			block: "AGENTO11Y_AUTH_TOKEN=glc_test\n" +
+				"OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.example.invalid\n" +
+				"AGENTO11Y_OTEL_AUTH_TOKEN=glc_team\nAGENTO11Y_HEADERS=Authorization=Bearer team\n",
+			fixed:      fixedValues{otelEndpoint: "https://my-own-collector.example"},
+			seed:       formValues{otelEndpoint: "https://my-own-collector.example"},
+			want:       formValues{otelEndpoint: "https://my-own-collector.example", token: "glc_test"},
+			wantFilled: pasteFilled{token: true},
 		},
 	}
 	for _, c := range cases {
@@ -1575,6 +1644,39 @@ func TestValidatePastedBlock(t *testing.T) {
 			name:    "protocol and auth mode alone fill nothing",
 			in:      "AGENTO11Y_PROTOCOL=http\nAGENTO11Y_AUTH_MODE=basic\n",
 			wantErr: "no credentials",
+		},
+		{name: "a block of only comments fills nothing", in: "# AGENTO11Y block\n# nothing yet\n", wantErr: "no credentials"},
+		{name: "a key with no value fills nothing", in: "AGENTO11Y_AUTH_TOKEN\nAGENTO11Y_ENDPOINT=\n", wantErr: "no credentials"},
+		{
+			name:    "a zero guard timeout",
+			in:      "AGENTO11Y_AUTH_TOKEN=glc_test\nAGENTO11Y_GUARDS_TIMEOUT_MS=0\n",
+			wantErr: "AGENTO11Y_GUARDS_TIMEOUT_MS is not usable: use a positive whole number of milliseconds",
+		},
+		{
+			name:    "a negative guard timeout",
+			in:      "AGENTO11Y_AUTH_TOKEN=glc_test\nSIGIL_GUARDS_TIMEOUT_MS=-250\n",
+			wantErr: "SIGIL_GUARDS_TIMEOUT_MS is not usable",
+			notIn:   "-250",
+		},
+		{
+			name:    "a guard timeout past the integer range",
+			in:      "AGENTO11Y_AUTH_TOKEN=glc_test\nAGENTO11Y_GUARDS_TIMEOUT_MS=99999999999999999999\n",
+			wantErr: "AGENTO11Y_GUARDS_TIMEOUT_MS is not usable",
+			notIn:   "99999999999999999999",
+		},
+		{
+			name:    "a guards switch spelled as a word the parser does not know",
+			in:      "AGENTO11Y_AUTH_TOKEN=glc_test\nAGENTO11Y_GUARDS_ENABLED=enabled\n",
+			wantErr: "AGENTO11Y_GUARDS_ENABLED is not usable: use true or false",
+		},
+		{
+			// --env-file accepts up to 64 KiB, and the loader reads a line of
+			// at most 64 KiB, so a single line that size cannot be parsed. The
+			// error must still leave the value out.
+			name:    "a single 64 KiB line is refused without its value",
+			in:      "AGENTO11Y_AUTH_TOKEN=glc_" + strings.Repeat("S", 64<<10-len("AGENTO11Y_AUTH_TOKEN=glc_")),
+			wantErr: "could not read the block",
+			notIn:   "glc_SSS",
 		},
 	}
 	for _, c := range cases {
@@ -3150,11 +3252,13 @@ func TestRun_Block(t *testing.T) {
 				"SIGIL_LOCAL_WEB_DIR=/tmp/evil-web\n" +
 				"AGENTO11Y_LOCAL=true\n" +
 				"SIGIL_STACK_URL=https://other.grafana.net\n"},
-			wantStderr: "set AGENTO11Y_CONTENT_CAPTURE_MODE, AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE from the block.\n" +
-				"agento11y login: did not set AGENTO11Y_BIN, AGENTO11Y_LOCAL, SIGIL_BIN, SIGIL_LOCAL_WEB_DIR from the block",
+			wantStderr: "set AGENTO11Y_CONTENT_CAPTURE_MODE from the block.\n" +
+				"agento11y login: did not set AGENTO11Y_BIN, SIGIL_BIN, SIGIL_LOCAL_WEB_DIR from the block: a block cannot choose what agento11y runs, loads, or answers.\n" +
+				"agento11y login: did not set AGENTO11Y_LOCAL from the block: login sets these itself.\n" +
+				"agento11y login: did not set AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE from the block: a block cannot turn off redaction or TLS.",
 			wantFile: map[string]string{
 				"AGENTO11Y_CONTENT_CAPTURE_MODE":        "full",
-				"AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE": "true",
+				"AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE": "",
 				"AGENTO11Y_BIN":                         "",
 				"SIGIL_BIN":                             "",
 				"AGENTO11Y_LOCAL_WEB_DIR":               "",
@@ -3178,9 +3282,12 @@ func TestRun_Block(t *testing.T) {
 		{
 			// Windows reads environment names without case, so a denied key in
 			// another case is refused as well.
-			name:       "a denied key in another case is refused",
-			opts:       RunOpts{Block: block + "AGENTO11Y_Bin=/tmp/evil\nSIGIL_local_web_dir=/tmp/web\nAGENTO11Y_LOCAL_ALLOWED_HOSTS=evil.example\n"},
-			wantStderr: "did not set AGENTO11Y_Bin, AGENTO11Y_LOCAL_ALLOWED_HOSTS, SIGIL_local_web_dir from the block",
+			name: "a denied key in another case or script is refused",
+			opts: RunOpts{Block: block + "AGENTO11Y_Bin=/tmp/evil\nSIGIL_local_web_dir=/tmp/web\nAGENTO11Y_LOCAL_ALLOWED_HOSTS=evil.example\n" +
+				"AGENTO11Y_B\u0131N=/tmp/evil\nAGENTO11Y_Content_Capture_Mode=full\nlowercase_line=ignored\n"},
+			wantStderr: "did not set AGENTO11Y_Bin, AGENTO11Y_B\u0131N, AGENTO11Y_Content_Capture_Mode, SIGIL_local_web_dir from the block: a setting name must be upper case.\n" +
+				"agento11y login: did not set AGENTO11Y_LOCAL_ALLOWED_HOSTS from the block: a block cannot choose what agento11y runs, loads, or answers.",
+			notInStderr: "lowercase_line",
 			wantFile: map[string]string{
 				"AGENTO11Y_Bin":                 "",
 				"SIGIL_Bin":                     "",
@@ -3189,6 +3296,36 @@ func TestRun_Block(t *testing.T) {
 				"AGENTO11Y_LOCAL_ALLOWED_HOSTS": "",
 				"SIGIL_LOCAL_ALLOWED_HOSTS":     "",
 			},
+		},
+		{
+			// These choose where requests other than the stack's go, or what
+			// guard rules match on, so a team block cannot set them; turning
+			// redaction or TLS off is refused as well, while turning them on
+			// is saved.
+			name: "a block cannot redirect requests or turn protections off",
+			opts: RunOpts{Block: block +
+				"AGENTO11Y_ANONYMOUS_USAGE_STATS_ENDPOINT=https://beacon.example\n" +
+				"AGENTO11Y_CONTROL_ENDPOINT=https://collect.example\n" +
+				"AGENTO11Y_AGENT_NAME=renamed\n" +
+				"AGENTO11Y_REDACT_INPUT_MESSAGES=false\n" +
+				"OTEL_EXPORTER_OTLP_INSECURE=true\n" +
+				"SIGIL_GUARDS_FAIL_OPEN=false\n"},
+			wantStderr: "did not set AGENTO11Y_AGENT_NAME from the block: a block cannot rename the agent that guard rules and dashboards match.\n" +
+				"agento11y login: did not set AGENTO11Y_ANONYMOUS_USAGE_STATS_ENDPOINT, AGENTO11Y_CONTROL_ENDPOINT from the block: a block cannot send requests anywhere but its stack.\n" +
+				"agento11y login: did not set AGENTO11Y_REDACT_INPUT_MESSAGES, OTEL_EXPORTER_OTLP_INSECURE from the block: a block cannot turn off redaction or TLS.",
+			wantFile: map[string]string{
+				"AGENTO11Y_ANONYMOUS_USAGE_STATS_ENDPOINT": "",
+				"AGENTO11Y_CONTROL_ENDPOINT":               "",
+				"AGENTO11Y_AGENT_NAME":                     "",
+				"AGENTO11Y_REDACT_INPUT_MESSAGES":          "",
+				"OTEL_EXPORTER_OTLP_INSECURE":              "",
+				"AGENTO11Y_GUARDS_FAIL_OPEN":               "false",
+			},
+		},
+		{
+			name:     "turning redaction on is saved",
+			opts:     RunOpts{Block: block + "AGENTO11Y_REDACT_INPUT_MESSAGES=true\n"},
+			wantFile: map[string]string{"AGENTO11Y_REDACT_INPUT_MESSAGES": "true"},
 		},
 		{
 			// OTEL_AUTH_TOKEN and HEADERS carry the export credential, as the
@@ -3412,5 +3549,486 @@ func TestRun_BlockReportsOnlyWhatItSaved(t *testing.T) {
 	}
 	if strings.Contains(stderr.String(), "from the block") {
 		t.Errorf("expected no report of block settings when nothing was saved, got:\n%s", stderr.String())
+	}
+}
+
+// padBlock fills block with comment lines up to exactly size bytes.
+func padBlock(block string, size int) string {
+	var b strings.Builder
+	b.WriteString(block)
+	for b.Len() < size {
+		line := "# " + strings.Repeat("x", min(98, size-b.Len()-3)) + "\n"
+		b.WriteString(line)
+	}
+	return b.String()
+}
+
+// TestRun_BlockEdgeCases covers --env-file blocks that are written in an
+// unusual but harmless way, that spell a setting twice or oddly, or that try
+// to set a key a block may not hold. Harmless formatting must not fail the
+// login, and a key that could run code, redirect requests, or weaken a
+// protection must not be saved under any spelling.
+func TestRun_BlockEdgeCases(t *testing.T) {
+	cases := []struct {
+		name        string
+		existing    string            // config.env before the run
+		shell       map[string]string // exported for the run only
+		opts        RunOpts
+		wantErr     string
+		wantStderr  string
+		notInStderr string
+		wantFile    map[string]string // "" means the key must be absent
+	}{
+		{
+			name: "CRLF line endings",
+			opts: RunOpts{Block: strings.ReplaceAll(blockCreds+"AGENTO11Y_DEBUG=true\n", "\n", "\r\n")},
+			wantFile: map[string]string{
+				"AGENTO11Y_ENDPOINT":   "https://block.example.com",
+				"AGENTO11Y_AUTH_TOKEN": "glc_block",
+				"AGENTO11Y_DEBUG":      "true",
+			},
+		},
+		{
+			name: "tabs and spaces around the equals sign",
+			opts: RunOpts{Block: "AGENTO11Y_ENDPOINT\t=\thttps://block.example.com\n" +
+				"AGENTO11Y_AUTH_TENANT_ID = 456\nAGENTO11Y_AUTH_TOKEN=glc_block\nAGENTO11Y_DEBUG =\ttrue\n"},
+			wantFile: map[string]string{
+				"AGENTO11Y_ENDPOINT":       "https://block.example.com",
+				"AGENTO11Y_AUTH_TENANT_ID": "456",
+				"AGENTO11Y_DEBUG":          "true",
+			},
+		},
+		{
+			name: "export with extra spaces",
+			opts: RunOpts{Block: "export   AGENTO11Y_ENDPOINT=https://block.example.com\n" +
+				"  export AGENTO11Y_AUTH_TENANT_ID=456\nexport  AGENTO11Y_AUTH_TOKEN=glc_block\n"},
+			wantFile: map[string]string{
+				"AGENTO11Y_ENDPOINT":       "https://block.example.com",
+				"AGENTO11Y_AUTH_TENANT_ID": "456",
+				"AGENTO11Y_AUTH_TOKEN":     "glc_block",
+			},
+		},
+		{
+			name: "single and double quotes, and a value holding = and #",
+			opts: RunOpts{Block: "AGENTO11Y_ENDPOINT='https://block.example.com'\n" +
+				"AGENTO11Y_AUTH_TENANT_ID=\"456\"\nAGENTO11Y_AUTH_TOKEN=glc_a=b#c\n" +
+				"AGENTO11Y_TAGS='team=core # not a comment'\n"},
+			wantFile: map[string]string{
+				"AGENTO11Y_ENDPOINT":       "https://block.example.com",
+				"AGENTO11Y_AUTH_TENANT_ID": "456",
+				"AGENTO11Y_AUTH_TOKEN":     "glc_a=b#c",
+				"AGENTO11Y_TAGS":           "team=core # not a comment",
+			},
+		},
+		{
+			name:     "an inline comment after a value is dropped",
+			opts:     RunOpts{Block: blockCreds + "AGENTO11Y_DEBUG=true # team default\nAGENTO11Y_CONTENT_CAPTURE_MODE=full  # chosen by the team\n"},
+			wantFile: map[string]string{"AGENTO11Y_DEBUG": "true", "AGENTO11Y_CONTENT_CAPTURE_MODE": "full"},
+		},
+		{
+			name:     "a tab before an inline comment",
+			opts:     RunOpts{Block: "AGENTO11Y_ENDPOINT=https://block.example.com\nAGENTO11Y_AUTH_TENANT_ID=456\nAGENTO11Y_AUTH_TOKEN=glc_block\t# rotated\nAGENTO11Y_CONTENT_CAPTURE_MODE=full\t# team choice\n"},
+			wantFile: map[string]string{"AGENTO11Y_AUTH_TOKEN": "glc_block", "AGENTO11Y_CONTENT_CAPTURE_MODE": "full"},
+		},
+		{
+			name:     "export followed by a tab",
+			opts:     RunOpts{Block: "export\tAGENTO11Y_ENDPOINT=https://block.example.com\nAGENTO11Y_AUTH_TENANT_ID=456\nAGENTO11Y_AUTH_TOKEN=glc_block\n"},
+			wantFile: map[string]string{"AGENTO11Y_ENDPOINT": "https://block.example.com"},
+		},
+		{
+			// Windows Notepad starts a UTF-8 file with a byte order mark.
+			name:     "a UTF-8 BOM before the credentials",
+			opts:     RunOpts{Block: "\ufeff" + blockCreds},
+			wantFile: map[string]string{"AGENTO11Y_ENDPOINT": "https://block.example.com"},
+		},
+		{
+			name:     "a UTF-8 BOM before a setting",
+			opts:     RunOpts{Block: "\ufeffAGENTO11Y_DEBUG=true\n" + blockCreds},
+			wantFile: map[string]string{"AGENTO11Y_DEBUG": "true"},
+		},
+		{
+			name:        "an empty value keeps the saved one and is not reported",
+			existing:    "AGENTO11Y_DEBUG=true\n",
+			opts:        RunOpts{Block: blockCreds + "AGENTO11Y_DEBUG=\n"},
+			notInStderr: "AGENTO11Y_DEBUG",
+			wantFile:    map[string]string{"AGENTO11Y_DEBUG": "true"},
+		},
+		{
+			name:        "a key with no equals sign is ignored",
+			opts:        RunOpts{Block: blockCreds + "AGENTO11Y_DEBUG\nAGENTO11Y_BIN\n"},
+			notInStderr: "from the block",
+			wantFile:    map[string]string{"AGENTO11Y_DEBUG": "", "AGENTO11Y_BIN": ""},
+		},
+		{
+			// As in TestApplyPaste: the last line wins in both paths.
+			name: "a repeated key keeps its last value",
+			opts: RunOpts{Block: blockCreds + "AGENTO11Y_DEBUG=true\nAGENTO11Y_DEBUG=false\nAGENTO11Y_AUTH_TOKEN=glc_second\n"},
+			wantFile: map[string]string{
+				"AGENTO11Y_AUTH_TOKEN": "glc_second",
+				"SIGIL_AUTH_TOKEN":     "glc_second",
+				"AGENTO11Y_DEBUG":      "false",
+			},
+		},
+		{name: "a block of only comments", opts: RunOpts{Block: "# AGENTO11Y_AUTH_TOKEN=glc_old\n# team block\n"}, wantErr: "no credentials"},
+		{
+			name: "a flattened block with settings beyond the credentials",
+			opts: RunOpts{Block: strings.ReplaceAll(blockCreds, "\n", " ") +
+				"AGENTO11Y_DEBUG=true AGENTO11Y_TAGS=team=core,env=dev SIGIL_BIN=/tmp/evil"},
+			wantStderr: "set AGENTO11Y_DEBUG, AGENTO11Y_TAGS from the block.\n" +
+				"agento11y login: did not set SIGIL_BIN from the block: a block cannot choose what agento11y runs, loads, or answers.",
+			wantFile: map[string]string{
+				"AGENTO11Y_AUTH_TOKEN": "glc_block",
+				"AGENTO11Y_DEBUG":      "true",
+				"AGENTO11Y_TAGS":       "team=core,env=dev",
+				"SIGIL_BIN":            "",
+				"AGENTO11Y_BIN":        "",
+			},
+		},
+		{
+			// --env-file reads at most 64 KiB.
+			name:     "a block of exactly 64 KiB",
+			opts:     RunOpts{Block: padBlock(blockCreds+"AGENTO11Y_DEBUG=true\n", 64<<10)},
+			wantFile: map[string]string{"AGENTO11Y_AUTH_TOKEN": "glc_block", "AGENTO11Y_DEBUG": "true"},
+		},
+		{
+			name:     "two spellings with different values save the AGENTO11Y_ one",
+			opts:     RunOpts{Block: blockCreds + "SIGIL_DEBUG=false\nAGENTO11Y_DEBUG=true\n"},
+			wantFile: map[string]string{"AGENTO11Y_DEBUG": "true", "SIGIL_DEBUG": "true"},
+		},
+		{
+			name:     "only the SIGIL_ spelling is saved under both",
+			opts:     RunOpts{Block: blockCreds + "SIGIL_DEBUG=true\nSIGIL_GUARDS_TIMEOUT_MS=900\n"},
+			wantFile: map[string]string{"AGENTO11Y_DEBUG": "true", "SIGIL_DEBUG": "true", "AGENTO11Y_GUARDS_TIMEOUT_MS": "900"},
+		},
+		{
+			name: "the SIGIL_ spelling of every denied key is refused",
+			opts: RunOpts{Block: blockCreds +
+				"SIGIL_BIN=/tmp/evil\nSIGIL_LOCAL_WEB_DIR=/tmp/web\nSIGIL_LOCAL_ALLOWED_HOSTS=evil.example\n" +
+				"SIGIL_ANONYMOUS_USAGE_STATS_ENDPOINT=https://beacon.example\nSIGIL_CONTROL_ENDPOINT=https://collect.example\n" +
+				"SIGIL_AGENT_NAME=renamed\nSIGIL_LOCAL=true\nSIGIL_LOCAL_FORWARD=true\n"},
+			wantStderr: "did not set SIGIL_AGENT_NAME from the block: a block cannot rename the agent that guard rules and dashboards match.\n" +
+				"agento11y login: did not set SIGIL_ANONYMOUS_USAGE_STATS_ENDPOINT, SIGIL_CONTROL_ENDPOINT from the block: a block cannot send requests anywhere but its stack.\n" +
+				"agento11y login: did not set SIGIL_BIN, SIGIL_LOCAL_ALLOWED_HOSTS, SIGIL_LOCAL_WEB_DIR from the block: a block cannot choose what agento11y runs, loads, or answers.\n" +
+				"agento11y login: did not set SIGIL_LOCAL, SIGIL_LOCAL_FORWARD from the block: login sets these itself.\n",
+			notInStderr: "agento11y login: set ",
+			wantFile: map[string]string{
+				"AGENTO11Y_BIN": "", "SIGIL_BIN": "",
+				"AGENTO11Y_LOCAL_WEB_DIR": "", "SIGIL_LOCAL_WEB_DIR": "",
+				"AGENTO11Y_LOCAL_ALLOWED_HOSTS": "", "SIGIL_LOCAL_ALLOWED_HOSTS": "",
+				"AGENTO11Y_ANONYMOUS_USAGE_STATS_ENDPOINT": "", "SIGIL_ANONYMOUS_USAGE_STATS_ENDPOINT": "",
+				"AGENTO11Y_CONTROL_ENDPOINT": "", "SIGIL_CONTROL_ENDPOINT": "",
+				"AGENTO11Y_AGENT_NAME": "", "SIGIL_AGENT_NAME": "",
+				"AGENTO11Y_LOCAL": "false", "SIGIL_LOCAL": "false",
+				"AGENTO11Y_LOCAL_FORWARD": "", "SIGIL_LOCAL_FORWARD": "",
+			},
+		},
+		{
+			// The loader drops a name outside its prefixes, so these never
+			// reach the config file in any spelling.
+			name: "lower-case raw keys are not saved",
+			opts: RunOpts{Block: blockCreds + "otel_exporter_otlp_insecure=true\nOtel_Exporter_Otlp_Insecure=true\nsigil_bin=/tmp/evil\nagento11y_redact_input_messages=false\n"},
+			wantFile: map[string]string{
+				"OTEL_EXPORTER_OTLP_INSECURE":           "",
+				"AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE": "",
+				"SIGIL_BIN":                             "",
+				"AGENTO11Y_REDACT_INPUT_MESSAGES":       "",
+				"otel_exporter_otlp_insecure":           "",
+				"sigil_bin":                             "",
+			},
+		},
+		{
+			name:     "a key with digits is saved",
+			opts:     RunOpts{Block: blockCreds + "AGENTO11Y_EXPORT_TIMEOUT_MS=15000\nAGENTO11Y_TEST_2=on\n"},
+			wantFile: map[string]string{"AGENTO11Y_EXPORT_TIMEOUT_MS": "15000", "SIGIL_EXPORT_TIMEOUT_MS": "15000", "AGENTO11Y_TEST_2": "on"},
+		},
+		{
+			name: "the form's booleans and capture mode are saved as the form writes them",
+			opts: RunOpts{Block: blockCreds + "AGENTO11Y_GUARDS_ENABLED=1\nSIGIL_GUARDS_FAIL_OPEN=no\nAGENTO11Y_CONTENT_CAPTURE_MODE=FULL_WITH_METADATA_SPANS\n"},
+			wantFile: map[string]string{
+				"AGENTO11Y_GUARDS_ENABLED":       "true",
+				"SIGIL_GUARDS_ENABLED":           "true",
+				"AGENTO11Y_GUARDS_FAIL_OPEN":     "false",
+				"AGENTO11Y_CONTENT_CAPTURE_MODE": "full_with_metadata_spans",
+			},
+		},
+		{
+			name:     "guards switched on with yes",
+			opts:     RunOpts{Block: blockCreds + "AGENTO11Y_GUARDS_ENABLED=yes\n"},
+			wantFile: map[string]string{"AGENTO11Y_GUARDS_ENABLED": "true"},
+		},
+		{
+			name:     "session tags with spaces and commas are saved as the form saves them",
+			opts:     RunOpts{Block: blockCreds + "AGENTO11Y_TAGS=\" team = core, env=dev, \"\n"},
+			wantFile: map[string]string{"AGENTO11Y_TAGS": "team = core, env=dev,"},
+		},
+		{
+			name:     "a stack URL with a path, a port, a trailing slash, and an upper-case host",
+			opts:     RunOpts{Block: blockCreds + "AGENTO11Y_STACK_URL=https://Team.Grafana.NET:8443/a/grafana-agento11y-app/\n"},
+			wantFile: map[string]string{"AGENTO11Y_STACK_URL": "https://team.grafana.net:8443", "SIGIL_STACK_URL": ""},
+		},
+		{
+			name:     "a local stack keeps its plain HTTP",
+			opts:     RunOpts{Block: blockCreds + "SIGIL_STACK_URL=localhost:3000/\n"},
+			wantFile: map[string]string{"AGENTO11Y_STACK_URL": "http://localhost:3000"},
+		},
+		{
+			// The tenant is part of the block's export credentials, so a flag
+			// that replaces it drops them, as it drops the OTLP headers.
+			name: "a tenant flag drops the block's export credentials",
+			opts: RunOpts{
+				Block: blockCreds + "OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.block.example\n" +
+					"OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic abc\nAGENTO11Y_OTEL_AUTH_TOKEN=glc_team\nAGENTO11Y_HEADERS=Authorization=Bearer team\n",
+				TenantID: "789",
+			},
+			wantFile: map[string]string{
+				"AGENTO11Y_AUTH_TENANT_ID":          "789",
+				"AGENTO11Y_AUTH_TOKEN":              "glc_block",
+				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT": "https://otlp.block.example",
+				"OTEL_EXPORTER_OTLP_HEADERS":        "",
+				"AGENTO11Y_OTEL_AUTH_TOKEN":         "",
+				"AGENTO11Y_HEADERS":                 "",
+			},
+		},
+		{
+			// A user who points login at their own collector must not get the
+			// block's Grafana Cloud credential written next to it.
+			name: "an OTLP endpoint flag drops the block's endpoint and export credentials",
+			opts: RunOpts{
+				Block: blockCreds + "OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.block.example\nSIGIL_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp2.block.example\n" +
+					"OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic abc\nAGENTO11Y_OTEL_AUTH_TOKEN=glc_team\n",
+				OTLPEndpoint: "https://collector.mine.example",
+			},
+			wantFile: map[string]string{
+				"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": "https://collector.mine.example",
+				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT":     "https://collector.mine.example",
+				"OTEL_EXPORTER_OTLP_ENDPOINT":           "",
+				"OTEL_EXPORTER_OTLP_HEADERS":            "",
+				"AGENTO11Y_OTEL_AUTH_TOKEN":             "",
+				"SIGIL_OTEL_AUTH_TOKEN":                 "",
+			},
+		},
+		{
+			// --token-stdin fills the same field as --token.
+			name: "a piped token beats the block's and drops its export credentials",
+			opts: RunOpts{
+				Block: blockCreds + "OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.block.example\nAGENTO11Y_OTEL_AUTH_TOKEN=glc_team\n",
+				Token: "glc_piped",
+			},
+			wantFile: map[string]string{
+				"AGENTO11Y_AUTH_TOKEN":      "glc_piped",
+				"SIGIL_AUTH_TOKEN":          "glc_piped",
+				"AGENTO11Y_OTEL_AUTH_TOKEN": "",
+			},
+		},
+		{
+			name:     "a saved key the block leaves out stays",
+			existing: "AGENTO11Y_DEBUG=true\nAGENTO11Y_THEME=dark\nOTEL_SERVICE_NAME=team-laptop\n",
+			opts:     RunOpts{Block: blockCreds + "AGENTO11Y_EXPORT_TIMEOUT_MS=15000\n"},
+			wantFile: map[string]string{
+				"AGENTO11Y_DEBUG":             "true",
+				"AGENTO11Y_THEME":             "dark",
+				"OTEL_SERVICE_NAME":           "team-laptop",
+				"AGENTO11Y_EXPORT_TIMEOUT_MS": "15000",
+			},
+		},
+		{
+			// The refusal is about what a block may set; a value the user
+			// saved themselves is theirs, and the report names only the block.
+			name:        "a saved denied key stays untouched and is not reported",
+			existing:    "AGENTO11Y_BIN=/opt/agento11y/bin/agento11y\nSIGIL_AGENT_NAME=my-agent\n",
+			opts:        RunOpts{Block: blockCreds},
+			notInStderr: "from the block",
+			wantFile: map[string]string{
+				"AGENTO11Y_BIN":    "/opt/agento11y/bin/agento11y",
+				"SIGIL_AGENT_NAME": "my-agent",
+			},
+		},
+		{
+			name:        "a block of only credentials prints no set line",
+			opts:        RunOpts{Block: blockCreds + "AGENTO11Y_PROTOCOL=http\nAGENTO11Y_AUTH_MODE=basic\n"},
+			notInStderr: "from the block",
+		},
+		{
+			name:        "a block whose extra keys are all refused prints only refusals",
+			opts:        RunOpts{Block: blockCreds + "AGENTO11Y_BIN=/tmp/evil\nAGENTO11Y_REDACT_INPUT_MESSAGES=0\n"},
+			wantStderr:  "agento11y login: did not set AGENTO11Y_BIN from the block",
+			notInStderr: "agento11y login: set ",
+		},
+		{
+			// The AGENTO11Y_ value is the one login would write, so a safe
+			// SIGIL_ line must not carry it through.
+			name:        "a safe SIGIL_ spelling does not carry a refused redaction switch",
+			opts:        RunOpts{Block: blockCreds + "AGENTO11Y_REDACT_INPUT_MESSAGES=false\nSIGIL_REDACT_INPUT_MESSAGES=true\n"},
+			wantStderr:  "agento11y login: did not set AGENTO11Y_REDACT_INPUT_MESSAGES, SIGIL_REDACT_INPUT_MESSAGES from the block: a block cannot turn off redaction or TLS.\n",
+			notInStderr: "agento11y login: set ",
+			wantFile:    map[string]string{"AGENTO11Y_REDACT_INPUT_MESSAGES": "", "SIGIL_REDACT_INPUT_MESSAGES": ""},
+		},
+		{
+			name:        "a safe SIGIL_ spelling does not carry a refused TLS switch",
+			opts:        RunOpts{Block: blockCreds + "AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE=true\nSIGIL_OTEL_EXPORTER_OTLP_INSECURE=false\n"},
+			wantStderr:  "agento11y login: did not set AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE, SIGIL_OTEL_EXPORTER_OTLP_INSECURE from the block: a block cannot turn off redaction or TLS.\n",
+			notInStderr: "agento11y login: set ",
+			wantFile:    map[string]string{"AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE": "", "SIGIL_OTEL_EXPORTER_OTLP_INSECURE": ""},
+		},
+		{
+			name:        "a key that is only the prefix is dropped",
+			opts:        RunOpts{Block: blockCreds + "AGENTO11Y_=x\nSIGIL_=y\n"},
+			notInStderr: "from the block",
+			wantFile:    map[string]string{"AGENTO11Y_": "", "SIGIL_": ""},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, stderr, err := runBlockForTest(t, c.existing, c.shell, c.opts)
+			if c.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+					t.Fatalf("Run err = %v, want %q", err, c.wantErr)
+				}
+			} else if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if !strings.Contains(stderr, c.wantStderr) {
+				t.Errorf("stderr missing %q:\n%s", c.wantStderr, stderr)
+			}
+			if c.notInStderr != "" && strings.Contains(stderr, c.notInStderr) {
+				t.Errorf("stderr has %q:\n%s", c.notInStderr, stderr)
+			}
+			for key, want := range c.wantFile {
+				if got[key] != want {
+					t.Errorf("%s = %q, want %q", key, got[key], want)
+				}
+			}
+		})
+	}
+}
+
+// TestBlockKeysRefusesDowngrades runs every spelling of a false redaction
+// switch and of a true TLS-off switch through blockKeys, and the values that
+// keep the protection on, which a block may set.
+func TestBlockKeysRefusesDowngrades(t *testing.T) {
+	cases := []struct {
+		name        string
+		key, value  string
+		wantRefused bool
+	}{
+		{name: "redaction off as 0", key: "AGENTO11Y_REDACT_INPUT_MESSAGES", value: "0", wantRefused: true},
+		{name: "redaction off as no", key: "SIGIL_REDACT_INPUT_MESSAGES", value: "no", wantRefused: true},
+		{name: "redaction off as off", key: "AGENTO11Y_REDACT_INPUT_MESSAGES", value: "off", wantRefused: true},
+		{name: "redaction off as FALSE", key: "AGENTO11Y_REDACT_INPUT_MESSAGES", value: "FALSE", wantRefused: true},
+		{name: "redaction off padded", key: "AGENTO11Y_REDACT_INPUT_MESSAGES", value: " False ", wantRefused: true},
+		{name: "redaction on as true", key: "AGENTO11Y_REDACT_INPUT_MESSAGES", value: "true"},
+		{name: "redaction on as 1", key: "SIGIL_REDACT_INPUT_MESSAGES", value: "1"},
+		{name: "TLS off as 1", key: "OTEL_EXPORTER_OTLP_INSECURE", value: "1", wantRefused: true},
+		{name: "TLS off as yes", key: "AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE", value: "yes", wantRefused: true},
+		{name: "TLS off as TRUE", key: "SIGIL_OTEL_EXPORTER_OTLP_INSECURE", value: "TRUE", wantRefused: true},
+		{name: "TLS off as on", key: "OTEL_EXPORTER_OTLP_INSECURE", value: "on", wantRefused: true},
+		{name: "TLS on as false", key: "OTEL_EXPORTER_OTLP_INSECURE", value: "false"},
+		{name: "TLS on as 0", key: "AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE", value: "0"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			settings, refused := blockKeys(map[string]string{c.key: c.value}, true, false)
+			wasRefused := slices.Contains(refused, blockRefusal{c.key, blockReasonDowngrade})
+			if wasRefused != c.wantRefused {
+				t.Errorf("%s=%q refused = %v, want %v (refused %v)", c.key, c.value, wasRefused, c.wantRefused, refused)
+			}
+			if c.wantRefused && len(settings) > 0 {
+				t.Errorf("%s=%q was refused but still saved: %v", c.key, c.value, settings)
+			}
+			if !c.wantRefused && len(settings) != 1 {
+				t.Errorf("%s=%q should be saved once, got %v", c.key, c.value, settings)
+			}
+		})
+	}
+}
+
+// TestRun_BlockUnrecognisedSwitchKeepsProtection covers a value the boolean
+// parsers do not know. However login stores it, the setting the hooks and the
+// exporter resolve from the saved file must keep redaction and TLS on.
+func TestRun_BlockUnrecognisedSwitchKeepsProtection(t *testing.T) {
+	for _, value := range []string{"maybe", "t", "f", "disabled", "2"} {
+		t.Run(value, func(t *testing.T) {
+			got, _, err := runBlockForTest(t, "", nil, RunOpts{Block: blockCreds +
+				"AGENTO11Y_REDACT_INPUT_MESSAGES=" + value + "\n" +
+				"OTEL_EXPORTER_OTLP_INSECURE=" + value + "\n" +
+				"SIGIL_OTEL_EXPORTER_OTLP_INSECURE=" + value + "\n"})
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			look := func(suffix string) (string, string, bool) { return envconfig.LookupMap(got, suffix) }
+			if !envconfig.ResolveRedactInputWith(nil, look) {
+				t.Errorf("REDACT_INPUT_MESSAGES=%q turned prompt redaction off", value)
+			}
+			insecure, _, _ := envconfig.LookupMap(got, "OTEL_EXPORTER_OTLP_INSECURE")
+			if envconfig.ParseBool(insecure) || envconfig.ParseBool(got["OTEL_EXPORTER_OTLP_INSECURE"]) {
+				t.Errorf("OTEL_EXPORTER_OTLP_INSECURE=%q turned TLS off", value)
+			}
+		})
+	}
+}
+
+// TestRun_BlockTwiceIsIdempotent runs one team block twice over the same file
+// and requires the second run to leave the file byte for byte as the first
+// left it.
+func TestRun_BlockTwiceIsIdempotent(t *testing.T) {
+	block := blockCreds +
+		"OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.block.example\n" +
+		"OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic abc\n" +
+		"AGENTO11Y_CONTENT_CAPTURE_MODE=full\nSIGIL_TAGS=team=core\n" +
+		"AGENTO11Y_GUARDS_ENABLED=true\nAGENTO11Y_GUARDS_TIMEOUT_MS=900\n" +
+		"AGENTO11Y_AUTO_CODING_AGENT_TAGS=true\nAGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=user,repo\n" +
+		"AGENTO11Y_STACK_URL=https://team.grafana.net\nAGENTO11Y_DEBUG=true\nAGENTO11Y_BIN=/tmp/evil\n"
+	clearSeededEnv(t)
+	path := filepath.Join(t.TempDir(), "config.env")
+	if err := os.WriteFile(path, []byte("AGENTO11Y_THEME=dark\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var contents []string
+	for range 2 {
+		if _, err := Run(context.Background(), RunOpts{ConfigPath: path, Stdin: nonTTYStdin(t), Stderr: io.Discard, SkipVerify: true, Block: block}); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		contents = append(contents, string(data))
+	}
+	if contents[0] != contents[1] {
+		t.Errorf("the second run changed the file:\nfirst:\n%s\nsecond:\n%s", contents[0], contents[1])
+	}
+}
+
+// TestRun_BlockReportLeavesValuesOut sends a block whose every value is
+// distinct through each branch of the report, and requires stderr to name
+// keys only. A team block can carry secrets, and --env-file output lands in
+// CI logs.
+func TestRun_BlockReportLeavesValuesOut(t *testing.T) {
+	values := map[string]string{
+		"AGENTO11Y_DEBUG":                  "v_saved_debug",
+		"AGENTO11Y_OTEL_AUTH_TOKEN":        "v_saved_otel_token",
+		"AGENTO11Y_BIN":                    "v_denied_bin",
+		"SIGIL_CONTROL_ENDPOINT":           "v_denied_control",
+		"AGENTO11Y_LOCAL":                  "v_login_local",
+		"AGENTO11Y_REDACT_INPUT_MESSAGES":  "off",
+		"OTEL_EXPORTER_OTLP_INSECURE":      "yes",
+		"AGENTO11Y_Bin":                    "v_bad_name",
+		"AGENTO11Y_AUTO_CODING_AGENT_TAGS": "true",
+	}
+	block := blockCreds + "OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.block.example\n"
+	for _, key := range slices.Sorted(maps.Keys(values)) {
+		block += key + "=" + values[key] + "\n"
+	}
+	_, stderr, err := runBlockForTest(t, "", nil, RunOpts{Block: block})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(stderr, "did not set") || !strings.Contains(stderr, "agento11y login: set ") {
+		t.Fatalf("expected both report lines, got:\n%s", stderr)
+	}
+	for _, secret := range []string{"v_saved_debug", "v_saved_otel_token", "v_denied_bin", "v_denied_control", "v_login_local", "v_bad_name", "glc_block", "456", "block.example"} {
+		if strings.Contains(stderr, secret) {
+			t.Errorf("stderr leaks %q:\n%s", secret, stderr)
+		}
 	}
 }

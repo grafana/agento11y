@@ -2766,6 +2766,12 @@ func TestReadBlock(t *testing.T) {
 	if _, err := readBlock(strings.NewReader(strings.Repeat("y\n", maxBlockBytes)), "stdin", &stderr); err == nil || !strings.Contains(err.Error(), "larger than") {
 		t.Errorf("oversized block: err = %v, want a size error", err)
 	}
+	if got, err := readBlock(strings.NewReader(strings.Repeat("y", maxBlockBytes)), "stdin", &stderr); err != nil || len(got) != maxBlockBytes {
+		t.Errorf("block of exactly the cap: len = %d, err = %v, want it read whole", len(got), err)
+	}
+	if _, err := readBlock(strings.NewReader(strings.Repeat("y", maxBlockBytes+1)), "stdin", &stderr); err == nil || !strings.Contains(err.Error(), "larger than 64 KiB") {
+		t.Errorf("block one byte over the cap: err = %v, want a size error", err)
+	}
 
 	old := blockWaitHint
 	blockWaitHint = time.Millisecond

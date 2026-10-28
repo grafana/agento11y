@@ -178,7 +178,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana.net/otlp
 OTEL_EXPORTER_OTLP_HEADERS='Authorization=Basic <base64-value>'
 ```
 
-Without OTLP, default HTTP conversations work but analytics does not. Login rejects placeholders; flags can replace pasted values. A pasted block fills in the form's preferences, such as content capture, guards and automatic tags, which the user can still change, and login saves the block's other settings, apart from `AGENTO11Y_BIN`, `AGENTO11Y_LOCAL_WEB_DIR`, `AGENTO11Y_LOCAL_ALLOWED_HOSTS`, and the local mode, which it never takes from a block. Configure experimental OTel through the environment or `config.env`, as described in the Reference. Existing config keys stay.
+Without OTLP, default HTTP conversations work but analytics does not. Login rejects placeholders; flags can replace pasted values. A pasted block fills in the form's preferences, such as content capture, guards and automatic tags, which the user can still change, and login saves the block's other settings, apart from keys that choose what agento11y runs or loads, where it sends anything but the stack's data, or the agent name, which it never takes from a block (see the README). Configure experimental OTel through the environment or `config.env`, as described in the Reference. Existing config keys stay.
 
 For default HTTP capture and analytics, one token needs `sigil:write`, `metrics:write`, and `traces:write`. Generated policies can include extra scopes; the HTTP integrations use only these three.
 

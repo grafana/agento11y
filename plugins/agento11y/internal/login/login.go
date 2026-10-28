@@ -460,6 +460,13 @@ func Run(ctx context.Context, opts RunOpts) (Result, error) {
 		// the form's seeds, so both runs save the same answer.
 		env := parseBlock(opts.Block)
 		v.autoTagsFromBlock = presetAutoTags(&v, env)
+		// The names are saved only while the switch is on (see buildUpdates).
+		if _, on := blockPreference(env, envconfig.AutoTagsSuffix); on != "" {
+			v.blockAutoTagKeys = append(v.blockAutoTagKeys, envconfig.PreferredKey(envconfig.AutoTagsSuffix))
+		}
+		if _, names := blockPreference(env, envconfig.AutoTagNamesSuffix); names != "" && v.autoTags {
+			v.blockAutoTagKeys = append(v.blockAutoTagKeys, envconfig.PreferredKey(envconfig.AutoTagNamesSuffix))
+		}
 		_, on := blockPreference(env, envconfig.AutoTagsSuffix)
 		if key, names := blockPreference(env, envconfig.AutoTagNamesSuffix); names != "" && on == "" && !v.autoTags {
 			_, _ = fmt.Fprintf(opts.Stderr, "agento11y login: automatic tags stay off, so the block's %s was not saved; add AGENTO11Y_AUTO_CODING_AGENT_TAGS=true to the block to turn them on.\n", key)
@@ -1220,7 +1227,7 @@ func applyPaste(v *formValues, fixed fixedValues, block string) pasteFilled {
 	v.otlpHeadersPasted = filled.otlpHeaders
 	v.autoTagsFromBlock = presetAutoTags(v, env)
 	presetFormPreferences(v, env)
-	dropExport := fixed.tenantID != "" || fixed.token != "" ||
+	dropExport := fixed.tenantID != "" || fixed.token != "" || fixed.otelEndpoint != "" ||
 		strings.TrimSpace(cmp.Or(brandedPaste(env, "OTEL_EXPORTER_OTLP_ENDPOINT"), env["OTEL_EXPORTER_OTLP_ENDPOINT"])) == ""
 	v.blockSettings, v.blockRefused = blockKeys(env, false, dropExport)
 	return filled
@@ -1310,13 +1317,57 @@ func validateBlockPreferences(env map[string]string) error {
 // applyPaste).
 var blockReadSuffixes = []string{"ENDPOINT", "AUTH_TENANT_ID", "AUTH_TOKEN", "OTEL_EXPORTER_OTLP_ENDPOINT"}
 
-// blockDeniedSuffixes are the keys a block never sets, in either spelling and
-// any letter case: the binary the agent plugins launch, the directory the
-// local app loads its web UI from, and the hosts the local app answers, which
-// guard its session list and config API. Whoever can edit a shared block could
-// otherwise run code on, or read the sessions of, every machine set up from it.
-// Case matters because Windows reads environment names without it.
-var blockDeniedSuffixes = []string{"BIN", "LOCAL_WEB_DIR", "LOCAL_ALLOWED_HOSTS"}
+// blockDeniedSuffixes are the keys a block never sets, in either spelling:
+// the binary the agent plugins launch, the directory the local app loads its
+// web UI from, and the hosts the local app answers, which guard its session
+// list and config API; where usage stats and the SDKs' test-suite requests
+// (which carry the user's own service account token) go; and the agent name,
+// which guard rules and dashboards filter on. Whoever can edit a shared block
+// could otherwise run code on, read the sessions of, or collect requests from
+// every machine set up from it. A block chooses the stack it reports to, and
+// nothing else that leaves the machine.
+var blockDeniedSuffixes = []string{"BIN", "LOCAL_WEB_DIR", "LOCAL_ALLOWED_HOSTS", "ANONYMOUS_USAGE_STATS_ENDPOINT", "CONTROL_ENDPOINT", "AGENT_NAME"}
+
+// blockRefusalReasons say, on stderr, why login did not take a key, one line
+// per reason, so a team can tell a typo from a setting a block may not hold.
+var blockRefusalReasons = map[string]string{
+	"BIN":                            "a block cannot choose what agento11y runs, loads, or answers",
+	"LOCAL_WEB_DIR":                  "a block cannot choose what agento11y runs, loads, or answers",
+	"LOCAL_ALLOWED_HOSTS":            "a block cannot choose what agento11y runs, loads, or answers",
+	"ANONYMOUS_USAGE_STATS_ENDPOINT": "a block cannot send requests anywhere but its stack",
+	"CONTROL_ENDPOINT":               "a block cannot send requests anywhere but its stack",
+	"AGENT_NAME":                     "a block cannot rename the agent that guard rules and dashboards match",
+	"LOCAL":                          "login sets these itself",
+	"LOCAL_FORWARD":                  "login sets these itself",
+}
+
+const (
+	blockReasonDowngrade = "a block cannot turn off redaction or TLS"
+	blockReasonKeyName   = "a setting name must be upper case"
+)
+
+// blockRefusal is a key login did not take from a block, and why.
+type blockRefusal struct{ key, reason string }
+
+// blockKeyName is what a setting's name may hold. Windows reads environment
+// names without case, and Unicode case folding does not map every letter onto
+// ASCII (a dotless ı uppercases to I), so a name in any other form could reach
+// a denied setting there while every check here read it as another key.
+var blockKeyName = regexp.MustCompile(`^[A-Z0-9_]+$`)
+
+// blockDowngrade reports whether a value would turn off a protection the
+// user's machine keeps by default: secret redaction of prompts, or TLS to the
+// OTLP endpoint. The masked paste field never shows a block's lines, so login
+// refuses these instead of saving them.
+func blockDowngrade(key, suffix, value string) bool {
+	switch {
+	case suffix == "REDACT_INPUT_MESSAGES":
+		return !envconfig.ParseBoolDefault(value, true)
+	case suffix == "OTEL_EXPORTER_OTLP_INSECURE" || key == "OTEL_EXPORTER_OTLP_INSECURE":
+		return envconfig.ParseBool(value)
+	}
+	return false
+}
 
 // blockLoginSuffixes are the keys login writes itself on every Cloud setup
 // (see buildUpdates), so a block's value would not survive the save.
@@ -1350,7 +1401,7 @@ var blockDefaultValues = map[string]string{"PROTOCOL": "http", "AUTH_MODE": "bas
 // and the setup page's defaults are skipped. refused are the keys a block
 // cannot set (blockDeniedSuffixes, blockLoginSuffixes). Keys the config file
 // does not accept are dropped, as the loader would drop them.
-func blockKeys(env map[string]string, writeFormKeys, dropExportCredentials bool) (settings map[string]string, refused []string) {
+func blockKeys(env map[string]string, writeFormKeys, dropExportCredentials bool) (settings map[string]string, refused []blockRefusal) {
 	readIntoForm := map[string]bool{"OTEL_EXPORTER_OTLP_ENDPOINT": true, "OTEL_EXPORTER_OTLP_HEADERS": true}
 	for _, s := range slices.Concat(blockReadSuffixes, blockPreferenceSuffixes, []string{"STACK_URL"}) {
 		readIntoForm[envconfig.PreferredKey(s)], readIntoForm[envconfig.LegacyKey(s)] = true, true
@@ -1358,19 +1409,35 @@ func blockKeys(env map[string]string, writeFormKeys, dropExportCredentials bool)
 	settings = map[string]string{}
 	for _, key := range slices.Sorted(maps.Keys(env)) {
 		suffix := brandSuffix(key)
+		// A branded key writes its family's resolved value, so the downgrade
+		// check reads that one; checking each spelling's own value would let
+		// a safe second spelling carry a refused first one through.
+		value := strings.TrimSpace(env[key])
+		if suffix != "" {
+			_, value = blockPreference(env, suffix)
+		}
 		switch {
+		case !blockKeyName.MatchString(key):
+			// Name it when it reads as one of ours once upper-cased, the way
+			// Windows reads it; any other line is dropped, as before.
+			if upper := strings.ToUpper(key); brandSuffix(upper) != "" || strings.HasPrefix(upper, "OTEL_") {
+				refused = append(refused, blockRefusal{key, blockReasonKeyName})
+			}
 		case !dotenv.AllowedDotenvKey(key) || readIntoForm[key]:
-		case containsFold(blockDeniedSuffixes, suffix) || containsFold(blockLoginSuffixes, suffix):
-			refused = append(refused, key)
+		case suffix == "" && !strings.HasPrefix(key, "OTEL_"):
+			// A bare AGENTO11Y_ or SIGIL_ names no setting.
+		case slices.Contains(blockDeniedSuffixes, suffix) || slices.Contains(blockLoginSuffixes, suffix):
+			refused = append(refused, blockRefusal{key, blockRefusalReasons[suffix]})
+		case blockDowngrade(key, suffix, value):
+			refused = append(refused, blockRefusal{key, blockReasonDowngrade})
 		case suffix == "":
 			// A raw OTEL_ key, which has no second spelling.
-			if value := strings.TrimSpace(env[key]); value != "" {
+			if value != "" {
 				settings[key] = value
 			}
 		case dropExportCredentials && slices.Contains(blockExportCredentialSuffixes, suffix):
 		case slices.Contains(blockFormSuffixes, suffix) && !writeFormKeys:
 		default:
-			_, value := blockPreference(env, suffix)
 			if value == "" || strings.EqualFold(value, blockDefaultValues[suffix]) {
 				continue
 			}
@@ -1384,10 +1451,6 @@ func blockKeys(env map[string]string, writeFormKeys, dropExportCredentials bool)
 		settings = nil
 	}
 	return settings, refused
-}
-
-func containsFold(list []string, s string) bool {
-	return slices.ContainsFunc(list, func(item string) bool { return strings.EqualFold(item, s) })
 }
 
 // brandSuffix is key without its AGENTO11Y_ or SIGIL_ prefix, or "" for a key
@@ -1446,15 +1509,26 @@ func presetFormPreferences(v *formValues, env map[string]string) {
 	}
 }
 
-// reportBlockKeys names, on stderr, the settings a block set beyond the form
-// and the keys it could not set, so a team that shares a block can see what
-// login took from it. Values stay out, as they do in every block error.
+// reportBlockKeys names, on stderr, the settings a block set beyond the
+// credentials, and the keys it could not set with the reason for each, so a
+// team that shares a block can see what login took from it. Values stay out,
+// as they do in every block error.
 func reportBlockKeys(w io.Writer, v formValues) {
-	if len(v.blockSettings) > 0 {
-		_, _ = fmt.Fprintf(w, "agento11y login: set %s from the block.\n", strings.Join(slices.Sorted(maps.Keys(v.blockSettings)), ", "))
+	set := slices.Concat(slices.Collect(maps.Keys(v.blockSettings)), v.blockAutoTagKeys)
+	if len(set) > 0 {
+		slices.Sort(set)
+		_, _ = fmt.Fprintf(w, "agento11y login: set %s from the block.\n", strings.Join(set, ", "))
 	}
-	if len(v.blockRefused) > 0 {
-		_, _ = fmt.Fprintf(w, "agento11y login: did not set %s from the block: a block cannot choose the binary agento11y launches, where its web UI loads from, or which hosts it answers, and login sets LOCAL and LOCAL_FORWARD itself.\n", strings.Join(v.blockRefused, ", "))
+	var reasons []string
+	byReason := map[string][]string{}
+	for _, r := range v.blockRefused {
+		if _, seen := byReason[r.reason]; !seen {
+			reasons = append(reasons, r.reason)
+		}
+		byReason[r.reason] = append(byReason[r.reason], r.key)
+	}
+	for _, reason := range reasons {
+		_, _ = fmt.Fprintf(w, "agento11y login: did not set %s from the block: %s.\n", strings.Join(byReason[reason], ", "), reason)
 	}
 }
 
@@ -1982,7 +2056,10 @@ type formValues struct {
 	// blockSettings are the keys a block set that login writes as the block
 	// spells them, and blockRefused the ones it could not set (see blockKeys).
 	blockSettings map[string]string
-	blockRefused  []string
+	blockRefused  []blockRefusal
+	// blockAutoTagKeys are the automatic tag keys a block set that login
+	// saves; presetAutoTags writes them through the form's own rules.
+	blockAutoTagKeys []string
 }
 
 // buildUpdates maps the form values onto the dotenv keys WriteDotenv expects.

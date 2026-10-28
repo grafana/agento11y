@@ -182,6 +182,22 @@ func TestParseDotenv(t *testing.T) {
 			want: map[string]string{"OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Basic dGVzdA=="},
 		},
 		{
+			// Windows Notepad starts a UTF-8 file with a byte order mark.
+			name: "a UTF-8 BOM at the start",
+			in:   "\ufeffAGENTO11Y_ENDPOINT=https://example.invalid\n",
+			want: map[string]string{"AGENTO11Y_ENDPOINT": "https://example.invalid"},
+		},
+		{
+			name: "export followed by a tab",
+			in:   "export\tAGENTO11Y_ENDPOINT=https://example.invalid\n",
+			want: map[string]string{"AGENTO11Y_ENDPOINT": "https://example.invalid"},
+		},
+		{
+			name: "a tab before an inline comment",
+			in:   "AGENTO11Y_AUTH_TOKEN=glc_test\t# rotated\n",
+			want: map[string]string{"AGENTO11Y_AUTH_TOKEN": "glc_test"},
+		},
+		{
 			name: "empty input",
 			in:   "",
 			want: map[string]string{},
