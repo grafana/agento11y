@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.15.0] - 2026-10-28
+
+### Features
+
+- **sdk**: disable debug snapshots by default in JS and Java SDKs (#948)
+- trace tool context and skill loads across agents (#925)
+- **sdk**: trace skill loads, resource reads, and commands (#920)
+- **plugins/opencode**: support opencode v2 (#876)
+
+### Bug Fixes
+
+- **sdk-js**: keep error text off framework chain and retriever spans when content is hidden (#924)
+- **sdk-js**: keep redacted call errors and titles off the generation span (#899)
+- **sdk-js**: redact the title and call error copies in metadata (#897)
+
 ## [0.14.0] - 2026-10-15
 
 ### Features
