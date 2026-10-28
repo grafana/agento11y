@@ -39,6 +39,8 @@ import {
   type PiToolResult,
   type PiUsageLike,
   type PiUserMessage,
+  redactSpans,
+  removedSpans,
   resolveConversationTitle,
   type ToolTiming,
   toolResultText,
@@ -108,6 +110,18 @@ export default function (pi: ExtensionAPI) {
   // boundaries (never in resetTurnState).
   let firstUserText: string | undefined;
 
+  // Text a redact guard removed from this session's prompts. The title can
+  // come from pi's session name, which no guard sees, so title sources are
+  // redacted with these too. Cleared on session boundaries, like
+  // firstUserText.
+  const guardSpans = new Set<string>();
+
+  /** Redacts what a guard removed this session from a title source. */
+  const guardSafe = (value: string | undefined): string | undefined =>
+    value === undefined || guardSpans.size === 0
+      ? value
+      : redactSpans(value, guardSpans);
+
   // Start timestamps for pi's own summarization LLM calls. Written by the
   // `session_before_*` handler, which is the only start signal pi gives us
   // (those events are `hasHandlers`-gated, so registering the handler is what
@@ -158,6 +172,7 @@ export default function (pi: ExtensionAPI) {
     resetTurnState();
     pendingInputMessages.length = 0;
     firstUserText = undefined;
+    guardSpans.clear();
     lastSeenModel = null;
     currentSystemPrompt = undefined;
     currentRequestControls = {};
@@ -285,8 +300,8 @@ export default function (pi: ExtensionAPI) {
       kind,
       conversationId,
       conversationTitle: resolveConversationTitle({
-        sessionName,
-        firstUserText,
+        sessionName: guardSafe(sessionName),
+        firstUserText: guardSafe(firstUserText),
         conversationId,
         contentCapture: config.contentCapture,
       }),
@@ -598,6 +613,9 @@ export default function (pi: ExtensionAPI) {
       // this redaction. Record what the model receives instead.
       const redactions = userTextRedactions(forward, result.messages);
       if (redactions.size > 0) {
+        for (const [before, after] of redactions) {
+          for (const span of removedSpans(before, after)) guardSpans.add(span);
+        }
         pendingInputMessages.forEach((message, i) => {
           pendingInputMessages[i] = withRedactedUserText(message, redactions);
         });
@@ -810,8 +828,8 @@ export default function (pi: ExtensionAPI) {
         logger.debug("getSessionName failed", err);
       }
       const conversationTitle = resolveConversationTitle({
-        sessionName,
-        firstUserText,
+        sessionName: guardSafe(sessionName),
+        firstUserText: guardSafe(firstUserText),
         conversationId,
         contentCapture,
       });

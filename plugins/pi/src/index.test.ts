@@ -1221,7 +1221,7 @@ describe("extension lifecycle", () => {
       const evaluateHook = vi.fn().mockResolvedValue({
         action: "allow",
         evaluations: [],
-        ...(transformedText
+        ...(transformedText !== undefined
           ? {
               transformedInput: {
                 messages: [
@@ -1260,20 +1260,31 @@ describe("extension lifecycle", () => {
       return { seeds, recorder, evaluateHook };
     }
 
-    async function runTurn(pi: FakePi) {
-      await pi.emit("session_start");
-      await pi.emit("turn_start");
+    async function runTurn(pi: FakePi, ctx: unknown = defaultCtx) {
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit("turn_start", {}, ctx);
       const user = { role: "user", content: PROMPT, timestamp: Date.now() };
-      await pi.emit("message_end", { message: user });
+      await pi.emit("message_end", { message: user }, ctx);
       // pi hands the context hook its own copy of the conversation.
       const event = { messages: [{ ...user }] };
-      const result = await pi.handlers.get("context")!(event, defaultCtx);
-      await pi.emit("message_end", { message: { role: "assistant" } });
-      await pi.emit("turn_end", {
-        message: assistantMessage(),
-        toolResults: [],
-      });
+      const result = await pi.handlers.get("context")!(event, ctx);
+      await pi.emit("message_end", { message: { role: "assistant" } }, ctx);
+      await pi.emit(
+        "turn_end",
+        { message: assistantMessage(), toolResults: [] },
+        ctx,
+      );
       return { event, result };
+    }
+
+    function namedSession(name: string) {
+      return {
+        ...defaultCtx,
+        sessionManager: {
+          ...defaultCtx.sessionManager,
+          getSessionName: () => name,
+        },
+      };
     }
 
     function recordedInputText(recorder: {
@@ -1299,6 +1310,40 @@ describe("extension lifecycle", () => {
       expect(recordedInputText(recorder)).toEqual([REDACTED]);
       expect(seeds[0]!.conversationTitle).toContain("[REDACTED]");
       expect(seeds[0]!.conversationTitle).not.toContain("Falcon");
+    });
+
+    // pi prefers a user-set session name over the first prompt. No guard sees
+    // the name, so it is redacted with what the guard removed from the prompt.
+    it.each([
+      ["is the prompt", PROMPT],
+      ["quotes the redacted value", "Project Falcon notes"],
+    ])("redacts a session name that %s", async (_case, name) => {
+      const { seeds } = setupGuardedTurn(REDACTED);
+      const pi = new FakePi();
+      registerExtension(pi as any);
+
+      await runTurn(pi, namedSession(name));
+
+      expect(seeds[0]!.conversationTitle).toContain("[REDACTED]");
+      expect(seeds[0]!.conversationTitle).not.toContain("Falcon");
+    });
+
+    it("records a prompt the guard redacted to nothing", async () => {
+      const { seeds, recorder } = setupGuardedTurn("");
+      const pi = new FakePi();
+      registerExtension(pi as any);
+
+      const { event } = await runTurn(pi);
+
+      expect((event.messages[0] as { content: string }).content).toBe("");
+      expect(recordedInputText(recorder)).toEqual([""]);
+      // With no prompt text left, the title falls back to the session id.
+      const seed = seeds[0] as {
+        conversationTitle?: string;
+        conversationId?: string;
+      };
+      expect(seed.conversationTitle).toBe(seed.conversationId);
+      expect(seed.conversationTitle).not.toContain("Falcon");
     });
 
     it("records the prompt as sent when the guard changes nothing", async () => {

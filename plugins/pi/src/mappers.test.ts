@@ -25,8 +25,11 @@ import {
   type PiToolInfo,
   type PiToolResult,
   type PiUserMessage,
+  redactSpans,
+  removedSpans,
   resolveConversationTitle,
   userMessageText,
+  userTextRedactions,
 } from "./mappers.js";
 
 function makeMsg(overrides?: Partial<PiAssistantMessage>): PiAssistantMessage {
@@ -1906,5 +1909,55 @@ describe("mapSummaryGenerationResult", () => {
       responseModel: "claude-sonnet-4",
     });
     expect(result.responseModel).toBe("claude-sonnet-4");
+  });
+});
+
+describe("guard redaction spans", () => {
+  it("finds what the guard removed around each token", () => {
+    expect(
+      removedSpans(
+        "Mail jane@example.com and bob@example.com today",
+        "Mail [REDACTED] and [REDACTED] today",
+      ),
+    ).toEqual(["jane@example.com", "bob@example.com"]);
+  });
+
+  it("treats text changed some other way, including to empty, as removed whole", () => {
+    expect(removedSpans("Project Falcon update", "")).toEqual([
+      "Project Falcon update",
+    ]);
+    expect(removedSpans("Project Falcon", "something else")).toEqual([
+      "Project Falcon",
+    ]);
+    expect(removedSpans("same", "same")).toEqual([]);
+  });
+
+  it("keeps only the text around an earlier token", () => {
+    // A second guard redacted across the first one's token.
+    expect(removedSpans("a [REDACTED] b secret c", "a [REDACTED] c")).toEqual([
+      "b secret",
+    ]);
+  });
+
+  it("redacts every occurrence, merging overlaps whatever the order", () => {
+    const value = "Falcon Project Falcon";
+    expect(redactSpans(value, ["Falcon", "Project Falcon"])).toBe(
+      "[REDACTED] [REDACTED]",
+    );
+    expect(redactSpans(value, ["Project Falcon", "Falcon"])).toBe(
+      "[REDACTED] [REDACTED]",
+    );
+    expect(redactSpans("abcd", ["abc", "bcd"])).toBe("[REDACTED]");
+    expect(redactSpans("nothing here", ["Falcon"])).toBe("nothing here");
+  });
+
+  it("records a redaction to empty text", () => {
+    const user = (text: string) => ({
+      role: "user",
+      parts: [{ type: "text" as const, text }],
+    });
+    expect([
+      ...userTextRedactions([user("Project Falcon")], [user("")]),
+    ]).toEqual([["Project Falcon", ""]]);
   });
 });
