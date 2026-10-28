@@ -18,6 +18,7 @@ import (
 	sharedemit "github.com/grafana/agento11y/plugins/agento11y/internal/emit"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/otel"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/skillidentity"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/useragent"
 )
 
@@ -271,7 +272,7 @@ func emitToolSpans(ctx context.Context, client *agento11y.Client, gen agento11y.
 			tc := part.ToolCall
 			ev, hasEvent := events[tc.ID]
 			startedAt, completedAt := toolSpanWindow(ev, hasEvent, gen.CompletedAt)
-			_, toolRec := client.StartToolExecution(ctx, agento11y.ToolExecutionStart{
+			start := agento11y.ToolExecutionStart{
 				ToolName:        tc.Name,
 				ToolCallID:      tc.ID,
 				ToolType:        "function",
@@ -281,7 +282,14 @@ func emitToolSpans(ctx context.Context, client *agento11y.Client, gen agento11y.
 				RequestProvider: gen.Model.Provider,
 				StartedAt:       startedAt,
 				ContentCapture:  mode,
-			})
+			}
+			if hasEvent && ev.ToolCallID == tc.ID && ev.ToolName == tc.Name && tc.Name == "skill" {
+				if name, ok := skillidentity.Validate(ev.SkillName); ok {
+					start.ExecutionKind = agento11y.ToolExecutionKindLoadSkill
+					start.SkillName = name
+				}
+			}
+			_, toolRec := client.StartToolExecution(ctx, start)
 			end := agento11y.ToolExecutionEnd{CompletedAt: completedAt}
 			if len(tc.InputJSON) > 0 {
 				end.Arguments = string(tc.InputJSON)

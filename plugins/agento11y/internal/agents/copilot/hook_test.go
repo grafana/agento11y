@@ -3,6 +3,7 @@ package copilot
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"log"
 	"net/http"
@@ -10,7 +11,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/copilot/fragment"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
+	"github.com/stretchr/testify/require"
 )
 
 func TestHookUnknownEventDoesNotCrash(t *testing.T) {
@@ -87,6 +91,65 @@ func TestHookPreToolUseAllowKeepsStdoutEmpty(t *testing.T) {
 	}
 	if stdout.Len() != 0 {
 		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+}
+
+func TestHookSkillClassification(t *testing.T) {
+	for _, mode := range []agento11y.ContentCaptureMode{
+		agento11y.ContentCaptureModeFull, agento11y.ContentCaptureModeNoToolContent,
+		agento11y.ContentCaptureModeFullWithMetadataSpans, agento11y.ContentCaptureModeMetadataOnly,
+	} {
+		for _, surface := range []string{"copilot-cli", "vscode", "unknown"} {
+			for _, event := range []string{"postToolUse", "PostToolUse", "postToolUseFailure", "PostToolUseFailure"} {
+				t.Run(mode.String()+"/"+surface+"/"+event, func(t *testing.T) {
+					envconfig.PinAliasEnvBlank(t)
+					t.Setenv("XDG_STATE_HOME", t.TempDir())
+					t.Setenv("AGENTO11Y_CONTENT_CAPTURE_MODE", mode.String())
+					t.Setenv("AGENTO11Y_COPILOT_HOOK_SURFACE", surface)
+					logger := log.New(io.Discard, "", 0)
+					var stdout bytes.Buffer
+					pre := `{"hook_event_name":"PreToolUse","session_id":"sess","tool_name":"skill","tool_input":{"skill":"original"}}`
+					require.NoError(t, Hook(context.Background(), strings.NewReader(pre), &stdout, logger))
+					before := fragment.LoadTolerant("sess", "turn-000001", logger)
+					require.NotNil(t, before)
+					require.Len(t, before.Tools, 1)
+					require.Empty(t, before.Tools[0].SkillName, "pre arguments are not effective-input evidence")
+
+					input := any(map[string]string{"skill": "review", "private": "private-input"})
+					if strings.HasPrefix(event, "Post") {
+						input = `{"skill":"review","private":"private-input"}`
+					}
+					raw, err := json.Marshal(map[string]any{
+						"hookEventName": event, "sessionId": "sess", "toolName": "skill",
+						"toolArgs": input, "toolResult": map[string]string{"text_result_for_llm": "private-result"},
+						"SurfaceMarker": "copilot-cli", "surface": "copilot-cli",
+					})
+					require.NoError(t, err)
+					require.NoError(t, Hook(context.Background(), bytes.NewReader(raw), &stdout, logger))
+					require.Empty(t, stdout.String())
+					got := fragment.LoadTolerant("sess", "turn-000001", logger)
+					require.NotNil(t, got)
+					require.Equal(t, surface, got.Surface)
+					require.Len(t, got.Tools, 1)
+					tool := got.Tools[0]
+					require.Equal(t, before.Tools[0].ToolUseID, tool.ToolUseID)
+					require.Equal(t, "skill", tool.ToolName)
+					wantSkill, wantStatus := "", "completed"
+					if strings.HasSuffix(event, "Failure") {
+						wantStatus = "error"
+					} else if surface == "copilot-cli" {
+						wantSkill = "review"
+					}
+					require.Equal(t, wantSkill, tool.SkillName)
+					require.Equal(t, wantStatus, tool.Status)
+					require.False(t, tool.SkillAttributionAmbiguous)
+					if mode != agento11y.ContentCaptureModeFull {
+						require.Empty(t, tool.ToolInput)
+						require.Empty(t, tool.ToolResponse)
+					}
+				})
+			}
+		}
 	}
 }
 
