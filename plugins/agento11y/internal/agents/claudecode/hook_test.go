@@ -831,96 +831,6 @@ func TestReadTranscriptSettled_LonePromptWaitsForReply(t *testing.T) {
 	}
 }
 
-func TestBuildToolResultMap(t *testing.T) {
-	tests := []struct {
-		name     string
-		gens     []agento11y.Generation
-		wantIDs  []string
-		wantErrs map[string]bool
-	}{
-		{name: "empty generations", gens: nil, wantIDs: nil},
-		{
-			name: "no tool results in input",
-			gens: []agento11y.Generation{{
-				Input: []agento11y.Message{{
-					Role:  agento11y.RoleUser,
-					Parts: []agento11y.Part{{Kind: agento11y.PartKindText, Text: "hello"}},
-				}},
-			}},
-			wantIDs: nil,
-		},
-		{
-			name: "single tool result",
-			gens: []agento11y.Generation{{
-				Input: []agento11y.Message{{
-					Role: agento11y.RoleTool,
-					Parts: []agento11y.Part{{
-						Kind: agento11y.PartKindToolResult,
-						ToolResult: &agento11y.ToolResult{
-							ToolCallID: "tc_1",
-							Content:    "file contents",
-						},
-					}},
-				}},
-			}},
-			wantIDs: []string{"tc_1"},
-		},
-		{
-			name: "multiple tool results across generations",
-			gens: []agento11y.Generation{
-				{Input: []agento11y.Message{{
-					Role: agento11y.RoleTool,
-					Parts: []agento11y.Part{
-						{Kind: agento11y.PartKindToolResult, ToolResult: &agento11y.ToolResult{ToolCallID: "tc_1", Content: "result1"}},
-						{Kind: agento11y.PartKindToolResult, ToolResult: &agento11y.ToolResult{ToolCallID: "tc_2", Content: "result2"}},
-					},
-				}}},
-				{Input: []agento11y.Message{{
-					Role: agento11y.RoleTool,
-					Parts: []agento11y.Part{
-						{Kind: agento11y.PartKindToolResult, ToolResult: &agento11y.ToolResult{ToolCallID: "tc_3", Content: "result3", IsError: true}},
-					},
-				}}},
-			},
-			wantIDs:  []string{"tc_1", "tc_2", "tc_3"},
-			wantErrs: map[string]bool{"tc_3": true},
-		},
-		{
-			name: "skips parts without tool call ID",
-			gens: []agento11y.Generation{{
-				Input: []agento11y.Message{{
-					Role: agento11y.RoleTool,
-					Parts: []agento11y.Part{
-						{Kind: agento11y.PartKindToolResult, ToolResult: &agento11y.ToolResult{ToolCallID: "", Content: "orphan"}},
-						{Kind: agento11y.PartKindToolResult, ToolResult: &agento11y.ToolResult{ToolCallID: "tc_1", Content: "ok"}},
-					},
-				}},
-			}},
-			wantIDs: []string{"tc_1"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			m := buildToolResultMap(tt.gens)
-
-			if len(m) != len(tt.wantIDs) {
-				t.Fatalf("got %d entries, want %d", len(m), len(tt.wantIDs))
-			}
-			for _, id := range tt.wantIDs {
-				tr, ok := m[id]
-				if !ok {
-					t.Errorf("missing key %q", id)
-					continue
-				}
-				if tt.wantErrs[id] && !tr.IsError {
-					t.Errorf("key %q: IsError = false, want true", id)
-				}
-			}
-		})
-	}
-}
-
 func newSpanRecordingClient(t *testing.T, mode agento11y.ContentCaptureMode) (*agento11y.Client, *tracetest.SpanRecorder) {
 	t.Helper()
 	recorder := tracetest.NewSpanRecorder()
@@ -1047,10 +957,7 @@ func TestRecord_GenerationSpanWindowNotInverted(t *testing.T) {
 }
 
 // TestHook_SpanWindowsFromTranscript runs Hook itself over a transcript with
-// distinct timestamps and asserts the recorded span windows. It covers the
-// wiring the helper-level tests cannot: re-inlining the GenerationStart literal
-// in Hook, or dropping the tool-result timestamps on the way to emitToolSpans,
-// fails here.
+// distinct timestamps and asserts the recorded span windows.
 func TestHook_SpanWindowsFromTranscript(t *testing.T) {
 	const (
 		sessionID = "span-window-session"
@@ -1290,9 +1197,8 @@ func TestHook_NativeSkillDetectionFromTranscript(t *testing.T) {
 				}
 				start, _ := time.Parse(time.RFC3339Nano, callAt)
 				end, _ := time.Parse(time.RFC3339Nano, resultAt)
-				if tt.source != "parent" {
-					// Subagent tool-result timestamps are not propagated to the emitter.
-					end = start
+				if call.id == "native" {
+					start, _ = time.Parse(time.RFC3339Nano, promptAt)
 				}
 				if !s.StartTime().Equal(start) || !s.EndTime().Equal(end) {
 					t.Errorf("call %q: changed span window %v to %v", call.id, s.StartTime(), s.EndTime())
@@ -1363,7 +1269,7 @@ func acceptGenerationExport(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-func TestEmitToolSpans(t *testing.T) {
+func TestEmitPendingTools(t *testing.T) {
 	ts := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 
 	tests := []struct {
@@ -1391,7 +1297,7 @@ func TestEmitToolSpans(t *testing.T) {
 			wantSpans: 0,
 		},
 		{
-			name: "single tool call metadata only",
+			name: "call without result emits nothing",
 			gen: agento11y.Generation{
 				ConversationID: "conv-1",
 				AgentName:      "claude-code",
@@ -1410,10 +1316,8 @@ func TestEmitToolSpans(t *testing.T) {
 					}},
 				}},
 			},
-			contentMode:   agento11y.ContentCaptureModeMetadataOnly,
-			wantSpans:     1,
-			wantNames:     []string{"Read"},
-			wantDurations: map[string]time.Duration{"Read": 0},
+			contentMode: agento11y.ContentCaptureModeMetadataOnly,
+			wantSpans:   0,
 		},
 		{
 			name: "multiple tool calls with full content and results",
@@ -1515,7 +1419,7 @@ func TestEmitToolSpans(t *testing.T) {
 			wantDurations: map[string]time.Duration{"Bash": 1200 * time.Millisecond},
 		},
 		{
-			name: "zero result timestamp collapses to zero width",
+			name: "missing result timestamp emits nothing",
 			gen: agento11y.Generation{
 				CompletedAt: ts,
 				Output: []agento11y.Message{{
@@ -1526,19 +1430,12 @@ func TestEmitToolSpans(t *testing.T) {
 					}},
 				}},
 			},
-			// The mapper drops unparseable timestamps rather than storing the
-			// zero value, so this pins the window against a caller that does not.
-			resultAt:      map[string]time.Time{"tc_1": {}},
-			contentMode:   agento11y.ContentCaptureModeMetadataOnly,
-			wantSpans:     1,
-			wantNames:     []string{"Bash"},
-			wantDurations: map[string]time.Duration{"Bash": 0},
+			resultAt:    map[string]time.Time{"tc_1": {}},
+			contentMode: agento11y.ContentCaptureModeMetadataOnly,
+			wantSpans:   0,
 		},
 		{
-			// A zero generation completion is the case that used to invert the
-			// span: the SDK stamps the start with the current time, which is
-			// after every transcript timestamp. Both ends move to the result.
-			name: "zero generation completion anchors on the result",
+			name: "missing call timestamp emits nothing",
 			gen: agento11y.Generation{
 				Output: []agento11y.Message{{
 					Role: agento11y.RoleAssistant,
@@ -1548,12 +1445,9 @@ func TestEmitToolSpans(t *testing.T) {
 					}},
 				}},
 			},
-			resultAt:      map[string]time.Time{"tc_1": ts},
-			contentMode:   agento11y.ContentCaptureModeMetadataOnly,
-			wantSpans:     1,
-			wantNames:     []string{"Bash"},
-			wantStarts:    map[string]time.Time{"Bash": ts},
-			wantDurations: map[string]time.Duration{"Bash": 0},
+			resultAt:    map[string]time.Time{"tc_1": ts},
+			contentMode: agento11y.ContentCaptureModeMetadataOnly,
+			wantSpans:   0,
 		},
 		{
 			name: "result before the call clamps to zero width",
@@ -1607,7 +1501,8 @@ func TestEmitToolSpans(t *testing.T) {
 				results = map[string]*agento11y.ToolResult{}
 			}
 
-			emitToolSpans(context.Background(), client, tt.gen, results, tt.resultAt, nil)
+			pending := pendingToolFixture(t, tt.gen, results, tt.resultAt)
+			emitPendingTools(context.Background(), client, &pending, tt.contentMode, nil)
 			_ = client.Shutdown(context.Background())
 
 			toolSpans := spansByName(recorder.Ended(), "execute_tool")
@@ -1655,7 +1550,7 @@ func TestEmitToolSpans(t *testing.T) {
 	}
 }
 
-func TestEmitToolSpans_ErrorStatus(t *testing.T) {
+func TestEmitPendingTools_ErrorStatus(t *testing.T) {
 	client, recorder := newSpanRecordingClient(t, agento11y.ContentCaptureModeMetadataOnly)
 	ts := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 
@@ -1673,7 +1568,8 @@ func TestEmitToolSpans_ErrorStatus(t *testing.T) {
 		"tc_err": {ToolCallID: "tc_err", Content: "denied", IsError: true},
 	}
 
-	emitToolSpans(context.Background(), client, gen, results, nil, nil)
+	pending := pendingToolFixture(t, gen, results, nil)
+	emitPendingTools(context.Background(), client, &pending, agento11y.ContentCaptureModeMetadataOnly, nil)
 	_ = client.Shutdown(context.Background())
 
 	spans := spansByName(recorder.Ended(), "execute_tool")

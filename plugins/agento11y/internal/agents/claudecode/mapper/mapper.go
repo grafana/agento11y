@@ -55,6 +55,10 @@ type Options struct {
 	// metadata_only does, so Process titles every generation with the session
 	// ID instead of redacting a title no one sees. The zero value redacts.
 	TitleDropped bool
+	// GenerationSources optionally records the assistant source line at each
+	// output position. Synthetic generations have no entry. Positions, unlike
+	// generation IDs, distinguish separate turns that reuse a request ID.
+	GenerationSources map[int]transcript.Line
 }
 
 // agent is the base agent name for every generation this run produces: the
@@ -354,6 +358,7 @@ func mergeAssistantGroup(lines []transcript.Line, inferredStopReason string) tra
 		return final
 	}
 	final.Message = merged
+	final.AssistantSources = lines
 	return final
 }
 
@@ -487,6 +492,9 @@ func Process(lines []transcript.Line, st *state.Session, opts Options, r *redact
 							}
 						}
 					}
+				}
+				if opts.GenerationSources != nil {
+					opts.GenerationSources[len(gens)] = line
 				}
 				gens = append(gens, gen)
 			}
@@ -726,14 +734,10 @@ func processUserLine(line transcript.Line, uctx *userContext, st *state.Session,
 			if b.ToolUseID != "" && !resultAt.IsZero() {
 				toolResultAt[b.ToolUseID] = resultAt
 			}
-			content := b.Content()
-			if r != nil {
-				content = r.ToolPayload(content)
-			}
 			// A tool result has no cap in the transcript; on export it shares
 			// the bound every mapper applies, so one large result cannot push
 			// the generation past the SDK's payload limit.
-			content = mapperutil.BoundText(content, mapperutil.MaxToolResultBytes)
+			content := ToolResultContent(b, r)
 			toolParts = append(toolParts, agento11y.Part{
 				Kind: agento11y.PartKindToolResult,
 				ToolResult: &agento11y.ToolResult{
@@ -928,7 +932,7 @@ func buildOutput(blocks []transcript.ContentBlock, r *redact.Redactor) []agento1
 			})
 
 		case "tool_use":
-			inputJSON := truncateJSON(block.Input, maxToolInputLen, r)
+			inputJSON := ToolInputJSON(block.Input, r)
 			parts = append(parts, agento11y.Part{
 				Kind: agento11y.PartKindToolCall,
 				ToolCall: &agento11y.ToolCall{
@@ -948,6 +952,21 @@ func buildOutput(blocks []transcript.ContentBlock, r *redact.Redactor) []agento1
 		Role:  agento11y.RoleAssistant,
 		Parts: parts,
 	}}
+}
+
+// ToolInputJSON shares generation redaction and size limits with delayed tool spans.
+// Truncation changes JSON objects and arrays into JSON strings.
+func ToolInputJSON(raw json.RawMessage, r *redact.Redactor) json.RawMessage {
+	return truncateJSON(raw, maxToolInputLen, r)
+}
+
+// ToolResultContent shares generation redaction and size limits with delayed tool spans.
+func ToolResultContent(block transcript.UserContentBlock, r *redact.Redactor) string {
+	content := block.Content()
+	if r != nil {
+		content = r.ToolPayload(content)
+	}
+	return mapperutil.BoundText(content, mapperutil.MaxToolResultBytes)
 }
 
 // truncateJSON redacts and truncates tool input JSON. When truncation occurs,

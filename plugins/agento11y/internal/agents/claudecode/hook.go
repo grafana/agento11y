@@ -18,7 +18,6 @@ import (
 	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/mapper"
-	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/skilldetect"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/state"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/subagent"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/transcript"
@@ -30,6 +29,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/otel"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/redact"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/useragent"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Version is overridden via -ldflags at build time. The dispatcher prints it
@@ -90,6 +90,9 @@ type hookInput struct {
 // errors are logged internally because hooks must never crash the agent.
 func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Logger) error {
 	input, err := parseHookInput(stdin)
+	if input != nil && input.SessionID != "" && strings.TrimSpace(input.HookEventName) == "SessionEnd" {
+		defer discardSessionTools(input.SessionID, logger)
+	}
 	if err != nil {
 		logger.Printf("stdin: %v", err)
 		return nil
@@ -189,9 +192,32 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 		_ = otelProviders.Shutdown(cleanupCtx)
 	}()
 
+	subFiles, err := liveSubagentFiles(input.TranscriptPath, logger)
+	if err != nil {
+		logger.Printf("list subagent transcripts: %v", err)
+		return nil
+	}
+	initToolState(&st, input.TranscriptPath, subFiles)
 	stop := strings.TrimSpace(input.HookEventName) == "Stop"
-	lines, safeOffset, rawCount, titles := readTranscriptSettled(hookCtx, input.TranscriptPath, st.Offset, stop, logger)
-	parentReady := rawCount > 0 && safeOffset > 0
+	readFrom := toolReadOffset(&st, input.TranscriptPath, st.Offset)
+	raw, readPos, titles, err := readLiveSettled(hookCtx, input.TranscriptPath, readFrom, st.Offset, stop, logger)
+	if err != nil {
+		return nil
+	}
+	// Read every required file before changing checkpoints or exporting parents.
+	// SessionEnd has no later retry, so export readable files despite child failures.
+	reads, err := readLiveSubagentFiles(subFiles, input.TranscriptPath, &st, logger)
+	if err != nil && strings.TrimSpace(input.HookEventName) != "SessionEnd" {
+		return nil
+	}
+	observeTools(&st, input.TranscriptPath, raw, readPos, subFiles)
+	for _, item := range reads {
+		observeTools(&st, item.path, item.raw, item.readPos, subFiles)
+	}
+	resolvePendingToolChildren(&st, subFiles)
+	lines, safeOffset := mapper.Coalesce(afterOffset(raw, st.Offset))
+	rawCount := len(afterOffset(raw, st.Offset))
+	parentReady := rawCount > 0 && safeOffset > st.Offset
 	switch {
 	case parentReady:
 		logger.Printf("read %d raw lines", rawCount)
@@ -212,9 +238,6 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 		r = redact.New()
 	}
 
-	// Mapping can redact or truncate arguments. Detect structural identities
-	// from the settled transcript, independent of content capture mode.
-	skillNames := buildSkillNameMap(lines)
 	opts := mapper.Options{
 		SessionID:           input.SessionID,
 		Titles:              titles,
@@ -224,30 +247,23 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 		AgentVersion:        envconfig.ResolveAgentVersion(""),
 		SkipPromptRedaction: skipPromptRedaction,
 		TitleDropped:        contentMode == agento11y.ContentCaptureModeMetadataOnly,
-	}
-	subFiles, err := liveSubagentFiles(input.TranscriptPath, logger)
-	if err != nil {
-		logger.Printf("list subagent transcripts: %v", err)
+		GenerationSources:   map[int]transcript.Line{},
 	}
 
-	var (
-		parentGens   []agento11y.Generation
-		toolResultAt map[string]time.Time
-	)
+	var parentGens []agento11y.Generation
 	if parentReady {
 		lines = subagent.DropCoveredSidechain(lines, subFiles, input.TranscriptPath)
 		opts.SuppressSyntheticSubagentToolCallIDs = subagent.SyntheticToolCallIDs(lines, subagent.RefsForFiles(subFiles))
-		parentGens, toolResultAt = mapper.Process(lines, &st, opts, r)
+		parentGens, _ = mapper.Process(lines, &st, opts, r)
 	}
-	subGens := liveSubagentGens(input, lines, parentGens, subFiles, &st, opts, r, skillNames, logger)
+	parents := associateTools(&st, input.TranscriptPath, opts.GenerationSources, parentGens)
+	rememberToolChildren(&st, resolvedAgentName)
+	subGens, subParents := liveSubagentGens(input, raw, lines, parentGens, subFiles, reads, &st, opts, r, logger)
+	parents = append(parents, subParents...)
 	gens := make([]agento11y.Generation, 0, len(parentGens)+len(subGens))
 	gens = append(gens, parentGens...)
 	gens = append(gens, subGens...)
 
-	if len(gens) == 0 {
-		logger.Printf("no generations produced; keeping offset=%d for next event", st.Offset)
-		return nil
-	}
 	logger.Printf("produced %d generations", len(gens))
 
 	cfg := agento11y.Config{
@@ -276,18 +292,24 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 	}()
 	t0 := time.Now()
 
-	toolResults := buildToolResultMap(gens)
-
-	for _, gen := range gens {
-		if err := emit.Record(hookCtx, client, generationStart(gen), gen, nil, func(genCtx context.Context) {
-			emitToolSpans(genCtx, client, gen, toolResults, toolResultAt, skillNames)
-		}); err != nil {
+	for i, gen := range gens {
+		var parentContext trace.SpanContext
+		err := emit.Record(hookCtx, client, generationStart(gen), gen, nil, func(genCtx context.Context) {
+			parentContext = trace.SpanContextFromContext(genCtx)
+		})
+		if err != nil {
 			logger.Printf("enqueue: %v", err)
 			if protocol == agento11y.GenerationExportProtocolOTel {
+				emitPendingTools(hookCtx, client, &st, contentMode, r)
 				return nil
 			}
+			continue
 		}
+		// Record invokes the callback before validation. Failed records must not
+		// make their pending tools ready, even if a span context was captured.
+		captureToolParent(parents[i], parentContext)
 	}
+	emitPendingTools(hookCtx, client, &st, contentMode, r)
 
 	if err := client.Flush(hookCtx); err != nil {
 		logger.Printf("flush: %v", err)
@@ -303,11 +325,32 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 	if parentReady {
 		st.Offset = safeOffset
 	}
+	pruneToolSpawns(&st, input.TranscriptPath)
+	if strings.TrimSpace(input.HookEventName) == "SessionEnd" {
+		st.Tools.Pending = nil
+		st.Tools.Spawns = nil
+		st.Tools.CompletedChildren = nil
+	}
 	if err := state.Save(input.SessionID, st); err != nil {
 		logger.Printf("save state: %v", err)
 	}
 	logger.Printf("done: %d generations in %s", len(gens), time.Since(t0))
 	return nil
+}
+
+// Reload persisted state: failed reads and mapping may mutate working checkpoints.
+// A shallow snapshot would share maps and save those uncommitted changes.
+func discardSessionTools(sessionID string, logger *log.Logger) {
+	persisted := state.Load(sessionID)
+	if len(persisted.Tools.Pending) == 0 && len(persisted.Tools.Spawns) == 0 && len(persisted.Tools.CompletedChildren) == 0 {
+		return
+	}
+	persisted.Tools.Pending = nil
+	persisted.Tools.Spawns = nil
+	persisted.Tools.CompletedChildren = nil
+	if err := state.Save(sessionID, persisted); err != nil {
+		logger.Printf("discard session tools: %v", err)
+	}
 }
 
 // handlePreToolUse evaluates the tool call against agento11y guards and writes a
@@ -382,20 +425,33 @@ func handleUserPromptSubmit(ctx context.Context, stdout io.Writer, input *hookIn
 // caller can distinguish "nothing to read" from "read but nothing complete",
 // and the title lines Claude Code wrote in the range.
 func readTranscriptSettled(ctx context.Context, path string, offset int64, stop bool, logger *log.Logger) ([]transcript.Line, int64, int, transcript.Titles) {
+	raw, _, titles, err := readLiveSettled(ctx, path, offset, offset, stop, logger)
+	if err != nil {
+		return nil, 0, 0, transcript.Titles{}
+	}
+	lines, safe := mapper.Coalesce(raw)
+	return lines, safe, len(raw), titles
+}
+
+// A test seam for transient I/O faults. Each accepted batch feeds both consumers.
+var readLiveComplete = transcript.ReadCompleteWithTitles
+
+func readLiveSettled(ctx context.Context, path string, offset, generationOffset int64, stop bool, logger *log.Logger) ([]transcript.Line, int64, transcript.Titles, error) {
 	deadline := time.Now().Add(transcriptSettleWindow)
 	for {
-		raw, _, titles, err := transcript.ReadWithTitles(path, offset)
+		raw, pos, titles, err := readLiveComplete(path, offset)
 		if err != nil && (!stop || !errors.Is(err, fs.ErrNotExist)) {
 			logger.Printf("read transcript: %v", err)
-			return nil, 0, 0, transcript.Titles{}
+			return nil, offset, transcript.Titles{}, err
 		}
 
-		coalesced, safeOffset := mapper.Coalesce(raw)
+		mappingRaw := afterOffset(raw, generationOffset)
+		coalesced, safeOffset := mapper.Coalesce(mappingRaw)
 
 		// Settle unless the tail is an assistant turn Claude Code is still
 		// flushing. An empty read (redundant Stop/SessionEnd after a prior
 		// export) has nothing to wait for, and tailNeedsSettle decides the rest.
-		settled := len(raw) == 0 || !tailNeedsSettle(raw[len(raw)-1], safeOffset)
+		settled := len(mappingRaw) == 0 || !tailNeedsSettle(mappingRaw[len(mappingRaw)-1], safeOffset)
 		if stop {
 			settled = settled && endsTurn(coalesced)
 		}
@@ -403,14 +459,14 @@ func readTranscriptSettled(ctx context.Context, path string, offset int64, stop 
 			if err != nil {
 				logger.Printf("read transcript: %v", err)
 			}
-			return coalesced, safeOffset, len(raw), titles
+			return raw, pos, titles, err
 		}
 
 		timer := time.NewTimer(transcriptSettleInterval)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return coalesced, safeOffset, len(raw), titles
+			return raw, pos, titles, err
 		case <-timer.C:
 		}
 	}
@@ -481,7 +537,8 @@ func parseHookInput(r io.Reader) (*hookInput, error) {
 	input.SessionID = strings.TrimSpace(input.SessionID)
 	input.TranscriptPath = strings.TrimSpace(input.TranscriptPath)
 	if input.SessionID == "" || input.TranscriptPath == "" {
-		return nil, fmt.Errorf("missing session_id or transcript_path")
+		// SessionEnd cleanup still needs the session ID when the transcript path is missing.
+		return &input, fmt.Errorf("missing session_id or transcript_path")
 	}
 
 	return &input, nil
@@ -509,117 +566,5 @@ func generationStart(gen agento11y.Generation) agento11y.GenerationStart {
 		Tags:                gen.Tags,
 		Metadata:            gen.Metadata,
 		StartedAt:           gen.StartedAt,
-	}
-}
-
-func buildSkillNameMap(lines []transcript.Line) map[string]string {
-	names := make(map[string]string)
-	for _, line := range lines {
-		if line.Type != "assistant" {
-			continue
-		}
-		var msg transcript.AssistantMessage
-		if err := json.Unmarshal(line.Message, &msg); err != nil {
-			continue
-		}
-		for _, block := range msg.Content {
-			if block.Type != "tool_use" || block.ID == "" {
-				continue
-			}
-			if name, ok := skilldetect.Detect(block.Name, block.Input); ok {
-				names[block.ID] = name
-			}
-		}
-	}
-	return names
-}
-
-// buildToolResultMap indexes tool results by their call ID across all generations.
-// Tool results appear in the Input of the generation that follows the tool call.
-func buildToolResultMap(gens []agento11y.Generation) map[string]*agento11y.ToolResult {
-	m := make(map[string]*agento11y.ToolResult)
-	for _, gen := range gens {
-		for _, msg := range gen.Input {
-			for i, part := range msg.Parts {
-				if part.ToolResult != nil && part.ToolResult.ToolCallID != "" {
-					m[part.ToolResult.ToolCallID] = msg.Parts[i].ToolResult
-				}
-			}
-		}
-	}
-	return m
-}
-
-// toolSpanWindow resolves the [start, end] window of an execute_tool span from
-// the completion of the turn that requested the tool and the timestamp of the
-// matching tool_result line. Either can be missing or out of order, and any such
-// pair collapses to a zero-width span rather than one that inverts.
-//
-// A zero genCompletedAt is the case worth spelling out: the SDK then stamps the
-// span start with the current time, which is after every transcript timestamp,
-// so pairing it with a result timestamp would invert the window. Anchor both
-// ends on the result instead.
-//
-// This differs from emit.ToolSpanWindow, which backdates a known duration from
-// the tool's own completion timestamp. Claude Code reports no tool duration, and
-// the window measures the gap between two transcript lines, so it includes any
-// time the user spent approving the call.
-func toolSpanWindow(genCompletedAt, resultAt time.Time) (startedAt, completedAt time.Time) {
-	if genCompletedAt.IsZero() {
-		return resultAt, resultAt
-	}
-	if !resultAt.After(genCompletedAt) {
-		return genCompletedAt, genCompletedAt
-	}
-	return genCompletedAt, resultAt
-}
-
-// emitToolSpans creates execute_tool spans for each tool call in the generation
-// output, windowed by toolSpanWindow from the generation's completion and the
-// matching tool_result timestamp in resultAt.
-func emitToolSpans(ctx context.Context, client *agento11y.Client, gen agento11y.Generation, results map[string]*agento11y.ToolResult, resultAt map[string]time.Time, skillNames map[string]string) {
-	for _, msg := range gen.Output {
-		for _, part := range msg.Parts {
-			if part.ToolCall == nil {
-				continue
-			}
-			tc := part.ToolCall
-			startedAt, completedAt := toolSpanWindow(gen.CompletedAt, resultAt[tc.ID])
-			start := agento11y.ToolExecutionStart{
-				ToolName:        tc.Name,
-				ToolCallID:      tc.ID,
-				ToolType:        "function",
-				ConversationID:  gen.ConversationID,
-				AgentName:       gen.AgentName,
-				AgentVersion:    gen.AgentVersion,
-				RequestModel:    gen.Model.Name,
-				RequestProvider: gen.Model.Provider,
-				StartedAt:       startedAt,
-			}
-			if name := skillNames[tc.ID]; name != "" && tc.Name == "Skill" {
-				start.ExecutionKind = agento11y.ToolExecutionKindLoadSkill
-				start.SkillName = name
-			}
-			_, toolRec := client.StartToolExecution(ctx, start)
-
-			end := agento11y.ToolExecutionEnd{
-				CompletedAt: completedAt,
-				Arguments:   string(tc.InputJSON),
-			}
-			if tr, ok := results[tc.ID]; ok {
-				if tr.Content != "" {
-					end.Result = tr.Content
-				} else if len(tr.ContentJSON) > 0 {
-					end.Result = string(tr.ContentJSON)
-				}
-			}
-
-			if tr, ok := results[tc.ID]; ok && tr.IsError {
-				toolRec.SetExecError(fmt.Errorf("tool returned error"))
-			}
-
-			toolRec.SetResult(end)
-			toolRec.End()
-		}
 	}
 }
