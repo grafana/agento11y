@@ -23,6 +23,7 @@ import {
   nativeOutput,
   nativeToolRecords,
 } from "./v2-mappers.js";
+import type { GuardRedactions } from "./v2-redactions.js";
 
 export type { NativeEvent } from "./v2-mappers.js";
 
@@ -79,6 +80,8 @@ export interface NativeCaptureOptions {
   /** Running OpenCode version, the default when no agent version is configured. */
   hostVersion?: string;
   debugLog: (message: string, ...args: unknown[]) => void;
+  /** Redactions native guards applied to outgoing requests. */
+  redactions?: GuardRedactions;
 }
 
 interface CompactionGroup {
@@ -107,6 +110,7 @@ export function createNativeCapture({
   workspaceID,
   hostVersion,
   debugLog,
+  redactions,
 }: NativeCaptureOptions): {
   handleEvent(event: NativeEvent): void;
   observeToolExecution(observation: NativeToolObservation): void;
@@ -137,6 +141,12 @@ export function createNativeCapture({
     if (!reservations.size) group.owners.delete(sessionID);
   };
   const sessions = new Map<string, SessionState>();
+  // Guard redactions live exactly as long as the session state that holds the
+  // original text they cover.
+  const dropSession = (id: string) => {
+    sessions.delete(id);
+    redactions?.forget(id);
+  };
   // Ownership comes from events, never from a later session lookup.
   const locations = new Map<string, NativeLocation>();
   const locationSince = new Map<string, number>();
@@ -185,18 +195,39 @@ export function createNativeCapture({
     const assistant = session.assistant;
     if (!assistant) return;
     session.assistant = undefined;
-    if (draining && !session.compaction) sessions.delete(sessionID);
+    // A draining instance keeps no idle state. The session's guard redactions
+    // go too, but only after this export has used them.
+    const drop = draining && !session.compaction;
+    if (drop) sessions.delete(sessionID);
     const id = stableOpencodeGenerationId(sessionID, assistant.id);
     if (settled.has(id)) {
       assistant.toolObservations.clear();
+      if (drop) redactions?.forget(sessionID);
       return;
     }
     settled.add(id); // Commit before scheduling any asynchronous export.
     session.lastGeneration = id;
     session.history.push(...nativeOutput(assistant.blocks));
+    // Guards redact the request sent to the model, but session events keep the
+    // original text. Export what the model received.
+    const exported = redactions
+      ? {
+          ...assistant,
+          input: redactions.messages(sessionID, assistant.input),
+          systemPrompt:
+            assistant.systemPrompt === undefined
+              ? undefined
+              : redactions.text(sessionID, assistant.systemPrompt),
+          title:
+            assistant.title === undefined
+              ? undefined
+              : redactions.title(sessionID, assistant.title),
+        }
+      : assistant;
+    if (drop) redactions?.forget(sessionID);
     const result = mapNativeGeneration(
       {
-        ...assistant,
+        ...exported,
         terminalAt: at,
         settlement: reason,
         tokens: terminal?.tokens,
@@ -219,7 +250,7 @@ export function createNativeCapture({
     const seed = {
       id,
       conversationId: assistant.conversationId,
-      conversationTitle: assistant.title,
+      conversationTitle: exported.title,
       parentGenerationIds: assistant.parent ? [assistant.parent] : undefined,
       agentName: nativeAgentName(config.agentName, assistant.agent),
       agentVersion,
@@ -229,8 +260,8 @@ export function createNativeCapture({
       contentCapture: config.contentCapture,
       systemPrompt:
         config.contentCapture !== "metadata_only" &&
-        assistant.systemPrompt !== undefined
-          ? redactor.redact(assistant.systemPrompt)
+        exported.systemPrompt !== undefined
+          ? redactor.redact(exported.systemPrompt)
           : undefined,
       // Per turn, like v1, so a mid-session checkout reaches the next turn.
       tags: buildBuiltinTags({
@@ -264,7 +295,7 @@ export function createNativeCapture({
         if (error) recorder.setCallError(new Error(error));
         emitToolSpans((start) => recorder.startToolExecution(start), records, {
           conversationId: assistant.conversationId,
-          conversationTitle: assistant.title,
+          conversationTitle: exported.title,
           agentName: seed.agentName,
           agentVersion,
           requestProvider: assistant.model.providerID,
@@ -304,8 +335,12 @@ export function createNativeCapture({
       reserved(event);
       return;
     }
-    const snapshot =
+    const observed =
       session.compaction?.seq === started ? session.compaction : undefined;
+    const snapshot =
+      observed && redactions
+        ? { ...observed, input: redactions.messages(sessionID, observed.input) }
+        : observed;
     const mapped = mapNativeCompactionGeneration(
       event,
       snapshot,
@@ -322,8 +357,9 @@ export function createNativeCapture({
       ...mapped.seed,
       conversationId: session.conversationId,
       conversationTitle:
-        session.conversationId === event.data.sessionID
-          ? session.title
+        session.conversationId === event.data.sessionID &&
+        session.title !== undefined
+          ? (redactions?.title(sessionID, session.title) ?? session.title)
           : undefined,
       parentGenerationIds: snapshot?.parent ? [snapshot.parent] : undefined,
       agentVersion,
@@ -384,7 +420,7 @@ export function createNativeCapture({
       if (owns(event.location)) {
         draining = true;
         for (const [id, session] of sessions)
-          if (!session.assistant && !session.compaction) sessions.delete(id);
+          if (!session.assistant && !session.compaction) dropSession(id);
       }
       return;
     }
@@ -422,7 +458,7 @@ export function createNativeCapture({
       }
       // Neither side imports the other location's retained history or queued inbox.
       releaseCompaction(sessionID);
-      sessions.delete(sessionID);
+      dropSession(sessionID);
       if (owns(previous) || owns(event.data.location)) seen.add(event.id);
       locations.set(sessionID, { ...event.data.location });
       locationSince.set(sessionID, event.durable.seq);
@@ -524,7 +560,7 @@ export function createNativeCapture({
           session.instructions = [];
         }
         if (draining && !session.assistant && !session.compaction)
-          sessions.delete(sessionID);
+          dropSession(sessionID);
         return;
       case "session.step.started": {
         const id = stableOpencodeGenerationId(
@@ -579,7 +615,7 @@ export function createNativeCapture({
       case "session.deleted":
         settle(sessionID, session, event.created, "deleted");
         releaseCompaction(sessionID);
-        sessions.delete(sessionID);
+        dropSession(sessionID);
         locations.delete(sessionID);
         return;
     }

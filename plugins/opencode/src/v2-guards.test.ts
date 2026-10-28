@@ -20,6 +20,10 @@ import {
   nativePromptMessages,
   projectNativeRequest,
 } from "./v2-guards.js";
+import {
+  createGuardRedactions,
+  type GuardRedactions,
+} from "./v2-redactions.js";
 
 function request(): SessionRequest {
   return {
@@ -506,12 +510,13 @@ describe("native awaited guards through the real SDK decoder", () => {
     ).toBe(true);
     warning.mockRestore();
   });
-  async function setup(failAt = 0) {
+  async function setup(failAt = 0, redactions?: GuardRedactions) {
     const native = host(failAt);
     const guards = createNativeGuards({
       client,
       config,
       context: native.context,
+      redactions,
     });
     cleanup = await guards.register();
     return { ...native, guards };
@@ -573,6 +578,34 @@ describe("native awaited guards through the real SDK decoder", () => {
       phase: "preflight",
       context: { model: { provider: "fixture", name: "model" } },
     });
+  });
+
+  it.each(
+    providerHooks,
+  )("records %s redactions so capture exports the redacted text", async (name) => {
+    wire.response((body) => ({
+      action: "allow",
+      transformed_input: { messages: transformText(body.input.messages) },
+    }));
+    const redactions = createGuardRedactions();
+    const native = await setup(0, redactions);
+    await native.send(`session.${name}`, request(), () => {});
+    // The fixture rewrites text without the redaction token, so capture
+    // redacts each changed part whole.
+    expect(redactions.text("ses_guard", "user-secret")).toBe("[REDACTED]");
+    expect(redactions.text("ses_guard", "system-secret")).toBe("[REDACTED]");
+    expect(redactions.text("ses_other", "user-secret")).toBe("user-secret");
+  });
+
+  it("records nothing when the guard changes nothing", async () => {
+    wire.response((body) => ({
+      action: "allow",
+      transformed_input: { messages: body.input.messages },
+    }));
+    const redactions = createGuardRedactions();
+    const native = await setup(0, redactions);
+    await native.send("session.context", request(), () => {});
+    expect(redactions.text("ses_guard", "user-secret")).toBe("user-secret");
   });
 
   it("admits but does not transform the stored prompt", async () => {

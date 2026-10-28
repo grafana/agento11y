@@ -34,6 +34,10 @@ import type {
   NativeEventOf,
   NativeLocation,
 } from "./v2-mappers.js";
+import {
+  createGuardRedactions,
+  type GuardRedactions,
+} from "./v2-redactions.js";
 import { nativeFixture } from "./v2-testdata.js";
 
 vi.mock("./git.js", () => ({
@@ -243,6 +247,7 @@ function harness(
   location = home,
   overrides: Partial<Agento11yOpencodeConfig> = {},
   createCapture = createNativeCapture,
+  redactions?: GuardRedactions,
 ) {
   const generations: Recorded[] = [];
   const toolResults: unknown[] = [];
@@ -291,6 +296,7 @@ function harness(
     ...location,
     hostVersion: "2.0.29",
     debugLog,
+    redactions,
   });
   return {
     capture,
@@ -1234,6 +1240,142 @@ describe("native lifecycle fold", () => {
     expect(drained?.result?.output).toEqual([
       { role: "assistant", parts: [{ type: "text", text: "before after" }] },
     ]);
+  });
+});
+
+describe("native capture with guard redactions", () => {
+  // A guard-only pattern: the plugin's own secret redaction doesn't know it.
+  const PROMPT = "Status update on Project Falcon for the board";
+  const REDACTED = "Status update on [REDACTED] for the board";
+  const INSTRUCTIONS = "Escalate Project Falcon questions to the leads.";
+  const REDACTED_INSTRUCTIONS = "Escalate [REDACTED] questions to the leads.";
+  const titled = (title: string) => {
+    const created = event("session.created", {
+      sessionID: "s",
+      projectID: "p",
+      location: home,
+      slug: "s",
+      version: "2.0.22",
+      title,
+    });
+    return created;
+  };
+  const turn = (prompt: string) => [
+    titled(prompt),
+    event("session.instructions.updated", {
+      sessionID: "s",
+      delta: { instructions: "set" },
+      text: INSTRUCTIONS,
+    }),
+    enqueue(prompt),
+    event("session.inbox.delivered", { sessionID: "s", inboxID: "i" }),
+    start(),
+    end(),
+  ];
+
+  it("exports what the guard sent to the model, not the session's original text", async () => {
+    const redactions = createGuardRedactions();
+    const { capture, generations } = harness(
+      home,
+      {},
+      createNativeCapture,
+      redactions,
+    );
+    // What the native request guard records after rewriting the request.
+    redactions.record(
+      "s",
+      [
+        { role: "system", parts: [{ type: "text", text: INSTRUCTIONS }] },
+        { role: "user", parts: [{ type: "text", text: PROMPT }] },
+      ],
+      [
+        {
+          role: "system",
+          parts: [{ type: "text", text: REDACTED_INSTRUCTIONS }],
+        },
+        { role: "user", parts: [{ type: "text", text: REDACTED }] },
+      ],
+    );
+
+    await replay(capture, turn(PROMPT));
+
+    const generation = generations[0];
+    expect(JSON.stringify(generation?.result?.input)).toContain(REDACTED);
+    expect(generation?.seed.systemPrompt).toBe(REDACTED_INSTRUCTIONS);
+    expect(generation?.seed.conversationTitle).toBe(REDACTED);
+    expect(JSON.stringify(generation)).not.toContain("Falcon");
+  });
+
+  // The session's own events keep the original text for as long as capture
+  // holds the session, so the redactions must too, and a title that only
+  // quotes part of the prompt is still redacted.
+  it("exports redacted text after many redactions and with a shortened title", async () => {
+    const redactions = createGuardRedactions();
+    const { capture, generations } = harness(
+      home,
+      {},
+      createNativeCapture,
+      redactions,
+    );
+    redactions.record(
+      "s",
+      [{ role: "user", parts: [{ type: "text", text: PROMPT }] }],
+      [{ role: "user", parts: [{ type: "text", text: REDACTED }] }],
+    );
+    for (let i = 0; i < 300; i++) {
+      redactions.record(
+        "s",
+        [{ role: "user", parts: [{ type: "text", text: `ticket-${i}` }] }],
+        [{ role: "user", parts: [{ type: "text", text: "[REDACTED]" }] }],
+      );
+    }
+    for (let i = 0; i < 600; i++) {
+      redactions.record(
+        `other-${i}`,
+        [{ role: "user", parts: [{ type: "text", text: "unrelated" }] }],
+        [{ role: "user", parts: [{ type: "text", text: "[REDACTED]" }] }],
+      );
+    }
+
+    const events = turn(PROMPT);
+    events[0] = titled("Project Falcon status");
+    await replay(capture, events);
+
+    const generation = generations[0];
+    expect(JSON.stringify(generation?.result?.input)).toContain(REDACTED);
+    expect(generation?.seed.conversationTitle).toBe("[REDACTED] status");
+    expect(JSON.stringify(generation)).not.toContain("Falcon");
+  });
+
+  it("forgets a session's redactions when the session is deleted", async () => {
+    const redactions = createGuardRedactions();
+    const { capture } = harness(home, {}, createNativeCapture, redactions);
+    redactions.record(
+      "s",
+      [{ role: "user", parts: [{ type: "text", text: PROMPT }] }],
+      [{ role: "user", parts: [{ type: "text", text: REDACTED }] }],
+    );
+
+    await replay(capture, [
+      ...turn(PROMPT),
+      event("session.deleted", { sessionID: "s" }),
+    ]);
+
+    expect(redactions.text("s", PROMPT)).toBe(PROMPT);
+  });
+
+  it("exports the session's text when no guard redacted it", async () => {
+    const { capture, generations } = harness(
+      home,
+      {},
+      createNativeCapture,
+      createGuardRedactions(),
+    );
+
+    await replay(capture, turn(PROMPT));
+
+    expect(JSON.stringify(generations[0]?.result?.input)).toContain(PROMPT);
+    expect(generations[0]?.seed.systemPrompt).toBe(INSTRUCTIONS);
   });
 });
 

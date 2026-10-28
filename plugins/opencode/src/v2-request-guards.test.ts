@@ -8,6 +8,10 @@ import type {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAgento11yClient } from "./client.js";
 import type { Agento11yOpencodeConfig } from "./config.js";
+import {
+  createGuardRedactions,
+  type GuardRedactions,
+} from "./v2-redactions.js";
 import { createFinalCompactionGuards } from "./v2-request-guards.js";
 
 const HTTP = "session.http.request";
@@ -278,13 +282,14 @@ describe("final compaction guards through the real SDK decoder", () => {
     warning.mockRestore();
   });
 
-  async function setup(failAt = 0) {
+  async function setup(failAt = 0, redactions?: GuardRedactions) {
     const native = host(failAt);
     cleanup = await createFinalCompactionGuards({
       client,
       config,
       context: native.context,
       agentVersion: "plugin-version",
+      redactions,
     }).register();
     return native;
   }
@@ -366,6 +371,17 @@ describe("final compaction guards through the real SDK decoder", () => {
     expect(JSON.stringify(wire.calls[0].body.input)).toContain(
       "summary-secret",
     );
+  });
+
+  it("records a rewritten HTTP compaction body's redactions for capture", async () => {
+    wire.response(redacting);
+    const redactions = createGuardRedactions();
+    const native = await setup(0, redactions);
+    const fixture = Object.keys(fixtures)[0] as Fixture;
+    await native.send(HTTP, httpEvent(request(fixture)));
+    // The fixture rewrites text without the redaction token, so capture
+    // redacts the changed part whole.
+    expect(redactions.text("ses_final", "summary-secret")).toBe("[REDACTED]");
   });
 
   it("forwards the caller's abort signal on a rebuilt request", async () => {
