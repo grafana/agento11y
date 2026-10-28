@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import secrets
+import weakref
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable
 from dataclasses import replace
 from pathlib import Path
@@ -98,10 +99,7 @@ class Agento11yClaudeAgentHandler:
         self._enable_guards = enable_guards
         self._extra_tags = dict(extra_tags or {})
         self._extra_metadata = dict(extra_metadata or {})
-        # Text a redact guard removed, by Claude session and conversation id.
-        # It outlives a run, so a message replayed into a later run of the same
-        # session is still recorded redacted, while a new session starts clean.
-        self._redacted_spans: dict[str, set[str]] = {}
+        self._redacted_spans = _redacted_spans_for(client)
 
         self._reset_run_state()
 
@@ -379,11 +377,7 @@ class Agento11yClaudeAgentHandler:
             spans |= self._redacted_spans.get(key, set())
         if not spans:
             return message
-        parts = [
-            replace(part, text=_redact_spans(part.text, spans)) if part.kind == PartKind.TEXT else part
-            for part in message.parts
-        ]
-        return replace(message, parts=parts)
+        return replace(message, parts=_redact_text_parts(message.parts, spans))
 
     def _evaluate_guard(
         self,
@@ -488,6 +482,22 @@ class Agento11yClaudeAgentHandler:
     def _end_open_tools(self) -> None:
         for run_key in list(self._tool_runs):
             self._finish_tool(run_key, error=RuntimeError("tool did not complete before Claude Agent SDK stopped"))
+
+
+# Text a redact guard removed, by Claude session and conversation id, shared by
+# every handler made for the same agento11y client. Agento11yClaudeSDKClient and
+# agento11y_query make a new handler for each query, so this is what lets a
+# prompt replayed into a later run of the same session stay redacted, while a
+# new session starts clean. It goes away with the client.
+_redacted_spans_by_client: weakref.WeakKeyDictionary[Client, dict[str, set[str]]] = weakref.WeakKeyDictionary()
+
+
+def _redacted_spans_for(client: Client) -> dict[str, set[str]]:
+    try:
+        return _redacted_spans_by_client.setdefault(client, {})
+    except TypeError:
+        # A client that can't be weakly referenced keeps spans per handler.
+        return {}
 
 
 class Agento11yClaudeSDKClient:
@@ -781,6 +791,40 @@ def _sensitive_pieces(spans: list[str]) -> list[str]:
     # across it. Only the text around the token is sensitive.
     pieces = (piece.strip() for span in spans for piece in span.split(_REDACTION_TOKEN))
     return [piece for piece in pieces if piece != ""]
+
+
+def _redact_text_parts(parts: list[Part], spans: set[str]) -> list[Part]:
+    """Redact ``spans`` in a message's text parts, including a span split across parts.
+
+    A span inside one part is replaced in place. Claude can replay a prompt split
+    into several text blocks, which can also split a value, so each span is then
+    looked for across the text parts with whitespace ignored, and every part it
+    touches is replaced whole. Other parts are kept as sent.
+    """
+
+    parts = [
+        replace(part, text=_redact_spans(part.text, spans)) if part.kind == PartKind.TEXT else part for part in parts
+    ]
+    chars: list[str] = []
+    owners: list[int] = []
+    for index, part in enumerate(parts):
+        if part.kind != PartKind.TEXT:
+            continue
+        for char in part.text:
+            if not char.isspace():
+                chars.append(char)
+                owners.append(index)
+    joined = "".join(chars)
+    touched: set[int] = set()
+    for span in spans:
+        compact = "".join(span.split())
+        at = joined.find(compact) if compact else -1
+        while at >= 0:
+            touched.update(owners[at : at + len(compact)])
+            at = joined.find(compact, at + 1)
+    if not touched:
+        return parts
+    return [replace(part, text=_REDACTION_TOKEN) if index in touched else part for index, part in enumerate(parts)]
 
 
 def _redact_spans(value: str, spans: Iterable[str]) -> str:
