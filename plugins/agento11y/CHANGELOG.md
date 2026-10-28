@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.53.0] - 2026-10-28
+
+### Features
+
+- **plugins/agento11y**: report skill loads from Copilot and Vibe (#973)
+- **plugins/agento11y**: add local skill analytics (#963)
+
+### Bug Fixes
+
+- **plugins/agento11y**: decode local OTLP JSON trace IDs (#974)
+- **plugins/agento11y**: move Claude Code installs off the legacy marketplace (#969)
+- **security/high/plugins/agento11y**: update dependency happy-dom to v21 [security] (#937)
+- **security/unknown/plugins/agento11y**: update module golang.org/x/net to v0.62.0 [security] (#960)
+- **plugins/agento11y**: mark Codex usage as input-inclusive (#949)
+
 ## [0.52.0] - 2026-10-26
 
 ### Features
