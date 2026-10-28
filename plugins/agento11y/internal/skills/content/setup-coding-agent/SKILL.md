@@ -374,9 +374,9 @@ All hosts read the resolved config path. The default is `~/.config/agento11y/con
 | `AGENTO11Y_ANONYMOUS_USAGE_STATS` | `disabled` stops reporting usage statistics about the CLI itself; `log` prints them instead of sending |
 
 Branded keys have older `SIGIL_*` spellings except `AGENTO11Y_STACK_URL` and `AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES`. `SIGIL_PROTOCOL` remains supported.
-**Local only** writes `AGENTO11Y_LOCAL` and `SIGIL_LOCAL` as true, and both
-`LOCAL_FORWARD` spellings as false. **Local web UI = Yes** writes all four local
-keys as true. **Local web UI = No** writes all four as false. An explicit
+**Local only** writes `AGENTO11Y_LOCAL` as true and `AGENTO11Y_LOCAL_FORWARD`
+as false. **Local web UI = Yes** writes both as true. **Local web UI = No**
+writes both as false. An explicit
 `agento11y login` still runs Cloud setup. Doctor reports provenance only for settings in its report.
 
 ### Experimental OTel generation export
@@ -430,7 +430,7 @@ Warn the user before enabling this. For Claude Code, Codex, and Cursor, `user` c
 Each value combination creates a time series, and branch names are unbounded. Start with `user,repo`.
 Doctor shows repo and branch but cannot read a host's signed-in identity; set `AGENTO11Y_USER_ID` when the user value must be known before launch.
 
-Other hosts have no account-email lookup. Discovery makes no provider requests, refreshes no credentials, and runs no host account commands. See [local account identity sources](https://github.com/grafana/agento11y/blob/main/docs/concepts/tags-and-metadata.md#local-account-identity-sources). The OS fallback supplies only the optional tag; explicit tags never set identity. Account identity stays active when automatic tags are off. Use the same `AGENTO11Y_USER_ID` across plugins for consistent identity; arbitrary IDs, pseudonyms, and legacy `SIGIL_*` aliases remain supported.
+Other hosts have no account-email lookup. Discovery makes no provider requests, refreshes no credentials, and runs no host account commands. See [local account identity sources](https://github.com/grafana/agento11y/blob/main/docs/concepts/tags-and-metadata.md#local-account-identity-sources). The OS fallback supplies only the optional tag; explicit tags never set identity. Account identity stays active when automatic tags are off. Use the same `AGENTO11Y_USER_ID` across plugins for consistent identity; arbitrary IDs and pseudonyms remain supported.
 
 ### Content capture
 
@@ -474,7 +474,7 @@ agento11y history import claude-code --no-local  # import into Grafana Cloud
 ```
 
 The import resolves the destination in this order: `--no-local`, `--local`, a true
-`AGENTO11Y_LOCAL`/`SIGIL_LOCAL` value from the shell or `config.env`, then saved Cloud credentials.
+`AGENTO11Y_LOCAL` value from the shell or `config.env`, then saved Cloud credentials.
 With none set, an interactive run asks where sessions go. `--no-local` or any valid LOCAL value
 skips that question; missing Cloud credentials still starts Cloud setup. That setup does not offer
 **Local web UI** because locally forwarded imports never relay to Cloud. A noninteractive run never

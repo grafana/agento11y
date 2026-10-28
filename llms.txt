@@ -142,7 +142,7 @@ Guards, scores, and experiment APIs still need HTTP credentials.
 
 `agento11y <agent> --local`, **Local only**, or **Local web UI = Yes** records full session content to a JSONL store on this machine and serves a local viewer. The launcher prints the viewer URL: it tries `http://127.0.0.1:8765` first and moves to a higher port when that one is taken. Manage the daemon with `agento11y local start|open|status|stop|restart`. Use `agento11y local open` to start the receiver if needed, print its address, and try to open the viewer. Local mode is available on every supported platform.
 
-**Local only** writes `AGENTO11Y_LOCAL` and `SIGIL_LOCAL` as true, and writes `AGENTO11Y_LOCAL_FORWARD` and `SIGIL_LOCAL_FORWARD` as false. Sessions then stay on the machine. **Local web UI = Yes** writes all four keys as true and forwards with valid Cloud credentials. **Local web UI = No** writes all four keys as false and sends directly to Cloud. `--no-local` sends one launcher session to Cloud without changing those keys.
+**Local only** writes `AGENTO11Y_LOCAL` as true and `AGENTO11Y_LOCAL_FORWARD` as false. Sessions then stay on the machine. **Local web UI = Yes** writes both as true and forwards with valid Cloud credentials. **Local web UI = No** writes both as false and sends directly to Cloud. `--no-local` sends one launcher session to Cloud without changing those keys.
 
 Separately from captured sessions, versioned builds of the binary report statistics about their own use (which subcommand ran, flag names, outcome, duration, a random per-installation ID) and never argument values, endpoints, tenant IDs, tokens, tags, hostnames, or file paths. Local development builds do not send usage statistics. `AGENTO11Y_ANONYMOUS_USAGE_STATS=disabled` or `DO_NOT_TRACK=1` turns it off; `=log` prints the event instead of sending it.
 
@@ -254,7 +254,7 @@ Coding-agent plugins (Path A) add one opt-in switch on top: `AGENTO11Y_AUTO_CODI
 
 Coding-agent account discovery is local-only. Claude uses its selected config-directory account file, Codex uses existing `auth.json` email fields, and Cursor uses saved session email before current hook email. Other hosts have no account-email lookup. Discovery makes no provider requests, refreshes no credentials, and runs no host account commands. See [local account identity sources](https://github.com/grafana/agento11y/blob/main/docs/concepts/tags-and-metadata.md#local-account-identity-sources).
 
-Automatic user-tag precedence is explicit `TAGS[user]`, explicit `USER_ID`, host account identity, then OS username. The OS fallback sets only the optional tag, never conversation identity. An explicit `user` tag stays independent of identity. Disabling automatic tags does not disable account identity. `AGENTO11Y_USER_ID` accepts arbitrary identifiers, including pseudonyms; set the same value across plugins to unify attribution. Legacy `SIGIL_*` aliases remain supported.
+Automatic user-tag precedence is explicit `TAGS[user]`, explicit `USER_ID`, host account identity, then OS username. The OS fallback sets only the optional tag, never conversation identity. An explicit `user` tag stays independent of identity. Disabling automatic tags does not disable account identity. `AGENTO11Y_USER_ID` accepts arbitrary identifiers, including pseudonyms; set the same value across plugins to unify attribution.
 
 Capture modes do not strip `tags`/`metadata`/`user_id`; do not put secrets there.
 
