@@ -75,3 +75,85 @@ describe("guard redactions", () => {
     ]);
   });
 });
+
+describe("guard redactions under review cases", () => {
+  const user = (value: string) => text("user", value);
+
+  it("keeps every redaction while capture holds the session, however many there are", () => {
+    const redactions = createGuardRedactions();
+    // More than the old caps: 256 pairs per session and 512 sessions.
+    for (let i = 0; i < 300; i++) {
+      redactions.record(
+        "s",
+        [user(`code-${i} here`)],
+        [user("[REDACTED] here")],
+      );
+    }
+    for (let i = 0; i < 600; i++) {
+      redactions.record(`other-${i}`, [user("Falcon")], [user("[REDACTED]")]);
+    }
+
+    expect(redactions.text("s", "code-0 here")).toBe("[REDACTED] here");
+    expect(redactions.text("other-0", "Falcon")).toBe("[REDACTED]");
+
+    redactions.forget("s");
+    expect(redactions.text("s", "code-0 here")).toBe("code-0 here");
+  });
+
+  it("composes a redaction of already-redacted text", () => {
+    const redactions = createGuardRedactions();
+    const original = "Ping jane@example.com about Project Falcon";
+    // A first guard removes the address, then a second one the project.
+    redactions.record(
+      "s",
+      [user(original)],
+      [user("Ping [REDACTED] about Project Falcon")],
+    );
+    redactions.record(
+      "s",
+      [user("Ping [REDACTED] about Project Falcon")],
+      [user("Ping [REDACTED] about [REDACTED]")],
+    );
+
+    expect(redactions.text("s", original)).toBe(
+      "Ping [REDACTED] about [REDACTED]",
+    );
+  });
+
+  it("redacts overlapping values the same way whichever was recorded first", () => {
+    const joined = "Notes: Falcon Project Falcon";
+    const shortFirst = createGuardRedactions();
+    shortFirst.record("s", [user("Falcon")], [user("[REDACTED]")]);
+    shortFirst.record("s", [user("Project Falcon")], [user("[REDACTED]")]);
+    const longFirst = createGuardRedactions();
+    longFirst.record("s", [user("Project Falcon")], [user("[REDACTED]")]);
+    longFirst.record("s", [user("Falcon")], [user("[REDACTED]")]);
+
+    expect(shortFirst.text("s", joined)).toBe("Notes: [REDACTED] [REDACTED]");
+    expect(longFirst.text("s", joined)).toBe("Notes: [REDACTED] [REDACTED]");
+  });
+
+  it("redacts a shortened or cut-off title", () => {
+    const redactions = createGuardRedactions();
+    redactions.record(
+      "s",
+      [user("Status update on Project Falcon for the board")],
+      [user("Status update on [REDACTED] for the board")],
+    );
+
+    expect(redactions.title("s", "Update on Project Falcon")).toBe(
+      "Update on [REDACTED]",
+    );
+    expect(redactions.title("s", "Status update on Project Fal…")).toBe(
+      "Status update on [REDACTED]",
+    );
+    expect(redactions.title("s", "Board status")).toBe("Board status");
+  });
+
+  it("treats a redaction to empty text as removing the whole part", () => {
+    const redactions = createGuardRedactions();
+    redactions.record("s", [user("Project Falcon")], [user("")]);
+
+    expect(redactions.text("s", "Project Falcon")).toBe("[REDACTED]");
+  });
+});

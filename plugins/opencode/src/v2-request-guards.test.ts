@@ -379,9 +379,9 @@ describe("final compaction guards through the real SDK decoder", () => {
     const native = await setup(0, redactions);
     const fixture = Object.keys(fixtures)[0] as Fixture;
     await native.send(HTTP, httpEvent(request(fixture)));
-    expect(redactions.text("ses_final", "summary-secret")).toBe(
-      "summary-clean",
-    );
+    // The fixture rewrites text without the redaction token, so capture
+    // redacts the changed part whole.
+    expect(redactions.text("ses_final", "summary-secret")).toBe("[REDACTED]");
   });
 
   it("forwards the caller's abort signal on a rebuilt request", async () => {

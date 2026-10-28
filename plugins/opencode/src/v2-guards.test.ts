@@ -590,8 +590,10 @@ describe("native awaited guards through the real SDK decoder", () => {
     const redactions = createGuardRedactions();
     const native = await setup(0, redactions);
     await native.send(`session.${name}`, request(), () => {});
-    expect(redactions.text("ses_guard", "user-secret")).toBe("user-clean");
-    expect(redactions.text("ses_guard", "system-secret")).toBe("system-clean");
+    // The fixture rewrites text without the redaction token, so capture
+    // redacts each changed part whole.
+    expect(redactions.text("ses_guard", "user-secret")).toBe("[REDACTED]");
+    expect(redactions.text("ses_guard", "system-secret")).toBe("[REDACTED]");
     expect(redactions.text("ses_other", "user-secret")).toBe("user-secret");
   });
 

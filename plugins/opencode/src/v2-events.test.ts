@@ -1306,6 +1306,64 @@ describe("native capture with guard redactions", () => {
     expect(JSON.stringify(generation)).not.toContain("Falcon");
   });
 
+  // The session's own events keep the original text for as long as capture
+  // holds the session, so the redactions must too, and a title that only
+  // quotes part of the prompt is still redacted.
+  it("exports redacted text after many redactions and with a shortened title", async () => {
+    const redactions = createGuardRedactions();
+    const { capture, generations } = harness(
+      home,
+      {},
+      createNativeCapture,
+      redactions,
+    );
+    redactions.record(
+      "s",
+      [{ role: "user", parts: [{ type: "text", text: PROMPT }] }],
+      [{ role: "user", parts: [{ type: "text", text: REDACTED }] }],
+    );
+    for (let i = 0; i < 300; i++) {
+      redactions.record(
+        "s",
+        [{ role: "user", parts: [{ type: "text", text: `ticket-${i}` }] }],
+        [{ role: "user", parts: [{ type: "text", text: "[REDACTED]" }] }],
+      );
+    }
+    for (let i = 0; i < 600; i++) {
+      redactions.record(
+        `other-${i}`,
+        [{ role: "user", parts: [{ type: "text", text: "unrelated" }] }],
+        [{ role: "user", parts: [{ type: "text", text: "[REDACTED]" }] }],
+      );
+    }
+
+    const events = turn(PROMPT);
+    events[0] = titled("Project Falcon status");
+    await replay(capture, events);
+
+    const generation = generations[0];
+    expect(JSON.stringify(generation?.result?.input)).toContain(REDACTED);
+    expect(generation?.seed.conversationTitle).toBe("[REDACTED] status");
+    expect(JSON.stringify(generation)).not.toContain("Falcon");
+  });
+
+  it("forgets a session's redactions when the session is deleted", async () => {
+    const redactions = createGuardRedactions();
+    const { capture } = harness(home, {}, createNativeCapture, redactions);
+    redactions.record(
+      "s",
+      [{ role: "user", parts: [{ type: "text", text: PROMPT }] }],
+      [{ role: "user", parts: [{ type: "text", text: REDACTED }] }],
+    );
+
+    await replay(capture, [
+      ...turn(PROMPT),
+      event("session.deleted", { sessionID: "s" }),
+    ]);
+
+    expect(redactions.text("s", PROMPT)).toBe(PROMPT);
+  });
+
   it("exports the session's text when no guard redacted it", async () => {
     const { capture, generations } = harness(
       home,

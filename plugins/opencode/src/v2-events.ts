@@ -141,6 +141,12 @@ export function createNativeCapture({
     if (!reservations.size) group.owners.delete(sessionID);
   };
   const sessions = new Map<string, SessionState>();
+  // Guard redactions live exactly as long as the session state that holds the
+  // original text they cover.
+  const dropSession = (id: string) => {
+    sessions.delete(id);
+    redactions?.forget(id);
+  };
   // Ownership comes from events, never from a later session lookup.
   const locations = new Map<string, NativeLocation>();
   const locationSince = new Map<string, number>();
@@ -189,10 +195,14 @@ export function createNativeCapture({
     const assistant = session.assistant;
     if (!assistant) return;
     session.assistant = undefined;
-    if (draining && !session.compaction) sessions.delete(sessionID);
+    // A draining instance keeps no idle state. The session's guard redactions
+    // go too, but only after this export has used them.
+    const drop = draining && !session.compaction;
+    if (drop) sessions.delete(sessionID);
     const id = stableOpencodeGenerationId(sessionID, assistant.id);
     if (settled.has(id)) {
       assistant.toolObservations.clear();
+      if (drop) redactions?.forget(sessionID);
       return;
     }
     settled.add(id); // Commit before scheduling any asynchronous export.
@@ -211,9 +221,10 @@ export function createNativeCapture({
           title:
             assistant.title === undefined
               ? undefined
-              : redactions.text(sessionID, assistant.title),
+              : redactions.title(sessionID, assistant.title),
         }
       : assistant;
+    if (drop) redactions?.forget(sessionID);
     const result = mapNativeGeneration(
       {
         ...exported,
@@ -348,7 +359,7 @@ export function createNativeCapture({
       conversationTitle:
         session.conversationId === event.data.sessionID &&
         session.title !== undefined
-          ? (redactions?.text(sessionID, session.title) ?? session.title)
+          ? (redactions?.title(sessionID, session.title) ?? session.title)
           : undefined,
       parentGenerationIds: snapshot?.parent ? [snapshot.parent] : undefined,
       agentVersion,
@@ -409,7 +420,7 @@ export function createNativeCapture({
       if (owns(event.location)) {
         draining = true;
         for (const [id, session] of sessions)
-          if (!session.assistant && !session.compaction) sessions.delete(id);
+          if (!session.assistant && !session.compaction) dropSession(id);
       }
       return;
     }
@@ -447,7 +458,7 @@ export function createNativeCapture({
       }
       // Neither side imports the other location's retained history or queued inbox.
       releaseCompaction(sessionID);
-      sessions.delete(sessionID);
+      dropSession(sessionID);
       if (owns(previous) || owns(event.data.location)) seen.add(event.id);
       locations.set(sessionID, { ...event.data.location });
       locationSince.set(sessionID, event.durable.seq);
@@ -549,7 +560,7 @@ export function createNativeCapture({
           session.instructions = [];
         }
         if (draining && !session.assistant && !session.compaction)
-          sessions.delete(sessionID);
+          dropSession(sessionID);
         return;
       case "session.step.started": {
         const id = stableOpencodeGenerationId(
@@ -604,7 +615,7 @@ export function createNativeCapture({
       case "session.deleted":
         settle(sessionID, session, event.created, "deleted");
         releaseCompaction(sessionID);
-        sessions.delete(sessionID);
+        dropSession(sessionID);
         locations.delete(sessionID);
         return;
     }
