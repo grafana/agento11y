@@ -1386,3 +1386,52 @@ async def test_claude_agent_handler_redacts_text_split_across_blocks(monkeypatch
         assert _recorded_input_text(generation) == want
     finally:
         client.shutdown()
+
+
+# A shorter value the guard removed earlier can sit inside one piece of a longer
+# value Claude split across blocks. Redacting it first must not hide the rest.
+@pytest.mark.asyncio
+async def test_claude_agent_handler_redacts_split_value_containing_a_shorter_one(monkeypatch) -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    redacted = {
+        "Ask jane about the order": "Ask [REDACTED] about the order",
+        _PROMPT_WITH_EMAIL: _REDACTED_PROMPT,
+    }
+
+    def redact(request) -> HookEvaluateResponse:
+        prompt = request.input.messages[0].parts[0].text
+        return HookEvaluateResponse(
+            action="allow",
+            rule_id="redact_names_and_emails",
+            transformed_input=HookInput(messages=[user_text_message(redacted[prompt])]),
+        )
+
+    monkeypatch.setattr(client, "evaluate_hook", redact)
+
+    async def streamed_prompt() -> AsyncIterator[dict[str, object]]:
+        yield {"type": "user", "message": {"role": "user", "content": _PROMPT_WITH_EMAIL}}
+
+    try:
+        handler = Agento11yClaudeAgentHandler(client=client, conversation_id="conv-42")
+        options = handler.instrument_options(ClaudeAgentOptions(model="claude-sonnet-4-5"))
+        await handler.start(prompt=streamed_prompt(), options=options)
+        hook = options.hooks["UserPromptSubmit"][0].hooks[0]
+        for prompt in redacted:
+            await hook(_user_prompt_submit_input(prompt), None, {"signal": None})
+        handler.record_message(
+            UserMessage(
+                content=[
+                    TextBlock("Email my order confirmation to jane.doe@"),
+                    TextBlock("example.com"),
+                    TextBlock("Ask jane later."),
+                ]
+            )
+        )
+        handler.record_message(_success_result())
+
+        client.flush()
+        generation = exporter.requests[0].generations[0]
+        assert _recorded_input_text(generation) == ["[REDACTED]", "[REDACTED]", "Ask [REDACTED] later."]
+    finally:
+        client.shutdown()

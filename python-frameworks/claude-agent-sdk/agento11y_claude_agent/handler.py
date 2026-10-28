@@ -796,15 +796,14 @@ def _sensitive_pieces(spans: list[str]) -> list[str]:
 def _redact_text_parts(parts: list[Part], spans: set[str]) -> list[Part]:
     """Redact ``spans`` in a message's text parts, including a span split across parts.
 
-    A span inside one part is replaced in place. Claude can replay a prompt split
-    into several text blocks, which can also split a value, so each span is then
-    looked for across the text parts with whitespace ignored, and every part it
-    touches is replaced whole. Other parts are kept as sent.
+    Claude can replay a prompt split into several text blocks, which can also
+    split a value. Each span is looked for across the original text parts with
+    whitespace ignored, and every part a split match touches is replaced whole.
+    The search runs before any part is rewritten, so a shorter span inside one
+    piece of a split value can't hide the rest of it. The other text parts get
+    spans replaced in place, and non-text parts are kept as sent.
     """
 
-    parts = [
-        replace(part, text=_redact_spans(part.text, spans)) if part.kind == PartKind.TEXT else part for part in parts
-    ]
     chars: list[str] = []
     owners: list[int] = []
     for index, part in enumerate(parts):
@@ -820,11 +819,20 @@ def _redact_text_parts(parts: list[Part], spans: set[str]) -> list[Part]:
         compact = "".join(span.split())
         at = joined.find(compact) if compact else -1
         while at >= 0:
-            touched.update(owners[at : at + len(compact)])
+            owned = set(owners[at : at + len(compact)])
+            # A match inside one part that holds the span as written is left to
+            # the in-place pass, which keeps the rest of that part.
+            if len(owned) > 1 or span not in parts[min(owned)].text:
+                touched |= owned
             at = joined.find(compact, at + 1)
-    if not touched:
-        return parts
-    return [replace(part, text=_REDACTION_TOKEN) if index in touched else part for index, part in enumerate(parts)]
+    return [
+        replace(part, text=_REDACTION_TOKEN)
+        if index in touched
+        else replace(part, text=_redact_spans(part.text, spans))
+        if part.kind == PartKind.TEXT
+        else part
+        for index, part in enumerate(parts)
+    ]
 
 
 def _redact_spans(value: str, spans: Iterable[str]) -> str:
