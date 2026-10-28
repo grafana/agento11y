@@ -66,3 +66,5 @@ minimumReleaseAgeExclude:
   - body-parser@2.4.0
   # Renovate security update: @strands-agents/sdk@1.5.0
   - "@strands-agents/sdk@1.5.0"
+  # Renovate security update: happy-dom@21.0.4
+  - happy-dom@21.0.4
