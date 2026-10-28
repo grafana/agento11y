@@ -26,7 +26,7 @@ overrides:
   postcss: 8.5.29
   'brace-expansion@1': 1.1.21
   '@opentelemetry/core': 2.8.0
-  'body-parser@2': 2.3.0
+  'body-parser@2': 2.4.0
 
 # Security Hardening Week package-manager policy.
 minimumReleaseAge: 4320
@@ -62,3 +62,5 @@ minimumReleaseAgeExclude:
   - qs@6.16.0 || 6.16.1
   # Renovate security update: vitest@4.1.11
   - vitest@4.1.11
+  # Renovate security update: body-parser@2.4.0
+  - body-parser@2.4.0
