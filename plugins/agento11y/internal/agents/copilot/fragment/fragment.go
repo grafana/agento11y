@@ -16,16 +16,18 @@ import (
 const DefaultStaleAge = 24 * time.Hour
 
 type ToolRecord struct {
-	ToolName     string          `json:"toolName"`
-	ToolUseID    string          `json:"toolUseId,omitempty"`
-	ToolInput    json.RawMessage `json:"toolInput,omitempty"`
-	ToolResponse json.RawMessage `json:"toolResponse,omitempty"`
-	Status       string          `json:"status,omitempty"`
-	ErrorMessage string          `json:"errorMessage,omitempty"`
-	Cwd          string          `json:"cwd,omitempty"`
-	StartedAt    string          `json:"startedAt,omitempty"`
-	CompletedAt  string          `json:"completedAt,omitempty"`
-	DurationMs   *float64        `json:"durationMs,omitempty"`
+	SkillName                 string          `json:"skillName,omitempty"`
+	SkillAttributionAmbiguous bool            `json:"skillAttributionAmbiguous,omitempty"`
+	ToolName                  string          `json:"toolName"`
+	ToolUseID                 string          `json:"toolUseId,omitempty"`
+	ToolInput                 json.RawMessage `json:"toolInput,omitempty"`
+	ToolResponse              json.RawMessage `json:"toolResponse,omitempty"`
+	Status                    string          `json:"status,omitempty"`
+	ErrorMessage              string          `json:"errorMessage,omitempty"`
+	Cwd                       string          `json:"cwd,omitempty"`
+	StartedAt                 string          `json:"startedAt,omitempty"`
+	CompletedAt               string          `json:"completedAt,omitempty"`
+	DurationMs                *float64        `json:"durationMs,omitempty"`
 }
 
 type ErrorRecord struct {

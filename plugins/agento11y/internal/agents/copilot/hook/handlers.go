@@ -16,6 +16,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/copilot/config"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/copilot/fragment"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/copilot/mapper"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/copilot/skilldetect"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/copilot/transcript"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/guard"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/autotag"
@@ -23,6 +24,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/otel"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/redact"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/skillidentity"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/timeutil"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/useragent"
 )
@@ -313,9 +315,30 @@ func PostToolUse(p Payload, cfg config.Config, logger *log.Logger, failed bool) 
 			errorMessage = redactor().RedactJSONForText(p.Error())
 		}
 		idx := findPendingToolIndex(f.Tools, p.ToolName())
+		pending := 0
+		for _, tool := range f.Tools {
+			if tool.ToolName == p.ToolName() && tool.CompletedAt == "" {
+				pending++
+			}
+		}
+		if pending > 1 && p.ToolName() == "skill" {
+			// Hooks have no call IDs. Later completions cannot repair this association.
+			for i := range f.Tools {
+				if f.Tools[i].ToolName == p.ToolName() && f.Tools[i].CompletedAt == "" {
+					f.Tools[i].SkillAttributionAmbiguous = true
+					f.Tools[i].SkillName = ""
+				}
+			}
+		}
+		skillName := ""
+		// CLI failure hooks can reuse arguments cached before another hook rewrote them.
+		if !failed && p.Surface() == surfaceCopilotCLI && (idx < 0 || !f.Tools[idx].SkillAttributionAmbiguous) {
+			skillName, _ = skilldetect.Detect(p.ToolName(), p.ToolInput())
+		}
 		if idx < 0 {
 			f.NextToolIndex++
 			f.Tools = append(f.Tools, fragment.ToolRecord{
+				SkillName:    skillName,
 				ToolName:     p.ToolName(),
 				ToolUseID:    fmt.Sprintf("%s-tool-%03d", turnID, f.NextToolIndex),
 				Cwd:          p.CWD,
@@ -328,6 +351,7 @@ func PostToolUse(p Payload, cfg config.Config, logger *log.Logger, failed bool) 
 			})
 			return
 		}
+		f.Tools[idx].SkillName = skillName
 		f.Tools[idx].Status = status
 		f.Tools[idx].CompletedAt = p.ResolvedTimestamp()
 		f.Tools[idx].DurationMs = p.DurationMs()
@@ -761,7 +785,7 @@ func emitToolSpans(ctx context.Context, client *agento11y.Client, frag *fragment
 			continue
 		}
 		startedAt, completedAt := toolSpanWindow(*t, gen.CompletedAt)
-		_, toolRec := client.StartToolExecution(ctx, agento11y.ToolExecutionStart{
+		start := agento11y.ToolExecutionStart{
 			ToolName:        t.ToolName,
 			ToolCallID:      t.ToolUseID,
 			ToolType:        "function",
@@ -772,7 +796,14 @@ func emitToolSpans(ctx context.Context, client *agento11y.Client, frag *fragment
 			RequestProvider: gen.Model.Provider,
 			StartedAt:       startedAt,
 			ContentCapture:  mappedContentCapture(gen),
-		})
+		}
+		if frag.Surface == surfaceCopilotCLI && t.ToolName == "skill" && t.Status == "completed" && !t.SkillAttributionAmbiguous {
+			if name, ok := skillidentity.Validate(t.SkillName); ok {
+				start.ExecutionKind = agento11y.ToolExecutionKindLoadSkill
+				start.SkillName = name
+			}
+		}
+		_, toolRec := client.StartToolExecution(ctx, start)
 
 		end := agento11y.ToolExecutionEnd{CompletedAt: completedAt}
 		if len(t.ToolInput) > 0 {

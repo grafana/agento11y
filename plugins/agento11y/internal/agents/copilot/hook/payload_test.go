@@ -34,6 +34,21 @@ func TestToolInput(t *testing.T) {
 			want: `{"c":3}`,
 		},
 		{
+			name: "skill object from documented toolArgs",
+			raw:  `{"toolName":"skill","toolArgs":{"skill":"review"}}`,
+			want: `{"skill":"review"}`,
+		},
+		{
+			name: "skill JSON wrapper from documented toolArgs stays intact",
+			raw:  `{"toolName":"skill","toolArgs":"{\"skill\":\"review\"}"}`,
+			want: `"{\"skill\":\"review\"}"`,
+		},
+		{
+			name: "skill JSON wrapper from snake_case wins",
+			raw:  `{"tool_input":"{\"skill\":\"review\"}","toolArgs":{"skill":"stale"}}`,
+			want: `"{\"skill\":\"review\"}"`,
+		},
+		{
 			name: "missing returns nil",
 			raw:  `{}`,
 			want: "",
