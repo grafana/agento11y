@@ -69,9 +69,9 @@ class Agento11yOpenAIAgentsRunHooks(RunHooks):
     ) -> None:
         self._agento11y_handler = agento11y_handler
         self._delegate = delegate
-        self._agent_run_stacks: dict[int, list[UUID]] = {}
+        self._agent_run_stacks: dict[int, list[tuple[int, UUID]]] = {}
         self._llm_run_stacks: dict[tuple[int, int], list[UUID]] = {}
-        self._tool_run_stacks: dict[tuple[int, int], list[UUID]] = {}
+        self._tool_run_stacks: dict[tuple[int, int, str | None], list[UUID]] = {}
 
     async def on_agent_start(self, context: Any, agent: Any) -> None:
         await _invoke_delegate(self._delegate, "on_agent_start", context, agent)
@@ -79,8 +79,8 @@ class Agento11yOpenAIAgentsRunHooks(RunHooks):
         context_key = _run_context_key(context)
         stack = self._agent_run_stacks.setdefault(context_key, [])
         run_id = uuid4()
-        parent_run_id = stack[-1] if stack else None
-        stack.append(run_id)
+        parent_run_id = stack[-1][1] if stack else None
+        stack.append((id(agent), run_id))
 
         agent_name = _agent_name(agent)
         await _invoke_handler(
@@ -98,7 +98,12 @@ class Agento11yOpenAIAgentsRunHooks(RunHooks):
     async def on_agent_end(self, context: Any, agent: Any, output: Any) -> None:
         context_key = _run_context_key(context)
         stack = self._agent_run_stacks.get(context_key, [])
-        run_id = stack.pop() if stack else None
+        # The SDK creates a fresh AgentHookContext for the end callback.
+        run_id = None
+        for index in range(len(stack) - 1, -1, -1):
+            if stack[index][0] == id(agent):
+                _, run_id = stack.pop(index)
+                break
         if run_id is not None:
             await _invoke_handler(self._agento11y_handler, "on_chain_end", {"output": output}, run_id=run_id)
         if not stack:
@@ -108,8 +113,7 @@ class Agento11yOpenAIAgentsRunHooks(RunHooks):
 
     async def on_handoff(self, context: Any, from_agent: Any, to_agent: Any) -> None:
         run_id = uuid4()
-        stack = self._agent_run_stacks.get(_run_context_key(context), [])
-        parent_run_id = stack[-1] if stack else None
+        parent_run_id = self._agent_run_id(context, from_agent)
         serialized = {
             "name": "agent_handoff",
             "source": _agent_name(from_agent),
@@ -145,8 +149,7 @@ class Agento11yOpenAIAgentsRunHooks(RunHooks):
         run_id = uuid4()
         llm_stack.append(run_id)
 
-        parent_stack = self._agent_run_stacks.get(context_key, [])
-        parent_run_id = parent_stack[-1] if parent_stack else None
+        parent_run_id = self._agent_run_id(context, agent)
 
         model_name = _model_name(agent)
         invocation_params: dict[str, Any] = {}
@@ -188,7 +191,7 @@ class Agento11yOpenAIAgentsRunHooks(RunHooks):
         await _invoke_delegate(self._delegate, "on_tool_start", context, agent, tool)
 
         context_key = _run_context_key(context)
-        tool_key = (context_key, id(tool))
+        tool_key = _tool_context_key(context, tool)
         tool_stack = self._tool_run_stacks.setdefault(tool_key, [])
         run_id = uuid4()
         tool_stack.append(run_id)
@@ -197,8 +200,7 @@ class Agento11yOpenAIAgentsRunHooks(RunHooks):
         if llm_stack:
             parent_run_id = llm_stack[-1]
         else:
-            agent_stack = self._agent_run_stacks.get(context_key, [])
-            parent_run_id = agent_stack[-1] if agent_stack else None
+            parent_run_id = self._agent_run_id(context, agent)
 
         tool_name = _tool_name(tool)
         tool_input = _read(context, "tool_input")
@@ -215,7 +217,7 @@ class Agento11yOpenAIAgentsRunHooks(RunHooks):
         )
 
     async def on_tool_end(self, context: Any, agent: Any, tool: Any, result: Any) -> None:
-        tool_key = (_run_context_key(context), id(tool))
+        tool_key = _tool_context_key(context, tool)
         tool_stack = self._tool_run_stacks.get(tool_key, [])
         run_id = tool_stack.pop() if tool_stack else None
         if run_id is not None:
@@ -224,6 +226,12 @@ class Agento11yOpenAIAgentsRunHooks(RunHooks):
             self._tool_run_stacks.pop(tool_key, None)
 
         await _invoke_delegate(self._delegate, "on_tool_end", context, agent, tool, result)
+
+    def _agent_run_id(self, context: Any, agent: Any) -> UUID | None:
+        for agent_id, run_id in reversed(self._agent_run_stacks.get(_run_context_key(context), [])):
+            if agent_id == id(agent):
+                return run_id
+        return None
 
 
 def create_agento11y_openai_agents_hooks(
@@ -362,11 +370,18 @@ def _tool_input_string(tool_input: Any) -> str:
 
 def _run_context_key(context: Any) -> int:
     # AgentHookContext, RunContextWrapper, and ToolContext are distinct wrappers
-    # for one run. The SDK shares its Usage instance across all three. Unlike
-    # the application context, that instance also separates concurrent runs
-    # that reuse the same application payload (including context=None).
+    # for a run and its nested agent tools. The SDK shares Usage across these
+    # wrappers, but independent runs get separate Usage instances even when
+    # they reuse the same application payload (including context=None).
     usage = _read(context, "usage")
     return id(usage) if usage is not None else id(context)
+
+
+def _tool_context_key(context: Any, tool: Any) -> tuple[int, int, str | None]:
+    # Function tools have a per-call ID; other tool hooks may only receive a
+    # RunContextWrapper, so retain the per-tool stack as a fallback.
+    call_id = _read(context, "tool_call_id")
+    return (_run_context_key(context), id(tool), call_id if isinstance(call_id, str) and call_id else None)
 
 
 def _context_metadata(context: Any) -> dict[str, Any]:
