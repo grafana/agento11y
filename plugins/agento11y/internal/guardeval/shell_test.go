@@ -291,6 +291,28 @@ func TestShellCommands(t *testing.T) {
 			want: []string{"cat .env", "ls"},
 		},
 		{
+			// Codex's local_shell nests its command under action; the argv
+			// list is one command, not one subject per word.
+			name: "a nested command is read as one command",
+			in:   agento11y.HookInput{Output: msg(call("local_shell", `{"action":{"type":"exec","command":["git","reset","--hard"]}}`))},
+			want: []string{"git reset --hard"},
+		},
+		{
+			name: "a top-level command does not hide a nested one",
+			in:   agento11y.HookInput{Output: msg(call("local_shell", `{"command":"ls","action":{"command":["git","reset","--hard"]}}`))},
+			want: []string{"ls", "git reset --hard"},
+		},
+		{
+			name: "an argv list under an unknown key is one command",
+			in:   agento11y.HookInput{Output: msg(call("Bash", `{"args":["git","reset","--hard"]}`))},
+			want: []string{"git reset --hard"},
+		},
+		{
+			name: "a list of one string stays that string",
+			in:   agento11y.HookInput{Output: msg(call("Bash", `{"input":["cat .env"]}`))},
+			want: []string{"cat .env"},
+		},
+		{
 			name: "a non-string non-array command falls through to the next key",
 			in:   agento11y.HookInput{Output: msg(call("Bash", `{"command":{"line":"rm"},"cmd":"echo hi"}`))},
 			want: []string{"echo hi"},
@@ -491,6 +513,16 @@ func TestShellSimpleCommands(t *testing.T) {
 		{`trap 'rm -rf /tmp/x' EXIT`, []string{`trap rm\ -rf\ /tmp/x EXIT`, "rm -rf /tmp/x"}},
 		{`find . -name x -exec rm -rf {} \;`, []string{`find . -name x -exec rm -rf {} \;`, "rm -rf {}"}},
 		{"bash <<'EOF'\ngit reset --hard\nEOF", []string{"bash <<'EOF'", "bash", "git reset --hard"}},
+		// Long wrapper options and their values come before the command name.
+		{"sudo --user deploy git reset --hard", []string{"sudo --user deploy git reset --hard", "git reset --hard"}},
+		{"timeout --signal=KILL 5 git reset --hard", []string{"timeout --signal=KILL 5 git reset --hard", "git reset --hard"}},
+		{"env --split-string 'git reset --hard'", []string{`env --split-string git\ reset\ --hard`, "git reset --hard"}},
+		// xargs --replace takes its value only as =VALUE.
+		{"xargs --replace git reset --hard", []string{"xargs --replace git reset --hard", "git reset --hard"}},
+		// $'...' decodes the escapes the shell decodes.
+		{`git $'\u0072eset' --hard`, []string{"git reset --hard"}},
+		{`git $'\U00000072eset' --hard`, []string{"git reset --hard"}},
+		{`printf $'\e[1m\cA'`, []string{"printf \x1b\\[1m\x01"}},
 	} {
 		_, got := lexShell(tt.in, 0)
 		assert.Equal(t, tt.want, got, tt.in)

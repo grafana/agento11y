@@ -216,6 +216,17 @@ var cloudPackCases = []cloudPackCase{
 	{Pack: packGit, Command: `bash -c "bash -c \"bash -c 'git reset --hard'\""`, Deny: true},
 	{Pack: packGit, Command: "git --attr-source=HEAD reset --hard", Deny: true},
 	{Pack: packGit, Command: `git $'\x72eset' --hard`, Deny: true},
+	{Pack: packGit, Command: `git $'\u0072eset' --hard`, Deny: true},
+	{Pack: packGit, Command: `git $'\U00000072eset' --hard`, Deny: true},
+	// Long wrapper options take their value from the next word.
+	{Pack: packGit, Command: "sudo --user deploy git reset --hard", Deny: true},
+	{Pack: packGit, Command: "timeout --signal KILL 5 git reset --hard", Deny: true},
+	{Pack: packGit, Command: "xargs --max-args 1 git reset --hard", Deny: true},
+	{Pack: packGit, Command: "env --split-string 'git reset --hard'", Deny: true},
+	{Pack: packGit, Command: "sudo --preserve-env git status"},
+	// A nested command and an argv list are each one command.
+	{Pack: packGit, Tool: "local_shell", Input: json.RawMessage(`{"action":{"type":"exec","command":["git","reset","--hard"]}}`), Deny: true},
+	{Pack: packGit, Tool: "Bash", Input: json.RawMessage(`{"args":["git","reset","--hard"]}`), Deny: true},
 	// Read-only disk and git commands.
 	{Pack: packDisk, Command: "dd if=/dev/zero of=/dev/null bs=1M count=1"},
 	{Pack: packDisk, Command: "dd if=disk.img of=/dev/stdout"},

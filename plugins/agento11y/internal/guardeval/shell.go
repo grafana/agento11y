@@ -184,10 +184,39 @@ func shellCommandsOf(tc *agento11y.ToolCall, cfg shellConfig) (commands, plain [
 			}
 		}
 	}
+	// Codex's local_shell can carry the command one level down, as
+	// {"action":{"type":"exec","command":[...]}}. A top-level command does not
+	// hide a nested one, since a runtime may run either.
+	for _, k := range slices.Sorted(maps.Keys(args)) {
+		commands = nestedCommands(commands, args[k], cfg)
+	}
 	if len(commands) == 0 {
 		commands = stringValues(nil, args)
 	}
 	return commands, plain
+}
+
+// nestedCommands appends the commands under command keys of the objects in
+// value, at any depth, read as the top level reads them.
+func nestedCommands(out []string, value any, cfg shellConfig) []string {
+	switch v := value.(type) {
+	case []any:
+		for _, item := range v {
+			out = nestedCommands(out, item, cfg)
+		}
+	case map[string]any:
+		for _, key := range cfg.commandKeys {
+			if raw, ok := lookupArg(v, key); ok {
+				if command, ok := commandString(raw); ok {
+					out = append(out, command)
+				}
+			}
+		}
+		for _, k := range slices.Sorted(maps.Keys(v)) {
+			out = nestedCommands(out, v[k], cfg)
+		}
+	}
+	return out
 }
 
 // stringValues appends every non-empty string in value, at any depth, in
@@ -199,6 +228,14 @@ func stringValues(out []string, value any) []string {
 			out = append(out, s)
 		}
 	case []any:
+		// A list of two or more strings is an argv list, one command, so its
+		// words are not judged one by one.
+		if command, ok := commandString(v); ok && len(v) > 1 {
+			if command != "" {
+				out = append(out, command)
+			}
+			return out
+		}
 		for _, item := range v {
 			out = stringValues(out, item)
 		}
@@ -511,8 +548,31 @@ func (l *shellLexer) ansiC(i, end int) {
 			}
 			v, _ := strconv.ParseUint(l.cmd[start:stop], base, 16)
 			c, i = byte(v), stop-1
-		case strings.IndexByte("nrtv", e) >= 0:
-			c = "\n\r\t\v"[strings.IndexByte("nrtv", e)]
+		case e == 'u' || e == 'U':
+			width := 4
+			if e == 'U' {
+				width = 8
+			}
+			stop := i + 1
+			for stop < end && stop-i-1 < width && digitValue(l.cmd[stop]) < 16 {
+				stop++
+			}
+			if stop == i+1 {
+				l.putQuoted('\\', "")
+				c = e
+				break
+			}
+			v, _ := strconv.ParseUint(l.cmd[i+1:stop], 16, 32)
+			r := []byte(string(rune(v)))
+			for _, b := range r[:len(r)-1] {
+				l.putQuoted(b, "")
+			}
+			c, i = r[len(r)-1], stop-1
+		case e == 'c' && i+1 < end:
+			i++
+			c = l.cmd[i] & 0x1f
+		case strings.IndexByte("nrtvabfeE", e) >= 0:
+			c = "\n\r\t\v\a\b\f\x1b\x1b"[strings.IndexByte("nrtvabfeE", e)]
 		case strings.IndexByte(`\'"?`, e) >= 0:
 			c = e
 		default:
@@ -810,18 +870,30 @@ type shellWrapper struct {
 	values string
 	// scripts are those of values whose value is a command, as env -S.
 	scripts string
+	// long are its long options that take a value, as sudo --user USER, and
+	// longScripts those whose value is a command, as env --split-string.
+	long, longScripts []string
 	// positional counts the words it reads before the command, as the lock
 	// file of flock FILE COMMAND.
 	positional int
 }
 
 var shellCommandWrappers = map[string]shellWrapper{
-	"sudo": {values: "ughCDprtUT"}, "doas": {values: "uC"}, "env": {values: "uCS", scripts: "S"},
-	"command": {}, "builtin": {}, "exec": {values: "a"}, "nohup": {}, "nice": {values: "n"},
-	"timeout": {values: "sk", positional: 1}, "stdbuf": {values: "ioe"}, "xargs": {values: "InPLsdEa"},
-	"time": {values: "fo"}, "setsid": {}, "caffeinate": {values: "tw"}, "chronic": {}, "unbuffer": {},
-	"flock": {values: "wE", positional: 1}, "ionice": {values: "cnp"},
-	"script": {values: "Ftc", scripts: "c", positional: 1},
+	"sudo":    {values: "ughCDprtUT", long: strings.Fields("user group host close-from chdir prompt role type other-user command-timeout chroot")},
+	"doas":    {values: "uC"},
+	"env":     {values: "uCS", scripts: "S", long: strings.Fields("unset chdir"), longScripts: []string{"split-string"}},
+	"command": {}, "builtin": {}, "exec": {values: "a"}, "nohup": {},
+	"nice":    {values: "n", long: []string{"adjustment"}},
+	"timeout": {values: "sk", positional: 1, long: strings.Fields("signal kill-after")},
+	"stdbuf":  {values: "ioe", long: strings.Fields("input output error")},
+	// --replace, --max-lines and --eof take an optional value, which only
+	// =VALUE gives them, so the word after them is the command.
+	"xargs":  {values: "InPLsdEa", long: strings.Fields("max-args max-procs max-chars delimiter arg-file process-slot-var")},
+	"time":   {values: "fo", long: strings.Fields("format output")},
+	"setsid": {}, "caffeinate": {values: "tw"}, "chronic": {}, "unbuffer": {},
+	"flock":  {values: "wE", positional: 1, long: strings.Fields("wait timeout conflict-exit-code")},
+	"ionice": {values: "cnp", long: strings.Fields("class classdata pid")},
+	"script": {values: "Ftc", scripts: "c", positional: 1, long: strings.Fields("log-timing timing log-in log-out log-io logging-format"), longScripts: []string{"command"}},
 }
 
 var shellKeywords = map[string]bool{
@@ -851,7 +923,11 @@ func commandIndex(words []string) (int, []string) {
 			if len(opt) < 2 || opt[0] != '-' {
 				break
 			}
-			for k := 1; k < len(opt) && opt[1] != '-'; k++ {
+			if strings.HasPrefix(opt, "--") {
+				i, scripts = longWrapperOption(wrapper, words, i, scripts)
+				continue
+			}
+			for k := 1; k < len(opt); k++ {
 				if strings.IndexByte(wrapper.values, opt[k]) < 0 {
 					continue
 				}
@@ -872,6 +948,27 @@ func commandIndex(words []string) (int, []string) {
 		i += wrapper.positional - 1
 	}
 	return len(words), scripts
+}
+
+// longWrapperOption reads the long option words[i] of a wrapper, and the
+// value after it when it takes one, as sudo --user deploy does. git accepts a
+// unique prefix of a long option, and so do these tools, so --us is --user.
+// It returns the index of the option's last word.
+func longWrapperOption(w shellWrapper, words []string, i int, scripts []string) (int, []string) {
+	name, value, inline := strings.Cut(words[i][2:], "=")
+	prefixOf := func(l string) bool { return name != "" && strings.HasPrefix(l, name) }
+	script := slices.ContainsFunc(w.longScripts, prefixOf)
+	if !script && !slices.ContainsFunc(w.long, prefixOf) {
+		return i, scripts
+	}
+	if !inline && i+1 < len(words) {
+		i++
+		value = words[i]
+	}
+	if script {
+		scripts = append(scripts, unescapeWords([]string{value}))
+	}
+	return i, scripts
 }
 
 // runsShell reports whether a simple command runs a shell that reads its

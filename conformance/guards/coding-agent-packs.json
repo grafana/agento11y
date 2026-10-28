@@ -630,6 +630,68 @@
       "deny": true
     },
     {
+      "pack": "git",
+      "command": "git $'\\u0072eset' --hard",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "git $'\\U00000072eset' --hard",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "sudo --user deploy git reset --hard",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "timeout --signal KILL 5 git reset --hard",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "xargs --max-args 1 git reset --hard",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "env --split-string 'git reset --hard'",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "sudo --preserve-env git status",
+      "deny": false
+    },
+    {
+      "pack": "git",
+      "tool": "local_shell",
+      "input": {
+        "action": {
+          "type": "exec",
+          "command": [
+            "git",
+            "reset",
+            "--hard"
+          ]
+        }
+      },
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "tool": "Bash",
+      "input": {
+        "args": [
+          "git",
+          "reset",
+          "--hard"
+        ]
+      },
+      "deny": true
+    },
+    {
       "pack": "disk",
       "command": "dd if=/dev/zero of=/dev/null bs=1M count=1",
       "deny": false

@@ -48,8 +48,9 @@ Where the arguments cannot be read at all (not one JSON object, or a command key
 holding something other than a string or a list of strings), Cloud fails the call
 with `blocked by tool_filter: shell tool arguments have no readable command`, while
 the local engine judges the string values, or the text of arguments that are not
-JSON. Cloud also reads command keys inside nested objects and every copy of a
-repeated key. The local engine also judges an argv list joined with plain spaces,
+JSON. Both read command keys inside nested objects, and a list of strings is one
+argv command; Cloud also keeps every copy of a repeated key and fails a call whose
+nested command it cannot read. The local engine also judges an argv list joined with plain spaces,
 as earlier versions did, so users' own `shell_command` patterns keep matching.
 
 ## What the patterns cannot see
