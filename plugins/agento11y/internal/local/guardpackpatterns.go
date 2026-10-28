@@ -1,7 +1,5 @@
 package local
 
-import "strings"
-
 // These fragments match literal arguments, not shell evaluation. Substitutions
 // allow one nested $() without treating its flags as outer-command options.
 const (
@@ -19,7 +17,6 @@ const (
 	shellArgumentGap = shellWordGap + `(?:` + shellWord + shellWordGap + `)*`
 
 	// An adjoining quoted suffix belongs to the argument: --force"-with-lease" is not --force.
-	// Closing quotes and backticks require an opening delimiter in shellWrappedPatterns.
 	shellArgumentEnd = `(?:''|"")*(?:[[:space:];&|()<>]|["']?$)`
 
 	// A standalone -- ends option recognition, including its quoted spellings.
@@ -27,23 +24,28 @@ const (
 	shellOptionWord  = `(?:` + shellWordPart + `*` + shellNonDashPart + shellWordPart + `*|(?:''|"")*(?:-|\\-|'-'|"-"|---+|'---+'|"---+")(?:''|"")*|(?:''|"")+)`
 	shellOptionGap   = shellWordGap + `(?:` + shellOptionWord + shellWordGap + `)*`
 	rmRecursiveFlag  = `(?:--recursive|-[a-z]*r[a-z]*)`
-	rmForceFlag      = `(?:--force|-[a-z]*f[a-z]*)`
+
+	// The end of a command: a separator, a comment, or the end of the text.
+	shellCommandEnd = `[ \t]*(?:[;&|()\r\n#]|$)`
+	rmForceFlag     = `(?:--force|-[a-z]*f[a-z]*)`
 )
+
+// shellCommandStart matches what can come before a command's name at the start
+// of a simple command: VAR=value assignments, a keyword such as if or do, a
+// wrapper that runs the command after it (sudo, env, xargs, timeout and the
+// like) with its options and their values, and a directory or a backslash on
+// the name itself, as in /usr/bin/git or \git. Every pack pattern starts with
+// it, at the start of a subject, so a pattern matches a command the shell
+// runs and not a mention of one in a quoted message.
+var shellCommandStart = `^[ \t]*(?:(?:` + shellAssignment + `|!|if|then|else|elif|do|while|until|` +
+	`(?:[^\s;&|()<>'"]*/)?(?:sudo|doas|env|command|builtin|exec|nohup|nice|timeout|stdbuf|xargs|time)` +
+	`(?:[ \t]+(?:-` + shellWordPart + `*(?:[ \t]+` + shellWord + `)?|[0-9]` + shellWordPart + `*|` + shellAssignment + `))*` +
+	`)[ \t]+)*(?:\\|[^\s;&|()<>'"]*/)?`
+
+const shellAssignment = `[A-Za-z_][A-Za-z0-9_]*=` + shellWordPart + `*`
 
 func shellQuoted(pattern string) string {
 	return `(?:` + pattern + `|'` + pattern + `'|"` + pattern + `")`
-}
-
-func shellWrappedPatterns(pattern string) []string {
-	out := []string{pattern}
-	if !strings.Contains(pattern, shellArgumentEnd) {
-		return out
-	}
-	for _, quote := range []string{`'`, `"`, "`"} {
-		end := `(?:''|"")*` + quote
-		out = append(out, quote+`[^`+quote+`]*`+strings.ReplaceAll(pattern, shellArgumentEnd, end))
-	}
-	return out
 }
 
 // Git clean consumes the argument after -e/--exclude even when it is --.
@@ -57,4 +59,34 @@ var (
 	gitCleanOptionGap = shellWordGap + `(?:(?:` + gitCleanExclude + shellWordGap + shellWord + `|` + gitCleanFlag + `|` + gitCleanValue + `|` + gitCleanPath + `)` + shellWordGap + `)*`
 )
 
-var gitCommandPrefix = `(?i)\bgit[ \t]+(?:(?:-[Cc][ \t]+` + shellWord + `|--(?:git-dir|work-tree|namespace|config-env)(?:=|[ \t]+)` + shellWord + `|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|no-optional-locks))[ \t]+)*`
+var gitCommandPrefix = `(?i)` + shellCommandStart + `git[ \t]+(?:(?:-[Cc][ \t]+` + shellWord + `|--(?:git-dir|work-tree|namespace|config-env)(?:=|[ \t]+)` + shellWord + `|--(?:attr-source|super-prefix|list-cmds)=` + shellWord + `|--exec-path(?:=` + shellWord + `)?|-[pP]|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch|no-advice))[ \t]+)*`
+
+// gitForce is --force and the prefixes git accepts for it where it is the
+// only option starting with --f, as in git clean and git checkout.
+const gitForce = `--f(?:o(?:r(?:ce?)?)?)?`
+
+// gitWholeTree is a pathspec for the whole working tree, which git checkout
+// overwrites with the index or the named commit. The \* forms are a quoted *
+// as the subjects write it.
+const gitWholeTree = `(?:\.|\./|\./\\?\*|\\?\*|:/[.*]?)`
+
+// git restore writes the working tree unless --staged (-S) is its only mode,
+// so restoring a path without -S, or with -S and --worktree (-W), throws away
+// uncommitted work. git accepts a unique prefix of a long option, so --st is
+// --staged and --w is --worktree.
+const (
+	gitRestoreStaged   = `(?:--st[a-z]*|(?-i:-[a-zA-Z]*S[a-zA-Z]*))`
+	gitRestoreWorktree = `(?:--w[a-z]*|(?-i:-[a-zA-Z]*W[a-zA-Z]*))`
+)
+
+// gitRestoreWorktreeWords matches every word of a git restore up to the end of
+// its command, so a --staged anywhere after restore stops the match. A word is
+// a path, - (paths read from stdin), a short option cluster without S or h, or
+// a long option that does not start with --st or --h (git restore --help only
+// prints its usage), with or without a value. No word
+// at all counts too: xargs git restore gets its paths from stdin.
+var (
+	gitRestoreOption        = shellQuoted(`(?:(?-i:-[a-gi-zA-RT-Z]+)|--(?:[a-gi-rt-z][a-z-]*|s(?:[a-su-z][a-z-]*)?)(?:=`+shellWordPart+`*)?|--|-)`) + `(?:''|"")*`
+	gitRestoreWorktreeWords = `(?:` + shellWordGap + `(?:` + gitRestoreOption + `|(?:` + gitCleanPath + `)))*` +
+		`(?:(?:[ \t]+[0-9]*)?` + shellRedirection + `)*` + shellCommandEnd
+)

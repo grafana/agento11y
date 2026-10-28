@@ -23,7 +23,7 @@ const cloudPacksFixture = "../../../../conformance/guards/coding-agent-packs.jso
 // cloudPackMessages is what a Cloud guard tells the agent and the user when it
 // denies a call. Local packs have no message of their own yet.
 var cloudPackMessages = map[string]string{
-	packGit:         "Your organization's coding agent policy blocks git commands that discard uncommitted work or rewrite history (reset --hard, push --force, clean -f, checkout --, stash drop or clear, branch -D).",
+	packGit:         "Your organization's coding agent policy blocks git commands that discard uncommitted work or rewrite history (reset --hard, push --force or +refspec, clean -f, checkout -- or ., checkout or switch -f, restore without --staged, stash drop or clear, branch -D).",
 	packDestructive: "Your organization's coding agent policy blocks recursive deletes such as rm -rf.",
 	packPermissions: "Your organization's coding agent policy blocks recursive chmod or chown, and chmod 777, on / or the home directory.",
 	packDisk:        "Your organization's coding agent policy blocks irreversible disk operations: dd to a device, mkfs, wipefs, fdisk, and parted.",
@@ -80,6 +80,42 @@ type cloudPackCase struct {
 // checks them against the local engine; sigil runs the same cases against each
 // pack's tool filter (TestCodingAgentPacksMatchLocalCases).
 var cloudPackCases = []cloudPackCase{
+	// A blocked command mentioned in quoted text, a comment or a heredoc body
+	// runs nothing, so the packs allow it.
+	{Pack: packGit, Command: "git commit -m \"$(cat <<'EOF'\nUndo with git checkout . or git reset --hard, never \"git push --force\".\nEOF\n)\""},
+	{Pack: packDestructive, Command: "gh pr create --title x --body \"$(cat <<'EOF'\nThe destructive pack blocks rm -rf /.\nEOF\n)\""},
+	{Pack: packGit, Command: "git log -5 # before git reset --hard"},
+	{Pack: packGit, Command: `echo "run git reset --hard to start over"`},
+	{Pack: packGit, Command: `git commit -m 'git push --force is blocked'`},
+	{Pack: packDestructive, Command: `grep -r "rm -rf" .`},
+	{Pack: packFiles, Command: `git commit -m "add .env to .gitignore"`},
+	// A command after another, behind a wrapper or in code the shell runs is
+	// still a command.
+	{Pack: packGit, Command: "cd repo && git reset --hard", Deny: true},
+	{Pack: packGit, Command: "GIT_DIR=x git reset --hard", Deny: true},
+	{Pack: packDestructive, Command: "sudo rm -rf /", Deny: true},
+	{Pack: packGit, Command: "env FOO=1 git push --force", Deny: true},
+	{Pack: packGit, Command: "/usr/bin/git reset --hard", Deny: true},
+	{Pack: packGit, Command: `\git reset --hard`, Deny: true},
+	{Pack: packDestructive, Command: "xargs rm -rf", Deny: true},
+	{Pack: packDestructive, Command: "find . | xargs -I{} rm -rf {}", Deny: true},
+	{Pack: packDestructive, Command: `find . -name build -exec rm -rf {} \;`, Deny: true},
+	{Pack: packGit, Command: `bash -lc 'git reset --hard'`, Deny: true},
+	{Pack: packDestructive, Command: `sh -c "rm -rf /tmp/x"`, Deny: true},
+	{Pack: packGit, Command: `eval "git reset --hard"`, Deny: true},
+	{Pack: packGit, Command: "bash <<'EOF'\ngit reset --hard\nEOF", Deny: true},
+	{Pack: packGit, Command: "echo $(git reset --hard)", Deny: true},
+	{Pack: packGit, Command: `echo "$(git reset --hard)"`, Deny: true},
+	{Pack: packGit, Command: "(cd x; git reset --hard)", Deny: true},
+	{Pack: packGit, Command: "{ git reset --hard; }", Deny: true},
+	{Pack: packGit, Command: "if true; then git reset --hard; fi", Deny: true},
+	{Pack: packGit, Command: "time git push --force", Deny: true},
+	{Pack: packGit, Command: "timeout 30 git clean -fdx", Deny: true},
+	{Pack: packGit, Command: "cat <<EOF > notes\nhi\nEOF\ngit reset --hard", Deny: true},
+	{Pack: packFiles, Command: "cat .env", Deny: true},
+	{Pack: packFiles, Command: `cat ".env"`, Deny: true},
+	{Pack: packFiles, Command: "echo x > .env", Deny: true},
+	{Pack: packFiles, Command: "source .env && npm start", Deny: true},
 	{Pack: packGit, Command: "git reset --hard HEAD~1", Deny: true},
 	{Pack: packGit, Command: "git push --force origin main", Deny: true},
 	{Pack: packGit, Command: "git push -f", Deny: true},
@@ -98,6 +134,40 @@ var cloudPackCases = []cloudPackCase{
 	// The shell joins a backslash-newline before it runs the command.
 	{Pack: packGit, Command: "git reset \\\n--hard", Deny: true},
 	{Pack: packDestructive, Command: "rm \\\n-rf /tmp/x", Deny: true},
+	// The shell removes quotes and backslashes before it runs a word.
+	{Pack: packGit, Command: `git "reset" --hard`, Deny: true},
+	{Pack: packGit, Command: `git 'reset' --hard`, Deny: true},
+	{Pack: packGit, Command: `g\it re""set --hard`, Deny: true},
+	{Pack: packGit, Command: `git checkout "."`, Deny: true},
+	{Pack: packGit, Command: `git checkout \*`, Deny: true},
+	{Pack: packDestructive, Command: `rm $'-rf' /tmp/x`, Deny: true},
+	// A quoted ~ is not the home directory.
+	{Pack: packPermissions, Command: `chmod -R 755 "~/"`},
+	{Pack: packGit, Command: `g\it 'reset' --hard`, Deny: true},
+	{Pack: packDestructive, Command: `rm "-rf" /tmp/x`, Deny: true},
+	{Pack: packDestructive, Command: `rm -r /tmp/"path -f"`},
+	// The other ways git throws away uncommitted work.
+	{Pack: packGit, Command: "git checkout .", Deny: true},
+	{Pack: packGit, Command: "git checkout -f main", Deny: true},
+	{Pack: packGit, Command: "git restore src/main.go", Deny: true},
+	{Pack: packGit, Command: "git restore --staged --worktree .", Deny: true},
+	{Pack: packGit, Command: "git push origin +main", Deny: true},
+	{Pack: packGit, Command: "git restore --staged ."},
+	{Pack: packGit, Command: "git diff --name-only | xargs git restore", Deny: true},
+	{Pack: packGit, Command: "git restore --staged --pathspec-from-file -"},
+	{Pack: packGit, Command: "git reset --ha", Deny: true},
+	{Pack: packGit, Command: "git -P reset --hard", Deny: true},
+	{Pack: packGit, Command: "git switch --di main", Deny: true},
+	{Pack: packGit, Command: "cat <<< EOF\ngit \"reset\" --hard", Deny: true},
+	{Pack: packGit, Command: "echo $((a<<b))\ngit \"reset\" --hard", Deny: true},
+	{Pack: packPermissions, Command: "chmod -R 777 ~/.", Deny: true},
+	{Pack: packGit, Command: "git restore --source HEAD --staged src/a.go"},
+	{Pack: packGit, Command: "git restore . --staged"},
+	{Pack: packGit, Command: `git checkout '*'`, Deny: true},
+	{Pack: packGit, Command: `git $'reset' --hard`, Deny: true},
+	{Pack: packGit, Command: `git "reset" --hard # don't`, Deny: true},
+	{Pack: packGit, Command: "cat <<EOF > notes.md\nit's done\nEOF\ngit \"reset\" --hard", Deny: true},
+	{Pack: packGit, Command: "git checkout -b feature"},
 	{Pack: packGit, Command: "git status"},
 	{Pack: packGit, Command: "git push origin main"},
 	{Pack: packGit, Command: "git branch -d merged"},
@@ -119,6 +189,49 @@ var cloudPackCases = []cloudPackCase{
 	{Pack: packFiles, Command: "cat .env", Deny: true},
 	{Pack: packFiles, Command: "cp .env.example .env", Deny: true},
 	{Pack: packFiles, Command: "cat environment.md"},
+	// The $(...) and backticks of an unquoted heredoc body run as the shell
+	// expands it; a quoted delimiter keeps the body as data, and any word is a
+	// delimiter.
+	{Pack: packDestructive, Command: "cat > notes.md <<EOF\nNever run `rm -rf ~`\nEOF", Deny: true},
+	{Pack: packGit, Command: "cat <<EOF\n$(git reset --hard)\nEOF", Deny: true},
+	{Pack: packGit, Command: "cat <<'EOF'\n$(git reset --hard)\nEOF"},
+	{Pack: packDestructive, Command: "cat <<'END-OF-SCRIPT' > clean.sh\nrm -rf build\nEND-OF-SCRIPT"},
+	// Wrapper options with values, shell options before -c, and redirections
+	// before the command do not hide it.
+	{Pack: packGit, Command: "sudo -u deploy bash -c 'git reset --hard'", Deny: true},
+	{Pack: packDestructive, Command: "env -u X find ~ -exec rm -rf {} +", Deny: true},
+	{Pack: packDestructive, Command: "xargs -I % sh -c 'rm -rf %'", Deny: true},
+	{Pack: packGit, Command: "timeout -s KILL 60 bash -c 'git reset --hard'", Deny: true},
+	{Pack: packGit, Command: "env -S 'git reset --hard'", Deny: true},
+	{Pack: packGit, Command: "coproc git reset --hard", Deny: true},
+	{Pack: packGit, Command: "flock -n /tmp/lock git reset --hard", Deny: true},
+	{Pack: packGit, Command: "watch -n 5 'git reset --hard'", Deny: true},
+	{Pack: packGit, Command: "script -q /dev/null git reset --hard", Deny: true},
+	{Pack: packGit, Command: "bash -o pipefail -c 'git reset --hard'", Deny: true},
+	{Pack: packGit, Command: "bash --norc -c -- 'git reset --hard'", Deny: true},
+	{Pack: packGit, Command: "bash --norc <<'EOF'\ngit reset --hard\nEOF", Deny: true},
+	{Pack: packGit, Command: "2>&1 git reset --hard", Deny: true},
+	{Pack: packGit, Command: "git 2>/dev/null reset --hard", Deny: true},
+	{Pack: packDestructive, Command: ">/dev/null rm -rf ~", Deny: true},
+	{Pack: packGit, Command: `bash -c "bash -c \"bash -c 'git reset --hard'\""`, Deny: true},
+	{Pack: packGit, Command: "git --attr-source=HEAD reset --hard", Deny: true},
+	{Pack: packGit, Command: `git $'\x72eset' --hard`, Deny: true},
+	// Read-only disk and git commands.
+	{Pack: packDisk, Command: "dd if=/dev/zero of=/dev/null bs=1M count=1"},
+	{Pack: packDisk, Command: "dd if=disk.img of=/dev/stdout"},
+	{Pack: packDisk, Command: "dd if=/dev/zero of=/dev/disk2", Deny: true},
+	{Pack: packDisk, Command: "sudo fdisk -l"},
+	{Pack: packDisk, Command: "fdisk /dev/sdb", Deny: true},
+	{Pack: packDisk, Command: "parted -l"},
+	{Pack: packDisk, Command: "parted /dev/sda print"},
+	{Pack: packDisk, Command: "parted -s /dev/sdb mklabel gpt", Deny: true},
+	{Pack: packDisk, Command: "parted /dev/sdb", Deny: true},
+	{Pack: packGit, Command: "git restore --help"},
+	{Pack: packGit, Command: "git clean -nfd"},
+	// A shell call whose command key is missing or unreadable is judged by
+	// its string values.
+	{Pack: packFiles, Tool: "Bash", Input: json.RawMessage(`{"input":"cat .env"}`), Deny: true},
+	{Pack: packFiles, Tool: "Bash", Input: json.RawMessage(`{"command":"ls","script":"cat .env"}`), Deny: true},
 }
 
 // cloudFileToolCases are File safety calls through file tools rather than a

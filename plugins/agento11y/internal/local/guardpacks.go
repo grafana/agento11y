@@ -133,26 +133,40 @@ var gitPreview = []string{
 	"git reset --hard",
 	"git push --force",
 	"git push -f",
+	"git push +<ref>",
 	"git clean -f",
 	"git checkout --",
+	"git checkout .",
+	"git checkout -f",
+	"git switch -f",
+	"git restore <path>",
 	"git stash drop",
 	"git stash clear",
 	"git branch -D",
 }
 
 var gitPatterns = []string{
-	gitCommandPrefix + `reset` + shellOptionGap + shellQuoted(`--hard`) + shellArgumentEnd,
+	gitCommandPrefix + `reset` + shellOptionGap + shellQuoted(`--h(?:a(?:rd?)?)?`) + shellArgumentEnd,
 	gitCommandPrefix + `push` + shellOptionGap + shellQuoted(`(?:--force|-[a-z]*f[a-z]*)`) + shellArgumentEnd,
-	gitCommandPrefix + `clean` + gitCleanOptionGap + shellQuoted(`(?:--force|-[diqnxX]*f[a-z]*)`) + shellArgumentEnd,
+	gitCommandPrefix + `push` + shellOptionGap + `["']?\+[^\s;&|()<>"']`,
+	// A cluster with n, as in git clean -nfd, is a dry run that deletes nothing.
+	gitCommandPrefix + `clean` + gitCleanOptionGap + shellQuoted(`(?:`+gitForce+`|-[diqxX]*f[a-mo-z]*)`) + shellArgumentEnd,
 	gitCommandPrefix + `checkout` + shellOptionGap + shellQuoted(`--`) + shellArgumentEnd,
+	gitCommandPrefix + `checkout` + shellOptionGap + shellQuoted(gitWholeTree) + shellArgumentEnd,
+	gitCommandPrefix + `checkout` + shellOptionGap + shellQuoted(`(?:`+gitForce+`|(?-i:-[a-zA-Z]*f[a-zA-Z]*))`) + shellArgumentEnd,
+	gitCommandPrefix + `switch` + shellOptionGap + shellQuoted(`(?:--force|--di[a-z-]*|(?-i:-[a-zA-Z]*f[a-zA-Z]*))`) + shellArgumentEnd,
+	gitCommandPrefix + `restore` + gitRestoreWorktreeWords,
+	gitCommandPrefix + `restore` + shellOptionGap + shellQuoted(gitRestoreStaged) + shellOptionGap + shellQuoted(gitRestoreWorktree) + shellArgumentEnd,
+	gitCommandPrefix + `restore` + shellOptionGap + shellQuoted(gitRestoreWorktree) + shellOptionGap + shellQuoted(gitRestoreStaged) + shellArgumentEnd,
+	gitCommandPrefix + `restore` + shellOptionGap + shellQuoted(`(?-i:-[a-zA-Z]*(?:S[a-zA-Z]*W|W[a-zA-Z]*S)[a-zA-Z]*)`) + shellArgumentEnd,
 	gitCommandPrefix + `stash[ \t]+(?:drop|clear)` + shellArgumentEnd,
 	gitCommandPrefix + `branch` + shellOptionGap + shellQuoted(`(?-i:-[a-zA-Z]*D[a-zA-Z]*)`) + shellArgumentEnd,
 }
 
 var destructivePatterns = []string{
-	`(?i)\brm` + shellOptionGap + shellQuoted(`-[a-z]*(?:r[a-z]*f|f[a-z]*r)[a-z]*`) + shellArgumentEnd,
-	`(?i)\brm` + shellOptionGap + shellQuoted(rmRecursiveFlag) + shellOptionGap + shellQuoted(rmForceFlag) + shellArgumentEnd,
-	`(?i)\brm` + shellOptionGap + shellQuoted(rmForceFlag) + shellOptionGap + shellQuoted(rmRecursiveFlag) + shellArgumentEnd,
+	`(?i)` + shellCommandStart + `rm` + shellOptionGap + shellQuoted(`-[a-z]*(?:r[a-z]*f|f[a-z]*r)[a-z]*`) + shellArgumentEnd,
+	`(?i)` + shellCommandStart + `rm` + shellOptionGap + shellQuoted(rmRecursiveFlag) + shellOptionGap + shellQuoted(rmForceFlag) + shellArgumentEnd,
+	`(?i)` + shellCommandStart + `rm` + shellOptionGap + shellQuoted(rmForceFlag) + shellOptionGap + shellQuoted(rmRecursiveFlag) + shellArgumentEnd,
 }
 
 var permissionsPreview = []string{
@@ -170,12 +184,12 @@ var permissionsPreview = []string{
 // pathRootOrHome matches /, ~, or $HOME, including home paths ending in / or /*
 // and the root glob /*. It does not match /tmp or a project under $HOME.
 // Quoted tildes and single-quoted variables do not expand to the home directory.
-const pathRootOrHome = `(?:/\*?|(?:~|\$HOME|\$\{HOME\})(?:/\*?)?|'/'|"(?:/|\$(?:HOME|\{HOME\})/?)")` + shellArgumentEnd
+const pathRootOrHome = `(?:/[*.]?|(?:~|\$HOME|\$\{HOME\})(?:/[*.]?)?|'/\.?'|"(?:/\.?|\$(?:HOME|\{HOME\})(?:/\.?)?)")` + shellArgumentEnd
 
 var permissionsPatterns = []string{
-	`(?i:\bchmod)` + shellOptionGap + shellQuoted(`(?:--recursive|-[a-zA-Z]*R[a-zA-Z]*)`) + shellArgumentGap + pathRootOrHome,
-	`(?i:\bchown)` + shellOptionGap + shellQuoted(`(?:--recursive|-[a-zA-Z]*R[a-zA-Z]*)`) + shellArgumentGap + pathRootOrHome,
-	`(?i:\bchmod)` + shellOptionGap + shellQuoted(`777`) + shellArgumentGap + pathRootOrHome,
+	`(?i:` + shellCommandStart + `chmod)` + shellOptionGap + shellQuoted(`(?:--recursive|-[a-zA-Z]*R[a-zA-Z]*)`) + shellArgumentGap + pathRootOrHome,
+	`(?i:` + shellCommandStart + `chown)` + shellOptionGap + shellQuoted(`(?:--recursive|-[a-zA-Z]*R[a-zA-Z]*)`) + shellArgumentGap + pathRootOrHome,
+	`(?i:` + shellCommandStart + `chmod)` + shellOptionGap + shellQuoted(`777`) + shellArgumentGap + pathRootOrHome,
 }
 
 var diskPreview = []string{
@@ -187,12 +201,29 @@ var diskPreview = []string{
 	"parted",
 }
 
+// diskDevice is the start of a disk's device name, as /dev/sda, /dev/nvme0n1
+// and /dev/disk2 are. /dev/null, /dev/zero, /dev/stdout and /dev/fd/N are not
+// disks, so dd can write to them.
+const diskDevice = `/dev/(?:sd|hd|vd|xvd|nvme|mmcblk|r?disk|md|dm-|mapper/|loop|mtdblock|nbd|zd|sr|ram)`
+
+// diskWord is a word of a disk tool's command line that is no option.
+const diskWord = `[^\s;&|()<>-][^\s;&|()<>]*`
+
+// diskReadOption is an option of fdisk or parted other than -l and --list,
+// which only list the partition tables.
+const diskReadOption = `(?:-[a-km-z0-9]*|--[a-km-z][a-z-]*)`
+
 var diskPatterns = []string{
-	`(?i)(?:\bdd|'dd'|"dd")` + shellArgumentGap + `(?:of=["']?/dev/|["']of=/dev/)`,
-	`(?i)\bmkfs(\.[A-Za-z0-9]+)?\b`,
-	`(?i)\bwipefs\b`,
-	`(?i)\bfdisk\b`,
-	`(?i)\bparted\b`,
+	`(?i)` + shellCommandStart + `(?:dd|'dd'|"dd")` + shellArgumentGap + `(?:of=["']?|["']of=)` + diskDevice,
+	`(?i)` + shellCommandStart + `mkfs(\.[A-Za-z0-9]+)?\b`,
+	`(?i)` + shellCommandStart + `wipefs\b`,
+	// fdisk changes a disk unless it only lists, as fdisk -l does.
+	`(?i)` + shellCommandStart + `fdisk(?:[ \t]+(?:` + diskWord + `|` + diskReadOption + `))*` + shellCommandEnd,
+	// parted changes a disk through a command such as mklabel, or
+	// interactively when it is given a disk and no command; print and -l only
+	// read.
+	`(?i)` + shellCommandStart + `parted(?:[ \t]+[^\s;&|()<>]+)*?[ \t]+(?:mklabel|mktable|mkpart|mkpartfs|mkfs|rm|resize|resizepart|rescue|set|toggle|disk_set|disk_toggle|name|cp|move)(?:[ \t]|` + shellCommandEnd + `)`,
+	`(?i)` + shellCommandStart + `parted(?:[ \t]+` + diskReadOption + `)*[ \t]+` + diskWord + shellCommandEnd,
 }
 
 var highRiskPromptPreview = []string{
@@ -242,12 +273,13 @@ var filesPreview = []string{
 }
 
 // envFileToolNames are the host spellings File safety matches with a qualified
-// glob, so a .env path is blocked whether the call is a Read, a Write, a content
-// search, or a shell cat. Matching is case-insensitive at compile time, so Grep
-// also covers the hosts that call it grep. Glob is left out: it returns file
-// names, not their contents.
+// glob, so a .env path is blocked whether the call is a Read, a Write or a
+// content search. Matching is case-insensitive at compile time, so Grep also
+// covers the hosts that call it grep. Glob is left out: it returns file names,
+// not their contents. Shell tools are left out too: File safety's shell
+// pattern judges the commands they run, so a .env mentioned in a quoted commit
+// message is not a read.
 var envFileToolNames = []string{
-	"Bash", "shell", "run_terminal_cmd", "execute_command", "run_command",
 	"Write", "Edit", "MultiEdit", "str_replace_editor", "apply_patch", "create_file",
 	"Read", "read_file", "view_file",
 	"Grep", "grep_search",
@@ -371,7 +403,11 @@ func filesPackRule() guardeval.Rule {
 				"target": "shell_command",
 				"reject": true,
 				"patterns": []any{
-					`(?i)(^|[/'"[:space:]<>;|&()])\.env($|['"[:space:].<>;|&()])`,
+					// A .env word in a command, outside quotes: no quote may come
+					// before it, and the character before it must not be escaped,
+					// so the subjects where quoted text is escaped data carry a
+					// .env in a commit message without matching.
+					`(?i)^(?:(?:[^'"\\]|\\.)*?[/[:space:]<>;|&()=])?\.env($|['"[:space:].<>;|&()])`,
 				},
 			},
 		}},
@@ -381,9 +417,7 @@ func filesPackRule() guardeval.Rule {
 func denyShellRule(id string, priority int, patterns []string) guardeval.Rule {
 	list := make([]any, 0, len(patterns))
 	for _, p := range patterns {
-		for _, pattern := range shellWrappedPatterns(p) {
-			list = append(list, pattern)
-		}
+		list = append(list, p)
 	}
 	return guardeval.Rule{
 		RuleID:       packRuleID(id),

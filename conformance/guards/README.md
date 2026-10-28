@@ -25,17 +25,44 @@ character classes. Cloud cannot name a literal `*`, so it puts `?` in that posit
 which also blocks a glob with one ordinary character there, such as `a.env` or
 `.env1`.
 
-## Cloud is stricter on shell arguments
+## How both runtimes read shell calls
 
-The local engine judges one command per shell call: the first command key it
-finds. Cloud's `shell_patterns` judge every value under every command key,
-including repeated keys and other letter cases, and fail a shell call whose
-arguments are not one JSON object or whose command is neither a string nor a list
-of strings. So Cloud also denies `{"command":"ls","script":"rm -rf x"}`, a repeated
-`command` key whose last copy is harmless, and unreadable arguments, which the local
-engine allows. Cloud also reads command keys inside a nested object when the top
-level has none. Both use the same shell tool names and command keys, and both join
-a backslash-newline before matching, as the shell does.
+Both read every value under the `command`, `cmd` and `script` keys, in any letter
+case, use the same shell tool names, and share one shell reader, kept byte for byte
+the same in `plugins/agento11y/internal/guardeval/shell.go` and sigil's
+`sigil/internal/eval/hooks/shell.go`. After joining a backslash-newline, each
+command is judged as written, with its quotes and backslashes removed, and as each
+simple command in it, split where the shell splits commands, both as written and
+from its name on, without assignments, wrappers with their option values, and
+redirections. Quoted text and quoted heredoc bodies stay data; the code in
+`$(...)`, backticks (also in an unquoted heredoc body), `sh -c`, `su -c`, `env -S`,
+`script -c`, `eval`, `watch`, `trap`, `find -exec` and a heredoc fed to a shell is
+read as commands, three levels deep, and code at the last level is judged as
+written. Every pack pattern matches where a command starts. So `git "reset" --hard`,
+`cd repo && git reset --hard` and `sudo -u deploy bash -c 'git reset --hard'` are
+denied, and a commit message that mentions `git reset --hard` is not. A shell
+command longer than 64 KiB is not read, and both runtimes fail it closed.
+
+A shell call with no command key is judged by the string values in its arguments.
+Where the arguments cannot be read at all (not one JSON object, or a command key
+holding something other than a string or a list of strings), Cloud fails the call
+with `blocked by tool_filter: shell tool arguments have no readable command`, while
+the local engine judges the string values, or the text of arguments that are not
+JSON. Cloud also reads command keys inside nested objects and every copy of a
+repeated key. The local engine also judges an argv list joined with plain spaces,
+as earlier versions did, so users' own `shell_command` patterns keep matching.
+
+## What the patterns cannot see
+
+The patterns judge the command as the shell reads it, not as it runs. A command
+built when it runs gets past them, locally and in Cloud: a variable
+(`g=git; $g reset --hard`), an alias, a script file, text piped into a shell
+(`echo "..." | bash`), or a command an interpreter such as `python -c` runs. So
+does `git checkout <path>` with no `--`, since a path cannot be told from a branch
+name; a git config change that turns a safety off, such as
+`git -c clean.requireForce=false clean`; and disk writes the disk pack does not
+name, such as `> /dev/disk2` or `diskutil`. The packs stop an agent's mistakes, not
+a determined attempt to get round them.
 
 ## Changing a pack
 
@@ -47,6 +74,9 @@ UPDATE_GOLDENS=1 go test -run TestCloudPacksFixture ./internal/local/
 ```
 
 The test checks every case against the local engine before it writes. Copy the
-result to sigil's `sigil/internal/eval/hooks/testdata/coding_agent_packs.json` and
-`apps/plugin/src/evaluation/codingAgentPacks.json`, the two copies the comment in
-sigil's `sigil/internal/eval/hooks/coding_agent_packs_test.go` names.
+result byte for byte to sigil's
+`sigil/internal/eval/hooks/testdata/coding_agent_packs.json`, where
+`TestCodingAgentPacksMatchLocalCases` runs every case through each pack's Cloud
+rule, and, once the Guards page change (grafana/sigil#2069) is in, to
+`apps/plugin/src/evaluation/codingAgentPacks.json`, the pack list the Guards page
+turns on.

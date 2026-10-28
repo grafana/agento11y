@@ -108,15 +108,21 @@ func compileEvaluator(spec EvaluatorSpec) (*compiledEvaluator, error) {
 // at all. passed and explanation are the outcome and the text for the deny
 // reason.
 //
-// Every subject is matched on its own. The shell_command and tool_arguments
-// targets contribute one subject per tool call, so a pattern cannot match text
-// formed by joining two calls; every other target contributes exactly one.
+// Every subject is matched on its own. The tool_arguments target contributes
+// one subject per tool call, and shell_command several per call (the command,
+// its unquoted form, and each simple command in it, as written and from its
+// name on), so a pattern cannot match
+// text formed by joining two calls; every other target contributes exactly one.
 // Several subjects still give one verdict: the evaluator answers on whether any
 // subject matched.
 //
 // Only compileEvaluator's regex branch builds a compiledEvaluator, so this runs
 // the patterns without asking which kind it holds.
 func runEvaluator(ce *compiledEvaluator, in agento11y.HookInput) (ran, passed bool, explanation string) {
+	if ce.target == evalTargetShellCommand && shellCommandTooLong(in, ce.shell) {
+		// Too long to read safely, so no pattern can clear it.
+		return true, false, "shell command is too long to judge"
+	}
 	subjects := subjectsFor(ce.target, in, ce.shell)
 	if len(subjects) == 0 {
 		// shell_command and tool_arguments can project nothing. A rule written
@@ -233,8 +239,9 @@ func parseTargetAndShell(config map[string]any) (string, shellConfig, error) {
 // subjectsFor returns the subjects an evaluator judges for the given target. It
 // computes only the target it returns: the shell_command and tool_arguments
 // projections decode JSON per tool call, and flattening a long message history
-// is not free either. Those projections yield one subject per tool call, and
-// shell_command yields none when the call runs no command; every other target
+// is not free either. tool_arguments yields one subject per tool call, and
+// shell_command several (the command, its unquoted form, and each simple
+// command in it), or none when the call runs no command; every other target
 // yields exactly one.
 func subjectsFor(target string, in agento11y.HookInput, shell shellConfig) []string {
 	switch target {

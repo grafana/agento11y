@@ -136,6 +136,11 @@ func TestPermissionsAndDiskPacks(t *testing.T) {
 		{packPermissions, "chmod -R 755 /; echo ok", true},
 		{packPermissions, "chmod 777 /; echo ok", true},
 		{packPermissions, "chmod 777 ~/*", true},
+		{packPermissions, "chown -R me $HOME/.", true},
+		{packPermissions, `chmod -R 755 "${HOME}/."`, true},
+		{packPermissions, "chmod -R 755 /.", true},
+		{packPermissions, "chmod -R 755 ./build", false},
+		{packPermissions, "chmod -R 755 ~/.config", false},
 		{packPermissions, `chown '-R' root '/'`, true},
 		{packPermissions, "chmod -R 755 /tmp; echo /", false},
 		{packPermissions, "chmod -R 755 /tmp", false},
@@ -298,4 +303,25 @@ func TestSecretsPackDecodedStrings(t *testing.T) {
 		})
 	}
 	assert.Nil(t, engine.Evaluate(packRequest("Bash", `{"command":"echo ghp_short"}`)).TransformedInput)
+}
+
+// TestFilesPackUnreadableShellCalls checks that a shell call File safety
+// cannot read a command from is still judged, by its string values or, when
+// its arguments are not JSON, by their text, as v0.52's argument glob judged
+// it. Grafana Cloud denies these as unreadable instead.
+func TestFilesPackUnreadableShellCalls(t *testing.T) {
+	rule, err := packRule(packFiles)
+	require.NoError(t, err)
+	data, err := guardeval.EncodeRules([]guardeval.Rule{rule})
+	require.NoError(t, err)
+	engine := guardeval.NewEngineFromContents("guards.toml", data, nil)
+	require.Empty(t, engine.Status().Errors)
+	for input, want := range map[string]agento11y.HookAction{
+		`{"command":{"command":"cat .env"}}`: agento11y.HookActionDeny,
+		`{"command":"cat .env"`:              agento11y.HookActionDeny,
+		`{"input":"cat .env"}`:               agento11y.HookActionDeny,
+		`{"command":{"command":"ls"}}`:       agento11y.HookActionAllow,
+	} {
+		assert.Equal(t, want, engine.Evaluate(packRequest("Bash", input)).Action, input)
+	}
 }
