@@ -633,7 +633,9 @@ func markCredentialCopies(v *formValues, saved map[string]string) {
 	}
 	v.dropCredentialCopies = v.token != savedValue("AUTH_TOKEN") ||
 		v.endpoint != savedValue("ENDPOINT") ||
-		v.otelEndpoint != savedValue("OTEL_EXPORTER_OTLP_ENDPOINT")
+		// The setup page's raw key holds the OTLP endpoint when the file
+		// has no branded one, as a block's does.
+		v.otelEndpoint != cmp.Or(savedValue("OTEL_EXPORTER_OTLP_ENDPOINT"), strings.TrimSpace(saved["OTEL_EXPORTER_OTLP_ENDPOINT"]))
 	if !v.dropCredentialCopies {
 		return
 	}
@@ -1727,7 +1729,8 @@ func cutInlineComment(line string) string {
 			from += end + 2
 		}
 	}
-	if i := strings.Index(line[from:], " #"); i >= 0 {
+	// A tab before the comment counts as a space, as ParseDotenv reads it.
+	if i := strings.Index(strings.ReplaceAll(line[from:], "\t", " "), " #"); i >= 0 {
 		return line[:from+i]
 	}
 	return line

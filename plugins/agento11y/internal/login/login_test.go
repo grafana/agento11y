@@ -275,6 +275,13 @@ func TestNormalizePastedBlock(t *testing.T) {
 			want: "AGENTO11Y_ENDPOINT=https://api.example.invalid # export AGENTO11Y_AUTH_TOKEN=glc_test",
 		},
 		{
+			// ParseDotenv reads a tab before # as a comment too, so the
+			// assignment the comment mentions must not come alive.
+			name: "a tab comment that mentions an assignment stays a comment",
+			in:   "AGENTO11Y_ENDPOINT=https://api.example.invalid\nAGENTO11Y_GUARDS_ENABLED=false\t# set AGENTO11Y_GUARDS_ENABLED=true to turn it on\n",
+			want: "AGENTO11Y_ENDPOINT=https://api.example.invalid\nAGENTO11Y_GUARDS_ENABLED=false",
+		},
+		{
 			name: "CRLF line endings lose their carriage returns",
 			in:   "AGENTO11Y_ENDPOINT=https://api.example.invalid\r\nAGENTO11Y_AUTH_TOKEN=glc_test\r\n",
 			want: "AGENTO11Y_ENDPOINT=https://api.example.invalid\nAGENTO11Y_AUTH_TOKEN=glc_test",
@@ -4206,5 +4213,45 @@ func TestRun_CredentialCopiesReportedOnlyWhenSaved(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(path); string(data) != saved {
 		t.Errorf("config.env changed:\n%s", data)
+	}
+}
+
+// TestRun_BlockTabCommentStaysDead runs a block whose tab comment names
+// another value for the same key: the block's own value is saved.
+func TestRun_BlockTabCommentStaysDead(t *testing.T) {
+	got, stderr, err := runBlockForTest(t, "", nil, RunOpts{
+		Block: blockCreds + "AGENTO11Y_GUARDS_ENABLED=false\t# set AGENTO11Y_GUARDS_ENABLED=true to turn it on\n",
+	})
+	if err != nil {
+		t.Fatalf("Run: %v (stderr %q)", err, stderr)
+	}
+	if got["AGENTO11Y_GUARDS_ENABLED"] != "false" {
+		t.Errorf("AGENTO11Y_GUARDS_ENABLED = %q, want false", got["AGENTO11Y_GUARDS_ENABLED"])
+	}
+}
+
+// TestRun_CredentialCopiesReadRawOTLPEndpoint covers a saved file that holds
+// the OTLP endpoint only under the setup page's raw key: a run for the same
+// stack keeps the saved copies, and a new OTLP endpoint still drops them.
+func TestRun_CredentialCopiesReadRawOTLPEndpoint(t *testing.T) {
+	saved := blockCreds +
+		"OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.block.example.com/otlp\n" +
+		"AGENTO11Y_HEADERS=Authorization=Bearer saved_header\n"
+	for _, c := range []struct {
+		name, otlp string
+		keep       bool
+	}{
+		{"the same stack", "https://otlp.block.example.com/otlp", true},
+		{"a new OTLP endpoint", "https://otlp.other.example.com/otlp", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got, stderr, err := runBlockForTest(t, saved, nil, RunOpts{Block: blockCreds + "OTEL_EXPORTER_OTLP_ENDPOINT=" + c.otlp + "\n"})
+			if err != nil {
+				t.Fatalf("Run: %v (stderr %q)", err, stderr)
+			}
+			if kept := got["AGENTO11Y_HEADERS"] != ""; kept != c.keep {
+				t.Errorf("AGENTO11Y_HEADERS kept = %v, want %v (stderr %q)", kept, c.keep, stderr)
+			}
+		})
 	}
 }
