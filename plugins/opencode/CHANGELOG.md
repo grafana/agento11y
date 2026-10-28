@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.24.0] - 2026-10-26
+
+### Features
+
+- trace tool context and skill loads across agents (#925)
+- **sdk**: trace skill loads, resource reads, and commands (#920)
+- **plugins/opencode**: export v2 compaction generations (#891)
+- **plugins/agento11y**: support opencode v2 history (#890)
+- **plugins/opencode**: support opencode v2 (#876)
+
+### Bug Fixes
+
+- **security**: resolve medium+ CVEs in Go and Python dependencies (#862)
+
 ## [0.23.0] - 2026-09-16
 
 ### Features

@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.26.0] - 2026-10-26
+
+### Features
+
+- trace tool context and skill loads across agents (#925)
+- **python**: run published suite versions and gate them in CI (#865)
+
+### Bug Fixes
+
+- **plugins/pi**: redact the conversation title before clipping it (#884)
+- **plugins/pi**: preserve reasoning token counts (#872)
+- **security**: resolve medium+ CVEs in npm dependencies (#863)
+- **security**: resolve medium+ CVEs in Go and Python dependencies (#862)
+
 ## [0.25.0] - 2026-09-16
 
 ### Features
