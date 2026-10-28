@@ -1328,6 +1328,22 @@ describe("extension lifecycle", () => {
       expect(seeds[0]!.conversationTitle).not.toContain("Falcon");
     });
 
+    // A guard that redacts the whole prompt doesn't say which part was
+    // sensitive, so a name quoting any of the prompt is redacted word by word.
+    it.each([
+      ["to nothing", ""],
+      ["to one token", "[REDACTED]"],
+    ])("redacts a session name quoting a prompt redacted %s", async (_case, transformed) => {
+      const { seeds } = setupGuardedTurn(transformed);
+      const pi = new FakePi();
+      registerExtension(pi as any);
+
+      await runTurn(pi, namedSession("Project Falcon"));
+
+      expect(seeds[0]!.conversationTitle).toContain("[REDACTED]");
+      expect(seeds[0]!.conversationTitle).not.toContain("Falcon");
+    });
+
     it("records a prompt the guard redacted to nothing", async () => {
       const { seeds, recorder } = setupGuardedTurn("");
       const pi = new FakePi();

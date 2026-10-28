@@ -25,6 +25,7 @@ import {
   type PiToolInfo,
   type PiToolResult,
   type PiUserMessage,
+  redactSharedWords,
   redactSpans,
   removedSpans,
   resolveConversationTitle,
@@ -1949,6 +1950,18 @@ describe("guard redaction spans", () => {
     );
     expect(redactSpans("abcd", ["abc", "bcd"])).toBe("[REDACTED]");
     expect(redactSpans("nothing here", ["Falcon"])).toBe("nothing here");
+  });
+
+  it("redacts the words a title shares with a wholly redacted prompt", () => {
+    const prompt = "Status update on Project Falcon for the board";
+    expect(redactSharedWords("Project Falcon, quarterly", [prompt])).toBe(
+      "[REDACTED] [REDACTED], quarterly",
+    );
+    // Short words and the token itself are left alone.
+    expect(redactSharedWords("on the [REDACTED] list", [prompt])).toBe(
+      "on the [REDACTED] list",
+    );
+    expect(redactSharedWords("Project Falcon", [])).toBe("Project Falcon");
   });
 
   it("records a redaction to empty text", () => {

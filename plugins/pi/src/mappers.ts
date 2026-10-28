@@ -805,6 +805,36 @@ function sensitivePieces(spans: string[]): string[] {
     .filter((piece) => piece !== "");
 }
 
+// The shortest word redactSharedWords treats as sensitive. Shorter words are
+// too likely to appear in a prompt by coincidence.
+const MIN_SHARED_WORD = 4;
+
+/**
+ * Redacts each word of `value` that also appears in one of `texts`.
+ *
+ * When a guard redacts a whole prompt, there is no telling which part of it
+ * was sensitive, so a title that quotes any of it is redacted word by word.
+ * Leading and trailing punctuation is ignored when matching a word.
+ */
+export function redactSharedWords(
+  value: string,
+  texts: Iterable<string>,
+): string {
+  const sources = [...texts];
+  if (sources.length === 0) return value;
+  return value
+    .split(/(\s+)/)
+    .map((word) => {
+      if (word.includes(REDACTION_TOKEN)) return word;
+      const core = word.replace(/^[\p{P}\p{S}]+|[\p{P}\p{S}]+$/gu, "");
+      if (core.length < MIN_SHARED_WORD) return word;
+      return sources.some((text) => text.includes(core))
+        ? word.replace(core, REDACTION_TOKEN)
+        : word;
+    })
+    .join("");
+}
+
 /**
  * Replaces every occurrence of each span in `value` with the redaction token.
  * Overlapping occurrences merge into one, so the result doesn't depend on the
