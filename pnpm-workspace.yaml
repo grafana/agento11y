@@ -64,3 +64,5 @@ minimumReleaseAgeExclude:
   - vitest@4.1.11
   # Renovate security update: body-parser@2.4.0
   - body-parser@2.4.0
+  # Renovate security update: @strands-agents/sdk@1.5.0
+  - "@strands-agents/sdk@1.5.0"
