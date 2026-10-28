@@ -1216,6 +1216,175 @@ describe("extension lifecycle", () => {
     expect(capturedSeed!.conversationId).toBeUndefined();
   });
 
+  describe("guards (context redaction recording)", () => {
+    // A guard-only pattern: the plugin's own secret redaction doesn't know it,
+    // so only the guard's transform can remove it from what is recorded.
+    const PROMPT = "Status update on Project Falcon for the board";
+    const REDACTED = "Status update on [REDACTED] for the board";
+
+    function setupGuardedTurn(transformedText?: string) {
+      const seeds: Array<{ conversationTitle?: string }> = [];
+      const recorder = {
+        setResult: vi.fn(),
+        setCallError: vi.fn(),
+        setFirstTokenAt: vi.fn(),
+      };
+      const evaluateHook = vi.fn().mockResolvedValue({
+        action: "allow",
+        evaluations: [],
+        ...(transformedText !== undefined
+          ? {
+              transformedInput: {
+                messages: [
+                  {
+                    role: "user",
+                    parts: [{ type: "text", text: transformedText }],
+                  },
+                ],
+              },
+            }
+          : {}),
+      });
+      const sigil = {
+        startStreamingGeneration: vi.fn(async (seed, run) => {
+          seeds.push(seed as { conversationTitle?: string });
+          await run(recorder);
+        }),
+        startToolExecution: vi.fn(() => ({
+          setResult: vi.fn(),
+          setCallError: vi.fn(),
+          end: vi.fn(),
+          getError: vi.fn(),
+        })),
+        shutdown: vi.fn(async () => {}),
+        evaluateHook,
+      } as Agento11yLike & { evaluateHook: ReturnType<typeof vi.fn> };
+
+      loadConfigMock.mockResolvedValue({
+        endpoint: "http://localhost:8080/api/v1/generations:export",
+        auth: { mode: "none" },
+        agentName: "pi",
+        contentCapture: "full",
+        guards: { enabled: true, timeoutMs: 1500, failOpen: true },
+      });
+      createAgento11yClientMock.mockReturnValue(sigil);
+      return { seeds, recorder, evaluateHook };
+    }
+
+    async function runTurn(pi: FakePi, ctx: unknown = defaultCtx) {
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit("turn_start", {}, ctx);
+      const user = { role: "user", content: PROMPT, timestamp: Date.now() };
+      await pi.emit("message_end", { message: user }, ctx);
+      // pi hands the context hook its own copy of the conversation.
+      const event = { messages: [{ ...user }] };
+      const result = await pi.handlers.get("context")!(event, ctx);
+      await pi.emit("message_end", { message: { role: "assistant" } }, ctx);
+      await pi.emit(
+        "turn_end",
+        { message: assistantMessage(), toolResults: [] },
+        ctx,
+      );
+      return { event, result };
+    }
+
+    function namedSession(name: string) {
+      return {
+        ...defaultCtx,
+        sessionManager: {
+          ...defaultCtx.sessionManager,
+          getSessionName: () => name,
+        },
+      };
+    }
+
+    function recordedInputText(recorder: {
+      setResult: ReturnType<typeof vi.fn>;
+    }): string[] {
+      const result = recorder.setResult.mock.calls[0]![0] as {
+        input?: Array<{ parts: Array<{ text?: string }> }>;
+      };
+      return (result.input ?? []).flatMap((m) =>
+        m.parts.map((part) => part.text ?? ""),
+      );
+    }
+
+    it("records the redacted prompt and title, not the original", async () => {
+      const { seeds, recorder, evaluateHook } = setupGuardedTurn(REDACTED);
+      const pi = new FakePi();
+      registerExtension(pi as any);
+
+      const { event } = await runTurn(pi);
+
+      expect(evaluateHook).toHaveBeenCalledTimes(1);
+      expect((event.messages[0] as { content: string }).content).toBe(REDACTED);
+      expect(recordedInputText(recorder)).toEqual([REDACTED]);
+      expect(seeds[0]!.conversationTitle).toContain("[REDACTED]");
+      expect(seeds[0]!.conversationTitle).not.toContain("Falcon");
+    });
+
+    // pi prefers a user-set session name over the first prompt. No guard sees
+    // the name, so it is redacted with what the guard removed from the prompt.
+    it.each([
+      ["is the prompt", PROMPT],
+      ["quotes the redacted value", "Project Falcon notes"],
+    ])("redacts a session name that %s", async (_case, name) => {
+      const { seeds } = setupGuardedTurn(REDACTED);
+      const pi = new FakePi();
+      registerExtension(pi as any);
+
+      await runTurn(pi, namedSession(name));
+
+      expect(seeds[0]!.conversationTitle).toContain("[REDACTED]");
+      expect(seeds[0]!.conversationTitle).not.toContain("Falcon");
+    });
+
+    // A guard that redacts the whole prompt doesn't say which part was
+    // sensitive, so a name quoting any of the prompt is redacted word by word.
+    it.each([
+      ["to nothing", ""],
+      ["to one token", "[REDACTED]"],
+    ])("redacts a session name quoting a prompt redacted %s", async (_case, transformed) => {
+      const { seeds } = setupGuardedTurn(transformed);
+      const pi = new FakePi();
+      registerExtension(pi as any);
+
+      await runTurn(pi, namedSession("Project Falcon"));
+
+      expect(seeds[0]!.conversationTitle).toContain("[REDACTED]");
+      expect(seeds[0]!.conversationTitle).not.toContain("Falcon");
+    });
+
+    it("records a prompt the guard redacted to nothing", async () => {
+      const { seeds, recorder } = setupGuardedTurn("");
+      const pi = new FakePi();
+      registerExtension(pi as any);
+
+      const { event } = await runTurn(pi);
+
+      expect((event.messages[0] as { content: string }).content).toBe("");
+      expect(recordedInputText(recorder)).toEqual([""]);
+      // With no prompt text left, the title falls back to the session id.
+      const seed = seeds[0] as {
+        conversationTitle?: string;
+        conversationId?: string;
+      };
+      expect(seed.conversationTitle).toBe(seed.conversationId);
+      expect(seed.conversationTitle).not.toContain("Falcon");
+    });
+
+    it("records the prompt as sent when the guard changes nothing", async () => {
+      const { seeds, recorder } = setupGuardedTurn();
+      const pi = new FakePi();
+      registerExtension(pi as any);
+
+      await runTurn(pi);
+
+      expect(recordedInputText(recorder)).toEqual([PROMPT]);
+      expect(seeds[0]!.conversationTitle).toContain("Falcon");
+    });
+  });
+
   describe("guards (tool_call wiring)", () => {
     function makeRecorder() {
       return {

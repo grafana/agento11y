@@ -41,10 +41,15 @@ import {
   type PiToolResult,
   type PiUsageLike,
   type PiUserMessage,
+  redactSharedWords,
+  redactSpans,
+  removedSpans,
   resolveConversationTitle,
   type ToolTiming,
   toolResultText,
   userMessageText,
+  userTextRedactions,
+  withRedactedUserText,
 } from "./mappers.js";
 import {
   type ConversationRecord,
@@ -145,6 +150,30 @@ export default function (pi: ExtensionAPI) {
   // boundaries (never in resetTurnState).
   let firstUserText: string | undefined;
 
+  // Text a redact guard removed from this session's prompts. The title can
+  // come from pi's session name, which no guard sees, so title sources are
+  // redacted with these too. Cleared on session boundaries, like
+  // firstUserText.
+  const guardSpans = new Set<string>();
+  // Prompts a guard redacted whole, so their sensitive part is unknown.
+  const wholeRedactions = new Set<string>();
+
+  /** Redacts what a guard removed this session from a prompt's text. */
+  const guardSafe = (value: string | undefined): string | undefined =>
+    value === undefined || guardSpans.size === 0
+      ? value
+      : redactSpans(value, guardSpans);
+
+  /**
+   * Redacts what a guard removed this session from pi's session name. The
+   * name can quote part of a prompt the guard redacted whole, so its words
+   * that appear in such a prompt are redacted too.
+   */
+  const guardSafeName = (value: string | undefined): string | undefined => {
+    const out = guardSafe(value);
+    return out === undefined ? out : redactSharedWords(out, wholeRedactions);
+  };
+
   // Start timestamps for pi's own summarization LLM calls. Written by the
   // `session_before_*` handler, which is the only start signal pi gives us
   // (those events are `hasHandlers`-gated, so registering the handler is what
@@ -195,6 +224,8 @@ export default function (pi: ExtensionAPI) {
     resetTurnState();
     pendingInputMessages.length = 0;
     firstUserText = undefined;
+    guardSpans.clear();
+    wholeRedactions.clear();
     lastSeenModel = null;
     currentSystemPrompt = undefined;
     pendingSkillOptions = undefined;
@@ -324,8 +355,8 @@ export default function (pi: ExtensionAPI) {
       kind,
       conversationId,
       conversationTitle: resolveConversationTitle({
-        sessionName,
-        firstUserText,
+        sessionName: guardSafeName(sessionName),
+        firstUserText: guardSafe(firstUserText),
         conversationId,
         contentCapture: config.contentCapture,
       }),
@@ -649,6 +680,29 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
+      // The recorded input and the title were captured at message_end, before
+      // this redaction. Record what the model receives instead.
+      const redactions = userTextRedactions(forward, result.messages);
+      if (redactions.size > 0) {
+        for (const [before, after] of redactions) {
+          for (const span of removedSpans(before, after)) {
+            guardSpans.add(span);
+            if (span === before.trim()) wholeRedactions.add(span);
+          }
+        }
+        pendingInputMessages.forEach((message, i) => {
+          pendingInputMessages[i] = withRedactedUserText(message, redactions);
+        });
+        if (firstUserText !== undefined) {
+          for (const [before, after] of redactions) {
+            if (before.trim() === firstUserText) {
+              firstUserText = after.trim();
+              break;
+            }
+          }
+        }
+      }
+
       // applyRedactedText mutated piMessages (pi's own AgentMessage[]) in
       // place; returning it hands the redacted conversation back to pi.
       return { messages: piMessages };
@@ -883,8 +937,8 @@ export default function (pi: ExtensionAPI) {
         logger.debug("getSessionName failed", err);
       }
       const conversationTitle = resolveConversationTitle({
-        sessionName,
-        firstUserText,
+        sessionName: guardSafeName(sessionName),
+        firstUserText: guardSafe(firstUserText),
         conversationId,
         contentCapture,
       });

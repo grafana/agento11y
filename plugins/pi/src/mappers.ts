@@ -729,6 +729,158 @@ export function applyRedactedText(
   return true;
 }
 
+/**
+ * Maps each user message's text to the text a redact guard returned for it,
+ * for the user messages the guard changed. `forward` and `redacted` are the
+ * index-aligned arrays `applyRedactedText` accepted.
+ *
+ * The recorded input and the conversation title are captured at
+ * `message_end`, before the `context` hook redacts the outgoing messages, so
+ * the plugin uses this map to record what the model actually receives.
+ */
+export function userTextRedactions(
+  forward: Message[],
+  redacted: Message[],
+): Map<string, string> {
+  const out = new Map<string, string>();
+  for (let i = 0; i < forward.length && i < redacted.length; i++) {
+    const sent = forward[i];
+    const returned = redacted[i];
+    if (sent?.role !== "user" || !returned) continue;
+    const before = extractTextFromAgento11yMessage(sent);
+    const after = extractTextFromAgento11yMessage(returned);
+    // A guard can redact a prompt to nothing, so only missing text means the
+    // guard returned no change.
+    if (before !== null && after !== null && before !== after) {
+      out.set(before, after);
+    }
+  }
+  return out;
+}
+
+/** The token a redact guard writes in place of each match. */
+const REDACTION_TOKEN = "[REDACTED]";
+
+/**
+ * Returns the text a redact guard removed when it turned `before` into
+ * `after`. The guard replaces each match with a fixed token, so the literal
+ * text between the tokens in `after` lines up with `before`, and what `before`
+ * holds between those literals is what the guard removed. Text changed any
+ * other way, including to an empty string, counts as removed whole.
+ *
+ * Unlike the whole text, these spans also match where the same value turns up
+ * in another form, such as pi's session name.
+ */
+export function removedSpans(before: string, after: string): string[] {
+  if (before === after) return [];
+  const literals = after.split(REDACTION_TOKEN);
+  const head = literals[0] ?? "";
+  const tail = literals[literals.length - 1] ?? "";
+  if (
+    literals.length === 1 ||
+    head.length + tail.length > before.length ||
+    !before.startsWith(head) ||
+    !before.endsWith(tail)
+  ) {
+    return sensitivePieces([before]);
+  }
+  const end = before.length - tail.length;
+  const spans: string[] = [];
+  let pos = head.length;
+  for (const literal of literals.slice(1, -1)) {
+    const at = before.indexOf(literal, pos);
+    if (at < 0 || at + literal.length > end) return sensitivePieces([before]);
+    spans.push(before.slice(pos, at));
+    pos = at + literal.length;
+  }
+  spans.push(before.slice(pos, end));
+  return sensitivePieces(spans);
+}
+
+// A span can hold an earlier redaction's token when a second guard matched
+// across it. Only the text around the token is sensitive.
+function sensitivePieces(spans: string[]): string[] {
+  return spans
+    .flatMap((span) => span.split(REDACTION_TOKEN))
+    .map((piece) => piece.trim())
+    .filter((piece) => piece !== "");
+}
+
+// The shortest word redactSharedWords treats as sensitive. Shorter words are
+// too likely to appear in a prompt by coincidence.
+const MIN_SHARED_WORD = 4;
+
+/**
+ * Redacts each word of `value` that also appears in one of `texts`.
+ *
+ * When a guard redacts a whole prompt, there is no telling which part of it
+ * was sensitive, so a title that quotes any of it is redacted word by word.
+ * Leading and trailing punctuation is ignored when matching a word.
+ */
+export function redactSharedWords(
+  value: string,
+  texts: Iterable<string>,
+): string {
+  const sources = [...texts];
+  if (sources.length === 0) return value;
+  return value
+    .split(/(\s+)/)
+    .map((word) => {
+      if (word.includes(REDACTION_TOKEN)) return word;
+      const core = word.replace(/^[\p{P}\p{S}]+|[\p{P}\p{S}]+$/gu, "");
+      if (core.length < MIN_SHARED_WORD) return word;
+      return sources.some((text) => text.includes(core))
+        ? word.replace(core, REDACTION_TOKEN)
+        : word;
+    })
+    .join("");
+}
+
+/**
+ * Replaces every occurrence of each span in `value` with the redaction token.
+ * Overlapping occurrences merge into one, so the result doesn't depend on the
+ * order the spans were recorded in.
+ */
+export function redactSpans(value: string, spans: Iterable<string>): string {
+  const ranges: Array<[number, number]> = [];
+  for (const span of spans) {
+    if (span === "") continue;
+    for (
+      let at = value.indexOf(span);
+      at >= 0;
+      at = value.indexOf(span, at + 1)
+    ) {
+      ranges.push([at, at + span.length]);
+    }
+  }
+  ranges.sort((a, b) => a[0] - b[0]);
+  const merged: Array<[number, number]> = [];
+  for (const [from, to] of ranges) {
+    const last = merged[merged.length - 1];
+    if (last && from <= last[1]) last[1] = Math.max(last[1], to);
+    else merged.push([from, to]);
+  }
+  let out = "";
+  let pos = 0;
+  for (const [from, to] of merged) {
+    out += value.slice(pos, from) + REDACTION_TOKEN;
+    pos = to;
+  }
+  return out + value.slice(pos);
+}
+
+/** Returns `message` with its text redacted when `redactions` has its text. */
+export function withRedactedUserText(
+  message: Message,
+  redactions: Map<string, string>,
+): Message {
+  if (message.role !== "user") return message;
+  const text = extractTextFromAgento11yMessage(message);
+  const redacted = text === null ? undefined : redactions.get(text);
+  if (redacted === undefined) return message;
+  return { ...message, parts: [{ type: "text", text: redacted }] };
+}
+
 function applyRedactedToMessage(pi: PiAgentMessage, sig: Message): boolean {
   const role = (pi as { role?: unknown }).role;
   if (role === "user") {
