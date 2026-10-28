@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.25.0] - 2026-10-28
+
+### Features
+
+- **plugins/agento11y**: add local skill analytics (#963)
+
 ## [0.24.0] - 2026-10-26
 
 ### Features

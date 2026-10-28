@@ -1,6 +1,6 @@
 {
   "name": "@grafana/agento11y-opencode",
-  "version": "0.24.0",
+  "version": "0.25.0",
   "description": "OpenCode plugin for Grafana Agent Observability",
   "repository": {
     "type": "git",
