@@ -881,7 +881,7 @@ func stripTracePayload(body []byte, contentType string) ([]byte, string, error) 
 		return nil, "", err
 	}
 	if isJSON {
-		out, err := protojson.Marshal(req)
+		out, err := marshalTraceJSON(req)
 		return out, wire.ContentTypeJSON, err
 	}
 	out, err := proto.Marshal(req)
@@ -891,7 +891,7 @@ func stripTracePayload(body []byte, contentType string) ([]byte, string, error) 
 func decodeTracePayload(body []byte, contentType string) (*coltracepb.ExportTraceServiceRequest, error) {
 	req := new(coltracepb.ExportTraceServiceRequest)
 	if strings.Contains(strings.ToLower(contentType), "json") {
-		if err := protojson.Unmarshal(body, req); err != nil {
+		if err := unmarshalTraceJSON(body, req); err != nil {
 			return nil, err
 		}
 		return req, nil
