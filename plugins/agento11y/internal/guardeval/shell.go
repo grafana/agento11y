@@ -17,10 +17,15 @@ import (
 
 // defaultShellToolNames are the tool names treated as "runs a shell command"
 // with no configuration. They cover the spellings the supported hosts emit
-// (Claude Code's Bash, Cursor's run_terminal_cmd, Codex/Copilot's
-// execute_command / run_command, and generic terminal / shell). Matching is
-// case-insensitive, so "Bash" and "bash" are the same tool.
-var defaultShellToolNames = []string{"bash", "shell", "run_terminal_cmd", "execute_command", "run_command", "terminal", "powershell", "pwsh"}
+// (Claude Code's Bash, Cursor's run_terminal_cmd, Codex's exec_command and
+// local_shell, Gemini CLI's run_shell_command, Copilot's run_in_terminal,
+// execute_command / run_command, and generic terminal / shell). Grafana Cloud's
+// shell_patterns use the same list (sigil/internal/eval/hooks/shell.go).
+// Matching is case-insensitive, so "Bash" and "bash" are the same tool.
+var defaultShellToolNames = []string{
+	"bash", "shell", "run_terminal_cmd", "execute_command", "run_command", "terminal", "powershell", "pwsh",
+	"exec_command", "local_shell", "run_shell_command", "run_in_terminal",
+}
 
 // defaultShellCommandKeys are the argument keys that hold the command line,
 // in the order they are tried. The first key present with a non-empty string
@@ -185,7 +190,7 @@ func lookupArg(args map[string]any, key string) (any, bool) {
 func commandString(raw any) (string, bool) {
 	switch typed := raw.(type) {
 	case string:
-		if trimmed := strings.TrimSpace(typed); trimmed != "" {
+		if trimmed := strings.TrimSpace(joinLineContinuations(typed)); trimmed != "" {
 			return trimmed, true
 		}
 	case []any:
@@ -200,9 +205,16 @@ func commandString(raw any) (string, bool) {
 			}
 			parts = append(parts, s)
 		}
-		if joined := strings.TrimSpace(strings.Join(parts, " ")); joined != "" {
+		if joined := strings.TrimSpace(joinLineContinuations(strings.Join(parts, " "))); joined != "" {
 			return joined, true
 		}
 	}
 	return "", false
+}
+
+// joinLineContinuations removes the backslash-newlines the shell removes
+// before it runs a command, so `git reset \<newline>--hard` is judged as the
+// `git reset --hard` it runs. Grafana Cloud's shell_patterns do the same.
+func joinLineContinuations(command string) string {
+	return strings.NewReplacer("\\\r\n", "", "\\\n", "").Replace(command)
 }

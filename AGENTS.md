@@ -109,7 +109,7 @@ The `## Reference` section of `plugins/agento11y/internal/skills/content/setup-c
 
 ## Sigil copies the coding agent guard packs
 
-`conformance/guards/coding-agent-packs.json` exports the git, destructive, permissions, disk, and File safety packs for Grafana Cloud, and sigil builds its coding agent guard templates from a byte-for-byte copy. Changing one of those packs in `internal/local/guardpacks.go` fails `TestCloudPacksFixture` until the file is regenerated. Nothing checks the copies in sigil, so copy the new file there too. `conformance/guards/README.md` has the steps.
+`conformance/guards/coding-agent-packs.json` exports the git, destructive, permissions, disk, and File safety packs for Grafana Cloud, and sigil turns each pack into one tool filter rule from byte-for-byte copies. Changing one of those packs in `internal/local/guardpacks.go` fails `TestCloudPacksFixture` until the file is regenerated. Nothing checks sigil's copies against this file (a plugin test compares sigil's two copies with each other), so copy the new file there too. `conformance/guards/README.md` has the steps.
 
 ## Running checks
 

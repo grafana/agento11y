@@ -47,6 +47,60 @@
     },
     {
       "pack": "git",
+      "tool": "exec_command",
+      "input": {
+        "cmd": "git reset --hard"
+      },
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "tool": "local_shell",
+      "input": {
+        "command": [
+          "bash",
+          "-lc",
+          "git reset --hard"
+        ]
+      },
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "tool": "run_shell_command",
+      "input": {
+        "command": "git reset --hard"
+      },
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "tool": "run_in_terminal",
+      "input": {
+        "command": "git reset --hard"
+      },
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "tool": "exec_command",
+      "input": {
+        "cmd": "git status"
+      },
+      "deny": false
+    },
+    {
+      "pack": "git",
+      "command": "git reset \\\n--hard",
+      "deny": true
+    },
+    {
+      "pack": "destructive",
+      "command": "rm \\\n-rf /tmp/x",
+      "deny": true
+    },
+    {
+      "pack": "git",
       "command": "git status",
       "deny": false
     },

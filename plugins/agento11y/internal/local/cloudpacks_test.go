@@ -14,10 +14,10 @@ import (
 )
 
 // cloudPacksFixture is the canonical export of the coding agent guard packs
-// for Grafana Cloud. Sigil keeps a byte-for-byte snapshot and builds its coding
-// agent guard templates from it, so a Cloud guard denies the calls the local
-// pack denies, apart from the cases marked local_only. Set UPDATE_GOLDENS=1 to
-// regenerate it.
+// for Grafana Cloud. Sigil keeps byte-for-byte copies and turns each pack into
+// one tool filter rule (its patterns become tool_filter.shell_patterns), so a
+// Cloud guard denies the calls the local pack denies, apart from the cases
+// marked local_only. Set UPDATE_GOLDENS=1 to regenerate it.
 const cloudPacksFixture = "../../../../conformance/guards/coding-agent-packs.json"
 
 // cloudPackMessages is what a Cloud guard tells the agent and the user when it
@@ -77,8 +77,8 @@ type cloudPackCase struct {
 }
 
 // cloudPackCases are the calls every runtime must agree on. The test below
-// checks them against the local engine; sigil runs the same cases against its
-// templates.
+// checks them against the local engine; sigil runs the same cases against each
+// pack's tool filter (TestCodingAgentPacksMatchLocalCases).
 var cloudPackCases = []cloudPackCase{
 	{Pack: packGit, Command: "git reset --hard HEAD~1", Deny: true},
 	{Pack: packGit, Command: "git push --force origin main", Deny: true},
@@ -89,6 +89,15 @@ var cloudPackCases = []cloudPackCase{
 	{Pack: packGit, Command: "git branch -D feature", Deny: true},
 	{Pack: packGit, Command: `bash -c "git reset --hard"`, Deny: true},
 	{Pack: packGit, Command: "git -C repo reset --hard", Deny: true},
+	// The shell tools of Codex, Gemini CLI, and Copilot, which are not named Bash.
+	{Pack: packGit, Tool: "exec_command", Input: json.RawMessage(`{"cmd":"git reset --hard"}`), Deny: true},
+	{Pack: packGit, Tool: "local_shell", Input: json.RawMessage(`{"command":["bash","-lc","git reset --hard"]}`), Deny: true},
+	{Pack: packGit, Tool: "run_shell_command", Input: json.RawMessage(`{"command":"git reset --hard"}`), Deny: true},
+	{Pack: packGit, Tool: "run_in_terminal", Input: json.RawMessage(`{"command":"git reset --hard"}`), Deny: true},
+	{Pack: packGit, Tool: "exec_command", Input: json.RawMessage(`{"cmd":"git status"}`)},
+	// The shell joins a backslash-newline before it runs the command.
+	{Pack: packGit, Command: "git reset \\\n--hard", Deny: true},
+	{Pack: packDestructive, Command: "rm \\\n-rf /tmp/x", Deny: true},
 	{Pack: packGit, Command: "git status"},
 	{Pack: packGit, Command: "git push origin main"},
 	{Pack: packGit, Command: "git branch -d merged"},
