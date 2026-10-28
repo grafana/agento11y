@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from datetime import timedelta
 
 from agento11y import (
@@ -26,6 +27,12 @@ from agento11y import (
 )
 from agento11y.redaction import _resolve_redact_input_messages
 from conftest import CapturingGenerationExporter
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import StatusCode
+
+_API_KEY = "sk-proj-" + "a" * 48
 
 
 def _new_client(
@@ -33,9 +40,12 @@ def _new_client(
     *,
     generation_sanitizer=None,
     logger: logging.Logger | None = None,
+    tracer=None,
+    content_capture: ContentCaptureMode = ContentCaptureMode.DEFAULT,
 ) -> Client:
     return Client(
         ClientConfig(
+            tracer=tracer,
             generation_export=GenerationExportConfig(
                 batch_size=10,
                 flush_interval=timedelta(seconds=60),
@@ -45,7 +55,7 @@ def _new_client(
                 max_backoff=timedelta(milliseconds=1),
             ),
             generation_exporter=exporter,
-            content_capture=ContentCaptureMode.DEFAULT,
+            content_capture=content_capture,
             generation_sanitizer=generation_sanitizer,
             logger=logger,
         )
@@ -291,6 +301,199 @@ def test_generation_sanitizer_failure_falls_back_to_metadata_only(caplog) -> Non
         assert "agento11y: generation sanitization failed, falling back to metadata_only" in caplog.text
     finally:
         client.shutdown()
+
+
+def _new_span_capture() -> tuple[InMemorySpanExporter, TracerProvider]:
+    span_exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    return span_exporter, provider
+
+
+def _raised_call_error() -> RuntimeError:
+    """Returns a raised error whose cause also carries the key, as a wrapped provider error does."""
+    try:
+        try:
+            raise ValueError(f"upstream rejected {_API_KEY}")
+        except ValueError as cause:
+            raise RuntimeError(f"API error: invalid key {_API_KEY}") from cause
+    except RuntimeError as error:
+        return error
+
+
+def _span_text(span) -> str:
+    return repr((dict(span.attributes), span.status.description, [dict(event.attributes) for event in span.events]))
+
+
+def test_secret_redaction_sanitizer_also_redacts_the_title_and_call_error_copies_in_metadata() -> None:
+    exporter = CapturingGenerationExporter()
+    client = _new_client(exporter, generation_sanitizer=create_secret_redaction_sanitizer())
+
+    try:
+        rec = client.start_generation(
+            GenerationStart(
+                model=ModelRef(provider="openai", name="gpt-5"),
+                conversation_title=f"Discussion about {_API_KEY}",
+            )
+        )
+        rec.set_call_error(RuntimeError(f"API error: invalid key {_API_KEY}"))
+        rec.end()
+        client.flush()
+
+        generation = exporter.requests[0].generations[0]
+        assert "[REDACTED:openai-project-key]" in generation.conversation_title
+        assert "[REDACTED:openai-project-key]" in generation.call_error
+        assert generation.metadata["agento11y.conversation.title"] == generation.conversation_title
+        assert generation.metadata["call_error"] == generation.call_error
+        assert _API_KEY not in repr(generation)
+    finally:
+        client.shutdown()
+
+
+def test_generation_sanitizer_that_clears_the_title_and_call_error_drops_their_metadata_copies() -> None:
+    exporter = CapturingGenerationExporter()
+    client = _new_client(
+        exporter,
+        generation_sanitizer=lambda generation: replace(generation, conversation_title="", call_error=""),
+    )
+
+    try:
+        rec = client.start_generation(
+            GenerationStart(model=ModelRef(provider="openai", name="gpt-5"), conversation_title="Private title")
+        )
+        rec.set_call_error(RuntimeError("private error"))
+        rec.end()
+        client.flush()
+
+        generation = exporter.requests[0].generations[0]
+        assert generation.conversation_title == ""
+        assert generation.call_error == ""
+        assert "agento11y.conversation.title" not in generation.metadata
+        assert "call_error" not in generation.metadata
+    finally:
+        client.shutdown()
+
+
+def test_secret_redaction_sanitizer_also_redacts_the_title_and_call_error_on_the_span() -> None:
+    span_exporter, provider = _new_span_capture()
+    client = _new_client(
+        CapturingGenerationExporter(),
+        generation_sanitizer=create_secret_redaction_sanitizer(),
+        tracer=provider.get_tracer("agento11y-test"),
+    )
+
+    try:
+        rec = client.start_generation(
+            GenerationStart(
+                model=ModelRef(provider="openai", name="gpt-5"),
+                conversation_title=f"Discussion about {_API_KEY}",
+            )
+        )
+        rec.set_call_error(_raised_call_error())
+        rec.end()
+
+        span = span_exporter.get_finished_spans()[0]
+        assert "[REDACTED:openai-project-key]" in span.attributes["agento11y.conversation.title"]
+        assert span.status.status_code == StatusCode.ERROR
+        assert "[REDACTED:openai-project-key]" in span.status.description
+        assert len(span.events) == 1
+        event = span.events[0]
+        assert event.attributes["exception.type"] == "RuntimeError"
+        assert "[REDACTED:openai-project-key]" in event.attributes["exception.message"]
+        assert "_raised_call_error" in event.attributes["exception.stacktrace"]
+        assert _API_KEY not in _span_text(span)
+    finally:
+        client.shutdown()
+        provider.shutdown()
+
+
+def test_without_a_sanitizer_the_span_keeps_the_raw_call_error_and_full_stacktrace() -> None:
+    span_exporter, provider = _new_span_capture()
+    client = _new_client(CapturingGenerationExporter(), tracer=provider.get_tracer("agento11y-test"))
+
+    try:
+        rec = client.start_generation(GenerationStart(model=ModelRef(provider="openai", name="gpt-5")))
+        error = _raised_call_error()
+        rec.set_call_error(error)
+        rec.end()
+
+        span = span_exporter.get_finished_spans()[0]
+        assert span.status.description == str(error)
+        assert len(span.events) == 1
+        event = span.events[0]
+        assert event.attributes["exception.message"] == str(error)
+        assert event.attributes["exception.stacktrace"].startswith("Traceback")
+        assert "upstream rejected" in event.attributes["exception.stacktrace"]
+    finally:
+        client.shutdown()
+        provider.shutdown()
+
+
+def test_generation_sanitizer_that_clears_the_title_and_call_error_leaves_neither_on_the_span() -> None:
+    span_exporter, provider = _new_span_capture()
+    client = _new_client(
+        CapturingGenerationExporter(),
+        generation_sanitizer=lambda generation: replace(generation, conversation_title="", call_error=""),
+        tracer=provider.get_tracer("agento11y-test"),
+    )
+
+    try:
+        rec = client.start_generation(
+            GenerationStart(model=ModelRef(provider="openai", name="gpt-5"), conversation_title="Private title")
+        )
+        rec.set_call_error(RuntimeError("private error"))
+        rec.end()
+
+        span = span_exporter.get_finished_spans()[0]
+        assert span.attributes["agento11y.conversation.title"] == ""
+        assert span.status.status_code == StatusCode.ERROR
+        assert span.status.description
+        assert "Private title" not in _span_text(span)
+        assert "private error" not in _span_text(span)
+    finally:
+        client.shutdown()
+        provider.shutdown()
+
+
+def test_generation_sanitizer_that_clears_the_title_adds_no_title_to_a_full_with_metadata_spans_span() -> None:
+    span_exporter, provider = _new_span_capture()
+    client = _new_client(
+        CapturingGenerationExporter(),
+        generation_sanitizer=lambda generation: replace(generation, conversation_title=""),
+        tracer=provider.get_tracer("agento11y-test"),
+        content_capture=ContentCaptureMode.FULL_WITH_METADATA_SPANS,
+    )
+
+    try:
+        rec = client.start_generation(
+            GenerationStart(model=ModelRef(provider="openai", name="gpt-5"), conversation_title="Private title")
+        )
+        rec.end()
+
+        span = span_exporter.get_finished_spans()[0]
+        assert "agento11y.conversation.title" not in span.attributes
+    finally:
+        client.shutdown()
+        provider.shutdown()
+
+
+def test_generation_sanitizer_leaves_no_title_on_the_span_when_the_generation_had_none() -> None:
+    span_exporter, provider = _new_span_capture()
+    client = _new_client(
+        CapturingGenerationExporter(),
+        generation_sanitizer=create_secret_redaction_sanitizer(),
+        tracer=provider.get_tracer("agento11y-test"),
+    )
+
+    try:
+        rec = client.start_generation(GenerationStart(model=ModelRef(provider="openai", name="gpt-5")))
+        rec.end()
+
+        span = span_exporter.get_finished_spans()[0]
+        assert "agento11y.conversation.title" not in span.attributes
+    finally:
+        client.shutdown()
+        provider.shutdown()
 
 
 def test_resolve_redact_input_messages_defaults_to_false() -> None:

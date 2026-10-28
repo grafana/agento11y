@@ -8,6 +8,7 @@ import logging
 import re
 import secrets
 import threading
+import traceback
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
@@ -247,6 +248,25 @@ def _resolve_tool_content_capture_mode(
     if tool_mode != ContentCaptureMode.DEFAULT:
         resolved = tool_mode
     return resolved
+
+
+def _sync_canonical_metadata_mirrors(generation: Generation) -> None:
+    """Writes the metadata copies of ``conversation_title`` and ``call_error`` from the fields.
+
+    The copies are written before the sanitizer runs, so after it they must
+    follow the sanitized fields; a field the sanitizer cleared drops its copy.
+    The Go, .NET and JS SDKs do the same.
+    """
+    if generation.metadata is None:
+        return
+    if (generation.conversation_title or "").strip():
+        generation.metadata[_span_attr_conversation_title] = generation.conversation_title
+    else:
+        generation.metadata.pop(_span_attr_conversation_title, None)
+    if (generation.call_error or "").strip():
+        generation.metadata["call_error"] = generation.call_error
+    else:
+        generation.metadata.pop("call_error", None)
 
 
 def _stamp_content_capture_metadata(generation: Generation, mode: ContentCaptureMode) -> None:
@@ -1633,6 +1653,7 @@ class GenerationRecorder:
                 )
 
             effective_content_capture_mode = self._content_capture_mode
+            sanitized = False
             _stamp_content_capture_metadata(generation, self._content_capture_mode)
             validation_target = copy.deepcopy(generation)
             if self._content_capture_mode == ContentCaptureMode.METADATA_ONLY:
@@ -1643,7 +1664,11 @@ class GenerationRecorder:
             elif self.client._has_generation_sanitizer():
                 try:
                     generation = self.client._sanitize_generation(generation)
+                    # The metadata copies were written before the sanitizer
+                    # ran, so a secret it redacted would still go out in them.
+                    _sync_canonical_metadata_mirrors(generation)
                     validation_target = copy.deepcopy(generation)
+                    sanitized = True
                 except Exception:  # noqa: BLE001
                     effective_content_capture_mode = ContentCaptureMode.METADATA_ONLY
                     error_cat = call_category
@@ -1693,6 +1718,15 @@ class GenerationRecorder:
                 # re-emitted as an empty value (the start span already left
                 # the attribute absent).
                 self.span.set_attribute(_span_attr_conversation_title, "")
+            if (
+                sanitized
+                and self._content_capture_mode != ContentCaptureMode.FULL_WITH_METADATA_SPANS
+                and self.seed.conversation_title.strip()
+                and not (generation.conversation_title or "").strip()
+            ):
+                # The start span published the seed title. A sanitizer that
+                # cleared the title must not leave that value on the span.
+                self.span.set_attribute(_span_attr_conversation_title, "")
 
             local_error: Exception | None = None
             try:
@@ -1718,9 +1752,29 @@ class GenerationRecorder:
                 ContentCaptureMode.METADATA_ONLY,
                 ContentCaptureMode.FULL_WITH_METADATA_SPANS,
             )
+            # After a sanitizer the span takes its text, so it cannot show what
+            # the sanitizer redacted. A sanitizer that cleared the error leaves
+            # the category, so the span still reads as an error.
+            span_call_error = str(call_error) if call_error is not None else ""
+            if sanitized and call_error is not None:
+                if (generation.call_error or "").strip():
+                    span_call_error = generation.call_error
+                else:
+                    span_call_error = _error_category_from_exception(call_error, fallback_sdk=True)
 
             if not redact_span_errors:
-                if call_error is not None:
+                if call_error is not None and sanitized:
+                    # The default stacktrace ends with the raw message and holds
+                    # the messages of chained exceptions, which the sanitizer
+                    # never saw. Keep the type and the frames only.
+                    self.span.record_exception(
+                        call_error,
+                        attributes={
+                            "exception.message": span_call_error,
+                            "exception.stacktrace": "".join(traceback.format_tb(call_error.__traceback__)),
+                        },
+                    )
+                elif call_error is not None:
                     self.span.record_exception(call_error)
                 if mapping_error is not None:
                     self.span.record_exception(mapping_error)
@@ -1736,7 +1790,7 @@ class GenerationRecorder:
                 self.span.set_attribute(_span_attr_error_type, error_type)
                 self.span.set_attribute(_span_attr_error_category, error_category)
                 self.span.set_status(
-                    Status(StatusCode.ERROR, error_category if redact_span_errors else str(call_error))
+                    Status(StatusCode.ERROR, error_category if redact_span_errors else span_call_error)
                 )
             elif mapping_error is not None:
                 error_type = "mapping_error"
