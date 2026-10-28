@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0] - 2026-10-28
+
+### Features
+
+- **sdk**: disable debug snapshots by default in JS and Java SDKs (#948)
+- **sdk**: trace skill loads, resource reads, and commands (#920)
+
 ## [0.8.0] - 2026-10-15
 
 ### Bug Fixes
