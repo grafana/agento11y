@@ -72,15 +72,33 @@ class Agento11yOpenAIAgentsRunHooks(RunHooks):
         self._agent_run_stacks: dict[int, list[tuple[int, UUID]]] = {}
         self._llm_run_stacks: dict[tuple[int, int], list[UUID]] = {}
         self._tool_run_stacks: dict[tuple[int, int, str | None], list[UUID]] = {}
+        self._agent_runs_by_usage: dict[int, list[UUID]] = {}
+        self._tool_runs_by_usage: dict[int, dict[UUID, bool]] = {}
 
     async def on_agent_start(self, context: Any, agent: Any) -> None:
         await _invoke_delegate(self._delegate, "on_agent_start", context, agent)
 
         context_key = _run_context_key(context)
         stack = self._agent_run_stacks.setdefault(context_key, [])
+        usage_key = _usage_context_key(context)
+        usage_runs = self._agent_runs_by_usage.setdefault(usage_key, [])
         run_id = uuid4()
         parent_run_id = stack[-1][1] if stack else None
+        if not stack:
+            # Nested agent tools have their own run key but share outer Usage.
+            # AgentHookContext loses the invoking tool's call ID, so under
+            # concurrency claim the oldest unclaimed active tool as a heuristic.
+            # Without one, use the oldest active agent in the shared usage group.
+            tools = self._tool_runs_by_usage.get(usage_key, {})
+            for tool_run_id, claimed in tools.items():
+                if not claimed:
+                    parent_run_id = tool_run_id
+                    tools[tool_run_id] = True
+                    break
+            else:
+                parent_run_id = usage_runs[0] if usage_runs else None
         stack.append((id(agent), run_id))
+        usage_runs.append(run_id)
 
         agent_name = _agent_name(agent)
         await _invoke_handler(
@@ -105,6 +123,12 @@ class Agento11yOpenAIAgentsRunHooks(RunHooks):
                 _, run_id = stack.pop(index)
                 break
         if run_id is not None:
+            usage_key = _usage_context_key(context)
+            usage_runs = self._agent_runs_by_usage.get(usage_key, [])
+            if run_id in usage_runs:
+                usage_runs.remove(run_id)
+            if not usage_runs:
+                self._agent_runs_by_usage.pop(usage_key, None)
             await _invoke_handler(self._agento11y_handler, "on_chain_end", {"output": output}, run_id=run_id)
         if not stack:
             self._agent_run_stacks.pop(context_key, None)
@@ -195,6 +219,7 @@ class Agento11yOpenAIAgentsRunHooks(RunHooks):
         tool_stack = self._tool_run_stacks.setdefault(tool_key, [])
         run_id = uuid4()
         tool_stack.append(run_id)
+        self._tool_runs_by_usage.setdefault(_usage_context_key(context), {})[run_id] = False
 
         llm_stack = self._llm_run_stacks.get((context_key, id(agent)), [])
         if llm_stack:
@@ -221,6 +246,11 @@ class Agento11yOpenAIAgentsRunHooks(RunHooks):
         tool_stack = self._tool_run_stacks.get(tool_key, [])
         run_id = tool_stack.pop() if tool_stack else None
         if run_id is not None:
+            usage_key = _usage_context_key(context)
+            tools = self._tool_runs_by_usage.get(usage_key, {})
+            tools.pop(run_id, None)
+            if not tools:
+                self._tool_runs_by_usage.pop(usage_key, None)
             await _invoke_handler(self._agento11y_handler, "on_tool_end", result, run_id=run_id)
         if not tool_stack:
             self._tool_run_stacks.pop(tool_key, None)
@@ -369,10 +399,15 @@ def _tool_input_string(tool_input: Any) -> str:
 
 
 def _run_context_key(context: Any) -> int:
-    # AgentHookContext, RunContextWrapper, and ToolContext are distinct wrappers
-    # for a run and its nested agent tools. The SDK shares Usage across these
-    # wrappers, but independent runs get separate Usage instances even when
-    # they reuse the same application payload (including context=None).
+    # The SDK shares tool-state dicts between a run's wrapper and its fresh
+    # AgentHookContext / ToolContext callbacks. Agent.as_tool creates fresh state
+    # for each nested run, even when the same agent and Usage are reused in
+    # parallel. Older SDKs lack this state, so retain usage-based correlation.
+    tool_state = getattr(context, "_tool_invocations", None)
+    return id(tool_state) if tool_state is not None else _usage_context_key(context)
+
+
+def _usage_context_key(context: Any) -> int:
     usage = _read(context, "usage")
     return id(usage) if usage is not None else id(context)
 

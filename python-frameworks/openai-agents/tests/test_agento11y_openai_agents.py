@@ -53,6 +53,12 @@ def _new_client(exporter: _CapturingExporter, tracer=None) -> Client:
     )
 
 
+def _agent_hook_context(context: RunContextWrapper) -> AgentHookContext:
+    hook_context = AgentHookContext(context=context.context, usage=context.usage)
+    context._share_tool_state_with(hook_context)
+    return hook_context
+
+
 def test_agento11y_openai_agents_sync_lifecycle_sets_framework_metadata() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
@@ -371,7 +377,7 @@ def test_distinct_callback_wrappers_share_lineage_and_keep_runs_separate(payload
 
     async def run() -> None:
         for context in contexts:
-            await hooks.on_agent_start(AgentHookContext(context=payload, usage=context.usage), agent)
+            await hooks.on_agent_start(_agent_hook_context(context), agent)
             await hooks.on_llm_start(context, agent, None, [{"role": "user", "content": "Order status?"}])
         for index, context in enumerate(contexts):
             await hooks.on_llm_end(
@@ -379,16 +385,15 @@ def test_distinct_callback_wrappers_share_lineage_and_keep_runs_separate(payload
                 agent,
                 {"output": [{"content": "Shipped."}], "usage": {"input_tokens": 2, "output_tokens": 1}},
             )
-            tool_context = ToolContext(
-                context=payload,
-                usage=context.usage,
+            tool_context = ToolContext.from_agent_context(
+                context,
                 tool_name="lookup_order",
                 tool_call_id=f"call-{index}",
                 tool_arguments="{}",
             )
             await hooks.on_tool_start(tool_context, agent, tool)
             await hooks.on_tool_end(tool_context, agent, tool, "Shipped.")
-            await hooks.on_agent_end(AgentHookContext(context=payload, usage=context.usage), agent, "Shipped.")
+            await hooks.on_agent_end(_agent_hook_context(context), agent, "Shipped.")
 
     try:
         asyncio.run(run())
@@ -407,6 +412,8 @@ def test_distinct_callback_wrappers_share_lineage_and_keep_runs_separate(payload
         assert not hooks._agent_run_stacks
         assert not hooks._llm_run_stacks
         assert not hooks._tool_run_stacks
+        assert not hooks._agent_runs_by_usage
+        assert not hooks._tool_runs_by_usage
     finally:
         client.shutdown()
         provider.shutdown()
@@ -433,7 +440,7 @@ def test_overlapping_calls_of_same_tool_close_with_their_own_results(end_order, 
         tool_context.tool_input = {"order": index}
 
     async def run() -> None:
-        await hooks.on_agent_start(AgentHookContext(context=None, usage=context.usage), agent)
+        await hooks.on_agent_start(_agent_hook_context(context), agent)
         if active_llm:
             await hooks.on_llm_start(context, agent, None, [])
         for tool_context in tool_contexts:
@@ -442,7 +449,7 @@ def test_overlapping_calls_of_same_tool_close_with_their_own_results(end_order, 
             await hooks.on_tool_end(tool_contexts[index], agent, tool, f"result-{index}")
         if active_llm:
             await hooks.on_llm_end(context, agent, {"output": [{"content": "Done."}]})
-        await hooks.on_agent_end(AgentHookContext(context=None, usage=context.usage), agent, "Done.")
+        await hooks.on_agent_end(_agent_hook_context(context), agent, "Done.")
 
     try:
         with with_content_capture_mode(ContentCaptureMode.FULL):
@@ -490,19 +497,17 @@ def test_overlapping_nested_agents_sharing_usage_close_their_own_spans(end_order
     contexts = [RunContextWrapper(context=None, usage=context.usage) for _ in agents]
 
     async def run() -> None:
-        await hooks.on_agent_start(AgentHookContext(context=None, usage=context.usage), parent)
-        for agent in agents:
-            await hooks.on_agent_start(AgentHookContext(context=None, usage=context.usage), agent)
+        await hooks.on_agent_start(_agent_hook_context(context), parent)
+        for child_context, agent in zip(contexts, agents, strict=True):
+            await hooks.on_agent_start(_agent_hook_context(child_context), agent)
         # Both children are active when the first LLM callback arrives.
         for index in end_order:
             await hooks.on_llm_start(contexts[index], agents[index], None, [])
             await hooks.on_llm_end(contexts[index], agents[index], {"output": [{"content": f"result-{index}"}]})
-            await hooks.on_agent_end(
-                AgentHookContext(context=None, usage=context.usage), agents[index], f"result-{index}"
-            )
+            await hooks.on_agent_end(_agent_hook_context(contexts[index]), agents[index], f"result-{index}")
         await hooks.on_llm_start(context, parent, None, [])
         await hooks.on_llm_end(context, parent, {"output": [{"content": "Done."}]})
-        await hooks.on_agent_end(AgentHookContext(context=None, usage=context.usage), parent, "Done.")
+        await hooks.on_agent_end(_agent_hook_context(context), parent, "Done.")
 
     try:
         asyncio.run(run())
@@ -529,6 +534,146 @@ def test_overlapping_nested_agents_sharing_usage_close_their_own_spans(end_order
     finally:
         client.shutdown()
         provider.shutdown()
+
+
+@pytest.mark.parametrize("end_order", [(0, 1), (1, 0)])
+@pytest.mark.parametrize("parent_tool", [False, True])
+def test_parallel_runs_of_same_agent_tool_keep_their_own_lineage(end_order, parent_tool) -> None:
+    exporter = _CapturingExporter()
+    span_exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    client = _new_client(exporter, tracer=provider.get_tracer("parallel-agent-tools-test"))
+    handler = Mock(wraps=Agento11yOpenAIAgentsHandler(client=client))
+    hooks = Agento11yOpenAIAgentsRunHooks(agento11y_handler=handler)
+    parent = SimpleNamespace(name="parent", model="gpt-4o-mini")
+    agent = SimpleNamespace(name="child", model="gpt-4o-mini")
+    tool = SimpleNamespace(name="child_tool")
+    inner_tool = SimpleNamespace(name="lookup")
+    context = RunContextWrapper(context=None)
+    tool_contexts = [
+        ToolContext.from_agent_context(context, tool_call_id=f"call-{index}", tool_name=tool.name, tool_arguments="{}")
+        for index in range(2)
+    ]
+    # Agent.as_tool copies these fields into a fresh wrapper for each nested run.
+    # Usage is shared, but tool state is separate from the parent and sibling.
+    contexts = [
+        ToolContext(
+            context=tool_context.context,
+            usage=tool_context.usage,
+            tool_call_id=tool_context.tool_call_id,
+            tool_name=tool_context.tool_name,
+            tool_arguments=tool_context.tool_arguments,
+        )
+        for tool_context in tool_contexts
+    ]
+    inner_contexts = [
+        ToolContext.from_agent_context(child, tool_call_id="lookup", tool_name=inner_tool.name, tool_arguments="{}")
+        for child in contexts
+    ]
+
+    async def run() -> None:
+        await hooks.on_agent_start(_agent_hook_context(context), parent)
+        if parent_tool:
+            for tool_context in tool_contexts:
+                await hooks.on_tool_start(tool_context, parent, tool)
+        for child in contexts:
+            await hooks.on_agent_start(_agent_hook_context(child), agent)
+        # Both LLM calls overlap, and tool call IDs may repeat across nested runs.
+        for child, inner_context in zip(contexts, inner_contexts, strict=True):
+            await hooks.on_llm_start(child, agent, None, [])
+            await hooks.on_tool_start(inner_context, agent, inner_tool)
+        for index in end_order:
+            await hooks.on_tool_end(inner_contexts[index], agent, inner_tool, f"lookup-{index}")
+            await hooks.on_llm_end(contexts[index], agent, {"output": [{"content": f"result-{index}"}]})
+            # A later LLM callback must still find this run after its sibling ends.
+            await hooks.on_llm_start(contexts[index], agent, None, [])
+            await hooks.on_llm_end(contexts[index], agent, {"output": [{"content": f"followup-{index}"}]})
+            await hooks.on_agent_end(_agent_hook_context(contexts[index]), agent, f"result-{index}")
+            if parent_tool:
+                await hooks.on_tool_end(tool_contexts[index], parent, tool, f"result-{index}")
+        await hooks.on_agent_end(_agent_hook_context(context), parent, "Done.")
+
+    try:
+        asyncio.run(run())
+        client.flush()
+        starts = handler.on_chain_start.call_args_list
+        parent_id = starts[0].kwargs["run_id"]
+        child_ids = [start.kwargs["run_id"] for start in starts[1:]]
+        assert len(set(child_ids)) == 2
+        tool_starts = handler.on_tool_start.call_args_list
+        expected_parents = [start.kwargs["run_id"] for start in tool_starts[:2]] if parent_tool else [parent_id] * 2
+        for start, expected_parent in zip(starts[1:], expected_parents, strict=True):
+            assert start.kwargs["parent_run_id"] == expected_parent
+        for end, index in zip(handler.on_chain_end.call_args_list[:2], end_order, strict=True):
+            assert end.kwargs["run_id"] == child_ids[index]
+            assert end.args == ({"output": f"result-{index}"},)
+        llm_starts = handler.on_llm_start.call_args_list
+        assert [start.kwargs["parent_run_id"] for start in llm_starts[:2]] == child_ids
+        inner_starts = tool_starts[2:] if parent_tool else tool_starts
+        for start, llm_start in zip(inner_starts, llm_starts[:2], strict=True):
+            assert start.kwargs["parent_run_id"] == llm_start.kwargs["run_id"]
+        inner_ends = [end for end in handler.on_tool_end.call_args_list if end.args[0].startswith("lookup-")]
+        for end, index in zip(inner_ends, end_order, strict=True):
+            assert end.kwargs["run_id"] == inner_starts[index].kwargs["run_id"]
+        generations = [generation for request in exporter.requests for generation in request.generations]
+        assert len(generations) == 4
+        spans = {
+            span.attributes["agento11y.framework.run_id"]: span
+            for span in span_exporter.get_finished_spans()
+            if "agento11y.framework.run_id" in span.attributes
+        }
+        assert len(spans) == 7  # Three agent spans and four LLM spans all closed.
+        for index in range(2):
+            child_span = spans[str(child_ids[index])]
+            assert child_span.attributes["agento11y.framework.parent_run_id"] == str(expected_parents[index])
+            for prefix in ("result", "followup"):
+                generation = next(g for g in generations if g.output[0].parts[0].text == f"{prefix}-{index}")
+                assert generation.metadata["agento11y.framework.parent_run_id"] == str(child_ids[index])
+                llm_span = spans[generation.metadata["agento11y.framework.run_id"]]
+                assert llm_span.attributes["agento11y.framework.parent_run_id"] == str(child_ids[index])
+        assert not hooks._agent_run_stacks
+        assert not hooks._llm_run_stacks
+        assert not hooks._tool_run_stacks
+        assert not hooks._agent_runs_by_usage
+        assert not hooks._tool_runs_by_usage
+    finally:
+        client.shutdown()
+        provider.shutdown()
+
+
+@pytest.mark.parametrize("shared_usage", [False, True])
+def test_callbacks_without_tool_state_keep_legacy_correlation(shared_usage) -> None:
+    handler = Mock()
+    hooks = Agento11yOpenAIAgentsRunHooks(agento11y_handler=handler)
+    context = SimpleNamespace(context=None)
+    end_context = context
+    if shared_usage:
+        context.usage = object()
+        end_context = SimpleNamespace(context=None, usage=context.usage)
+    agent = SimpleNamespace(name="agent", model="gpt-4o-mini")
+    tool = SimpleNamespace(name="lookup")
+
+    async def run() -> None:
+        await hooks.on_agent_start(context, agent)
+        await hooks.on_llm_start(context, agent, None, [])
+        await hooks.on_llm_end(end_context, agent, {"output": [{"content": "Done."}]})
+        await hooks.on_tool_start(context, agent, tool)
+        await hooks.on_tool_end(end_context, agent, tool, "Done.")
+        await hooks.on_agent_end(end_context, agent, "Done.")
+
+    asyncio.run(run())
+    agent_id = handler.on_chain_start.call_args.kwargs["run_id"]
+    assert handler.on_chain_end.call_args.kwargs["run_id"] == agent_id
+    assert handler.on_llm_start.call_args.kwargs["parent_run_id"] == agent_id
+    assert handler.on_llm_end.call_args.kwargs["run_id"] == handler.on_llm_start.call_args.kwargs["run_id"]
+    assert handler.on_tool_start.call_args.kwargs["parent_run_id"] == agent_id
+    assert handler.on_tool_end.call_args.kwargs["run_id"] == handler.on_tool_start.call_args.kwargs["run_id"]
+    assert not hooks._agent_run_stacks
+    assert not hooks._llm_run_stacks
+    assert not hooks._tool_run_stacks
+    assert not hooks._agent_runs_by_usage
+    assert not hooks._tool_runs_by_usage
 
 
 def test_agento11y_openai_agents_handler_explicitly_has_no_embedding_lifecycle() -> None:
