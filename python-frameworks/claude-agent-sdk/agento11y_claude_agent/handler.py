@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import secrets
-from collections.abc import AsyncIterable, AsyncIterator, Callable
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -98,6 +98,10 @@ class Agento11yClaudeAgentHandler:
         self._enable_guards = enable_guards
         self._extra_tags = dict(extra_tags or {})
         self._extra_metadata = dict(extra_metadata or {})
+        # Text a redact guard removed, by Claude session and conversation id.
+        # It outlives a run, so a message replayed into a later run of the same
+        # session is still recorded redacted, while a new session starts clean.
+        self._redacted_spans: dict[str, set[str]] = {}
 
         self._reset_run_state()
 
@@ -118,8 +122,8 @@ class Agento11yClaudeAgentHandler:
         self._tool_runs: dict[str, Any] = {}
         self._tool_arguments: dict[str, Any] = {}
         self._skip_next_replayed_prompt = ""
-        # Original prompt text -> the text a redact guard returned for it.
-        self._prompt_redactions: dict[str, str] = {}
+        # Sessions this run continues (options.resume and options.session_id).
+        self._linked_sessions: tuple[str, ...] = ()
 
     def instrument_options(self, options: ClaudeAgentOptions | None = None) -> ClaudeAgentOptions:
         """Return Claude options with agento11y hook callbacks attached."""
@@ -142,6 +146,7 @@ class Agento11yClaudeAgentHandler:
             self._reset_run_state()
         self._model = self._configured_model or (options.model or "")
         conversation_id = self._resolve_conversation_id(options)
+        self._linked_sessions = tuple(key for key in (options.resume, options.session_id) if key)
         metadata = dict(self._extra_metadata)
         metadata[_metadata_run_id] = self._run_id
         metadata[_metadata_run_type] = "agent"
@@ -178,7 +183,7 @@ class Agento11yClaudeAgentHandler:
         if self._capture_inputs and isinstance(prompt, str):
             prompt_text = prompt.strip()
             if prompt_text != "":
-                self._input_messages.append(self._redacted(user_text_message(prompt_text)))
+                self._input_messages.append(user_text_message(prompt_text))
                 self._skip_next_replayed_prompt = prompt_text
 
     def record_message(self, message: Any) -> None:
@@ -190,7 +195,7 @@ class Agento11yClaudeAgentHandler:
                 if self._skip_next_replayed_prompt and _message_text(mapped) == self._skip_next_replayed_prompt:
                     self._skip_next_replayed_prompt = ""
                     return
-                self._input_messages.append(self._redacted(mapped))
+                self._input_messages.append(mapped)
             return
 
         if isinstance(message, AssistantMessage):
@@ -248,7 +253,9 @@ class Agento11yClaudeAgentHandler:
 
             self._recorder.set_result(
                 Generation(
-                    input=self._input_messages if self._capture_inputs else [],
+                    # Redacted here, once the session id is known, so a message
+                    # recorded before the guard ran is covered too.
+                    input=[self._redacted(message) for message in self._input_messages] if self._capture_inputs else [],
                     output=self._output_messages if self._capture_outputs else [],
                     usage=map_usage(self._usage),
                     response_model=self._response_model,
@@ -278,7 +285,7 @@ class Agento11yClaudeAgentHandler:
         # A UserPromptSubmit hook can block a prompt but can't rewrite it, so a
         # redact guard can't change what the model receives. Record the
         # redacted text instead of the original.
-        self._record_prompt_redaction(prompt, response.transformed_input)
+        self._record_prompt_redaction(prompt, response.transformed_input, _as_string(_read(input_data, "session_id")))
         denied = hook_denied_from_response(response)
         if denied is None:
             return {}
@@ -341,24 +348,42 @@ class Agento11yClaudeAgentHandler:
         self._end_open_tools()
         return {}
 
-    def _record_prompt_redaction(self, prompt: str, transformed: HookInput | None) -> None:
+    def _record_prompt_redaction(self, prompt: str, transformed: HookInput | None, session_id: str) -> None:
         if transformed is None or not transformed.messages:
             return
-        original = prompt.strip()
-        redacted = _message_text(transformed.messages[0])
-        if original == "" or redacted == "" or redacted == original:
+        # Empty text is a redaction to nothing; only missing text means the
+        # guard returned no change.
+        redacted = _joined_text(transformed.messages[0])
+        if redacted is None:
             return
-        self._prompt_redactions[original] = redacted
-        # start() records a string prompt before the hook fires.
-        self._input_messages = [self._redacted(message) for message in self._input_messages]
+        spans = _removed_spans(prompt.strip(), redacted.strip())
+        if not spans:
+            return
+        for key in {*self._span_keys(), session_id} - {""}:
+            self._redacted_spans.setdefault(key, set()).update(spans)
+
+    def _span_keys(self) -> set[str]:
+        return {key for key in (self._conversation_id, self._session_id, *self._linked_sessions) if key}
 
     def _redacted(self, message: Message) -> Message:
+        """Return ``message`` with what a guard removed this session redacted.
+
+        The spans are applied to each text part, so a message Claude splits into
+        several text blocks is covered and its other parts are kept as sent.
+        """
+
         if message.role != MessageRole.USER:
             return message
-        redacted = self._prompt_redactions.get(_message_text(message))
-        if redacted is None:
+        spans: set[str] = set()
+        for key in self._span_keys():
+            spans |= self._redacted_spans.get(key, set())
+        if not spans:
             return message
-        return user_text_message(redacted)
+        parts = [
+            replace(part, text=_redact_spans(part.text, spans)) if part.kind == PartKind.TEXT else part
+            for part in message.parts
+        ]
+        return replace(message, parts=parts)
 
     def _evaluate_guard(
         self,
@@ -701,6 +726,92 @@ def _message_text(message: Message) -> str:
     if part.kind != PartKind.TEXT:
         return ""
     return part.text.strip()
+
+
+def _joined_text(message: Message) -> str | None:
+    """Return the text parts of ``message`` joined, or None when it has none."""
+
+    texts = [part.text for part in message.parts if part.kind == PartKind.TEXT]
+    if not texts:
+        return None
+    return "\n".join(texts)
+
+
+# The token a redact guard writes in place of each match.
+_REDACTION_TOKEN = "[REDACTED]"
+
+
+def _removed_spans(before: str, after: str) -> list[str]:
+    """Return the text a redact guard removed when it turned ``before`` into ``after``.
+
+    The guard replaces each match with a fixed token, so the literal text between
+    the tokens in ``after`` lines up with ``before``, and what ``before`` holds
+    between those literals is what the guard removed. Text changed any other way,
+    including to an empty string, counts as removed whole. Unlike the whole
+    prompt, these spans still match when Claude replays the prompt split into
+    several text blocks.
+    """
+
+    if before == after:
+        return []
+    literals = after.split(_REDACTION_TOKEN)
+    head, tail = literals[0], literals[-1]
+    if (
+        len(literals) == 1
+        or len(head) + len(tail) > len(before)
+        or not before.startswith(head)
+        or not before.endswith(tail)
+    ):
+        return _sensitive_pieces([before])
+    end = len(before) - len(tail)
+    spans: list[str] = []
+    pos = len(head)
+    for literal in literals[1:-1]:
+        at = before.find(literal, pos)
+        if at < 0 or at + len(literal) > end:
+            return _sensitive_pieces([before])
+        spans.append(before[pos:at])
+        pos = at + len(literal)
+    spans.append(before[pos:end])
+    return _sensitive_pieces(spans)
+
+
+def _sensitive_pieces(spans: list[str]) -> list[str]:
+    # A span can hold an earlier redaction's token when a second guard matched
+    # across it. Only the text around the token is sensitive.
+    pieces = (piece.strip() for span in spans for piece in span.split(_REDACTION_TOKEN))
+    return [piece for piece in pieces if piece != ""]
+
+
+def _redact_spans(value: str, spans: Iterable[str]) -> str:
+    """Replace every occurrence of each span with the redaction token.
+
+    Overlapping occurrences merge into one, so the result doesn't depend on the
+    order the spans were recorded in.
+    """
+
+    ranges: list[tuple[int, int]] = []
+    for span in spans:
+        if span == "":
+            continue
+        at = value.find(span)
+        while at >= 0:
+            ranges.append((at, at + len(span)))
+            at = value.find(span, at + 1)
+    merged: list[list[int]] = []
+    for start, stop in sorted(ranges):
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], stop)
+        else:
+            merged.append([start, stop])
+    out: list[str] = []
+    pos = 0
+    for start, stop in merged:
+        out.append(value[pos:start])
+        out.append(_REDACTION_TOKEN)
+        pos = stop
+    out.append(value[pos:])
+    return "".join(out)
 
 
 def _messages_contain_text(messages: list[Message], text: str) -> bool:
