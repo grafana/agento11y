@@ -4255,3 +4255,21 @@ func TestRun_CredentialCopiesReadRawOTLPEndpoint(t *testing.T) {
 		})
 	}
 }
+
+// TestRun_CredentialCopiesKeptWithRawOTLPOnly covers a config.env whose OTLP
+// endpoint is only the setup page's raw key: a re-login to the same stack
+// with flags, which sets no OTLP endpoint, keeps the saved copies.
+func TestRun_CredentialCopiesKeptWithRawOTLPOnly(t *testing.T) {
+	saved := "AGENTO11Y_ENDPOINT=https://a.example.com\n" +
+		"AGENTO11Y_AUTH_TENANT_ID=123\n" +
+		"AGENTO11Y_AUTH_TOKEN=saved_token_a\n" +
+		"OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.a.example.com/otlp\n" +
+		"AGENTO11Y_HEADERS=Authorization=Bearer saved_header_a\n"
+	got, stderr, err := runBlockForTest(t, saved, nil, RunOpts{Endpoint: "https://a.example.com", TenantID: "123", Token: "saved_token_a"})
+	if err != nil {
+		t.Fatalf("Run: %v (stderr %q)", err, stderr)
+	}
+	if got["AGENTO11Y_HEADERS"] != "Authorization=Bearer saved_header_a" {
+		t.Errorf("AGENTO11Y_HEADERS = %q, want the saved value (stderr %q)", got["AGENTO11Y_HEADERS"], stderr)
+	}
+}

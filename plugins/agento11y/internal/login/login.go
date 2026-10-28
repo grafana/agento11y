@@ -631,11 +631,13 @@ func markCredentialCopies(v *formValues, saved map[string]string) {
 		value, _, _ := envconfig.LookupMap(saved, suffix)
 		return value
 	}
+	// The setup page's raw key holds the OTLP endpoint when the file has no
+	// branded one. A run that sets no OTLP endpoint keeps that raw key, so
+	// it is unchanged then too.
+	rawOTLP := strings.TrimSpace(saved["OTEL_EXPORTER_OTLP_ENDPOINT"])
 	v.dropCredentialCopies = v.token != savedValue("AUTH_TOKEN") ||
 		v.endpoint != savedValue("ENDPOINT") ||
-		// The setup page's raw key holds the OTLP endpoint when the file
-		// has no branded one, as a block's does.
-		v.otelEndpoint != cmp.Or(savedValue("OTEL_EXPORTER_OTLP_ENDPOINT"), strings.TrimSpace(saved["OTEL_EXPORTER_OTLP_ENDPOINT"]))
+		cmp.Or(v.otelEndpoint, rawOTLP) != cmp.Or(savedValue("OTEL_EXPORTER_OTLP_ENDPOINT"), rawOTLP)
 	if !v.dropCredentialCopies {
 		return
 	}
