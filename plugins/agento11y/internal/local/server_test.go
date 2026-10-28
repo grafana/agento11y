@@ -706,17 +706,17 @@ func TestServer_SkillsToolsMetricsAndSessionDrilldown(t *testing.T) {
 	writeToolGeneration(t, storage, "conv-lower", "g1", "/repo", lower.Add(10*time.Minute), "call-lower", "bash", false)
 	writeToolGeneration(t, storage, "conv-new", "g1", "/repo", upper, "call-2", "Bash", false)
 	_, err := storage.appendToolSpans([]toolSpanRecord{
-		analyticsSpan("conv-match", "trace-1", "span-1", "call-1", "Bash", lower.Add(time.Second), 2*time.Second, false),
+		skillSpan("conv-match", "span-1", "call-1", "Bash", "org:Review", lower.Add(time.Second), 2*time.Second, false),
 	})
 	require.NoError(t, err)
 
-	t.Run("tools-only exact response", func(t *testing.T) {
+	t.Run("combined exact response", func(t *testing.T) {
 		req := newLocalRequest(http.MethodGet,
 			"/api/v1/metrics/skills-tools?since=2026-08-21T10:00:00Z&before=2026-08-21T11:00:00Z&workspace=%2Frepo&interval=300", nil)
 		rr := httptest.NewRecorder()
 		srv.ServeHTTP(rr, req)
 		require.Equal(t, http.StatusOK, rr.Code)
-		assert.NotContains(t, rr.Body.String(), `"skills"`)
+		assert.Contains(t, rr.Body.String(), `"skills"`)
 		var got SkillsToolsMetricsResponse
 		decodeJSON(t, io.NopCloser(rr.Body), &got)
 		assert.Equal(t, ToolAnalyticsTotals{Calls: 2, Failures: 1, Tools: 1, Sessions: 2, DurationSamples: 1}, got.Tools.Totals)
@@ -725,6 +725,25 @@ func TestServer_SkillsToolsMetricsAndSessionDrilldown(t *testing.T) {
 		require.Len(t, got.Tools.Rows, 1)
 		assert.Equal(t, "Bash", got.Tools.Rows[0].Name)
 		assert.Equal(t, 2, got.Tools.Rows[0].Calls)
+		assert.Equal(t, SkillAnalyticsTotals{Calls: 1, Failures: 1, Skills: 1, Sessions: 1, DurationSamples: 1}, got.Skills.Totals)
+		assert.Equal(t, ToolAnalyticsCoverage{GenerationCalls: 1, ProjectedSpans: 1, MatchedCalls: 1}, got.Skills.Coverage)
+		assert.Equal(t, int64(300), got.Skills.IntervalSeconds)
+		require.Len(t, got.Skills.Rows, 1)
+		assert.Equal(t, "org:Review", got.Skills.Rows[0].Name)
+	})
+
+	t.Run("empty scope retains skills capability and workspace facets", func(t *testing.T) {
+		rr := httptest.NewRecorder()
+		srv.ServeHTTP(rr, newLocalRequest(http.MethodGet, "/api/v1/metrics/skills-tools?workspace=%2Fmissing", nil))
+		require.Equal(t, http.StatusOK, rr.Code)
+		var got map[string]map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &got))
+		for _, section := range []string{"tools", "skills"} {
+			for _, field := range []string{"rows", "buckets"} {
+				assert.JSONEq(t, "[]", string(got[section][field]))
+			}
+		}
+		assert.JSONEq(t, `[{"path":"/repo","calls":1,"sessions":1}]`, string(got["skills"]["workspaces"]))
 	})
 
 	t.Run("folded row deep link reaches both spellings", func(t *testing.T) {
@@ -753,18 +772,180 @@ func TestServer_SkillsToolsMetricsAndSessionDrilldown(t *testing.T) {
 		assert.Empty(t, got.Conversations)
 	})
 
+	t.Run("exact skill drilldown confirms the requested value on both endpoints", func(t *testing.T) {
+		for _, tc := range []struct {
+			name, query string
+			skill       *string
+			want        []string
+		}{
+			{name: "exact", query: "skill=org%3AReview", skill: new("org:Review"), want: []string{"conv-match"}},
+			{name: "trimmed match raw echo", query: "skill=%20org%3AReview%09", skill: new(" org:Review\t"), want: []string{"conv-match"}},
+			{name: "blank", query: "skill=", skill: new("")},
+			{name: "whitespace", query: "skill=%20%09", skill: new(" \t")},
+			{name: "case distinct", query: "skill=org%3Areview", skill: new("org:review")},
+			{name: "namespace distinct", query: "skill=Review", skill: new("Review")},
+			{name: "workspace before limit", query: "skill=org%3AReview&workspace=%2Fother", skill: new("org:Review")},
+			{name: "tool without skill omits echo", query: "tool=Bash", want: []string{"conv-lower"}},
+			{name: "unfiltered omits echo", want: []string{"conv-lower"}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				for _, endpoint := range []string{"/api/v1/conversations", "/api/v1/metrics/conversations"} {
+					rr := httptest.NewRecorder()
+					srv.ServeHTTP(rr, newLocalRequest(http.MethodGet, endpoint+"?limit=1&since=2026-08-21T10:00:00Z&before=2026-08-21T11:00:00Z&"+tc.query, nil))
+					require.Equal(t, http.StatusOK, rr.Code)
+					var got struct {
+						Conversations []ConversationSummary `json:"conversations"`
+						AppliedSkill  *string               `json:"applied_skill"`
+					}
+					require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &got))
+					assert.Equal(t, tc.want, summaryIDs(got.Conversations), endpoint)
+					assert.Equal(t, tc.skill, got.AppliedSkill, endpoint)
+					var payload map[string]json.RawMessage
+					require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &payload))
+					_, echoed := payload["applied_skill"]
+					assert.Equal(t, tc.skill != nil, echoed, "echo must be omitted without skill")
+					if len(tc.want) == 0 {
+						assert.JSONEq(t, "[]", string(payload["conversations"]))
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("skill presence enables exact selection without other parameters", func(t *testing.T) {
+		for _, endpoint := range []string{"/api/v1/conversations", "/api/v1/metrics/conversations"} {
+			rr := httptest.NewRecorder()
+			srv.ServeHTTP(rr, newLocalRequest(http.MethodGet, endpoint+"?skill=org%3AReview&limit=1", nil))
+			require.Equal(t, http.StatusOK, rr.Code)
+			var got struct {
+				Conversations []ConversationSummary `json:"conversations"`
+			}
+			require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &got))
+			assert.Equal(t, []string{"conv-match"}, summaryIDs(got.Conversations))
+		}
+	})
+
+	t.Run("tool and skill conflict by presence even when blank", func(t *testing.T) {
+		for _, endpoint := range []string{"/api/v1/conversations", "/api/v1/metrics/conversations"} {
+			for _, query := range []string{"tool=Bash&skill=org%3AReview", "tool=&skill=", "tool=Bash&skill=", "tool=&skill=org%3AReview", "tool&skill"} {
+				rr := httptest.NewRecorder()
+				srv.ServeHTTP(rr, newLocalRequest(http.MethodGet, endpoint+"?"+query, nil))
+				assert.Equal(t, http.StatusBadRequest, rr.Code, endpoint+"?"+query)
+			}
+		}
+	})
+
 	t.Run("invalid exact parameters are rejected", func(t *testing.T) {
 		for _, path := range []string{
 			"/api/v1/metrics/skills-tools?interval=0",
+			"/api/v1/metrics/skills-tools?interval=-1",
+			"/api/v1/metrics/skills-tools?interval=bad",
+			"/api/v1/metrics/skills-tools?since=",
+			"/api/v1/metrics/skills-tools?since=tomorrow",
 			"/api/v1/metrics/skills-tools?before=tomorrow",
 			"/api/v1/conversations?tool=Bash&since=",
 			"/api/v1/conversations?tool=Bash&before=tomorrow",
+			"/api/v1/conversations?skill=org%3AReview&since=",
+			"/api/v1/conversations?skill=org%3AReview&before=tomorrow",
+			"/api/v1/metrics/conversations?skill=org%3AReview&since=tomorrow",
+			"/api/v1/metrics/conversations?skill=org%3AReview&before=tomorrow",
 		} {
 			rr := httptest.NewRecorder()
 			srv.ServeHTTP(rr, newLocalRequest(http.MethodGet, path, nil))
 			assert.Equal(t, http.StatusBadRequest, rr.Code, path)
 		}
 	})
+}
+
+func TestServer_ConversationSkillDrilldownPeriodAndLimit(t *testing.T) {
+	srv, storage, _ := newTestServerStorage(t)
+	lower := mustParse(t, "2026-08-21T10:00:00Z")
+	var spans []toolSpanRecord
+	const sessions = 205
+	for i := range sessions {
+		id := "conv-" + strconv.Itoa(i)
+		at := lower.Add(time.Duration(i) * time.Second)
+		writeGen(t, storage, id, "g1", agento11y.Generation{
+			StartedAt: at, Tags: map[string]string{"cwd": "/repo"},
+			Usage: agento11y.TokenUsage{InputTokens: 7},
+		}, at.Format(time.RFC3339Nano))
+		spans = append(spans, skillSpan(id, "span-"+id, "call", "Read", "org:Review", at, time.Second, false))
+	}
+	// The generation file predates the requested range. Only its reconciled
+	// skill call is in range, so the session contributes no in-period usage.
+	writeToolGeneration(t, storage, "old", "g1", "/repo", lower.Add(-time.Hour), "call", "Read", false)
+	spans = append(spans,
+		skillSpan("old", "span-old", "call", "Read", "org:Review", lower, time.Second, false),
+		skillSpan("standalone", "span-only", "call", "Read", "org:Review", lower, time.Second, false),
+	)
+	_, err := storage.appendToolSpans(spans)
+	require.NoError(t, err)
+	writeToolGeneration(t, storage, "new-unmarked", "g1", "/repo", lower.Add(30*time.Minute), "call", "Read", false)
+	for _, endpoint := range []string{"/api/v1/conversations", "/api/v1/metrics/conversations"} {
+		for _, limit := range []string{"", "&limit=1000"} {
+			rr := httptest.NewRecorder()
+			srv.ServeHTTP(rr, newLocalRequest(http.MethodGet, endpoint+"?skill=org%3AReview&workspace=%2Frepo&since=2026-08-21T10:00:00Z&before=2026-08-21T11:00:00Z"+limit, nil))
+			require.Equal(t, http.StatusOK, rr.Code)
+			var got struct {
+				Conversations        []ConversationSummary        `json:"conversations"`
+				MatchedConversations int                          `json:"matched_conversations"`
+				Aggregate            ConversationMetricsAggregate `json:"aggregate"`
+				AppliedSkill         *string                      `json:"applied_skill"`
+			}
+			require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &got))
+			assert.Equal(t, new("org:Review"), got.AppliedSkill)
+			wantRows := conversationListLimit
+			if limit != "" {
+				wantRows = sessions + 1
+			}
+			require.Len(t, got.Conversations, wantRows)
+			assert.NotContains(t, summaryIDs(got.Conversations), "standalone")
+			assert.NotContains(t, summaryIDs(got.Conversations), "new-unmarked")
+			if endpoint == "/api/v1/metrics/conversations" {
+				assert.Equal(t, sessions+1, got.MatchedConversations)
+				assert.Equal(t, sessions, got.Aggregate.Calls)
+				assert.Equal(t, int64(sessions*7), got.Aggregate.TokenBuckets.FreshInput)
+				for _, row := range got.Conversations {
+					if row.ID == "old" {
+						assert.Zero(t, row.Calls)
+						assert.Equal(t, TokenBuckets{}, row.TokenBuckets)
+						assert.Equal(t, lower, row.LastActivity)
+					}
+				}
+			}
+			if limit != "" {
+				assert.Contains(t, summaryIDs(got.Conversations), "old")
+			}
+		}
+	}
+}
+
+func TestServer_SkillsToolsMetricsEmptyAndReadErrors(t *testing.T) {
+	for _, directory := range []string{"", ConversationsDir, ToolSpansDir} {
+		t.Run("broken="+directory, func(t *testing.T) {
+			srv, storage, _ := newTestServerStorage(t)
+			if directory != "" {
+				path := filepath.Join(storage.Dir(), directory)
+				require.NoError(t, os.RemoveAll(path))
+				require.NoError(t, os.WriteFile(path, nil, 0o600))
+			}
+			rr := httptest.NewRecorder()
+			srv.ServeHTTP(rr, newLocalRequest(http.MethodGet, "/api/v1/metrics/skills-tools", nil))
+			if directory != "" {
+				assert.Equal(t, http.StatusInternalServerError, rr.Code)
+				assert.Contains(t, rr.Body.String(), "skills-tools metrics:")
+				return
+			}
+			require.Equal(t, http.StatusOK, rr.Code)
+			var got map[string]map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &got))
+			for _, section := range []string{"tools", "skills"} {
+				for _, field := range []string{"rows", "buckets", "workspaces"} {
+					assert.JSONEq(t, "[]", string(got[section][field]))
+				}
+			}
+		})
+	}
 }
 
 func TestServe_ShutdownEndpoint(t *testing.T) {

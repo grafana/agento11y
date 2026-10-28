@@ -17,10 +17,8 @@ You are acting as a coding agent inside this repository. Your goal is to add or 
 4. Add or update tests for changed instrumentation behavior.
 5. Explain what was instrumented and why.
 
-Agent Observability is a Grafana Cloud-only product for user-facing setup. Do not suggest
-non-Cloud or development-only endpoints in docs, examples, or generated
-instructions. Use the Grafana Cloud API URL from Agent Observability configuration
-and Cloud `basic` auth.
+For application instrumentation, use the Grafana Cloud API URL from Agent Observability configuration and Cloud `basic` auth.
+Do not invent Cloud or development endpoints. Coding-agent capture also supports the shared launcher's local mode, without Cloud credentials or Tempo.
 
 ## Output contract (required)
 
@@ -221,7 +219,13 @@ The `no_tool_content` arguments/results opt-in is unchanged and does not bypass 
 See [capture-mode privacy](https://github.com/grafana/agento11y/blob/main/docs/concepts/content-capture-modes.md#skill-and-process-attribute-privacy).
 
 The shared local receiver stores optional skill/resource/executable names and int64 exit codes in tool-span sidecars, never the three private attributes.
-It prefers nonblank `gen_ai.skill.name` and accepts legacy `agento11y.skill.name`. Old sidecars have no backfill; no UI or analytics are added.
+It prefers nonblank `gen_ai.skill.name` and accepts legacy `agento11y.skill.name`. Local **Analytics > Skills** counts retained marked calls, including loads, resource reads, commands, and failures.
+**Tools** and **Skills** overlap; never add their counts together. See [Local skill analytics](https://github.com/grafana/agento11y/tree/main/plugins/agento11y#local-skill-analytics) for exact identifiers, duration coverage, and session drilldowns.
+Older recordings without skill markers stay unmarked; history import does not reconstruct missing skill metadata. Local recording and analytics need no Tempo.
+
+Live recognition supports Claude Code's native `Skill`, Pi's catalog-matched instruction reads, and OpenCode's standard `skill` tool, not arbitrary resource reads or commands.
+OpenCode retains the requested identifier, not a resolved directory basename, trimming only surrounding whitespace. A recognized attempt can fail and does not explain later activity.
+See [OpenCode recognition limits](https://github.com/grafana/agento11y/tree/main/plugins/opencode#3-verify). Cloud skill visibility requires retained tool and generation spans in Tempo plus deployed Sigil consumer support.
 
 ## Multi-agent dependency tracking
 

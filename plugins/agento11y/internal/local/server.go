@@ -1098,7 +1098,7 @@ const conversationListLimit = 200
 
 // handleListConversations returns the aggregated conversation list as JSON.
 // The response is newest-first. ?limit= caps matching rows. Exact time,
-// workspace, and tool filters, plus the ?agent=, ?model=, ?status= and
+// workspace, and tool/skill filters, plus the ?agent=, ?model=, ?status= and
 // ?subagents= facets, are applied to each decoded candidate before it counts
 // toward that cap; see ConversationListOptions.
 //
@@ -1115,7 +1115,10 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	tool := toolParam(r)
+	tool, skill, ok := conversationExecutionParams(w, r)
+	if !ok {
+		return
+	}
 	facets, ok := conversationFacetParams(w, r)
 	if !ok {
 		return
@@ -1123,9 +1126,9 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request)
 	_, hasBefore := r.URL.Query()["before"]
 	// A since-only request without facets is the normal ranged list and uses last
 	// activity. Facets still use period-clipped summaries.
-	exact := hasBefore || workspace != nil || tool != nil
+	exact := hasBefore || workspace != nil || tool != nil || skill != nil
 	facets.Limit, facets.Since, facets.Before = limit, since, before
-	facets.Workspace, facets.Tool, facets.Exact = workspace, tool, exact
+	facets.Workspace, facets.Tool, facets.Skill, facets.Exact = workspace, tool, skill, exact
 	convs, total, err := s.storage.ListConversations(facets)
 	if err != nil {
 		s.logger.Printf("local: list conversations: %v", err)
@@ -1138,10 +1141,14 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request)
 		// guarding.
 		convs = []ConversationSummary{}
 	}
-	s.writeJSON(w, http.StatusOK, map[string]any{
+	response := map[string]any{
 		"conversations":       convs,
 		"total_conversations": total,
-	})
+	}
+	if skill != nil {
+		response["applied_skill"] = *skill
+	}
+	s.writeJSON(w, http.StatusOK, response)
 	s.warmSummariesInBackground()
 }
 
@@ -1157,6 +1164,21 @@ func toolParam(r *http.Request) *string {
 		value = toolNameKey(values[0])
 	}
 	return &value
+}
+
+// Echo the requested skill as applied_skill so clients can confirm filter support.
+// Normalize only in storage.
+func conversationExecutionParams(w http.ResponseWriter, r *http.Request) (tool, skill *string, ok bool) {
+	tool = toolParam(r)
+	if r.URL.Query().Has("skill") {
+		value := r.URL.Query().Get("skill")
+		skill = &value
+	}
+	if tool != nil && skill != nil {
+		http.Error(w, "tool and skill filters are mutually exclusive", http.StatusBadRequest)
+		return nil, nil, false
+	}
+	return tool, skill, true
 }
 
 // conversationFacetParams reads ?agent=, ?model=, ?status= and ?subagents=
@@ -1317,13 +1339,17 @@ func (s *Server) handleConversationMetrics(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
+	tool, skill, ok := conversationExecutionParams(w, r)
+	if !ok {
+		return
+	}
 	order := r.URL.Query().Get("order")
 	if order != "" && order != "tokens" {
 		http.Error(w, `order must be "tokens"`, http.StatusBadRequest)
 		return
 	}
 	facets.Limit, facets.Since, facets.Before = limit, since, before
-	facets.Workspace, facets.Tool, facets.Order = workspace, toolParam(r), order
+	facets.Workspace, facets.Tool, facets.Skill, facets.Order = workspace, tool, skill, order
 	rows, matched, aggregate, err := s.storage.ConversationMetrics(facets)
 	if err != nil {
 		s.logger.Printf("local: conversation metrics: %v", err)
@@ -1333,11 +1359,15 @@ func (s *Server) handleConversationMetrics(w http.ResponseWriter, r *http.Reques
 	if rows == nil {
 		rows = []ConversationSummary{}
 	}
-	s.writeJSON(w, http.StatusOK, map[string]any{
+	response := map[string]any{
 		"aggregate":             aggregate,
 		"conversations":         rows,
 		"matched_conversations": matched,
-	})
+	}
+	if skill != nil {
+		response["applied_skill"] = *skill
+	}
+	s.writeJSON(w, http.StatusOK, response)
 	s.warmSummariesInBackground()
 }
 
@@ -1424,7 +1454,7 @@ func (s *Server) handleSkillsToolsMetrics(w http.ResponseWriter, r *http.Request
 		}
 		interval = time.Duration(seconds) * time.Second
 	}
-	tools, err := s.storage.ToolAnalytics(ToolAnalyticsOptions{
+	metrics, err := s.storage.SkillsToolsMetrics(ToolAnalyticsOptions{
 		Since: since, Before: before, Workspace: workspace, Interval: interval,
 	})
 	if err != nil {
@@ -1432,7 +1462,7 @@ func (s *Server) handleSkillsToolsMetrics(w http.ResponseWriter, r *http.Request
 		http.Error(w, "skills-tools metrics: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.writeJSON(w, http.StatusOK, SkillsToolsMetricsResponse{Tools: tools})
+	s.writeJSON(w, http.StatusOK, metrics)
 	s.warmSummariesInBackground()
 }
 

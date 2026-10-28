@@ -42,6 +42,7 @@ export interface ConversationSummary {
 }
 
 export interface ConversationListResponse {
+  applied_skill?: string;
   conversations: ConversationSummary[];
   total_conversations: number;
 }
@@ -98,6 +99,7 @@ export interface ConversationMetricsAggregate {
 }
 
 export interface ConversationMetricsResponse {
+  applied_skill?: string;
   aggregate: ConversationMetricsAggregate;
   conversations: ConversationSummary[];
   matched_conversations: number;
@@ -245,8 +247,17 @@ export interface ToolAnalytics {
   coverage: ToolAnalyticsCoverage;
 }
 
+export interface SkillAnalyticsTotals extends Omit<ToolAnalyticsTotals, 'tools'> {
+  skills: number;
+}
+
+export interface SkillAnalytics extends Omit<ToolAnalytics, 'totals'> {
+  totals: SkillAnalyticsTotals;
+}
+
 export interface SkillsToolsMetricsResponse {
   tools: ToolAnalytics;
+  skills?: SkillAnalytics;
 }
 
 /** SearchHit in search.go: one row of GET /api/v1/search. */

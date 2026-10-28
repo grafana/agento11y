@@ -390,6 +390,29 @@ func TestProjectToolSpansSkillNamespaces(t *testing.T) {
 				require.NoError(t, err)
 				require.Len(t, records, 1)
 				assert.Equal(t, tc.want, records[0].SkillName)
+
+				srv, dir := newTestServer(t)
+				body := marshalTraceRequest(t, toolTraceRequest(span), contentType)
+				for range 2 {
+					rr := postIngestTrace(srv, body, contentType, "")
+					require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+				}
+				restarted, err := NewStorage(dir)
+				require.NoError(t, err)
+				for _, reader := range []*Storage{srv.storage, restarted} {
+					got, err := reader.SkillsToolsMetrics(ToolAnalyticsOptions{})
+					require.NoError(t, err)
+					assert.Equal(t, ToolAnalyticsTotals{Calls: 1, Failures: 1, Tools: 1, DurationSamples: 1}, got.Tools.Totals)
+					if tc.want == "" {
+						assert.Zero(t, got.Skills.Totals.Calls)
+						assert.Empty(t, got.Skills.Rows)
+						continue
+					}
+					assert.Equal(t, SkillAnalyticsTotals{Calls: 1, Failures: 1, Skills: 1, DurationSamples: 1}, got.Skills.Totals)
+					require.Len(t, got.Skills.Rows, 1)
+					assert.Equal(t, tc.want, got.Skills.Rows[0].Name)
+					assert.Equal(t, ToolAnalyticsCoverage{ProjectedSpans: 1}, got.Skills.Coverage)
+				}
 			})
 		}
 	}
@@ -608,7 +631,7 @@ func TestToolSpanCacheUsesLastDeliveryAndPreservesReusedCallIDs(t *testing.T) {
 func TestToolSpansDedupeGloballyAcrossConversationChangesAndRestart(t *testing.T) {
 	storage := newStorage(t)
 	first := toolSpanRecord{
-		TraceID: "same-trace", SpanID: "same-span", ConversationID: "conv-old", ToolName: "Read",
+		TraceID: "same-trace", SpanID: "same-span", ConversationID: "conv-old", ToolName: "Read", SkillName: "old:Skill",
 		StartedAt: time.Unix(10, 0).UTC(),
 	}
 	changed, err := storage.appendToolSpans([]toolSpanRecord{first})
@@ -620,6 +643,7 @@ func TestToolSpansDedupeGloballyAcrossConversationChangesAndRestart(t *testing.T
 	last := first
 	last.ConversationID = "conv-new"
 	last.ToolName = "Bash"
+	last.SkillName = "new:Skill"
 	changed, err = storage.appendToolSpans([]toolSpanRecord{first, last})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"conv-new"}, changed, "the final batch occurrence determines its persisted conversation")
@@ -638,8 +662,10 @@ func TestToolSpansDedupeGloballyAcrossConversationChangesAndRestart(t *testing.T
 	require.Len(t, observations, 2)
 	assert.Equal(t, "conv-new", observations[0].ConversationID)
 	assert.Equal(t, "Bash", observations[0].Name)
+	assert.Equal(t, "new:Skill", observations[0].SkillName)
 	assert.Equal(t, "conv-old", observations[1].ConversationID)
 	assert.Equal(t, "Write", observations[1].Name)
+	assert.Empty(t, observations[1].SkillName)
 }
 
 func TestAppendToolSpansEmptyIsNoop(t *testing.T) {

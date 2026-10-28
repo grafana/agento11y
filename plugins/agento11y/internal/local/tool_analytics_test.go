@@ -134,7 +134,7 @@ func TestReconcileToolSourceMatchesOnlyNonblankCallIDs(t *testing.T) {
 			Timestamp: mustParse(t, "2026-08-21T10:00:00Z"), Name: "Bash",
 		}}},
 		spans: []toolSpanRecord{{
-			TraceID: "trace", SpanID: "span", ConversationID: "conv-anonymous", ToolName: "Bash",
+			TraceID: "trace", SpanID: "span", ConversationID: "conv-anonymous", ToolName: "Bash", SkillName: " org:Skill ",
 			StartedAt: mustParse(t, "2026-08-21T10:00:01Z"), CompletedAt: mustParse(t, "2026-08-21T10:00:02Z"),
 		}},
 	}
@@ -144,6 +144,8 @@ func TestReconcileToolSourceMatchesOnlyNonblankCallIDs(t *testing.T) {
 	assert.False(t, got[0].HasSpan)
 	assert.False(t, got[1].HasGeneration)
 	assert.True(t, got[1].HasSpan)
+	assert.Empty(t, got[0].SkillName)
+	assert.Equal(t, "org:Skill", got[1].SkillName)
 }
 
 func TestToolAnalyticsUsesLastDuplicateSpanDelivery(t *testing.T) {
