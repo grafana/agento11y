@@ -1097,9 +1097,12 @@ func TestRun_BlockAutoTags(t *testing.T) {
 				"AGENTO11Y_GUARDS_ENABLED=true\n" +
 				"SIGIL_GUARDS_FAIL_OPEN=false\n" +
 				"OTEL_EXPORTER_OTLP_INSECURE=true\n" +
-				"AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE=true\n"},
-			wantStderr: "set AGENTO11Y_AUTO_CODING_AGENT_TAGS, AGENTO11Y_CONTENT_CAPTURE_MODE, AGENTO11Y_GUARDS_ENABLED, AGENTO11Y_GUARDS_FAIL_OPEN from the block.\n" +
-				"agento11y login: did not set AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE, OTEL_EXPORTER_OTLP_INSECURE from the block: a block cannot turn off redaction or TLS.",
+				"AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE=true\n" +
+				// Over gRPC, INSECURE sends generations and the token in cleartext.
+				"AGENTO11Y_PROTOCOL=grpc\n" +
+				"SIGIL_INSECURE=1\n"},
+			wantStderr: "set AGENTO11Y_AUTO_CODING_AGENT_TAGS, AGENTO11Y_CONTENT_CAPTURE_MODE, AGENTO11Y_GUARDS_ENABLED, AGENTO11Y_GUARDS_FAIL_OPEN, AGENTO11Y_PROTOCOL from the block.\n" +
+				"agento11y login: did not set AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE, OTEL_EXPORTER_OTLP_INSECURE, SIGIL_INSECURE from the block: a block cannot turn off redaction or TLS.",
 			wantFile: map[string]string{
 				"AGENTO11Y_AUTO_CODING_AGENT_TAGS":      "true",
 				"AGENTO11Y_CONTENT_CAPTURE_MODE":        "full",
@@ -1109,6 +1112,8 @@ func TestRun_BlockAutoTags(t *testing.T) {
 				"AGENTO11Y_GUARDS_FAIL_OPEN":            "false",
 				"OTEL_EXPORTER_OTLP_INSECURE":           "",
 				"AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE": "",
+				"AGENTO11Y_INSECURE":                    "",
+				"SIGIL_INSECURE":                        "",
 			},
 		},
 		{

@@ -1357,13 +1357,14 @@ var blockKeyName = regexp.MustCompile(`^[A-Z0-9_]+$`)
 
 // blockDowngrade reports whether a value would turn off a protection the
 // user's machine keeps by default: secret redaction of prompts, or TLS to the
-// OTLP endpoint. The masked paste field never shows a block's lines, so login
-// refuses these instead of saving them.
+// OTLP endpoint or, over gRPC, to the generation endpoint. The masked paste
+// field never shows a block's lines, so login refuses these instead of saving
+// them.
 func blockDowngrade(key, suffix, value string) bool {
 	switch {
 	case suffix == "REDACT_INPUT_MESSAGES":
 		return !envconfig.ParseBoolDefault(value, true)
-	case suffix == "OTEL_EXPORTER_OTLP_INSECURE" || key == "OTEL_EXPORTER_OTLP_INSECURE":
+	case suffix == "INSECURE", suffix == "OTEL_EXPORTER_OTLP_INSECURE", key == "OTEL_EXPORTER_OTLP_INSECURE":
 		return envconfig.ParseBool(value)
 	}
 	return false
