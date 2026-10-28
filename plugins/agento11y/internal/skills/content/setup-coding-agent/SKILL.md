@@ -178,7 +178,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana.net/otlp
 OTEL_EXPORTER_OTLP_HEADERS='Authorization=Basic <base64-value>'
 ```
 
-Without OTLP, default HTTP conversations work but analytics does not. Login rejects placeholders; flags can replace pasted values. Login ignores pasted protocol and auth-mode values. Besides credentials it reads automatic tags from a block and ignores the rest, such as content capture, guards and TLS. Configure experimental OTel through the environment or `config.env`, as described in the Reference. Existing config keys stay.
+Without OTLP, default HTTP conversations work but analytics does not. Login rejects placeholders; flags can replace pasted values. A pasted block fills in the form's preferences, such as content capture, guards and automatic tags, which the user can still change, and login saves the block's other settings, apart from `AGENTO11Y_BIN`, `AGENTO11Y_LOCAL_WEB_DIR`, `AGENTO11Y_LOCAL_ALLOWED_HOSTS`, and the local mode, which it never takes from a block. Configure experimental OTel through the environment or `config.env`, as described in the Reference. Existing config keys stay.
 
 For default HTTP capture and analytics, one token needs `sigil:write`, `metrics:write`, and `traces:write`. Generated policies can include extra scopes; the HTTP integrations use only these three.
 
@@ -204,10 +204,10 @@ script the question is never asked, because a piped stdin is not a terminal:
 login writes nothing and exits 1. Pass `--yes` to save the values regardless, or
 `--no-verify` to skip the check. The preferences have no flags.
 
-`--env-file <file>` (`-` for a pipe) never prompts for a value either: the
-block and the flags must supply the endpoint, instance ID, and token, and the
-other preferences keep their saved values. Flags still win over the block's
-values, and `--token-stdin` can supply a token the file leaves out.
+`--env-file <file>` (`-` for a pipe) never prompts: the block and the flags
+must supply the endpoint, instance ID, and token, and a setting the block
+leaves out keeps its saved value. Flags beat the block's values, and
+`--token-stdin` can supply a token the file leaves out.
 
 Login writes to the resolved config path described above. An install that still
 has only the old `sigil/config.env` under the same config root keeps using that

@@ -271,11 +271,11 @@ type RunOpts struct {
 	Token        string
 	OTLPEndpoint string
 
-	// Block is an environment block from `login --env-file`. Like a pasted
-	// block, only its credential, OTLP, and automatic tag lines are read. Its
-	// values count as command-line values, a flag still beats the block, and
+	// Block is an environment block from `login --env-file`. Its credential
+	// lines count as command-line values, a flag still beats the block, and
 	// together they must supply every required credential because nothing
-	// can be prompted for.
+	// can be prompted for. Its other settings are saved as it sets them, apart
+	// from the keys blockKeys refuses.
 	Block string
 
 	// ShowNextStep prints a `Try sigil claude or sigil pi.` hint after a
@@ -381,9 +381,6 @@ func Run(ctx context.Context, opts RunOpts) (Result, error) {
 		if opts.TenantID != "" || opts.Token != "" || block.otelEndpoint == "" {
 			block.otlpHeadersPasted = false
 		}
-		if ignored := ignoredBlockKeys(opts.Block); len(ignored) > 0 {
-			_, _ = fmt.Fprintf(opts.Stderr, "agento11y login: ignored %s from the block; login reads only the credential, OTLP, and automatic tag lines.\n", strings.Join(ignored, ", "))
-		}
 	}
 
 	// The form runs only while a required credential is still missing after
@@ -435,6 +432,17 @@ func Run(ctx context.Context, opts RunOpts) (Result, error) {
 	}
 	if block.otlpHeadersPasted {
 		v.otlpHeaders, v.otlpHeadersPasted = block.otlpHeaders, true
+	}
+	if opts.Block != "" {
+		// --env-file shows no form, so the block's form preferences are
+		// written as it spells them, and the ones it leaves out keep their
+		// saved values.
+		env := parseBlock(opts.Block)
+		dropExport := opts.TenantID != "" || opts.Token != "" || block.otelEndpoint == ""
+		v.blockSettings, v.blockRefused = blockKeys(env, true, dropExport)
+		if _, stack := blockPreference(env, "STACK_URL"); stack != "" {
+			v.stackURL, _ = stackOrigin(stack)
+		}
 	}
 	if opts.Block != "" {
 		// Both automatic-tag keys are written back below, so the one the
@@ -509,6 +517,7 @@ func Run(ctx context.Context, opts RunOpts) (Result, error) {
 	if err := dotenv.WriteDotenv(configPath, updates, opts.Logger); err != nil {
 		return Result{}, err
 	}
+	reportBlockKeys(opts.Stderr, v)
 
 	// Mirror into process env so a following in-process launcher dispatch
 	// inherits the new credentials without re-loading the file.
@@ -1194,8 +1203,9 @@ type pasteFilled struct {
 // their own, because a user who points login at their own collector must not
 // get a Grafana Cloud token written next to it.
 //
-// Pasting credentials must not change transport, experimental opt-in, or auth
-// mode. Those settings stay outside the login form.
+// applyPaste fills the form from a pasted block: its credentials, and its
+// preferences as answers the user can still change. The block's other
+// settings are recorded to be written (see blockKeys).
 func applyPaste(v *formValues, fixed fixedValues, block string) pasteFilled {
 	env := parseBlock(block)
 	var filled pasteFilled
@@ -1209,6 +1219,10 @@ func applyPaste(v *formValues, fixed fixedValues, block string) pasteFilled {
 	filled.otlpHeaders = setPasted(&v.otlpHeaders, fixed.otelEndpoint, env["OTEL_EXPORTER_OTLP_HEADERS"])
 	v.otlpHeadersPasted = filled.otlpHeaders
 	v.autoTagsFromBlock = presetAutoTags(v, env)
+	presetFormPreferences(v, env)
+	dropExport := fixed.tenantID != "" || fixed.token != "" ||
+		strings.TrimSpace(cmp.Or(brandedPaste(env, "OTEL_EXPORTER_OTLP_ENDPOINT"), env["OTEL_EXPORTER_OTLP_ENDPOINT"])) == ""
+	v.blockSettings, v.blockRefused = blockKeys(env, false, dropExport)
 	return filled
 }
 
@@ -1219,12 +1233,9 @@ func parseBlock(block string) map[string]string {
 	return env
 }
 
-// blockPreferenceSuffixes are the preferences a block may set: the automatic
-// tag switch and names, which decide the user, repository, and branch labels
-// on the Coding agents page. A block cannot set content capture, guards,
-// session tags, TLS, the binary, the web dir, or the stack URL. Session tags
-// stay out because AGENTO11Y_TAGS is one value, so a team value would replace
-// each person's own tags.
+// blockPreferenceSuffixes are the automatic tag switch and names, which decide
+// the user, repository, and branch labels on the Coding agents page. They have
+// rules of their own (presetAutoTags), so blockKeys leaves them out.
 var blockPreferenceSuffixes = []string{envconfig.AutoTagsSuffix, envconfig.AutoTagNamesSuffix}
 
 // blockPreference resolves one preference family from a block or the saved
@@ -1270,6 +1281,28 @@ func validateBlockPreferences(env map[string]string) error {
 			return fmt.Errorf("the block's %s is not usable: use a comma-separated list of user, repo, and branch, or all", key)
 		}
 	}
+	// The form's own rules, checked on every spelling the block carries,
+	// since both are written.
+	checks := []struct {
+		suffix, usage string
+		ok            func(string) bool
+	}{
+		{"CONTENT_CAPTURE_MODE", "use full, metadata_only, no_tool_content, or full_with_metadata_spans", func(raw string) bool {
+			return normalizeContentMode(raw) == strings.ToLower(raw)
+		}},
+		{"TAGS", "use comma-separated key=value pairs", func(raw string) bool { return validateTags(raw) == nil }},
+		{"GUARDS_ENABLED", "use true or false", func(raw string) bool { _, ok := envconfig.ParseBoolValue(raw); return ok }},
+		{"GUARDS_FAIL_OPEN", "use true or false", func(raw string) bool { _, ok := envconfig.ParseBoolValue(raw); return ok }},
+		{"GUARDS_TIMEOUT_MS", "use a positive whole number of milliseconds", func(raw string) bool { return validateGuardTimeout(raw) == nil }},
+		{"STACK_URL", "use the stack URL, such as https://example.grafana.net", func(raw string) bool { return validateStack(raw) == nil }},
+	}
+	for _, check := range checks {
+		for _, key := range []string{envconfig.PreferredKey(check.suffix), envconfig.LegacyKey(check.suffix)} {
+			if raw := strings.TrimSpace(env[key]); raw != "" && !check.ok(raw) {
+				return fmt.Errorf("the block's %s is not usable: %s", key, check.usage)
+			}
+		}
+	}
 	return nil
 }
 
@@ -1277,33 +1310,152 @@ func validateBlockPreferences(env map[string]string) error {
 // applyPaste).
 var blockReadSuffixes = []string{"ENDPOINT", "AUTH_TENANT_ID", "AUTH_TOKEN", "OTEL_EXPORTER_OTLP_ENDPOINT"}
 
+// blockDeniedSuffixes are the keys a block never sets, in either spelling and
+// any letter case: the binary the agent plugins launch, the directory the
+// local app loads its web UI from, and the hosts the local app answers, which
+// guard its session list and config API. Whoever can edit a shared block could
+// otherwise run code on, or read the sessions of, every machine set up from it.
+// Case matters because Windows reads environment names without it.
+var blockDeniedSuffixes = []string{"BIN", "LOCAL_WEB_DIR", "LOCAL_ALLOWED_HOSTS"}
+
+// blockLoginSuffixes are the keys login writes itself on every Cloud setup
+// (see buildUpdates), so a block's value would not survive the save.
+var blockLoginSuffixes = []string{"LOCAL", "LOCAL_FORWARD"}
+
+// blockFormSuffixes are the settings form's preferences other than automatic
+// tags and the stack URL, which have their own handling. A pasted block fills
+// them in as answers the user can still change (presetFormPreferences);
+// --env-file, which shows no form, writes the ones the block sets.
+var blockFormSuffixes = []string{"CONTENT_CAPTURE_MODE", "TAGS", "GUARDS_ENABLED", "GUARDS_FAIL_OPEN", "GUARDS_TIMEOUT_MS"}
+
+// blockExportCredentialSuffixes carry a copy of the export credential, like
+// the block's OTLP headers: OTEL_AUTH_TOKEN wins over the token for OTLP, and
+// HEADERS can carry an Authorization value. They follow the headers' rule, so
+// a flag that replaces the tenant or the token drops them, and so does a block
+// without its own OTLP endpoint.
+var blockExportCredentialSuffixes = []string{"OTEL_AUTH_TOKEN", "HEADERS"}
+
 // blockDefaultValues are the PROTOCOL and AUTH_MODE values the setup page's
-// block always carries. Login does not write either key, but these values are
-// the defaults, so leaving them out changes nothing and they are not named.
-// Any other value, such as PROTOCOL=otel, is named like any ignored key.
+// block always carries. They are the defaults, so login does not write them
+// over a saved choice such as PROTOCOL=otel; any other value is written.
 var blockDefaultValues = map[string]string{"PROTOCOL": "http", "AUTH_MODE": "basic"}
 
-// ignoredBlockKeys names the keys in a block that login does not read, so
-// a team that put content capture or guards in a shared file learns that
-// login left them out.
-func ignoredBlockKeys(block string) []string {
-	env := parseBlock(block)
-	read := map[string]bool{"OTEL_EXPORTER_OTLP_ENDPOINT": true, "OTEL_EXPORTER_OTLP_HEADERS": true}
-	for _, s := range slices.Concat(blockReadSuffixes, blockPreferenceSuffixes) {
-		read[envconfig.PreferredKey(s)], read[envconfig.LegacyKey(s)] = true, true
+// blockKeys sorts a block's keys by what login does with them. settings are
+// the keys login writes: every key the config file accepts, apart from the
+// credential, OTLP, automatic tag, and stack lines, which login reads into
+// the form, and, unless writeFormKeys is set, the form preferences, which a
+// paste fills into the form instead. A branded key is written once, under
+// its AGENTO11Y_ spelling with the value blockPreference resolves, so both
+// paths save the same thing when a block carries both spellings. Blank values
+// and the setup page's defaults are skipped. refused are the keys a block
+// cannot set (blockDeniedSuffixes, blockLoginSuffixes). Keys the config file
+// does not accept are dropped, as the loader would drop them.
+func blockKeys(env map[string]string, writeFormKeys, dropExportCredentials bool) (settings map[string]string, refused []string) {
+	readIntoForm := map[string]bool{"OTEL_EXPORTER_OTLP_ENDPOINT": true, "OTEL_EXPORTER_OTLP_HEADERS": true}
+	for _, s := range slices.Concat(blockReadSuffixes, blockPreferenceSuffixes, []string{"STACK_URL"}) {
+		readIntoForm[envconfig.PreferredKey(s)], readIntoForm[envconfig.LegacyKey(s)] = true, true
 	}
-	for s, def := range blockDefaultValues {
-		for _, k := range []string{envconfig.PreferredKey(s), envconfig.LegacyKey(s)} {
-			read[k] = strings.EqualFold(strings.TrimSpace(env[k]), def)
+	settings = map[string]string{}
+	for _, key := range slices.Sorted(maps.Keys(env)) {
+		suffix := brandSuffix(key)
+		switch {
+		case !dotenv.AllowedDotenvKey(key) || readIntoForm[key]:
+		case containsFold(blockDeniedSuffixes, suffix) || containsFold(blockLoginSuffixes, suffix):
+			refused = append(refused, key)
+		case suffix == "":
+			// A raw OTEL_ key, which has no second spelling.
+			if value := strings.TrimSpace(env[key]); value != "" {
+				settings[key] = value
+			}
+		case dropExportCredentials && slices.Contains(blockExportCredentialSuffixes, suffix):
+		case slices.Contains(blockFormSuffixes, suffix) && !writeFormKeys:
+		default:
+			_, value := blockPreference(env, suffix)
+			if value == "" || strings.EqualFold(value, blockDefaultValues[suffix]) {
+				continue
+			}
+			if slices.Contains(blockFormSuffixes, suffix) {
+				value = formPreferenceValue(suffix, value)
+			}
+			settings[envconfig.PreferredKey(suffix)] = value
 		}
 	}
-	var ignored []string
-	for _, k := range slices.Sorted(maps.Keys(env)) {
-		if !read[k] {
-			ignored = append(ignored, k)
+	if len(settings) == 0 {
+		settings = nil
+	}
+	return settings, refused
+}
+
+func containsFold(list []string, s string) bool {
+	return slices.ContainsFunc(list, func(item string) bool { return strings.EqualFold(item, s) })
+}
+
+// brandSuffix is key without its AGENTO11Y_ or SIGIL_ prefix, or "" for a key
+// with neither.
+func brandSuffix(key string) string {
+	for _, prefix := range []string{"AGENTO11Y_", "SIGIL_"} {
+		if suffix, ok := strings.CutPrefix(key, prefix); ok {
+			return suffix
 		}
 	}
-	return ignored
+	return ""
+}
+
+// formPreferenceValue normalizes a form preference the way the form saves its
+// answer. validateBlockPreferences has already accepted raw.
+func formPreferenceValue(suffix, raw string) string {
+	raw = strings.TrimSpace(raw)
+	switch suffix {
+	case "CONTENT_CAPTURE_MODE":
+		return normalizeContentMode(raw)
+	case "GUARDS_ENABLED", "GUARDS_FAIL_OPEN":
+		return strconv.FormatBool(envconfig.ParseBool(raw))
+	}
+	return raw
+}
+
+// presetFormPreferences puts the block's form preferences over the answers v
+// holds, so a pasted block's values are the form's defaults, which the user
+// can still change. A key the block leaves out keeps the seeded answer.
+func presetFormPreferences(v *formValues, env map[string]string) {
+	if _, mode := blockPreference(env, "CONTENT_CAPTURE_MODE"); mode != "" {
+		v.contentMode = normalizeContentMode(mode)
+	}
+	if _, tags := blockPreference(env, "TAGS"); tags != "" {
+		v.tags = tags
+	}
+	_, enabled := blockPreference(env, "GUARDS_ENABLED")
+	_, failOpen := blockPreference(env, "GUARDS_FAIL_OPEN")
+	if enabled != "" || failOpen != "" {
+		on, open := v.guards != guardsOff, v.guards != guardsClosed
+		if enabled != "" {
+			on = envconfig.ParseBool(enabled)
+		}
+		if failOpen != "" {
+			open = envconfig.ParseBool(failOpen)
+		}
+		v.guards = seedGuards(strconv.FormatBool(on), strconv.FormatBool(open))
+	}
+	if _, timeout := blockPreference(env, "GUARDS_TIMEOUT_MS"); timeout != "" {
+		v.guardTimeout = timeout
+	}
+	// A stack the user already chose in this run stays: the block came from
+	// that stack's setup page, and the form has no field to show a swap.
+	if _, stack := blockPreference(env, "STACK_URL"); stack != "" && v.stackURL == "" {
+		v.stackURL, _ = stackOrigin(stack)
+	}
+}
+
+// reportBlockKeys names, on stderr, the settings a block set beyond the form
+// and the keys it could not set, so a team that shares a block can see what
+// login took from it. Values stay out, as they do in every block error.
+func reportBlockKeys(w io.Writer, v formValues) {
+	if len(v.blockSettings) > 0 {
+		_, _ = fmt.Fprintf(w, "agento11y login: set %s from the block.\n", strings.Join(slices.Sorted(maps.Keys(v.blockSettings)), ", "))
+	}
+	if len(v.blockRefused) > 0 {
+		_, _ = fmt.Fprintf(w, "agento11y login: did not set %s from the block: a block cannot choose the binary agento11y launches, where its web UI loads from, or which hosts it answers, and login sets LOCAL and LOCAL_FORWARD itself.\n", strings.Join(v.blockRefused, ", "))
+	}
 }
 
 // setPasted writes value into field unless a flag fixed that value or the
@@ -1826,6 +1978,11 @@ type formValues struct {
 	// presetAutoTags). The automatic-tag answers are then written even when
 	// the form did not run, because the block chose them.
 	autoTagsFromBlock bool
+
+	// blockSettings are the keys a block set that login writes as the block
+	// spells them, and blockRefused the ones it could not set (see blockKeys).
+	blockSettings map[string]string
+	blockRefused  []string
 }
 
 // buildUpdates maps the form values onto the dotenv keys WriteDotenv expects.
@@ -1915,6 +2072,7 @@ func buildUpdates(v formValues, keepLocalSetting bool) map[string]string {
 			updates["SIGIL_GUARDS_ENABLED"] = "false"
 		}
 	}
+	maps.Copy(updates, v.blockSettings)
 	out := envconfig.ExpandAliases(updates)
 	if v.stackURL != "" {
 		out[stackURLKey] = v.stackURL

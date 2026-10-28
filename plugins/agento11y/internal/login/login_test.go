@@ -1078,7 +1078,7 @@ func TestRun_BlockAutoTags(t *testing.T) {
 			wantFile: map[string]string{"AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES": "repo"},
 		},
 		{
-			name: "content capture, guards and TLS stay ignored",
+			name: "content capture, guards and TLS are set from the block",
 			opts: RunOpts{Block: blockCreds +
 				"AGENTO11Y_AUTO_CODING_AGENT_TAGS=true\n" +
 				"SIGIL_CONTENT_CAPTURE_MODE=full\n" +
@@ -1086,16 +1086,16 @@ func TestRun_BlockAutoTags(t *testing.T) {
 				"SIGIL_GUARDS_FAIL_OPEN=false\n" +
 				"OTEL_EXPORTER_OTLP_INSECURE=true\n" +
 				"AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE=true\n"},
-			wantStderr: "ignored AGENTO11Y_GUARDS_ENABLED, AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE, OTEL_EXPORTER_OTLP_INSECURE, SIGIL_CONTENT_CAPTURE_MODE, SIGIL_GUARDS_FAIL_OPEN from the block; login reads only the credential, OTLP, and automatic tag lines.",
+			wantStderr: "set AGENTO11Y_CONTENT_CAPTURE_MODE, AGENTO11Y_GUARDS_ENABLED, AGENTO11Y_GUARDS_FAIL_OPEN, AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE, OTEL_EXPORTER_OTLP_INSECURE from the block.",
 			wantFile: map[string]string{
 				"AGENTO11Y_AUTO_CODING_AGENT_TAGS":      "true",
-				"AGENTO11Y_CONTENT_CAPTURE_MODE":        "",
-				"SIGIL_CONTENT_CAPTURE_MODE":            "",
-				"AGENTO11Y_GUARDS_ENABLED":              "",
-				"SIGIL_GUARDS_ENABLED":                  "",
-				"AGENTO11Y_GUARDS_FAIL_OPEN":            "",
-				"OTEL_EXPORTER_OTLP_INSECURE":           "",
-				"AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE": "",
+				"AGENTO11Y_CONTENT_CAPTURE_MODE":        "full",
+				"SIGIL_CONTENT_CAPTURE_MODE":            "full",
+				"AGENTO11Y_GUARDS_ENABLED":              "true",
+				"SIGIL_GUARDS_ENABLED":                  "true",
+				"AGENTO11Y_GUARDS_FAIL_OPEN":            "false",
+				"OTEL_EXPORTER_OTLP_INSECURE":           "true",
+				"AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE": "true",
 			},
 		},
 		{
@@ -1220,6 +1220,32 @@ func TestApplyPaste(t *testing.T) {
 				otlpHeadersPasted: true,
 			},
 			wantFilled: pasteFilled{endpoint: true, tenantID: true, token: true, otelEndpoint: true, otlpHeaders: true},
+		},
+		{
+			// A shared block's form preferences become the form's answers, which
+			// the user can still change; the rest are recorded to be written,
+			// and the binary is refused.
+			name: "a shared block fills the form and records the rest",
+			block: "AGENTO11Y_AUTH_TOKEN=glc_test\n" +
+				"AGENTO11Y_CONTENT_CAPTURE_MODE=full\n" +
+				"AGENTO11Y_TAGS=team=core\n" +
+				"AGENTO11Y_GUARDS_ENABLED=true\n" +
+				"AGENTO11Y_GUARDS_FAIL_OPEN=false\n" +
+				"AGENTO11Y_GUARDS_TIMEOUT_MS=900\n" +
+				"AGENTO11Y_STACK_URL=https://team.grafana.net\n" +
+				"AGENTO11Y_DEBUG=true\n" +
+				"AGENTO11Y_BIN=/tmp/evil\n",
+			want: formValues{
+				token:         "glc_test",
+				contentMode:   contentModeFull,
+				tags:          "team=core",
+				guards:        guardsClosed,
+				guardTimeout:  "900",
+				stackURL:      "https://team.grafana.net",
+				blockSettings: map[string]string{"AGENTO11Y_DEBUG": "true"},
+				blockRefused:  []string{"AGENTO11Y_BIN"},
+			},
+			wantFilled: pasteFilled{token: true},
 		},
 		{
 			// The same block after a single-line paste field replaced every
@@ -1494,6 +1520,34 @@ func TestValidatePastedBlock(t *testing.T) {
 			in:      "AGENTO11Y_AUTH_TOKEN=glc_test\nSIGIL_AUTO_CODING_AGENT_TAGS=maybe\n",
 			wantErr: "SIGIL_AUTO_CODING_AGENT_TAGS is not usable",
 			notIn:   "maybe",
+		},
+		{
+			// A form preference from a block gets the form's own rule.
+			name:    "a content capture mode the form does not offer",
+			in:      "AGENTO11Y_AUTH_TOKEN=glc_test\nSIGIL_CONTENT_CAPTURE_MODE=everything\n",
+			wantErr: "SIGIL_CONTENT_CAPTURE_MODE is not usable: use full, metadata_only, no_tool_content, or full_with_metadata_spans",
+			notIn:   "everything",
+		},
+		{
+			name:    "a guard timeout that is not a number",
+			in:      "AGENTO11Y_AUTH_TOKEN=glc_test\nAGENTO11Y_GUARDS_TIMEOUT_MS=soon\n",
+			wantErr: "AGENTO11Y_GUARDS_TIMEOUT_MS is not usable",
+			notIn:   "soon",
+		},
+		{
+			name:    "session tags without a value",
+			in:      "AGENTO11Y_AUTH_TOKEN=glc_test\nAGENTO11Y_TAGS=team\n",
+			wantErr: "AGENTO11Y_TAGS is not usable: use comma-separated key=value pairs",
+		},
+		{
+			name:    "a guards switch that is not a boolean",
+			in:      "AGENTO11Y_AUTH_TOKEN=glc_test\nAGENTO11Y_GUARDS_FAIL_OPEN=sometimes\n",
+			wantErr: "AGENTO11Y_GUARDS_FAIL_OPEN is not usable: use true or false",
+		},
+		{
+			name:    "a stack URL that is not a URL",
+			in:      "AGENTO11Y_AUTH_TOKEN=glc_test\nAGENTO11Y_STACK_URL=ftp://stack\n",
+			wantErr: "AGENTO11Y_STACK_URL is not usable",
 		},
 		{
 			name:    "an automatic tag name outside the allow-list",
@@ -3083,44 +3137,128 @@ func TestRun_Block(t *testing.T) {
 			},
 		},
 		{
-			// Beyond the credential and OTLP lines only the automatic tag keys
-			// are read, so a block cannot turn off TLS, point at a binary, or
-			// replace the saved stack.
-			name: "settings beyond the credentials are ignored",
+			// A block sets every setting the config file accepts, apart from
+			// the binary the plugins launch and the web UI directory, which
+			// would let whoever edits a shared block run code on every machine,
+			// and LOCAL, which login writes itself.
+			name: "a block sets every setting but the binary and the web UI directory",
 			opts: RunOpts{Block: block +
 				"AGENTO11Y_CONTENT_CAPTURE_MODE=full\n" +
 				"AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE=true\n" +
 				"AGENTO11Y_BIN=/tmp/evil\n" +
-				"SIGIL_STACK_URL=https://evil.example\n"},
-			wantStderr: "ignored AGENTO11Y_BIN, AGENTO11Y_CONTENT_CAPTURE_MODE, AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE, SIGIL_STACK_URL from the block",
+				"SIGIL_BIN=/tmp/evil\n" +
+				"SIGIL_LOCAL_WEB_DIR=/tmp/evil-web\n" +
+				"AGENTO11Y_LOCAL=true\n" +
+				"SIGIL_STACK_URL=https://other.grafana.net\n"},
+			wantStderr: "set AGENTO11Y_CONTENT_CAPTURE_MODE, AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE from the block.\n" +
+				"agento11y login: did not set AGENTO11Y_BIN, AGENTO11Y_LOCAL, SIGIL_BIN, SIGIL_LOCAL_WEB_DIR from the block",
 			wantFile: map[string]string{
-				"AGENTO11Y_CONTENT_CAPTURE_MODE":        "",
-				"AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE": "",
+				"AGENTO11Y_CONTENT_CAPTURE_MODE":        "full",
+				"AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE": "true",
 				"AGENTO11Y_BIN":                         "",
-				"AGENTO11Y_STACK_URL":                   "",
-				"SIGIL_STACK_URL":                       "",
+				"SIGIL_BIN":                             "",
+				"AGENTO11Y_LOCAL_WEB_DIR":               "",
+				"SIGIL_LOCAL_WEB_DIR":                   "",
+				"AGENTO11Y_LOCAL":                       "false",
+				"AGENTO11Y_STACK_URL":                   "https://other.grafana.net",
 			},
 		},
 		{
-			// PROTOCOL=otel is a real setting, and login does not write it, so
-			// the user must hear that it was left out.
-			name:       "a non-default protocol is named",
+			// --env-file shows no form, so a form preference the block leaves
+			// out keeps its saved value.
+			name:     "a preference the block leaves out keeps its saved value",
+			existing: "AGENTO11Y_CONTENT_CAPTURE_MODE=full\nAGENTO11Y_TAGS=team=core\n",
+			opts:     RunOpts{Block: block + "AGENTO11Y_GUARDS_ENABLED=true\n"},
+			wantFile: map[string]string{
+				"AGENTO11Y_CONTENT_CAPTURE_MODE": "full",
+				"AGENTO11Y_TAGS":                 "team=core",
+				"AGENTO11Y_GUARDS_ENABLED":       "true",
+			},
+		},
+		{
+			// Windows reads environment names without case, so a denied key in
+			// another case is refused as well.
+			name:       "a denied key in another case is refused",
+			opts:       RunOpts{Block: block + "AGENTO11Y_Bin=/tmp/evil\nSIGIL_local_web_dir=/tmp/web\nAGENTO11Y_LOCAL_ALLOWED_HOSTS=evil.example\n"},
+			wantStderr: "did not set AGENTO11Y_Bin, AGENTO11Y_LOCAL_ALLOWED_HOSTS, SIGIL_local_web_dir from the block",
+			wantFile: map[string]string{
+				"AGENTO11Y_Bin":                 "",
+				"SIGIL_Bin":                     "",
+				"SIGIL_local_web_dir":           "",
+				"AGENTO11Y_local_web_dir":       "",
+				"AGENTO11Y_LOCAL_ALLOWED_HOSTS": "",
+				"SIGIL_LOCAL_ALLOWED_HOSTS":     "",
+			},
+		},
+		{
+			// OTEL_AUTH_TOKEN and HEADERS carry the export credential, as the
+			// OTLP headers do, so a token flag drops them too.
+			name: "a token flag drops the block's export credentials",
+			opts: RunOpts{Block: block + "AGENTO11Y_OTEL_AUTH_TOKEN=glc_team\nAGENTO11Y_HEADERS=Authorization=Bearer team\n", Token: "glc_mine"},
+			wantFile: map[string]string{
+				"SIGIL_AUTH_TOKEN":          "glc_mine",
+				"AGENTO11Y_OTEL_AUTH_TOKEN": "",
+				"SIGIL_OTEL_AUTH_TOKEN":     "",
+				"AGENTO11Y_HEADERS":         "",
+			},
+		},
+		{
+			name:     "the block's own export credentials are kept without a flag",
+			opts:     RunOpts{Block: block + "AGENTO11Y_OTEL_AUTH_TOKEN=glc_team\n"},
+			wantFile: map[string]string{"AGENTO11Y_OTEL_AUTH_TOKEN": "glc_team"},
+		},
+		{
+			// The setup page's lines are the defaults, so they must not undo a
+			// saved opt-in.
+			name:        "the setup page's defaults keep a saved protocol",
+			existing:    "AGENTO11Y_PROTOCOL=otel\nAGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true\n",
+			opts:        RunOpts{Block: block + "AGENTO11Y_PROTOCOL=http\nAGENTO11Y_AUTH_MODE=basic\n"},
+			notInStderr: "AGENTO11Y_PROTOCOL",
+			wantFile: map[string]string{
+				"AGENTO11Y_PROTOCOL":                     "otel",
+				"AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "true",
+			},
+		},
+		{
+			// A quoted blank is no value, so it must not delete a saved one.
+			name:     "a blank value keeps the saved one",
+			existing: "AGENTO11Y_DEBUG=true\n",
+			opts:     RunOpts{Block: block + "AGENTO11Y_DEBUG=\" \"\n"},
+			wantFile: map[string]string{"AGENTO11Y_DEBUG": "true"},
+		},
+		{
+			// Both spellings are written with one value, the AGENTO11Y_ one, as
+			// a paste of the same block saves it.
+			name: "two spellings of a setting save one value",
+			opts: RunOpts{Block: block + "AGENTO11Y_CONTENT_CAPTURE_MODE=full\nSIGIL_CONTENT_CAPTURE_MODE=metadata_only\n"},
+			wantFile: map[string]string{
+				"AGENTO11Y_CONTENT_CAPTURE_MODE": "full",
+				"SIGIL_CONTENT_CAPTURE_MODE":     "full",
+			},
+		},
+		{
+			name:     "the block's stack URL is saved as an origin",
+			opts:     RunOpts{Block: block + "AGENTO11Y_STACK_URL=Team.grafana.net/a/foo\n"},
+			wantFile: map[string]string{"AGENTO11Y_STACK_URL": "https://team.grafana.net"},
+		},
+		{
+			name:       "a protocol and auth mode in the block are set",
 			existing:   "AGENTO11Y_PROTOCOL=http\n",
 			opts:       RunOpts{Block: block + "AGENTO11Y_PROTOCOL=otel\nAGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true\nSIGIL_AUTH_MODE=Tenant\n"},
-			wantStderr: "ignored AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES, AGENTO11Y_PROTOCOL, SIGIL_AUTH_MODE from the block",
+			wantStderr: "set AGENTO11Y_AUTH_MODE, AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES, AGENTO11Y_PROTOCOL from the block.",
 			wantFile: map[string]string{
-				"AGENTO11Y_PROTOCOL":                     "http",
-				"SIGIL_PROTOCOL":                         "",
-				"AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "",
-				"SIGIL_AUTH_MODE":                        "",
-				"AGENTO11Y_AUTH_MODE":                    "",
+				"AGENTO11Y_PROTOCOL":                     "otel",
+				"SIGIL_PROTOCOL":                         "otel",
+				"AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "true",
+				"SIGIL_AUTH_MODE":                        "Tenant",
+				"AGENTO11Y_AUTH_MODE":                    "Tenant",
 			},
 		},
 		{
 			// The setup page's block always carries these defaults.
-			name:        "the default protocol and auth mode are not named",
+			name:        "the setup page's protocol and auth mode refuse nothing",
 			opts:        RunOpts{Block: block + "AGENTO11Y_PROTOCOL= HTTP \nSIGIL_AUTH_MODE=basic\n"},
-			notInStderr: "ignored",
+			notInStderr: "did not set",
 		},
 		{
 			// The raw OTLP endpoint is a credential field login already
@@ -3251,5 +3389,28 @@ func TestRun_Block(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestRun_BlockReportsOnlyWhatItSaved checks that login does not say it set a
+// block's settings when the credential check fails and nothing is saved.
+func TestRun_BlockReportsOnlyWhatItSaved(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.env")
+	var stderr bytes.Buffer
+	_, err := Run(context.Background(), RunOpts{
+		ConfigPath: path,
+		Stdin:      nonTTYStdin(t),
+		Stderr:     &stderr,
+		Block: "AGENTO11Y_ENDPOINT=https://block.example.com\nAGENTO11Y_AUTH_TENANT_ID=456\n" +
+			"AGENTO11Y_AUTH_TOKEN=glc_block\nAGENTO11Y_DEBUG=true\nAGENTO11Y_BIN=/tmp/evil\n",
+		Probe: func(context.Context, string, string, string, bool) *doctor.ProbeResult {
+			return &doctor.ProbeResult{StatusCode: 401}
+		},
+	})
+	if !errors.Is(err, ErrNotVerified) {
+		t.Fatalf("expected ErrNotVerified, got %v", err)
+	}
+	if strings.Contains(stderr.String(), "from the block") {
+		t.Errorf("expected no report of block settings when nothing was saved, got:\n%s", stderr.String())
 	}
 }
