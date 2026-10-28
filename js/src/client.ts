@@ -66,6 +66,7 @@ import type {
   ToolExecutionRecorder,
   ToolExecutionResult,
   ToolExecutionStart,
+  ToolResultPart,
   WorkflowStep,
 } from './types.js';
 import {
@@ -825,6 +826,83 @@ export class Agento11yClient {
     return cloneGeneration(sanitized);
   }
 
+  /**
+   * Runs the generation sanitizer over the text a tool span shows. The
+   * sanitizer only takes generations, so the text goes in one built from the
+   * tool, where the same text sits in a real generation: the title in
+   * conversationTitle, the arguments in a tool_call part, and the result and
+   * the error in tool_result parts, the error one marked isError. Each gets
+   * the redaction it gets there. Text the sanitizer drops, or hands back as
+   * something other than a string, stays off the span. Returns undefined
+   * when the sanitizer throws or returns parts the SDK cannot read.
+   */
+  internalSanitizeToolSpanText(tool: ToolExecutionStart, text: ToolSpanText): ToolSpanText | undefined {
+    const output: Message[] = [];
+    if (text.arguments !== undefined) {
+      output.push({
+        role: 'assistant',
+        parts: [
+          { type: 'tool_call', toolCall: { id: tool.toolCallId, name: tool.toolName, inputJSON: text.arguments } },
+        ],
+      });
+    }
+    const toolResults: ToolResultPart[] = [];
+    if (text.result !== undefined) {
+      toolResults.push({ toolCallId: tool.toolCallId, name: tool.toolName, content: text.result });
+    }
+    if (text.error !== undefined) {
+      toolResults.push({ toolCallId: tool.toolCallId, name: tool.toolName, content: text.error, isError: true });
+    }
+    if (toolResults.length > 0) {
+      output.push({ role: 'tool', parts: toolResults.map((toolResult) => ({ type: 'tool_result', toolResult })) });
+    }
+    const now = this.internalNow();
+    try {
+      const sanitized = this.internalSanitizeGeneration({
+        id: tool.toolCallId ?? '',
+        conversationId: tool.conversationId,
+        conversationTitle: text.title,
+        agentName: tool.agentName,
+        agentVersion: tool.agentVersion,
+        mode: 'SYNC',
+        operationName: 'execute_tool',
+        model: { provider: tool.requestProvider ?? '', name: tool.requestModel ?? '' },
+        input: [],
+        output,
+        tools: [],
+        startedAt: now,
+        completedAt: now,
+        tags: {},
+        metadata: {},
+      });
+
+      let toolArguments: unknown;
+      let toolResult: unknown;
+      let toolError: unknown;
+      for (const message of sanitized.output ?? []) {
+        for (const part of message.parts ?? []) {
+          if (part.type === 'tool_call') {
+            toolArguments ??= part.toolCall.inputJSON;
+          } else if (part.type === 'tool_result' && part.toolResult.isError === true) {
+            toolError ??= part.toolResult.content;
+          } else if (part.type === 'tool_result') {
+            toolResult ??= part.toolResult.content;
+          }
+        }
+      }
+      // Only the fields the caller passed come back.
+      return {
+        title: text.title === undefined ? undefined : textOrUndefined(sanitized.conversationTitle),
+        arguments: text.arguments === undefined ? undefined : textOrUndefined(toolArguments),
+        result: text.result === undefined ? undefined : textOrUndefined(toolResult),
+        error: text.error === undefined ? undefined : textOrUndefined(toolError),
+      };
+    } catch (error) {
+      this.internalLogWarn('agento11y tool span sanitization failed; leaving its text off the span', error);
+      return undefined;
+    }
+  }
+
   internalStartGenerationSpan(
     seed: GenerationStart,
     mode: GenerationMode,
@@ -1039,49 +1117,81 @@ export class Agento11yClient {
       span.setAttribute('process.exit.code', toolExecution.processExitCode);
     }
 
+    let toolArguments: string | undefined;
+    let toolResult: string | undefined;
     if (toolExecution.includeContent) {
       const argumentsResult = serializeToolContent(toolExecution.arguments);
       if (argumentsResult.error !== undefined && localError === undefined) {
         localError = argumentsResult.error;
-      } else if (argumentsResult.value !== undefined) {
-        span.setAttribute(spanAttrToolCallArguments, argumentsResult.value);
+      } else {
+        toolArguments = argumentsResult.value;
       }
 
       const resultValue = serializeToolContent(toolExecution.result);
       if (resultValue.error !== undefined && localError === undefined) {
         localError = resultValue.error;
-      } else if (resultValue.value !== undefined) {
-        span.setAttribute(spanAttrToolCallResult, resultValue.value);
+      } else {
+        toolResult = resultValue.value;
       }
     }
 
     // Tools have no proto export; under both stripped modes the span must
     // not echo raw provider exception text via recordException events or the
     // status description.
-    const redactSpanErrors =
-      contentCaptureMode === 'metadata_only' || contentCaptureMode === 'full_with_metadata_spans';
+    let redactSpanErrors = contentCaptureMode === 'metadata_only' || contentCaptureMode === 'full_with_metadata_spans';
+
+    // The generation sanitizer redacts the same arguments, result and error
+    // on the generation, where the error is an error tool result, so the
+    // span shows them redacted too. If it throws, none of that text goes on
+    // the span.
+    const sanitizing = !redactSpanErrors && this.config.generationSanitizer !== undefined;
+    let errorText = toolExecution.callError ?? localError?.message;
+    if (sanitizing && (toolArguments !== undefined || toolResult !== undefined || errorText !== undefined)) {
+      const sanitized = this.internalSanitizeToolSpanText(toolExecution, {
+        arguments: toolArguments,
+        result: toolResult,
+        error: errorText,
+      });
+      toolArguments = sanitized?.arguments;
+      toolResult = sanitized?.result;
+      errorText = sanitized?.error;
+      if (sanitized === undefined) {
+        redactSpanErrors = true;
+      }
+    }
+    if (toolArguments !== undefined) {
+      span.setAttribute(spanAttrToolCallArguments, toolArguments);
+    }
+    if (toolResult !== undefined) {
+      span.setAttribute(spanAttrToolCallResult, toolResult);
+    }
 
     if (toolExecution.callError !== undefined) {
       const errorCategory = errorCategoryFromError(toolExecution.callError, true);
-      if (!redactSpanErrors) {
-        span.recordException(new Error(toolExecution.callError));
+      // A sanitizer that cleared the error leaves only its category.
+      const message = sanitizing ? errorText : toolExecution.callError;
+      if (!redactSpanErrors && message !== undefined) {
+        span.recordException(new Error(message));
       }
       span.setAttribute(spanAttrErrorType, 'tool_execution_error');
       span.setAttribute(spanAttrErrorCategory, errorCategory);
       span.setStatus({
         code: SpanStatusCode.ERROR,
-        message: redactSpanErrors ? errorCategory : toolExecution.callError,
+        message: redactSpanErrors ? errorCategory : (message ?? errorCategory),
       });
     } else if (localError !== undefined) {
       const errorCategory = errorCategoryFromError(localError, true);
-      if (!redactSpanErrors) {
-        span.recordException(localError);
+      const message = sanitizing ? errorText : localError.message;
+      if (!redactSpanErrors && message !== undefined) {
+        // The error's own stack starts with its raw message, so a sanitized
+        // exception leaves the stack out.
+        span.recordException(sanitizing ? { name: localError.name, message } : localError);
       }
       span.setAttribute(spanAttrErrorType, 'tool_execution_error');
       span.setAttribute(spanAttrErrorCategory, errorCategory);
       span.setStatus({
         code: SpanStatusCode.ERROR,
-        message: redactSpanErrors ? errorCategory : localError.message,
+        message: redactSpanErrors ? errorCategory : (message ?? errorCategory),
       });
     } else {
       span.setStatus({ code: SpanStatusCode.OK });
@@ -1886,6 +1996,12 @@ class ToolExecutionRecorderImpl implements ToolExecutionRecorder {
     if (this.toolMode === 'metadata_only' || this.toolMode === 'full_with_metadata_spans') {
       this.seed.conversationTitle = undefined;
       this.seed.toolDescription = undefined;
+    } else if (notEmpty(this.seed.conversationTitle) && this.client.internalHasGenerationSanitizer()) {
+      // The sanitizer redacts this title on the generation, so the tool span
+      // shows it redacted too.
+      this.seed.conversationTitle = this.client.internalSanitizeToolSpanText(this.seed, {
+        title: this.seed.conversationTitle,
+      })?.title;
     }
     this.resolvedIncludeContent = shouldIncludeToolContent(this.toolMode, this.seed.includeContent ?? false);
     this.startedAt = this.seed.startedAt ?? this.client.internalNow();
@@ -2344,6 +2460,14 @@ function setEmbeddingEndSpanAttributes(
   }
 }
 
+/** The text on a tool span that the generation sanitizer redacts. */
+interface ToolSpanText {
+  title?: string;
+  arguments?: string;
+  result?: string;
+  error?: string;
+}
+
 function toolSpanAttributes(tool: ToolExecutionStart): Record<string, string> {
   const attrs: Record<string, string> = {
     [spanAttrOperationName]: 'execute_tool',
@@ -2767,6 +2891,10 @@ function isJSON(value: string): boolean {
 
 function notEmpty(value: string | undefined): value is string {
   return value !== undefined && value.trim().length > 0;
+}
+
+function textOrUndefined(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
 }
 
 /**

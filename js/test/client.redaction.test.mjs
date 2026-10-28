@@ -2,7 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { SpanStatusCode, trace } from '@opentelemetry/api';
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
-import { Agento11yClient, createSecretRedactionSanitizer, defaultConfig } from '../.test-dist/index.js';
+import {
+  Agento11yClient,
+  createSecretRedactionSanitizer,
+  defaultConfig,
+  withConversationTitle,
+} from '../.test-dist/index.js';
 
 class CapturingExporter {
   requests = [];
@@ -227,12 +232,13 @@ test('secret redaction sanitizer redacts systemPrompt, conversationTitle, and ca
 function newSanitizingClient(
   exporter,
   generationSanitizer,
-  { tracer = trace.getTracer('agento11y-sdk-js-test'), contentCapture } = {},
+  { tracer = trace.getTracer('agento11y-sdk-js-test'), contentCapture, logger } = {},
 ) {
   const defaults = defaultConfig();
   return new Agento11yClient({
     tracer,
     contentCapture,
+    ...(logger ? { logger } : {}),
     generationExport: {
       ...defaults.generationExport,
       batchSize: 1,
@@ -397,6 +403,292 @@ test('generation sanitizer leaves no title on the span when the generation had n
 
     const span = singleSpan(spanExporter);
     assert.equal('agento11y.conversation.title' in span.attributes, false);
+  } finally {
+    await client.shutdown();
+    await traceProvider.shutdown();
+  }
+});
+
+function recordSecretToolCall(client, apiKey) {
+  const recorder = client.startToolExecution({
+    toolName: 'bash',
+    toolCallId: 'call-1',
+    conversationTitle: `Discussion about ${apiKey}`,
+    includeContent: true,
+  });
+  recorder.setResult({ arguments: { command: `curl -H 'x-api-key: ${apiKey}'` }, result: `echoed ${apiKey}` });
+  recorder.setCallError(new Error(`tool failed with ${apiKey}`));
+  recorder.end();
+}
+
+for (const contentCapture of ['default', 'full']) {
+  test(`secret redaction sanitizer also redacts the title, arguments, result and error on a ${contentCapture} tool span`, async () => {
+    const { spanExporter, traceProvider, tracer } = newSpanCapture();
+    const client = newSanitizingClient(new CapturingExporter(), createSecretRedactionSanitizer(), {
+      tracer,
+      contentCapture,
+    });
+
+    try {
+      const apiKey = `sk-proj-${'a'.repeat(48)}`;
+      recordSecretToolCall(client, apiKey);
+
+      const span = singleSpan(spanExporter);
+      assert.equal(span.attributes['gen_ai.tool.name'], 'bash');
+      assert.match(span.attributes['agento11y.conversation.title'], /\[REDACTED:openai-project-key\]/);
+      assert.match(JSON.parse(span.attributes['gen_ai.tool.call.arguments']).command, /\[REDACTED:/);
+      assert.match(span.attributes['gen_ai.tool.call.result'], /\[REDACTED:openai-project-key\]/);
+      assert.equal(span.status.code, SpanStatusCode.ERROR);
+      assert.match(span.status.message, /\[REDACTED:openai-project-key\]/);
+      assert.equal(span.events.length, 1);
+      assert.match(span.events[0].attributes['exception.message'], /\[REDACTED:openai-project-key\]/);
+      assert.doesNotMatch(JSON.stringify([span.attributes, span.status, span.events]), /sk-proj-/);
+    } finally {
+      await client.shutdown();
+      await traceProvider.shutdown();
+    }
+  });
+}
+
+test('generation sanitizer that drops the tool span text leaves none of it on the span', async () => {
+  const { spanExporter, traceProvider, tracer } = newSpanCapture();
+  const client = newSanitizingClient(
+    new CapturingExporter(),
+    (generation) => ({ ...generation, conversationTitle: '', output: [] }),
+    { tracer, contentCapture: 'full' },
+  );
+
+  try {
+    const apiKey = `sk-proj-${'a'.repeat(48)}`;
+    recordSecretToolCall(client, apiKey);
+
+    const span = singleSpan(spanExporter);
+    assert.equal('agento11y.conversation.title' in span.attributes, false);
+    assert.equal('gen_ai.tool.call.arguments' in span.attributes, false);
+    assert.equal('gen_ai.tool.call.result' in span.attributes, false);
+    assert.equal(span.status.code, SpanStatusCode.ERROR);
+    assert.equal(span.status.message, span.attributes['error.category']);
+    assert.equal(span.events.length, 0);
+    assert.doesNotMatch(JSON.stringify([span.attributes, span.status, span.events]), /sk-proj-/);
+  } finally {
+    await client.shutdown();
+    await traceProvider.shutdown();
+  }
+});
+
+test('secret redaction sanitizer gives a tool error the redaction a tool result gets', async () => {
+  const { spanExporter, traceProvider, tracer } = newSpanCapture();
+  const client = newSanitizingClient(new CapturingExporter(), createSecretRedactionSanitizer(), { tracer });
+
+  try {
+    const recorder = client.startToolExecution({ toolName: 'bash' });
+    recorder.setCallError(new Error('exit 1: DATABASE_PASSWORD=hunter2secret123'));
+    recorder.end();
+
+    const span = singleSpan(spanExporter);
+    assert.match(span.status.message, /DATABASE_PASSWORD=\[REDACTED:/);
+    assert.match(span.events[0].attributes['exception.message'], /DATABASE_PASSWORD=\[REDACTED:/);
+    assert.doesNotMatch(JSON.stringify([span.attributes, span.status, span.events]), /hunter2secret123/);
+  } finally {
+    await client.shutdown();
+    await traceProvider.shutdown();
+  }
+});
+
+test('secret redaction sanitizer also redacts a tool span title that comes from context', async () => {
+  const { spanExporter, traceProvider, tracer } = newSpanCapture();
+  const client = newSanitizingClient(new CapturingExporter(), createSecretRedactionSanitizer(), { tracer });
+
+  try {
+    const apiKey = `sk-proj-${'a'.repeat(48)}`;
+    withConversationTitle(`Discussion about ${apiKey}`, () => {
+      client.startToolExecution({ toolName: 'bash' }).end();
+    });
+
+    const span = singleSpan(spanExporter);
+    assert.match(span.attributes['agento11y.conversation.title'], /\[REDACTED:openai-project-key\]/);
+    assert.doesNotMatch(JSON.stringify(span.attributes), /sk-proj-/);
+  } finally {
+    await client.shutdown();
+    await traceProvider.shutdown();
+  }
+});
+
+test('generation sanitizer that returns non-string tool span text leaves it off without throwing', async () => {
+  const { spanExporter, traceProvider, tracer } = newSpanCapture();
+  const redact = createSecretRedactionSanitizer();
+  const client = newSanitizingClient(
+    new CapturingExporter(),
+    (generation) => {
+      const redacted = redact(generation);
+      return {
+        ...redacted,
+        conversationTitle: null,
+        output: redacted.output.map((message) => ({
+          ...message,
+          parts: message.parts.map((part) =>
+            part.type === 'tool_call' ? { ...part, toolCall: { ...part.toolCall, inputJSON: { command: 'x' } } } : part,
+          ),
+        })),
+      };
+    },
+    { tracer, contentCapture: 'full' },
+  );
+
+  try {
+    const apiKey = `sk-proj-${'a'.repeat(48)}`;
+    recordSecretToolCall(client, apiKey);
+
+    const span = singleSpan(spanExporter);
+    assert.equal('agento11y.conversation.title' in span.attributes, false);
+    assert.equal('gen_ai.tool.call.arguments' in span.attributes, false);
+    assert.match(span.attributes['gen_ai.tool.call.result'], /\[REDACTED:openai-project-key\]/);
+    assert.match(span.status.message, /\[REDACTED:openai-project-key\]/);
+    assert.doesNotMatch(JSON.stringify([span.attributes, span.status, span.events]), /sk-proj-/);
+  } finally {
+    await client.shutdown();
+    await traceProvider.shutdown();
+  }
+});
+
+test('generation sanitizer that returns an unknown part leaves no tool span text', async () => {
+  const { spanExporter, traceProvider, tracer } = newSpanCapture();
+  const warnings = [];
+  const client = newSanitizingClient(
+    new CapturingExporter(),
+    (generation) => ({ ...generation, output: [{ role: 'tool', parts: [{ type: 'image' }] }] }),
+    { tracer, contentCapture: 'full', logger: { warn: (message) => warnings.push(message) } },
+  );
+
+  try {
+    const recorder = client.startToolExecution({ toolName: 'bash' });
+    recorder.setResult({ arguments: { command: 'ls' }, result: 'private output' });
+    recorder.setCallError(new Error('private error'));
+    recorder.end();
+
+    const span = singleSpan(spanExporter);
+    assert.equal('gen_ai.tool.call.arguments' in span.attributes, false);
+    assert.equal('gen_ai.tool.call.result' in span.attributes, false);
+    assert.equal(span.status.message, span.attributes['error.category']);
+    assert.equal(span.events.length, 0);
+    assert.doesNotMatch(JSON.stringify([span.attributes, span.status, span.events]), /private/);
+    assert.ok(warnings.some((message) => message.includes('tool span sanitization failed')));
+  } finally {
+    await client.shutdown();
+    await traceProvider.shutdown();
+  }
+});
+
+test('generation sanitizer that throws leaves no tool span text and no exception event', async () => {
+  const { spanExporter, traceProvider, tracer } = newSpanCapture();
+  const warnings = [];
+  const client = newSanitizingClient(
+    new CapturingExporter(),
+    () => {
+      throw new Error('sanitizer broke');
+    },
+    { tracer, contentCapture: 'full', logger: { warn: (message) => warnings.push(message) } },
+  );
+
+  try {
+    const apiKey = `sk-proj-${'a'.repeat(48)}`;
+    recordSecretToolCall(client, apiKey);
+
+    const span = singleSpan(spanExporter);
+    assert.equal(span.attributes['gen_ai.tool.name'], 'bash');
+    assert.equal('agento11y.conversation.title' in span.attributes, false);
+    assert.equal('gen_ai.tool.call.arguments' in span.attributes, false);
+    assert.equal('gen_ai.tool.call.result' in span.attributes, false);
+    assert.equal(span.status.code, SpanStatusCode.ERROR);
+    assert.equal(span.status.message, span.attributes['error.category']);
+    assert.equal(span.events.length, 0);
+    assert.doesNotMatch(JSON.stringify([span.attributes, span.status, span.events]), /sk-proj-/);
+    assert.ok(warnings.some((message) => message.includes('tool span sanitization failed')));
+  } finally {
+    await client.shutdown();
+    await traceProvider.shutdown();
+  }
+});
+
+test('secret redaction sanitizer redacts a tool content error and leaves its raw stack off the span', async () => {
+  const { spanExporter, traceProvider, tracer } = newSpanCapture();
+  const client = newSanitizingClient(new CapturingExporter(), createSecretRedactionSanitizer(), {
+    tracer,
+    contentCapture: 'full',
+  });
+
+  try {
+    const apiKey = `sk-proj-${'a'.repeat(48)}`;
+    const recorder = client.startToolExecution({ toolName: 'bash' });
+    recorder.setResult({
+      arguments: {
+        toJSON() {
+          throw new TypeError(`cannot encode ${apiKey}`);
+        },
+      },
+    });
+    recorder.end();
+
+    const span = singleSpan(spanExporter);
+    assert.equal(span.status.code, SpanStatusCode.ERROR);
+    assert.match(span.status.message, /\[REDACTED:openai-project-key\]/);
+    assert.equal(span.events.length, 1);
+    assert.equal(span.events[0].attributes['exception.type'], 'TypeError');
+    assert.match(span.events[0].attributes['exception.message'], /\[REDACTED:openai-project-key\]/);
+    assert.equal('exception.stacktrace' in span.events[0].attributes, false);
+    assert.doesNotMatch(JSON.stringify([span.attributes, span.status, span.events]), /sk-proj-/);
+  } finally {
+    await client.shutdown();
+    await traceProvider.shutdown();
+  }
+});
+
+function recordUnencodableToolArguments(client, message) {
+  const recorder = client.startToolExecution({ toolName: 'bash' });
+  recorder.setResult({
+    arguments: {
+      toJSON() {
+        throw new TypeError(message);
+      },
+    },
+  });
+  recorder.end();
+}
+
+test('generation sanitizer that clears a tool content error leaves only its category', async () => {
+  const { spanExporter, traceProvider, tracer } = newSpanCapture();
+  const client = newSanitizingClient(new CapturingExporter(), (generation) => ({ ...generation, output: [] }), {
+    tracer,
+    contentCapture: 'full',
+  });
+
+  try {
+    recordUnencodableToolArguments(client, 'cannot encode private value');
+
+    const span = singleSpan(spanExporter);
+    assert.equal(span.status.code, SpanStatusCode.ERROR);
+    assert.equal(span.status.message, span.attributes['error.category']);
+    assert.equal(span.events.length, 0);
+    assert.doesNotMatch(JSON.stringify([span.attributes, span.status, span.events]), /private value/);
+  } finally {
+    await client.shutdown();
+    await traceProvider.shutdown();
+  }
+});
+
+test('tool content error keeps its message and stack on the span without a sanitizer', async () => {
+  const { spanExporter, traceProvider, tracer } = newSpanCapture();
+  const client = newSanitizingClient(new CapturingExporter(), undefined, { tracer, contentCapture: 'full' });
+
+  try {
+    recordUnencodableToolArguments(client, 'cannot encode value');
+
+    const span = singleSpan(spanExporter);
+    assert.equal(span.status.message, 'cannot encode value');
+    assert.equal(span.events.length, 1);
+    assert.equal(span.events[0].attributes['exception.type'], 'TypeError');
+    assert.equal(span.events[0].attributes['exception.message'], 'cannot encode value');
+    assert.match(span.events[0].attributes['exception.stacktrace'], /TypeError: cannot encode value/);
   } finally {
     await client.shutdown();
     await traceProvider.shutdown();
