@@ -102,9 +102,9 @@ Live capture recognizes the standard `skill` tool with version-specific input:
 
 Custom tools named `skill` can match the same signature. Detection does not verify that the tool is built in.
 
-Recognized attempts add `gen_ai.skill.name` to existing tool-execution spans, including failed attempts. They do not prove that instructions loaded successfully or guided later actions. Validated names remain in reduced modes, including `metadata_only` and `full_with_metadata_spans`; names that look like secrets are omitted. Detection adds no descriptions, paths, or URIs, changes no payload policy, and adds no metric labels.
+Recognized attempts mark existing tool-execution spans with `gen_ai.skill.name`, including failures. The requested identifier keeps its case and namespace; only surrounding whitespace is trimmed. It is not rewritten to a resolved directory basename. Recognition does not prove successful loading or explain later actions. It excludes imported history, direct `/skill` prompt insertion, resource reads, scripts, and attribution of later activity. Validated names remain in reduced capture modes; secret-like names are omitted. Recognition adds no descriptions, paths, URIs, or metric labels and changes no payload policy.
 
-Skill visibility requires retained tool and generation spans in Tempo plus deployed Sigil consumer support. A conversation alone is insufficient. Detection excludes history import, direct `/skill` prompt insertion, resource reads, scripts, and attribution of later activity.
+For local capture, open **Analytics > Skills**. See [Local skill analytics](../agento11y/README.md#local-skill-analytics) for counts, timing coverage, and session drilldowns. Local recording and analytics need no Tempo. Cloud skill visibility requires retained tool and generation spans in Tempo plus deployed Sigil consumer support; a Cloud conversation alone is insufficient.
 
 ## OpenCode 2
 

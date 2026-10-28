@@ -349,6 +349,7 @@ export function PageHero({ title, desc, descStyle, stats = [], style }: PageHero
           direction="row"
           align="baseline"
           gap={18}
+          wrap="wrap"
           style={{
             fontFamily: 'var(--fontFamilyMonospace)',
             fontSize: 12.5,

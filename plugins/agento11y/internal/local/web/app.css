@@ -611,6 +611,7 @@
       font-family: var(--fontFamilyMonospace);
       font-size: 12px;
     }
+    .tools-stat { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
     .tools-stat strong { font-weight: 500; }
     .tools-filter-bar {
       display: flex;
@@ -799,8 +800,8 @@
       color: var(--fg3);
       font: 11px var(--fontFamilyMonospace);
     }
-    .tools-chart-legend li { display: inline-flex; align-items: center; gap: 6px; }
-    .tools-chart-legend i { width: 10px; height: 10px; border-radius: 1px; }
+    .tools-chart-legend li { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+    .tools-chart-legend i { flex: 0 0 10px; height: 10px; border-radius: 1px; }
     .tools-chart-body { min-height: 164px; padding: 16px 16px 12px; }
     .tools-chart-state {
       min-height: 130px;

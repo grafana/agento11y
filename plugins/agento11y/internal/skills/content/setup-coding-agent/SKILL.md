@@ -178,7 +178,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana.net/otlp
 OTEL_EXPORTER_OTLP_HEADERS='Authorization=Basic <base64-value>'
 ```
 
-Without OTLP, default HTTP conversations work but analytics does not. Login rejects placeholders; flags can replace pasted values. Login ignores pasted protocol and auth-mode values. Configure experimental OTel through the environment or `config.env`, as described in the Reference. Existing config keys stay.
+Without OTLP, default HTTP conversations work but Cloud analytics does not. Local recording and analytics need no Tempo or Cloud credentials. Login rejects placeholders; flags can replace pasted values. Login ignores pasted protocol and auth-mode values. Configure experimental OTel through the environment or `config.env`, as described in the Reference. Existing config keys stay.
 
 For default HTTP capture and analytics, one token needs `sigil:write`, `metrics:write`, and `traces:write`. Generated policies can include extra scopes; the HTTP integrations use only these three.
 
@@ -276,7 +276,7 @@ only if they ask; silently shadowing their agent command is surprising.
    user trusted the hooks from `/hooks`. Read launcher stderr for lines starting
    with `agento11y:`.
 
-Confirm conversations and analytics separately. With default HTTP capture, conversations can arrive while **Analytics** stays empty. Check OTLP when that happens.
+For local capture, run `agento11y local open`. Check **Sessions** and **Analytics > Overview**. Optionally check **Analytics > Skills** after a recognized skill-load attempt in Claude Code, Pi, or OpenCode. For Cloud, confirm conversations and analytics separately. With default HTTP capture, conversations can arrive while Cloud **Analytics** stays empty. Check OTLP when that happens.
 
 ## Troubleshooting
 
@@ -437,11 +437,12 @@ For direct OTel export, the SDK upgrades `full_with_metadata_spans` to `full`, s
 
 Capture modes choose which fields ship. By default, every plugin redacts known secret formats from captured content, but redaction does not guarantee that shipped content is safe. Ask before enabling `full`, especially on shared machines. Hosts can omit or truncate fields.
 
-Live skill-load detection covers native tools in [Claude Code](https://github.com/grafana/agento11y/tree/main/plugins/claude-code#3-verify) and [OpenCode](https://github.com/grafana/agento11y/tree/main/plugins/opencode#3-verify), and catalog-matched instruction reads in [Pi](https://github.com/grafana/agento11y/tree/main/plugins/pi#3-verify).
-Recognized attempts add `gen_ai.skill.name` to existing tool-execution spans, including failures. They do not prove successful instruction loading or explain later actions.
-Validated names remain in reduced modes; secret-like names are omitted. Detection adds no descriptions, paths, URIs, or metric labels and changes no payload policy.
-Detection does not cover other hosts, history import, direct `/skill` prompt insertion, resource reads, scripts, or attribution of later activity.
-Skill visibility requires retained tool and generation spans in Tempo plus deployed Sigil consumer support; a conversation alone is insufficient.
+Live skill-load recognition covers native tools in [Claude Code](https://github.com/grafana/agento11y/tree/main/plugins/claude-code#3-verify) and [OpenCode](https://github.com/grafana/agento11y/tree/main/plugins/opencode#3-verify), and catalog-matched instruction reads in [Pi](https://github.com/grafana/agento11y/tree/main/plugins/pi#3-verify).
+Recognized attempts mark existing tool spans with `gen_ai.skill.name`, including failures, without proving successful loading or explaining later actions.
+Validated names remain in reduced modes; secret-like names are omitted. Recognition adds no descriptions, paths, URIs, or metric labels and changes no payload policy.
+Recognition excludes other hosts, imported history, direct `/skill` prompt insertion, resource reads, scripts, and attribution of later activity.
+Claude Code and OpenCode retain requested identifiers, not resolved directory basenames; Pi retains catalog names. Only surrounding whitespace is trimmed.
+Cloud skill visibility requires retained tool and generation spans in Tempo plus deployed Sigil consumer support. Local recording and analytics do not require Tempo.
 
 ### Local mode
 
@@ -449,6 +450,9 @@ Skill visibility requires retained tool and generation spans in Tempo plus deplo
 **Local only** does not forward. **Local web UI = No** sends directly to Cloud without a local copy. `--no-local` uses Cloud once without changing either saved alias family. The launcher prints the viewer URL. Manage the daemon with `agento11y local start|open|status|stop|restart`.
 Local mode is available on every supported platform. A launcher starts the receiver in the same invocation; a saved choice from Cursor install applies to the next hook.
 With `AGENTO11Y_GUARDS_ENABLED=true`, evaluate `guards.toml` next to `config.env`. `reject = true` blocks on match; `shell_command` is for shell policies. Fail-open is Cloud-only. For pack selection, configuration, and testing, follow `agento11y skills show setup-local-guards`.
+
+Local **Analytics > Skills** counts all retained calls marked with a skill name, including loads, resource reads, commands, and failures. Case and namespace remain distinct. **Tools** and **Skills** overlap; never add their counts together.
+Duration coverage and p50/p95 describe tool calls, not skill effectiveness or cost. Skill row and chart links open **Sessions** filtered by the exact identifier, workspace, and time bounds. Summary tiles show matching sessions' in-period generation usage; session rows show lifetime totals. The token chart covers all generation usage in that range and workspace, not skill-attributed usage. Imports do not reconstruct missing skill metadata. See [Local skill analytics](https://github.com/grafana/agento11y/tree/main/plugins/agento11y#local-skill-analytics) for timing and retention limits.
 
 For an offline dry run, use `agento11y guards test 'rm -rf ~/.ssh'`. It does not execute input, check Cloud rules, contact endpoints, start a daemon, or write files. It tests saved policy even when host guard requests are disabled, without predicting host enforcement. Disabled rules and absent packs stay unchanged.
 - Flags precede one quoted command: `agento11y guards test [--json] [--rules path] [--tool name] [--agent name] [--stdin] [--] <command>`. Use `--` before a command starting with a dash. Alternatively, `printf '%s\n' 'echo first' 'echo second' | agento11y guards test --stdin` reads one command through EOF, preserving newlines. Blank commands and empty tool names are errors.

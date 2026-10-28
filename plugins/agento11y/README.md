@@ -158,9 +158,11 @@ Run `agento11y skills show setup-local-guards` and follow it to help me choose, 
 
 The skills for instrumenting your own application code are separate and ship with [`gcx`](https://github.com/grafana/gcx) instead: `gcx agent skills install agento11y-instrument`.
 
-Live skill-load detection covers native tools in [Claude Code](../claude-code/README.md#3-verify) and [OpenCode](../opencode/README.md#3-verify), and catalog-matched instruction reads in [Pi](../pi/README.md#3-verify). Recognized attempts add `gen_ai.skill.name` to existing tool-execution spans, including failures. They do not prove successful instruction loading or explain later actions. Validated names remain in reduced modes; secret-like names are omitted. Detection adds no descriptions, paths, URIs, or metric labels and changes no payload policy.
+Live skill-load recognition covers native tools in [Claude Code](../claude-code/README.md#3-verify) and [OpenCode](../opencode/README.md#3-verify), and catalog-matched instruction reads in [Pi](../pi/README.md#3-verify). Recognized attempts add `gen_ai.skill.name` to existing tool-execution spans, including failures. They do not prove successful instruction loading or explain later actions. Validated names remain in reduced modes; secret-like names are omitted. Recognition adds no descriptions, paths, URIs, or metric labels and changes no payload policy.
 
-Detection does not cover other hosts, history import, direct `/skill` prompt insertion, resource reads, scripts, or attribution of later activity. Skill visibility requires retained tool and generation spans in Tempo plus deployed Sigil consumer support; a conversation alone is insufficient.
+Recognition excludes other hosts, imported history, direct `/skill` prompt insertion, resource reads, scripts, and attribution of later activity. Claude Code and OpenCode retain the requested identifier, not a resolved directory basename. Pi retains the matched catalog name. Names keep their case and namespace; only surrounding whitespace is trimmed.
+
+See [Local skill analytics](#local-skill-analytics) for retained calls on this machine. Cloud skill visibility requires retained tool and generation spans in Tempo plus deployed Sigil consumer support. A Cloud conversation alone is insufficient. Tempo is not required for local recording or analytics.
 
 ## Local mode
 
@@ -171,6 +173,18 @@ Detection does not cover other hosts, history import, direct `/skill` prompt ins
 The daemon always stores full session content locally. It forwards full generation content only when `AGENTO11Y_CONTENT_CAPTURE_MODE=full`. Every other selected capture mode is reduced to `metadata_only` for the forwarded copy. Local mode is available on every supported platform.
 
 Manage the app with `agento11y local start|open|status|stop|restart`. `agento11y local open` starts the receiver if needed, prints its address, and tries to open the app.
+
+### Local skill analytics
+
+Open **Analytics > Skills** in the local app to inspect retained tool calls by time range and workspace. The view counts every call marked with a nonblank skill name, including loads, resource reads, commands, and failures. It does not infer unmarked activity or reconstruct missing skill metadata in older recordings or imported history.
+
+Skill identifiers are exact after trimming surrounding whitespace. `Team:Review`, `team:Review`, and `Review` remain separate rows. **Tools** and **Skills** overlap: a marked call appears in both. Never add their counts together. Name search filters only the table, not totals or the chart.
+
+The **timed calls** count shows duration coverage. The p50 and p95 values use only calls with valid start and end timestamps, including zero-duration calls. Missing or inverted timestamps supply no duration sample. These are tool-call durations, not skill effectiveness, total skill runtime, or cost. Host timing can be approximate; Claude Code's transcript-based duration can include approval waits.
+
+Select a skill row to open matching **Sessions** with the exact identifier, workspace, and time bounds. A chart segment narrows those bounds to its bucket. The start is inclusive; the end is exclusive. A retained call without a readable session can count in analytics but cannot create a session row.
+
+Session summary tiles show generation usage within the selected period for matching sessions, not usage attributed to the skill. Session rows show lifetime cost, tokens, and duration. The token chart covers all generation usage in the exact time range and workspace, not only matching sessions. A matching call can fall inside the period while its generation falls outside, leaving a matching session with zero in-period usage.
 
 ### Local guards
 
