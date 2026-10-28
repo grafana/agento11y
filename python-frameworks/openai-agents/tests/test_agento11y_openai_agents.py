@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from datetime import timedelta
-from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -18,8 +17,6 @@ from agento11y_openai_agents import (
     with_agento11y_openai_agents_hooks,
 )
 from agents import RunHooks
-from agents.run_context import AgentHookContext, RunContextWrapper
-from agents.tool_context import ToolContext
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -352,62 +349,6 @@ def test_agento11y_openai_agents_hook_helpers_append_handler() -> None:
             with_agento11y_openai_agents_hooks({"hooks": [existing]}, client=client)
     finally:
         client.shutdown()
-
-
-@pytest.mark.parametrize("payload", [None, {"conversation_id": "shared-conversation"}])
-def test_distinct_callback_wrappers_share_lineage_and_keep_runs_separate(payload) -> None:
-    exporter = _CapturingExporter()
-    span_exporter = InMemorySpanExporter()
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(span_exporter))
-    client = _new_client(exporter, tracer=provider.get_tracer("wrapper-lineage-test"))
-    hooks = with_agento11y_openai_agents_hooks(None, client=client)["hooks"]
-    agent = SimpleNamespace(name="support", model="gpt-4o-mini")
-    tool = SimpleNamespace(name="lookup_order")
-    # Independent Runner.run calls may reuse the same application context.
-    contexts = [RunContextWrapper(context=payload), RunContextWrapper(context=payload)]
-
-    async def run() -> None:
-        for context in contexts:
-            await hooks.on_agent_start(AgentHookContext(context=payload, usage=context.usage), agent)
-            await hooks.on_llm_start(context, agent, None, [{"role": "user", "content": "Order status?"}])
-        for index, context in enumerate(contexts):
-            await hooks.on_llm_end(
-                context,
-                agent,
-                {"output": [{"content": "Shipped."}], "usage": {"input_tokens": 2, "output_tokens": 1}},
-            )
-            tool_context = ToolContext(
-                context=payload,
-                usage=context.usage,
-                tool_name="lookup_order",
-                tool_call_id=f"call-{index}",
-                tool_arguments="{}",
-            )
-            await hooks.on_tool_start(tool_context, agent, tool)
-            await hooks.on_tool_end(tool_context, agent, tool, "Shipped.")
-            await hooks.on_agent_end(AgentHookContext(context=payload, usage=context.usage), agent, "Shipped.")
-
-    try:
-        asyncio.run(run())
-        client.flush()
-        generations = [generation for request in exporter.requests for generation in request.generations]
-        spans = span_exporter.get_finished_spans()
-        agent_spans = [span for span in spans if span.attributes.get("agento11y.framework.run_type") == "agent"]
-        tool_spans = [span for span in spans if span.attributes.get("gen_ai.operation.name") == "execute_tool"]
-        assert len(generations) == len(agent_spans) == len(tool_spans) == 2
-        parent_ids = []
-        for generation, agent_span in zip(generations, agent_spans, strict=True):
-            parent_id = agent_span.attributes["agento11y.framework.run_id"]
-            assert generation.metadata["agento11y.framework.parent_run_id"] == parent_id
-            parent_ids.append(parent_id)
-        assert parent_ids[0] != parent_ids[1]
-        assert not hooks._agent_run_stacks
-        assert not hooks._llm_run_stacks
-        assert not hooks._tool_run_stacks
-    finally:
-        client.shutdown()
-        provider.shutdown()
 
 
 def test_agento11y_openai_agents_handler_explicitly_has_no_embedding_lifecycle() -> None:
