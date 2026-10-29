@@ -1239,10 +1239,12 @@ class Client:
         """Runs the generation sanitizer over the text a tool span shows.
 
         The sanitizer takes a generation, so the text goes where a generation
-        holds it: the title in ``conversation_title``, the error in
-        ``call_error``, the arguments in a ``tool_call`` part, and the result
-        in a ``tool_result`` part. Returns ``None`` when the sanitizer fails,
-        so the caller leaves all of this text off the span.
+        holds it: the title in ``conversation_title``, the arguments in a
+        ``tool_call`` part, and the result and the error in ``tool_result``
+        parts, the error one with ``is_error``. A tool's error goes back to the
+        model as a tool result, so it gets the redaction a tool result gets.
+        Returns ``None`` when the sanitizer fails, so the caller leaves all of
+        this text off the span.
         """
         now = _to_utc(self._now())
         try:
@@ -1252,15 +1254,22 @@ class Client:
                 input_json = text.arguments.encode("utf-8")
                 tool_call = ToolCall(name=tool.tool_name, id=tool.tool_call_id, input_json=input_json)
                 output.append(Message(role=MessageRole.ASSISTANT, parts=[tool_call_part(tool_call)]))
+            tool_results: list[ToolResult] = []
             if text.result:
-                tool_result = ToolResult(tool_call_id=tool.tool_call_id, name=tool.tool_name, content=text.result)
-                output.append(Message(role=MessageRole.TOOL, parts=[tool_result_part(tool_result)]))
+                tool_results.append(
+                    ToolResult(tool_call_id=tool.tool_call_id, name=tool.tool_name, content=text.result)
+                )
+            if text.error:
+                tool_results.append(
+                    ToolResult(tool_call_id=tool.tool_call_id, name=tool.tool_name, content=text.error, is_error=True)
+                )
+            if tool_results:
+                output.append(Message(role=MessageRole.TOOL, parts=[tool_result_part(r) for r in tool_results]))
             sanitized = self._sanitize_generation(
                 Generation(
                     id=tool.tool_call_id,
                     conversation_id=tool.conversation_id,
                     conversation_title=text.title,
-                    call_error=text.error,
                     agent_name=tool.agent_name,
                     agent_version=tool.agent_version,
                     mode=GenerationMode.SYNC,
@@ -1273,10 +1282,13 @@ class Client:
             )
             arguments: Any = None
             result: Any = None
+            error: Any = None
             for message in sanitized.output:
                 for part in message.parts:
                     if part.kind == PartKind.TOOL_CALL:
                         arguments = part.tool_call.input_json if arguments is None else arguments
+                    elif part.kind == PartKind.TOOL_RESULT and part.tool_result.is_error is True:
+                        error = part.tool_result.content if error is None else error
                     elif part.kind == PartKind.TOOL_RESULT:
                         result = part.tool_result.content if result is None else result
             # Only the fields passed in come back.
@@ -1284,7 +1296,7 @@ class Client:
                 title=_tool_span_text_value(sanitized.conversation_title) if text.title else "",
                 arguments=_tool_span_text_value(arguments) if text.arguments else "",
                 result=_tool_span_text_value(result) if text.result else "",
-                error=_tool_span_text_value(sanitized.call_error) if text.error else "",
+                error=_tool_span_text_value(error) if text.error else "",
             )
         except Exception:  # noqa: BLE001
             if self._config.logger is not None:

@@ -158,10 +158,10 @@ Every plugin applies the same tier per content field as the SDKs' generation san
 | --- | --- | --- |
 | User prompt | 1 + 2 | Where a human pastes a `.env` file, a config block or a command line. |
 | System prompt | 1 + 2 | Assembled content: tool definitions, environment dumps, pasted config. |
-| Tool arguments, tool results | 1 + 2 | Structured data, on the generation and on the span. |
+| Tool arguments, tool results, tool errors | 1 + 2 | Structured data, on the generation and on the span. A tool's error goes back to the model as a tool result. |
 | Assistant text, thinking | 1 | Model prose. |
 | Conversation title | 1 | The agent's own session title when it has one (Claude Code's, for example), else the first prompt, truncated. |
-| Error messages | 1 | Sentences. |
+| Call error messages | 1 | Sentences: the provider's or the agent's own error. |
 
 Tier 2 on a prompt has a real cost: `sort key: name` is exported as `sort key: [REDACTED:env-secret-value]`, because the heuristic cannot tell that `key:` is part of a sentence. Turn prompt redaction off with `AGENTO11Y_REDACT_INPUT_MESSAGES=false` if the prompt text matters more than the coverage. Tier 2 is kept off prose for that reason, and a secret a model repeats in prose is still caught by tier 1 as long as it has a known format.
 
