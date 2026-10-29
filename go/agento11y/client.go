@@ -2394,6 +2394,12 @@ func (c *Client) recordToolExecutionMetrics(ctx context.Context, seed ToolExecut
 		metricStringAttribute(spanAttrOperationName, "execute_tool"),
 		metricStringAttribute(spanAttrToolName, strings.TrimSpace(seed.ToolName)),
 	}, attrs...)
+	if isToolExecutionKind(seed.ExecutionKind) {
+		attrs = append(attrs, metricStringAttribute("agento11y.tool.execution.kind", string(seed.ExecutionKind)))
+		if skill := strings.TrimSpace(seed.SkillName); skill != "" {
+			attrs = append(attrs, metricStringAttribute("gen_ai.skill.name", skill))
+		}
+	}
 	attrs = append(attrs, c.clientTagMetricAttributes()...)
 	attrs = append(attrs,
 		metricStringAttribute(spanAttrErrorType, errorType),

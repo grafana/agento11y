@@ -956,6 +956,7 @@ def test_conformance_tool_execution_kinds(case, protocol, monkeypatch) -> None:
             "gen_ai.agent.name": "",
             "error.type": "tool_execution_error" if error else "",
             "error.category": "sdk_error" if error else "",
+            **case["client_metric_attributes"],
         }
     finally:
         client.shutdown()

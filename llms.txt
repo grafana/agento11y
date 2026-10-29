@@ -398,9 +398,16 @@ Framework adapters:
 
 Use the OpenTelemetry conventions for loading skills, reading skill resources, and running commands from [GenAI #498](https://github.com/open-telemetry/semantic-conventions-genai/pull/498).
 These conventions have Development status. The global schema declaration stays on the legacy schema while other signals still use it.
-Each execution remains one `INTERNAL` span with `gen_ai.operation.name=execute_tool` and no new metric labels.
+Each execution remains one `INTERNAL` span with `gen_ai.operation.name=execute_tool`.
 The execution kind selects span naming and standard `gen_ai.skill.*` and `process.*` attributes.
-The SDK does not emit the execution kind as an attribute.
+The SDK does not emit the execution kind as a span attribute.
+The five SDK clients enrich `gen_ai.client.operation.duration` for the three recognized kinds with metric-only `agento11y.tool.execution.kind`.
+They also add a trimmed, nonblank `gen_ai.skill.name` from copied start fields, including failed attempts.
+A recognized kind without a name retains only the kind; unset or unknown kinds add neither label.
+These dimensions are independent of tracing, sampling, capture mode, and debug history. No other skill or process dimensions are added automatically.
+Standalone Go `otelgenai` automatic dimensions remain unchanged; explicit `Invocation.MetricAttributes` remain available.
+Prometheus labels are `gen_ai_skill_name` and `agento11y_tool_execution_kind`; filter the latter by `load_skill` for load-only counts or latency.
+These are tool-load intervals, not whole-skill runtime or token cost. Labels split histogram series; storage cost depends on workload cardinality.
 
 | Execution kind | Use | Suffix after `execute_tool {tool}` |
 | --- | --- | --- |

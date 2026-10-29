@@ -336,7 +336,11 @@ Tool arguments and results still require `Full` or the legacy `IncludeContent` o
 Every exported skill source URI has userinfo, query, and fragment removed, even under `Full`.
 Invalid or relative URIs are omitted without network or filesystem lookup.
 
-Generic tool recording, `ExecuteToolCalls`, and existing metrics are unchanged. No skill/process metric dimensions are added.
+Generic tool recording and `ExecuteToolCalls` remain unchanged.
+For `load_skill`, `read_skill_resource`, and `command`, `gen_ai.client.operation.duration` adds `agento11y.tool.execution.kind`.
+It also includes a trimmed, nonblank `gen_ai.skill.name` when supplied, including failed attempts and reduced capture modes.
+No resource or process metric dimensions are added.
+See the [client metric contract](https://github.com/grafana/agento11y/blob/main/docs/concepts/tool-call-vs-tool-execution.md#client-metrics).
 
 ## Context defaults with async-local scopes
 

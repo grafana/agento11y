@@ -1540,16 +1540,43 @@ public final class Agento11yClient implements AutoCloseable {
             errorCategory = errorCategoryFromThrowable(finalError, true);
         }
 
-        operationDurationHistogram.record(
-                durationSeconds,
-                metricIdentityAttributes(seed.getRequestProvider(), seed.getRequestModel(), seed.getAgentName(), seed.getAgentVersion())
-                        .put(SPAN_ATTR_OPERATION_NAME, TOOL_EXECUTION_OPERATION_NAME)
-                        .put(SPAN_ATTR_TOOL_NAME, seed.getToolName().trim())
-                        .putAll(clientTagAttributes())
-                        .put(SPAN_ATTR_ERROR_TYPE, errorType)
-                        .put(SPAN_ATTR_ERROR_CATEGORY, errorCategory)
-                        .build()
-        );
+        AttributesBuilder attributes = metricIdentityAttributes(
+                seed.getRequestProvider(), seed.getRequestModel(), seed.getAgentName(), seed.getAgentVersion())
+                .put(SPAN_ATTR_OPERATION_NAME, TOOL_EXECUTION_OPERATION_NAME)
+                .put(SPAN_ATTR_TOOL_NAME, seed.getToolName().trim())
+                .putAll(clientTagAttributes())
+                .put(SPAN_ATTR_ERROR_TYPE, errorType)
+                .put(SPAN_ATTR_ERROR_CATEGORY, errorCategory);
+        String executionKind = seed.getExecutionKind() == null ? null : switch (seed.getExecutionKind()) {
+            case LOAD_SKILL -> "load_skill";
+            case READ_SKILL_RESOURCE -> "read_skill_resource";
+            case COMMAND -> "command";
+            default -> null;
+        };
+        if (executionKind != null) {
+            attributes.put("agento11y.tool.execution.kind", executionKind);
+            String skillName = trimUnicodeWhitespace(seed.getSkillName());
+            if (!skillName.isEmpty()) {
+                attributes.put(SPAN_ATTR_SKILL_NAME, skillName);
+            }
+        }
+        operationDurationHistogram.record(durationSeconds, attributes.build());
+    }
+
+    private static String trimUnicodeWhitespace(String value) {
+        int start = 0;
+        int end = value.length();
+        while (start < end && isUnicodeWhitespace(value.charAt(start))) {
+            start++;
+        }
+        while (end > start && isUnicodeWhitespace(value.charAt(end - 1))) {
+            end--;
+        }
+        return value.substring(start, end);
+    }
+
+    private static boolean isUnicodeWhitespace(char value) {
+        return value <= ' ' || Character.isWhitespace(value) || Character.isSpaceChar(value) || value == '\u0085';
     }
 
     static String errorCategoryFromThrowable(Throwable error, boolean fallbackSdk) {
