@@ -718,11 +718,15 @@ class Client:
                 # Run the executor inside the execute_tool span's context so any spans the
                 # executor creates (e.g. downstream RPCs) nest under it rather than becoming
                 # flat siblings of it in the trace. NoopToolExecutionRecorder has no span, so
-                # fall back to running without an active span in that case.
+                # fall back to running without an active span in that case. The recorder
+                # records the executor's error as the capture mode and the sanitizer allow,
+                # so use_span must not record the raw exception and its stacktrace too.
                 exec_span = getattr(rec, "span", None)
                 try:
                     if exec_span is not None:
-                        with use_span(exec_span, end_on_exit=False):
+                        with use_span(
+                            exec_span, end_on_exit=False, record_exception=False, set_status_on_exception=False
+                        ):
                             result = executor(name, arguments)
                     else:
                         result = executor(name, arguments)
