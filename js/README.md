@@ -141,9 +141,9 @@ validation, span sync, debug snapshots, and export.
 
 Tool execution spans show the same conversation title, tool arguments, result, and error, so the
 SDK runs the sanitizer over them too. It passes a generation with `operationName: 'execute_tool'`
-that holds only that text: the title in `conversationTitle`, the arguments as a `tool_call` part,
-and the result and the error as `tool_result` parts, the error one with `isError: true`. The
-sanitizer is called once with the title when the span starts and once with the rest when it ends.
+that holds only that text: the title in `conversationTitle`, the error in `callError`, the
+arguments as a `tool_call` part, and the result as a `tool_result` part. The sanitizer is called
+once with the title when the span starts and once with the rest when it ends.
 Text the sanitizer removes stays off the span. If a call throws, the text from that call stays
 off the span; the span keeps the tool name and error category.
 

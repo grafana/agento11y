@@ -66,7 +66,6 @@ import type {
   ToolExecutionRecorder,
   ToolExecutionResult,
   ToolExecutionStart,
-  ToolResultPart,
   WorkflowStep,
 } from './types.js';
 import {
@@ -829,10 +828,10 @@ export class Agento11yClient {
   /**
    * Runs the generation sanitizer over the text a tool span shows. The
    * sanitizer only takes generations, so the text goes in one built from the
-   * tool, where the same text sits in a real generation: the title in
-   * conversationTitle, the arguments in a tool_call part, and the result and
-   * the error in tool_result parts, the error one marked isError. Each gets
-   * the redaction it gets there. Text the sanitizer drops, or hands back as
+   * tool: the title in conversationTitle, the error in callError, where a
+   * generation keeps its own error, the arguments in a tool_call part, and
+   * the result in a tool_result part. Each gets the redaction those fields
+   * get on a generation. Text the sanitizer drops, or hands back as
    * something other than a string, stays off the span. Returns undefined
    * when the sanitizer throws or returns parts the SDK cannot read.
    */
@@ -846,15 +845,16 @@ export class Agento11yClient {
         ],
       });
     }
-    const toolResults: ToolResultPart[] = [];
     if (text.result !== undefined) {
-      toolResults.push({ toolCallId: tool.toolCallId, name: tool.toolName, content: text.result });
-    }
-    if (text.error !== undefined) {
-      toolResults.push({ toolCallId: tool.toolCallId, name: tool.toolName, content: text.error, isError: true });
-    }
-    if (toolResults.length > 0) {
-      output.push({ role: 'tool', parts: toolResults.map((toolResult) => ({ type: 'tool_result', toolResult })) });
+      output.push({
+        role: 'tool',
+        parts: [
+          {
+            type: 'tool_result',
+            toolResult: { toolCallId: tool.toolCallId, name: tool.toolName, content: text.result },
+          },
+        ],
+      });
     }
     const now = this.internalNow();
     try {
@@ -862,6 +862,7 @@ export class Agento11yClient {
         id: tool.toolCallId ?? '',
         conversationId: tool.conversationId,
         conversationTitle: text.title,
+        callError: text.error,
         agentName: tool.agentName,
         agentVersion: tool.agentVersion,
         mode: 'SYNC',
@@ -878,13 +879,10 @@ export class Agento11yClient {
 
       let toolArguments: unknown;
       let toolResult: unknown;
-      let toolError: unknown;
       for (const message of sanitized.output ?? []) {
         for (const part of message.parts ?? []) {
           if (part.type === 'tool_call') {
             toolArguments ??= part.toolCall.inputJSON;
-          } else if (part.type === 'tool_result' && part.toolResult.isError === true) {
-            toolError ??= part.toolResult.content;
           } else if (part.type === 'tool_result') {
             toolResult ??= part.toolResult.content;
           }
@@ -895,7 +893,7 @@ export class Agento11yClient {
         title: text.title === undefined ? undefined : textOrUndefined(sanitized.conversationTitle),
         arguments: text.arguments === undefined ? undefined : textOrUndefined(toolArguments),
         result: text.result === undefined ? undefined : textOrUndefined(toolResult),
-        error: text.error === undefined ? undefined : textOrUndefined(toolError),
+        error: text.error === undefined ? undefined : textOrUndefined(sanitized.callError),
       };
     } catch (error) {
       this.internalLogWarn('agento11y tool span sanitization failed; leaving its text off the span', error);
@@ -1140,10 +1138,9 @@ export class Agento11yClient {
     // status description.
     let redactSpanErrors = contentCaptureMode === 'metadata_only' || contentCaptureMode === 'full_with_metadata_spans';
 
-    // The generation sanitizer redacts the same arguments, result and error
-    // on the generation, where the error is an error tool result, so the
-    // span shows them redacted too. If it throws, none of that text goes on
-    // the span.
+    // The generation sanitizer also runs over the arguments, result and
+    // error, so the span shows them redacted. If it throws, none of that text
+    // goes on the span.
     const sanitizing = !redactSpanErrors && this.config.generationSanitizer !== undefined;
     let errorText = toolExecution.callError ?? localError?.message;
     if (sanitizing && (toolArguments !== undefined || toolResult !== undefined || errorText !== undefined)) {
