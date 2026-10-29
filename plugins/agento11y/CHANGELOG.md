@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.54.0] - 2026-10-29
+
+### Features
+
+- **sdk**: add skill identity to tool execution metrics (#979)
+
+### Bug Fixes
+
+- **plugins/agento11y**: pin SDK to merged main commit (#986)
+
 ## [0.53.0] - 2026-10-28
 
 ### Features
