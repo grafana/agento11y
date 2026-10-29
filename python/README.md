@@ -205,6 +205,14 @@ client = Client(
 Use `generation_sanitizer` when you want to redact substrings from normalized generations before
 validation, span sync, and export.
 
+Tool execution spans show the same conversation title, tool arguments, result, and error, so the
+SDK runs the sanitizer over them too. It passes a generation with `operation_name="execute_tool"`
+that holds only that text: the title in `conversation_title`, the error in `call_error`, the
+arguments as a `tool_call` part, and the result as a `tool_result` part. The sanitizer is called
+once with the title when the span starts and once with the rest when it ends. Text the sanitizer
+removes stays off the span. If a call raises, the text from that call stays off the span; the span
+keeps the tool name and error category.
+
 ```python
 from agento11y import (
     Client,
