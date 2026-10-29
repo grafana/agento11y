@@ -21,8 +21,20 @@ import (
 // one person's first day read about 20x their bill (grafana/sigil#2044). The
 // import still sends the turn as a generation and a backdated span.
 func TestImportRecordsNoLiveMetrics(t *testing.T) {
+	// The OTel generation transport records gen_ai.client.* through its own
+	// meter provider, separate from the client's meter.
+	for _, protocol := range []agento11y.GenerationExportProtocol{
+		agento11y.GenerationExportProtocolHTTP,
+		agento11y.GenerationExportProtocolOTel,
+	} {
+		t.Run(string(protocol), func(t *testing.T) { importRecordsNoLiveMetrics(t, protocol) })
+	}
+}
+
+func importRecordsNoLiveMetrics(t *testing.T, protocol agento11y.GenerationExportProtocol) {
 	envconfig.PinAliasEnvBlank(t)
 	pinStateHome(t)
+	t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "true")
 	var (
 		mu          sync.Mutex
 		metricBody  strings.Builder
@@ -30,6 +42,8 @@ func TestImportRecordsNoLiveMetrics(t *testing.T) {
 	)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/healthz":
+			_, _ = io.WriteString(w, `{"capabilities":["otel_generation_ingest_v1"]}`)
 		case "/v1/metrics":
 			body, _ := io.ReadAll(r.Body)
 			mu.Lock()
@@ -50,7 +64,7 @@ func TestImportRecordsNoLiveMetrics(t *testing.T) {
 		OTLPEndpoint: server.URL,
 		TenantID:     "tenant",
 		AuthToken:    "test-token",
-		Protocol:     agento11y.GenerationExportProtocolHTTP,
+		Protocol:     protocol,
 	}
 	exporter, cleanup, err := NewTargetExporter(t.Context(), target, nil)
 	require.NoError(t, err)
