@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.10.0] - 2026-10-29
+
+### Features
+
+- **sdk**: add skill identity to tool execution metrics (#979)
+
+### Bug Fixes
+
+- **security/medium/java/gradle**: update dependency io.opentelemetry:opentelemetry-api to v1.67.0 [security] (#980)
+
 ## [0.9.0] - 2026-10-28
 
 ### Features
