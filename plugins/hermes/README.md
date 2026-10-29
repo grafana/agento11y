@@ -71,7 +71,7 @@ Set variables in the environment that starts Hermes. Hermes loads `~/.hermes/.en
 
 ## Privacy
 
-The plugin uses Python SDK 0.17.x for content capture and secret redaction.
+The plugin requires Python SDK 0.22.0 or later for content capture and secret redaction.
 
 - `metadata_only` is the default. Message structure, tool names, model, usage, timing, IDs, and sampling parameters can leave the machine. Prompt text, responses, system prompts, tool schemas, tool I/O, and detailed error text do not.
 - Set `AGENTO11Y_CONTENT_CAPTURE_MODE=full` only when you want content exported. `no_tool_content` still exports generation content. `full_with_metadata_spans` sends content only through generation ingest.

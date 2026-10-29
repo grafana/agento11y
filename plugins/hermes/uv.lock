@@ -9,7 +9,7 @@ resolution-markers = [
 
 [[package]]
 name = "agento11y"
-version = "0.17.0"
+version = "0.22.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "grpcio" },
@@ -21,9 +21,9 @@ dependencies = [
     { name = "protobuf" },
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/79/c8/5635669915cd7c70328a430533ee9df1b0561b69c90c941d2dfeea81002d/agento11y-0.17.0.tar.gz", hash = "sha256:13d285a7367f65e43649523665e3a35934fc90532abe671da5cebea7be34dccd", size = 246418, upload-time = "2026-08-25T19:06:52.441Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/93/76/f67e60379581d15b2ab79e6a830213e6a838d18560b760c11d7458d5c0c6/agento11y-0.22.0.tar.gz", hash = "sha256:994bcde9da09658e3b577bf9914766c3638ea9eb4553246af99a0fbbaa7ce066", size = 330587, upload-time = "2026-10-29T15:37:19.068Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d8/2e/a897d5959d7ed806a4fbb6adebff9e97401163476b44052f4d1498e08649/agento11y-0.17.0-py3-none-any.whl", hash = "sha256:3ddfeeac88d0c5cebd78bdda8c775fb89342f7aaf12a18f0470aa66fbab14e00", size = 145181, upload-time = "2026-08-25T19:06:50.985Z" },
+    { url = "https://files.pythonhosted.org/packages/e2/9e/594609b386420caec0f28682d6533afd5b8d183c4656e5134e72415ef668/agento11y-0.22.0-py3-none-any.whl", hash = "sha256:3df41647ee5dc9a57d5fb13a98c645ab8daff49804e38cd0fe07563ec9eb1158", size = 182044, upload-time = "2026-10-29T15:37:17.401Z" },
 ]
 
 [[package]]
@@ -46,7 +46,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agento11y", specifier = ">=0.17" },
+    { name = "agento11y", specifier = ">=0.22.0" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.27" },
     { name = "opentelemetry-sdk", specifier = ">=1.27" },
 ]
