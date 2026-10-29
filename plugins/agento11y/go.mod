@@ -6,7 +6,7 @@ require (
 	github.com/charmbracelet/huh v1.0.0
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/google/uuid v1.6.0
-	github.com/grafana/agento11y/go v0.19.1-0.20261028204029-dc5dfe17267d
+	github.com/grafana/agento11y/go v0.19.1-0.20261029145210-232e072d207b
 	github.com/muesli/termenv v0.16.0
 	github.com/pelletier/go-toml/v2 v2.4.0
 	github.com/stretchr/testify v1.11.1

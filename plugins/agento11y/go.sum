@@ -65,8 +65,8 @@ github.com/google/pprof v0.0.0-20260802141513-ef3492d7dac3 h1:LMLX+LgTNWpfvCBdFe
 github.com/google/pprof v0.0.0-20260802141513-ef3492d7dac3/go.mod h1:jl5iWTm0/hd5PjEYEOuwAJ57L/CibdZfrqZ5XA5GrCk=
 github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
 github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
-github.com/grafana/agento11y/go v0.19.1-0.20261028204029-dc5dfe17267d h1:+hs5kfHuUsimn+2ij7h6buFynwdkT4qJt4Str/ndREk=
-github.com/grafana/agento11y/go v0.19.1-0.20261028204029-dc5dfe17267d/go.mod h1:gCQ6CusLWDpgtVcdLj02WRZs0udgeGAwWk493SLq/V0=
+github.com/grafana/agento11y/go v0.19.1-0.20261029145210-232e072d207b h1:0WWV4SIqAXeKYoanT0F1lYhCvDemXco53wpxLJPJKQs=
+github.com/grafana/agento11y/go v0.19.1-0.20261029145210-232e072d207b/go.mod h1:gCQ6CusLWDpgtVcdLj02WRZs0udgeGAwWk493SLq/V0=
 github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 h1:5VipnvEpbqr2gA2VbM+nYVbkIF28c5ZQfqCBQ5g2xfk=
 github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0/go.mod h1:Hyl3n6Twe1hvtd9XUXDec4pTvgMSEixRuQKPTMH2bNs=
 github.com/hashicorp/golang-lru/v2 v2.0.7 h1:a+bsQ5rvGLjzHuww6tVxozPZFVghXaHOwFs4luLUK2k=
