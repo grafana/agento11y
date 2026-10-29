@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.20.0] - 2026-10-29
+
+### Features
+
+- **sdk**: add skill identity to tool execution metrics (#979)
+- **sdk**: trace skill loads, resource reads, and commands (#920)
+
+### Bug Fixes
+
+- **security/unknown/go**: update module golang.org/x/net to v0.62.0 [security] (#958)
+- **security/unknown/go-frameworks/google-adk**: update module golang.org/x/net to v0.62.0 [security] (#954)
+- **security/unknown/go-providers/anthropic**: update module golang.org/x/net to v0.62.0 [security] (#955)
+- **security/unknown/go-providers/openai**: update module golang.org/x/net to v0.62.0 [security] (#957)
+- **security/unknown/go-providers/gemini**: update module golang.org/x/net to v0.62.0 [security] (#956)
+- **security/unknown/go-providers/anthropic**: update go toolchain directive to v1.26.10 [security] (#909)
+- **security/unknown/go**: update go toolchain directive to v1.26.10 [security] (#912)
+- **security/unknown/go-providers/gemini**: update go toolchain directive to v1.26.10 [security] (#910)
+- **security/unknown/go-frameworks/google-adk**: update go toolchain directive to v1.26.10 [security] (#908)
+- **security/unknown/go-providers/openai**: update go toolchain directive to v1.26.10 [security] (#911)
+
 ## [0.19.0] - 2026-10-15
 
 ### Features
