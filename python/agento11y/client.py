@@ -1586,11 +1586,22 @@ class Client:
             error_type = "tool_execution_error"
             error_category = _error_category_from_exception(final_error, fallback_sdk=True)
 
+        tool_attributes = {}
+        if seed.execution_kind in (
+            ToolExecutionKind.LOAD_SKILL,
+            ToolExecutionKind.READ_SKILL_RESOURCE,
+            ToolExecutionKind.COMMAND,
+        ):
+            tool_attributes["agento11y.tool.execution.kind"] = ToolExecutionKind(seed.execution_kind).value
+            if skill_name := seed.skill_name.strip():
+                tool_attributes["gen_ai.skill.name"] = skill_name
+
         self._operation_duration_histogram.record(
             duration_seconds,
             attributes={
                 _span_attr_operation_name: "execute_tool",
                 _span_attr_tool_name: seed.tool_name.strip(),
+                **tool_attributes,
                 **_metric_identity_attributes(
                     seed.request_provider,
                     seed.request_model,

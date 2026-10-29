@@ -158,6 +158,8 @@ class ConformanceTest {
             }
             assertThat(span.getAttributes().get(AttributeKey.stringKey("agento11y.skill.name"))).isNull();
             assertThat(creationAttributes.get().get(AttributeKey.stringKey("agento11y.skill.name"))).isNull();
+            assertThat(span.getAttributes().get(AttributeKey.stringKey("agento11y.tool.execution.kind"))).isNull();
+            assertThat(creationAttributes.get().get(AttributeKey.stringKey("agento11y.tool.execution.kind"))).isNull();
             assertThat(span.getStatus().getStatusCode()).isEqualTo(test.has("error") ? StatusCode.ERROR : StatusCode.OK);
             if (test.has("error")) {
                 assertThat(span.getAttributes().get(AttributeKey.stringKey("error.type"))).isEqualTo("tool_execution_error");
@@ -169,9 +171,22 @@ class ConformanceTest {
                     .containsExactly(Agento11yClient.METRIC_OPERATION_DURATION);
             assertThat(recordedMetrics.get(0).getHistogramData().getPoints()).singleElement().satisfies(point -> {
                 assertThat(point.getCount()).isEqualTo(1L);
-                assertThat(point.getAttributes().asMap().keySet()).extracting(AttributeKey::getKey)
-                        .containsExactlyInAnyOrder("gen_ai.provider.name", "gen_ai.request.model", "gen_ai.agent.name",
-                                "gen_ai.operation.name", "gen_ai.tool.name", "error.type", "error.category");
+                assertThat(test.path("client_metric_attributes").isObject()).as("%s metric additions", id).isTrue();
+                Map<String, Object> expected = new LinkedHashMap<>();
+                expected.put("gen_ai.provider.name", "");
+                expected.put("gen_ai.request.model", "");
+                expected.put("gen_ai.agent.name", "");
+                expected.put("gen_ai.operation.name", "execute_tool");
+                expected.put("gen_ai.tool.name", seed.getToolName().trim());
+                expected.put("error.type", test.has("error") ? "tool_execution_error" : "");
+                expected.put("error.category", test.has("error") ? "sdk_error" : "");
+                test.path("client_metric_attributes").fields().forEachRemaining(entry -> {
+                    assertThat(entry.getKey()).isIn("gen_ai.skill.name", "agento11y.tool.execution.kind");
+                    expected.put(entry.getKey(), entry.getValue().asText());
+                });
+                Map<String, Object> actual = new LinkedHashMap<>();
+                point.getAttributes().forEach((key, value) -> actual.put(key.getKey(), value));
+                assertThat(actual).isEqualTo(expected);
             });
             assertThat(client.debugSnapshot().getToolExecutions()).hasSize(1);
         }

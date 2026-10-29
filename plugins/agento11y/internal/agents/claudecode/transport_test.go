@@ -20,19 +20,22 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/mapper"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/state"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
+	colmetricpb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	"google.golang.org/protobuf/proto"
 )
 
 func TestHookRecordFailureTransport(t *testing.T) {
 	for _, tc := range []struct {
-		name, protocol string
-		savedPrefix    bool
+		name, protocol                       string
+		savedPrefix, completedTool, terminal bool
 	}{
 		{name: "HTTP from zero", protocol: "http"},
 		{name: "HTTP saved offset", protocol: "http", savedPrefix: true},
 		{name: "OTel from zero", protocol: "otel"},
 		{name: "OTel saved offset", protocol: "otel", savedPrefix: true},
+		{name: "OTel completed tool before failure", protocol: "otel", completedTool: true},
+		{name: "OTel terminal completed tool before failure", protocol: "otel", completedTool: true, terminal: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			envconfig.PinAliasEnvBlank(t)
@@ -46,8 +49,14 @@ func TestHookRecordFailureTransport(t *testing.T) {
 			if err := state.Save(sessionID, prior); err != nil {
 				t.Fatal(err)
 			}
+			validBefore := buildHookAssistantJSONL(sessionID, "A", "end_turn", "valid before", 5)
+			if tc.completedTool {
+				validBefore = buildHookAssistantLineAt(sessionID, "A", "tool_use", rawCallAt, []any{
+					map[string]any{"type": "tool_use", "id": "skill-call", "name": "Skill", "input": map[string]any{"skill": "review"}},
+				}, 5) + "\n" + buildHookToolResultJSONLAt(sessionID, "skill-call", "loaded", rawResultAt)
+			}
 			text := prefix + strings.Join([]string{
-				buildHookAssistantJSONL(sessionID, "A", "end_turn", "valid before", 5),
+				validBefore,
 				strings.ReplaceAll(buildHookAssistantJSONL(sessionID, "B", "end_turn", "invalid middle", 5), `"model":"claude-opus-4"`, `"model":""`),
 				buildHookAssistantJSONL(sessionID, "C", "end_turn", "valid after", 5),
 			}, "\n") + "\n"
@@ -74,6 +83,9 @@ func TestHookRecordFailureTransport(t *testing.T) {
 
 			var mu sync.Mutex
 			var httpIDs, otelIDs []string
+			var otelTools int
+			var toolObservations uint64
+			var toolSeconds float64
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				mu.Lock()
 				defer mu.Unlock()
@@ -109,23 +121,53 @@ func TestHookRecordFailureTransport(t *testing.T) {
 						for _, ss := range rs.ScopeSpans {
 							for _, span := range ss.Spans {
 								var marked bool
-								var id string
+								var id, operation string
 								for _, attr := range span.Attributes {
 									switch attr.Key {
 									case "agento11y.record":
 										marked = attr.Value.GetStringValue() == "true"
 									case "agento11y.generation.id":
 										id = attr.Value.GetStringValue()
+									case "gen_ai.operation.name":
+										operation = attr.Value.GetStringValue()
 									}
 								}
 								if marked {
 									otelIDs = append(otelIDs, id)
+								}
+								if operation == "execute_tool" {
+									otelTools++
 								}
 							}
 						}
 					}
 					w.Header().Set("Content-Type", "application/x-protobuf")
 				case "/v1/metrics":
+					body, err := io.ReadAll(r.Body)
+					if err != nil {
+						t.Error(err)
+					}
+					var req colmetricpb.ExportMetricsServiceRequest
+					if err := proto.Unmarshal(body, &req); err != nil {
+						t.Error(err)
+					}
+					for _, resource := range req.ResourceMetrics {
+						for _, scope := range resource.ScopeMetrics {
+							for _, metric := range scope.Metrics {
+								if metric.Name != "gen_ai.client.operation.duration" {
+									continue
+								}
+								for _, point := range metric.GetHistogram().GetDataPoints() {
+									for _, attr := range point.Attributes {
+										if attr.Key == "gen_ai.operation.name" && attr.Value.GetStringValue() == "execute_tool" {
+											toolObservations += point.Count
+											toolSeconds += point.GetSum()
+										}
+									}
+								}
+							}
+						}
+					}
 					w.Header().Set("Content-Type", "application/x-protobuf")
 				default:
 					t.Errorf("unexpected request: %s", r.URL.Path)
@@ -139,8 +181,12 @@ func TestHookRecordFailureTransport(t *testing.T) {
 				t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "true")
 				t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", server.URL)
 			}
+			event := "Stop"
+			if tc.terminal {
+				event = "SessionEnd"
+			}
 			for stop := 1; stop <= 2; stop++ {
-				logs := runHookForTest(t, hookInput{HookEventName: "Stop", SessionID: sessionID, TranscriptPath: path})
+				logs := runHookForTest(t, hookInput{HookEventName: event, SessionID: sessionID, TranscriptPath: path})
 				wantState := prior
 				var wantHTTP, wantOTel []string
 				if tc.protocol == "otel" {
@@ -150,6 +196,7 @@ func TestHookRecordFailureTransport(t *testing.T) {
 					}
 				} else {
 					wantState.Offset = safeOffset
+					wantState.Tools = state.ToolState{Version: toolStateVersion, Offsets: map[string]int64{toolPath(path): int64(len(text))}}
 					wantHTTP = []string{gens[0].ID, gens[2].ID}
 				}
 				if got := state.Load(sessionID); !reflect.DeepEqual(got, wantState) {
@@ -164,7 +211,15 @@ func TestHookRecordFailureTransport(t *testing.T) {
 				}
 				mu.Lock()
 				gotHTTP, gotOTel := slices.Clone(httpIDs), slices.Clone(otelIDs)
+				gotTools, gotObservations, gotSeconds := otelTools, toolObservations, toolSeconds
 				mu.Unlock()
+				wantTools := 0
+				if tc.completedTool {
+					wantTools = stop
+				}
+				if gotTools != wantTools || gotObservations != uint64(wantTools) || gotSeconds != float64(3*wantTools) {
+					t.Fatalf("%s%d tools=%d observations=%d seconds=%v, want %d/%d/%d; logs: %s", event, stop, gotTools, gotObservations, gotSeconds, wantTools, wantTools, 3*wantTools, logs)
+				}
 				if !slices.Equal(gotHTTP, wantHTTP) || !slices.Equal(gotOTel, wantOTel) {
 					t.Fatalf("Stop%d HTTP=%v OTel=%v, want HTTP=%v OTel=%v; logs: %s", stop, gotHTTP, gotOTel, wantHTTP, wantOTel, logs)
 				}

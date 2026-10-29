@@ -1319,8 +1319,21 @@ export class Agento11yClient {
     const durationSeconds = Math.max(0, (completedMs - startedMs) / 1_000);
     const errorType = finalError === undefined ? '' : 'tool_execution_error';
     const errorCategory = finalError === undefined ? '' : errorCategoryFromError(finalError, true);
+    const skillAttributes: Record<string, string> = {};
+    if (
+      toolExecution.executionKind === 'load_skill' ||
+      toolExecution.executionKind === 'read_skill_resource' ||
+      toolExecution.executionKind === 'command'
+    ) {
+      skillAttributes['agento11y.tool.execution.kind'] = toolExecution.executionKind;
+      const skillName = toolExecution.skillName?.trim();
+      if (skillName) {
+        skillAttributes['gen_ai.skill.name'] = skillName;
+      }
+    }
     this.operationDurationHistogram.record(durationSeconds, {
       [spanAttrOperationName]: 'execute_tool',
+      ...skillAttributes,
       [spanAttrToolName]: toolExecution.toolName.trim(),
       ...metricIdentityAttributes(
         toolExecution.requestProvider ?? '',

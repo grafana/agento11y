@@ -57,7 +57,10 @@ They can override typed attributes. Callers must filter private attributes and s
 Do not use `no_tool_content` as a privacy boundary for skill descriptions, source URIs, or executable paths.
 The existing arguments/results behavior is unchanged, including the legacy content opt-in under `no_tool_content`.
 That opt-in does not bypass effective `metadata_only` or `full_with_metadata_spans`.
-Structural fields and exit codes add no metric labels.
+The five SDK clients retain `agento11y.tool.execution.kind` and nonblank `gen_ai.skill.name` on recognized tool-duration observations in every capture mode.
+No other skill or process fields become automatic metric dimensions. Standalone Go `otelgenai` automatic dimensions remain unchanged.
+Skill names remain under metric retention even in reduced modes; use stable, nonsensitive names.
+See [client metrics](./tool-call-vs-tool-execution.md#client-metrics) for applicability and cardinality.
 The local forwarder also strips the three private attributes from spans and span events in reduced modes.
 
 ### Experimental OTel generation export

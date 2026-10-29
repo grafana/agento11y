@@ -184,7 +184,11 @@ Every exported skill source URI has userinfo, query, and fragment removed, even 
 Invalid or relative URIs are omitted without network or filesystem lookup.
 When debug history is enabled, capture modes do not sanitize tool snapshots: raw arguments, results, and error text remain there.
 
-Generic tool recording, `executeToolCalls`, and existing metrics are unchanged. No skill/process metric dimensions are added.
+Generic tool recording and `executeToolCalls` remain unchanged.
+For `load_skill`, `read_skill_resource`, and `command`, `gen_ai.client.operation.duration` adds `agento11y.tool.execution.kind`.
+It also includes a trimmed, nonblank `gen_ai.skill.name` when supplied, including failed attempts and reduced capture modes.
+No resource or process metric dimensions are added.
+See the [client metric contract](../docs/concepts/tool-call-vs-tool-execution.md#client-metrics).
 
 ## Content Capture
 

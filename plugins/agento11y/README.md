@@ -158,11 +158,11 @@ Run `agento11y skills show setup-local-guards` and follow it to help me choose, 
 
 The skills for instrumenting your own application code are separate and ship with [`gcx`](https://github.com/grafana/gcx) instead: `gcx agent skills install agento11y-instrument`.
 
-Live skill-load recognition covers native tools in [Claude Code](../claude-code/README.md#3-verify) and [OpenCode](../opencode/README.md#3-verify), and catalog-matched instruction reads in [Pi](../pi/README.md#3-verify). Recognized attempts add `gen_ai.skill.name` to existing tool-execution spans, including failures. They do not prove successful instruction loading or explain later actions. Validated names remain in reduced modes; secret-like names are omitted. Recognition adds no descriptions, paths, URIs, or metric labels and changes no payload policy.
+Live skill-load recognition covers native tools in [Claude Code](../claude-code/README.md#3-verify) and [OpenCode](../opencode/README.md#3-verify), and catalog-matched instruction reads in [Pi](../pi/README.md#3-verify). Recognized attempts add `gen_ai.skill.name` to existing tool-execution spans, including failures. They do not prove successful instruction loading or explain later actions. Validated names remain in reduced modes; secret-like names are omitted. Recognition adds no descriptions, paths, or URIs and changes no payload policy. Recognized attempts also add `gen_ai.skill.name` and `agento11y.tool.execution.kind="load_skill"` to the existing `gen_ai.client.operation.duration` histogram, including failures. Names remain under metric retention even in reduced modes; use stable, nonsensitive names.
 
 Recognition excludes other hosts, imported history, direct `/skill` prompt insertion, resource reads, scripts, and attribution of later activity. Claude Code and OpenCode retain the requested identifier, not a resolved directory basename. Pi retains the matched catalog name. Names keep their case and namespace; only surrounding whitespace is trimmed.
 
-See [Local skill analytics](#local-skill-analytics) for retained calls on this machine. Cloud skill visibility requires retained tool and generation spans in Tempo plus deployed Sigil consumer support. A Cloud conversation alone is insufficient. Tempo is not required for local recording or analytics.
+See [Local skill analytics](#local-skill-analytics) for retained calls on this machine. Cloud skill trace visibility requires retained tool and generation spans in Tempo plus deployed Sigil consumer support. A Cloud conversation alone is insufficient. Tempo is not required for local recording or analytics.
 
 ## Local mode
 

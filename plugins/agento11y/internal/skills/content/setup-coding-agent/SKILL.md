@@ -439,10 +439,11 @@ Capture modes choose which fields ship. By default, every plugin redacts known s
 
 Live skill-load recognition covers native tools in [Claude Code](https://github.com/grafana/agento11y/tree/main/plugins/claude-code#3-verify) and [OpenCode](https://github.com/grafana/agento11y/tree/main/plugins/opencode#3-verify), and catalog-matched instruction reads in [Pi](https://github.com/grafana/agento11y/tree/main/plugins/pi#3-verify).
 Recognized attempts mark existing tool spans with `gen_ai.skill.name`, including failures, without proving successful loading or explaining later actions.
-Validated names remain in reduced modes; secret-like names are omitted. Recognition adds no descriptions, paths, URIs, or metric labels and changes no payload policy.
+Validated names remain in reduced modes; secret-like names are omitted. Recognition adds no descriptions, paths, or URIs and changes no payload policy.
+Recognized attempts also add `gen_ai.skill.name` and `agento11y.tool.execution.kind="load_skill"` to the existing `gen_ai.client.operation.duration` histogram, including failures. Names remain under metric retention even in reduced modes; use stable, nonsensitive names.
 Recognition excludes other hosts, imported history, direct `/skill` prompt insertion, resource reads, scripts, and attribution of later activity.
 Claude Code and OpenCode retain requested identifiers, not resolved directory basenames; Pi retains catalog names. Only surrounding whitespace is trimmed.
-Cloud skill visibility requires retained tool and generation spans in Tempo plus deployed Sigil consumer support. Local recording and analytics do not require Tempo.
+Cloud skill trace visibility requires retained tool and generation spans in Tempo plus deployed Sigil consumer support. Local recording and analytics do not require Tempo.
 
 ### Local mode
 

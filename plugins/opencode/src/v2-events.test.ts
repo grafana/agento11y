@@ -2814,7 +2814,8 @@ describe("native tools and real SDK capture modes", () => {
         ...data,
         metadata: {
           calls: [
-            { id: "repeat", name: "read" },
+            { id: "c", name: "skill" },
+            { id: "c", name: "skill" },
             { id: "repeat", name: "read" },
           ],
         },
@@ -2845,11 +2846,28 @@ describe("native tools and real SDK capture modes", () => {
         "full_with_metadata_spans",
       ] satisfies ContentCaptureMode[]
     ).flatMap((contentCapture) =>
-      [false, true].map((failed) => ({ contentCapture, failed })),
+      [false, true].flatMap((failed) =>
+        [
+          "correlated",
+          "after terminal",
+          "absent",
+          "wrong session",
+          "wrong message",
+          "wrong agent",
+          "wrong call",
+          "wrong tool",
+          "before active",
+          "late",
+          "cleared",
+          "secret",
+          "replaced",
+        ].map((join) => ({ contentCapture, failed, join })),
+      ),
     ),
-  )("exports final skill input through real SDK under $contentCapture failed=$failed", async ({
+  )("exports final skill input through real SDK under $contentCapture failed=$failed join=$join", async ({
     contentCapture,
     failed,
+    join,
   }) => {
     const exporter = new InMemorySpanExporter();
     const provider = new BasicTracerProvider({
@@ -2899,22 +2917,60 @@ describe("native tools and real SDK capture modes", () => {
       await replay(capture, [
         enqueue("prompt ghp_abcdefghijklmnopqrstuvwxyz1234567890"),
         event("session.inbox.delivered", { sessionID: "s", inboxID: "i" }),
-        start(),
-        ...tools(),
       ]);
+      if (join === "before active")
+        capture.observeToolExecution(
+          observation({ skillName: "requested-skill" }),
+        );
+      await replay(capture, [start(), ...tools()]);
       // Final post-before-hook id, not the durable old input or result display name.
+      const secret = "glc_abcdefghijklmnopqrstuv";
       const finalInput = Object.freeze({
-        id: "requested-skill",
+        id: join === "secret" ? secret : "requested-skill",
         name: "display-name",
+        path: "/private/skills/review/SKILL.md",
+        uri: "file:///private/skills/review/SKILL.md",
+        description: "private skill description",
         extra: "FINAL_INPUT_ONLY_DO_NOT_EXPORT",
       });
       const skillName = detectSkillName("skill", finalInput, "id") ?? null;
-      capture.observeToolExecution(observation({ skillName }));
+      const mismatches: Record<
+        string,
+        Partial<ReturnType<typeof observation>>
+      > = {
+        "wrong session": { sessionID: "other-session" },
+        "wrong message": { messageID: "other-message" },
+        "wrong agent": { agent: "plan" },
+        "wrong call": { id: "other-call" },
+        "wrong tool": { tool: "read" },
+      };
+      const observed = observation({ skillName, ...mismatches[join] });
+      if (
+        !["absent", "before active", "late", "after terminal"].includes(join)
+      ) {
+        capture.observeToolExecution(observed);
+        capture.observeToolExecution(observed);
+      }
+      if (join === "cleared" || join === "replaced")
+        capture.observeToolExecution(
+          observation({
+            skillName: join === "cleared" ? null : "replacement-id",
+          }),
+        );
       capture.observeToolExecution(
-        observation({ id: "outer-code-call", skillName }),
+        observation({ id: "outer-code-call", skillName: "requested-skill" }),
       );
+      const skillEvents = skillTools("s", "a", failed);
+      skillEvents.forEach(capture.handleEvent);
+      capture.handleEvent(skillEvents[2]!);
+      if (join === "after terminal") capture.observeToolExecution(observed);
+      const expectedSkill =
+        join === "correlated" || join === "after terminal"
+          ? "requested-skill"
+          : join === "replaced"
+            ? "replacement-id"
+            : undefined;
       await replay(capture, [
-        ...skillTools("s", "a", failed),
         event("session.text.ended", {
           sessionID: "s",
           assistantMessageID: "a",
@@ -2930,6 +2986,7 @@ describe("native tools and real SDK capture modes", () => {
         end(),
         end(),
       ]);
+      if (join === "late") capture.observeToolExecution(observed);
       await capture.shutdown();
       await client.flush();
       await provider.forceFlush();
@@ -2955,8 +3012,8 @@ describe("native tools and real SDK capture modes", () => {
       expect(snapshotTools).toHaveLength(2);
       expect(snapshotTools[0]?.executionKind).toBeUndefined();
       expect(snapshotTools[1]).toMatchObject({
-        executionKind: "load_skill",
-        skillName: "requested-skill",
+        executionKind: expectedSkill ? "load_skill" : undefined,
+        skillName: expectedSkill,
         toolName: "skill",
         toolCallId: "c",
       });
@@ -2971,11 +3028,11 @@ describe("native tools and real SDK capture modes", () => {
       const skillSpan = spans.find(
         (span) => span.attributes["gen_ai.tool.name"] === "skill",
       );
-      expect(skillSpan?.name).toBe("execute_tool skill requested-skill");
-      expect(skillSpan?.status.code === SpanStatusCode.ERROR).toBe(failed);
-      expect(skillSpan?.attributes["gen_ai.skill.name"]).toBe(
-        "requested-skill",
+      expect(skillSpan?.name).toBe(
+        `execute_tool skill${expectedSkill ? ` ${expectedSkill}` : ""}`,
       );
+      expect(skillSpan?.status.code === SpanStatusCode.ERROR).toBe(failed);
+      expect(skillSpan?.attributes["gen_ai.skill.name"]).toBe(expectedSkill);
       for (const span of spans.filter(
         (span) => span.attributes["gen_ai.operation.name"] === "execute_tool",
       )) {
@@ -2987,6 +3044,7 @@ describe("native tools and real SDK capture modes", () => {
         );
       }
       expect(JSON.stringify(exported)).not.toContain("requested-skill");
+      expect(JSON.stringify(exported)).not.toContain("replacement-id");
       expect(
         JSON.stringify({
           spans: spans.map((span) => span.attributes),
@@ -3024,23 +3082,119 @@ describe("native tools and real SDK capture modes", () => {
             : [],
         );
       expect(
-        duration.reduce((count, point) => count + point.value.count, 0),
+        [...new Set(metrics.map((metric) => metric.descriptor.name))].sort(),
+      ).toEqual([
+        "gen_ai.client.operation.duration",
+        "gen_ai.client.time_to_first_token",
+        "gen_ai.client.token.usage",
+        "gen_ai.client.tool_calls_per_operation",
+      ]);
+      const bounds = [
+        0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12, 10.24,
+        20.48, 40.96, 81.92,
+      ];
+      const identity = {
+        "gen_ai.agent.name": "opencode:build",
+        "gen_ai.agent.version": "2.0.22",
+        "gen_ai.provider.name": "provider",
+        "gen_ai.request.model": "model",
+      };
+      const expectedDuration = [
+        ...["code", "skill"].map((toolName) => ({
+          attributes: {
+            ...identity,
+            "gen_ai.operation.name": "execute_tool",
+            "gen_ai.tool.name": toolName,
+            "error.type":
+              toolName === "skill" && failed ? "tool_execution_error" : "",
+            "error.category": toolName === "skill" && failed ? "sdk_error" : "",
+            ...(toolName === "skill" &&
+              expectedSkill && {
+                "agento11y.tool.execution.kind": "load_skill",
+                "gen_ai.skill.name": expectedSkill,
+              }),
+          },
+          count: 1,
+          sum: 0.06,
+          min: 0.06,
+          max: 0.06,
+          buckets: {
+            boundaries: bounds,
+            counts: bounds
+              .concat(Infinity)
+              .map((_, index) => (index === 3 ? 1 : 0)),
+          },
+        })),
+        {
+          attributes: {
+            ...identity,
+            "gen_ai.operation.name": "streamText",
+            "error.type": "",
+            "error.category": "",
+          },
+          count: 1,
+          sum: 0.14,
+          min: 0.14,
+          max: 0.14,
+          buckets: {
+            boundaries: bounds,
+            counts: bounds
+              .concat(Infinity)
+              .map((_, index) => (index === 4 ? 1 : 0)),
+          },
+        },
+      ];
+      const actualDuration = duration.map((point) => ({
+        attributes: point.attributes,
+        count: point.value.count,
+        sum: point.value.sum,
+        min: point.value.min,
+        max: point.value.max,
+        buckets: point.value.buckets,
+      }));
+      expect(actualDuration).toHaveLength(expectedDuration.length);
+      expect(actualDuration).toEqual(expect.arrayContaining(expectedDuration));
+      expect(
+        actualDuration.reduce((count, point) => count + point.count, 0),
       ).toBe(3);
-      const toolPoints = duration.filter(
-        (point) => point.attributes["gen_ai.operation.name"] === "execute_tool",
-      );
-      expect(toolPoints).toHaveLength(2);
-      for (const point of toolPoints) {
-        expect(point.value.count).toBe(1);
-        expect(point.value.sum).toBe(0.06);
-        expect(
-          Object.keys(point.attributes).some((key) =>
-            /skill|execution.kind|tool.call/.test(key),
-          ),
-        ).toBe(false);
-        expect(JSON.stringify(point.attributes)).not.toContain(
-          "requested-skill",
-        );
+      const allowedKeys = new Set([
+        ...Object.keys(identity),
+        "gen_ai.operation.name",
+        "gen_ai.tool.name",
+        "error.type",
+        "error.category",
+        "agento11y.tool.execution.kind",
+        "gen_ai.skill.name",
+        "gen_ai.token.type",
+        "gen_ai.token.semantics",
+      ]);
+      for (const metric of metrics) {
+        for (const point of metric.dataPoints) {
+          for (const key of Object.keys(point.attributes)) {
+            expect(allowedKeys.has(key), key).toBe(true);
+          }
+          if (point.attributes["gen_ai.operation.name"] !== "execute_tool") {
+            expect(point.attributes).not.toHaveProperty("gen_ai.skill.name");
+            expect(point.attributes).not.toHaveProperty(
+              "agento11y.tool.execution.kind",
+            );
+          }
+        }
+      }
+      const metricWire = JSON.stringify(metrics);
+      for (const value of [
+        secret,
+        finalInput.path,
+        finalInput.uri,
+        finalInput.description,
+        finalInput.extra,
+        "durable-old",
+        "display-name",
+        "not-v2",
+        "outer-code-call",
+        "ghp_abcdefghijklmnopqrstuvwxyz1234567890",
+      ]) {
+        expect(metricWire).not.toContain(value);
       }
       const toolSpans = spans.filter(
         (span) => span.attributes["gen_ai.tool.name"] === "code",
