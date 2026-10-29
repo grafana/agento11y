@@ -1,0 +1,65 @@
+{
+  "provenance": {
+    "kind": "source-derived, not captured host payloads",
+    "release": "v2026.6.5",
+    "commit": "3c231eb3979ab9c57d5cd6d02f1d577a3b718b43",
+    "source": "https://github.com/NousResearch/hermes-agent/blob/3c231eb3979ab9c57d5cd6d02f1d577a3b718b43/tools/skills_tool.py",
+    "lookup_lines": [960, 966, 984, 987],
+    "identity_lines": [1276, 1278],
+    "result_lines": [1360, 1390],
+    "layout": "writer/SKILL.md and writer/references/checklist.md; checklist.md has no frontmatter",
+    "limitation": "Absent file_path and a safe resolved name do not prove a root instruction load."
+  },
+  "cases": [
+    {
+      "id": "direct-supporting-markdown",
+      "tool_name": "skill_view",
+      "args": {"name": "writer/references/checklist"},
+      "result": {
+        "success": true,
+        "name": "checklist",
+        "description": "",
+        "tags": [],
+        "related_skills": [],
+        "content": "Synthetic supporting checklist, not root instructions.",
+        "path": "writer/references/checklist.md",
+        "skill_dir": null,
+        "linked_files": null,
+        "usage_hint": null,
+        "required_environment_variables": [],
+        "required_commands": [],
+        "missing_required_environment_variables": [],
+        "missing_credential_files": [],
+        "missing_required_commands": [],
+        "setup_needed": false,
+        "setup_skipped": false,
+        "readiness_status": "available"
+      }
+    },
+    {
+      "id": "recursive-supporting-markdown",
+      "tool_name": "skill_view",
+      "args": {"name": "checklist"},
+      "result": {
+        "success": true,
+        "name": "checklist",
+        "description": "",
+        "tags": [],
+        "related_skills": [],
+        "content": "Synthetic supporting checklist, not root instructions.",
+        "path": "writer/references/checklist.md",
+        "skill_dir": null,
+        "linked_files": null,
+        "usage_hint": null,
+        "required_environment_variables": [],
+        "required_commands": [],
+        "missing_required_environment_variables": [],
+        "missing_credential_files": [],
+        "missing_required_commands": [],
+        "setup_needed": false,
+        "setup_skipped": false,
+        "readiness_status": "available"
+      }
+    }
+  ]
+}
