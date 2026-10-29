@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.16.0] - 2026-10-29
+
+### Features
+
+- **sdk**: add skill identity to tool execution metrics (#979)
+
+### Bug Fixes
+
+- **sdk-js**: run the generation sanitizer over tool span text (#971)
+- **security/high/js**: update dependency @strands-agents/sdk to v1.5.0 [security] (#934)
+
 ## [0.15.0] - 2026-10-28
 
 ### Features
