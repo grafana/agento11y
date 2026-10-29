@@ -10,7 +10,7 @@ resolution-markers = [
 
 [[package]]
 name = "agento11y"
-version = "0.21.0"
+version = "0.22.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "grpcio" },
@@ -22,14 +22,14 @@ dependencies = [
     { name = "protobuf" },
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ec/ee/2a67357a1bf908db152e73ad322c4cfa5eea53e4764debe288e8603c16b2/agento11y-0.21.0.tar.gz", hash = "sha256:9b46337bd6d838cf2ef640d90ac9b4b4f99504cc1608b5138ccc2bc6df5d6868", size = 311469, upload-time = "2026-10-15T18:39:54.134Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/93/76/f67e60379581d15b2ab79e6a830213e6a838d18560b760c11d7458d5c0c6/agento11y-0.22.0.tar.gz", hash = "sha256:994bcde9da09658e3b577bf9914766c3638ea9eb4553246af99a0fbbaa7ce066", size = 330587, upload-time = "2026-10-29T15:37:19.068Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8b/9a/f43077845a7d862e0387f620e91809c4225029f8e8d904cfcef12a9f2df7/agento11y-0.21.0-py3-none-any.whl", hash = "sha256:75ede8a544f76e4708347ef6a1ef9ef86c5d8b45abb02d62c3036b3b54d28357", size = 176489, upload-time = "2026-10-15T18:39:52.557Z" },
+    { url = "https://files.pythonhosted.org/packages/e2/9e/594609b386420caec0f28682d6533afd5b8d183c4656e5134e72415ef668/agento11y-0.22.0-py3-none-any.whl", hash = "sha256:3df41647ee5dc9a57d5fb13a98c645ab8daff49804e38cd0fe07563ec9eb1158", size = 182044, upload-time = "2026-10-29T15:37:17.401Z" },
 ]
 
 [[package]]
 name = "agento11y-deepeval"
-version = "0.21.0"
+version = "0.22.0"
 source = { editable = "." }
 dependencies = [
     { name = "agento11y" },
@@ -43,7 +43,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agento11y", specifier = ">=0.21.0" },
+    { name = "agento11y", specifier = ">=0.22.0" },
     { name = "deepeval", specifier = ">=4.2.0,<5.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.2.0" },
 ]
