@@ -1,0 +1,96 @@
+{
+  "source_commit": "360319d8dee62d87e2d59fc0c21805d79519cfed",
+  "fixture_kind": "source-derived projections, not captured host payloads",
+  "cases": [
+    {
+      "name": "native_read_without_bridge",
+      "premise": "Even a native initial read lacks hook-visible catalog, step and full-name evidence.",
+      "events": [
+        {"tool_name":"skillsread","tool_use_id":"read-1","tool_input":{"package":"pkg-shared"},"tool_response":{"resource":"skill://shared/SKILL.md","contents":"synthetic instructions","next_cursor":null}}
+      ]
+    },
+    {
+      "name": "plain_external_read_collision",
+      "premise": "A default-namespace external skillsread tool can produce the identical hook observation.",
+      "events": [
+        {"tool_name":"skillsread","tool_use_id":"read-1","tool_input":{"package":"pkg-shared"},"tool_response":{"resource":"skill://shared/SKILL.md","contents":"synthetic instructions","next_cursor":null}}
+      ]
+    },
+    {
+      "name": "plain_external_list_collision",
+      "premise": "An external skillslist tool can supply plausible catalog data before a native read.",
+      "events": [
+        {"tool_name":"skillslist","tool_use_id":"list-1","tool_input":{"authority":{"kind":"cloud"}},"tool_response":{"skills":[{"authority":{"kind":"cloud"},"package":"pkg-shared","name":"review","description":"synthetic description","main_resource":"skill://shared/SKILL.md"}],"warnings":[],"next_cursor":null}},
+        {"tool_name":"skillsread","tool_use_id":"read-1","tool_input":{"package":"pkg-shared"},"tool_response":{"resource":"skill://shared/SKILL.md","contents":"synthetic instructions","next_cursor":null}}
+      ]
+    },
+    {
+      "name": "earlier_step_same_turn",
+      "premise": "Codex replaces the step catalog between these observations without changing the hook turn_id.",
+      "events": [
+        {"tool_name":"skillslist","tool_use_id":"list-1","tool_input":{"authority":{"kind":"executor"}},"tool_response":{"skills":[{"authority":{"kind":"executor","id":"executor-a"},"package":"pkg-shared","name":"old-review","description":"synthetic description","main_resource":"skill://shared/SKILL.md"}],"warnings":[],"next_cursor":null}},
+        {"tool_name":"skillsread","tool_use_id":"read-1","tool_input":{"package":"pkg-shared"},"tool_response":{"resource":"skill://shared/SKILL.md","contents":"synthetic instructions","skill_root":"/synthetic/skills/review","next_cursor":null}}
+      ]
+    },
+    {
+      "name": "unlisted_authority_conflict",
+      "premise": "The executor list omits a cloud route for the same package; merged-catalog order decides the source-less read.",
+      "events": [
+        {"tool_name":"skillslist","tool_use_id":"list-1","tool_input":{"authority":{"kind":"executor"}},"tool_response":{"skills":[{"authority":{"kind":"executor","id":"executor-a"},"package":"pkg-shared","name":"executor-review","description":"synthetic description","main_resource":"skill://shared/SKILL.md"}],"warnings":[],"next_cursor":null}},
+        {"tool_name":"skillsread","tool_use_id":"read-1","tool_input":{"package":"pkg-shared"},"tool_response":{"resource":"skill://shared/SKILL.md","contents":"synthetic instructions","installations":[{"package":"pkg-shared","resource":"skill://shared/SKILL.md"},{"environment_id":"env-a","skill_root":"/synthetic/skills/review"}],"next_cursor":null}}
+      ]
+    },
+    {
+      "name": "unlisted_environment_conflict",
+      "premise": "A visibility-filtered executor list omits another environment route. An explicit source still supplies no full skill identity or step correlation.",
+      "events": [
+        {"tool_name":"skillslist","tool_use_id":"list-1","tool_input":{"authority":{"kind":"executor"}},"tool_response":{"skills":[{"authority":{"kind":"executor","id":"executor-a"},"package":"pkg-shared","name":"visible-review","description":"synthetic description","main_resource":"skill://shared/SKILL.md"}],"warnings":[],"next_cursor":null}},
+        {"tool_name":"skillsread","tool_use_id":"read-1","tool_input":{"package":"pkg-shared","source":{"kind":"executor","environment_id":"env-b"}},"tool_response":{"resource":"skill://shared/SKILL.md","contents":"synthetic instructions","installations":[{"environment_id":"env-b","skill_root":"/synthetic/skills/review"}],"installations_truncated":true,"next_cursor":null}}
+      ]
+    },
+    {
+      "name": "partial_list",
+      "premise": "A later list page can contain a conflicting route. The cursor fingerprints listed entries, not an authoritative model-step identity.",
+      "events": [
+        {"tool_name":"skillslist","tool_use_id":"list-1","tool_input":{"authority":{"kind":"executor"}},"tool_response":{"skills":[{"authority":{"kind":"executor","id":"executor-a"},"package":"pkg-shared","name":"review","description":"synthetic description","main_resource":"skill://shared/SKILL.md"}],"warnings":[],"next_cursor":"0123456789abcdef:1:524288"}},
+        {"tool_name":"skillsread","tool_use_id":"read-1","tool_input":{"package":"pkg-shared"},"tool_response":{"resource":"skill://shared/SKILL.md","contents":"synthetic instructions","next_cursor":null}}
+      ]
+    },
+    {
+      "name": "possibly_truncated_name",
+      "premise": "The list truncates names to 256 UTF-8 bytes without marking truncation; this 256-byte prefix cannot prove a full name.",
+      "events": [
+        {"tool_name":"skillslist","tool_use_id":"list-1","tool_input":{"authority":{"kind":"cloud"}},"tool_response":{"skills":[{"authority":{"kind":"cloud"},"package":"pkg-shared","name":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","description":"synthetic description","main_resource":"skill://shared/SKILL.md"}],"warnings":[],"next_cursor":null}},
+        {"tool_name":"skillsread","tool_use_id":"read-1","tool_input":{"package":"pkg-shared"},"tool_response":{"resource":"skill://shared/SKILL.md","contents":"synthetic instructions","next_cursor":null}}
+      ]
+    },
+    {
+      "name": "supporting_resource",
+      "premise": "A supporting-resource read is not an initial instruction read.",
+      "events": [
+        {"tool_name":"skillsread","tool_use_id":"read-1","tool_input":{"package":"pkg-shared","resource":"skill://shared/reference.md"},"tool_response":{"resource":"skill://shared/reference.md","contents":"synthetic reference","next_cursor":null}}
+      ]
+    },
+    {
+      "name": "continuation_page",
+      "premise": "A nonempty read cursor requests a continuation, not an initial instruction read.",
+      "events": [
+        {"tool_name":"skillsread","tool_use_id":"read-1","tool_input":{"package":"pkg-shared","cursor":"0123456789abcdef:20"},"tool_response":{"resource":"skill://shared/SKILL.md","contents":"synthetic continuation","next_cursor":null}}
+      ]
+    },
+    {
+      "name": "alias_without_current_resolution",
+      "premise": "An executor alias needs the current catalog alias map; the hook cannot establish its resolved full skill identity.",
+      "events": [
+        {"tool_name":"skillsread","tool_use_id":"read-1","tool_input":{"package":"e0/shared"},"tool_response":{"resource":"skill://shared/SKILL.md","contents":"synthetic instructions","next_cursor":null}}
+      ]
+    },
+    {
+      "name": "missing_read_post_hook",
+      "premise": "An unsuccessful read has no successful PostToolUse observation; a prior list must not create an extra execution.",
+      "events": [
+        {"tool_name":"skillslist","tool_use_id":"list-1","tool_input":{"authority":{"kind":"cloud"}},"tool_response":{"skills":[{"authority":{"kind":"cloud"},"package":"pkg-shared","name":"review","description":"synthetic description","main_resource":"skill://shared/SKILL.md"}],"warnings":[],"next_cursor":null}}
+      ]
+    }
+  ]
+}
