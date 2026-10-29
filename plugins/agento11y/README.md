@@ -55,7 +55,7 @@ Verify with `agento11y --version`.
 
 ## Configure
 
-Run `agento11y login` to configure capture. On first run it asks where sessions go: **Local only**, or **Grafana Cloud**. **Local only** needs no Cloud credentials and does not forward sessions. **Grafana Cloud** prints your stack's coding-agent setup page and asks you to paste the connection block from that page.
+Run `agento11y login` to configure capture. On first run it asks where sessions go: **Local only**, or **Grafana Cloud**. **Local only** needs no Cloud credentials and does not forward sessions. **Grafana Cloud** prints your stack's coding-agent setup page and asks you to paste the environment block from that page.
 
 Interactive Cloud setup also asks for **Local web UI** in the preferences. The question starts on **Yes** by default and remembers an earlier answer. **Yes** keeps a full local copy and forwards a copy to Grafana Cloud. **No** sends directly to Grafana Cloud without a local copy. Complete credential flags also skip the preferences and keep direct Cloud behavior.
 
@@ -342,8 +342,9 @@ agento11y login --endpoint https://agento11y-prod-<region>.grafana.net --tenant 
 | `--endpoint url` | conversations API URL |
 | `--tenant id` | instance ID |
 | `--token value` | access-policy token with the `sigil:write` scope |
-| `--token-stdin` | read the token from stdin; requires `--endpoint` and `--tenant` |
+| `--token-stdin` | read the token from stdin; requires `--endpoint` and `--tenant`, or an `--env-file` that sets them |
 | `--otlp-endpoint url` | OTLP endpoint for SDK traces and metrics |
+| `--env-file path` | read the environment block from a file, or from stdin when the path is `-` |
 | `--no-verify` | write the file without checking the credentials |
 | `--yes` | save even when the check fails |
 
@@ -354,6 +355,15 @@ Keep the token out of your shell history with `--token-stdin`:
 ```sh
 printf %s "$TOKEN" | agento11y login --endpoint https://agento11y-prod-<region>.grafana.net --tenant <instance-id> --token-stdin
 ```
+
+A team can share one environment block instead, as a file or through a password manager. Save the block from the setup page, then pass the file, or pipe it in with `-`:
+
+```sh
+agento11y login --env-file team.env
+op document get agento11y-cloud-env | agento11y login --env-file -
+```
+
+Login reads the same lines as a pasted block: the endpoint, instance ID, token, OTLP endpoint, and OTLP headers. `--env-file` never prompts for a value: the block and the flags must supply the endpoint, instance ID, and token, and the other preferences keep their saved values. Other `AGENTO11Y_*`, `SIGIL_*`, and `OTEL_*` keys that the config file accepts are ignored and named on stderr, so a shared file cannot change anyone's content capture, guards, protocol, or other settings. The setup page's own `AGENTO11Y_PROTOCOL=http` and `AGENTO11Y_AUTH_MODE=basic` lines are the defaults, so they are not named. Lines with any other key are dropped without a notice. `export` prefixes and `#` comment lines are accepted, so the same file also works with `source`. A file of `op://` references must be resolved first, for example `op inject -i <file> | agento11y login --env-file -`. Flags still win over the block's values, and a file that holds only the endpoint and instance ID can be combined with `--token-stdin`. A block larger than 64 KiB is refused.
 
 ## Settings
 

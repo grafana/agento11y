@@ -31,10 +31,10 @@ at all.
 2. **Never invent an endpoint URL.** The API URL and the OTLP endpoint come from
    the setup page of the user's own stack (Step 3). Do not assemble one from the
    stack name; regions differ.
-3. **Never print or echo a token, and never ask for the connection block in
-   chat.** The block the setup page hands out carries a live token, and this
-   conversation can be exported. The user pastes it into login's own prompt. A
-   token you have to pass yourself goes in over stdin with `--token-stdin`.
+3. **Never print or echo a token, and never ask for the environment block in
+   chat.** The block carries a live token, and this conversation can be
+   exported. The user pastes it into login's prompt or passes `--env-file <file>`
+   (`-` for a pipe). A token you pass yourself goes in with `--token-stdin`.
 4. **Do not edit application code.** Adding SDK calls to the user's app is a
    different job ("Path B"). If the user wants their own app or agent
    instrumented, stop and hand off to the `agento11y-instrument` skill, which
@@ -203,6 +203,11 @@ depends on the terminal. Interactively, login asks whether to save anyway. In a
 script the question is never asked, because a piped stdin is not a terminal:
 login writes nothing and exits 1. Pass `--yes` to save the values regardless, or
 `--no-verify` to skip the check. The preferences have no flags.
+
+`--env-file <file>` (`-` for a pipe) never prompts for a value either: the
+block and the flags must supply the endpoint, instance ID, and token, and the
+other preferences keep their saved values. Flags still win over the block's
+values, and `--token-stdin` can supply a token the file leaves out.
 
 Login writes to the resolved config path described above. An install that still
 has only the old `sigil/config.env` under the same config root keeps using that

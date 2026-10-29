@@ -49,6 +49,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net"
 	"net/url"
 	"os"
@@ -270,6 +271,13 @@ type RunOpts struct {
 	Token        string
 	OTLPEndpoint string
 
+	// Block is an environment block from `login --env-file`. Like a pasted
+	// block, only its credential and OTLP lines are read. Its values count as
+	// command-line values, a flag still beats the block, and together they
+	// must supply every required credential because nothing can be prompted
+	// for.
+	Block string
+
 	// ShowNextStep prints a `Try sigil claude or sigil pi.` hint after a
 	// successful save so users know what to run next. Set by the explicit
 	// `agento11y login` command; left false when login auto-fires from a
@@ -347,6 +355,36 @@ func Run(ctx context.Context, opts RunOpts) (Result, error) {
 	if err := fixed.validate(); err != nil {
 		return Result{}, err
 	}
+	var block formValues
+	if opts.Block != "" {
+		// An --env-file run never prompts for a value: the block and the
+		// flags must hold every required value between them.
+		if err := validatePastedBlock(fixed, opts.Block); err != nil {
+			return Result{}, err
+		}
+		applyPaste(&block, fixed, opts.Block)
+		fixed.endpoint = cmp.Or(fixed.endpoint, block.endpoint)
+		fixed.tenantID = cmp.Or(fixed.tenantID, block.tenantID)
+		fixed.token = cmp.Or(fixed.token, block.token)
+		fixed.otelEndpoint = cmp.Or(fixed.otelEndpoint, block.otelEndpoint)
+		if keys, flags := fixed.missingCredentials(); len(keys) > 0 {
+			pronoun := "them"
+			if len(keys) == 1 {
+				pronoun = "it"
+			}
+			return Result{}, fmt.Errorf("the block does not set %s; add %s to the block or pass %s", strings.Join(keys, " and "), pronoun, strings.Join(flags, " and "))
+		}
+		// The block's OTLP headers embed its own tenant and token, so a flag
+		// that replaces either one leaves them stale. Headers without the
+		// block's own OTLP endpoint would go to whichever endpoint was saved
+		// before, so they are dropped too.
+		if opts.TenantID != "" || opts.Token != "" || block.otelEndpoint == "" {
+			block.otlpHeadersPasted = false
+		}
+		if ignored := ignoredBlockKeys(opts.Block); len(ignored) > 0 {
+			_, _ = fmt.Fprintf(opts.Stderr, "agento11y login: ignored %s from the block; login reads only the credential and OTLP lines.\n", strings.Join(ignored, ", "))
+		}
+	}
 
 	// The form runs only while a required credential is still missing after
 	// the flags, so `--endpoint --tenant --token` configures a devcontainer,
@@ -394,6 +432,9 @@ func Run(ctx context.Context, opts RunOpts) (Result, error) {
 		guardTimeout: strings.TrimSpace(existing["SIGIL_GUARDS_TIMEOUT_MS"]),
 		otlpHeaders:  existing["OTEL_EXPORTER_OTLP_HEADERS"],
 		stackURL:     existing[stackURLKey],
+	}
+	if block.otlpHeadersPasted {
+		v.otlpHeaders, v.otlpHeadersPasted = block.otlpHeaders, true
 	}
 
 	if askUser {
@@ -496,6 +537,22 @@ type fixedValues struct {
 // arrived as flags, which is what lets login run with no terminal.
 func (f fixedValues) completeCredentials() bool {
 	return f.endpoint != "" && f.tenantID != "" && f.token != ""
+}
+
+// missingCredentials names the required credentials the flags left empty, as
+// block keys and as the flags that set them.
+func (f fixedValues) missingCredentials() (keys, flags []string) {
+	for _, c := range []struct{ key, flag, value string }{
+		{"AGENTO11Y_ENDPOINT", "--endpoint", f.endpoint},
+		{"AGENTO11Y_AUTH_TENANT_ID", "--tenant", f.tenantID},
+		{"AGENTO11Y_AUTH_TOKEN", "--token-stdin", f.token},
+	} {
+		if c.value == "" {
+			keys = append(keys, c.key)
+			flags = append(flags, c.flag)
+		}
+	}
+	return keys, flags
 }
 
 func (f fixedValues) validate() error {
@@ -1128,6 +1185,39 @@ func applyPaste(v *formValues, fixed fixedValues, block string) pasteFilled {
 	return filled
 }
 
+// blockReadSuffixes are the branded keys login reads from a block (see
+// applyPaste).
+var blockReadSuffixes = []string{"ENDPOINT", "AUTH_TENANT_ID", "AUTH_TOKEN", "OTEL_EXPORTER_OTLP_ENDPOINT"}
+
+// blockDefaultValues are the PROTOCOL and AUTH_MODE values the setup page's
+// block always carries. Login does not write either key, but these values are
+// the defaults, so leaving them out changes nothing and they are not named.
+// Any other value, such as PROTOCOL=otel, is named like any ignored key.
+var blockDefaultValues = map[string]string{"PROTOCOL": "http", "AUTH_MODE": "basic"}
+
+// ignoredBlockKeys names the keys in a block that login does not read, so
+// a team that put content capture or guards in a shared file learns that
+// login left them out.
+func ignoredBlockKeys(block string) []string {
+	env, _ := dotenv.ParseDotenv(strings.NewReader(normalizePastedBlock(block)))
+	read := map[string]bool{"OTEL_EXPORTER_OTLP_ENDPOINT": true, "OTEL_EXPORTER_OTLP_HEADERS": true}
+	for _, s := range blockReadSuffixes {
+		read[envconfig.PreferredKey(s)], read[envconfig.LegacyKey(s)] = true, true
+	}
+	for s, def := range blockDefaultValues {
+		for _, k := range []string{envconfig.PreferredKey(s), envconfig.LegacyKey(s)} {
+			read[k] = strings.EqualFold(strings.TrimSpace(env[k]), def)
+		}
+	}
+	var ignored []string
+	for _, k := range slices.Sorted(maps.Keys(env)) {
+		if !read[k] {
+			ignored = append(ignored, k)
+		}
+	}
+	return ignored
+}
+
 // setPasted writes value into field unless a flag fixed that value or the
 // block carried none, and reports whether the field now holds the pasted one.
 func setPasted(field *string, fixed, value string) bool {
@@ -1166,11 +1256,13 @@ func validatePastedBlock(fixed fixedValues, s string) error {
 	if _, err := dotenv.ParseDotenv(strings.NewReader(normalizePastedBlock(s))); err != nil {
 		return fmt.Errorf("could not read the block: %w", err)
 	}
-	var probe formValues
-	filled := applyPaste(&probe, fixed, s)
-	if filled == (pasteFilled{}) {
+	// A block whose every line a flag overrode still carries credentials,
+	// so this check ignores the flags.
+	if applyPaste(&formValues{}, fixedValues{}, s) == (pasteFilled{}) {
 		return errors.New("no credentials in this block. Expected lines like AGENTO11Y_ENDPOINT=…, AGENTO11Y_AUTH_TENANT_ID=…, AGENTO11Y_AUTH_TOKEN=…")
 	}
+	var probe formValues
+	filled := applyPaste(&probe, fixed, s)
 	for _, c := range []struct {
 		supplied bool
 		name     string
@@ -1186,8 +1278,13 @@ func validatePastedBlock(fixed fixedValues, s string) error {
 		if !c.supplied {
 			continue
 		}
+		if strings.HasPrefix(c.value, "op://") {
+			return fmt.Errorf("the %s is a 1Password reference. Resolve it first, for example: op inject -i <file> | agento11y login --env-file -", c.name)
+		}
 		if looksLikePlaceholder(c.value) {
-			return fmt.Errorf("the %s is still a placeholder (%s). Fill it in on the page, then copy the block again", c.name, c.value)
+			// The value is left out: it can sit next to a real secret, and
+			// a block from stdin prints this error to a log.
+			return fmt.Errorf("the %s is still a placeholder. Fill it in on the page, then copy the block again", c.name)
 		}
 		if c.validate != nil {
 			if err := c.validate(c.value); err != nil {
@@ -1214,14 +1311,28 @@ var pastedAssignmentRe = regexp.MustCompile(`(?:^|\s)(?:export\s+)?([A-Za-z_][A-
 // field is a single-line input, and a terminal paste into one of those arrives
 // with each newline replaced by a space, which the loader would read as one
 // unusable key. Cutting before every key the loader accepts restores the
-// lines. A block that kept its newlines passes through unchanged.
+// lines. A block that kept its newlines loses only its comments.
 //
 // Only accepted keys cut, so a value keeps its spaces:
 // OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic …" holds no such key and
-// stays whole. Text before the first assignment becomes its own line, which is
+// stays whole. A key right after `#` is commented out and does not cut
+// either, so a block that is only `# KEY=…` stays dead. Text before the first assignment becomes its own line, which is
 // what keeps a leading `# copied from Grafana` from commenting out the block
 // once the newline after it is gone.
 func normalizePastedBlock(block string) string {
+	// In a block that kept its newlines, a comment must stay dead: drop
+	// comment lines and ` #` tails before the regex below, which would
+	// otherwise start a live assignment at a `KEY=` inside them. A flattened
+	// paste is one line, so a leading comment there is handled below instead.
+	if strings.Contains(strings.TrimSpace(block), "\n") {
+		var lines []string
+		for line := range strings.SplitSeq(block, "\n") {
+			if !strings.HasPrefix(strings.TrimSpace(line), "#") {
+				lines = append(lines, cutInlineComment(line))
+			}
+		}
+		block = strings.Join(lines, "\n")
+	}
 	var cuts []int
 	for _, m := range pastedAssignmentRe.FindAllStringSubmatchIndex(block, -1) {
 		if !dotenv.AllowedDotenvKey(block[m[2]:m[3]]) {
@@ -1231,6 +1342,9 @@ func normalizePastedBlock(block string) string {
 		// The regex opens with (?:^|\s); drop the whitespace byte it consumed.
 		if strings.IndexByte(" \t\n\f\r", block[start]) >= 0 {
 			start++
+		}
+		if strings.HasSuffix(strings.TrimRight(block[:start], " \t"), "#") {
+			continue
 		}
 		cuts = append(cuts, start)
 	}
@@ -1249,6 +1363,27 @@ func normalizePastedBlock(block string) string {
 		lines = append(lines, strings.TrimSpace(block[start:end]))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// cutInlineComment drops a ` #` comment from the end of a line where the
+// loader would drop it: after the closing quote of a quoted value, or anywhere
+// in an unquoted one (see dotenv.ParseDotenv).
+func cutInlineComment(line string) string {
+	_, rest, ok := strings.Cut(line, "=")
+	if !ok {
+		return line
+	}
+	value := strings.TrimLeft(rest, " \t")
+	from := len(line) - len(value)
+	if len(value) >= 2 && (value[0] == '"' || value[0] == '\'') {
+		if end := strings.IndexByte(value[1:], value[0]); end >= 0 {
+			from += end + 2
+		}
+	}
+	if i := strings.Index(line[from:], " #"); i >= 0 {
+		return line[:from+i]
+	}
+	return line
 }
 
 // autoTagOptions lists the values the automatic-tag switch can attach, with
@@ -1834,7 +1969,9 @@ func requireURL(s string) error {
 	}
 	u, err := url.Parse(s)
 	if err != nil {
-		return fmt.Errorf("invalid URL: %w", err)
+		// The parse error quotes the input, or part of it such as the port,
+		// and the input can carry a secret from a block; say nothing of it.
+		return errors.New("invalid URL")
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return errors.New("endpoint URL must start with http:// or https://")

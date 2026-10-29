@@ -52,6 +52,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/term"
+
 	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agentinstall"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode"
@@ -689,6 +691,7 @@ func resetLocalHookStartFailureForTest() {
 
 type loginFlags struct {
 	endpoint, tenant, token, otlpEndpoint string
+	envFile                               string
 	tokenStdin, noVerify, assumeYes       bool
 }
 
@@ -698,18 +701,20 @@ func newLoginFlags() (*flag.FlagSet, *loginFlags) {
 	fs.StringVar(&opts.endpoint, "endpoint", "", "conversations API URL")
 	fs.StringVar(&opts.tenant, "tenant", "", "instance ID")
 	fs.StringVar(&opts.token, "token", "", "access-policy token with the sigil:write scope")
-	fs.BoolVar(&opts.tokenStdin, "token-stdin", false, "read the token from stdin; requires --endpoint and --tenant. Cannot be combined with --token.")
+	fs.BoolVar(&opts.tokenStdin, "token-stdin", false, "read the token from stdin; requires --endpoint and --tenant, or an --env-file that sets them. Cannot be combined with --token.")
 	fs.StringVar(&opts.otlpEndpoint, "otlp-endpoint", "", "OTLP endpoint")
 	fs.BoolVar(&opts.noVerify, "no-verify", false, "skip the credential check")
 	fs.BoolVar(&opts.assumeYes, "yes", false, "save even when the check fails")
+	fs.StringVar(&opts.envFile, "env-file", "", "read the environment block from `path`, or from stdin when path is -")
 	return fs, opts
 }
 
 // runLoginCommand handles `agento11y login`. Values can arrive as flags, on
-// stdin (--token-stdin), or from the prompt; whatever is still missing after
-// the flags is asked for, and a run that supplies --endpoint, --tenant, and a
-// token needs no terminal at all. Misuse of the flags exits 2, a refused or
-// failed save exits 1.
+// stdin (--token-stdin), from an environment block (--env-file), or from the
+// prompt; whatever is still missing after the flags is asked for, and a run
+// that supplies --endpoint, --tenant, and a token needs no terminal at all.
+// Misuse of the flags exits 2, an unreadable block or a refused or failed save
+// exits 1.
 func runLoginCommand(args []string, stdin io.Reader, stderr io.Writer) {
 	fs, opts := newLoginFlags()
 	if err := fs.Parse(args); err != nil {
@@ -723,9 +728,29 @@ func runLoginCommand(args []string, stdin io.Reader, stderr io.Writer) {
 		return
 	}
 
+	if opts.envFile == "-" && opts.tokenStdin {
+		usageError(stderr, "login", "--env-file - and --token-stdin both read stdin; pass one")
+		exit(2)
+		return
+	}
+	if f, isFile := stdin.(*os.File); opts.envFile == "-" && isFile && term.IsTerminal(int(f.Fd())) {
+		// ReadAll would wait for an EOF the user was never told to type.
+		usageError(stderr, "login", "--env-file - reads a piped block, for example: op document get <name> | agento11y login --env-file -")
+		exit(2)
+		return
+	}
+	var block string
+	if opts.envFile != "" {
+		var err error
+		if block, err = readEnvFile(opts.envFile, stdin, stderr); err != nil {
+			_, _ = fmt.Fprintf(stderr, "agento11y login: %v\n", err)
+			exit(1)
+			return
+		}
+	}
 	if opts.tokenStdin {
 		var ok bool
-		opts.token, ok = readTokenStdin(fs, opts.endpoint, opts.tenant, stdin, stderr)
+		opts.token, ok = readTokenStdin(fs, opts.endpoint, opts.tenant, block != "", stdin, stderr)
 		if !ok {
 			exit(2)
 			return
@@ -750,6 +775,7 @@ func runLoginCommand(args []string, stdin io.Reader, stderr io.Writer) {
 		TenantID:         opts.tenant,
 		Token:            opts.token,
 		OTLPEndpoint:     opts.otlpEndpoint,
+		Block:            block,
 		SkipVerify:       opts.noVerify,
 		AssumeYes:        opts.assumeYes,
 	})
@@ -767,7 +793,7 @@ func runLoginCommand(args []string, stdin io.Reader, stderr io.Writer) {
 		exit(1)
 		return
 	case errors.Is(err, login.ErrNotInteractive):
-		_, _ = fmt.Fprintln(stderr, "agento11y login: cannot prompt because stdin is not a terminal. Run from an interactive shell, pass --endpoint, --tenant and --token (or --token-stdin), or set AGENTO11Y_ENDPOINT, AGENTO11Y_AUTH_TENANT_ID and AGENTO11Y_AUTH_TOKEN in your environment (the legacy SIGIL_* names still work).")
+		_, _ = fmt.Fprintln(stderr, "agento11y login: cannot prompt because stdin is not a terminal. Run from an interactive shell, pass --endpoint, --tenant and --token (or --token-stdin), pass the environment block with --env-file (for example op document get <name> | agento11y login --env-file -), or set AGENTO11Y_ENDPOINT, AGENTO11Y_AUTH_TENANT_ID and AGENTO11Y_AUTH_TOKEN in your environment (the legacy SIGIL_* names still work).")
 		exit(1)
 		return
 	default:
@@ -775,6 +801,54 @@ func runLoginCommand(args []string, stdin io.Reader, stderr io.Writer) {
 		exit(1)
 		return
 	}
+}
+
+// readEnvFile reads the environment block for --env-file, from stdin when
+// path is "-".
+func readEnvFile(path string, stdin io.Reader, stderr io.Writer) (string, error) {
+	r, source := stdin, "stdin"
+	if path != "-" {
+		f, err := os.Open(path)
+		if err != nil {
+			return "", fmt.Errorf("could not read the environment block: %w", err)
+		}
+		defer func() { _ = f.Close() }()
+		r, source = f, path
+	}
+	data, err := readBlock(r, source, stderr)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(data) == "" {
+		return "", fmt.Errorf("--env-file %s contained no environment block", path)
+	}
+	return data, nil
+}
+
+// maxBlockBytes caps an environment block. The setup page's block is well
+// under 1 KiB; the cap keeps `yes | agento11y login` from reading forever.
+const maxBlockBytes = 64 << 10
+
+// blockWaitHint is how long readBlock waits for input before it says what it
+// is waiting for. A password manager can sit on an unlock prompt for a while,
+// so this only explains the wait and never ends it.
+var blockWaitHint = 5 * time.Second
+
+// readBlock reads an environment block of at most maxBlockBytes from source,
+// the file path or "stdin".
+func readBlock(r io.Reader, source string, stderr io.Writer) (string, error) {
+	hint := time.AfterFunc(blockWaitHint, func() {
+		_, _ = fmt.Fprintf(stderr, "agento11y login: waiting for the environment block from %s. Press Ctrl-C to stop.\n", source)
+	})
+	defer hint.Stop()
+	data, err := io.ReadAll(io.LimitReader(r, maxBlockBytes+1))
+	if err != nil {
+		return "", fmt.Errorf("could not read the environment block: %w", err)
+	}
+	if len(data) > maxBlockBytes {
+		return "", fmt.Errorf("the environment block is larger than %d KiB", maxBlockBytes>>10)
+	}
+	return string(data), nil
 }
 
 // readTokenStdin reads the token for --token-stdin. Consuming stdin leaves
@@ -785,7 +859,7 @@ func runLoginCommand(args []string, stdin io.Reader, stderr io.Writer) {
 // script from stopping there.) --token names a second source for one value,
 // so the two flags cannot be combined. ok is false when the caller must exit
 // with a usage error.
-func readTokenStdin(fs *flag.FlagSet, endpoint, tenant string, stdin io.Reader, stderr io.Writer) (string, bool) {
+func readTokenStdin(fs *flag.FlagSet, endpoint, tenant string, hasBlock bool, stdin io.Reader, stderr io.Writer) (string, bool) {
 	passed := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { passed[f.Name] = true })
 	if passed["token"] {
@@ -800,7 +874,9 @@ func readTokenStdin(fs *flag.FlagSet, endpoint, tenant string, stdin io.Reader, 
 	if strings.TrimSpace(tenant) == "" {
 		missing = append(missing, "--tenant")
 	}
-	if len(missing) > 0 {
+	// An --env-file block may supply the endpoint and tenant instead; login
+	// reports whatever the block and the flags still leave out.
+	if len(missing) > 0 && !hasBlock {
 		usageError(stderr, "login", fmt.Sprintf("--token-stdin also requires %s", strings.Join(missing, " and ")))
 		return "", false
 	}
