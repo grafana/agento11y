@@ -138,6 +138,57 @@ func TestPostToolUseFailure_RecordsErrorStatusAndMessage(t *testing.T) {
 	}
 }
 
+func TestPostToolUseFailure_ReadsErrorMessageAndFailureType(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	logger := log.New(&bytes.Buffer{}, "", 0)
+
+	PostToolUse(Payload{
+		HookEventName:  "postToolUseFailure",
+		ConversationID: "conv",
+		GenerationID:   "gen",
+		ToolName:       "Shell",
+		ToolUseID:      "tu-1",
+		ErrorMessage:   "Command timed out after 30s",
+		FailureType:    "timeout",
+		Error:          json.RawMessage(`"legacy message"`),
+	}, config.Config{ContentCapture: agento11y.ContentCaptureModeFull}, logger, true)
+
+	got := fragment.LoadTolerant("conv", "gen", logger)
+	if got == nil || len(got.Tools) != 1 {
+		t.Fatalf("expected 1 tool record; got %+v", got)
+	}
+	tool := got.Tools[0]
+	if tool.Status != "error" {
+		t.Errorf("Status = %q; want error", tool.Status)
+	}
+	if tool.ErrorMessage != "Command timed out after 30s" {
+		t.Errorf("ErrorMessage = %q; want the error_message field, not the legacy error", tool.ErrorMessage)
+	}
+	if tool.FailureType != "timeout" {
+		t.Errorf("FailureType = %q; want timeout", tool.FailureType)
+	}
+
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	PostToolUse(Payload{
+		HookEventName:  "postToolUseFailure",
+		ConversationID: "conv",
+		GenerationID:   "gen",
+		ToolName:       "Shell",
+		ErrorMessage:   "denied",
+		FailureType:    "permission_denied",
+	}, config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}, logger, true)
+	got = fragment.LoadTolerant("conv", "gen", logger)
+	if got == nil || len(got.Tools) != 1 {
+		t.Fatalf("expected metadata_only record; got %+v", got)
+	}
+	if got.Tools[0].ErrorMessage != "" {
+		t.Errorf("ErrorMessage = %q; want it dropped outside full mode", got.Tools[0].ErrorMessage)
+	}
+	if got.Tools[0].FailureType != "permission_denied" {
+		t.Errorf("FailureType = %q; want the classification kept", got.Tools[0].FailureType)
+	}
+}
+
 func TestPostToolUse_MissingIDsSilent(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	var buf bytes.Buffer
