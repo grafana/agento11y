@@ -6,6 +6,7 @@ import pytest
 from agento11y import (
     Client,
     ClientConfig,
+    ContentCaptureMode,
     EmbeddingResult,
     EmbeddingStart,
     Generation,
@@ -18,6 +19,7 @@ from agento11y import (
     TokenInputSemantics,
     TokenUsage,
     ToolCall,
+    ToolExecutionKind,
     ToolExecutionStart,
     tool_call_part,
 )
@@ -138,13 +140,115 @@ def finish(client, **result):
     return rec
 
 
-def test_duration_is_observed_once(telemetry):
+@pytest.mark.parametrize("mode", list(ContentCaptureMode))
+@pytest.mark.parametrize("kind", [None, ToolExecutionKind.LOAD_SKILL])
+def test_duration_is_observed_once(telemetry, mode, kind):
     new_client, reader, _, exporter = telemetry
-    client = new_client()
+    client = new_client(content_capture=mode, tags={"team": "sigil"})
     finish(client)
-    assert single_point(metrics(reader), _DURATION).sum >= 0
+    generation = single_point(metrics(reader), _DURATION)
+    assert generation.sum >= 0
     assert len(exporter.get_finished_spans()) == 1
     assert client._pending_generations == []
+    embedding = client.start_embedding(
+        EmbeddingStart(model=ModelRef(provider="openai", name="embed"), started_at=_START)
+    )
+    embedding.set_result(EmbeddingResult())
+    embedding.end()
+    embedding.end()
+    before_snapshot = metrics(reader)
+    before = points(before_snapshot, _DURATION)
+    for skill, seconds in [(" code-review ", 2), ("security", 4)]:
+        rec = client.start_tool_execution(
+            ToolExecutionStart(
+                tool_name="lookup",
+                execution_kind=kind,
+                skill_name=skill,
+                started_at=_START,
+                request_provider="openai",
+                request_model="start-model",
+                agent_name="agent",
+                agent_version="v1",
+            )
+        )
+        rec.set_result(completed_at=_START + timedelta(seconds=seconds))
+        rec.end()
+        rec.end()
+        assert rec.err() is None
+    snapshot = metrics(reader)
+    assert (
+        {metric.name for _, metric in snapshot} == {metric.name for _, metric in before_snapshot} == {_DURATION, _TOOLS}
+    )
+    [tool_calls] = points(snapshot, _TOOLS)
+    [original_tool_calls] = points(before_snapshot, _TOOLS)
+    assert tool_calls.attributes == original_tool_calls.attributes
+    assert (tool_calls.count, tool_calls.sum, tool_calls.bucket_counts) == (
+        original_tool_calls.count,
+        original_tool_calls.sum,
+        original_tool_calls.bucket_counts,
+    )
+    assert "gen_ai.skill.name" not in tool_calls.attributes
+    assert "agento11y.tool.execution.kind" not in tool_calls.attributes
+    observed = points(snapshot, _DURATION)
+    tools = [point for point in observed if point.attributes["gen_ai.operation.name"] == "execute_tool"]
+    assert len(tools) == (1 if kind is None else 2)
+    assert sum(point.count for point in tools) == 2
+    assert sum(point.sum for point in tools) == 6
+    bounds = tools[0].explicit_bounds
+    assert all(point.explicit_bounds == bounds for point in tools)
+    buckets = [sum(point.bucket_counts[index] for point in tools) for index in range(len(bounds) + 1)]
+    expected_buckets = [0] * (len(bounds) + 1)
+    for seconds in (2, 4):
+        expected_buckets[next(index for index, bound in enumerate((*bounds, float("inf"))) if seconds <= bound)] += 1
+    assert buckets == expected_buckets
+    for point in tools:
+        additions = (
+            {}
+            if kind is None
+            else {
+                "agento11y.tool.execution.kind": "load_skill",
+                "gen_ai.skill.name": point.attributes["gen_ai.skill.name"],
+            }
+        )
+        assert dict(point.attributes) == {
+            "gen_ai.operation.name": "execute_tool",
+            "gen_ai.tool.name": "lookup",
+            "gen_ai.provider.name": "openai",
+            "gen_ai.request.model": "start-model",
+            "gen_ai.agent.name": "agent",
+            "gen_ai.agent.version": "v1",
+            "agento11y.tag.team": "sigil",
+            "error.type": "",
+            "error.category": "",
+            **additions,
+        }
+    if kind is not None:
+        assert {point.attributes["gen_ai.skill.name"]: (point.count, point.sum) for point in tools} == {
+            "code-review": (1, 2),
+            "security": (1, 4),
+        }
+    non_tools = [point for point in observed if point.attributes["gen_ai.operation.name"] != "execute_tool"]
+    assert len(non_tools) == len(before) == 2
+    for original in before:
+        [point] = [point for point in non_tools if point.attributes == original.attributes]
+        assert (point.count, point.sum, point.explicit_bounds, point.bucket_counts) == (
+            original.count,
+            original.sum,
+            original.explicit_bounds,
+            original.bucket_counts,
+        )
+        assert "gen_ai.skill.name" not in point.attributes
+        assert "agento11y.tool.execution.kind" not in point.attributes
+    [embedding_point] = [point for point in non_tools if point.attributes["gen_ai.operation.name"] == "embeddings"]
+    assert dict(embedding_point.attributes) == {
+        "gen_ai.operation.name": "embeddings",
+        "gen_ai.provider.name": "openai",
+        "gen_ai.request.model": "embed",
+        "gen_ai.agent.name": "",
+        "agento11y.tag.team": "sigil",
+        "error.type": "",
+        "error.category": "",
+    }
 
 
 @pytest.mark.parametrize(
@@ -377,14 +481,17 @@ def test_direct_meter_is_ignored_for_generation_metrics(telemetry):
 
 
 @pytest.mark.parametrize("operation", ["execute_tool", "embeddings"])
-def test_direct_meter_retains_precedence_for_tools_and_embeddings(telemetry, operation):
+@pytest.mark.parametrize("kind", [None, *ToolExecutionKind])
+def test_direct_meter_retains_precedence_for_tools_and_embeddings(telemetry, operation, kind):
     new_client, reader, _, _ = telemetry
     direct_reader = InMemoryMetricReader()
     direct_provider = MeterProvider(metric_readers=[direct_reader])
     try:
         client = new_client(meter=direct_provider.get_meter("application-direct"))
         if operation == "execute_tool":
-            rec = client.start_tool_execution(ToolExecutionStart(tool_name="lookup"))
+            rec = client.start_tool_execution(
+                ToolExecutionStart(tool_name="lookup", execution_kind=kind, skill_name=" code-review ")
+            )
             rec.set_result(result="found")
         else:
             rec = client.start_embedding(EmbeddingStart(model=ModelRef(provider="openai", name="embed")))
@@ -392,7 +499,14 @@ def test_direct_meter_retains_precedence_for_tools_and_embeddings(telemetry, ope
         rec.end()
         snapshot = metrics(direct_reader)
         assert all(scope.name == "application-direct" for scope, _ in snapshot)
-        assert single_point(snapshot, _DURATION).attributes["gen_ai.operation.name"] == operation
+        attributes = single_point(snapshot, _DURATION).attributes
+        assert attributes["gen_ai.operation.name"] == operation
+        if operation == "execute_tool" and kind is not None:
+            assert attributes["gen_ai.skill.name"] == "code-review"
+            assert attributes["agento11y.tool.execution.kind"] == kind.value
+        else:
+            assert "gen_ai.skill.name" not in attributes
+            assert "agento11y.tool.execution.kind" not in attributes
         if operation == "embeddings":
             assert single_point(snapshot, _TOKENS).sum == 7
         else:

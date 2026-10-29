@@ -492,7 +492,11 @@ Every exported skill source URI has userinfo, query, and fragment removed, even 
 Invalid or relative URIs are omitted without network or filesystem lookup.
 With experimental OTel generation export, `FULL_WITH_METADATA_SPANS` resolves to `FULL`; it does not protect private fields from spans.
 
-Generic tool recording, `execute_tool_calls`, and existing metrics are unchanged. No skill/process metric dimensions are added.
+Generic tool recording and `execute_tool_calls` remain unchanged.
+For `load_skill`, `read_skill_resource`, and `command`, `gen_ai.client.operation.duration` adds `agento11y.tool.execution.kind`.
+It also includes a trimmed, nonblank `gen_ai.skill.name` when supplied, including failed attempts and reduced capture modes.
+No resource or process metric dimensions are added.
+See the [client metric contract](../docs/concepts/tool-call-vs-tool-execution.md#client-metrics).
 
 ## SDK identity attributes
 

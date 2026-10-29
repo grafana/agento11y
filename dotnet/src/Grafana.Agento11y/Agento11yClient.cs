@@ -1736,17 +1736,33 @@ public sealed partial class Agento11yClient : IAsyncDisposable
         var errorType = finalError == null ? string.Empty : "tool_execution_error";
         var errorCategory = finalError == null ? string.Empty : ErrorCategoryFromException(finalError, true);
 
-        _operationDurationHistogram.Record(
-            durationSeconds,
-            WithMetricTags(seed.AgentVersion, [
-                new(SpanAttrOperationName, "execute_tool"),
-                new(SpanAttrProviderName, (seed.RequestProvider ?? string.Empty).Trim()),
-                new(SpanAttrRequestModel, (seed.RequestModel ?? string.Empty).Trim()),
-                new(SpanAttrToolName, (seed.ToolName ?? string.Empty).Trim()),
-                new(SpanAttrAgentName, seed.AgentName ?? string.Empty),
-                new(SpanAttrErrorType, errorType),
-                new(SpanAttrErrorCategory, errorCategory),
-            ]));
+        List<KeyValuePair<string, object?>> tags = [
+            new(SpanAttrOperationName, "execute_tool"),
+            new(SpanAttrProviderName, (seed.RequestProvider ?? string.Empty).Trim()),
+            new(SpanAttrRequestModel, (seed.RequestModel ?? string.Empty).Trim()),
+            new(SpanAttrToolName, (seed.ToolName ?? string.Empty).Trim()),
+            new(SpanAttrAgentName, seed.AgentName ?? string.Empty),
+            new(SpanAttrErrorType, errorType),
+            new(SpanAttrErrorCategory, errorCategory),
+        ];
+        var executionKind = seed.ExecutionKind switch
+        {
+            ToolExecutionKind.LoadSkill => "load_skill",
+            ToolExecutionKind.ReadSkillResource => "read_skill_resource",
+            ToolExecutionKind.Command => "command",
+            _ => null,
+        };
+        if (executionKind != null)
+        {
+            tags.Add(new("agento11y.tool.execution.kind", executionKind));
+            var skillName = (seed.SkillName ?? string.Empty).Trim();
+            if (skillName.Length > 0)
+            {
+                tags.Add(new(SpanAttrSkillName, skillName));
+            }
+        }
+
+        _operationDurationHistogram.Record(durationSeconds, WithMetricTags(seed.AgentVersion, [.. tags]));
     }
 
     internal static string ErrorCategoryFromException(Exception? error, bool fallbackSdk)
