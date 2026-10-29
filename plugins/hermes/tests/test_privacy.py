@@ -184,7 +184,10 @@ def test_real_sdk_privacy(monkeypatch, mode, redact_setting, redact_inputs, secr
         assert secret not in str(tool.status.description)
         if mode == "full":
             assert "[REDACTED" in repr(dict(tool.attributes or {}))
-            assert "sort key: name" in str(tool.status.description)
+            # The redacted error stays on the span. The SDK sanitizer gives a
+            # tool error the key/value pass a tool result gets, so an SDK that
+            # sanitizes tool spans also rewrites "sort key: name".
+            assert "[REDACTED" in str(tool.status.description)
         else:
             assert "gen_ai.tool.call.arguments" not in (tool.attributes or {})
         assert request == original

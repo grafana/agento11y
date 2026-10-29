@@ -605,7 +605,7 @@ def test_secret_redaction_sanitizer_also_redacts_the_tool_span_text(
         provider.shutdown()
 
 
-def test_secret_redaction_sanitizer_redacts_a_tool_error_like_a_call_error() -> None:
+def test_secret_redaction_sanitizer_redacts_a_tool_error_like_a_tool_result() -> None:
     span_exporter, provider = _new_span_capture()
     client = _new_client(
         CapturingGenerationExporter(),
@@ -614,15 +614,78 @@ def test_secret_redaction_sanitizer_redacts_a_tool_error_like_a_call_error() -> 
     )
 
     try:
+        # No known secret format: only the key/value heuristic catches it.
+        password = "hunter2" + "z" * 12
         rec = client.start_tool_execution(ToolExecutionStart(tool_name="lookup"))
-        rec.set_exec_error(RuntimeError(f"{_API_KEY}; sort key: name"))
+        rec.set_exec_error(RuntimeError(f"exit 1: DATABASE_PASSWORD={password}"))
         rec.end()
 
-        # Error messages get the high-confidence formats only, so the
-        # key/value heuristic leaves the prose alone.
         span = span_exporter.get_finished_spans()[0]
-        assert span.status.description == "[REDACTED:openai-project-key]; sort key: name"
+        assert "DATABASE_PASSWORD=[REDACTED:" in span.status.description
         assert span.events[0].attributes["exception.message"] == span.status.description
+        assert password not in _span_text(span)
+    finally:
+        client.shutdown()
+        provider.shutdown()
+
+
+def test_generation_sanitizer_hands_the_tool_result_and_error_back_to_their_own_span_fields() -> None:
+    span_exporter, provider = _new_span_capture()
+    client = _new_client(
+        CapturingGenerationExporter(),
+        generation_sanitizer=lambda generation: generation,
+        tracer=provider.get_tracer("agento11y-test"),
+    )
+
+    try:
+        rec = client.start_tool_execution(ToolExecutionStart(tool_name="lookup", include_content=True))
+        rec.set_result(arguments={"query": "weather"}, result="partial output")
+        rec.set_exec_error(RuntimeError("tool failed"))
+        rec.end()
+
+        # The result and the error sit in the same tool message.
+        span = span_exporter.get_finished_spans()[0]
+        assert span.attributes["gen_ai.tool.call.result"] == json.dumps("partial output")
+        assert span.status.description == "tool failed"
+        assert span.events[0].attributes["exception.message"] == "tool failed"
+    finally:
+        client.shutdown()
+        provider.shutdown()
+
+
+def test_secret_redaction_sanitizer_redacts_an_executor_error_on_the_tool_span_as_in_the_next_generation() -> None:
+    exporter = CapturingGenerationExporter()
+    span_exporter, provider = _new_span_capture()
+    client = _new_client(
+        exporter,
+        generation_sanitizer=create_secret_redaction_sanitizer(),
+        tracer=provider.get_tracer("agento11y-test"),
+    )
+
+    try:
+        password = "hunter2" + "z" * 12
+
+        def run(_name: str, _arguments: object) -> object:
+            raise RuntimeError(f"401 from upstream; password={password}")
+
+        call = Message(
+            role=MessageRole.ASSISTANT,
+            parts=[Part(kind=PartKind.TOOL_CALL, tool_call=ToolCall(id="call-1", name="http", input_json=b"{}"))],
+        )
+        # The error goes back to the model as a tool result.
+        tool_messages = client.execute_tool_calls([call], run)
+        rec = client.start_generation(GenerationStart(model=ModelRef(provider="openai", name="gpt-5")))
+        rec.set_result(
+            input=[call, *tool_messages],
+            output=[Message(role=MessageRole.ASSISTANT, parts=[Part(kind=PartKind.TEXT, text="The call failed.")])],
+        )
+        rec.end()
+        client.flush()
+
+        generation = exporter.requests[0].generations[0]
+        span = next(s for s in span_exporter.get_finished_spans() if s.name == "execute_tool http")
+        assert "password=[REDACTED:" in span.status.description
+        assert span.status.description == generation.input[1].parts[0].tool_result.content
     finally:
         client.shutdown()
         provider.shutdown()
@@ -653,7 +716,7 @@ def test_generation_sanitizer_that_drops_the_tool_text_leaves_it_off_the_tool_sp
     span_exporter, provider = _new_span_capture()
     client = _new_client(
         CapturingGenerationExporter(),
-        generation_sanitizer=lambda generation: replace(generation, conversation_title="", call_error="", output=[]),
+        generation_sanitizer=lambda generation: replace(generation, conversation_title="", output=[]),
         tracer=provider.get_tracer("agento11y-test"),
     )
 
@@ -671,7 +734,6 @@ def test_generation_sanitizer_that_drops_the_tool_text_leaves_it_off_the_tool_sp
 def test_generation_sanitizer_that_returns_non_string_tool_text_leaves_it_off_the_tool_span() -> None:
     def to_non_strings(generation: Generation) -> Generation:
         generation.conversation_title = 42
-        generation.call_error = None
         for message in generation.output:
             for part in message.parts:
                 if part.tool_call is not None:
@@ -794,7 +856,7 @@ def test_generation_sanitizer_that_clears_a_tool_content_serialization_error_lea
     span_exporter, provider = _new_span_capture()
     client = _new_client(
         CapturingGenerationExporter(),
-        generation_sanitizer=lambda generation: replace(generation, call_error=""),
+        generation_sanitizer=lambda generation: replace(generation, output=[]),
         tracer=provider.get_tracer("agento11y-test"),
     )
 
