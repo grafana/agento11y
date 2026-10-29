@@ -89,6 +89,11 @@ var cloudPackCases = []cloudPackCase{
 	{Pack: packGit, Command: `git commit -m 'git push --force is blocked'`},
 	{Pack: packDestructive, Command: `grep -r "rm -rf" .`},
 	{Pack: packFiles, Command: `git commit -m "add .env to .gitignore"`},
+	// A heredoc body is data unless a shell reads it, whether or not its
+	// delimiter is quoted, so a newline ends what can come before a name.
+	{Pack: packDestructive, Command: "cat > notes.md <<EOF\nnever run rm -rf /\nEOF"},
+	{Pack: packDestructive, Command: "cat > notes.md <<\\EOF\nnever run rm -rf /\nEOF"},
+	{Pack: packGit, Command: "git commit -F - <<EOF\nrevert: stop calling git reset --hard\nEOF"},
 	// A command after another, behind a wrapper or in code the shell runs is
 	// still a command.
 	{Pack: packGit, Command: "cd repo && git reset --hard", Deny: true},
@@ -147,6 +152,14 @@ var cloudPackCases = []cloudPackCase{
 	{Pack: packDestructive, Command: "docker exec c rm -rf /", Deny: true},
 	{Pack: packDestructive, Command: "mise exec -- rm -rf /", Deny: true},
 	{Pack: packGit, Command: "pkexec git reset --hard", Deny: true},
+	// A command on a later line, a heredoc fed to a shell, and a quoted
+	// argument that spans lines in front of the name are still read.
+	{Pack: packDestructive, Command: "echo hi\npkexec rm -rf /", Deny: true},
+	{Pack: packDestructive, Command: "bash <<EOF\nrm -rf /\nEOF", Deny: true},
+	{Pack: packDestructive, Command: "docker exec -e \"A=x\ny\" c rm -rf /", Deny: true},
+	// An argv list is also judged joined with plain spaces, as v0.52 judged it,
+	// so a message in its own argv word reads as a command there.
+	{Pack: packGit, Tool: "exec_command", Input: json.RawMessage(`{"cmd":["git","commit","-m","drop git reset --hard"]}`), Deny: true},
 	{Pack: packDestructive, Command: "pkexec a#b rm -rf /", Deny: true},
 	// The trade: a command named as an unquoted argument is judged too.
 	{Pack: packDestructive, Command: "echo rm -rf /", Deny: true},

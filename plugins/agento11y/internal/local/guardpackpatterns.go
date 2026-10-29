@@ -32,7 +32,10 @@ const (
 
 // shellCommandStart matches what can come before a command's name: nothing,
 // or separators and words with no quote in them, where a backslash escapes
-// the next character, ending in an unescaped separator. A wrapper in front of
+// the next character (a newline too), ending in an unescaped separator. A
+// newline is no separator here: the shell ends a command there and each line
+// is judged as its own simple command, so the match cannot run on into the
+// body of a heredoc below the line. A wrapper in front of
 // the name (sudo, pkexec, ssh host, docker exec c) does not hide it, while a
 // quoted message cannot reach it: in the subject as written its quote stops
 // the match, and in the unquoted and simple command subjects its spaces are
@@ -40,7 +43,7 @@ const (
 // cannot start with #, which starts a comment; a # inside a word, as in a#b,
 // is part of it. A directory or a backslash on the name itself, as in
 // /usr/bin/git or \git, is part of the name.
-var shellCommandStart = `^(?:(?:[\s;&|()<>]|(?:[^'"\\\s;&|()<>#]|\\.)(?:[^'"\\\s;&|()<>]|\\.)*)*?[\s;&|()<>])?(?:\\|[^\s;&|()<>'"]*/)?`
+var shellCommandStart = `^(?:(?:[ \t;&|()<>]|(?:[^'"\\\s;&|()<>#]|\\[\s\S])(?:[^'"\\\s;&|()<>]|\\[\s\S])*)*?[ \t;&|()<>])?(?:\\|[^\s;&|()<>'"]*/)?`
 
 func shellQuoted(pattern string) string {
 	return `(?:` + pattern + `|'` + pattern + `'|"` + pattern + `")`

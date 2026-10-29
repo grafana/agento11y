@@ -42,7 +42,9 @@ written. Every pack pattern matches a command's name after an unquoted separator
 so a wrapper in front of it does not hide it and quoted text is not matched. So
 `git "reset" --hard`, `cd repo && git reset --hard`, `pkexec rm -rf /` and
 `sudo -u deploy bash -c 'git reset --hard'` are denied, and a commit message that
-mentions `git reset --hard` is not. A shell
+mentions `git reset --hard` is not. A command named as an unquoted argument, as
+in `echo rm -rf /`, is denied too. A newline ends what can stand in front of a
+name, so a heredoc body is matched only when a shell reads it. A shell
 command longer than 64 KiB is not read, and both runtimes fail it closed.
 
 A shell call with no command key is judged by the string values in its arguments.
