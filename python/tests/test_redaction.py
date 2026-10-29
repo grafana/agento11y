@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import replace
 from datetime import timedelta
 
+import pytest
 from agento11y import (
     Client,
     ClientConfig,
@@ -22,9 +24,12 @@ from agento11y import (
     SecretRedactionOptions,
     TokenUsage,
     ToolCall,
+    ToolExecutionStart,
     ToolResult,
     create_secret_redaction_sanitizer,
+    with_conversation_title,
 )
+from agento11y.client import ToolExecutionRecorder
 from agento11y.redaction import _resolve_redact_input_messages
 from conftest import CapturingGenerationExporter
 from opentelemetry.sdk.trace import TracerProvider
@@ -491,6 +496,448 @@ def test_generation_sanitizer_leaves_no_title_on_the_span_when_the_generation_ha
 
         span = span_exporter.get_finished_spans()[0]
         assert "agento11y.conversation.title" not in span.attributes
+    finally:
+        client.shutdown()
+        provider.shutdown()
+
+
+def _record_secret_tool_call(client: Client, error: Exception) -> ToolExecutionRecorder:
+    rec = client.start_tool_execution(
+        ToolExecutionStart(
+            tool_name="lookup",
+            tool_call_id="call-1",
+            conversation_title=f"Discussion about {_API_KEY}",
+            include_content=True,
+        )
+    )
+    rec.set_result(arguments={"api_key": _API_KEY}, result=f"found {_API_KEY}")
+    rec.set_exec_error(error)
+    rec.end()
+    return rec
+
+
+class _UnencodableArguments(dict):
+    """Arguments whose JSON encoding fails with the key in the error message.
+
+    The recorder deep-copies them, which also reads ``items``, so the copy
+    keeps this object as is.
+    """
+
+    def __deepcopy__(self, memo):
+        return self
+
+    def items(self):
+        raise ValueError(f"cannot encode {_API_KEY}")
+
+
+def _record_unencodable_tool_arguments(client: Client, error: Exception | None = None) -> ToolExecutionRecorder:
+    rec = client.start_tool_execution(ToolExecutionStart(tool_name="lookup", include_content=True))
+    rec.set_result(arguments=_UnencodableArguments(query="weather"))
+    if error is not None:
+        rec.set_exec_error(error)
+    rec.end()
+    return rec
+
+
+def _assert_no_tool_span_text(span, *, exception_event: bool) -> None:
+    """Asserts the tool span keeps no text, only the error category.
+
+    After a sanitizer pass, the exception event keeps its type and frames with
+    the category as its message. After a failed pass, there is no event.
+    """
+    assert "agento11y.conversation.title" not in span.attributes
+    assert "gen_ai.tool.call.arguments" not in span.attributes
+    assert "gen_ai.tool.call.result" not in span.attributes
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.status.description == span.attributes["error.category"]
+    if exception_event:
+        assert len(span.events) == 1
+        assert span.events[0].attributes["exception.message"] == span.attributes["error.category"]
+    else:
+        assert len(span.events) == 0
+
+
+@pytest.mark.parametrize(
+    ("content_capture", "include_content"),
+    [(ContentCaptureMode.DEFAULT, True), (ContentCaptureMode.FULL, False)],
+)
+def test_secret_redaction_sanitizer_also_redacts_the_tool_span_text(
+    content_capture: ContentCaptureMode, include_content: bool
+) -> None:
+    span_exporter, provider = _new_span_capture()
+    client = _new_client(
+        CapturingGenerationExporter(),
+        generation_sanitizer=create_secret_redaction_sanitizer(),
+        tracer=provider.get_tracer("agento11y-test"),
+        content_capture=content_capture,
+    )
+
+    try:
+        rec = client.start_tool_execution(
+            ToolExecutionStart(
+                tool_name="lookup",
+                tool_call_id="call-1",
+                conversation_title=f"Discussion about {_API_KEY}",
+                include_content=include_content,
+            )
+        )
+        rec.set_result(arguments={"api_key": _API_KEY}, result=f"found {_API_KEY}")
+        error = _raised_call_error()
+        rec.set_exec_error(error)
+        rec.end()
+
+        span = span_exporter.get_finished_spans()[0]
+        assert "[REDACTED:openai-project-key]" in span.attributes["agento11y.conversation.title"]
+        arguments = json.loads(span.attributes["gen_ai.tool.call.arguments"])
+        assert "[REDACTED:" in arguments["api_key"]
+        assert "[REDACTED:openai-project-key]" in span.attributes["gen_ai.tool.call.result"]
+        assert span.status.status_code == StatusCode.ERROR
+        assert "[REDACTED:openai-project-key]" in span.status.description
+        assert len(span.events) == 1
+        event = span.events[0]
+        assert event.attributes["exception.type"] == "RuntimeError"
+        assert "[REDACTED:openai-project-key]" in event.attributes["exception.message"]
+        assert "_raised_call_error" in event.attributes["exception.stacktrace"]
+        assert _API_KEY not in _span_text(span)
+        assert rec.err() is error
+    finally:
+        client.shutdown()
+        provider.shutdown()
+
+
+def test_secret_redaction_sanitizer_redacts_a_tool_error_like_a_call_error() -> None:
+    span_exporter, provider = _new_span_capture()
+    client = _new_client(
+        CapturingGenerationExporter(),
+        generation_sanitizer=create_secret_redaction_sanitizer(),
+        tracer=provider.get_tracer("agento11y-test"),
+    )
+
+    try:
+        rec = client.start_tool_execution(ToolExecutionStart(tool_name="lookup"))
+        rec.set_exec_error(RuntimeError(f"{_API_KEY}; sort key: name"))
+        rec.end()
+
+        # Error messages get the high-confidence formats only, so the
+        # key/value heuristic leaves the prose alone.
+        span = span_exporter.get_finished_spans()[0]
+        assert span.status.description == "[REDACTED:openai-project-key]; sort key: name"
+        assert span.events[0].attributes["exception.message"] == span.status.description
+    finally:
+        client.shutdown()
+        provider.shutdown()
+
+
+def test_secret_redaction_sanitizer_redacts_a_tool_span_title_from_context() -> None:
+    span_exporter, provider = _new_span_capture()
+    client = _new_client(
+        CapturingGenerationExporter(),
+        generation_sanitizer=create_secret_redaction_sanitizer(),
+        tracer=provider.get_tracer("agento11y-test"),
+    )
+
+    try:
+        with with_conversation_title(f"Discussion about {_API_KEY}"):
+            rec = client.start_tool_execution(ToolExecutionStart(tool_name="lookup"))
+        rec.end()
+
+        span = span_exporter.get_finished_spans()[0]
+        assert "[REDACTED:openai-project-key]" in span.attributes["agento11y.conversation.title"]
+        assert _API_KEY not in _span_text(span)
+    finally:
+        client.shutdown()
+        provider.shutdown()
+
+
+def test_generation_sanitizer_that_drops_the_tool_text_leaves_it_off_the_tool_span() -> None:
+    span_exporter, provider = _new_span_capture()
+    client = _new_client(
+        CapturingGenerationExporter(),
+        generation_sanitizer=lambda generation: replace(generation, conversation_title="", call_error="", output=[]),
+        tracer=provider.get_tracer("agento11y-test"),
+    )
+
+    try:
+        _record_secret_tool_call(client, _raised_call_error())
+
+        span = span_exporter.get_finished_spans()[0]
+        _assert_no_tool_span_text(span, exception_event=True)
+        assert _API_KEY not in _span_text(span)
+    finally:
+        client.shutdown()
+        provider.shutdown()
+
+
+def test_generation_sanitizer_that_returns_non_string_tool_text_leaves_it_off_the_tool_span() -> None:
+    def to_non_strings(generation: Generation) -> Generation:
+        generation.conversation_title = 42
+        generation.call_error = None
+        for message in generation.output:
+            for part in message.parts:
+                if part.tool_call is not None:
+                    part.tool_call.input_json = 42
+                if part.tool_result is not None:
+                    part.tool_result.content = {"text": "kept"}
+        return generation
+
+    span_exporter, provider = _new_span_capture()
+    client = _new_client(
+        CapturingGenerationExporter(),
+        generation_sanitizer=to_non_strings,
+        tracer=provider.get_tracer("agento11y-test"),
+    )
+
+    try:
+        error = _raised_call_error()
+        rec = _record_secret_tool_call(client, error)
+
+        span = span_exporter.get_finished_spans()[0]
+        _assert_no_tool_span_text(span, exception_event=True)
+        assert _API_KEY not in _span_text(span)
+        assert rec.err() is error
+    finally:
+        client.shutdown()
+        provider.shutdown()
+
+
+@pytest.mark.parametrize(
+    "sanitizer",
+    [
+        pytest.param(
+            lambda generation: replace(
+                generation, output=[Message(role=MessageRole.TOOL, parts=[Part(kind=PartKind.TOOL_RESULT)])]
+            ),
+            id="unreadable-part",
+        ),
+        pytest.param(
+            lambda _generation: (_ for _ in ()).throw(RuntimeError("boom")),
+            id="raises",
+        ),
+    ],
+)
+def test_generation_sanitizer_failure_leaves_the_tool_text_off_the_tool_span(sanitizer, caplog) -> None:
+    span_exporter, provider = _new_span_capture()
+    logger = logging.getLogger("agento11y.test_redaction")
+    client = _new_client(
+        CapturingGenerationExporter(),
+        generation_sanitizer=sanitizer,
+        logger=logger,
+        tracer=provider.get_tracer("agento11y-test"),
+    )
+
+    try:
+        with caplog.at_level(logging.WARNING, logger=logger.name):
+            rec = client.start_tool_execution(
+                ToolExecutionStart(tool_name="lookup", tool_call_id="call-1", include_content=True)
+            )
+            rec.set_result(arguments={"api_key": _API_KEY}, result=f"found {_API_KEY}")
+            error = _raised_call_error()
+            rec.set_exec_error(error)
+            rec.end()
+
+        span = span_exporter.get_finished_spans()[0]
+        _assert_no_tool_span_text(span, exception_event=False)
+        assert _API_KEY not in _span_text(span)
+        assert rec.err() is error
+        assert "agento11y: tool span sanitization failed" in caplog.text
+    finally:
+        client.shutdown()
+        provider.shutdown()
+
+
+def test_generation_sanitizer_that_raises_leaves_the_title_off_the_tool_span(caplog) -> None:
+    span_exporter, provider = _new_span_capture()
+    logger = logging.getLogger("agento11y.test_redaction")
+    client = _new_client(
+        CapturingGenerationExporter(),
+        generation_sanitizer=lambda _generation: (_ for _ in ()).throw(RuntimeError("boom")),
+        logger=logger,
+        tracer=provider.get_tracer("agento11y-test"),
+    )
+
+    try:
+        with caplog.at_level(logging.WARNING, logger=logger.name):
+            _record_secret_tool_call(client, _raised_call_error())
+
+        span = span_exporter.get_finished_spans()[0]
+        _assert_no_tool_span_text(span, exception_event=False)
+        assert _API_KEY not in _span_text(span)
+        assert caplog.text.count("agento11y: tool span sanitization failed") == 2
+    finally:
+        client.shutdown()
+        provider.shutdown()
+
+
+def test_secret_redaction_sanitizer_redacts_a_tool_content_serialization_error() -> None:
+    span_exporter, provider = _new_span_capture()
+    client = _new_client(
+        CapturingGenerationExporter(),
+        generation_sanitizer=create_secret_redaction_sanitizer(),
+        tracer=provider.get_tracer("agento11y-test"),
+    )
+
+    try:
+        _record_unencodable_tool_arguments(client)
+
+        span = span_exporter.get_finished_spans()[0]
+        assert "gen_ai.tool.call.arguments" not in span.attributes
+        assert "[REDACTED:openai-project-key]" in span.status.description
+        assert len(span.events) == 1
+        assert "[REDACTED:openai-project-key]" in span.events[0].attributes["exception.message"]
+        assert _API_KEY not in _span_text(span)
+    finally:
+        client.shutdown()
+        provider.shutdown()
+
+
+def test_generation_sanitizer_that_clears_a_tool_content_serialization_error_leaves_its_category() -> None:
+    span_exporter, provider = _new_span_capture()
+    client = _new_client(
+        CapturingGenerationExporter(),
+        generation_sanitizer=lambda generation: replace(generation, call_error=""),
+        tracer=provider.get_tracer("agento11y-test"),
+    )
+
+    try:
+        _record_unencodable_tool_arguments(client)
+
+        span = span_exporter.get_finished_spans()[0]
+        _assert_no_tool_span_text(span, exception_event=True)
+        assert _API_KEY not in _span_text(span)
+    finally:
+        client.shutdown()
+        provider.shutdown()
+
+
+def test_secret_redaction_sanitizer_redacts_a_tool_error_combined_with_a_serialization_error() -> None:
+    span_exporter, provider = _new_span_capture()
+    client = _new_client(
+        CapturingGenerationExporter(),
+        generation_sanitizer=create_secret_redaction_sanitizer(),
+        tracer=provider.get_tracer("agento11y-test"),
+    )
+
+    try:
+        _record_unencodable_tool_arguments(client, _raised_call_error())
+
+        span = span_exporter.get_finished_spans()[0]
+        assert "serialize tool arguments" in span.status.description
+        assert span.status.description.count("[REDACTED:openai-project-key]") == 2
+        assert span.events[0].attributes["exception.message"] == span.status.description
+        assert _API_KEY not in _span_text(span)
+    finally:
+        client.shutdown()
+        provider.shutdown()
+
+
+def test_secret_redaction_sanitizer_keeps_the_exception_event_of_a_tool_error_with_no_message() -> None:
+    def raised_timeout() -> TimeoutError:
+        try:
+            raise TimeoutError()
+        except TimeoutError as error:
+            return error
+
+    span_exporter, provider = _new_span_capture()
+    client = _new_client(
+        CapturingGenerationExporter(),
+        generation_sanitizer=create_secret_redaction_sanitizer(),
+        tracer=provider.get_tracer("agento11y-test"),
+    )
+
+    try:
+        rec = client.start_tool_execution(ToolExecutionStart(tool_name="slow"))
+        rec.set_exec_error(raised_timeout())
+        rec.end()
+
+        span = span_exporter.get_finished_spans()[0]
+        assert span.status.description == span.attributes["error.category"]
+        assert len(span.events) == 1
+        event = span.events[0]
+        assert event.attributes["exception.type"] == "TimeoutError"
+        assert event.attributes["exception.message"] == span.attributes["error.category"]
+        assert "raised_timeout" in event.attributes["exception.stacktrace"]
+    finally:
+        client.shutdown()
+        provider.shutdown()
+
+
+def test_generation_sanitizer_leaves_tool_arguments_it_cannot_encode_off_the_tool_span(caplog) -> None:
+    span_exporter, provider = _new_span_capture()
+    logger = logging.getLogger("agento11y.test_redaction")
+    client = _new_client(
+        CapturingGenerationExporter(),
+        generation_sanitizer=create_secret_redaction_sanitizer(),
+        logger=logger,
+        tracer=provider.get_tracer("agento11y-test"),
+    )
+
+    try:
+        with caplog.at_level(logging.WARNING, logger=logger.name):
+            rec = client.start_tool_execution(ToolExecutionStart(tool_name="ls", include_content=True))
+            # Valid JSON whose lone surrogate has no UTF-8 encoding.
+            rec.set_result(arguments=json.dumps({"path": "bad\udcff.txt"}, ensure_ascii=False), result="ok")
+            rec.end()
+
+        span = span_exporter.get_finished_spans()[0]
+        assert "gen_ai.tool.call.arguments" not in span.attributes
+        assert "gen_ai.tool.call.result" not in span.attributes
+        assert span.status.status_code == StatusCode.OK
+        assert "agento11y: tool span sanitization failed" in caplog.text
+    finally:
+        client.shutdown()
+        provider.shutdown()
+
+
+def test_without_a_sanitizer_the_tool_span_keeps_the_raw_text_and_full_stacktrace() -> None:
+    span_exporter, provider = _new_span_capture()
+    client = _new_client(CapturingGenerationExporter(), tracer=provider.get_tracer("agento11y-test"))
+
+    try:
+        error = _raised_call_error()
+        _record_secret_tool_call(client, error)
+
+        span = span_exporter.get_finished_spans()[0]
+        assert span.attributes["agento11y.conversation.title"] == f"Discussion about {_API_KEY}"
+        assert json.loads(span.attributes["gen_ai.tool.call.arguments"]) == {"api_key": _API_KEY}
+        assert span.status.description == str(error)
+        event = span.events[0]
+        assert event.attributes["exception.message"] == str(error)
+        assert event.attributes["exception.stacktrace"].startswith("Traceback")
+        assert "upstream rejected" in event.attributes["exception.stacktrace"]
+    finally:
+        client.shutdown()
+        provider.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("content_capture", "calls"),
+    [
+        (ContentCaptureMode.DEFAULT, 2),
+        (ContentCaptureMode.METADATA_ONLY, 0),
+        (ContentCaptureMode.FULL_WITH_METADATA_SPANS, 0),
+    ],
+)
+def test_generation_sanitizer_runs_on_tool_span_text_only_where_the_span_keeps_it(
+    content_capture: ContentCaptureMode, calls: int
+) -> None:
+    seen: list[str] = []
+
+    def counting(generation: Generation) -> Generation:
+        seen.append(generation.operation_name)
+        return generation
+
+    span_exporter, provider = _new_span_capture()
+    client = _new_client(
+        CapturingGenerationExporter(),
+        generation_sanitizer=counting,
+        tracer=provider.get_tracer("agento11y-test"),
+        content_capture=content_capture,
+    )
+
+    try:
+        _record_secret_tool_call(client, _raised_call_error())
+
+        assert seen == ["execute_tool"] * calls
     finally:
         client.shutdown()
         provider.shutdown()

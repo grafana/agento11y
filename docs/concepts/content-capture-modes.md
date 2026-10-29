@@ -143,7 +143,7 @@ A plugin redacts known secret formats out of every content field it exports: use
 
 Set `AGENTO11Y_REDACT_INPUT_MESSAGES=false` in `~/.config/agento11y/config.env` or the environment to export prompt text without redaction. The flag covers the prompt only: every other field stays redacted, and message structure, roles, token counts, tags, and IDs do not change. An unrecognised value keeps redaction on, so a typo cannot disable it.
 
-For Hermes, set variables in Hermes's environment or its `.env`, which overrides shell exports. The plugin does not read the shared launcher's config file. Prompt redaction defaults to on; the same opt-out applies. Hermes also sanitizes tool-execution spans, which do not pass through the generation sanitizer. Payload limits and upstream request clipping can reduce content further. Hermes also redacts secret-pattern matches in hook-derived IDs and metadata. Custom `AGENTO11Y_TAGS` values are not sanitized.
+For Hermes, set variables in Hermes's environment or its `.env`, which overrides shell exports. The plugin does not read the shared launcher's config file. Prompt redaction defaults to on; the same opt-out applies. Hermes also sanitizes tool-execution spans itself. Payload limits and upstream request clipping can reduce content further. Hermes also redacts secret-pattern matches in hook-derived IDs and metadata. Custom `AGENTO11Y_TAGS` values are not sanitized.
 
 ### Strength per field
 

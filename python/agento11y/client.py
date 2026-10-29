@@ -63,15 +63,18 @@ from .models import (
     GenerationStart,
     Message,
     MessageRole,
+    ModelRef,
     PartKind,
     SubmitConversationRatingResponse,
     TokenInputSemantics,
+    ToolCall,
     ToolExecutionEnd,
     ToolExecutionKind,
     ToolExecutionStart,
     ToolResult,
     WorkflowStep,
     _metadata_key_content_capture_mode,
+    tool_call_part,
     tool_result_part,
 )
 from .proto_mapping import generation_to_proto, workflow_step_to_proto
@@ -611,6 +614,12 @@ class Client:
         else:
             # NO_TOOL_CONTENT / DEFAULT: honor legacy include_content opt-in.
             include_content = seed.include_content
+
+        if seed.conversation_title and self._has_generation_sanitizer():
+            # The sanitizer redacts this title on the generation, so the tool
+            # span shows it redacted too.
+            sanitized = self._sanitize_tool_span_text(seed, _ToolSpanText(title=seed.conversation_title))
+            seed.conversation_title = sanitized.title if sanitized is not None else ""
 
         span = self._tracer.start_span(
             _tool_span_name(seed),
@@ -1225,6 +1234,65 @@ class Client:
         if sanitized is None:
             raise ValueError("generation sanitizer must return a generation")
         return copy.deepcopy(sanitized)
+
+    def _sanitize_tool_span_text(self, tool: ToolExecutionStart, text: _ToolSpanText) -> _ToolSpanText | None:
+        """Runs the generation sanitizer over the text a tool span shows.
+
+        The sanitizer takes a generation, so the text goes where a generation
+        holds it: the title in ``conversation_title``, the error in
+        ``call_error``, the arguments in a ``tool_call`` part, and the result
+        in a ``tool_result`` part. Returns ``None`` when the sanitizer fails,
+        so the caller leaves all of this text off the span.
+        """
+        now = _to_utc(self._now())
+        try:
+            output: list[Message] = []
+            if text.arguments:
+                # Raises on a lone surrogate, which fails closed like the rest.
+                input_json = text.arguments.encode("utf-8")
+                tool_call = ToolCall(name=tool.tool_name, id=tool.tool_call_id, input_json=input_json)
+                output.append(Message(role=MessageRole.ASSISTANT, parts=[tool_call_part(tool_call)]))
+            if text.result:
+                tool_result = ToolResult(tool_call_id=tool.tool_call_id, name=tool.tool_name, content=text.result)
+                output.append(Message(role=MessageRole.TOOL, parts=[tool_result_part(tool_result)]))
+            sanitized = self._sanitize_generation(
+                Generation(
+                    id=tool.tool_call_id,
+                    conversation_id=tool.conversation_id,
+                    conversation_title=text.title,
+                    call_error=text.error,
+                    agent_name=tool.agent_name,
+                    agent_version=tool.agent_version,
+                    mode=GenerationMode.SYNC,
+                    operation_name="execute_tool",
+                    model=ModelRef(provider=tool.request_provider, name=tool.request_model),
+                    output=output,
+                    started_at=now,
+                    completed_at=now,
+                )
+            )
+            arguments: Any = None
+            result: Any = None
+            for message in sanitized.output:
+                for part in message.parts:
+                    if part.kind == PartKind.TOOL_CALL:
+                        arguments = part.tool_call.input_json if arguments is None else arguments
+                    elif part.kind == PartKind.TOOL_RESULT:
+                        result = part.tool_result.content if result is None else result
+            # Only the fields passed in come back.
+            return _ToolSpanText(
+                title=_tool_span_text_value(sanitized.conversation_title) if text.title else "",
+                arguments=_tool_span_text_value(arguments) if text.arguments else "",
+                result=_tool_span_text_value(result) if text.result else "",
+                error=_tool_span_text_value(sanitized.call_error) if text.error else "",
+            )
+        except Exception:  # noqa: BLE001
+            if self._config.logger is not None:
+                self._config.logger.warning(
+                    "agento11y: tool span sanitization failed, leaving its text off the span",
+                    exc_info=True,
+                )
+            return None
 
     def _flush_internal(self, *, report_background_errors: bool = False) -> None:
         if self._otel_handler is not None:
@@ -2249,18 +2317,16 @@ class ToolExecutionRecorder:
             self.span.set_attribute("process.exit.code", result.process_exit_code)
 
         content_error: Exception | None = None
+        arguments = ""
+        tool_result = ""
         if self.include_content:
             try:
                 arguments = _serialize_tool_content(result.arguments)
-                if arguments != "":
-                    self.span.set_attribute(_span_attr_tool_call_arguments, arguments)
             except Exception as exc:  # noqa: BLE001
                 content_error = RuntimeError(f"serialize tool arguments: {exc}")
 
             try:
                 tool_result = _serialize_tool_content(result.result)
-                if tool_result != "":
-                    self.span.set_attribute(_span_attr_tool_call_result, tool_result)
             except Exception as exc:  # noqa: BLE001
                 if content_error is None:
                     content_error = RuntimeError(f"serialize tool result: {exc}")
@@ -2273,20 +2339,56 @@ class ToolExecutionRecorder:
         elif content_error is not None:
             final_error = content_error
 
-        if final_error is not None:
-            # Tools have no proto export; under both stripped modes the span
-            # must not echo raw provider exception text via record_exception
-            # events or the status description.
-            redact_span_errors = self._content_capture_mode in (
-                ContentCaptureMode.METADATA_ONLY,
-                ContentCaptureMode.FULL_WITH_METADATA_SPANS,
+        # Tools have no proto export; under both stripped modes the span
+        # must not echo raw provider exception text via record_exception
+        # events or the status description.
+        redact_span_errors = self._content_capture_mode in (
+            ContentCaptureMode.METADATA_ONLY,
+            ContentCaptureMode.FULL_WITH_METADATA_SPANS,
+        )
+        # The sanitizer redacts this text on the generation, so the tool span
+        # shows it redacted too. If it fails, the span keeps none of it.
+        sanitizing = not redact_span_errors and self.client._has_generation_sanitizer()
+        error_text = str(final_error) if final_error is not None else ""
+        if sanitizing and (arguments or tool_result or error_text):
+            sanitized = self.client._sanitize_tool_span_text(
+                self.seed, _ToolSpanText(arguments=arguments, result=tool_result, error=error_text)
             )
+            if sanitized is None:
+                arguments = tool_result = error_text = ""
+                redact_span_errors = True
+            else:
+                arguments, tool_result, error_text = sanitized.arguments, sanitized.result, sanitized.error
+
+        if arguments != "":
+            self.span.set_attribute(_span_attr_tool_call_arguments, arguments)
+        if tool_result != "":
+            self.span.set_attribute(_span_attr_tool_call_result, tool_result)
+
+        if final_error is not None:
             error_category = _error_category_from_exception(final_error, fallback_sdk=True)
-            if not redact_span_errors:
+            if redact_span_errors:
+                description = error_category
+            elif sanitizing:
+                # A sanitizer that cleared the error leaves the category, so
+                # the span still reads as an error.
+                description = error_text or error_category
+                # The default stacktrace ends with the raw message and holds
+                # the messages of chained exceptions, which the sanitizer
+                # never saw. Keep the type and the frames only.
+                self.span.record_exception(
+                    final_error,
+                    attributes={
+                        "exception.message": description,
+                        "exception.stacktrace": "".join(traceback.format_tb(final_error.__traceback__)),
+                    },
+                )
+            else:
+                description = str(final_error)
                 self.span.record_exception(final_error)
             self.span.set_attribute(_span_attr_error_type, "tool_execution_error")
             self.span.set_attribute(_span_attr_error_category, error_category)
-            self.span.set_status(Status(StatusCode.ERROR, error_category if redact_span_errors else str(final_error)))
+            self.span.set_status(Status(StatusCode.ERROR, description))
         else:
             self.span.set_status(Status(StatusCode.OK))
 
@@ -2568,6 +2670,24 @@ def _set_embedding_end_span_attributes(
         )
         if texts:
             span.set_attribute(_span_attr_embedding_input_texts, texts)
+
+
+@dataclass(slots=True)
+class _ToolSpanText:
+    """Text a tool span shows. An empty field stays off the span."""
+
+    title: str = ""
+    arguments: str = ""
+    result: str = ""
+    error: str = ""
+
+
+def _tool_span_text_value(value: Any) -> str:
+    """Returns a sanitized value as span text, or ``""`` when it is not text."""
+
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    return value if isinstance(value, str) and value.strip() != "" else ""
 
 
 def _set_tool_span_attributes(span: Span, start: ToolExecutionStart) -> None:
