@@ -38,9 +38,11 @@ redirections. Quoted text and quoted heredoc bodies stay data; the code in
 `$(...)`, backticks (also in an unquoted heredoc body), `sh -c`, `su -c`, `env -S`,
 `script -c`, `eval`, `watch`, `trap`, `find -exec` and a heredoc fed to a shell is
 read as commands, three levels deep, and code at the last level is judged as
-written. Every pack pattern matches where a command starts. So `git "reset" --hard`,
-`cd repo && git reset --hard` and `sudo -u deploy bash -c 'git reset --hard'` are
-denied, and a commit message that mentions `git reset --hard` is not. A shell
+written. Every pack pattern matches a command's name after an unquoted separator,
+so a wrapper in front of it does not hide it and quoted text is not matched. So
+`git "reset" --hard`, `cd repo && git reset --hard`, `pkexec rm -rf /` and
+`sudo -u deploy bash -c 'git reset --hard'` are denied, and a commit message that
+mentions `git reset --hard` is not. A shell
 command longer than 64 KiB is not read, and both runtimes fail it closed.
 
 A shell call with no command key is judged by the string values in its arguments.

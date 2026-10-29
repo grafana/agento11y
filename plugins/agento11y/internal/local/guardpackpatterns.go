@@ -30,19 +30,17 @@ const (
 	rmForceFlag     = `(?:--force|-[a-z]*f[a-z]*)`
 )
 
-// shellCommandStart matches what can come before a command's name at the start
-// of a simple command: VAR=value assignments, a keyword such as if or do, a
-// wrapper that runs the command after it (sudo, env, xargs, timeout and the
-// like) with its options and their values, and a directory or a backslash on
-// the name itself, as in /usr/bin/git or \git. Every pack pattern starts with
-// it, at the start of a subject, so a pattern matches a command the shell
-// runs and not a mention of one in a quoted message.
-var shellCommandStart = `^[ \t]*(?:(?:` + shellAssignment + `|!|if|then|else|elif|do|while|until|` +
-	`(?:[^\s;&|()<>'"]*/)?(?:sudo|doas|env|command|builtin|exec|nohup|nice|timeout|stdbuf|xargs|time)` +
-	`(?:[ \t]+(?:-` + shellWordPart + `*(?:[ \t]+` + shellWord + `)?|[0-9]` + shellWordPart + `*|` + shellAssignment + `))*` +
-	`)[ \t]+)*(?:\\|[^\s;&|()<>'"]*/)?`
-
-const shellAssignment = `[A-Za-z_][A-Za-z0-9_]*=` + shellWordPart + `*`
+// shellCommandStart matches what can come before a command's name: nothing,
+// or separators and words with no quote in them, where a backslash escapes
+// the next character, ending in an unescaped separator. A wrapper in front of
+// the name (sudo, pkexec, ssh host, docker exec c) does not hide it, while a
+// quoted message cannot reach it: in the subject as written its quote stops
+// the match, and in the unquoted and simple command subjects its spaces are
+// escaped (git\ reset\ --hard), so no separator sits before the name. A word
+// cannot start with #, which starts a comment; a # inside a word, as in a#b,
+// is part of it. A directory or a backslash on the name itself, as in
+// /usr/bin/git or \git, is part of the name.
+var shellCommandStart = `^(?:(?:[\s;&|()<>]|(?:[^'"\\\s;&|()<>#]|\\.)(?:[^'"\\\s;&|()<>]|\\.)*)*?[\s;&|()<>])?(?:\\|[^\s;&|()<>'"]*/)?`
 
 func shellQuoted(pattern string) string {
 	return `(?:` + pattern + `|'` + pattern + `'|"` + pattern + `")`

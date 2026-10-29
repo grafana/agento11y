@@ -136,6 +136,21 @@ var cloudPackCases = []cloudPackCase{
 	{Pack: packDestructive, Command: "rm \\\n-rf /tmp/x", Deny: true},
 	// The shell removes quotes and backslashes before it runs a word.
 	{Pack: packGit, Command: `git "reset" --hard`, Deny: true},
+	// A wrapper the packs do not know still does not hide the command, since a
+	// command name matches after any unquoted separator.
+	{Pack: packDestructive, Command: "pkexec rm -rf /", Deny: true},
+	{Pack: packDestructive, Command: "chroot / rm -rf /", Deny: true},
+	{Pack: packDestructive, Command: "strace -f rm -rf /", Deny: true},
+	{Pack: packDestructive, Command: "runuser -u x -- rm -rf /", Deny: true},
+	{Pack: packDestructive, Command: "taskset -c 0 rm -rf /", Deny: true},
+	{Pack: packDestructive, Command: "ssh host rm -rf /", Deny: true},
+	{Pack: packDestructive, Command: "docker exec c rm -rf /", Deny: true},
+	{Pack: packDestructive, Command: "mise exec -- rm -rf /", Deny: true},
+	{Pack: packGit, Command: "pkexec git reset --hard", Deny: true},
+	{Pack: packDestructive, Command: "pkexec a#b rm -rf /", Deny: true},
+	// The trade: a command named as an unquoted argument is judged too.
+	{Pack: packDestructive, Command: "echo rm -rf /", Deny: true},
+	{Pack: packGit, Command: "git log -5 # before git reset --hard"},
 	{Pack: packGit, Command: `git 'reset' --hard`, Deny: true},
 	{Pack: packGit, Command: `g\it re""set --hard`, Deny: true},
 	{Pack: packGit, Command: `git checkout "."`, Deny: true},
