@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.55.0] - 2026-10-30
+
+### Features
+
+- **plugins/agento11y**: export the coding agent guard packs for Cloud (#945)
+
+### Bug Fixes
+
+- **plugins/agento11y**: stop history imports recording live metrics (#997)
+
 ## [0.54.0] - 2026-10-29
 
 ### Features
