@@ -16,10 +16,12 @@ import (
 
 // SessionEnd sweeps any stranded fragments left by crashed or aborted turns,
 // emits each with `stopReason="aborted"` (or the pendingStop status saved by
-// handleStop on flush failure), then removes the conversation directory.
+// handleStop on flush failure), then removes the conversation's fragments.
+// The session file stays, because Cursor ends the session when the window or
+// the chat closes and can reopen that chat later without another sessionStart.
 //
-// On any emission failure the conversation directory is preserved so a later
-// sweep can retry rather than silently dropping the data.
+// On any emission failure the fragments are preserved so a later sweep can
+// retry rather than silently dropping the data.
 func SessionEnd(p Payload, cfg config.Config, logger *log.Logger) {
 	if p.ConversationID == "" {
 		logger.Print("sessionEnd: missing conversation_id")
@@ -35,13 +37,13 @@ func SessionEnd(p Payload, cfg config.Config, logger *log.Logger) {
 	ids := fragment.ListFragmentIDs(p.ConversationID, logger)
 
 	if len(ids) == 0 {
-		removeAndLog(p.ConversationID, logger)
+		finishConversation(p.ConversationID, logger)
 		return
 	}
 
 	if protocol == agento11y.GenerationExportProtocolHTTP && !config.HasCredentials() {
-		logger.Print("sessionEnd: missing credentials — wiping conversation dir without emission")
-		removeAndLog(p.ConversationID, logger)
+		logger.Print("sessionEnd: missing credentials — dropping fragments without emission")
+		finishConversation(p.ConversationID, logger)
 		return
 	}
 
@@ -99,7 +101,7 @@ func SessionEnd(p Payload, cfg config.Config, logger *log.Logger) {
 	}
 
 	if allEmitted && flushOK {
-		removeAndLog(p.ConversationID, logger)
+		finishConversation(p.ConversationID, logger)
 	} else {
 		logger.Printf("sessionEnd: preserving conv=%s for retry (emitted=%v flushed=%v)",
 			p.ConversationID, allEmitted, flushOK)
@@ -201,10 +203,14 @@ func isThoughtOnlyFragment(frag *fragment.Fragment) bool {
 	return true
 }
 
-func removeAndLog(conversationID string, logger *log.Logger) {
-	if err := fragment.RemoveConversationDir(conversationID); err != nil {
+// finishConversation removes the conversation's fragments, keeping its session
+// for a reopened chat, and prunes the conversations nobody has used for
+// fragment.IdleConversationAge.
+func finishConversation(conversationID string, logger *log.Logger) {
+	if err := fragment.RemoveFragments(conversationID); err != nil {
 		logger.Printf("sessionEnd: cleanup conv=%s: %v", conversationID, err)
-		return
+	} else {
+		logger.Printf("sessionEnd: cleaned conv=%s", conversationID)
 	}
-	logger.Printf("sessionEnd: cleaned conv=%s", conversationID)
+	fragment.PruneIdleConversations(time.Now().Add(-fragment.IdleConversationAge), conversationID, logger)
 }
