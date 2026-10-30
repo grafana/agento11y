@@ -58,7 +58,9 @@ try {
     testEnvironment(
       root,
       "build",
-      [join(isolatedPackage, "node_modules/.bin"), path].join(delimiter),
+      [realpathSync(join(isolatedPackage, "node_modules/.bin")), path].join(
+        delimiter,
+      ),
     ),
     120_000,
   );

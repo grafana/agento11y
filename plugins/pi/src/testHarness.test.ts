@@ -176,6 +176,7 @@ describe("native build isolation", () => {
       );
       const sdk = join(source, "node_modules/@grafana/agento11y/dist");
       mkdirSync(sdk, { recursive: true });
+      mkdirSync(join(source, "node_modules/.bin"));
       writeFileSync(join(sdk, "index.js"), "");
       expect(() => assertSdkBuilt(source)).toThrow("mise run build:ts:sdk-js");
       writeFileSync(join(sdk, "index.d.ts"), "");
@@ -185,6 +186,8 @@ describe("native build isolation", () => {
         `
         import assert from 'node:assert/strict';
         import { existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
+        import { delimiter } from 'node:path';
+        assert.equal(process.env.PATH.split(delimiter)[0], realpathSync('node_modules/.bin'));
         assert.notEqual(process.cwd(), ${JSON.stringify(source)});
         assert.equal(existsSync('dist'), false);
         assert.equal(realpathSync('node_modules'), ${JSON.stringify(join(source, "node_modules"))});

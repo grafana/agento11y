@@ -2,7 +2,7 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   assertSdkBuilt,
   copyTestPackage,
@@ -20,11 +20,14 @@ describe("bundle", () => {
     try {
       const isolatedPackage = copyTestPackage(packageDir, root);
       const path = [
-        join(isolatedPackage, "node_modules/.bin"),
+        realpathSync(join(isolatedPackage, "node_modules/.bin")),
         dirname(node),
         "/usr/bin",
         "/bin",
       ].join(delimiter);
+      expect(path.split(delimiter)[0]).toBe(
+        realpathSync(join(packageDir, "node_modules/.bin")),
+      );
       // Run the build script directly: `pnpm run` first checks the whole
       // workspace lockfile against its supply-chain policy, which can take
       // longer than the test timeout.
