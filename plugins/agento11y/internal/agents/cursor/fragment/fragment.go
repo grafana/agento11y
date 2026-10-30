@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/fragmentstore"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/redact"
@@ -280,8 +281,84 @@ func ListFragmentIDs(conversationID string, logger *log.Logger) []string {
 	return ids
 }
 
-// RemoveConversationDir wipes the entire per-conversation directory. Best
-// effort — sessionEnd uses this once all fragments have been emitted.
-func RemoveConversationDir(conversationID string) error {
-	return os.RemoveAll(ConversationDir(conversationID))
+// RemoveFragments deletes every fragment file in the conversation directory,
+// quarantined and temporary ones included, and keeps the session file. Cursor
+// can reopen a closed chat and continue it under the same conversation_id
+// without another sessionStart, so the session has to outlive sessionEnd for
+// the reopened turns to keep their workspace, Cursor version and title.
+// PruneIdleConversations removes the directory once the conversation goes
+// unused. Best effort — sessionEnd uses this once all fragments have been
+// emitted.
+func RemoveFragments(conversationID string) error {
+	dir := ConversationDir(conversationID)
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), fragmentPrefix) {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// IdleConversationAge is how long a conversation directory with no fragment
+// left in it is kept after the conversation was last used.
+const IdleConversationAge = 30 * 24 * time.Hour
+
+// PruneIdleConversations removes the directories of conversations other than
+// keepID that hold no fragment and were last used before cutoff. Every turn
+// writes and deletes its fragment in the conversation directory, and so does
+// sessionEnd, so the directory's modification time is when the conversation
+// was last used. A directory that still holds a fragment is left for its own
+// sessionEnd to retry. Errors are logged and never stop the sweep.
+func PruneIdleConversations(cutoff time.Time, keepID string, logger *log.Logger) {
+	root := StateRoot()
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) && logger != nil {
+			logger.Printf("fragment: prune readdir %s: %v", root, err)
+		}
+		return
+	}
+	keep := filepath.Base(ConversationDir(keepID))
+	for _, e := range entries {
+		if !e.IsDir() || e.Name() == keep {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || info.ModTime().After(cutoff) {
+			continue
+		}
+		dir := filepath.Join(root, e.Name())
+		if holdsFragment(dir) {
+			continue
+		}
+		if err := os.RemoveAll(dir); err != nil && logger != nil {
+			logger.Printf("fragment: prune %s: %v", dir, err)
+		}
+	}
+}
+
+// holdsFragment reports whether dir holds a fragment file. An unreadable
+// directory counts as holding one, so the prune leaves it alone.
+func holdsFragment(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return true
+	}
+	for _, e := range entries {
+		if ParseFragmentFilename(e.Name()) != "" {
+			return true
+		}
+	}
+	return false
 }
