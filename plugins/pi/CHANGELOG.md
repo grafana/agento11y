@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.28.0] - 2026-10-30
+
+### Features
+
+- **sdk**: add skill identity to tool execution metrics (#979)
+
+### Bug Fixes
+
+- **plugins/pi**: record the guard-redacted prompt and title (#903)
+
 ## [0.27.0] - 2026-10-28
 
 ### Features
