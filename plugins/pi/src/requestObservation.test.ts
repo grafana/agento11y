@@ -253,6 +253,7 @@ describe("RequestObservation", () => {
   it.each([
     "full",
     "full_with_metadata_spans",
+    "no_tool_content",
     "metadata_only",
   ] as const)("honors %s capture and still consumes the occurrence once", (mode) => {
     const f = fixture();
@@ -282,13 +283,88 @@ describe("RequestObservation", () => {
     expect(f.observation.firstUserText).toBe("latest safe a");
   });
 
-  it("invalidates a previous pending observation when the latest context omits it", () => {
+  it.each([
+    { name: "omitted user slot", messages: [] },
+    { name: "duplicate user metadata", messages: [user("raw"), user("safe")] },
+    { name: "changed timestamp", messages: [user("raw", 2)] },
+    {
+      name: "changed role",
+      messages: [{ role: "assistant", content: "raw", timestamp: 1 }],
+    },
+  ])("drops a previous body after $name without raw fallback or replay", ({
+    messages,
+  }) => {
     const f = fixture();
-    f.set([projected(entry("a", user("raw")))]);
-    f.observe([user("safe")]);
-    f.observe([]);
+    const first = projected(entry("a", user("raw")));
+    f.set([first]);
+    f.observe([user("previous safe observation")]);
+    f.observe(messages);
     expect(f.consume()).toEqual([]);
     expect(f.observation.firstUserText).toBeUndefined();
+
+    f.observe([user("later safe observation")]);
+    expect(f.consume()).toEqual([]);
+    f.set([first, projected(entry("b", user("raw next", 3)))]);
+    f.observe([user("raw"), user("safe next", 3)]);
+    expect(texts(f.consume())).toEqual([body("safe next")]);
+    expect(f.observation.firstUserText).toBeUndefined();
+  });
+
+  it.each([
+    {
+      name: "later host text projection",
+      later: [projected(entry("a", user("later projected raw")))],
+      expected: [body("intermediate observed text")],
+    },
+    {
+      name: "later metadata replacement",
+      later: [projected(entry("a", user("later raw", 2)))],
+      expected: [],
+    },
+    {
+      name: "hidden projected contribution",
+      later: [projected(entry("a", user("raw")), [])],
+      expected: [],
+    },
+    {
+      name: "expanded projected contribution",
+      later: [
+        projected(entry("a", user("raw")), [user("one"), user("two", 2)]),
+      ],
+      expected: [],
+    },
+    {
+      name: "duplicate projected metadata",
+      later: [
+        projected(entry("a", user("raw"))),
+        projected(entry("b", user("raw"))),
+      ],
+      expected: [],
+    },
+    {
+      name: "duplicate source occurrence",
+      later: [
+        projected(entry("a", user("raw"))),
+        projected(entry("a", user("raw", 2))),
+      ],
+      expected: [],
+    },
+  ])("keeps context observations intermediate, not final: $name", ({
+    later,
+    expected,
+  }) => {
+    const f = fixture();
+    f.set([projected(entry("a", user("persisted raw")))]);
+    const context = [user("intermediate observed text")];
+    f.observe(context);
+    // Later host mutations do not turn an observed context into final provider input.
+    context[0]!.content = "later provider text";
+    f.set(later);
+    expect(texts(f.consume())).toEqual(expected);
+    expect(f.observation.firstUserText).toBe(
+      expected.length > 0 ? "intermediate observed text" : undefined,
+    );
+    expect(f.consume()).toEqual([]);
   });
 
   it("revalidates persisted ownership at consume, without looking up bodies", () => {

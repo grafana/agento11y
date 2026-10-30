@@ -171,7 +171,7 @@ The built-in sanitizer:
 - redacts secret formats and key/value secrets in `generation.tools` descriptions and encoded schemas
 - leaves user input unchanged unless input redaction is enabled
 
-Tool-definition redaction uses copied definitions, not the application's executable tools. The sanitizer validates schema JSON before and after redacting the complete encoded string. If either validation fails, it omits the schema body instead of restoring raw content. Names and types remain unchanged. This coverage is JS-only; Go, Python, and .NET sanitizers still lack tool-definition redaction.
+Tool-definition redaction uses copied definitions, not the application's executable tools. The sanitizer validates schema JSON before and after redacting the complete encoded string. This covers secret-pattern matches in member names and key/value pairs, using the configured email policy too. If either validation fails, it omits the schema body instead of restoring raw content. Names and types remain unchanged. This coverage is JS-only; Go, Python, and .NET sanitizers still lack tool-definition redaction.
 
 To preserve email addresses, opt out explicitly:
 
@@ -338,7 +338,7 @@ TraceQL examples:
 
 Use `GenerationRecorder.startToolExecution(...)` to parent a tool span to that generation, including across `await`, without a global context manager. The method does not change active context or inherit generation capture settings, identity, or request model. Set those tool options explicitly when they must match the generation. `client.startToolExecution(...)` remains available and uses the active OpenTelemetry context.
 
-`ToolExecutionRecorder.startToolExecution(...)` parents a child span to that tool, including nested children and concurrent siblings. It binds only trace parentage. Baggage, suppression, sampling inputs, identity, and capture policy resolve at the child call. End each child yourself. Empty-name no-op recorders also return no-op descendants.
+`ToolExecutionRecorder.startToolExecution(start: ToolExecutionStart): ToolExecutionRecorder` parents a child span to that tool, including nested children and concurrent siblings. It replaces only the parent span in call-time context, without changing active context. Baggage, suppression, sampling inputs, identity, and capture policy resolve at the child call. End each child yourself. Empty-name no-op recorders also return no-op descendants. Neither recorder method replaces global OpenTelemetry providers or the global context manager.
 
 ```ts
 await client.startGeneration(
@@ -629,6 +629,10 @@ Generation and workflow-step exports retry five times by default, with exponenti
 Each in-memory export queue holds 2,000 records by default. Set `AGENTO11Y_QUEUE_SIZE` to a base-10 integer from `1` through `2147483647` to override that capacity. Size it from the peak records per second multiplied by the expected outage in seconds, plus headroom. Generations and workflow steps have separate queues of this capacity. Larger queues consume application memory and do not survive a process restart. An explicit `generationExport.queueSize` value wins over the environment variable.
 
 Retries run in the background exporter. While an export is retrying, the in-memory queue can fill and newer generations can be dropped. Use a retry budget sized for a short, known interruption rather than a permanent multi-minute setting.
+
+Recorder `getError()` reports local recording errors, including queue overflow. Callback-based generation methods throw those errors. Neither signal acknowledges asynchronous delivery. The configured `logger` reports generation rejection, exhausted background retries, and shutdown loss. These signals do not detect every silent loss or establish recovery. The SDK has no durable export spool.
+
+The Pi integration converts observed failures into fixed warnings, deduplicated per client, independently of debug logging. It uses Pi UI or headless stderr and filters debug diagnostics independently of capture mode. See [Pi verification and diagnostics](../plugins/pi/README.md#3-verify). This notification policy belongs to the plugin, not every SDK consumer.
 
 ## Wiring custom env vars
 

@@ -6,11 +6,11 @@ import {
   type Message,
   redactSecretTextLightweight,
 } from "@grafana/agento11y";
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   applyRedactedText,
-  extractRequestControls,
   MAX_TITLE_LEN,
+  type MapGenerationStartOptions,
   mapAgentMessagesForHook,
   mapGenerationResult,
   mapGenerationStart,
@@ -22,8 +22,8 @@ import {
   type PiAgentMessage,
   type PiAssistantMessage,
   type PiSummaryEntryLike,
-  type PiToolInfo,
   type PiToolResult,
+  type PiUsageLike,
   type PiUserMessage,
   redactSharedWords,
   redactSpans,
@@ -81,18 +81,37 @@ function makeUserMsg(overrides?: Partial<PiUserMessage>): PiUserMessage {
   };
 }
 
-function makeToolInfo(overrides?: Partial<PiToolInfo>): PiToolInfo {
-  return {
-    name: "bash",
-    description: "Run a shell command",
-    parameters: {
-      type: "object",
-      properties: { command: { type: "string" } },
-      required: ["command"],
-    },
-    ...overrides,
-  };
-}
+const CAPTURE_MODES = [
+  "full",
+  "full_with_metadata_spans",
+  "no_tool_content",
+  "metadata_only",
+] as const;
+
+const AUXILIARY_USAGE_FIELDS = [
+  ["input", "pi.tool_usage.input_tokens"],
+  ["output", "pi.tool_usage.output_tokens"],
+  ["totalTokens", "pi.tool_usage.total_tokens"],
+  ["cacheRead", "pi.tool_usage.cache_read_input_tokens"],
+  ["cacheWrite", "pi.tool_usage.cache_write_input_tokens"],
+  ["reasoning", "pi.tool_usage.reasoning_tokens"],
+  ["cacheWrite1h", "pi.tool_usage.cache_write_1h_input_tokens"],
+  ["cost", "pi.tool_usage.cost_usd"],
+] as const;
+
+const INVALID_USAGE_VALUES: unknown[] = [
+  undefined,
+  null,
+  -1,
+  Number.NaN,
+  Number.POSITIVE_INFINITY,
+  Number.NEGATIVE_INFINITY,
+  "12",
+  "secret",
+  true,
+  {},
+  [],
+];
 
 describe("mapGenerationStart", () => {
   it("maps model, conversation, agent info", () => {
@@ -215,37 +234,15 @@ describe("mapGenerationStart", () => {
     expect(b.tags).toBeUndefined();
   });
 
-  it("sets systemPrompt when provided and non-empty", () => {
-    const start = mapGenerationStart(makeMsg(), {
-      conversationId: "s",
-      agentName: "pi",
-      startedAt: 0,
+  it("does not accept unverified prompts or request controls", () => {
+    expectTypeOf<
+      Extract<
+        keyof MapGenerationStartOptions,
+        "systemPrompt" | "requestControls"
+      >
+    >().toBeNever();
+    const unverified = {
       systemPrompt: "You are a helpful agent.",
-    });
-    expect(start.systemPrompt).toBe("You are a helpful agent.");
-  });
-
-  it("omits systemPrompt when undefined or empty", () => {
-    const a = mapGenerationStart(makeMsg(), {
-      conversationId: "s",
-      agentName: "pi",
-      startedAt: 0,
-    });
-    const b = mapGenerationStart(makeMsg(), {
-      conversationId: "s",
-      agentName: "pi",
-      startedAt: 0,
-      systemPrompt: "",
-    });
-    expect(a.systemPrompt).toBeUndefined();
-    expect(b.systemPrompt).toBeUndefined();
-  });
-
-  it("sets request controls when provided", () => {
-    const start = mapGenerationStart(makeMsg(), {
-      conversationId: "s",
-      agentName: "pi",
-      startedAt: 0,
       requestControls: {
         maxTokens: 1024,
         temperature: 0.2,
@@ -253,28 +250,23 @@ describe("mapGenerationStart", () => {
         toolChoice: "auto",
         thinkingBudgetTokens: 4096,
       },
-    });
-    expect(start.maxTokens).toBe(1024);
-    expect(start.temperature).toBe(0.2);
-    expect(start.topP).toBe(0.9);
-    expect(start.toolChoice).toBe("auto");
-    expect(start.metadata).toEqual({
-      "agento11y.gen_ai.request.thinking.budget_tokens": 4096,
-    });
-  });
-
-  it("leaves request controls unset when fields are missing", () => {
+      tools: [
+        { name: "bash", description: "unverified", inputSchemaJSON: "{}" },
+      ],
+    };
     const start = mapGenerationStart(makeMsg(), {
-      conversationId: "s",
       agentName: "pi",
       startedAt: 0,
-      requestControls: {},
+      ...unverified,
     });
+    expect(start.systemPrompt).toBeUndefined();
     expect(start.maxTokens).toBeUndefined();
     expect(start.temperature).toBeUndefined();
     expect(start.topP).toBeUndefined();
     expect(start.toolChoice).toBeUndefined();
     expect(start.metadata).toBeUndefined();
+    expect(start.tools).toEqual([{ name: "bash" }]);
+    expect(JSON.stringify(start)).not.toContain("unverified");
   });
 
   it("passes caller metadata through", () => {
@@ -286,20 +278,6 @@ describe("mapGenerationStart", () => {
     });
     expect(start.metadata).toEqual({
       "pi.fork.parent_session_id": "trunk-conv",
-    });
-  });
-
-  it("merges caller metadata with the thinking budget instead of overwriting it", () => {
-    const start = mapGenerationStart(makeMsg(), {
-      conversationId: "s",
-      agentName: "pi",
-      startedAt: 0,
-      metadata: { "pi.fork.parent_session_id": "trunk-conv" },
-      requestControls: { thinkingBudgetTokens: 4096 },
-    });
-    expect(start.metadata).toEqual({
-      "pi.fork.parent_session_id": "trunk-conv",
-      "agento11y.gen_ai.request.thinking.budget_tokens": 4096,
     });
   });
 
@@ -367,21 +345,48 @@ describe("mapGenerationStart", () => {
 });
 
 describe("mapGenerationResult", () => {
-  it("maps usage and metadata (no content)", () => {
-    const msg = makeMsg();
-    const result = mapGenerationResult(msg, [], "metadata_only");
+  it.each([
+    { responseModel: undefined, expected: "claude-sonnet-4-20250514" },
+    { responseModel: null, expected: "claude-sonnet-4-20250514" },
+    {
+      responseModel: "physical-response-model",
+      expected: "physical-response-model",
+    },
+    { responseModel: "", expected: "" },
+  ])("maps response identity, usage and metadata: $responseModel", ({
+    responseModel,
+    expected,
+  }) => {
+    const msg = makeMsg({ responseModel });
+    for (const mode of CAPTURE_MODES) {
+      const start = mapGenerationStart(msg, { agentName: "pi", startedAt: 0 });
+      const result = mapGenerationResult(
+        msg,
+        [
+          makeToolResult({
+            usage: { input: 999, cost: { total: 123 } },
+          }),
+        ],
+        mode,
+      );
 
-    expect(result.usage).toEqual({
-      inputTokens: 100,
-      outputTokens: 50,
-      totalTokens: 165,
-      cacheReadInputTokens: 10,
-      cacheWriteInputTokens: 5,
-    });
-    expect(result.responseModel).toBe("claude-sonnet-4-20250514");
-    expect(result.stopReason).toBe("end_turn");
-    expect(result.completedAt).toEqual(new Date(1700000001000));
-    expect(result.metadata?.cost_usd).toBe(0.012);
+      expect(result.usage).toEqual({
+        inputTokens: 100,
+        outputTokens: 50,
+        totalTokens: 165,
+        cacheReadInputTokens: 10,
+        cacheWriteInputTokens: 5,
+      });
+      expect(start.model).toEqual({ provider: msg.provider, name: msg.model });
+      expect(result.responseModel).toBe(expected);
+      expect(result.stopReason).toBe("end_turn");
+      expect(result.completedAt).toEqual(new Date(1700000001000));
+      expect(result.metadata).toEqual({
+        cost_usd: 0.012,
+        "pi.tool_usage.input_tokens": 999,
+        "pi.tool_usage.cost_usd": 123,
+      });
+    }
   });
 
   it("omits cost_usd when usage.cost is missing", () => {
@@ -543,69 +548,202 @@ describe("mapGenerationResult", () => {
     expect(roles).toContain("tool");
   });
 
-  it("full_with_metadata_spans matches full for proto-export tool bodies", () => {
-    // Per the SDK contract (ContentCaptureModeFullWithMetadataSpans in
-    // go/agento11y/content_capture.go), the proto export gets full generation
-    // content under this mode; only the OTel span side is reduced.
-    const msg = makeMsg({
-      content: [
-        { type: "text", text: "I'll run that command" },
-        {
-          type: "toolCall",
-          id: "c1",
-          name: "bash",
-          arguments: { command: "ls" },
-        },
-      ],
+  describe.each(CAPTURE_MODES)("finalized results in %s", (mode) => {
+    it.each([
+      { command: "ls" },
+      undefined,
+    ])("maps observed or omitted tool proposals: %j", (args) => {
+      const msg = makeMsg({
+        content: [
+          { type: "text", text: "I'll run that command" },
+          {
+            type: "toolCall",
+            id: "c1",
+            name: "bash",
+            arguments: args,
+          },
+        ],
+      });
+      const toolResults = [
+        makeToolResult({
+          toolCallId: "c1",
+          content: [{ type: "text", text: "file.txt" }],
+        }),
+      ];
+      const result = mapGenerationResult(msg, toolResults, mode);
+
+      const toolCallPart = result.output
+        ?.flatMap((m) => m.parts ?? [])
+        .find((p) => p.type === "tool_call");
+      expect(
+        (toolCallPart as { toolCall: { inputJSON: string } }).toolCall
+          .inputJSON,
+      ).toBe(
+        (mode === "full" || mode === "full_with_metadata_spans") && args
+          ? JSON.stringify(args)
+          : "",
+      );
+
+      const toolResultPart = result.output
+        ?.flatMap((m) => m.parts ?? [])
+        .find((p) => p.type === "tool_result");
+      expect(
+        (toolResultPart as { toolResult: { content: string } }).toolResult
+          .content,
+      ).toBe(
+        mode === "full" || mode === "full_with_metadata_spans"
+          ? "file.txt"
+          : "",
+      );
     });
-    const toolResults = [
-      makeToolResult({
-        toolCallId: "c1",
-        content: [{ type: "text", text: "file.txt" }],
-      }),
-    ];
-    const result = mapGenerationResult(
-      msg,
-      toolResults,
-      "full_with_metadata_spans",
-    );
 
-    const toolCallPart = result.output
-      ?.flatMap((m) => m.parts ?? [])
-      .find((p) => p.type === "tool_call");
-    expect(
-      (toolCallPart as { toolCall: { inputJSON: string } }).toolCall.inputJSON,
-    ).toBe(JSON.stringify({ command: "ls" }));
+    it.each([
+      false,
+      true,
+    ])("counts finalized host aggregates once, with nested records=%s", (nested) => {
+      const aggregate = {
+        input: 200,
+        output: 40,
+        totalTokens: 275,
+        cacheRead: 20,
+        cacheWrite: 15,
+        cacheWrite1h: 5,
+        reasoning: 10,
+        cost: { total: 0.5 },
+        model: "unattributed-tool-model",
+        provider: "unattributed-tool-provider",
+        secret: "private",
+        unknownCount: 999,
+      };
+      const topLevel = {
+        ...makeToolResult({ usage: aggregate }),
+        ...(nested
+          ? {
+              nestedCalls: {
+                calls: [
+                  {
+                    id: "call-1/1",
+                    name: "child",
+                    status: "ok",
+                    usage: aggregate,
+                  },
+                ],
+                complete: true,
+              },
+              details: { usage: aggregate, results: [{ usage: aggregate }] },
+            }
+          : {}),
+      };
+      const toolResults = [
+        topLevel,
+        makeToolResult({
+          toolCallId: "call-2",
+          isError: true,
+          usage: { input: 3, output: 2, totalTokens: 5, cost: { total: 0.25 } },
+        }),
+      ];
+      const msg = makeMsg();
+      msg.usage.cacheWrite1h = 3;
+      msg.usage.reasoning = 7;
+      const before = structuredClone({ msg, toolResults });
+      const baseline = mapGenerationResult(msg, [], mode);
+      const result = mapGenerationResult(msg, toolResults, mode);
+      expect(result.metadata).toEqual({
+        cost_usd: 0.012,
+        "pi.usage.cache_write_1h_input_tokens": 3,
+        "pi.tool_usage.input_tokens": 203,
+        "pi.tool_usage.output_tokens": 42,
+        "pi.tool_usage.total_tokens": 280,
+        "pi.tool_usage.cache_read_input_tokens": 20,
+        "pi.tool_usage.cache_write_input_tokens": 15,
+        "pi.tool_usage.cache_write_1h_input_tokens": 5,
+        "pi.tool_usage.reasoning_tokens": 10,
+        "pi.tool_usage.cost_usd": 0.75,
+      });
+      expect(result.usage).toEqual(baseline.usage);
+      expect(result.responseModel).toBe(baseline.responseModel);
+      expect(result.responseId).toBe(baseline.responseId);
+      expect(
+        result.output?.filter((message) => message.role === "tool"),
+      ).toHaveLength(2);
+      expect({ msg, toolResults }).toEqual(before);
+    });
 
-    const toolResultPart = result.output
-      ?.flatMap((m) => m.parts ?? [])
-      .find((p) => p.type === "tool_result");
-    expect(
-      (toolResultPart as { toolResult: { content: string } }).toolResult
-        .content,
-    ).toBe("file.txt");
-  });
+    it.each(
+      INVALID_USAGE_VALUES,
+    )("omits invalid auxiliary fields: %j", (value) => {
+      const usage = Object.fromEntries(
+        AUXILIARY_USAGE_FIELDS.map(([source]) => [
+          source,
+          source === "cost" ? { total: value } : value,
+        ]),
+      ) as PiUsageLike;
+      const msg = makeMsg();
+      const result = mapGenerationResult(
+        msg,
+        [makeToolResult({ usage })],
+        mode,
+      );
+      expect(result.metadata).toEqual({ cost_usd: 0.012 });
+      expect(result.usage).toEqual(mapPiUsage(msg.usage));
+      expect(result.responseModel).toBe(msg.model);
+    });
 
-  it("mapTools emits descriptions and schemas under full_with_metadata_spans", () => {
-    const catalog: PiToolInfo[] = [
+    it.each(
+      AUXILIARY_USAGE_FIELDS,
+    )("validates and bounds %s", (source, key) => {
+      const withValue = (value: unknown): PiToolResult =>
+        makeToolResult({
+          usage: {
+            [source]: source === "cost" ? { total: value } : value,
+          } as PiUsageLike,
+        });
+      for (const value of [0, 1.5, Number.MAX_VALUE]) {
+        const result = mapGenerationResult(makeMsg(), [withValue(value)], mode);
+        expect(result.metadata).toEqual({ cost_usd: 0.012, [key]: value });
+      }
+      for (const invalid of INVALID_USAGE_VALUES) {
+        const result = mapGenerationResult(
+          makeMsg(),
+          [withValue(2), withValue(invalid), withValue(3)],
+          mode,
+        );
+        expect(result.metadata).toEqual({ cost_usd: 0.012, [key]: 5 });
+      }
+      const overflowing = [
+        withValue(Number.MAX_VALUE),
+        withValue(Number.MAX_VALUE),
+        withValue(1),
+      ];
+      overflowing.push(makeToolResult({ usage: { input: 1, output: 1 } }));
+      const result = mapGenerationResult(makeMsg(), overflowing, mode);
+      expect(result.metadata).not.toHaveProperty(key);
+      expect(result.metadata?.cost_usd).toBe(0.012);
+      const unaffected = source === "input" ? "output_tokens" : "input_tokens";
+      expect(result.metadata?.[`pi.tool_usage.${unaffected}`]).toBe(1);
+    });
+
+    it.each([
+      { usage: undefined },
+      { usage: {} },
+      { usage: { cost: { input: 1, output: 2, totalcost: 3 } } },
+      { usage: { cost: 0.5 } },
       {
-        name: "bash",
-        description: "Run a shell command",
-        parameters: { type: "object" },
+        usage: { totalcost: 3, total_tokens: 10, inputTokens: 5, unknown: 123 },
       },
-    ];
-    const defs = mapTools(
-      catalog,
-      new Set(["bash"]),
-      "full_with_metadata_spans",
-    );
-    expect(defs).toEqual([
+      { details: { usage: { input: 100, cost: { total: 0.5 } } } },
       {
-        name: "bash",
-        description: "Run a shell command",
-        inputSchemaJSON: JSON.stringify({ type: "object" }),
+        nestedCalls: {
+          calls: [{ id: "child", usage: { input: 100 } }],
+          complete: true,
+        },
       },
-    ]);
+    ])("does not infer aggregate usage or cost from other fields: %j", (fields) => {
+      const msg = makeMsg();
+      const toolResult = { ...makeToolResult(), ...fields } as PiToolResult;
+      const result = mapGenerationResult(msg, [toolResult], mode);
+      expect(result.metadata).toEqual({ cost_usd: 0.012 });
+    });
   });
 
   it("skips redacted thinking blocks", () => {
@@ -976,232 +1114,23 @@ describe("mapGenerationResult input wiring", () => {
 });
 
 describe("mapTools", () => {
-  it("returns name-only under metadata_only", () => {
-    const catalog = [
-      makeToolInfo({ name: "bash" }),
-      makeToolInfo({ name: "read", description: "Read a file" }),
-    ];
-    const defs = mapTools(catalog, new Set(["bash", "read"]), "metadata_only");
-    expect(defs).toEqual([{ name: "bash" }, { name: "read" }]);
-  });
-
-  it("returns name-only under no_tool_content", () => {
-    const catalog = [makeToolInfo({ name: "bash" })];
-    const defs = mapTools(catalog, new Set(["bash"]), "no_tool_content");
-    expect(defs).toEqual([{ name: "bash" }]);
-  });
-
-  it("returns name+description+inputSchemaJSON under full", () => {
-    const catalog = [
-      makeToolInfo({
-        name: "bash",
-        description: "Run a shell command",
-        parameters: { type: "object", properties: { cmd: { type: "string" } } },
-      }),
-    ];
-    const defs = mapTools(catalog, new Set(["bash"]), "full");
-    expect(defs).toHaveLength(1);
-    expect(defs[0]).toEqual({
-      name: "bash",
-      description: "Run a shell command",
-      inputSchemaJSON:
-        '{"type":"object","properties":{"cmd":{"type":"string"}}}',
-    });
-  });
-
-  it("filters by activeNames when set is non-empty", () => {
-    const catalog = [
-      makeToolInfo({ name: "bash" }),
-      makeToolInfo({ name: "read" }),
-      makeToolInfo({ name: "write" }),
-    ];
-    const defs = mapTools(catalog, new Set(["bash", "write"]), "metadata_only");
-    expect(defs.map((d) => d.name)).toEqual(["bash", "write"]);
-  });
-
-  it("emits the full catalog when activeNames is null (no filter)", () => {
-    // null means the active-set API is unavailable (older pi versions);
-    // emit the registry so something useful still ships.
-    const catalog = [
-      makeToolInfo({ name: "bash" }),
-      makeToolInfo({ name: "read" }),
-    ];
-    const defs = mapTools(catalog, null, "metadata_only");
-    expect(defs.map((d) => d.name)).toEqual(["bash", "read"]);
-  });
-
-  it("emits no tools when activeNames is an empty Set", () => {
-    // An empty Set means "no tools offered this turn" — different from null.
-    const catalog = [
-      makeToolInfo({ name: "bash" }),
-      makeToolInfo({ name: "read" }),
-    ];
-    expect(mapTools(catalog, new Set(), "metadata_only")).toEqual([]);
-  });
-
-  it("handles an empty catalog", () => {
-    expect(mapTools([], new Set(["bash"]), "full")).toEqual([]);
-  });
-
-  it("deduplicates by tool name", () => {
-    const catalog = [
-      makeToolInfo({ name: "bash" }),
-      makeToolInfo({ name: "bash" }),
-      makeToolInfo({ name: "read" }),
-    ];
-    const defs = mapTools(catalog, new Set(["bash", "read"]), "metadata_only");
-    expect(defs.map((d) => d.name)).toEqual(["bash", "read"]);
-  });
-
-  it("skips description under full when value is empty", () => {
-    const catalog = [makeToolInfo({ name: "bash", description: "" })];
-    const defs = mapTools(catalog, new Set(["bash"]), "full");
-    expect(defs[0]?.description).toBeUndefined();
-  });
-});
-
-describe("extractRequestControls", () => {
-  it("extracts Anthropic-shaped payload with thinking", () => {
-    const ctrls = extractRequestControls({
-      max_tokens: 4096,
-      temperature: 0.2,
-      top_p: 0.9,
-      tool_choice: { type: "auto" },
-      thinking: { type: "enabled", budget_tokens: 2048 },
-    });
-    expect(ctrls).toEqual({
-      maxTokens: 4096,
-      temperature: 0.2,
-      topP: 0.9,
-      toolChoice: "auto",
-      thinkingBudgetTokens: 2048,
-    });
-  });
-
-  it("preserves the forced tool name in Anthropic tool_choice", () => {
-    const ctrls = extractRequestControls({
-      tool_choice: { type: "tool", name: "search" },
-    });
-    expect(ctrls.toolChoice).toBe("tool:search");
-  });
-
-  it("falls back to type when forced-tool name is missing", () => {
-    const ctrls = extractRequestControls({
-      tool_choice: { type: "tool" },
-    });
-    expect(ctrls.toolChoice).toBe("tool");
-  });
-
-  it("accepts OpenAI Chat max_tokens", () => {
-    const ctrls = extractRequestControls({ max_tokens: 512 });
-    expect(ctrls.maxTokens).toBe(512);
-  });
-
-  it("accepts OpenAI Chat max_completion_tokens", () => {
-    const ctrls = extractRequestControls({ max_completion_tokens: 1024 });
-    expect(ctrls.maxTokens).toBe(1024);
-  });
-
-  it("accepts OpenAI Responses max_output_tokens", () => {
-    const ctrls = extractRequestControls({ max_output_tokens: 2000 });
-    expect(ctrls.maxTokens).toBe(2000);
-  });
-
-  it("reads Gemini config wrapper (pi's @google/genai SDK shape)", () => {
-    // Matches the payload pi's google.js builds: temperature/maxOutputTokens
-    // spread into `config`, plus toolConfig and thinkingConfig nests.
-    const ctrls = extractRequestControls({
-      model: "gemini-2.0-flash",
-      contents: [],
-      config: {
-        temperature: 0.7,
-        topP: 0.95,
-        maxOutputTokens: 8192,
-        toolConfig: { functionCallingConfig: { mode: "AUTO" } },
-        thinkingConfig: { thinkingBudget: 1024 },
-      },
-    });
-    expect(ctrls).toEqual({
-      maxTokens: 8192,
-      temperature: 0.7,
-      topP: 0.95,
-      toolChoice: "AUTO",
-      thinkingBudgetTokens: 1024,
-    });
-  });
-
-  it("reads the legacy generationConfig nest too", () => {
-    const ctrls = extractRequestControls({
-      generationConfig: {
-        temperature: 0.7,
-        topP: 0.95,
-        maxOutputTokens: 8192,
-      },
-    });
-    expect(ctrls).toEqual({
-      maxTokens: 8192,
-      temperature: 0.7,
-      topP: 0.95,
-    });
-  });
-
-  it("prefers top-level fields over Gemini config wrapper", () => {
-    // If both shapes appear (shouldn't happen in practice), top-level wins.
-    const ctrls = extractRequestControls({
-      max_tokens: 256,
-      config: { maxOutputTokens: 8192 },
-    });
-    expect(ctrls.maxTokens).toBe(256);
-  });
-
-  it("accepts string tool_choice", () => {
-    expect(extractRequestControls({ tool_choice: "required" }).toolChoice).toBe(
-      "required",
-    );
-  });
-
-  it("accepts camelCase toolChoice and topP", () => {
-    const ctrls = extractRequestControls({
-      toolChoice: "none",
-      topP: 0.5,
-    });
-    expect(ctrls.toolChoice).toBe("none");
-    expect(ctrls.topP).toBe(0.5);
-  });
-
-  it("returns {} for null", () => {
-    expect(extractRequestControls(null)).toEqual({});
-  });
-
-  it("returns {} for undefined", () => {
-    expect(extractRequestControls(undefined)).toEqual({});
-  });
-
-  it("returns {} for a string", () => {
-    expect(extractRequestControls("hello")).toEqual({});
-  });
-
-  it("returns {} for a number", () => {
-    expect(extractRequestControls(42)).toEqual({});
-  });
-
-  it("returns {} for an array", () => {
-    expect(extractRequestControls([1, 2])).toEqual({});
-  });
-
-  it("ignores non-finite numbers", () => {
-    const ctrls = extractRequestControls({
-      max_tokens: Number.NaN,
-      temperature: Number.POSITIVE_INFINITY,
-    });
-    expect(ctrls).toEqual({});
-  });
-
-  it("skips thinking budget when not numeric", () => {
-    const ctrls = extractRequestControls({
-      thinking: { type: "enabled", budget_tokens: "lots" },
-    });
-    expect(ctrls.thinkingBudgetTokens).toBeUndefined();
+  it.each([
+    { tools: [], want: [] },
+    { tools: [{ name: "bash" }], want: [{ name: "bash" }] },
+    {
+      tools: [
+        {
+          name: "bash",
+          description: "unverified",
+          parameters: { type: "object" },
+        },
+        { name: "bash", inputSchemaJSON: "{}" },
+        { name: "read" },
+      ],
+      want: [{ name: "bash" }, { name: "read" }],
+    },
+  ])("keeps only distinct called names: $tools", ({ tools, want }) => {
+    expect(mapTools(tools)).toEqual(want);
   });
 });
 
@@ -1552,6 +1481,69 @@ describe("applyRedactedText", () => {
 });
 
 describe("mapPiUsage", () => {
+  describe.each(CAPTURE_MODES)("cache detail in %s", (contentCapture) => {
+    it.each([
+      0,
+      3,
+      ...INVALID_USAGE_VALUES,
+    ])("keeps only valid cacheWrite1h as non-additive metadata: %j", (value) => {
+      const msg = makeMsg();
+      Object.assign(msg.usage, { cacheWrite1h: value });
+      const ordinary = mapGenerationResult(msg, [], contentCapture);
+      const summary = mapSummaryGenerationResult({
+        entry: { usage: msg.usage },
+        contentCapture,
+        completedAt: msg.timestamp,
+      });
+      const valid =
+        typeof value === "number" && Number.isFinite(value) && value >= 0;
+      const expected = {
+        cost_usd: 0.012,
+        ...(valid ? { "pi.usage.cache_write_1h_input_tokens": value } : {}),
+      };
+      expect(ordinary.metadata).toEqual(expected);
+      expect(summary.metadata).toEqual(expected);
+      expect(ordinary.usage).toEqual({
+        inputTokens: 100,
+        outputTokens: 50,
+        totalTokens: 165,
+        cacheReadInputTokens: 10,
+        cacheWriteInputTokens: 5,
+      });
+      expect(summary.usage).toEqual(ordinary.usage);
+      expect(ordinary.responseModel).toBe(msg.model);
+      expect(summary.responseModel).toBeUndefined();
+    });
+
+    it("does not turn a cache subset into summary totals or infer tool totals", () => {
+      const summary = mapSummaryGenerationResult({
+        entry: { usage: { cacheWrite1h: 7 } },
+        contentCapture,
+        completedAt: 0,
+      });
+      expect(summary.usage).toBeUndefined();
+      expect(summary.metadata).toEqual({
+        "pi.usage.cache_write_1h_input_tokens": 7,
+      });
+      const msg = makeMsg();
+      delete msg.usage.cost;
+      const result = mapGenerationResult(
+        msg,
+        [
+          makeToolResult({
+            usage: { cacheWrite1h: 7, cost: { total: 0.5 } },
+          }),
+        ],
+        contentCapture,
+      );
+      expect(result.metadata).toEqual({
+        "pi.tool_usage.cache_write_1h_input_tokens": 7,
+        "pi.tool_usage.cost_usd": 0.5,
+      });
+      expect(result.usage).toEqual(mapPiUsage(msg.usage));
+    });
+  });
+
   it.each([
     {
       name: "full usage block with positive reasoning",
@@ -1561,6 +1553,7 @@ describe("mapPiUsage", () => {
         reasoning: 7,
         cacheRead: 40,
         cacheWrite: 12,
+        cacheWrite1h: 9,
         totalTokens: 128052,
         cost: { total: 2.5 },
       },
@@ -1674,9 +1667,12 @@ describe("mapSummaryGenerationStart", () => {
     expect(start.agentName).toBe("pi");
     expect(start.agentVersion).toBe("0.82.1");
     expect(start.effectiveVersion).toBe("0.82.1");
-    expect(start.model).toEqual({
-      provider: "anthropic",
-      name: "claude-sonnet-4",
+    expect(start.model).toEqual({ provider: "unknown", name: "unknown" });
+    expect(start.metadata).toMatchObject({
+      "pi.summary.model_attribution": "unknown",
+      "pi.summary.operation_aggregate": true,
+      "pi.summary.selected_model": "claude-sonnet-4",
+      "pi.summary.selected_provider": "anthropic",
     });
     expect(start.startedAt).toEqual(new Date(1_700_000_000_000));
   });
@@ -1739,15 +1735,26 @@ describe("mapSummaryGenerationStart", () => {
   it("copies supplied metadata, e.g. a fork's trunk link", () => {
     const metadata = { "pi.fork.parent_session_id": "trunk-conv" };
     const start = mapSummaryGenerationStart({ ...baseOpts, metadata });
-    expect(start.metadata).toEqual(metadata);
+    expect(start.metadata).toMatchObject(metadata);
     expect(start.metadata).not.toBe(metadata);
   });
 
-  it("omits metadata when none is supplied", () => {
-    expect(mapSummaryGenerationStart(baseOpts).metadata).toBeUndefined();
-    expect(
-      mapSummaryGenerationStart({ ...baseOpts, metadata: {} }).metadata,
-    ).toBeUndefined();
+  it.each([
+    undefined,
+    { provider: "virtual", name: "router" },
+  ])("retains selected identity separately without physical attribution: %s", (model) => {
+    const start = mapSummaryGenerationStart({ ...baseOpts, model });
+    expect(start.model).toEqual({ provider: "unknown", name: "unknown" });
+    expect(start.metadata).toEqual({
+      "pi.summary.model_attribution": "unknown",
+      "pi.summary.operation_aggregate": true,
+      ...(model
+        ? {
+            "pi.summary.selected_model": model.name,
+            "pi.summary.selected_provider": model.provider,
+          }
+        : {}),
+    });
   });
 });
 
@@ -1779,27 +1786,38 @@ describe("mapSummaryGenerationResult", () => {
     });
   });
 
-  it.each([
-    "full",
-    "no_tool_content",
-    "full_with_metadata_spans",
-  ] as const)("keeps the summary as one assistant text part in %s", (contentCapture) => {
+  it.each(
+    CAPTURE_MODES,
+  )("preserves summary capture and unknown model identity in %s", (contentCapture) => {
+    const entry = makeSummaryEntry();
+    entry.usage!.cacheWrite1h = 0;
     const result = mapSummaryGenerationResult({
-      entry: makeSummaryEntry(),
+      entry,
       contentCapture,
       completedAt,
     });
-    expect(result.output).toEqual([
-      {
-        role: "assistant",
-        parts: [
-          {
-            type: "text",
-            text: "Earlier we refactored the exporter and fixed two tests.",
-          },
-        ],
-      },
-    ]);
+    expect(result.output).toEqual(
+      contentCapture === "metadata_only"
+        ? undefined
+        : [
+            {
+              role: "assistant",
+              parts: [
+                {
+                  type: "text",
+                  text: "Earlier we refactored the exporter and fixed two tests.",
+                },
+              ],
+            },
+          ],
+    );
+    expect(result.usage).toEqual(mapPiUsage(entry.usage!));
+    expect(result.metadata).toEqual({
+      cost_usd: 2.5,
+      "pi.tokens_before": 152000,
+      "pi.usage.cache_write_1h_input_tokens": 0,
+    });
+    expect(result.responseModel).toBeUndefined();
   });
 
   it("drops the summary text in metadata_only but keeps usage and metadata", () => {
@@ -1902,14 +1920,13 @@ describe("mapSummaryGenerationResult", () => {
     expect(result.metadata?.["pi.compaction.will_retry"]).toBe(true);
   });
 
-  it("sets responseModel when the resolved model is known", () => {
+  it("omits responseModel because summary entries lack physical identity", () => {
     const result = mapSummaryGenerationResult({
       entry: makeSummaryEntry(),
       contentCapture: "full",
       completedAt,
-      responseModel: "claude-sonnet-4",
     });
-    expect(result.responseModel).toBe("claude-sonnet-4");
+    expect(result.responseModel).toBeUndefined();
   });
 });
 

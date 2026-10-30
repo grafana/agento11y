@@ -10,11 +10,11 @@
         "trace_id": "<NORMALIZED>",
         "span_id": "<NORMALIZED>",
         "model": {
-          "provider": "anthropic",
-          "name": "claude-sonnet-4-pi"
+          "provider": "unknown",
+          "name": "unknown"
         },
         "response_id": "",
-        "response_model": "claude-sonnet-4-pi",
+        "response_model": "",
         "system_prompt": "",
         "input": [],
         "output": [
@@ -46,6 +46,10 @@
           "pi.call_kind": "compaction"
         },
         "metadata": {
+          "pi.summary.model_attribution": "unknown",
+          "pi.summary.operation_aggregate": true,
+          "pi.summary.selected_model": "claude-sonnet-4-pi",
+          "pi.summary.selected_provider": "anthropic",
           "cost_usd": 0.48,
           "pi.tokens_before": 152000,
           "pi.compaction.reason": "threshold",

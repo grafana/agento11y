@@ -138,6 +138,22 @@ For coding-agent plugins, the relevant env var is `AGENTO11Y_CONTENT_CAPTURE_MOD
 
 Unknown values fall back to `metadata_only`. The launchers, Pi, and OpenCode log a warning; Hermes falls back silently. A plugin can still export less than the SDK allows. For example, an adapter may drop a field if the host agent does not pass it through.
 
+### Pi observation limits
+
+The Pi plugin uses Pi 1.4.0 as its supported test baseline. Restart the process once after upgrading from the older dotenv loader.
+
+Capture modes do not restore fields that Pi cannot verify. In every mode, the plugin omits system prompts, offered-tool bodies, and uncorrelated request controls. `Generation.tools` contains name-only definitions from finalized assistant proposals, not the complete offered catalog.
+
+Incremental user input and prompt-derived titles come from observed request content with validated correspondence to finalized entries. Missing or ambiguous correspondence omits bodies; the plugin never falls back to raw restored history.
+
+Tool proposals, guard-stage input, and post-execution `tool_result.input` are separate observations. Transformed or uncertain proposal bodies are omitted rather than replaced with prepared arguments. Tool spans label permitted input as `tool_result.input`; tools can mutate arguments, so it is not an execution-entry snapshot. Only `full` includes permitted tool input and result bodies on Pi tool spans. The other modes follow the matrix above.
+
+Guards cover supported ordinary context and built-in summary preparation. Pi can substitute forced prompts after the ordinary hook, and later extensions can change requests. These hooks are not a final provider boundary. Postflight transforms do not guarantee protection of arbitrary historical replay after reload or resume.
+
+Numeric `pi.tool_usage.*` metadata remains separate from assistant token and cost totals. Pi already aggregates nested tool usage into finalized top-level results. One-hour cache-write fields are subsets of cache-write counts, not additional tokens. Reduced capture modes retain this numeric detail.
+
+Pi reports observed export failures through fixed warnings independently of debug logging. Diagnostics are filtered independently of capture mode. These signals do not detect every silent loss, establish recovery, or provide a durable spool. See [Pi capture and guard limits](../../plugins/pi/README.md#capture-and-attribution-limits) for attribution, lineage, and summary limits.
+
 ## Secret redaction in the plugins
 
 Capture modes choose which fields ship. Redaction scrubs the fields that do ship.
@@ -159,11 +175,14 @@ Every plugin applies the same tier per content field as the SDKs' generation san
 | User prompt | 1 + 2 | Where a human pastes a `.env` file, a config block or a command line. |
 | System prompt | 1 + 2 | Assembled content: tool definitions, environment dumps, pasted config. |
 | Tool arguments, tool results | 1 + 2 | Structured data, on the generation and on the span. |
+| Tool descriptions and encoded schemas (JS sanitizer only) | 1 + 2 | Copied definitions, including schema member names and key/value pairs. |
 | Assistant text, thinking | 1 | Model prose. |
 | Conversation title | 1 | The agent's own session title when it has one (Claude Code's, for example), else the first prompt, truncated. |
 | Error messages | 1 | Sentences. |
 
 Tier 2 on a prompt has a real cost: `sort key: name` is exported as `sort key: [REDACTED:env-secret-value]`, because the heuristic cannot tell that `key:` is part of a sentence. Turn prompt redaction off with `AGENTO11Y_REDACT_INPUT_MESSAGES=false` if the prompt text matters more than the coverage. Tier 2 is kept off prose for that reason, and a secret a model repeats in prose is still caught by tier 1 as long as it has a known format.
+
+The JS sanitizer validates tool schema JSON before and after redacting the complete encoded string. It omits invalid schema bodies instead of restoring raw content. It preserves executable host definitions and follows the configured email policy. Go, Python, and .NET sanitizers still lack equivalent tool-definition redaction. Pi omits offered-tool bodies regardless of this SDK capability.
 
 On a tool payload that decodes as JSON, the shared `agento11y` binary also redacts a value under a secret-looking key (`authorization`, `cookie`, `client_secret`), which the tier 2 key list does not cover. The SDK-based OpenCode, Pi, and Hermes sanitizers do not: they redact the encoded JSON as text, so they catch only the key names in the tier 2 patterns.
 

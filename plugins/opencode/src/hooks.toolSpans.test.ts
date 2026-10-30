@@ -1,5 +1,8 @@
 import { createServer, type Server } from "node:http";
-import type { ToolExecutionRecorder, ToolExecutionStart } from "@grafana/agento11y";
+import type {
+  ToolExecutionRecorder,
+  ToolExecutionStart,
+} from "@grafana/agento11y";
 import type { Part } from "@opencode-ai/sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Agento11yOpencodeConfig } from "./config.js";

@@ -12,41 +12,77 @@ import { pluginUserAgent } from "./version.js";
 export interface Agento11yClientOptions {
   tracer?: Tracer;
   meter?: Meter;
+  onExportFailure?: (message: string) => void;
 }
 
-function createSdkLogger(): Agento11yLogger {
-  return {
-    debug: (message: string, ...args: unknown[]) => {
-      logger.debug(message, ...args);
-    },
-    warn: (message: string, ...args: unknown[]) => {
-      // Best-effort export failures are expected when the endpoint is
-      // unreachable; keep them at debug level so they don't read as warnings.
-      if (isBestEffortExportLog(message)) {
-        logger.debug(message, ...args);
+const EXPORT_FAILURE_WARNING =
+  "Agent Observability: some telemetry could not be exported and may be lost.";
+const exportFailureReporters = new WeakMap<Agento11yClient, () => void>();
+
+function createExportFailureReporter(
+  sink?: (message: string) => void,
+): () => void {
+  let reported = false;
+  return () => {
+    if (reported) return;
+    reported = true;
+    if (sink) {
+      try {
+        sink(EXPORT_FAILURE_WARNING);
         return;
+      } catch {
+        // A failed UI notification must not interrupt the host operation.
       }
-      logger.warn(message, ...args);
-    },
-    error: (message: string, ...args: unknown[]) => {
-      logger.error(message, ...args);
-    },
+    }
+    try {
+      process.stderr.write(`${EXPORT_FAILURE_WARNING}\n`);
+    } catch {
+      // Reporting is best effort, including when stderr is unavailable.
+    }
   };
 }
 
-function isBestEffortExportLog(message: string): boolean {
-  return (
-    message.startsWith("agento11y generation export failed") ||
-    message.startsWith("agento11y generation rejected")
-  );
+/** Report observed recorder, enqueue, or shutdown loss without exposing errors. */
+export function reportExportFailure(client: Agento11yClient): void {
+  exportFailureReporters.get(client)?.();
+}
+
+const EXPORT_FAILURE_DIAGNOSTICS = [
+  "agento11y generation enqueue failed",
+  "agento11y generation validation failed",
+  "agento11y generation rejected",
+  "agento11y generation export failed",
+  "agento11y generation export flush on shutdown failed",
+  "agento11y generation exporter shutdown failed",
+];
+
+function createSdkLogger(reportFailure: () => void): Agento11yLogger {
+  function emit(level: "debug" | "warn" | "error", message: string): void {
+    const category = EXPORT_FAILURE_DIAGNOSTICS.find(
+      (prefix) =>
+        message === prefix ||
+        message.startsWith(`${prefix}:`) ||
+        message.startsWith(`${prefix} `),
+    );
+    if (category) reportFailure();
+    // SDK messages can append raw errors. Only allow fixed diagnostic text;
+    // secret redaction alone cannot remove arbitrary evaluator response bodies.
+    logger[level](category ?? "agento11y SDK diagnostic");
+  }
+  return {
+    debug: (message) => emit("debug", message),
+    warn: (message) => emit("warn", message),
+    error: (message) => emit("error", message),
+  };
 }
 
 export function createAgento11yClient(
   config: Agento11yPiConfig,
   options?: Agento11yClientOptions,
 ): Agento11yClient | null {
+  const reportFailure = createExportFailureReporter(options?.onExportFailure);
   try {
-    return new Agento11yClient({
+    const client = new Agento11yClient({
       generationExport: {
         protocol: "http",
         endpoint: appendExportPath(config.endpoint),
@@ -73,13 +109,15 @@ export function createAgento11yClient(
       ...(config.autoTags ? { tags: config.autoTags } : {}),
       ...(options?.tracer ? { tracer: options.tracer } : {}),
       ...(options?.meter ? { meter: options.meter } : {}),
-      logger: createSdkLogger(),
+      logger: createSdkLogger(reportFailure),
       generationSanitizer: createSecretRedactionSanitizer({
         redactInputMessages: config.redactInputMessages,
       }),
     });
-  } catch (err) {
-    logger.error("failed to create Agento11yClient", err);
+    exportFailureReporters.set(client, reportFailure);
+    return client;
+  } catch {
+    logger.error("failed to create Agento11yClient");
     return null;
   }
 }

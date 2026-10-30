@@ -89,7 +89,7 @@ export function projectGuardMessages(
                 toolCall: {
                   id: part.id as string,
                   name: part.name as string,
-                  inputJSON: JSON.stringify(part.arguments),
+                  inputJSON: JSON.stringify(part.arguments) ?? "{}",
                 },
               },
               ["toolCall", "inputJSON"],

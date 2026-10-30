@@ -16,7 +16,15 @@ import {
   InMemorySpanExporter,
   SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  type MockInstance,
+  vi,
+} from "vitest";
 
 const { telemetryFactory } = vi.hoisted(() => ({ telemetryFactory: vi.fn() }));
 // Only provider construction is replaced. Spans, metrics, recorders, config,
@@ -28,6 +36,11 @@ vi.mock("./telemetry.js", () => ({
 import registerExtension from "./index.js";
 import type { PiAssistantMessage, PiToolResult } from "./mappers.js";
 import { restoreEnv, snapshotAndClearTestEnv } from "./testEnv.js";
+import {
+  type Agento11yTestServer,
+  closeServer,
+  startAgento11yTestServer,
+} from "./testHttp.js";
 
 class SyntheticPi {
   handlers = new Map<string, (event: any, ctx: any) => any>();
@@ -382,6 +395,171 @@ describe("pi skill executions: actual SDK telemetry", () => {
 
   it.each(
     MODES,
+  )("retains finalized top-level results and occurrence-scoped nested observations in %s", async (mode) => {
+    process.env.AGENTO11Y_CONTENT_CAPTURE_MODE = mode;
+    await pi.emit("session_start", {}, ctx);
+    const batches: Array<{ calls: any[]; input: Record<string, unknown> }> = [];
+    for (let turn = 0; turn < 2; turn++) {
+      await pi.emit("turn_start", {}, ctx);
+      const proposed = { value: `proposal-${turn}` };
+      const observed =
+        turn === 0 ? proposed : { value: "prepared", extra: "post-execution" };
+      const calls = [
+        { toolCallId: "reused", toolName: "bash" },
+        { toolCallId: "child-a", toolName: "bash", parentToolCallId: "reused" },
+        { toolCallId: "child-b", toolName: "read", parentToolCallId: "reused" },
+        {
+          toolCallId: "grandchild",
+          toolName: "bash",
+          parentToolCallId: "child-a",
+        },
+        { toolCallId: "orphan", toolName: "bash", parentToolCallId: "missing" },
+        { toolCallId: "reused/99", toolName: "bash" },
+      ];
+      batches.push({ calls, input: observed });
+      const message: PiAssistantMessage = {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "reused", name: "bash", arguments: proposed },
+        ],
+        provider: "anthropic",
+        model: "test-model",
+        stopReason: "toolUse",
+        timestamp: 1000 + turn,
+        usage: {
+          input: 1,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 2,
+        },
+      };
+      await pi.emit("message_end", { message }, ctx);
+      for (const call of calls) {
+        await pi.emit("tool_execution_start", { ...call, args: proposed }, ctx);
+        await pi.emit("tool_call", { ...call, input: observed }, ctx);
+      }
+      for (const call of [...calls].reverse()) {
+        await pi.emit(
+          "tool_result",
+          {
+            ...call,
+            input: observed,
+            content: [{ type: "text", text: "early result must not win" }],
+            isError: false,
+          },
+          ctx,
+        );
+        await pi.emit(
+          "tool_execution_end",
+          {
+            ...call,
+            isError:
+              call.toolCallId === "grandchild" || call.toolCallId === "reused",
+            durationMs: 12.5,
+            result: {
+              content: [
+                { type: "text", text: `final-${turn}-${call.toolCallId}` },
+              ],
+            },
+          },
+          ctx,
+        );
+      }
+      await pi.emit(
+        "turn_end",
+        {
+          message,
+          toolResults: [
+            {
+              role: "toolResult",
+              toolCallId: "reused",
+              toolName: "bash",
+              content: [{ type: "text", text: `finalized-${turn}-reused` }],
+              isError: false,
+              timestamp: Date.now(),
+            },
+          ],
+        },
+        ctx,
+      );
+    }
+    await pi.emit("session_shutdown", {}, ctx);
+    await tracerProvider.forceFlush();
+    expect(generations).toHaveLength(2);
+    const exported = spans.getFinishedSpans();
+    for (let turn = 0; turn < 2; turn++) {
+      const generation = generations[turn];
+      const tools = exported.filter(
+        (span) =>
+          span.spanContext().traceId === generation.trace_id &&
+          span.attributes["gen_ai.operation.name"] === "execute_tool",
+      );
+      expect(tools).toHaveLength(6);
+      for (const call of batches[turn]!.calls) {
+        const span = tools.find(
+          (span) => span.attributes["gen_ai.tool.call.id"] === call.toolCallId,
+        )!;
+        const parent = tools.find(
+          (span) =>
+            span.attributes["gen_ai.tool.call.id"] === call.parentToolCallId,
+        );
+        expect(span.parentSpanContext?.spanId).toBe(
+          parent?.spanContext().spanId ?? generation.span_id,
+        );
+        expect(span.duration[0] + span.duration[1] / 1e9).toBeCloseTo(
+          Math.round(12.5) / 1000,
+          6,
+        );
+        expect(span.status.code).toBe(
+          call.toolCallId === "grandchild" || call.toolCallId === "reused"
+            ? 2
+            : 1,
+        );
+        if (mode === "full") {
+          expect(
+            JSON.parse(span.attributes["gen_ai.tool.call.arguments"] as string),
+          ).toEqual({
+            observation: "tool_result.input",
+            input: batches[turn]!.input,
+          });
+          const body = span.attributes["gen_ai.tool.call.result"];
+          if (call.toolCallId === "reused") {
+            expect(JSON.parse(body as string)).toBe(`finalized-${turn}-reused`);
+          } else if (call.parentToolCallId) {
+            expect(JSON.parse(body as string)).toBe(
+              `final-${turn}-${call.toolCallId}`,
+            );
+          } else expect(body).toBeUndefined();
+        } else {
+          expect(span.attributes["gen_ai.tool.call.arguments"]).toBeUndefined();
+          expect(span.attributes["gen_ai.tool.call.result"]).toBeUndefined();
+        }
+      }
+      const parts = generation.output.flatMap((message: any) => message.parts);
+      const call = parts.find((part: any) => part.tool_call).tool_call;
+      const result = parts.find((part: any) => part.tool_result).tool_result;
+      if (
+        turn === 0 &&
+        (mode === "full" || mode === "full_with_metadata_spans")
+      ) {
+        expect(
+          JSON.parse(Buffer.from(call.input_json, "base64").toString("utf8")),
+        ).toEqual({ value: "proposal-0" });
+      } else expect(call.input_json ?? "").toBe("");
+      expect(result.content ?? "").toBe(
+        mode === "full" || mode === "full_with_metadata_spans"
+          ? `finalized-${turn}-reused`
+          : "",
+      );
+      expect(result.is_error ?? false).toBe(false);
+    }
+    expect(JSON.stringify(generations)).not.toContain("final-0-reused");
+    expect(JSON.stringify(generations)).not.toContain("final-1-reused");
+  });
+
+  it.each(
+    MODES,
   )("retains successful and failed skill loads and their generation parent in %s", async (mode) => {
     process.env.AGENTO11Y_CONTENT_CAPTURE_MODE = mode;
     let now = 1_700_000_000_000;
@@ -512,7 +690,11 @@ describe("pi skill executions: actual SDK telemetry", () => {
       results.push(result);
       await pi.emit("tool_result", { ...result, input: call.arguments }, ctx);
       if (call.id !== "missing-end")
-        await pi.emit("tool_execution_end", result, ctx);
+        await pi.emit(
+          "tool_execution_end",
+          { ...result, result: { content: result.content } },
+          ctx,
+        );
     }
     await pi.emit("turn_end", { message, toolResults: results }, ctx);
     await pi.emit("session_shutdown", {}, ctx);
@@ -1045,6 +1227,11 @@ describe("pi skill executions: actual SDK telemetry", () => {
         name: "read",
         arguments: { path: "missing.md" },
       },
+      {
+        id: "invalid",
+        name: "read",
+        arguments: { path: "invalid-proposal-body" },
+      },
     ];
     const message: PiAssistantMessage = {
       role: "assistant",
@@ -1069,22 +1256,27 @@ describe("pi skill executions: actual SDK telemetry", () => {
         { toolCallId: call.id, toolName: call.name, args: input },
         ctx,
       );
-      const verdict = await pi.emit(
-        "tool_call",
-        { toolCallId: call.id, toolName: call.name, input },
-        ctx,
-      );
+      const verdict =
+        call.id === "invalid"
+          ? undefined
+          : await pi.emit(
+              "tool_call",
+              { toolCallId: call.id, toolName: call.name, input },
+              ctx,
+            );
       expect(input.path).toBe(
-        call.id === "transform-out" || call.id === "blocked-later-in"
-          ? "ordinary.md"
-          : "missing.md",
+        call.id === "invalid"
+          ? "invalid-proposal-body"
+          : call.id === "transform-out" || call.id === "blocked-later-in"
+            ? "ordinary.md"
+            : "missing.md",
       );
       expect(verdict?.block).toBe(call.id === "blocked" ? true : undefined);
       // A later tool_call handler may override our own transform.
       if (call.id === "result-overrides") input.path = "ordinary.md";
       if (call.id === "blocked-later-in") input.path = "missing.md";
       if (call.id === "blocked-later-out") input.path = "ordinary.md";
-      const blocked = call.id.startsWith("blocked");
+      const blocked = call.id.startsWith("blocked") || call.id === "invalid";
       // Blocked calls end without invoking tool_result.
       if (!blocked) {
         await pi.emit(
@@ -1099,29 +1291,62 @@ describe("pi skill executions: actual SDK telemetry", () => {
           toolCallId: call.id,
           toolName: call.name,
           isError: blocked,
+          result: { content: [{ type: "text", text: `final-${call.id}` }] },
         },
         ctx,
       );
     }
-    await pi.emit("turn_end", { message, toolResults: [] }, ctx);
+    await pi.emit(
+      "turn_end",
+      {
+        message,
+        toolResults: calls.map((call) => ({
+          role: "toolResult",
+          toolCallId: call.id,
+          toolName: call.name,
+          content: [{ type: "text", text: `final-${call.id}` }],
+          isError: call.id.startsWith("blocked") || call.id === "invalid",
+          timestamp: Date.now(),
+        })),
+      },
+      ctx,
+    );
     await pi.emit("session_shutdown", {}, ctx);
     const exported = spans.getFinishedSpans();
-    expect(exported).toHaveLength(7);
+    expect(exported).toHaveLength(8);
     const generation = exported.find(
       (span) => span.attributes["gen_ai.operation.name"] === "streamText",
     )!;
     const tools = exported.filter(
       (span) => span.attributes["gen_ai.operation.name"] === "execute_tool",
     );
-    expect(tools).toHaveLength(6);
+    expect(tools).toHaveLength(7);
     for (const span of tools) {
       const id = span.attributes["gen_ai.tool.call.id"];
+      const hasInput =
+        mode === "full" && (id === "transform-in" || id === "transform-out");
+      expect(span.attributes["gen_ai.tool.call.arguments"] !== undefined).toBe(
+        hasInput,
+      );
+      if (hasInput) {
+        expect(
+          JSON.parse(span.attributes["gen_ai.tool.call.arguments"] as string),
+        ).toEqual({
+          observation: "tool_result.input",
+          input: { path: id === "transform-in" ? "missing.md" : "ordinary.md" },
+        });
+      }
+      expect(span.attributes["gen_ai.tool.call.result"]).toBe(
+        mode === "full" ? JSON.stringify(`final-${id}`) : undefined,
+      );
       expect(span.attributes["gen_ai.skill.name"]).toBe(
         id === "transform-in" || id === "blocked" || id === "blocked-later-in"
           ? "review"
           : undefined,
       );
-      expect(span.status.code).toBe(String(id).startsWith("blocked") ? 2 : 1);
+      expect(span.status.code).toBe(
+        String(id).startsWith("blocked") || id === "invalid" ? 2 : 1,
+      );
       expect(span.spanContext().traceId).toBe(generation.spanContext().traceId);
       expect(span.parentSpanContext?.spanId).toBe(
         generation.spanContext().spanId,
@@ -1131,8 +1356,187 @@ describe("pi skill executions: actual SDK telemetry", () => {
       { ids: ["transform-in"], skill: "review" },
       { ids: ["transform-out", "result-overrides"] },
       { ids: ["blocked", "blocked-later-in"], skill: "review", error: true },
-      { ids: ["blocked-later-out"], error: true },
+      { ids: ["blocked-later-out", "invalid"], error: true },
     ]);
     expect(generations).toHaveLength(1);
+    const proposals = generations[0].output
+      .flatMap((message: any) => message.parts)
+      .filter((part: any) => part.tool_call)
+      .map((part: any) => part.tool_call);
+    expect(proposals).toHaveLength(calls.length);
+    expect(proposals.every((call: any) => !call.input_json)).toBe(true);
+    expect(JSON.stringify(generations)).not.toContain("invalid-proposal-body");
+  });
+});
+
+describe("pi export loss: actual SDK", () => {
+  const warning =
+    "Agent Observability: some telemetry could not be exported and may be lost.";
+  const cases = MODES.flatMap((mode) =>
+    ["ui", "headless", "throwing-ui"].flatMap((sink) =>
+      ["rejection", "retries", "queue-turn", "queue-summary", "shutdown"].map(
+        (failure) => ({ mode, sink, failure }),
+      ),
+    ),
+  );
+  let savedEnv: Record<string, string | undefined>;
+  let cwd: string;
+  let receiver: Agento11yTestServer | undefined;
+  let pi: SyntheticPi;
+  let ctx: any;
+  let stderr: MockInstance<typeof process.stderr.write>;
+  let stdout: MockInstance<typeof process.stdout.write>;
+
+  beforeEach(() => {
+    savedEnv = snapshotAndClearTestEnv();
+    cwd = mkdtempSync(join(tmpdir(), "pi-export-loss-"));
+    receiver = undefined;
+    pi = new SyntheticPi();
+    telemetryFactory.mockReset();
+    registerExtension(pi as any);
+    stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+  });
+
+  afterEach(async () => {
+    try {
+      await pi.emit("session_shutdown", {}, ctx);
+      if (receiver) await closeServer(receiver.server);
+    } finally {
+      stderr.mockRestore();
+      stdout.mockRestore();
+      restoreEnv(savedEnv);
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it.each(cases)("warns once for $failure through $sink in $mode", async ({
+    mode,
+    sink,
+    failure,
+  }) => {
+    receiver = await startAgento11yTestServer({
+      export: (body) => {
+        if (failure === "rejection")
+          return {
+            json: {
+              results: body.generations?.map((generation, index) => ({
+                generation_id: generation.id,
+                accepted: index !== 0,
+                error:
+                  "private evaluated body https://private.invalid token=secret",
+              })),
+            },
+          };
+        if (failure === "retries")
+          return {
+            status: 503,
+            json: {
+              error:
+                "private evaluated body https://private.invalid token=secret",
+            },
+          };
+        if (failure === "shutdown") return { delayMs: 1000 };
+        return {
+          json: {
+            results: body.generations?.map((generation) => ({
+              generation_id: generation.id,
+              accepted: true,
+            })),
+          },
+        };
+      },
+    });
+    const notify = vi.fn(() => {
+      if (sink === "throwing-ui")
+        throw new Error("private notification details");
+    });
+    ctx = {
+      cwd,
+      hasUI: sink !== "headless",
+      ui: { notify },
+      sessionManager: {
+        getSessionId: () => "export-loss-session",
+        getHeader: () => ({
+          id: "export-loss-session",
+          timestamp: "2026-01-01T00:00:00Z",
+        }),
+      },
+      model: { provider: "synthetic", id: "test-model" },
+    };
+    Object.assign(process.env, {
+      HOME: cwd,
+      USERPROFILE: cwd,
+      XDG_CONFIG_HOME: join(cwd, ".config"),
+      XDG_STATE_HOME: join(cwd, ".state"),
+      AGENTO11Y_ENDPOINT: receiver.baseUrl,
+      AGENTO11Y_AUTH_MODE: "none",
+      AGENTO11Y_GUARDS_ENABLED: "false",
+      AGENTO11Y_DEBUG: "false",
+      AGENTO11Y_CONTENT_CAPTURE_MODE: mode,
+      AGENTO11Y_QUEUE_SIZE: failure.startsWith("queue") ? "1" : "100",
+      AGENTO11Y_EXPORT_TIMEOUT_MS: failure === "shutdown" ? "30" : "1000",
+      AGENTO11Y_MAX_RETRIES: "1",
+      AGENTO11Y_MAX_BACKOFF_MS: "1",
+    });
+    await pi.emit("session_start", { reason: "startup" }, ctx);
+    const message: PiAssistantMessage = {
+      role: "assistant",
+      provider: "synthetic",
+      model: "test-model",
+      content: [{ type: "text", text: "private evaluated body" }],
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+    for (let turn = 0; turn < 3; turn++) {
+      if (failure === "queue-summary" && turn > 0) {
+        await pi.emit(
+          "session_compact",
+          {
+            compactionEntry: {
+              id: `summary-${turn}`,
+              summary: "private evaluated body",
+              timestamp: new Date().toISOString(),
+            },
+          },
+          ctx,
+        );
+      } else {
+        await pi.emit("turn_start", {}, ctx);
+        await pi.emit(
+          "turn_end",
+          {
+            message: { ...message, timestamp: message.timestamp + turn },
+            toolResults: [],
+          },
+          ctx,
+        );
+      }
+    }
+    if (failure.startsWith("queue")) {
+      expect(
+        sink === "headless"
+          ? stderr.mock.calls.length
+          : notify.mock.calls.length,
+      ).toBe(1);
+    }
+    await pi.emit("session_shutdown", {}, ctx);
+    expect(notify.mock.calls).toEqual(
+      sink === "headless" ? [] : [[warning, "warning"]],
+    );
+    expect(stderr.mock.calls.map(([chunk]) => String(chunk))).toEqual(
+      sink === "ui" ? [] : [`${warning}\n`],
+    );
+    expect(stdout).not.toHaveBeenCalled();
+    expect(receiver.errors).toEqual([]);
+    expect(receiver.exportCount).toBe(failure === "retries" ? 2 : 1);
+    expect(telemetryFactory).not.toHaveBeenCalled();
   });
 });

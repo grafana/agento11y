@@ -7,6 +7,7 @@ const {
   loadConfigMock,
   loadGuardIntentMock,
   createAgento11yClientMock,
+  reportExportFailureMock,
   createTelemetryProvidersMock,
   resolveGitBranchMock,
   loggerMock,
@@ -14,6 +15,7 @@ const {
   loadConfigMock: vi.fn(),
   loadGuardIntentMock: vi.fn(),
   createAgento11yClientMock: vi.fn(),
+  reportExportFailureMock: vi.fn(),
   createTelemetryProvidersMock: vi.fn(),
   resolveGitBranchMock: vi.fn(),
   loggerMock: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -32,6 +34,7 @@ vi.mock("./config.js", async (importOriginal) => {
 
 vi.mock("./client.js", () => ({
   createAgento11yClient: createAgento11yClientMock,
+  reportExportFailure: reportExportFailureMock,
 }));
 
 vi.mock("./telemetry.js", () => ({
@@ -50,11 +53,8 @@ import type {
 import registerExtension, { emitToolSpans } from "./index.js";
 import { stablePiGenerationId } from "./lineage.js";
 import { LocalReceiverError } from "./local.js";
-import type {
-  PiAssistantMessage,
-  PiToolResult,
-  ToolTiming,
-} from "./mappers.js";
+import type { PiAssistantMessage, PiToolResult } from "./mappers.js";
+import { ToolExecutions, type ToolObservation } from "./toolExecutions.js";
 
 const fakeStartToolExecution = vi.fn(() => ({
   setResult: vi.fn(),
@@ -146,6 +146,7 @@ class FakePi {
 const defaultModel = { provider: "anthropic", id: "claude-sonnet-4" };
 
 beforeEach(() => {
+  reportExportFailureMock.mockReset();
   loadGuardIntentMock.mockReset().mockReturnValue({
     enabled: false,
     failOpen: true,
@@ -218,6 +219,11 @@ function ctxWithBranch(
     sessionManager: {
       getSessionFile: () => "pi-session.jsonl",
       getSessionId: () => sessionId,
+      getHeader: () => ({
+        type: "session",
+        id: sessionId,
+        timestamp: "2020-01-01T00:00:00.000Z",
+      }),
       getBranch: branchFn,
     },
     model,
@@ -1075,48 +1081,56 @@ describe("extension lifecycle", () => {
     }
   });
 
-  it("logs export failures to the debug log, not the terminal", async () => {
+  it.each([
+    "turn",
+    "compaction",
+    "tree",
+    "shutdown",
+    "replacement",
+  ])("reports %s export loss without disrupting the host", async (operation) => {
+    const fail = async () => {
+      throw new Error("private transport details");
+    };
     const sigil = {
-      startStreamingGeneration: vi.fn(async () => {
-        throw new Error("transport down");
-      }),
+      startStreamingGeneration: vi.fn(fail),
+      startGeneration: vi.fn(fail),
       shutdown: vi.fn(async () => {}),
     };
-
     loadConfigMock.mockResolvedValue({
-      endpoint: "http://localhost:8080/api/v1/generations:export",
+      endpoint: "http://localhost:8080",
       auth: { mode: "none" },
       agentName: "pi",
       contentCapture: "metadata_only",
     });
     createAgento11yClientMock.mockReturnValue(sigil);
-
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      const pi = new FakePi();
-      registerExtension(pi as any);
-
-      await pi.emit("session_start");
+    const pi = new FakePi();
+    registerExtension(pi as any);
+    await pi.emit("session_start");
+    const entry = {
+      id: "failed-summary",
+      summary: "summary",
+      timestamp: new Date().toISOString(),
+    };
+    if (operation === "turn") {
       await pi.emit("turn_start");
       await pi.emit("turn_end", {
         message: assistantMessage(),
         toolResults: [],
       });
-
-      expect(loggerMock.debug).toHaveBeenCalledWith(
-        "generation export failed",
-        expect.any(Error),
+    } else if (operation === "compaction") {
+      await pi.emit("session_compact", { compactionEntry: entry });
+    } else if (operation === "tree") {
+      await pi.emit("session_tree", { summaryEntry: entry });
+    } else {
+      sigil.shutdown.mockImplementation(fail);
+      await pi.emit(
+        operation === "shutdown" ? "session_shutdown" : "session_start",
       );
-      expect(
-        loggerMock.debug.mock.calls.map(([message]) => message),
-      ).not.toEqual(
-        expect.arrayContaining([expect.stringContaining("generation queued")]),
-      );
-      // The export failure must never reach the terminal.
-      expect(error).not.toHaveBeenCalled();
-    } finally {
-      error.mockRestore();
     }
+    expect(reportExportFailureMock).toHaveBeenCalledExactlyOnceWith(sigil);
+    expect(loggerMock.debug.mock.calls.map(([message]) => message)).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("generation queued")]),
+    );
   });
 
   it("warns and skips when assistant message shape is invalid", async () => {
@@ -2484,708 +2498,362 @@ describe("extension lifecycle", () => {
     expect(capturedSeed!.tags).toEqual({ cwd: process.cwd() });
   });
 
-  describe("systemPrompt capture", () => {
-    function setupClient() {
-      const seeds: Array<{ systemPrompt?: string }> = [];
-      const recorder = {
-        setResult: vi.fn(),
-        setCallError: vi.fn(),
-        setFirstTokenAt: vi.fn(),
-      };
-      const sigil: Agento11yLike = {
-        startStreamingGeneration: vi.fn(async (seed, run) => {
-          seeds.push(seed as { systemPrompt?: string });
-          await run({
-            ...recorder,
-            startToolExecution: fakeStartToolExecution,
-          });
-        }),
-        startToolExecution: vi.fn(() => ({
-          setResult: vi.fn(),
-          setCallError: vi.fn(),
-          end: vi.fn(),
-          getError: vi.fn(),
-        })),
-        shutdown: vi.fn(async () => {}),
-      };
-      return { sigil, seeds, recorder };
-    }
-
-    it("attaches systemPrompt to every turn_end during the agent loop under full mode", async () => {
-      const { sigil, seeds } = setupClient();
-      loadConfigMock.mockResolvedValue({
-        endpoint: "http://localhost:8080/api/v1/generations:export",
-        auth: { mode: "none" },
-        agentName: "pi",
-        contentCapture: "full",
-      });
-      createAgento11yClientMock.mockReturnValue(sigil);
-
-      const pi = new FakePi();
-      registerExtension(pi as any);
-
-      await pi.emit("session_start");
-      await pi.emit("before_agent_start", {
-        systemPrompt: "You are a helpful agent.",
-      });
-      // Turn 1
-      await pi.emit("turn_start");
-      await pi.emit("turn_end", {
-        message: assistantMessage(),
-        toolResults: [],
-      });
-      // Turn 2 (tool-loop continuation)
-      await pi.emit("turn_start");
-      await pi.emit("turn_end", {
-        message: assistantMessage(),
-        toolResults: [],
-      });
-
-      expect(seeds).toHaveLength(2);
-      expect(seeds[0]!.systemPrompt).toBe("You are a helpful agent.");
-      expect(seeds[1]!.systemPrompt).toBe("You are a helpful agent.");
-    });
-
-    it("caches the prompt under no_tool_content but strips it under metadata_only", async () => {
-      for (const mode of ["no_tool_content", "metadata_only"] as const) {
-        const { sigil, seeds } = setupClient();
-        loadConfigMock.mockResolvedValue({
-          endpoint: "http://localhost:8080/api/v1/generations:export",
-          auth: { mode: "none" },
-          agentName: "pi",
-          contentCapture: mode,
-        });
-        createAgento11yClientMock.mockReturnValue(sigil);
-
-        const pi = new FakePi();
-        registerExtension(pi as any);
-
-        await pi.emit("session_start");
-        await pi.emit("before_agent_start", {
-          systemPrompt: "You are a helpful agent.",
-        });
-        await pi.emit("turn_start");
-        await pi.emit("turn_end", {
-          message: assistantMessage(),
-          toolResults: [],
-        });
-
-        if (mode === "no_tool_content") {
-          expect(seeds[0]!.systemPrompt, `mode=${mode}`).toBe(
-            "You are a helpful agent.",
-          );
-        } else {
-          expect(seeds[0]!.systemPrompt, `mode=${mode}`).toBeUndefined();
-        }
-      }
-    });
-
-    it("clears the cached prompt on agent_end so the next loop starts empty", async () => {
-      const { sigil, seeds } = setupClient();
-      loadConfigMock.mockResolvedValue({
-        endpoint: "http://localhost:8080/api/v1/generations:export",
-        auth: { mode: "none" },
-        agentName: "pi",
-        contentCapture: "full",
-      });
-      createAgento11yClientMock.mockReturnValue(sigil);
-
-      const pi = new FakePi();
-      registerExtension(pi as any);
-
-      await pi.emit("session_start");
-      await pi.emit("before_agent_start", { systemPrompt: "first prompt" });
-      await pi.emit("turn_start");
-      await pi.emit("turn_end", {
-        message: assistantMessage(),
-        toolResults: [],
-      });
-      await pi.emit("agent_end", { messages: [] });
-
-      // No new before_agent_start — second loop must not reuse the prior prompt.
-      await pi.emit("turn_start");
-      await pi.emit("turn_end", {
-        message: assistantMessage(),
-        toolResults: [],
-      });
-
-      expect(seeds).toHaveLength(2);
-      expect(seeds[0]!.systemPrompt).toBe("first prompt");
-      expect(seeds[1]!.systemPrompt).toBeUndefined();
-    });
-
-    it("clears the cached prompt on session_shutdown", async () => {
-      const { sigil, seeds } = setupClient();
-      loadConfigMock.mockResolvedValue({
-        endpoint: "http://localhost:8080/api/v1/generations:export",
-        auth: { mode: "none" },
-        agentName: "pi",
-        contentCapture: "full",
-      });
-      createAgento11yClientMock.mockReturnValue(sigil);
-
-      const pi = new FakePi();
-      registerExtension(pi as any);
-
-      await pi.emit("session_start");
-      await pi.emit("before_agent_start", { systemPrompt: "first prompt" });
-      await pi.emit("session_shutdown");
-
-      // Fresh session, no new before_agent_start.
-      await pi.emit("session_start");
-      await pi.emit("turn_start");
-      await pi.emit("turn_end", {
-        message: assistantMessage(),
-        toolResults: [],
-      });
-
-      expect(seeds[0]!.systemPrompt).toBeUndefined();
-    });
-  });
-
-  describe("tool catalog capture", () => {
-    function setupClient() {
-      const seeds: Array<{ tools?: unknown[] }> = [];
-      const recorder = {
-        setResult: vi.fn(),
-        setCallError: vi.fn(),
-        setFirstTokenAt: vi.fn(),
-      };
-      const sigil: Agento11yLike = {
-        startStreamingGeneration: vi.fn(async (seed, run) => {
-          seeds.push(seed as { tools?: unknown[] });
-          await run({
-            ...recorder,
-            startToolExecution: fakeStartToolExecution,
-          });
-        }),
-        startToolExecution: vi.fn(() => ({
-          setResult: vi.fn(),
-          setCallError: vi.fn(),
-          end: vi.fn(),
-          getError: vi.fn(),
-        })),
-        shutdown: vi.fn(async () => {}),
-      };
-      return { sigil, seeds };
-    }
-
-    const bashTool = {
-      name: "bash",
-      description: "Run a shell command",
-      parameters: {
-        type: "object",
-        properties: { command: { type: "string" } },
-      },
-    };
-    const readTool = {
-      name: "read",
-      description: "Read a file",
-      parameters: {
-        type: "object",
-        properties: { path: { type: "string" } },
-      },
-    };
-
-    it("emits description and inputSchemaJSON for active tools under full mode", async () => {
-      const { sigil, seeds } = setupClient();
-      loadConfigMock.mockResolvedValue({
-        endpoint: "http://localhost:8080/api/v1/generations:export",
-        auth: { mode: "none" },
-        agentName: "pi",
-        contentCapture: "full",
-      });
-      createAgento11yClientMock.mockReturnValue(sigil);
-
-      const pi = new FakePi();
-      pi.getAllTools = () => [bashTool, readTool];
-      pi.getActiveTools = () => ["bash", "read"];
-      registerExtension(pi as any);
-
-      await pi.emit("session_start");
-      await pi.emit("turn_start");
-      await pi.emit("turn_end", {
-        message: assistantMessage(),
-        toolResults: [],
-      });
-
-      const tools = seeds[0]!.tools as Array<{
-        name: string;
-        description?: string;
-        inputSchemaJSON?: string;
-      }>;
-      expect(tools).toHaveLength(2);
-      expect(tools[0]).toEqual({
-        name: "bash",
-        description: "Run a shell command",
-        inputSchemaJSON: JSON.stringify(bashTool.parameters),
-      });
-      expect(tools[1]?.inputSchemaJSON).toBe(
-        JSON.stringify(readTool.parameters),
-      );
-    });
-
-    it("strips description and inputSchemaJSON under metadata_only and no_tool_content", async () => {
-      for (const mode of ["metadata_only", "no_tool_content"] as const) {
-        const { sigil, seeds } = setupClient();
-        loadConfigMock.mockResolvedValue({
-          endpoint: "http://localhost:8080/api/v1/generations:export",
-          auth: { mode: "none" },
-          agentName: "pi",
-          contentCapture: mode,
-        });
-        createAgento11yClientMock.mockReturnValue(sigil);
-
-        const pi = new FakePi();
-        pi.getAllTools = () => [bashTool, readTool];
-        pi.getActiveTools = () => ["bash", "read"];
-        registerExtension(pi as any);
-
-        await pi.emit("session_start");
-        await pi.emit("turn_start");
-        await pi.emit("turn_end", {
-          message: assistantMessage(),
-          toolResults: [],
-        });
-
-        const tools = seeds[0]!.tools as Array<{
-          name: string;
-          description?: string;
-          inputSchemaJSON?: string;
-        }>;
-        expect(tools, `mode=${mode}`).toEqual([
-          { name: "bash" },
-          { name: "read" },
-        ]);
-      }
-    });
-
-    it("emits the offered (active) catalog even when no tool is called this turn", async () => {
-      const { sigil, seeds } = setupClient();
-      loadConfigMock.mockResolvedValue({
-        endpoint: "http://localhost:8080/api/v1/generations:export",
-        auth: { mode: "none" },
-        agentName: "pi",
-        contentCapture: "metadata_only",
-      });
-      createAgento11yClientMock.mockReturnValue(sigil);
-
-      const pi = new FakePi();
-      pi.getAllTools = () => [bashTool, readTool];
-      pi.getActiveTools = () => ["bash", "read"];
-      registerExtension(pi as any);
-
-      await pi.emit("session_start");
-      await pi.emit("turn_start");
-      // No tool_execution_* events — model offered tools but didn't call any.
-      await pi.emit("turn_end", {
-        message: assistantMessage(),
-        toolResults: [],
-      });
-
-      const tools = seeds[0]!.tools as Array<{ name: string }>;
-      expect(tools.map((t) => t.name)).toEqual(["bash", "read"]);
-    });
-
-    it("degrades to empty tools without crashing when getAllTools throws", async () => {
-      const { sigil, seeds } = setupClient();
-      loadConfigMock.mockResolvedValue({
-        endpoint: "http://localhost:8080/api/v1/generations:export",
-        auth: { mode: "none" },
-        agentName: "pi",
-        contentCapture: "full",
-      });
-      createAgento11yClientMock.mockReturnValue(sigil);
-
-      const pi = new FakePi();
-      pi.getAllTools = () => {
-        throw new Error("registry unavailable");
-      };
-      pi.getActiveTools = () => [];
-      registerExtension(pi as any);
-
-      await pi.emit("session_start");
-      await pi.emit("turn_start");
-      await pi.emit("turn_end", {
-        message: assistantMessage(),
-        toolResults: [],
-      });
-
-      expect(seeds).toHaveLength(1);
-      expect(seeds[0]!.tools).toBeUndefined();
-    });
-
-    it("synthesizes name-only tools from getActiveTools when getAllTools throws", async () => {
-      // Registry lookup fails (signature drift, transient error) but the
-      // active-set API still reports the names pi offered the model.
-      // Without the fallback, mapTools would filter an empty catalog and
-      // the seed would silently omit the tool list.
-      const { sigil, seeds } = setupClient();
-      loadConfigMock.mockResolvedValue({
-        endpoint: "http://localhost:8080/api/v1/generations:export",
-        auth: { mode: "none" },
-        agentName: "pi",
-        contentCapture: "full",
-      });
-      createAgento11yClientMock.mockReturnValue(sigil);
-
-      const pi = new FakePi();
-      pi.getAllTools = () => {
-        throw new Error("registry unavailable");
-      };
-      pi.getActiveTools = () => ["bash", "read"];
-      registerExtension(pi as any);
-
-      await pi.emit("session_start");
-      await pi.emit("turn_start");
-      await pi.emit("turn_end", {
-        message: assistantMessage(),
-        toolResults: [],
-      });
-
-      expect(seeds).toHaveLength(1);
-      const tools = seeds[0]!.tools as Array<{
-        name: string;
-        description?: string;
-        inputSchemaJSON?: string;
-      }>;
-      expect(tools.map((t) => t.name).sort()).toEqual(["bash", "read"]);
-      // Catalog was unavailable, so we have no description/schema to emit.
-      for (const t of tools) {
-        expect(t.description).toBeUndefined();
-        expect(t.inputSchemaJSON).toBeUndefined();
-      }
-    });
-
-    it("falls back to called tool names when getActiveTools is unavailable", async () => {
-      const { sigil, seeds } = setupClient();
-      loadConfigMock.mockResolvedValue({
-        endpoint: "http://localhost:8080/api/v1/generations:export",
-        auth: { mode: "none" },
-        agentName: "pi",
-        contentCapture: "metadata_only",
-      });
-      createAgento11yClientMock.mockReturnValue(sigil);
-
-      const pi = new FakePi();
-      // Neither hook present — emulates older pi versions.
-      registerExtension(pi as any);
-
-      await pi.emit("session_start");
-      await pi.emit("turn_start");
-      await pi.emit("tool_execution_start", {
-        toolCallId: "c1",
-        toolName: "bash",
-      });
-      await pi.emit("tool_execution_end", { toolCallId: "c1", isError: false });
-      await pi.emit("turn_end", {
-        message: assistantMessage(),
-        toolResults: [],
-      });
-
-      const tools = seeds[0]!.tools as Array<{ name: string }>;
-      expect(tools).toEqual([{ name: "bash" }]);
-    });
-
-    it("emits no tools when getActiveTools explicitly returns []", async () => {
-      // The registry is populated but the user disabled every tool via
-      // setActiveTools([]); the seed must NOT report the full registry.
-      const { sigil, seeds } = setupClient();
-      loadConfigMock.mockResolvedValue({
-        endpoint: "http://localhost:8080/api/v1/generations:export",
-        auth: { mode: "none" },
-        agentName: "pi",
-        contentCapture: "metadata_only",
-      });
-      createAgento11yClientMock.mockReturnValue(sigil);
-
-      const pi = new FakePi();
-      pi.getAllTools = () => [bashTool, readTool];
-      pi.getActiveTools = () => [];
-      registerExtension(pi as any);
-
-      await pi.emit("session_start");
-      await pi.emit("turn_start");
-      await pi.emit("turn_end", {
-        message: assistantMessage(),
-        toolResults: [],
-      });
-
-      expect(seeds[0]!.tools).toBeUndefined();
-    });
-  });
-
-  describe("request controls capture", () => {
-    function setupClient() {
+  describe.each([
+    "full",
+    "full_with_metadata_spans",
+    "no_tool_content",
+    "metadata_only",
+  ] as const)("request capture contract: %s", (mode) => {
+    function setup() {
       const seeds: Array<Record<string, unknown>> = [];
       const recorder = {
         setResult: vi.fn(),
         setCallError: vi.fn(),
         setFirstTokenAt: vi.fn(),
+        startToolExecution: fakeStartToolExecution,
       };
       const sigil: Agento11yLike = {
         startStreamingGeneration: vi.fn(async (seed, run) => {
           seeds.push(seed as Record<string, unknown>);
-          await run({
-            ...recorder,
-            startToolExecution: fakeStartToolExecution,
-          });
+          await run(recorder);
         }),
-        startToolExecution: vi.fn(() => ({
-          setResult: vi.fn(),
-          setCallError: vi.fn(),
-          end: vi.fn(),
-          getError: vi.fn(),
-        })),
+        startToolExecution: fakeStartToolExecution,
         shutdown: vi.fn(async () => {}),
       };
-      return { sigil, seeds };
+      loadConfigMock.mockResolvedValue({
+        endpoint: "http://localhost:8080/api/v1/generations:export",
+        auth: { mode: "none" },
+        agentName: "pi",
+        contentCapture: mode,
+      });
+      createAgento11yClientMock.mockReturnValue(sigil);
+      const pi = new FakePi();
+      return { pi, seeds, recorder };
     }
 
-    it("populates the seed for the matching turn_end", async () => {
-      const { sigil, seeds } = setupClient();
-      loadConfigMock.mockResolvedValue({
-        endpoint: "http://localhost:8080/api/v1/generations:export",
-        auth: { mode: "none" },
-        agentName: "pi",
-        contentCapture: "metadata_only",
-      });
-      createAgento11yClientMock.mockReturnValue(sigil);
+    const foreground = {
+      max_tokens: 4096,
+      temperature: 0.2,
+      top_p: 0.9,
+      tool_choice: { type: "tool", name: "read" },
+      thinking: { type: "enabled", budget_tokens: 2048 },
+    };
+    const warm = {
+      max_tokens: 1,
+      temperature: 0.8,
+      top_p: 0.4,
+      tool_choice: { type: "none" },
+      thinking: { type: "enabled", budget_tokens: 512 },
+    };
 
-      const pi = new FakePi();
-      registerExtension(pi as any);
-
-      await pi.emit("session_start");
-      await pi.emit("turn_start");
-      await pi.emit("before_provider_request", {
-        payload: {
-          max_tokens: 4096,
-          temperature: 0.2,
-          top_p: 0.9,
-          tool_choice: { type: "auto" },
-          thinking: { type: "enabled", budget_tokens: 2048 },
-        },
-      });
-      await pi.emit("turn_end", {
-        message: assistantMessage(),
-        toolResults: [],
-      });
-
-      const seed = seeds[0]!;
-      expect(seed.maxTokens).toBe(4096);
-      expect(seed.temperature).toBe(0.2);
-      expect(seed.topP).toBe(0.9);
-      expect(seed.toolChoice).toBe("auto");
-      expect(seed.metadata).toEqual({
-        "agento11y.gen_ai.request.thinking.budget_tokens": 2048,
-      });
-    });
-
-    it("clears between turns so an empty turn 2 does not inherit turn 1's values", async () => {
-      const { sigil, seeds } = setupClient();
-      loadConfigMock.mockResolvedValue({
-        endpoint: "http://localhost:8080/api/v1/generations:export",
-        auth: { mode: "none" },
-        agentName: "pi",
-        contentCapture: "metadata_only",
-      });
-      createAgento11yClientMock.mockReturnValue(sigil);
-
-      const pi = new FakePi();
-      registerExtension(pi as any);
-
-      await pi.emit("session_start");
-      await pi.emit("turn_start");
-      await pi.emit("before_provider_request", {
-        payload: { max_tokens: 1024, temperature: 0.5 },
-      });
-      await pi.emit("turn_end", {
-        message: assistantMessage(),
-        toolResults: [],
-      });
-
-      // Turn 2: no before_provider_request fires — values must clear.
-      await pi.emit("turn_start");
-      await pi.emit("turn_end", {
-        message: assistantMessage(),
-        toolResults: [],
-      });
-
-      expect(seeds[0]!.maxTokens).toBe(1024);
-      expect(seeds[0]!.temperature).toBe(0.5);
-      expect(seeds[1]!.maxTokens).toBeUndefined();
-      expect(seeds[1]!.temperature).toBeUndefined();
-    });
-
-    it("clears on agent_end so the next agent loop does not inherit controls", async () => {
-      const { sigil, seeds } = setupClient();
-      loadConfigMock.mockResolvedValue({
-        endpoint: "http://localhost:8080/api/v1/generations:export",
-        auth: { mode: "none" },
-        agentName: "pi",
-        contentCapture: "metadata_only",
-      });
-      createAgento11yClientMock.mockReturnValue(sigil);
-
-      const pi = new FakePi();
-      registerExtension(pi as any);
-
-      await pi.emit("session_start");
-      await pi.emit("before_agent_start", { systemPrompt: "sp" });
-      await pi.emit("turn_start");
-      await pi.emit("before_provider_request", {
-        payload: { max_tokens: 1024, temperature: 0.5 },
-      });
-      // Agent loop ends without a matching turn_end — turn_end's finally
-      // never runs, so agent_end is the last line of defense against stale
-      // request controls leaking into the next agent loop.
-      await pi.emit("agent_end", { messages: [] });
-
-      // Next agent loop: no before_provider_request fires before turn_end.
-      await pi.emit("turn_start");
-      await pi.emit("turn_end", {
-        message: assistantMessage(),
-        toolResults: [],
-      });
-
-      expect(seeds).toHaveLength(1);
-      expect(seeds[0]!.maxTokens).toBeUndefined();
-      expect(seeds[0]!.temperature).toBeUndefined();
-    });
-
-    it("refreshes per turn when consecutive before_provider_request events fire", async () => {
-      const { sigil, seeds } = setupClient();
-      loadConfigMock.mockResolvedValue({
-        endpoint: "http://localhost:8080/api/v1/generations:export",
-        auth: { mode: "none" },
-        agentName: "pi",
-        contentCapture: "metadata_only",
-      });
-      createAgento11yClientMock.mockReturnValue(sigil);
-
-      const pi = new FakePi();
-      registerExtension(pi as any);
-
-      await pi.emit("session_start");
-      await pi.emit("turn_start");
-      await pi.emit("before_provider_request", {
-        payload: { max_tokens: 1024, temperature: 0.5, top_p: 0.8 },
-      });
-      await pi.emit("turn_end", {
-        message: assistantMessage(),
-        toolResults: [],
-      });
-
-      // Tool-loop continuation: a new request payload with fewer fields.
-      await pi.emit("turn_start");
-      await pi.emit("before_provider_request", {
-        payload: { max_tokens: 2048 },
-      });
-      await pi.emit("turn_end", {
-        message: assistantMessage(),
-        toolResults: [],
-      });
-
-      expect(seeds[0]!.maxTokens).toBe(1024);
-      expect(seeds[0]!.topP).toBe(0.8);
-      expect(seeds[1]!.maxTokens).toBe(2048);
-      expect(seeds[1]!.temperature).toBeUndefined();
-      expect(seeds[1]!.topP).toBeUndefined();
-    });
-
-    it("emits controls under metadata_only too", async () => {
-      const { sigil, seeds } = setupClient();
-      loadConfigMock.mockResolvedValue({
-        endpoint: "http://localhost:8080/api/v1/generations:export",
-        auth: { mode: "none" },
-        agentName: "pi",
-        contentCapture: "metadata_only",
-      });
-      createAgento11yClientMock.mockReturnValue(sigil);
-
-      const pi = new FakePi();
-      registerExtension(pi as any);
-
-      await pi.emit("session_start");
-      await pi.emit("turn_start");
-      await pi.emit("before_provider_request", {
-        payload: { temperature: 0.1, max_tokens: 256 },
-      });
-      await pi.emit("turn_end", {
-        message: assistantMessage(),
-        toolResults: [],
-      });
-
-      expect(seeds[0]!.temperature).toBe(0.1);
-      expect(seeds[0]!.maxTokens).toBe(256);
-    });
-
-    it("extracts controls from Gemini-shaped payloads", async () => {
-      const { sigil, seeds } = setupClient();
-      loadConfigMock.mockResolvedValue({
-        endpoint: "http://localhost:8080/api/v1/generations:export",
-        auth: { mode: "none" },
-        agentName: "pi",
-        contentCapture: "metadata_only",
-      });
-      createAgento11yClientMock.mockReturnValue(sigil);
-
-      const pi = new FakePi();
-      registerExtension(pi as any);
-
-      await pi.emit("session_start");
-      await pi.emit("turn_start");
-      await pi.emit("before_provider_request", {
-        payload: {
-          model: "gemini-2.0-flash",
-          contents: [],
-          config: {
-            temperature: 0.4,
-            topP: 0.95,
-            maxOutputTokens: 8192,
-            toolConfig: { functionCallingConfig: { mode: "ANY" } },
-            thinkingConfig: { thinkingBudget: 2048 },
+    it.each([
+      { name: "warm then foreground", payloads: [warm, foreground] },
+      { name: "foreground then warm", payloads: [foreground, warm] },
+      {
+        name: "one-token foreground",
+        payloads: [warm, { ...foreground, max_tokens: 1 }],
+      },
+      {
+        name: "warming without a one-token marker",
+        payloads: [foreground, { ...warm, max_tokens: 512 }],
+      },
+      {
+        name: "Gemini-shaped callbacks",
+        payloads: [
+          {
+            config: {
+              maxOutputTokens: 8192,
+              temperature: 0.4,
+              topP: 0.95,
+              toolConfig: { functionCallingConfig: { mode: "ANY" } },
+              thinkingConfig: { thinkingBudget: 2048 },
+            },
           },
-        },
-      });
-      await pi.emit("turn_end", {
-        message: assistantMessage(),
-        toolResults: [],
-      });
+        ],
+      },
+    ])("omits uncorrelated controls and intermediate prompts: $name", async ({
+      payloads,
+    }) => {
+      const { pi, seeds, recorder } = setup();
+      registerExtension(pi as any);
+      const { ctx, entries } = requestCtx();
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit(
+        "before_agent_start",
+        { systemPrompt: "early prompt" },
+        ctx,
+      );
+      await pi.emit("agent_start", {}, ctx);
+      await pi.emit("turn_start", {}, ctx);
+      const raw = {
+        role: "user",
+        content: "persisted raw input",
+        timestamp: 1,
+      };
+      await pi.emit("message_end", { message: raw }, ctx);
+      entries.push({ type: "message", id: "u1", parentId: null, message: raw });
+      const context = {
+        messages: [
+          { role: "system", content: "intermediate prompt", timestamp: 0 },
+          { ...raw, content: "observed safe input" },
+        ],
+      };
+      await pi.emit("context_with_system", context, ctx);
+      // Pi can replace the system prompt and project user content after this hook.
+      context.messages[0]!.content = "forced provider prompt";
+      context.messages[1]!.content = "later host projection";
+      for (const payload of payloads) {
+        await pi.emit("before_provider_request", { payload }, ctx);
+      }
+      await pi.emit(
+        "turn_end",
+        { message: assistantMessage(), toolResults: [] },
+        ctx,
+      );
+      await pi.emit("turn_start", {}, ctx);
+      await pi.emit("context_with_system", context, ctx);
+      await pi.emit(
+        "turn_end",
+        { message: assistantMessage(), toolResults: [] },
+        ctx,
+      );
 
-      expect(seeds[0]!.maxTokens).toBe(8192);
-      expect(seeds[0]!.temperature).toBe(0.4);
-      expect(seeds[0]!.topP).toBe(0.95);
-      expect(seeds[0]!.toolChoice).toBe("ANY");
-      expect(seeds[0]!.metadata).toEqual({
-        "agento11y.gen_ai.request.thinking.budget_tokens": 2048,
+      await pi.emit("turn_start", {}, ctx);
+      const next = {
+        role: "user",
+        content: "persisted raw next input",
+        timestamp: 3,
+      };
+      await pi.emit("message_end", { message: next }, ctx);
+      entries.push({
+        type: "message",
+        id: "u2",
+        parentId: "u1",
+        message: next,
       });
+      await pi.emit(
+        "context_with_system",
+        {
+          messages: [
+            ...context.messages,
+            { ...next, content: "observed safe next input" },
+          ],
+        },
+        ctx,
+      );
+      await pi.emit(
+        "turn_end",
+        { message: assistantMessage(), toolResults: [] },
+        ctx,
+      );
+
+      expect(seeds).toHaveLength(3);
+      expect(pi.handlers.has("before_provider_request")).toBe(false);
+      const results = recorder.setResult.mock.calls.map(([result]) => result);
+      for (const seed of [...seeds, ...results]) {
+        for (const field of [
+          "systemPrompt",
+          "maxTokens",
+          "temperature",
+          "topP",
+          "toolChoice",
+        ]) {
+          expect(seed[field], field).toBeUndefined();
+        }
+        expect(
+          Object.keys((seed.metadata as object) ?? {}).filter((key) =>
+            key.startsWith("agento11y.gen_ai.request."),
+          ),
+        ).toEqual([]);
+      }
+      expect(results[0].input).toEqual(
+        mode === "metadata_only"
+          ? undefined
+          : [
+              {
+                role: "user",
+                parts: [{ type: "text", text: "observed safe input" }],
+              },
+            ],
+      );
+      expect(results[1].input).toBeUndefined();
+      expect(results[2].input).toEqual(
+        mode === "metadata_only"
+          ? undefined
+          : [
+              {
+                role: "user",
+                parts: [{ type: "text", text: "observed safe next input" }],
+              },
+            ],
+      );
+      expect(seeds.map((seed) => seed.conversationTitle)).toEqual(
+        Array(3).fill(
+          mode === "metadata_only" ? "request-session" : "observed safe input",
+        ),
+      );
+      expect(JSON.stringify({ seeds, results })).not.toMatch(
+        /early prompt|intermediate prompt|forced provider prompt|persisted raw input|later host projection/,
+      );
+      expect(loggerMock.error).not.toHaveBeenCalled();
     });
 
-    it("preserves the forced tool name in Anthropic tool_choice", async () => {
-      const { sigil, seeds } = setupClient();
-      loadConfigMock.mockResolvedValue({
-        endpoint: "http://localhost:8080/api/v1/generations:export",
-        auth: { mode: "none" },
-        agentName: "pi",
-        contentCapture: "metadata_only",
+    it.each([
+      "hidden catalog",
+      "empty active set",
+      "throwing registry",
+      "unavailable registry",
+    ])("reports unique name-only proposals, including blocked calls, with %s", async (registry) => {
+      const { pi, seeds, recorder } = setup();
+      const getAllTools = vi.fn(() => {
+        if (registry === "throwing registry")
+          throw new Error("registry unavailable");
+        return [
+          {
+            name: "offered_unused",
+            description: "private catalog",
+            parameters: { secret: "schema body" },
+          },
+          {
+            name: "read",
+            description: "private read definition",
+            parameters: { path: "schema body" },
+          },
+          {
+            name: "bash",
+            description: "hidden bash definition",
+            parameters: { command: "schema body" },
+          },
+        ];
       });
-      createAgento11yClientMock.mockReturnValue(sigil);
-
-      const pi = new FakePi();
+      const getActiveTools = vi.fn(() =>
+        registry === "empty active set" ? [] : ["offered_unused"],
+      );
+      if (registry !== "unavailable registry") {
+        pi.getAllTools = getAllTools;
+        pi.getActiveTools = getActiveTools;
+      }
       registerExtension(pi as any);
-
       await pi.emit("session_start");
       await pi.emit("turn_start");
-      await pi.emit("before_provider_request", {
-        payload: { tool_choice: { type: "tool", name: "search" } },
+      const calls = [
+        {
+          type: "toolCall",
+          id: "read-1",
+          name: "read",
+          arguments: { path: "a" },
+        },
+        {
+          type: "toolCall",
+          id: "read-2",
+          name: "read",
+          arguments: { path: "b" },
+        },
+        {
+          type: "toolCall",
+          id: "blocked",
+          name: "bash",
+          arguments: { command: "blocked" },
+        },
+      ];
+      const toolResults = calls.map((call) => ({
+        role: "toolResult",
+        toolCallId: call.id,
+        toolName: call.name,
+        content: [
+          {
+            type: "text",
+            text: call.id === "blocked" ? "blocked by host" : "read result",
+          },
+        ],
+        isError: call.id === "blocked",
+        timestamp: 2,
+      }));
+      await pi.emit("message_end", {
+        message: {
+          ...assistantMessage(),
+          content: [
+            {
+              type: "toolCall",
+              id: "early",
+              name: "early_proposal",
+              arguments: {},
+            },
+          ],
+        },
       });
+      // Execution-only names cannot establish a proposal in the assistant response.
+      await pi.emit("tool_execution_start", {
+        toolCallId: "nested",
+        toolName: "execution_only",
+        args: {},
+      });
+      await pi.emit("tool_execution_end", {
+        toolCallId: "nested",
+        toolName: "execution_only",
+        isError: false,
+      });
+      await pi.emit("turn_end", {
+        message: {
+          ...assistantMessage(),
+          content: calls,
+          stopReason: "toolUse",
+        },
+        toolResults,
+      });
+      await pi.emit("turn_start");
       await pi.emit("turn_end", {
         message: assistantMessage(),
         toolResults: [],
       });
 
-      expect(seeds[0]!.toolChoice).toBe("tool:search");
+      expect(seeds).toHaveLength(2);
+      expect(seeds[0]!.tools).toEqual([{ name: "read" }, { name: "bash" }]);
+      expect(seeds[1]!.tools).toBeUndefined();
+      expect(getAllTools).not.toHaveBeenCalled();
+      expect(getActiveTools).not.toHaveBeenCalled();
+      const output = recorder.setResult.mock.calls[0]![0].output;
+      expect(output).toEqual([
+        ...calls.map((call) => ({
+          role: "assistant",
+          parts: [
+            {
+              type: "tool_call",
+              toolCall: {
+                id: call.id,
+                name: call.name,
+                inputJSON: expect.any(String),
+              },
+            },
+          ],
+        })),
+        ...toolResults.map((result) => ({
+          role: "tool",
+          parts: [
+            {
+              type: "tool_result",
+              toolResult: {
+                toolCallId: result.toolCallId,
+                name: result.toolName,
+                content: expect.any(String),
+                isError: result.isError,
+              },
+            },
+          ],
+        })),
+      ]);
+      if (mode === "metadata_only" || mode === "no_tool_content") {
+        for (const message of output) {
+          for (const part of message.parts) {
+            if (part.toolCall) expect(part.toolCall.inputJSON).toBe("");
+            if (part.toolResult) expect(part.toolResult.content).toBe("");
+          }
+        }
+      }
+      expect(JSON.stringify(seeds)).not.toMatch(
+        /offered_unused|private catalog|private read definition|hidden bash definition|schema body|execution_only|early_proposal/,
+      );
+      expect(loggerMock.error).not.toHaveBeenCalled();
     });
   });
 
@@ -3338,6 +3006,11 @@ describe("extension lifecycle", () => {
         sessionManager: {
           getSessionFile: () => "pi-session.jsonl",
           getSessionId: () => "pi-conv-2",
+          getHeader: () => ({
+            type: "session",
+            id: "pi-conv-2",
+            timestamp: "2020-01-01T00:00:00.000Z",
+          }),
           getBranch: () => branch,
         },
       };
@@ -3672,6 +3345,7 @@ describe("extension lifecycle", () => {
       agentName?: string;
       agentVersion?: string;
       operationName?: string;
+      metadata?: Record<string, unknown>;
       model?: { provider: string; name: string };
       startedAt?: Date;
       tags?: Record<string, string>;
@@ -3691,6 +3365,8 @@ describe("extension lifecycle", () => {
       const results: CapturedResult[] = [];
       const turnSeeds: Array<Record<string, unknown>> = [];
       const turnResults: Array<Record<string, unknown>> = [];
+      const firstTokens: Date[] = [];
+      const turnErrors: Error[] = [];
       const sigil: Agento11yLike = {
         startStreamingGeneration: vi.fn(async (seed, run) => {
           turnSeeds.push(seed as Record<string, unknown>);
@@ -3699,8 +3375,12 @@ describe("extension lifecycle", () => {
             setResult: (value: unknown) => {
               turnResults.push(value as Record<string, unknown>);
             },
-            setCallError: vi.fn(),
-            setFirstTokenAt: vi.fn(),
+            setCallError: (error: Error) => {
+              turnErrors.push(error);
+            },
+            setFirstTokenAt: (time: Date) => {
+              firstTokens.push(time);
+            },
           });
         }),
         startGeneration: vi.fn(async (seed, run) => {
@@ -3722,7 +3402,15 @@ describe("extension lifecycle", () => {
         })),
         shutdown: vi.fn(async () => {}),
       };
-      return { sigil, seeds, results, turnSeeds, turnResults };
+      return {
+        sigil,
+        seeds,
+        results,
+        turnSeeds,
+        turnResults,
+        firstTokens,
+        turnErrors,
+      };
     }
 
     function useConfig(
@@ -3830,10 +3518,14 @@ describe("extension lifecycle", () => {
       expect(resolveGitBranchMock).toHaveBeenCalledWith(ctx.cwd);
       expect(seeds[0]!.conversationId).toBe("pi-conv-1");
       expect(seeds[0]!.agentName).toBe("pi");
-      expect(seeds[0]!.model).toEqual({
-        provider: "anthropic",
-        name: "claude-sonnet-4",
+      expect(seeds[0]!.model).toEqual({ provider: "unknown", name: "unknown" });
+      expect(seeds[0]!.metadata).toMatchObject({
+        "pi.summary.model_attribution": "unknown",
+        "pi.summary.operation_aggregate": true,
+        "pi.summary.selected_provider": "anthropic",
+        "pi.summary.selected_model": "claude-sonnet-4",
       });
+      expect(results[0]!.responseModel).toBeUndefined();
       // No explicit operationName: the SYNC path defaults it to generateText.
       expect(seeds[0]!.operationName).toBeUndefined();
       // Parent is the assistant turn that preceded the compaction.
@@ -4199,14 +3891,15 @@ describe("extension lifecycle", () => {
         ctx,
       );
 
-      expect(seeds[0]!.model).toEqual({
-        provider: "anthropic",
-        name: "claude-sonnet-4",
+      expect(seeds[0]!.model).toEqual({ provider: "unknown", name: "unknown" });
+      expect(seeds[0]!.metadata).toMatchObject({
+        "pi.summary.selected_provider": "anthropic",
+        "pi.summary.selected_model": "claude-sonnet-4",
       });
       expect(loggerMock.error).not.toHaveBeenCalled();
     });
 
-    it("falls back to the last seen model when ctx.model is unavailable", async () => {
+    it("does not use the last seen model when ctx.model is unavailable", async () => {
       const { sigil, seeds, results } = setupClient();
       useConfig(sigil);
       const entry = compactionEntry();
@@ -4234,13 +3927,17 @@ describe("extension lifecycle", () => {
         ctx,
       );
 
-      expect(seeds[0]!.model).toEqual({ provider: "openai", name: "gpt-5" });
-      expect(results[0]!.responseModel).toBe("gpt-5");
+      expect(seeds[0]!.model).toEqual({ provider: "unknown", name: "unknown" });
+      expect(seeds[0]!.metadata?.["pi.summary.selected_model"]).toBeUndefined();
+      expect(
+        seeds[0]!.metadata?.["pi.summary.selected_provider"],
+      ).toBeUndefined();
+      expect(results[0]!.responseModel).toBeUndefined();
       expect(loggerMock.error).not.toHaveBeenCalled();
     });
 
-    it("skips the export when no model can be resolved", async () => {
-      const { sigil } = setupClient();
+    it("exports unknown attribution when no model is selected", async () => {
+      const { sigil, seeds, results } = setupClient();
       useConfig(sigil);
       const entry = compactionEntry();
       const ctx = ctxWithBranch("pi-conv-1", branchWith(entry), {
@@ -4256,10 +3953,9 @@ describe("extension lifecycle", () => {
         ctx,
       );
 
-      expect(sigil.startGeneration).not.toHaveBeenCalled();
-      expect(
-        loggerMock.debug.mock.calls.map(([m]) => String(m)),
-      ).toContainEqual(expect.stringContaining("no model could be resolved"));
+      expect(sigil.startGeneration).toHaveBeenCalledTimes(1);
+      expect(seeds[0]!.model).toEqual({ provider: "unknown", name: "unknown" });
+      expect(results[0]!.responseModel).toBeUndefined();
       expect(loggerMock.error).not.toHaveBeenCalled();
     });
 
@@ -4482,9 +4178,7 @@ describe("extension lifecycle", () => {
       expect(loggerMock.error).not.toHaveBeenCalled();
     });
 
-    it("overwrites an orphaned start from an aborted compaction", async () => {
-      // An aborted or failed compaction emits no session_compact at all, so
-      // its start timestamp must not be reused by the next attempt.
+    it("overwrites an orphaned start from an unobserved compaction failure", async () => {
       const { sigil, seeds } = setupClient();
       useConfig(sigil);
       const entry = compactionEntry();
@@ -4588,10 +4282,255 @@ describe("extension lifecycle", () => {
       expect(loggerMock.error).not.toHaveBeenCalled();
     });
 
+    it.each([
+      "threshold",
+      "overflow",
+      "request",
+    ])("retains active input and timing through %s compaction", async (reason) => {
+      const { sigil, seeds, turnSeeds, turnResults, firstTokens } =
+        setupClient();
+      useConfig(sigil);
+      const branch = branchWith();
+      const ctx = ctxWithBranch("active-compaction", branch);
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      const clock = vi
+        .spyOn(Date, "now")
+        .mockReturnValue(COMPACTION_AT - 10_000);
+      try {
+        await pi.emit("session_start", {}, ctx);
+        await pi.emit(
+          "before_agent_start",
+          { systemPrompt: "run prompt" },
+          ctx,
+        );
+        await pi.emit("turn_start", {}, ctx);
+        await appendObservedUser(pi, ctx, branch, "active input");
+        clock.mockReturnValue(COMPACTION_AT - 8_000);
+        await pi.emit("message_update", assistantMessageUpdate(), ctx);
+        clock.mockReturnValue(COMPACTION_AT - 5_000);
+        await pi.emit("session_before_compact", { reason }, ctx);
+        const entry = compactionEntry({ parentId: branch.at(-1)!.id });
+        branch.push(entry);
+        await pi.emit(
+          "session_compact",
+          { compactionEntry: entry, reason },
+          ctx,
+        );
+        clock.mockReturnValue(COMPACTION_AT + 2_000);
+        const msg = assistantMessage();
+        await pi.emit("message_end", { message: msg }, ctx);
+        branch.push({
+          type: "message",
+          id: "answer",
+          parentId: "c1",
+          message: msg,
+        });
+        await pi.emit("turn_end", { message: msg, toolResults: [] }, ctx);
+        expect(seeds[0]!.startedAt).toEqual(new Date(COMPACTION_AT - 5_000));
+        expect(turnSeeds[0]!.startedAt).toEqual(
+          new Date(COMPACTION_AT - 10_000),
+        );
+        expect(turnResults[0]!.completedAt).toEqual(
+          new Date(COMPACTION_AT + 2_000),
+        );
+        expect(firstTokens).toEqual([new Date(COMPACTION_AT - 8_000)]);
+        expect(turnResults[0]!.input).toEqual([
+          { role: "user", parts: [{ type: "text", text: "active input" }] },
+        ]);
+      } finally {
+        clock.mockRestore();
+      }
+      expect(loggerMock.error).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      "threshold",
+      "overflow",
+      "request",
+    ])("retries after %s compaction without another startup hook", async (reason) => {
+      const { sigil, turnSeeds, turnResults, firstTokens, turnErrors } =
+        setupClient();
+      useConfig(sigil);
+      const branch = branchWith();
+      const ctx = ctxWithBranch("retry-compaction", branch);
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      const clock = vi
+        .spyOn(Date, "now")
+        .mockReturnValue(COMPACTION_AT - 10_000);
+      try {
+        await pi.emit("session_start", {}, ctx);
+        await pi.emit(
+          "before_agent_start",
+          { systemPrompt: "retry prompt" },
+          ctx,
+        );
+        await pi.emit("agent_start", {}, ctx);
+        await pi.emit("turn_start", {}, ctx);
+        await appendObservedUser(pi, ctx, branch, "attempt input");
+        const failed = {
+          ...assistantMessage(),
+          stopReason: "error",
+          errorMessage: "retryable",
+        };
+        clock.mockReturnValue(COMPACTION_AT - 9_000);
+        await pi.emit("message_update", assistantMessageUpdate(), ctx);
+        await pi.emit("message_end", { message: failed }, ctx);
+        branch.push({
+          type: "message",
+          id: "failed",
+          parentId: branch.at(-1)!.id,
+          message: failed,
+        });
+        await pi.emit("turn_end", { message: failed, toolResults: [] }, ctx);
+        await pi.emit("agent_end", { messages: [failed] }, ctx);
+        await pi.emit("session_before_compact", { reason }, ctx);
+        await pi.emit(
+          "session_compact_failed",
+          { reason, error: "cancelled" },
+          ctx,
+        );
+        clock.mockReturnValue(COMPACTION_AT);
+        await pi.emit("agent_start", {}, ctx);
+        await pi.emit("turn_start", {}, ctx);
+        const success = assistantMessage();
+        clock.mockReturnValue(COMPACTION_AT + 1_000);
+        await pi.emit("message_update", assistantMessageUpdate(), ctx);
+        clock.mockReturnValue(COMPACTION_AT + 2_000);
+        await pi.emit("message_end", { message: success }, ctx);
+        branch.push({
+          type: "message",
+          id: "success",
+          parentId: "failed",
+          message: success,
+        });
+        await pi.emit("turn_end", { message: success, toolResults: [] }, ctx);
+        expect(turnSeeds.map((seed) => seed.id)).toEqual([
+          stablePiGenerationId("retry-compaction", "failed"),
+          stablePiGenerationId("retry-compaction", "success"),
+        ]);
+        expect(turnSeeds.map((seed) => seed.systemPrompt)).toEqual([
+          undefined,
+          undefined,
+        ]);
+        expect(turnSeeds[1]!.startedAt).toEqual(new Date(COMPACTION_AT));
+        expect(firstTokens).toEqual([
+          new Date(COMPACTION_AT - 9_000),
+          new Date(COMPACTION_AT + 1_000),
+        ]);
+        expect(turnErrors).toHaveLength(1);
+        expect(turnResults[0]!.input).toHaveLength(1);
+        expect(turnResults[1]!.input).toBeUndefined();
+        await pi.emit("agent_settled", {}, ctx);
+        await pi.emit("turn_start", {}, ctx);
+        await pi.emit("turn_end", { message: success, toolResults: [] }, ctx);
+        expect(turnSeeds[2]!.systemPrompt).toBeUndefined();
+      } finally {
+        clock.mockRestore();
+      }
+      expect(loggerMock.error).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      {
+        name: "reported compaction failure",
+        before: "session_before_compact",
+        terminal: "session_compact_failed",
+        kind: "compaction",
+      },
+      {
+        name: "cancelled compaction",
+        before: "session_before_compact",
+        terminal: undefined,
+        kind: "compaction",
+        cancel: true,
+      },
+      {
+        name: "cancelled tree summary",
+        before: "session_before_tree",
+        terminal: undefined,
+        kind: "branch_summary",
+        cancel: true,
+      },
+      {
+        name: "tree navigation",
+        before: "session_before_tree",
+        terminal: "session_tree",
+        kind: "branch_summary",
+      },
+      {
+        name: "extension compaction",
+        before: "session_before_compact",
+        terminal: "session_compact",
+        kind: "compaction",
+        fromExtension: true,
+      },
+      {
+        name: "extension tree summary",
+        before: "session_before_tree",
+        terminal: "session_tree",
+        kind: "branch_summary",
+        fromExtension: true,
+      },
+    ])("consumes timing without fabricating usage for $name", async ({
+      before,
+      terminal,
+      kind,
+      cancel,
+      fromExtension,
+    }) => {
+      const { sigil, seeds } = setupClient();
+      useConfig(sigil);
+      const entry = { ...compactionEntry(), type: kind };
+      const ctx = ctxWithBranch("summary-cleanup", branchWith(entry));
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      const clock = vi
+        .spyOn(Date, "now")
+        .mockReturnValue(COMPACTION_AT - 10_000);
+      try {
+        await pi.emit("session_start", {}, ctx);
+        const result = await pi.handlers.get(before)!(
+          {
+            type: before,
+            preparation: { userWantsSummary: true },
+            signal: cancel ? AbortSignal.abort() : new AbortController().signal,
+          },
+          ctx,
+        );
+        if (cancel) expect(result).toEqual({ cancel: true });
+        if (terminal)
+          await pi.emit(
+            terminal,
+            fromExtension
+              ? {
+                  fromExtension,
+                  compactionEntry: entry,
+                  summaryEntry: entry,
+                }
+              : {},
+            ctx,
+          );
+        expect(sigil.startGeneration).not.toHaveBeenCalled();
+        expect(sigil.startStreamingGeneration).not.toHaveBeenCalled();
+        await pi.emit(
+          kind === "compaction" ? "session_compact" : "session_tree",
+          {
+            compactionEntry: entry,
+            summaryEntry: entry,
+          },
+          ctx,
+        );
+        expect(seeds[0]!.startedAt).toEqual(new Date(COMPACTION_AT));
+      } finally {
+        clock.mockRestore();
+      }
+      expect(loggerMock.error).not.toHaveBeenCalled();
+    });
+
     it("discards the turn state that a manual mid-stream /compact abandons", async () => {
-      // Manual /compact disconnects from the agent before aborting, so the
-      // in-flight turn's turn_end never arrives. Its buffered prompt must not
-      // be attributed to the next turn.
+      // Older hosts can abandon the active turn before manual compaction.
       const { sigil, turnResults } = setupClient();
       useConfig(sigil, "full");
       const msg = assistantMessage();
@@ -5166,7 +5105,39 @@ describe("extension lifecycle", () => {
       expect(seeds[0]!.metadata).toBeUndefined();
     });
 
-    it("suppresses the edge on an in-memory fork, whose header names no trunk", async () => {
+    it.each([
+      { name: "same factory", replace: false, reload: false, cacheMiss: false },
+      {
+        name: "replacement factory",
+        replace: true,
+        reload: false,
+        cacheMiss: false,
+      },
+      {
+        name: "replacement and reload",
+        replace: true,
+        reload: true,
+        cacheMiss: false,
+      },
+      {
+        name: "reload cache miss",
+        replace: true,
+        reload: true,
+        cacheMiss: true,
+      },
+      {
+        name: "unknown trunk start and reload",
+        replace: true,
+        reload: true,
+        cacheMiss: false,
+        unknownStart: true,
+      },
+    ])("retains in-memory fork ancestry across $name", async ({
+      replace,
+      reload,
+      cacheMiss,
+      unknownStart,
+    }) => {
       // `pi --no-session` plus `/fork`: createBranchedSession writes no
       // `parentSession` when the manager does not persist, and there is no
       // session file either, so the session_start reason and the trunk the
@@ -5179,7 +5150,7 @@ describe("extension lifecycle", () => {
       let header: Record<string, unknown> = {
         type: "session",
         id: TRUNK_ID,
-        timestamp: TRUNK_STARTED_AT,
+        timestamp: unknownStart ? undefined : TRUNK_STARTED_AT,
       };
       let branch: unknown[] = forkBranch(trunkMsg);
       const ctx = {
@@ -5191,56 +5162,223 @@ describe("extension lifecycle", () => {
         },
       };
 
-      const pi = new FakePi();
+      let pi = new FakePi();
       registerExtension(pi as any);
       await pi.emit("session_start", { reason: "startup" }, ctx);
       await pi.emit("turn_start", {}, ctx);
       await pi.emit("turn_end", { message: trunkMsg, toolResults: [] }, ctx);
-
+      await pi.emit("session_shutdown", {}, ctx);
+      if (replace) {
+        pi = new FakePi();
+        registerExtension(pi as any);
+      }
       header = { type: "session", id: FORK_ID, timestamp: FORKED_AT };
       branch = forkBranch(forkMsg);
       await pi.emit("session_start", { reason: "fork" }, ctx);
+      if (reload) {
+        await pi.emit("session_shutdown", {}, ctx);
+        pi = new FakePi();
+        registerExtension(pi as any);
+        if (cacheMiss) {
+          const otherCtx = ctxWithBranch("unrelated-manager", []);
+          await pi.emit("session_start", { reason: "startup" }, otherCtx);
+        } else {
+          await pi.emit("session_start", { reason: "reload" }, ctx);
+        }
+      }
       await pi.emit("turn_start", {}, ctx);
       await pi.emit("turn_end", { message: forkMsg, toolResults: [] }, ctx);
 
       expect(seeds).toHaveLength(2);
-      expect(seeds[0]!.parentGenerationIds).toEqual([
-        stablePiGenerationId(TRUNK_ID, "a1"),
-      ]);
-      // The defect this guards against: hashing the copied entry with the
-      // fork's conversation id names a generation nobody exported.
+      expect(seeds[0]!.parentGenerationIds).toEqual(
+        unknownStart ? undefined : [stablePiGenerationId(TRUNK_ID, "a1")],
+      );
+      // Copied entry ids must not become nonexistent local generations.
       expect(seeds[1]!.id).toBe(stablePiGenerationId(FORK_ID, "a2"));
       expect(seeds[1]!.parentGenerationIds).toBeUndefined();
-      expect(seeds[1]!.metadata).toEqual({
-        "pi.fork.parent_session_id": TRUNK_ID,
-        "pi.fork.parent_generation_id": stablePiGenerationId(TRUNK_ID, "a1"),
-      });
+      expect(seeds[1]!.metadata).toEqual(
+        unknownStart
+          ? undefined
+          : {
+              "pi.fork.parent_session_id": TRUNK_ID,
+              "pi.fork.parent_generation_id": stablePiGenerationId(
+                TRUNK_ID,
+                "a1",
+              ),
+            },
+      );
     });
 
-    it("suppresses the edge on an in-memory fork with no trunk to name", async () => {
+    it.each([
+      { name: "fork start", reason: "fork", reload: false },
+      { name: "fork reload", reason: "fork", reload: true },
+      {
+        name: "headerless startup",
+        reason: "startup",
+        reload: true,
+        noHeader: true,
+      },
+      {
+        name: "unusable header",
+        reason: "startup",
+        reload: true,
+        unusable: true,
+      },
+    ])("suppresses uncertain edges for $name", async ({
+      reason,
+      reload,
+      noHeader,
+      unusable,
+    }) => {
       // Same path, but the plugin never saw the trunk conversation, so it
       // has no trunk id. The edge must still go.
       const { seeds } = setupForkClient();
       const msg = assistantMessage();
       const ctx = {
         sessionManager: {
-          getHeader: () => ({
-            type: "session",
-            id: FORK_ID,
-            timestamp: FORKED_AT,
-          }),
+          getHeader: () =>
+            noHeader
+              ? undefined
+              : {
+                  type: "session",
+                  id: FORK_ID,
+                  timestamp: unusable ? undefined : FORKED_AT,
+                },
           getSessionFile: () => undefined,
           getSessionId: () => FORK_ID,
           getBranch: () => forkBranch(msg),
         },
       };
 
-      const pi = new FakePi();
+      let pi = new FakePi();
       registerExtension(pi as any);
-      await pi.emit("session_start", { reason: "fork" }, ctx);
+      await pi.emit("session_start", { reason }, ctx);
+      if (reload) {
+        await pi.emit("session_shutdown", {}, ctx);
+        pi = new FakePi();
+        registerExtension(pi as any);
+        await pi.emit("session_start", { reason: "reload" }, ctx);
+      }
       await pi.emit("turn_start", {}, ctx);
       await pi.emit("turn_end", { message: msg, toolResults: [] }, ctx);
 
+      expect(seeds[0]!.parentGenerationIds).toBeUndefined();
+      expect(seeds[0]!.metadata).toBeUndefined();
+    });
+
+    it.each([
+      { name: "local entry in the immediate trunk", inherited: false },
+      {
+        name: "earlier entry inherited by the immediate trunk",
+        inherited: true,
+      },
+    ])("forks again from $name and preserves ancestry through navigation", async ({
+      inherited,
+    }) => {
+      const { seeds } = setupForkClient();
+      let header = {
+        type: "session",
+        id: TRUNK_ID,
+        timestamp: TRUNK_STARTED_AT,
+      };
+      const msg = assistantMessage();
+      let branch = forkBranch(assistantMessage());
+      const ctx = {
+        sessionManager: {
+          getHeader: () => header,
+          getSessionId: () => header.id,
+          getBranch: () => branch,
+        },
+      };
+      let pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", { reason: "startup" }, ctx);
+      await pi.emit("session_shutdown", {}, ctx);
+      header = { type: "session", id: FORK_ID, timestamp: FORKED_AT };
+      pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", { reason: "fork" }, ctx);
+      await pi.emit("session_shutdown", {}, ctx);
+      header = {
+        type: "session",
+        id: "fork-of-fork",
+        timestamp: "2020-01-01T00:03:00.000Z",
+      };
+      const parentId = inherited ? "a1" : "a2";
+      const copied = inherited ? branch.slice(0, 2) : branch;
+      branch = [
+        ...copied,
+        messageEntry("u3", parentId, "user", "2020-01-01T00:04:00.000Z"),
+        messageEntry("a3", "u3", "assistant", "2020-01-01T00:04:01.000Z", msg),
+      ];
+      pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", { reason: "fork" }, ctx);
+      await pi.emit("session_shutdown", {}, ctx);
+      pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", { reason: "reload" }, ctx);
+      await pi.emit(
+        "session_before_tree",
+        { preparation: { userWantsSummary: false } },
+        ctx,
+      );
+      await pi.emit("session_tree", { newLeafId: parentId }, ctx);
+      await pi.emit("turn_start", {}, ctx);
+      await pi.emit("turn_end", { message: msg, toolResults: [] }, ctx);
+      expect(seeds[0]!.parentGenerationIds).toBeUndefined();
+      expect(seeds[0]!.metadata).toEqual(
+        inherited
+          ? undefined
+          : {
+              "pi.fork.parent_session_id": FORK_ID,
+              "pi.fork.parent_generation_id": stablePiGenerationId(
+                FORK_ID,
+                "a2",
+              ),
+            },
+      );
+      const next = assistantMessage();
+      branch = [
+        ...branch,
+        messageEntry("u4", "a3", "user", "2020-01-01T00:05:00.000Z"),
+        messageEntry("a4", "u4", "assistant", "2020-01-01T00:05:01.000Z", next),
+      ];
+      await pi.emit("turn_start", {}, ctx);
+      await pi.emit("turn_end", { message: next, toolResults: [] }, ctx);
+      expect(seeds[1]!.parentGenerationIds).toEqual([
+        stablePiGenerationId("fork-of-fork", "a3"),
+      ]);
+      branch = [
+        ...copied,
+        messageEntry("un", parentId, "user", "2020-01-01T00:06:00.000Z"),
+        messageEntry("an", "un", "assistant", "2020-01-01T00:06:01.000Z", next),
+      ];
+      await pi.emit("session_tree", { newLeafId: parentId }, ctx);
+      await pi.emit("turn_start", {}, ctx);
+      await pi.emit("turn_end", { message: next, toolResults: [] }, ctx);
+      expect(seeds[2]!.parentGenerationIds).toBeUndefined();
+      expect(seeds[2]!.metadata).toEqual(seeds[0]!.metadata);
+      expect(loggerMock.error).not.toHaveBeenCalled();
+    });
+
+    it("never associates a fork with another public manager", async () => {
+      const { seeds } = setupForkClient();
+      const msg = assistantMessage();
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      const trunk = ctxWithBranch(TRUNK_ID, forkBranch(msg));
+      await pi.emit("session_start", { reason: "startup" }, trunk);
+      await pi.emit("session_shutdown", {}, trunk);
+      const fork = ctxWithBranch(FORK_ID, forkBranch(msg));
+      fork.sessionManager.getHeader = () => ({
+        type: "session",
+        id: FORK_ID,
+        timestamp: FORKED_AT,
+      });
+      await pi.emit("session_start", { reason: "fork" }, fork);
+      await pi.emit("turn_start", {}, fork);
+      await pi.emit("turn_end", { message: msg, toolResults: [] }, fork);
       expect(seeds[0]!.parentGenerationIds).toBeUndefined();
       expect(seeds[0]!.metadata).toBeUndefined();
     });
@@ -5282,7 +5420,7 @@ describe("extension lifecycle", () => {
       expect(seeds).toHaveLength(1);
       expect(seeds[0]!.id).toBe(stablePiGenerationId(FORK_ID, "c1"));
       expect(seeds[0]!.parentGenerationIds).toBeUndefined();
-      expect(seeds[0]!.metadata).toEqual({
+      expect(seeds[0]!.metadata).toMatchObject({
         "pi.fork.parent_session_id": TRUNK_ID,
         "pi.fork.parent_generation_id": stablePiGenerationId(TRUNK_ID, "a1"),
       });
@@ -5314,8 +5452,11 @@ function makePiMsg(
   };
 }
 
-function makePiTiming(overrides?: Partial<ToolTiming>): ToolTiming {
+function makePiTiming(overrides?: Partial<ToolObservation>): ToolObservation {
   return {
+    occurrence: 0,
+    proposalSafe: false,
+    postExecutionInputSafe: true,
     toolCallId: "call-1",
     toolName: "bash",
     startedAt: 1700000000500,
@@ -5355,6 +5496,7 @@ function mockAgento11yClient() {
       };
       recorders.push(rec);
       return {
+        startToolExecution: client.startToolExecution,
         setResult: vi.fn((r: Record<string, unknown>) => {
           rec.result = r;
         }),
@@ -5836,14 +5978,14 @@ describe("skill catalog and tool lifecycle", () => {
         seed.startedAt,
       ]),
     ).toEqual([
-      ["two", "second", new Date(2000)],
       ["one", "first", new Date(1000)],
+      ["two", "second", new Date(2000)],
     ]);
     expect(
       startTool.mock.results.map(
         (result) => result.value.setResult.mock.calls[0][0].completedAt,
       ),
-    ).toEqual([new Date(3000), new Date(4000)]);
+    ).toEqual([new Date(4000), new Date(3000)]);
   });
 
   it("keeps catalogs across cancelled switches but clears on actual replacement and shutdown", async () => {
@@ -5977,18 +6119,30 @@ describe("emitToolSpans", () => {
       (start) => client.startToolExecution(start),
       msg,
       toolResults,
-      [makePiTiming({ toolCallId: "c1" })],
+      [
+        makePiTiming({
+          toolCallId: "c1",
+          postExecutionInputJSON: '{"cmd":"ls"}',
+          resultText: "file.txt",
+        }),
+      ],
       {
         agentName: "pi",
         contentCapture: "full",
       },
     );
 
-    expect(recorders[0]!.result?.arguments).toBe('{"cmd":"ls"}');
+    expect(recorders[0]!.result?.arguments).toBe(
+      '{"observation":"tool_result.input","input":{"cmd":"ls"}}',
+    );
     expect(recorders[0]!.result?.result).toBe("file.txt");
   });
 
-  it("omits content when contentCapture is off", () => {
+  it.each([
+    "metadata_only",
+    "no_tool_content",
+    "full_with_metadata_spans",
+  ] as const)("omits span content in %s", (contentCapture) => {
     const { client, recorders } = mockAgento11yClient();
     const msg = makePiMsg({
       content: [
@@ -6000,15 +6154,117 @@ describe("emitToolSpans", () => {
       (start) => client.startToolExecution(start),
       msg,
       [makePiToolResult({ toolCallId: "c1" })],
-      [makePiTiming({ toolCallId: "c1" })],
+      [
+        makePiTiming({
+          toolCallId: "c1",
+          postExecutionInputJSON: '{"private":true}',
+          resultText: "private",
+        }),
+      ],
       {
         agentName: "pi",
-        contentCapture: "metadata_only",
+        contentCapture,
       },
     );
 
     expect(recorders[0]!.result?.arguments).toBeUndefined();
     expect(recorders[0]!.result?.result).toBeUndefined();
+  });
+
+  it.each([
+    {
+      name: "replaced",
+      content: [{ type: "text", text: "finalized" }],
+      expected: "finalized",
+    },
+    { name: "removed", content: [], expected: "" },
+    { name: "missing", content: undefined, expected: undefined },
+    {
+      name: "duplicate",
+      content: [{ type: "text", text: "finalized" }],
+      expected: undefined,
+    },
+    {
+      name: "mismatched name",
+      content: [{ type: "text", text: "finalized" }],
+      expected: undefined,
+    },
+    {
+      name: "duplicate observation",
+      content: [{ type: "text", text: "finalized" }],
+      expected: undefined,
+    },
+    {
+      name: "unfinished duplicate",
+      content: [{ type: "text", text: "finalized" }],
+      expected: undefined,
+    },
+  ])("uses finalized top-level span bodies and live nested bodies: $name", ({
+    name,
+    content,
+    expected,
+  }) => {
+    const { client, recorders } = mockAgento11yClient();
+    const finalized = makePiToolResult({
+      toolCallId: "parent",
+      toolName: name === "mismatched name" ? "read" : "bash",
+      content: content ?? [],
+    });
+    let parent = makePiTiming({
+      toolCallId: "parent",
+      occurrence: 0,
+      resultText: "removed private content",
+    });
+    if (name === "unfinished duplicate") {
+      const state = new ToolExecutions();
+      const call = { toolCallId: "parent", toolName: "bash" };
+      state.start(call, 1000);
+      state.end(
+        { ...call, isError: false, result: { content: finalized.content } },
+        [],
+        2000,
+      );
+      state.start(call, 3000);
+      expect(state.completed()).toHaveLength(1);
+      parent = state.completed()[0]!;
+      expect(parent.duplicateId).toBe(true);
+    }
+    emitToolSpans(
+      (start) => client.startToolExecution(start),
+      makePiMsg(),
+      name === "missing"
+        ? []
+        : name === "duplicate"
+          ? [finalized, finalized]
+          : [finalized],
+      [
+        parent,
+        ...(name === "duplicate observation"
+          ? [
+              makePiTiming({
+                toolCallId: "parent",
+                occurrence: 1,
+                resultText: "other private content",
+              }),
+            ]
+          : []),
+        makePiTiming({
+          toolCallId: "child",
+          occurrence: 2,
+          parentToolCallId: "parent",
+          resultText: "nested live result",
+        }),
+      ],
+      { agentName: "pi", contentCapture: "full" },
+    );
+    for (const recorder of recorders.filter(
+      (item) => item.start.toolCallId === "parent",
+    ))
+      expect(recorder.result?.result).toBe(expected);
+    expect(
+      recorders.find((item) => item.start.toolCallId === "child")!.result
+        ?.result,
+    ).toBe("nested live result");
   });
 
   it("marks error tool executions", () => {
@@ -6024,18 +6280,26 @@ describe("emitToolSpans", () => {
     expect(recorders[0]!.callError).toBeInstanceOf(Error);
   });
 
-  it("uses real start/end times", () => {
+  it.each([
+    undefined,
+    0,
+    12.5,
+  ])("anchors host duration to the observed start: %s", (durationMs) => {
     const { client, recorders } = mockAgento11yClient();
     emitToolSpans(
       (start) => client.startToolExecution(start),
       makePiMsg(),
       [],
-      [makePiTiming({ startedAt: 1000, completedAt: 5000 })],
+      [makePiTiming({ startedAt: 1000, completedAt: 5000, durationMs })],
       { agentName: "pi", contentCapture: "metadata_only" },
     );
 
-    expect(recorders[0]!.start).toMatchObject({ startedAt: new Date(1000) });
-    expect(recorders[0]!.result?.completedAt).toEqual(new Date(5000));
+    expect(recorders[0]!.start).toMatchObject({
+      startedAt: new Date(1000),
+    });
+    expect(recorders[0]!.result?.completedAt).toEqual(
+      new Date(durationMs === undefined ? 5000 : 1000 + Math.round(durationMs)),
+    );
   });
 
   // The SDK's generation sanitizer never sees a tool-execution span, so the
@@ -6064,7 +6328,16 @@ describe("emitToolSpans", () => {
       (start) => client.startToolExecution(start),
       msg,
       toolResults,
-      [makePiTiming({ toolCallId: "c1" })],
+      [
+        makePiTiming({
+          toolCallId: "c1",
+          postExecutionInputJSON: JSON.stringify({
+            cmd: "deploy.sh",
+            env: "API_TOKEN=hunter2",
+          }),
+          resultText: `authenticated with ${token}`,
+        }),
+      ],
       { agentName: "pi", contentCapture: "full" },
     );
 

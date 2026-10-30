@@ -66,6 +66,15 @@ try {
     "file-loader",
     "reload",
     "lifecycle",
+    "lifecycle-request-compaction",
+    "lifecycle-summary-failed",
+    "lifecycle-summary-cancelled",
+    "lifecycle-fork-reload",
+    "telemetry-response-model",
+    "export-partial-rejection",
+    "export-exhausted-retries",
+    "export-queue-overflow",
+    "export-shutdown-deadline",
     "guard-startup-disabled",
     "guard-startup-open",
     "guard-startup-strict",
@@ -73,6 +82,22 @@ try {
     "ordinary-metadata",
     "ordinary-no-tools",
     "ordinary-metadata-spans",
+    ...[
+      "sequential",
+      "parallel",
+      "repeated-ids",
+      "nested",
+      "transformed",
+      "later-changes",
+      "finalized-result",
+      "result-delay",
+      "blocked-invalid",
+      "mutated-input",
+    ].flatMap((kind) =>
+      ["full", "metadata", "no-tools", "metadata-spans"].map(
+        (mode) => `tools-${kind}-${mode}`,
+      ),
+    ),
     "summary-manual",
     "summary-split",
     "summary-virtual",
@@ -101,15 +126,23 @@ try {
   ];
   const requested = process.argv.slice(2);
   assert(
-    requested.every((name) => name === "--summary" || scenarios.includes(name)),
-    "Pass native scenario names or --summary",
+    requested.every(
+      (name) =>
+        ["--summary", "--tools", "--lifecycle", "--proposal-controls"].includes(
+          name,
+        ) || scenarios.includes(name),
+    ),
+    "Pass native scenario names, --summary, --tools, --lifecycle, or --proposal-controls",
   );
   const failed = [];
   for (const scenario of scenarios.filter(
     (name) =>
       requested.length === 0 ||
       requested.includes(name) ||
-      (requested.includes("--summary") && name.startsWith("summary-")),
+      (requested.includes("--summary") && name.startsWith("summary-")) ||
+      (requested.includes("--tools") && name.startsWith("tools-")) ||
+      (requested.includes("--lifecycle") &&
+        (name === "lifecycle" || name.startsWith("lifecycle-"))),
   )) {
     const env = testEnvironment(root, scenario, path);
     const cwd = join(root, scenario, "workspace");
@@ -128,10 +161,13 @@ try {
     }
   }
   assert.deepEqual(failed, [], "Native Pi scenarios failed");
-  if (requested.length === 0)
+  if (requested.length === 0 || requested.includes("--proposal-controls"))
     await run(
       "native acceptance negative controls",
-      [join(isolatedPackage, "src/testdata/native/negative-controls.mjs")],
+      [
+        join(isolatedPackage, "src/testdata/native/negative-controls.mjs"),
+        ...(requested.length === 0 ? [] : ["--proposals"]),
+      ],
       isolatedPackage,
       testEnvironment(root, "negative-controls", path),
       180_000,

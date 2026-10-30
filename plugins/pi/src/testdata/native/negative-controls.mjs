@@ -29,6 +29,36 @@ function replaceOnce(source, before, after) {
   return source.replace(before, after);
 }
 
+const proposalControls = ["full", "metadata-spans"].flatMap((mode) => [
+  ...["sequential", "parallel", "nested"].map((kind) => ({
+    name: `missing-proposal-${kind}-${mode}`,
+    scenario: `tools-${kind}-${mode}`,
+    inject: (source) =>
+      replaceOnce(
+        source,
+        "input_json: toBase64Payload(part.toolCall.inputJSON)",
+        'input_json: ""',
+      ),
+    failure: /Unchanged proposal arguments must be present/,
+  })),
+  {
+    name: `retained-blocked-proposal-${mode}`,
+    scenario: `tools-blocked-invalid-${mode}`,
+    inject: (source) =>
+      replaceOnce(
+        source,
+        "input_json: toBase64Payload(part.toolCall.inputJSON)",
+        `input_json: toBase64Payload(JSON.stringify({
+          "guard-blocked": { value: "guard-blocked-body" },
+          "later-blocked": { value: "later-blocked-body" },
+          invalid: {},
+          unknown: { value: "unknown-body" },
+        }[part.toolCall.id]))`,
+      ),
+    failure: /Uncertain proposal arguments must be omitted, not substituted/,
+  },
+]);
+
 const controls = [
   {
     name: "named-udp",
@@ -48,8 +78,8 @@ ${source}`,
     inject: (source) =>
       replaceOnce(
         source,
-        'await sigil.shutdown();\n      } catch (err) {\n        logger.error("session shutdown failed", err);',
-        'await sigil.shutdown();\n        throw new Error("native injected shutdown failure");\n      } catch (err) {\n        logger.error("session shutdown failed", err);',
+        'await sigil.shutdown();\n      } catch (err) {\n        reportExportFailure(sigil);\n        logger.error("session shutdown failed", err);',
+        'await sigil.shutdown();\n        throw new Error("native injected shutdown failure");\n      } catch (err) {\n        reportExportFailure(sigil);\n        logger.error("session shutdown failed", err);',
       ),
     failure: /Unexpected plugin diagnostics/,
     witness: /native injected shutdown failure/,
@@ -167,19 +197,26 @@ async function run(name, scenario, source) {
 }
 
 const baselineOnly = process.argv[2] === "--baseline-only";
+const proposalsOnly = process.argv[2] === "--proposals";
 assert(
-  baselineOnly || process.argv.length === 2,
-  "Pass --baseline-only followed by native scenario names, or no arguments",
+  baselineOnly ||
+    (proposalsOnly && process.argv.length === 3) ||
+    process.argv.length === 2,
+  "Pass --baseline-only followed by native scenario names, --proposals, or no arguments",
 );
+const selectedControls = proposalsOnly
+  ? proposalControls
+  : [...controls, ...proposalControls];
 
 try {
   const baselines = baselineOnly
     ? process.argv.slice(3)
     : [
         ...new Set([
-          ...controls.map(({ scenario }) => scenario),
-          "guard-startup-open",
-          "guard-startup-strict",
+          ...selectedControls.map(({ scenario }) => scenario),
+          ...(proposalsOnly
+            ? []
+            : ["guard-startup-open", "guard-startup-strict"]),
         ]),
       ];
   assert(baselines.length > 0, "Pass at least one native scenario");
@@ -192,7 +229,7 @@ try {
     );
     console.log(`PASS baseline ${scenario}`);
   }
-  for (const control of baselineOnly ? [] : controls) {
+  for (const control of baselineOnly ? [] : selectedControls) {
     const result = await run(
       control.name,
       control.scenario,

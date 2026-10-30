@@ -851,6 +851,52 @@ describe("pi guards: real-SDK over HTTP", () => {
         },
       },
       {
+        name: "blocks when frozen tool input prevents a rewrite (failOpen=false)",
+        env: { failOpen: false },
+        hook: redactedToolCall("tc-1", '{"command":"echo [REDACTED]"}'),
+        input: Object.freeze({ command: "echo sk-real-secret" }),
+        assert: ({ result, event }) => {
+          expect(result).toEqual({
+            block: true,
+            reason:
+              "Agent Observability could not apply a required guard transformation.",
+          });
+          expect(event.input).toEqual({ command: "echo sk-real-secret" });
+        },
+      },
+      {
+        name: "blocks when sealed tool input prevents key deletion (failOpen=false)",
+        env: { failOpen: false },
+        hook: redactedToolCall("tc-1", '{"command":"echo [REDACTED]"}'),
+        input: Object.seal({
+          command: "echo sk-real-secret",
+          token: "sk-leak",
+        }),
+        assert: ({ result }) => {
+          expect(result).toMatchObject({ block: true });
+        },
+      },
+      {
+        name: "blocks after a partial rewrite hits a read-only property (failOpen=false)",
+        env: { failOpen: false },
+        hook: redactedToolCall(
+          "tc-1",
+          '{"other":"[REDACTED]","command":"echo [REDACTED]"}',
+        ),
+        input: Object.defineProperty({ other: "secret" }, "command", {
+          value: "echo sk-real-secret",
+          enumerable: true,
+          writable: false,
+        }),
+        assert: ({ result, event }) => {
+          expect(result).toMatchObject({ block: true });
+          expect(event.input).toEqual({
+            other: "[REDACTED]",
+            command: "echo sk-real-secret",
+          });
+        },
+      },
+      {
         name: "blocks on a deny verdict with policy wording",
         hook: deny("blocked rm -rf"),
         assert: ({ result }) => {

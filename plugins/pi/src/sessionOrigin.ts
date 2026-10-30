@@ -28,7 +28,7 @@ import { logger } from "./logger.js";
 
 /** Origin of a pi session. */
 export interface SessionOrigin {
-  /** True when the session was created by `--fork`, `/fork` or `/clone`. */
+  /** True for a fork or an unknown origin whose parent edges need suppression. */
   readonly forked: boolean;
   /**
    * ISO-8601 header timestamp of the fork. Entries stamped at or before it
@@ -51,11 +51,21 @@ export interface SessionOrigin {
 }
 
 /** A conversation this process has been attributing turns to. */
-export interface ConversationRecord {
+interface ConversationRecord {
   readonly id: string;
-  /** ISO-8601 time the conversation began: its session header timestamp. */
-  readonly startedAt: string;
+  readonly startedAt?: string;
+  readonly origin: SessionOrigin;
 }
+
+const registryKey = Symbol.for("grafana.agento11y.pi.session-origin.v1");
+const processRegistry = globalThis as typeof globalThis & {
+  [registryKey]?: WeakMap<SessionHeaderSourceLike, ConversationRecord>;
+};
+// Pi replaces extension factories while retaining and mutating the public manager.
+const origins: WeakMap<SessionHeaderSourceLike, ConversationRecord> =
+  processRegistry[registryKey] ?? new WeakMap();
+processRegistry[registryKey] = origins;
+const UNKNOWN_ORIGIN: SessionOrigin = Object.freeze({ forked: true });
 
 /**
  * Shared answer for a session that is not a fork. Frozen: callers cache it
@@ -73,6 +83,7 @@ export const NOT_FORKED: SessionOrigin = Object.freeze({ forked: false });
 export interface SessionHeaderSourceLike {
   getHeader?: () => SessionHeaderLike | null | undefined;
   getSessionFile?: () => string | undefined;
+  getSessionId?: () => string | undefined;
 }
 
 /** Minimal `SessionHeader` shape: just the fields we read. */
@@ -96,9 +107,7 @@ const HEADER_READ_BYTES = 64 * 1024;
 /**
  * Resolve the origin of the session `sessionManager` currently points at.
  *
- * Any failure degrades to `NOT_FORKED`. The opposite default would suppress
- * parent edges on every `--session` continuation, which is far more common
- * than a fork.
+ * Without a usable header, ancestry is unknown and parent edges stay suppressed.
  */
 export function resolveSessionOrigin(
   sessionManager: SessionHeaderSourceLike | undefined | null,
@@ -109,53 +118,52 @@ export function resolveSessionOrigin(
 /** What the `session_start` handler learns from the new session's header. */
 export interface SessionStartFacts {
   /**
-   * ISO-8601 time this conversation began. Absent when no header is
-   * available or it carries no timestamp.
+   * ISO-8601 time this conversation began. Absent when neither the header nor a
+   * cached snapshot for the same manager and session ID has a usable timestamp.
    */
   readonly startedAt?: string;
   /** Where the session came from. */
   readonly origin: SessionOrigin;
 }
 
-/**
- * Read the new session's header once and report both facts the
- * `session_start` handler needs: when the conversation began, and where it
- * came from.
- *
- * Pass `forked` from pi's own `session_start` reason. A persisted fork names
- * the trunk in its header and needs no help, but a `--no-session` fork does:
- * `createBranchedSession` writes `parentSession` only when the session
- * manager persists (`session-manager.js`), while the conversation id changes
- * either way. In that mode `trunk`, the conversation this process was
- * attributing turns to before the fork, is the only record of where the
- * copied entries came from. An in-memory session cannot be resumed in
- * another process, so the in-process record is complete for it.
- */
 export function resolveSessionStart(
   sessionManager: SessionHeaderSourceLike | undefined | null,
-  options: {
-    forked: boolean;
-    trunk?: ConversationRecord;
-    now?: Date;
-  },
+  options: { forked: boolean },
 ): SessionStartFacts {
   const header = resolveSessionHeader(sessionManager);
-  const startedAt = nonEmptyString(header?.timestamp);
-  const fromHeader = originFromHeader(header);
-  if (fromHeader.forked || !options.forked) {
-    return { startedAt, origin: fromHeader };
+  const startedAt = usableTimestamp(header?.timestamp);
+  let id: string | undefined;
+  try {
+    id = nonEmptyString(sessionManager?.getSessionId?.());
+  } catch {
+    // Header identity remains usable when the public accessor fails.
   }
-  return {
-    startedAt,
-    origin: {
-      forked: true,
-      // The header of an in-memory fork still carries the fork instant, the
-      // same value the persisted path reads.
-      forkedAt: startedAt ?? (options.now ?? new Date()).toISOString(),
-      trunkConversationId: options.trunk?.id,
-      trunkStartedAt: options.trunk?.startedAt,
-    },
+  id ??= nonEmptyString(header?.id);
+  const previous = sessionManager ? origins.get(sessionManager) : undefined;
+  let origin = originFromHeader(header);
+  // A persisted parentSession takes precedence over process observations.
+  if (!nonEmptyString(header?.parentSession)) {
+    if (id && previous?.id === id) {
+      origin = previous.origin;
+    } else if (options.forked) {
+      origin = {
+        forked: true,
+        forkedAt: startedAt,
+        trunkConversationId: id ? previous?.id : undefined,
+        trunkStartedAt: id ? previous?.startedAt : undefined,
+      };
+    }
+  }
+  const facts = {
+    startedAt:
+      startedAt ?? (previous?.id === id ? previous?.startedAt : undefined),
+    origin: Object.freeze({ ...origin }),
   };
+  if (sessionManager) {
+    if (id) origins.set(sessionManager, Object.freeze({ id, ...facts }));
+    else origins.delete(sessionManager);
+  }
+  return facts;
 }
 
 /**
@@ -174,11 +182,7 @@ function resolveSessionHeader(
     callGetHeader(sessionManager) ??
     readSessionHeader(callGetSessionFile(sessionManager));
   if (!header) {
-    // The costly degradation: with no header, a real fork looks like a
-    // resume, and its first turn goes back to naming a parent generation
-    // nothing exported. Logged here, where "no header at all" is still
-    // distinguishable from "a header that says this is not a fork".
-    logger.debug("no session header available, treating session as not forked");
+    logger.debug("no session header available");
   }
   return header;
 }
@@ -187,7 +191,11 @@ function originFromHeader(
   header: SessionHeaderLike | undefined,
 ): SessionOrigin {
   const parentSession = nonEmptyString(header?.parentSession);
-  if (!parentSession) return NOT_FORKED;
+  if (!parentSession) {
+    return nonEmptyString(header?.id) && usableTimestamp(header?.timestamp)
+      ? NOT_FORKED
+      : UNKNOWN_ORIGIN;
+  }
 
   const forkedAt = nonEmptyString(header?.timestamp);
   if (!forkedAt) {
@@ -317,6 +325,11 @@ function isSessionHeader(value: unknown): value is SessionHeaderLike {
     value !== null &&
     (value as { type?: unknown }).type === "session"
   );
+}
+
+function usableTimestamp(value: unknown): string | undefined {
+  const text = nonEmptyString(value);
+  return text && Number.isFinite(Date.parse(text)) ? text : undefined;
 }
 
 function nonEmptyString(value: unknown): string | undefined {

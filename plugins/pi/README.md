@@ -2,7 +2,7 @@
 
 [Pi](https://github.com/earendil-works/pi) agent extension that sends LLM generations to [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/).
 
-The tested host is Pi 1.4.0. Older hosts are not verified.
+The supported test baseline is Pi 1.4.0. Older hosts are not verified. Upgrading from the older dotenv loader requires one process restart; see [configuration reload](#all-options).
 
 By default only metadata is sent (token counts, cost, model, tool names, recognized skill names, durations). Set `AGENTO11Y_CONTENT_CAPTURE_MODE` to `full`, `no_tool_content`, `metadata_only`, or `full_with_metadata_spans` to control what is sent. `default` is accepted as an alias for `metadata_only`. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md) for the full reference.
 
@@ -90,9 +90,13 @@ AGENTO11Y_CONTENT_CAPTURE_MODE=full
 
 Run one pi turn, then open **Agent Observability → Conversations** in Grafana Cloud. A new generation should appear within a few seconds.
 
+The plugin reports observed export failures with a fixed warning, deduplicated per client, even when debug logging is disabled. Interactive sessions use Pi UI notifications; headless sessions use stderr, never stdout. If a notification sink throws, reporting attempts stderr without interrupting Pi.
+
+Warnings cover observed generation-export failures, including rejection, queue overflow, exhausted retries, and shutdown loss. They do not detect every silent loss. Export warnings and their SDK debug diagnostics omit raw errors, payloads, endpoints, and credentials. Diagnostic filtering is independent of capture mode. There is no durable spool or recovery guarantee.
+
 If nothing shows up, set `AGENTO11Y_DEBUG=true` in `~/.config/agento11y/config.env`, run another turn, and check the debug log at `~/.local/state/agento11y/logs/agento11y.log` (honors `XDG_STATE_HOME`).
 
-Live capture recognizes `read` attempts for an exact instruction file in Pi's finalized skill catalog, including standalone Markdown skills. The catalog comes from `systemPromptOptions` after all `before_agent_start` handlers finish and is cleared at `agent_settled`. Runs without a fresh catalog, including custom-message runs that skip `before_agent_start`, produce no skill match. Detection requires input observed through `tool_call` or `tool_result`; calls blocked before those handlers run stay generic. Reads without matching execution start/end events produce no tool span. Detection assumes built-in-compatible local `read` behavior; custom or remote overrides can associate a read with the wrong skill.
+Live capture recognizes `read` attempts for an exact instruction file in Pi's finalized skill catalog, including standalone Markdown skills. The catalog comes from `systemPromptOptions` after all `before_agent_start` handlers finish and is cleared at `agent_settled`. Runs without a fresh catalog produce no skill match. Pi 1.4.0 custom-message runs emit `before_agent_start` too. Detection requires input observed through `tool_call` or `tool_result`; calls blocked before those handlers run stay generic. Reads without matching execution start/end events produce no tool span. Detection assumes built-in-compatible local `read` behavior; custom or remote overrides can associate a read with the wrong skill.
 
 Recognized attempts mark existing tool-execution spans with `gen_ai.skill.name`, including failures. Pi retains the matched catalog name with its case and namespace, trimming only surrounding whitespace. Recognition does not prove successful loading or explain later actions. It excludes imported history, direct `/skill` prompt insertion, resource reads, scripts, and attribution of later activity. Validated names remain in reduced capture modes; secret-like names are omitted. Recognition adds no descriptions, paths, or URIs and changes no payload policy. Recognized attempts, including failures, also add `gen_ai.skill.name` and `agento11y.tool.execution.kind="load_skill"` to the existing `gen_ai.client.operation.duration` histogram. Names remain under metric retention even in reduced modes; use stable, nonsensitive names.
 
@@ -121,19 +125,46 @@ One more tag appears on generations pi produces outside a user turn:
 
 Built-in tags win collisions with user tags, matching the claude-code and cursor launchers. See [Tags and Metadata](../../docs/concepts/tags-and-metadata.md#built-in-tags-from-the-agent-launchers) for the tags the launchers share and the metadata keys pi adds.
 
+## Capture and attribution limits
+
+Pi 1.4.0 does not expose a verified final provider request. The plugin omits system prompts, offered-tool descriptions and schemas, and request controls such as temperature or token limits. Uncorrelated provider callbacks cannot distinguish foreground requests from warming or background work.
+
+`Generation.tools` contains unique, name-only definitions from finalized assistant tool-call proposals. These names describe proposed calls, not the offered catalog or proof of execution. Structural tool-call and tool-result parts remain available in reduced capture modes.
+
+The plugin keeps three tool observations separate:
+
+- The assistant's proposal supplies the generation's tool-call identity and arguments, when safe correspondence is proven.
+- The `tool_call` hook supplies guard-stage input. Argument preparation and other handlers can change it.
+- `tool_result.input` supplies post-execution input, explicitly labeled on tool spans. A tool can mutate its arguments, so this is not an execution-entry snapshot.
+
+Transformed proposal bodies are omitted. Missing or ambiguous correspondence also omits bodies instead of substituting prepared input or raw history. Post-execution input is retained only when its safety checks pass; blocked or invalid calls do not acquire invented execution input. Top-level result bodies and generation error flags use finalized transcript results, including message replacements. Top-level spans omit result bodies without a unique matching finalized result. Nested result bodies use live completion events because nested calls have no transcript entry. Observed parent IDs determine nested tool spans; missing, ambiguous, or malformed relationships stay attached to the generation.
+
+Tool spans retain the observed start. When Pi supplies a valid execute-only duration, the plugin places that duration at the observed start. This placement is an estimate: Pi does not expose the exact execution-entry timestamp, and its duration excludes guards and result hooks.
+
+Ordinary responses use `responseModel ?? model`: a supplied response identity wins, and a missing or null identity falls back to the request model. Failed assistant attempts remain separate from successful retries. Request-time compaction preserves active-turn input and timing. Reported usage does not establish complete accounting for every failed attempt or background call.
+
+Numeric `pi.tool_usage.*` metadata aggregates usage only from finalized top-level tool results, once per result; Pi already includes nested usage there. Tool usage and cost remain separate from assistant usage and `cost_usd`. This metadata does not change backend generation totals or attribute tool usage to the requesting model.
+
+One-hour cache writes are already included in cache-write counts. Assistant and summary records expose this non-additive detail as `pi.usage.cache_write_1h_input_tokens`. Tool usage uses `pi.tool_usage.cache_write_1h_input_tokens`.
+
+The plugin uses client-scoped OpenTelemetry providers. It does not replace global providers or the global context manager.
+
 ## Compaction and summarization
 
 Pi makes model calls of its own outside the agent loop. It compacts the context when the conversation approaches the model's window, when you run `/compact`, and while recovering from a context overflow. It summarizes the abandoned branch when you navigate the session tree with summarization on. A compaction on a large-window model can be a six-figure-token request at full price, because pi sends it with cache retention off.
 
-The plugin exports each of those calls as its own generation so they show up in the session's token and cost totals:
+The plugin exports each successful built-in summary operation as a generation. Split compaction can make several requests; the record is an operation aggregate, not an individual physical call:
 
 - The tag `pi.call_kind` is `compaction` or `branch_summary`. That is the marker to filter on.
 - `operation_name` is `generateText` rather than the `streamText` a turn gets, because there is no token stream to time.
-- The parent generation is the nearest assistant turn above the entry in pi's session tree. For a compaction that is the turn it followed. For a branch summary it is the turn above the navigation target, which can sit earlier in the session than the branch that was summarized.
+- When ancestry is known, the parent is the nearest local assistant turn above the summary entry. A branch summary follows the navigation target, which can precede the summarized branch.
+- Physical model identity is unknown. The request model and provider are `unknown`, and the response model is omitted. Metadata sets `pi.summary.model_attribution="unknown"` and `pi.summary.operation_aggregate=true`. The current selection, when available, stays separate in `pi.summary.selected_model` and `pi.summary.selected_provider`.
 - Metadata carries `cost_usd` whenever pi priced the call, on the same rule as a turn. Compactions add `pi.tokens_before`, `pi.compaction.reason`, and `pi.compaction.will_retry`. Branch summaries carry none of those three, because pi records no pre-summary context estimate and no trigger reason for them.
 - The summary text is exported as assistant output, so `AGENTO11Y_CONTENT_CAPTURE_MODE=metadata_only` drops it while keeping tokens, cost, and timing. The request side is not exported: these generations carry no input messages and no system prompt, so input tokens are reported without the text they came from.
 
-Two cases export nothing, because no model call happened: an extension supplied the compaction, or you navigated the tree without asking for a summary. Older pi versions record no usage on the entry; those still export a generation, with timing and metadata but no token counts.
+Extension-supplied summaries and tree navigation without summarization export no generation. Failed or cancelled compaction clears pending state without inventing a zero-usage generation. Pi exposes no `session_tree_failed` event. Tree events, the plugin's own cancellation, and shutdown clear pending tree timing. The next tree preparation replaces it. The plugin cannot observe every other tree failure.
+
+Summary timing can include retries and backoff. Saved usage does not account for every failed attempt. A successful summary entry without token counts exports no usage block. History import skips summary entries because they lack model identity and request timing.
 
 ## Forked sessions
 
@@ -142,7 +173,9 @@ Two cases export nothing, because no model call happened: an extension supplied 
 - `pi.fork.parent_session_id` — conversation id of the trunk.
 - `pi.fork.parent_generation_id` — generation id of the trunk turn the fork continues from.
 
-The fork's own turns link to each other as usual. Both keys are omitted when the plugin cannot name the trunk turn: the trunk session file is unreadable, the fork header carries no usable timestamp, or the trunk inherited the turn from an older session instead of running it (a fork of a fork). If `pi --fork` starts on a session file whose header cannot be read, the plugin cannot tell the fork from a resume and links turns as usual; a fork taken inside the session is recognized either way, because pi reports it.
+The fork's own turns link when origin evidence is sufficient. Both metadata keys are omitted when the plugin cannot establish the trunk turn's origin. This includes unreadable trunk evidence, missing usable timestamps, and turns inherited by the trunk from an older session.
+
+Persisted header evidence takes precedence. For an observed in-memory fork, a reload-stable ephemeral registry retains origin facts under the same public `SessionManager` object. It stores no clients or message bodies. It does not establish ancestry across independent managers or process restarts. If origin is unknown, the plugin suppresses uncertain parent edges rather than guessing.
 
 ## Redaction
 
@@ -167,16 +200,17 @@ The same three variables are honored by the [Claude Code plugin](../claude-code/
 When guards are enabled, pi also applies [Transform guards](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/guides/guards/) — regex redaction rules you configure in Grafana — in these paths:
 
 - Preflight message redaction runs at Pi's `context_with_system` hook. Validated replacements update request-local copies, not stored history. Supported content includes user and assistant text, tool arguments and results, custom messages, included Bash executions, summaries, and visible system updates.
-- Postflight tool-argument redaction runs before a tool executes. Matching Transform rules replace the arguments the tool receives.
+- Postflight tool-argument redaction runs before a tool executes. Matching Transform rules replace the arguments the tool receives. If Pi's input cannot be changed, `AGENTO11Y_GUARDS_FAIL_OPEN=false` blocks the call. Fail-open mode permits execution with original or partially changed arguments.
 - Built-in summary guards evaluate compaction and branch-summary preparation. See [Summary guard coverage](#summary-guard-coverage).
 
 Limits:
 
-- Each ordinary request adds one synchronous hook round-trip (`AGENTO11Y_GUARDS_TIMEOUT_MS`, default `1500`). This hook cannot cancel a request. Denied, failed, or invalid evaluations leave the request unchanged, log content-free warnings only when debug logging is enabled, and omit incremental user-message bodies from `Generation.input`. This omission does not suppress cached system prompts or offered-tool definitions; their export still follows the content-capture mode.
+- Each ordinary request adds one synchronous hook round-trip (`AGENTO11Y_GUARDS_TIMEOUT_MS`, default `1500`). This hook cannot cancel a request. Denied, failed, or invalid evaluations leave the request unchanged, log content-free warnings only when debug logging is enabled, and omit incremental user-message bodies from `Generation.input`. System prompts, offered-tool bodies, and unverified request controls are omitted in every capture mode.
 - Exported incremental user input and prompt-derived titles use only successfully observed content. Missing or ambiguous correspondence with finalized entries omits the body instead of reading raw history.
 - Ordinary guards use the current physical model selection. Tool guards use the assistant's reported dispatch model. Unknown or virtual selections remain unknown.
 - Pi substitutes forced prompts and filters hidden tools after this hook. Later extensions can change the request again. This is not a final provider boundary.
 - Images, thinking blocks, signatures, and unrelated fields remain unchanged. Guards do not evaluate that opaque content.
+- Tool postflight transforms do not establish universal historical replay protection after reload or resume. The plugin does not rerun historical tool authorization indiscriminately. Arbitrary extension-owned model calls remain outside coverage.
 
 ### Summary guard coverage
 
@@ -206,7 +240,7 @@ These hooks do not protect virtual-router internal calls, opaque content, or lat
 | `AGENTO11Y_AUTO_CODING_AGENT_TAGS` | `false` | Opt in to client tags resolved for the session: the user, the repository, and the branch. These reach OTel metrics as `agento11y_tag_*` labels, unlike the per-generation built-ins. The plugin builds one client per session, so the values freeze at session start. See [Tags and Metadata](../../docs/concepts/tags-and-metadata.md#opt-in-automatic-tags-agento11y_auto_coding_agent_tags) for the cardinality and personal-data trade-offs. |
 | `AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES` | all names | Narrows the switch above to a comma-separated subset of `user`, `repo`, `branch` (`all` is also accepted). Does nothing while the switch is off. |
 | `AGENTO11Y_CONTENT_CAPTURE_MODE` | `metadata_only` | One of `full`, `no_tool_content`, `metadata_only`, or `full_with_metadata_spans`. `default` is accepted as an alias for `metadata_only`. |
-| `AGENTO11Y_DEBUG` | `false` | Write lifecycle events to `~/.local/state/agento11y/logs/agento11y.log` (honors `XDG_STATE_HOME`). Never written to the terminal, to avoid corrupting pi's TUI. |
+| `AGENTO11Y_DEBUG` | `false` | Write filtered diagnostics to `~/.local/state/agento11y/logs/agento11y.log` (honors `XDG_STATE_HOME`). Debug logs stay off the terminal. Observed export-failure warnings use Pi UI or headless stderr independently. |
 | `AGENTO11Y_REDACT_INPUT_MESSAGES` | `true` | Redact known secret patterns in user input messages before export. |
 | `AGENTO11Y_EXPORT_TIMEOUT_MS` | `30000` | Timeout for each generation export request. Use a base-10 integer from `1` through `2147483647` milliseconds. |
 | `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP HTTP endpoint. Falls back to `OTEL_EXPORTER_OTLP_ENDPOINT`. |
@@ -221,4 +255,4 @@ A non-empty OS env value always wins over the file; an empty or whitespace-only 
 
 For recognized alias pairs, shell values take precedence across spellings: shell `AGENTO11Y_*`, shell `SIGIL_*`, file `AGENTO11Y_*`, then file `SIGIL_*`. This includes `QUEUE_SIZE`, `MAX_RETRIES`, and `MAX_BACKOFF_MS`. File edits and removals take effect at the next session start, including extension reload.
 
-Restart Pi once after upgrading from the older dotenv loader. The older loader does not retain ownership across module replacement, so the new loader cannot distinguish its injected values from shell exports. Later reloads retain configuration ownership without retaining clients or session contexts.
+Restart the Pi process once after upgrading from the older dotenv loader; extension reload alone is insufficient. The older loader does not retain ownership across module replacement, so the new loader cannot distinguish its injected values from shell exports. Later reloads retain configuration ownership without retaining clients or session contexts.

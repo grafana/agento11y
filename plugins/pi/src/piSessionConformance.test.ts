@@ -498,18 +498,26 @@ describe("pi session conformance", () => {
       );
       visibleBranch = branch.slice(0, branch.indexOf(entry) + 1);
       await pi.emit("message_end", { message: { role: "assistant" } }, ctx);
-      // Pi runs each tool between the assistant message and turn_end. The
-      // plugin reads the tool names off these events when the host exposes no
-      // tool registry, which is also all the session log can tell the importer.
       for (const result of toolResults) {
+        const call = (entry.message.content ?? []).find(
+          (part: any) =>
+            part.type === "toolCall" && part.id === result.toolCallId,
+        );
+        const identity = {
+          toolCallId: result.toolCallId,
+          toolName: result.toolName,
+        };
+        const input = structuredClone(call?.arguments);
         await pi.emit(
           "tool_execution_start",
-          { toolCallId: result.toolCallId, toolName: result.toolName },
+          { ...identity, args: call?.arguments },
           ctx,
         );
+        await pi.emit("tool_call", { ...identity, input }, ctx);
+        await pi.emit("tool_result", { ...result, input }, ctx);
         await pi.emit(
           "tool_execution_end",
-          { toolCallId: result.toolCallId, isError: result.isError === true },
+          { ...identity, result, isError: result.isError === true },
           ctx,
         );
       }
@@ -591,6 +599,13 @@ describe("pi session conformance", () => {
             (gen.usage.input_tokens ?? 0) + (gen.usage.output_tokens ?? 0);
         },
         wantPath: "usage.total_tokens",
+      },
+      {
+        name: "response model replaced with another identity",
+        mutate: (gen: NormalizedGeneration) => {
+          gen.response_model = "unrelated-response-model";
+        },
+        wantPath: "response_model",
       },
       {
         name: "stop reason passed through unmapped",

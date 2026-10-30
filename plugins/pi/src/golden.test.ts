@@ -231,6 +231,11 @@ describe("pi plugin: real-SDK golden export", () => {
       sessionManager: {
         getSessionFile: () => "pi-session.jsonl",
         getSessionId: () => "pi-conv-1",
+        getHeader: () => ({
+          type: "session",
+          id: "pi-conv-1",
+          timestamp: "2024-01-01T00:00:00.000Z",
+        }),
         getBranch: () =>
           appended
             ? [
@@ -264,14 +269,14 @@ describe("pi plugin: real-SDK golden export", () => {
       },
       ctx,
     );
-    await pi.emit(
-      "tool_execution_start",
-      { toolCallId: "tc-pi-1", toolName: "Bash" },
-      ctx,
-    );
+    const call = { toolCallId: "tc-pi-1", toolName: "Bash" };
+    const args = { command: "ls *.go" };
+    await pi.emit("tool_execution_start", { ...call, args }, ctx);
+    await pi.emit("tool_call", { ...call, input: args }, ctx);
+    await pi.emit("tool_result", { ...toolResult, input: args }, ctx);
     await pi.emit(
       "tool_execution_end",
-      { toolCallId: "tc-pi-1", isError: false },
+      { ...call, result: toolResult, isError: false },
       ctx,
     );
     await pi.emit("message_end", { message: { role: "assistant" } }, ctx);
@@ -358,6 +363,11 @@ describe("pi plugin: real-SDK golden export", () => {
       sessionManager: {
         getSessionFile: () => "pi-session.jsonl",
         getSessionId: () => "pi-conv-1",
+        getHeader: () => ({
+          type: "session",
+          id: "pi-conv-1",
+          timestamp: "2024-01-01T00:00:00.000Z",
+        }),
         getBranch: () => [
           { type: "message", id: "u1", parentId: null, message: userMsg },
           { type: "message", id: "a1", parentId: "u1", message: assistantMsg },
@@ -410,6 +420,14 @@ describe("pi plugin: real-SDK golden export", () => {
     expect(compaction.conversation_id).toBe("pi-conv-1");
     expect(compaction.id).toMatch(/^pi-[a-f0-9]{24}$/);
     expect(compaction.parent_generation_ids).toHaveLength(1);
+    expect(compaction.model).toEqual({ provider: "unknown", name: "unknown" });
+    expect(compaction.response_model).toBe("");
+    expect(compaction.metadata).toMatchObject({
+      "pi.summary.model_attribution": "unknown",
+      "pi.summary.operation_aggregate": true,
+      "pi.summary.selected_model": "claude-sonnet-4-pi",
+      "pi.summary.selected_provider": "anthropic",
+    });
     expect(compaction.tags["pi.call_kind"]).toBe("compaction");
     expect(String(compaction.usage.input_tokens)).toBe("120000");
     expect(String(compaction.usage.output_tokens)).toBe("8000");

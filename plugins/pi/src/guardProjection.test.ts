@@ -138,6 +138,35 @@ describe("request-local guard projection", () => {
     expect(result[1]!.content?.[1]).toBe(messages[1]!.content?.[1]);
   });
   it.each([
+    ["omitted", {}, "{}"],
+    ["undefined", { arguments: undefined }, "{}"],
+    ["null", { arguments: null }, "null"],
+    ["empty", { arguments: {} }, "{}"],
+  ])("preserves %s tool arguments during text rewrites", (_name, args, inputJSON) => {
+    const native = [
+      { role: "user", content: "secret" },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "c", name: "lookup", ...args }],
+      },
+    ];
+    const original = structuredClone(native);
+    const projection = projectGuardMessages(native);
+    const transformed = JSON.parse(
+      JSON.stringify(projection.messages).replaceAll("secret", "safe"),
+    );
+    const result = applyGuardTransform(native, projection, transformed);
+    expect(projection.messages[1]?.parts).toEqual([
+      {
+        type: "tool_call",
+        toolCall: { id: "c", name: "lookup", inputJSON },
+      },
+    ]);
+    expect(native).toEqual(original);
+    expect(result).toEqual([{ ...native[0], content: "safe" }, native[1]]);
+    expect(result[1]).toBe(native[1]);
+  });
+  it.each([
     ["reordered messages", (value: any[]) => value.reverse()],
     [
       "wrong name",

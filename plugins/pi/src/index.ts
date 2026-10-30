@@ -12,7 +12,7 @@ import type {
   SessionBeforeCompactEvent,
   SessionBeforeTreeEvent,
 } from "@mariozechner/pi-coding-agent";
-import { createAgento11yClient } from "./client.js";
+import { createAgento11yClient, reportExportFailure } from "./client.js";
 import type { Agento11yPiConfig, GuardsFeatureConfig } from "./config.js";
 import { loadConfig, loadGuardIntent } from "./config.js";
 import { detectPiVersion } from "./detectPiVersion.js";
@@ -35,47 +35,41 @@ import {
 import { LocalReceiverError } from "./local.js";
 import { logger } from "./logger.js";
 import {
-  type CachedRequestControls,
-  extractRequestControls,
   mapGenerationResult,
   mapGenerationStart,
   mapSummaryGenerationResult,
   mapSummaryGenerationStart,
-  mapTools,
   PI_USAGE_TOKEN_FIELDS,
   type PiAssistantMessage,
   type PiSummaryEntryLike,
   type PiSummaryKind,
-  type PiToolInfo,
   type PiToolResult,
   type PiUsageLike,
   redactSharedWords,
   redactSpans,
   removedSpans,
   resolveConversationTitle,
-  type ToolTiming,
   toolResultText,
 } from "./mappers.js";
 import { RequestObservation } from "./requestObservation.js";
 import {
-  type ConversationRecord,
   NOT_FORKED,
-  resolveSessionOrigin,
   resolveSessionStart,
   type SessionHeaderSourceLike,
   type SessionOrigin,
 } from "./sessionOrigin.js";
-import {
-  matchSkillRead,
-  type SkillIdentity,
-  snapshotSkills,
-} from "./skills.js";
+import { type SkillIdentity, snapshotSkills } from "./skills.js";
 import { guardCompaction, guardTreeSummary } from "./summaryGuards.js";
 import { buildBuiltinTags, effectiveTags } from "./tags.js";
 import {
   createTelemetryProviders,
   type TelemetryProviders,
 } from "./telemetry.js";
+import {
+  ToolExecutions,
+  type ToolObservation,
+  toolParents,
+} from "./toolExecutions.js";
 
 type GuardReadiness =
   | { kind: "disabled" }
@@ -111,51 +105,12 @@ export default function (pi: ExtensionAPI) {
   // same turn, so this is the actual completion time of the model call.
   // 0 means: no assistant message_end seen yet for this turn.
   let assistantMessageEndTime = 0;
-  // Cached from the most recent `before_agent_start`. Outlives a single
-  // turn so multi-turn tool loops reuse the same prompt; cleared on
-  // agent_end and session_shutdown.
-  let currentSystemPrompt: string | undefined;
-  // Refreshed for every `before_provider_request` and consumed by the
-  // matching `turn_end`. Cleared in the per-turn finally so a stale value
-  // from turn N never leaks into turn N+1, and also on `agent_end` /
-  // session shutdown in case a turn ends without a matching `turn_end`.
-  let currentRequestControls: CachedRequestControls = {};
 
   // Keep the mutable prompt options only until agent_start sees the final catalog.
   let pendingSkillOptions: { value: unknown } | undefined;
   let skillCatalog: SkillIdentity[] = [];
 
-  const toolStarts = new Map<
-    string,
-    {
-      toolName: string;
-      startedAt: number;
-      skillName?: string;
-      skillInput?: { ref: WeakRef<object>; toolName: string; cwd: string };
-    }
-  >();
-
-  function updateSkillCandidate(
-    toolCallId: string,
-    toolName: string,
-    args: unknown,
-    cwd: string,
-    observeMutations = false,
-  ) {
-    const timing = toolStarts.get(toolCallId);
-    if (!timing) return;
-    timing.skillName = matchSkillRead(skillCatalog, toolName, args, cwd);
-    // Later handlers can rewrite and block without tool_result. A weak reference
-    // observes their input at execution end without retaining the payload.
-    timing.skillInput =
-      observeMutations &&
-      toolName === "read" &&
-      typeof args === "object" &&
-      args !== null
-        ? { ref: new WeakRef(args), toolName, cwd }
-        : undefined;
-  }
-  const turnToolTimings: ToolTiming[] = [];
+  const toolExecutions = new ToolExecutions();
 
   const requestObservation = new RequestObservation();
 
@@ -183,13 +138,8 @@ export default function (pi: ExtensionAPI) {
     return out === undefined ? out : redactSharedWords(out, wholeRedactions);
   };
 
-  // Start timestamps for pi's own summarization LLM calls. Written by the
-  // `session_before_*` handler, which is the only start signal pi gives us
-  // (those events are `hasHandlers`-gated, so registering the handler is what
-  // makes pi emit them), and consumed by the matching terminal event. A new
-  // start overwrites any pending one, because an aborted or failed compaction
-  // emits no terminal event at all and would otherwise leak its start time
-  // into a later export.
+  // Pi exposes no tree-failure event. New starts overwrite pending timing
+  // so an unobserved failure cannot time a later operation.
   let compactionStartedAt: number | undefined;
   let branchSummaryStartedAt: number | undefined;
   // Summary entry ids already exported, so one entry never produces two
@@ -202,22 +152,16 @@ export default function (pi: ExtensionAPI) {
   // conversation id that appears without one, on first sight at `turn_end`,
   // so the session header is read once per conversation rather than per
   // turn. Cleared by resetSessionState.
-  const sessionOrigins = new Map<string, SessionOrigin>();
-
-  // Conversation the plugin is attributing turns to, and when that
-  // conversation began. Set on every `session_start`, and deliberately kept
-  // across `resetSessionState` and `session_shutdown`: a fork tears the old
-  // session down first (agent-session-runtime.js teardownCurrent), and a
-  // `--no-session` fork writes no `parentSession`, so this record is the
-  // only reference to the trunk it came from. See sessionOrigin.ts.
-  let currentConversation: ConversationRecord | undefined;
+  let sessionOrigins = new WeakMap<
+    SessionHeaderSourceLike,
+    { id: string; origin: SessionOrigin }
+  >();
 
   function resetTurnState() {
     turnStartTime = 0;
     firstTokenTime = 0;
     assistantMessageEndTime = 0;
-    toolStarts.clear();
-    turnToolTimings.length = 0;
+    toolExecutions.reset();
   }
 
   async function resetSessionState() {
@@ -235,25 +179,18 @@ export default function (pi: ExtensionAPI) {
     guardSpans.clear();
     wholeRedactions.clear();
     lastSeenModel = null;
-    currentSystemPrompt = undefined;
     pendingSkillOptions = undefined;
     skillCatalog = [];
-    currentRequestControls = {};
     compactionStartedAt = undefined;
     branchSummaryStartedAt = undefined;
     exportedSummaryEntryIds.clear();
-    sessionOrigins.clear();
+    sessionOrigins = new WeakMap();
   }
 
-  /**
-   * Resolve the model for a summarization call. Compaction and branch
-   * summaries run outside the agent loop and carry no model metadata, so read
-   * pi's live `ctx.model` first and fall back to the model cached from the
-   * last assistant message.
-   */
+  // The selected model is context only; Pi exposes no physical summary identity.
   function resolveSummaryModel(
     ctx: PiSummaryContext,
-  ): { provider: string; name: string } | null {
+  ): { provider: string; name: string } | undefined {
     const provider = ctx?.model?.provider;
     const id = ctx?.model?.id;
     if (
@@ -262,12 +199,10 @@ export default function (pi: ExtensionAPI) {
       typeof id === "string" &&
       id.length > 0
     ) {
-      // Assistant messages carry `model.id` as their `model` field, so use the
-      // id (not the display name) to keep turn and summary generations on the
-      // same model identity.
+      // Display names can differ from the selected model's stable id.
       return { provider, name: id };
     }
-    return lastSeenModel;
+    return undefined;
   }
 
   /**
@@ -313,10 +248,6 @@ export default function (pi: ExtensionAPI) {
     }
 
     const model = resolveSummaryModel(ctx);
-    if (!model) {
-      logger.debug(`${kind}: skipped, no model could be resolved`);
-      return;
-    }
 
     const conversationId = readSessionId(sessionManager);
 
@@ -382,7 +313,6 @@ export default function (pi: ExtensionAPI) {
       entry,
       contentCapture: config.contentCapture,
       completedAt,
-      responseModel: model.name,
       reason: extras.reason,
       willRetry: extras.willRetry,
     });
@@ -390,11 +320,16 @@ export default function (pi: ExtensionAPI) {
     // SYNC, not STREAM: there is no token stream and no TTFT signal for these
     // calls. The SYNC path defaults `operationName` to `generateText`, which
     // also discriminates them from turns (`streamText`).
-    await sigil.startGeneration(seed, async (recorder) => {
-      recorder.setResult(result);
-    });
-    // Only mark the entry exported once the recorder accepted it, so a
-    // failed export can be retried by a later event for the same entry.
+    try {
+      await sigil.startGeneration(seed, async (recorder) => {
+        recorder.setResult(result);
+      });
+    } catch (err) {
+      reportExportFailure(sigil);
+      throw err;
+    }
+    // Dedup tracks local enqueue, not delivery acknowledgment.
+    // A later event can retry only a failed enqueue.
     exportedSummaryEntryIds.add(entryId);
     logger.debug(
       `summary generation queued, kind=${kind} entry=${entryId} tokens=${
@@ -412,10 +347,11 @@ export default function (pi: ExtensionAPI) {
     conversationId: string,
     sessionManager: SessionHeaderSourceLike | undefined | null,
   ): SessionOrigin {
-    const cached = sessionOrigins.get(conversationId);
-    if (cached) return cached;
-    const origin = resolveSessionOrigin(sessionManager);
-    sessionOrigins.set(conversationId, origin);
+    const cached = sessionManager && sessionOrigins.get(sessionManager);
+    if (cached && cached.id === conversationId) return cached.origin;
+    const { origin } = resolveSessionStart(sessionManager, { forked: false });
+    if (sessionManager)
+      sessionOrigins.set(sessionManager, { id: conversationId, origin });
     return origin;
   }
 
@@ -452,32 +388,26 @@ export default function (pi: ExtensionAPI) {
         try {
           await sigil.shutdown();
         } catch (err) {
+          reportExportFailure(sigil);
           logger.error("stale client shutdown failed", err);
         }
       }
 
       sigil = null;
-      const trunk = currentConversation;
       await resetSessionState();
       requestObservation.reset(ctx.sessionManager);
       guardIntent = loadGuardIntent();
       invalidateGuards("initialization incomplete");
 
-      // Resolve the origin here, while the conversation the session came
-      // from is still known: with `--no-session` the header cannot say.
       const startedConversationId = readSessionId(ctx.sessionManager);
-      const { startedAt, origin } = resolveSessionStart(ctx.sessionManager, {
+      const { origin } = resolveSessionStart(ctx.sessionManager, {
         forked: event.reason === "fork",
-        trunk,
       });
       if (startedConversationId) {
-        currentConversation = {
+        sessionOrigins.set(ctx.sessionManager, {
           id: startedConversationId,
-          startedAt: startedAt ?? new Date().toISOString(),
-        };
-        sessionOrigins.set(startedConversationId, origin);
-      } else {
-        currentConversation = undefined;
+          origin,
+        });
       }
 
       try {
@@ -505,13 +435,6 @@ export default function (pi: ExtensionAPI) {
         config = { ...config, agentVersion: detectPiVersion() };
       }
 
-      // Note: the conversation id a generation carries is read fresh per
-      // turn from ctx.sessionManager.getSessionId() so fork/branch
-      // reassignments (session-manager.js:927,961) are reflected without
-      // restarting the plugin. `currentConversation` above records which
-      // conversation this process is on, and is only read when a later fork
-      // needs to name its trunk.
-
       // Set up OTel providers if OTLP is configured.
       // Pass the pi session id as service.instance.id so concurrent pi
       // sessions on the same machine emit distinct OTel metric series.
@@ -527,6 +450,12 @@ export default function (pi: ExtensionAPI) {
       sigil = createAgento11yClient(config, {
         tracer: telemetry?.tracer,
         meter: telemetry?.meter,
+        ...(ctx.hasUI && typeof ctx.ui?.notify === "function"
+          ? {
+              onExportFailure: (message: string) =>
+                ctx.ui.notify(message, "warning"),
+            }
+          : {}),
       });
       if (!sigil) {
         await resetSessionState();
@@ -537,9 +466,7 @@ export default function (pi: ExtensionAPI) {
         guardReadiness = { kind: "ready", client: sigil };
 
       logger.debug(
-        `enabled, endpoint=${config.endpoint} auth=${config.auth.mode}${
-          config.local ? " local=true" : ""
-        }`,
+        `enabled, auth=${config.auth.mode}${config.local ? " local=true" : ""}`,
       );
       if (config.local) {
         // Where the session went is not obvious once the endpoint stops being
@@ -571,13 +498,6 @@ export default function (pi: ExtensionAPI) {
       pendingSkillOptions.value = (
         event as { systemPromptOptions?: unknown }
       ).systemPromptOptions;
-      // System prompts encode project conventions (CLAUDE.md, skill text,
-      // etc.). Gate on contentCapture the same way `git.branch` is gated.
-      if (config.contentCapture === "metadata_only") return;
-      const prompt = (event as { systemPrompt?: unknown }).systemPrompt;
-      if (typeof prompt === "string" && prompt.length > 0) {
-        currentSystemPrompt = prompt;
-      }
     } catch (err) {
       logger.error("before_agent_start failed", err);
     }
@@ -592,31 +512,10 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("agent_settled", async () => {
+    // agent_end can precede a retry without another before_agent_start.
     skillCatalog = [];
-  });
-
-  pi.on("agent_end", async (_event, _ctx) => {
-    // Clear both caches at the agent boundary. `currentRequestControls` is
-    // normally cleared in turn_end's finally, but if an agent loop ends
-    // without a matching turn_end, those provider settings could otherwise
-    // attach to the next agent loop's first exported generation.
-    currentSystemPrompt = undefined;
-    currentRequestControls = {};
-  });
-
-  // Refresh request controls before every provider call. The payload is
-  // provider-specific (Anthropic/OpenAI/Gemini), so extraction is purely
-  // structural — see `extractRequestControls`. This handler MUST NOT return
-  // a value: pi treats a returned value as a payload replacement.
-  pi.on("before_provider_request", async (event, _ctx) => {
-    if (!sigil) return;
-    try {
-      const payload = (event as { payload?: unknown }).payload;
-      currentRequestControls = extractRequestControls(payload);
-    } catch (err) {
-      logger.error("before_provider_request failed", err);
-      currentRequestControls = {};
-    }
+    pendingSkillOptions = undefined;
+    resetTurnState();
   });
 
   pi.on("message_end", async (event, _ctx) => {
@@ -735,13 +634,7 @@ export default function (pi: ExtensionAPI) {
       }
     }
     if (!sigil) return;
-    updateSkillCandidate(
-      event.toolCallId,
-      event.toolName,
-      event.input,
-      ctx.cwd,
-      true,
-    );
+    toolExecutions.guardInput(event, skillCatalog, ctx.cwd);
     if (guardReadiness.kind !== "ready" || !config) return;
     const res = await runToolCallGuard({
       client: guardReadiness.client,
@@ -763,6 +656,10 @@ export default function (pi: ExtensionAPI) {
       logger: { warn: (msg: string) => logger.warn(msg) },
     });
     if (!res) return;
+    toolExecutions.guardChanged(
+      event,
+      "transform" in res ? res.transform : undefined,
+    );
     if ("block" in res) return { block: true, reason: res.reason };
     // Postflight transform: the server returns the complete redacted argument
     // set, so replace the tool input wholesale. A plain Object.assign would
@@ -771,9 +668,9 @@ export default function (pi: ExtensionAPI) {
     // re-validation runs after the mutation, so it is the server's
     // responsibility to keep the schema intact.
     //
-    // Redaction fails open: if the patch cannot be applied (e.g. event.input
-    // is null or frozen), log it and let the original arguments through rather
-    // than throwing, which pi would treat as a block.
+    // If the patch cannot be applied (e.g. event.input is null or frozen),
+    // log it and follow the configured failure policy rather than throwing,
+    // which pi would treat as a block.
     try {
       const input = event.input as Record<string, unknown>;
       for (const key of Object.keys(input)) {
@@ -782,37 +679,30 @@ export default function (pi: ExtensionAPI) {
         }
       }
       Object.assign(input, res.transform);
-    } catch (err) {
-      logger.warn(`tool_call transform apply failed: ${err}`);
+    } catch {
+      logger.warn("tool_call transform apply failed");
+      if (guardIntent?.failOpen === false) {
+        return {
+          block: true,
+          reason:
+            "Agent Observability could not apply a required guard transformation.",
+        };
+      }
     }
-    updateSkillCandidate(
-      event.toolCallId,
-      event.toolName,
-      event.input,
-      ctx.cwd,
-      true,
-    );
+    toolExecutions.guardInput(event, skillCatalog, ctx.cwd, true);
     return;
   });
 
   pi.on("tool_result", async (event, ctx) => {
     if (!sigil || !("input" in event)) return;
-    updateSkillCandidate(
-      event.toolCallId,
-      event.toolName,
-      event.input,
-      ctx.cwd,
-    );
+    toolExecutions.resultInput(event, skillCatalog, ctx.cwd);
   });
 
   pi.on("tool_execution_start", async (event, _ctx) => {
     if (!sigil) return;
 
     try {
-      toolStarts.set(event.toolCallId, {
-        toolName: event.toolName,
-        startedAt: Date.now(),
-      });
+      toolExecutions.start(event);
     } catch (err) {
       logger.error("tool_execution_start failed", err);
     }
@@ -822,27 +712,7 @@ export default function (pi: ExtensionAPI) {
     if (!sigil) return;
 
     try {
-      const start = toolStarts.get(event.toolCallId);
-      if (!start) return;
-      toolStarts.delete(event.toolCallId);
-      if (start.skillInput) {
-        const { ref, toolName, cwd } = start.skillInput;
-        const input = ref.deref();
-        // Collected input cannot invalidate the last observed candidate.
-        // Live input must still clear the candidate if a later handler rewrote it.
-        if (input !== undefined) {
-          start.skillName = matchSkillRead(skillCatalog, toolName, input, cwd);
-        }
-      }
-
-      turnToolTimings.push({
-        toolCallId: event.toolCallId,
-        toolName: start.toolName,
-        skillName: start.skillName,
-        startedAt: start.startedAt,
-        completedAt: Date.now(),
-        isError: event.isError,
-      });
+      toolExecutions.end(event, skillCatalog);
     } catch (err) {
       logger.error("tool_execution_end failed", err);
     }
@@ -862,44 +732,13 @@ export default function (pi: ExtensionAPI) {
       const msg = event.message;
       const contentCapture = config.contentCapture;
 
-      // Build the active tool catalog from pi's registry. Prefer the active
-      // set (what the model was offered this turn) so evaluators can
-      // compute precision/recall. `null` means the active-set API is
-      // unavailable (older pi versions); an empty Set means it returned
-      // explicitly no tools — those are different cases and `mapTools`
-      // treats them differently.
-      let toolCatalog: PiToolInfo[] = [];
-      try {
-        toolCatalog = pi.getAllTools?.() ?? [];
-      } catch (err) {
-        logger.debug("getAllTools failed", err);
-        toolCatalog = [];
-      }
-      let activeNames: Set<string> | null = null;
-      try {
-        const active = pi.getActiveTools?.();
-        if (Array.isArray(active)) activeNames = new Set(active);
-      } catch (err) {
-        logger.debug("getActiveTools failed", err);
-      }
-      if (
-        toolCatalog.length === 0 &&
-        activeNames !== null &&
-        activeNames.size > 0
-      ) {
-        // getAllTools threw or returned [] but getActiveTools still gave us
-        // names — synthesize name-only defs so the seed records the tools
-        // pi actually offered the model. Without this, `mapTools` would
-        // filter an empty catalog and drop the tool list entirely.
-        toolCatalog = Array.from(activeNames).map((name) => ({ name }));
-      } else if (activeNames === null && toolCatalog.length === 0) {
-        // Neither catalog nor active-set API — fall back to the called-tools
-        // subset so older pi versions still emit something useful.
-        const calledNames = new Set(turnToolTimings.map((t) => t.toolName));
-        toolCatalog = Array.from(calledNames).map((name) => ({ name }));
-        activeNames = calledNames;
-      }
-      const toolDefs = mapTools(toolCatalog, activeNames, contentCapture);
+      // Pi exposes no final offered catalog; these names describe observed proposals only.
+      const calledNames = new Set(
+        msg.content.flatMap((part) =>
+          part.type === "toolCall" ? [part.name] : [],
+        ),
+      );
+      const toolDefs = Array.from(calledNames, (name) => ({ name }));
 
       // Read the current sessionId every turn. SessionManager reassigns
       // sessionId on fork/branch, and extensions that spawn child sessions
@@ -980,16 +819,16 @@ export default function (pi: ExtensionAPI) {
         startedAt: startedAtMs,
         tools: toolDefs.length > 0 ? toolDefs : undefined,
         tags: builtinTags,
-        systemPrompt: currentSystemPrompt,
-        requestControls: currentRequestControls,
         generationId,
         parentGenerationIds: parentEdge(parent),
         metadata: forkMetadata(parent, origin),
       });
 
-      const toolResults = (event.toolResults ?? []) as PiToolResult[];
+      const toolResults = toolExecutions.safeResults(
+        (event.toolResults ?? []) as PiToolResult[],
+      );
       const result = mapGenerationResult(
-        msg,
+        toolExecutions.safeMessage(msg),
         toolResults,
         contentCapture,
         observedInput,
@@ -1015,7 +854,7 @@ export default function (pi: ExtensionAPI) {
             (start) => recorder.startToolExecution(start),
             msg,
             toolResults,
-            turnToolTimings,
+            toolExecutions.completed(),
             {
               conversationId,
               conversationTitle,
@@ -1029,6 +868,7 @@ export default function (pi: ExtensionAPI) {
           `generation queued, model=${msg.model} tokens=${msg.usage.totalTokens}`,
         );
       } catch (err) {
+        reportExportFailure(sigil);
         logger.debug("generation export failed", err);
       }
       if (telemetry) {
@@ -1039,9 +879,7 @@ export default function (pi: ExtensionAPI) {
     } catch (err) {
       logger.error("turn_end failed", err);
     } finally {
-      toolStarts.clear();
-      turnToolTimings.length = 0;
-      currentRequestControls = {};
+      toolExecutions.reset();
     }
   });
 
@@ -1105,20 +943,25 @@ export default function (pi: ExtensionAPI) {
   // pi emit them at all (`hasHandlers`-gated).
   pi.on("session_before_compact", async (event, ctx) => {
     compactionStartedAt = Date.now();
-    // Manual /compact disconnects from the agent before aborting the in-flight
-    // turn, so that turn's `turn_end` never reaches us. Drop its buffered
-    // state here instead of letting the abandoned prompt and stale timers
-    // attach to the next exported generation. Threshold and overflow
-    // compaction run after `turn_end`, where this is a no-op: the buffer is
-    // already drained and the next `turn_start` resets the timers.
-    resetTurnState();
-    currentRequestControls = {};
-    return protectSummary(event, ctx);
+    // Legacy manual compaction can abandon a turn. Automatic compaction
+    // also runs after turn_start and must retain that turn's observations.
+    if (event.reason === "manual") {
+      resetTurnState();
+    }
+    const result = await protectSummary(event, ctx);
+    if (result?.cancel) compactionStartedAt = undefined;
+    return result;
   });
 
   pi.on("session_before_tree", async (event, ctx) => {
     branchSummaryStartedAt = Date.now();
-    return protectSummary(event, ctx);
+    const result = await protectSummary(event, ctx);
+    if (result?.cancel) branchSummaryStartedAt = undefined;
+    return result;
+  });
+
+  pi.on("session_compact_failed", async () => {
+    compactionStartedAt = undefined;
   });
 
   pi.on("session_compact", async (event, ctx) => {
@@ -1132,8 +975,7 @@ export default function (pi: ExtensionAPI) {
         logger.debug("compaction: skipped, supplied by an extension");
         return;
       }
-      // `reason` and `willRetry` were added to this event after the pinned pi
-      // version, so read them structurally.
+      // `reason` and `willRetry` can be absent on summary events.
       const raw = event as { reason?: unknown; willRetry?: unknown };
       await exportSummaryGeneration("compaction", event.compactionEntry, ctx, {
         startedAt,
@@ -1177,6 +1019,7 @@ export default function (pi: ExtensionAPI) {
       try {
         await sigil.shutdown();
       } catch (err) {
+        reportExportFailure(sigil);
         logger.error("session shutdown failed", err);
       }
     }
@@ -1308,9 +1151,7 @@ function entryIdOf(value: unknown): string {
 }
 
 /**
- * Read pi's `CompactionEntry` / `BranchSummaryEntry` structurally. `usage` is
- * absent from the dev-pinned pi types and `tokensBefore` only exists on
- * compaction entries, so nothing here may assume a field is present.
+ * Older summary entries can omit usage; only compaction entries have tokensBefore.
  */
 function toPiSummaryEntry(value: unknown): PiSummaryEntryLike | null {
   if (!value || typeof value !== "object") return null;
@@ -1340,7 +1181,7 @@ function toPiUsage(value: unknown): PiUsageLike | undefined {
   const src = value as Record<string, unknown>;
   const out: PiUsageLike = {};
   let seen = false;
-  for (const key of PI_USAGE_TOKEN_FIELDS) {
+  for (const key of [...PI_USAGE_TOKEN_FIELDS, "cacheWrite1h"] as const) {
     const raw = src[key];
     if (typeof raw === "number" && Number.isFinite(raw)) {
       out[key] = raw;
@@ -1361,11 +1202,8 @@ function toPiUsage(value: unknown): PiUsageLike | undefined {
 /**
  * Emit one `execute_tool` span per tool call in the turn.
  *
- * Arguments and results are redacted here. This is a second boundary: the SDK's
- * generation sanitizer scrubs the copy of the same bytes that rides in the
- * generation payload, but it does not see a tool-execution span, so the span
- * needs its own pass. Full strength (tier 1 + tier 2), which is what the
- * sanitizer applies to a tool payload.
+ * Generation sanitizers do not process tool spans. Redact live input and final
+ * results independently, using both secret-redaction tiers.
  *
  * @internal Exported for testing.
  */
@@ -1373,7 +1211,7 @@ export function emitToolSpans(
   startToolExecution: (start: ToolExecutionStart) => ToolExecutionRecorder,
   msg: PiAssistantMessage,
   toolResults: PiToolResult[],
-  timings: ToolTiming[],
+  observations: ToolObservation[],
   opts: {
     conversationId?: string;
     conversationTitle?: string;
@@ -1382,30 +1220,34 @@ export function emitToolSpans(
     contentCapture: ContentCaptureMode;
   },
 ): void {
-  if (timings.length === 0) return;
-
   const includeContent = opts.contentCapture === "full";
-
-  const argsMap = new Map<string, string>();
-  const resultMap = new Map<string, string>();
-  if (includeContent) {
-    for (const block of msg.content) {
-      if (block.type !== "toolCall") continue;
-      const encoded = JSON.stringify(block.arguments);
-      if (encoded === undefined) continue;
-      argsMap.set(block.id, redactSecretText(encoded));
-    }
-    for (const tr of toolResults) {
-      resultMap.set(
-        tr.toolCallId,
-        redactSecretText(toolResultText(tr.content)),
-      );
-    }
+  const finalizedById = new Map<string, PiToolResult[]>();
+  for (const result of toolResults) {
+    const matches = finalizedById.get(result.toolCallId) ?? [];
+    matches.push(result);
+    finalizedById.set(result.toolCallId, matches);
+  }
+  const observationCounts = new Map<string, number>();
+  for (const item of observations) {
+    observationCounts.set(
+      item.toolCallId,
+      (observationCounts.get(item.toolCallId) ?? 0) + 1,
+    );
+  }
+  const parents = toolParents(observations);
+  const children = new Map<ToolObservation, ToolObservation[]>();
+  for (const [child, parent] of parents) {
+    const siblings = children.get(parent) ?? [];
+    siblings.push(child);
+    children.set(parent, siblings);
   }
 
-  for (const timing of timings) {
+  function emit(
+    timing: ToolObservation,
+    start: (value: ToolExecutionStart) => ToolExecutionRecorder,
+  ): void {
     try {
-      const toolRec = startToolExecution({
+      const toolRec = start({
         ...(timing.skillName
           ? { executionKind: "load_skill", skillName: timing.skillName }
           : {}),
@@ -1427,18 +1269,40 @@ export function emitToolSpans(
         result?: unknown;
         completedAt: Date;
       } = {
-        completedAt: new Date(timing.completedAt),
+        // Host duration excludes guards and result hooks; placement uses the observed start.
+        completedAt: new Date(
+          timing.durationMs === undefined
+            ? timing.completedAt
+            : timing.startedAt + Math.round(timing.durationMs),
+        ),
       };
 
       if (includeContent) {
-        const args = argsMap.get(timing.toolCallId);
-        if (args !== undefined) {
-          end.arguments = args;
+        if (
+          timing.postExecutionInputSafe &&
+          timing.postExecutionInputJSON !== undefined
+        ) {
+          // Tools can mutate input. This is not an execution-entry snapshot.
+          end.arguments = redactSecretText(
+            `{"observation":"tool_result.input","input":${timing.postExecutionInputJSON}}`,
+          );
         }
-        const trContent = resultMap.get(timing.toolCallId);
-        if (trContent !== undefined) {
-          end.result = trContent;
-        }
+        const matches = finalizedById.get(timing.toolCallId);
+        const finalized =
+          matches?.length === 1 &&
+          !timing.duplicateId &&
+          observationCounts.get(timing.toolCallId) === 1 &&
+          matches[0]?.toolName === timing.toolName
+            ? matches[0]
+            : undefined;
+        // Nested calls have no transcript entry. Top-level bodies must use finalization.
+        const text =
+          timing.parentToolCallId !== undefined
+            ? timing.resultText
+            : finalized === undefined
+              ? undefined
+              : toolResultText(finalized.content);
+        if (text !== undefined) end.result = redactSecretText(text);
       }
 
       if (timing.isError) {
@@ -1446,10 +1310,16 @@ export function emitToolSpans(
       }
 
       toolRec.setResult(end);
+      for (const child of children.get(timing) ?? []) {
+        emit(child, (value) => toolRec.startToolExecution(value));
+      }
       toolRec.end();
     } catch (err) {
-      logger.error(`failed to emit tool span for ${timing.toolName}`, err);
+      logger.error("failed to emit tool span", err);
     }
+  }
+  for (const observation of observations) {
+    if (!parents.has(observation)) emit(observation, startToolExecution);
   }
 }
 

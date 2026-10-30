@@ -2,6 +2,7 @@ import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { format } from "node:util";
+import { redactSecretText } from "@grafana/agento11y";
 
 // The pi plugin runs in-process inside pi's TUI. Anything written to the
 // terminal via console.* corrupts the live TUI frame (pi does not take over
@@ -79,11 +80,12 @@ function ensureLogDir(path: string): boolean {
 function emit(level: string, message: string, args: unknown[]): void {
   // Re-read the env per write: loadConfig() applies the launcher dotenv file,
   // which may set the debug variable after the module first loads.
-  if (!debugEnabled()) return;
-  const path = logFilePath();
-  if (!ensureLogDir(path)) return;
-  const line = `agento11y[pi]: ${new Date().toISOString()} ${level} ${format(message, ...args)}\n`;
   try {
+    if (!debugEnabled()) return;
+    const text = redactSecretText(format(message, ...args));
+    const path = logFilePath();
+    if (!ensureLogDir(path)) return;
+    const line = `agento11y[pi]: ${new Date().toISOString()} ${level} ${text}\n`;
     appendFileSync(path, line, { mode: 0o600 });
   } catch {
     // Best effort. A logging failure must never surface into the TUI.
