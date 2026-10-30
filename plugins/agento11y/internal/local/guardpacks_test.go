@@ -1,6 +1,7 @@
 package local
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/guardeval"
@@ -100,6 +101,11 @@ func TestEnvFileBlockedNamesCoverHostTools(t *testing.T) {
 	names := envFileBlockedNames()
 	require.Len(t, names, len(envFileToolNames)+1)
 	for _, tool := range envFileToolNames {
+		if slices.Contains(envSearchToolNames, tool) {
+			// A search glob can put a * on either side of .env.
+			assert.Contains(t, names, tool+`(*[/"' <>|;&()*].env[."' <>|;&()*]*)`)
+			continue
+		}
 		assert.Contains(t, names, tool+`(*[/"' <>|;&()].env[."' <>|;&()]*)`)
 		if tool == "apply_patch" {
 			assert.Contains(t, names, tool+`(*[/"' <>|;&()].env\\[nrt]*)`)

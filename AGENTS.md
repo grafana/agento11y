@@ -107,6 +107,10 @@ The `## Reference` section of `plugins/agento11y/internal/skills/content/setup-c
 
 `conformance/hooks/` pins the `POST /api/v1/hooks:evaluate` body and responses, and `conformance/experiments/` pins the experiment ingest bodies and responses. Neither endpoint group has generated stubs, so the fixtures are the contract, and the SDK suites check themselves against the fixtures rather than against the server. If you change a fixture, run the new shape through the server's decoder yourself first. Each directory's `README.md` documents the encodings, which the proto does not describe.
 
+## Sigil copies the coding agent guard packs
+
+`conformance/guards/coding-agent-packs.json` exports the git, destructive, permissions, disk, and File safety packs for Grafana Cloud, and sigil turns each pack into one tool filter rule from byte-for-byte copies. Changing one of those packs in `internal/local/guardpacks.go` fails `TestCloudPacksFixture` until the file is regenerated. Nothing checks sigil's copies against this file (a plugin test compares sigil's two copies with each other), so copy the new file there too. `conformance/guards/README.md` has the steps.
+
 ## Running checks
 
 Run plugin Go tests with a clean environment and an isolated HOME. Legacy tests

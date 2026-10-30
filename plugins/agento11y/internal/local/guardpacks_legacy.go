@@ -17,6 +17,19 @@ import (
 //go:embed testdata/guardpacks/afa354d4.toml
 var legacyGuardPacks []byte
 
+// Captured the same way at plugins/agento11y/v0.48.0 (the packs of v0.47.0 and
+// v0.48.0) and v0.52.0 (v0.49.0 to v0.52.0). afa354d4 holds the packs of
+// v0.45.0 and v0.46.0. A pack rule saved by any of these releases and never
+// edited is upgraded to the current pack.
+var (
+	//go:embed testdata/guardpacks/v0.48.0.toml
+	releasedGuardPacksV048 []byte
+	//go:embed testdata/guardpacks/v0.52.0.toml
+	releasedGuardPacksV052 []byte
+
+	releasedGuardPacks = [][]byte{legacyGuardPacks, releasedGuardPacksV048, releasedGuardPacksV052}
+)
+
 // NewGuardsEngineFromContents upgrades unchanged legacy packs in memory before compilation.
 // It does not read or write path; path only identifies file diagnostics.
 func NewGuardsEngineFromContents(path string, data []byte, logger *log.Logger) *guardeval.Engine {
@@ -49,9 +62,13 @@ func refreshStoredPackRule(rule guardeval.Rule) (guardeval.Rule, error) {
 }
 
 func upgradeLegacyPackRules(raw []json.RawMessage) []json.RawMessage {
-	legacy, err := guardeval.ParseRules(legacyGuardPacks)
-	if err != nil {
-		return raw
+	var legacy []json.RawMessage
+	for _, snapshot := range releasedGuardPacks {
+		rules, err := guardeval.ParseRules(snapshot)
+		if err != nil {
+			return raw
+		}
+		legacy = append(legacy, rules...)
 	}
 	out := append([]json.RawMessage(nil), raw...)
 	for i, item := range raw {
