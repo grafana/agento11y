@@ -65,15 +65,30 @@ Explain the trade-offs relevant to the user's request:
 
 - Secret redaction rewrites recognized secrets in tool arguments. It can change what the tool receives and break commands that need those values.
 - File safety matches `.env` and `.env.*`, including `.env.example`. It does not protect every secret file.
-- Git safety allows `--force-with-lease`; it does not block every history rewrite.
+- Git safety blocks worktree restores, forced checkout/switch, whole-tree checkout, and force refspecs. Staged-only restore and `--force-with-lease` allow; not every history rewrite is blocked.
 - Destructive commands blocks recursive force deletion even for temporary build output, but does not block every deletion.
-- Permissions targets selected root and home spellings, not every directory.
-- Disk wipe uses broad command-name patterns that can also block read-only inspection.
+- Permissions targets selected root and home spellings, including `/.`, not every directory.
+- Disk wipe allows `fdisk -l`, `parted -l`, `parted /dev/sda print`, and `dd` output to non-disk devices such as `/dev/null`. It blocks recognized disk writes, interactive partitioning, and `mkfs`/`wipefs`, including their inspection forms.
 - High-risk prompt triage blocks explicit high-impact decisions about people in specified domains. It cannot judge discrimination, explanation quality, legality, or real human oversight, and it only works where the host submits prompt preflight checks.
 - PHI-like data egress blocks a narrow set of recognizable outbound tools and shell network commands carrying high-confidence health identifiers. It cannot identify every egress path or determine authorization, permitted purpose, or minimum necessary scope.
 
-State that text matching can miss indirect operations and can block harmless mentions.
-Unknown tools, unsupported hooks, and scripts that perform dangerous operations internally can escape these checks.
+Current coding-agent integrations omit shell metadata and use lexer-based regex matching. Do not claim live Bash parser protection.
+Offline tests can use Bash syntax-tree analysis for unmodified Git safety, Destructive commands, Permissions, and Disk wipe packs.
+Parsing requires separate host metadata, an exact `Bash` or `bash` tool name, and a string `command` argument.
+Metadata cannot activate parsing for generic tool names such as `shell` or `local_shell`.
+Edited packs, custom regex rules, and older binaries use regex matching.
+Neither analysis path executes input.
+
+The lexer preserves quoted data and reads supported nested command text, including substitutions, shell `-c` payloads, and heredocs supplied directly to shells.
+Quoted destructive mentions and ordinary data heredocs generally allow with stock patterns, even without Bash metadata.
+Fallback reads all recognized command keys, nested commands, and unknown-key strings when no readable command key exists.
+Incomplete Bash analysis uses this fallback and keeps any parser-detected denial.
+Incomplete analysis alone does not block a call, but shell commands longer than 64 KiB fail shell rules with or without metadata.
+
+Git configuration payloads and secondary Bash evaluation contexts can pass fallback despite executing dangerous commands at runtime.
+Custom regexes can still match harmless quoted text.
+Unknown tools, unsupported hooks, dynamic commands, and scripts that perform dangerous operations internally can escape these checks.
+See [Enforcement limits](https://github.com/grafana/agento11y/blob/main/docs/local-guards.md#enforcement-limits) for parser coverage, limits, and option exceptions.
 
 Explain any destination change before asking for approval.
 Local mode stores full session content locally.
@@ -155,6 +170,12 @@ It evaluates saved rules even when host guards are disabled.
 Exit `0` means allow, `1` means deny, and `2` means an error, including compilation errors.
 Read notices and errors: a missing default file or no enforceable rules can return allow.
 `--tool` changes the synthetic tool name, not its `{"command": ...}` argument shape; it does not replay arbitrary file-tool calls.
+Tests use regex matching by default. Add `--shell bash` to test Bash parsing; only `bash` is supported.
+The flag does not change `--tool` or verify the host shell. Tool names other than `Bash` or `bash` still use regex matching.
+For example: `agento11y guards test --shell bash --json 'git clean -n -f'`.
+Git safety allows this parsed dry run; default regex matching denies the separate flags. Both paths allow the clustered form `git clean -nf`.
+JSON output includes `request.shell` only when `--shell` is supplied.
+Compare evaluation explanations even when verdicts agree: incomplete analysis falls back to lexer-based regex matching.
 
 For unexpected results, compare the rules path, enabled rules, tool name, and exact input before changing policy.
 A malformed or unreadable file can leave no local rules enforcing.

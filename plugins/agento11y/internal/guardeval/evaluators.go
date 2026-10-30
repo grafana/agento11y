@@ -47,8 +47,12 @@ const (
 )
 
 // compiledEvaluator is a ready-to-run inline evaluator.
-type compiledEvaluator struct {
-	kind   string
+type compiledEvaluator interface {
+	kind() string
+	evaluate(agento11y.HookInput, *shellRequestCache) (ran, passed bool, explanation string)
+}
+
+type regexEvaluator struct {
 	target string
 	// shell is the shell_command projection config (tool names and command
 	// keys). Only the shell_command target reads it.
@@ -57,12 +61,14 @@ type compiledEvaluator struct {
 	reject  bool
 }
 
+func (*regexEvaluator) kind() string { return evaluatorKindRegex }
+
 // compileEvaluator compiles one inline evaluator spec. regex yields a runnable
 // evaluator; the Cloud kinds return (nil, nil) so the loader keeps the rule but
 // never runs them. A malformed regex config or an unrecognised kind returns an
 // error, which the PUT validation surfaces as a 400 and the loader reports as a
 // skipped rule.
-func compileEvaluator(spec EvaluatorSpec) (*compiledEvaluator, error) {
+func compileEvaluator(spec EvaluatorSpec) (compiledEvaluator, error) {
 	kind := strings.ToLower(strings.TrimSpace(spec.Kind))
 	switch kind {
 	case evaluatorKindRegex:
@@ -86,8 +92,7 @@ func compileEvaluator(spec EvaluatorSpec) (*compiledEvaluator, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &compiledEvaluator{
-			kind:    kind,
+		return &regexEvaluator{
 			target:  target,
 			shell:   shell,
 			regexes: res,
@@ -103,24 +108,21 @@ func compileEvaluator(spec EvaluatorSpec) (*compiledEvaluator, error) {
 	}
 }
 
-// runEvaluator runs one evaluator against the working input. ran is false when
+// evaluate runs one evaluator against the working input. ran is false when
 // the evaluator has nothing to judge, which the caller records as no evaluation
 // at all. passed and explanation are the outcome and the text for the deny
 // reason.
 //
-// Every subject is matched on its own. The tool_arguments target contributes
-// one subject per tool call, and shell_command several per call (the command,
-// its unquoted form, and each simple command in it, as written and from its
-// name on), so a pattern cannot match
-// text formed by joining two calls; every other target contributes exactly one.
+// Every subject is matched on its own. The shell_command and tool_arguments
+// targets contribute one subject per tool call, so a pattern cannot match text
+// formed by joining two calls; every other target contributes exactly one.
 // Several subjects still give one verdict: the evaluator answers on whether any
 // subject matched.
 //
-// Only compileEvaluator's regex branch builds a compiledEvaluator, so this runs
+// Only compileEvaluator's regex branch builds a regexEvaluator, so this runs
 // the patterns without asking which kind it holds.
-func runEvaluator(ce *compiledEvaluator, in agento11y.HookInput) (ran, passed bool, explanation string) {
+func (ce *regexEvaluator) evaluate(in agento11y.HookInput, _ *shellRequestCache) (ran, passed bool, explanation string) {
 	if ce.target == evalTargetShellCommand && shellCommandTooLong(in, ce.shell) {
-		// Too long to read safely, so no pattern can clear it.
 		return true, false, "shell command is too long to judge"
 	}
 	subjects := subjectsFor(ce.target, in, ce.shell)
@@ -239,9 +241,8 @@ func parseTargetAndShell(config map[string]any) (string, shellConfig, error) {
 // subjectsFor returns the subjects an evaluator judges for the given target. It
 // computes only the target it returns: the shell_command and tool_arguments
 // projections decode JSON per tool call, and flattening a long message history
-// is not free either. tool_arguments yields one subject per tool call, and
-// shell_command several (the command, its unquoted form, and each simple
-// command in it), or none when the call runs no command; every other target
+// is not free either. Those projections yield one subject per tool call, and
+// shell_command yields none when the call runs no command; every other target
 // yields exactly one.
 func subjectsFor(target string, in agento11y.HookInput, shell shellConfig) []string {
 	switch target {

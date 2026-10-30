@@ -38,6 +38,9 @@ func TestDestructivePackRecursiveForce(t *testing.T) {
 		}
 		assert.Equal(t, want, result.Action)
 		assert.Equal(t, want, legacyEngine.Evaluate(packRequest("Bash", string(input))).Action, "legacy upgrade")
+		parsed, _, err := legacyEngine.EvaluateWithShellMetadata(t.Context(), packRequest("Bash", string(input)), []guardeval.ShellMetadata{{Dialect: "bash"}})
+		require.NoError(t, err)
+		assert.Equal(t, want, parsed.Action, "production parser")
 	}
 
 	for _, tt := range []struct {

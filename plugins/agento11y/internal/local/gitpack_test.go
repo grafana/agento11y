@@ -186,6 +186,9 @@ func TestGitPackForcePush(t *testing.T) {
 			input, err := json.Marshal(map[string]string{"command": tt.command})
 			require.NoError(t, err)
 			assert.Equal(t, want, legacyEngine.Evaluate(packRequest("Bash", string(input))).Action, "legacy upgrade")
+			parsed, _, err := legacyEngine.EvaluateWithShellMetadata(t.Context(), packRequest("Bash", string(input)), []guardeval.ShellMetadata{{Dialect: "bash"}})
+			require.NoError(t, err)
+			assert.Equal(t, want, parsed.Action, "production parser")
 		})
 	}
 }
