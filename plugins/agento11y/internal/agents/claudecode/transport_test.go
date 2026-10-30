@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -22,6 +23,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	colmetricpb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
+	metricpb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -84,8 +86,10 @@ func TestHookRecordFailureTransport(t *testing.T) {
 			var mu sync.Mutex
 			var httpIDs, otelIDs []string
 			var otelTools int
-			var toolObservations uint64
-			var toolSeconds float64
+			// Cumulative histograms repeat their running total on every export,
+			// so keep the latest point per series. Each hook process starts new
+			// series.
+			toolSeries := map[string]*metricpb.HistogramDataPoint{}
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				mu.Lock()
 				defer mu.Unlock()
@@ -160,8 +164,7 @@ func TestHookRecordFailureTransport(t *testing.T) {
 								for _, point := range metric.GetHistogram().GetDataPoints() {
 									for _, attr := range point.Attributes {
 										if attr.Key == "gen_ai.operation.name" && attr.Value.GetStringValue() == "execute_tool" {
-											toolObservations += point.Count
-											toolSeconds += point.GetSum()
+											toolSeries[fmt.Sprint(point.GetStartTimeUnixNano(), point.Attributes)] = point
 										}
 									}
 								}
@@ -199,7 +202,7 @@ func TestHookRecordFailureTransport(t *testing.T) {
 					wantState.Tools = state.ToolState{Version: toolStateVersion, Offsets: map[string]int64{toolPath(path): int64(len(text))}}
 					wantHTTP = []string{gens[0].ID, gens[2].ID}
 				}
-				if got := state.Load(sessionID); !reflect.DeepEqual(got, wantState) {
+				if got := withoutRecordedMetrics(state.Load(sessionID)); !reflect.DeepEqual(got, wantState) {
 					t.Fatalf("Stop%d state=%+v, want %+v; logs: %s", stop, got, wantState, logs)
 				}
 				if stop == 1 || tc.protocol == "otel" {
@@ -211,14 +214,22 @@ func TestHookRecordFailureTransport(t *testing.T) {
 				}
 				mu.Lock()
 				gotHTTP, gotOTel := slices.Clone(httpIDs), slices.Clone(otelIDs)
-				gotTools, gotObservations, gotSeconds := otelTools, toolObservations, toolSeconds
-				mu.Unlock()
-				wantTools := 0
-				if tc.completedTool {
-					wantTools = stop
+				gotTools := otelTools
+				var gotObservations uint64
+				var gotSeconds float64
+				for _, point := range toolSeries {
+					gotObservations += point.GetCount()
+					gotSeconds += point.GetSum()
 				}
-				if gotTools != wantTools || gotObservations != uint64(wantTools) || gotSeconds != float64(3*wantTools) {
-					t.Fatalf("%s%d tools=%d observations=%d seconds=%v, want %d/%d/%d; logs: %s", event, stop, gotTools, gotObservations, gotSeconds, wantTools, wantTools, 3*wantTools, logs)
+				mu.Unlock()
+				// Every failed Stop sends the tool span again, but its duration
+				// is counted once.
+				wantTools, wantObservations := 0, 0
+				if tc.completedTool {
+					wantTools, wantObservations = stop, 1
+				}
+				if gotTools != wantTools || gotObservations != uint64(wantObservations) || gotSeconds != float64(3*wantObservations) {
+					t.Fatalf("%s%d tools=%d observations=%d seconds=%v, want %d/%d/%d; logs: %s", event, stop, gotTools, gotObservations, gotSeconds, wantTools, wantObservations, 3*wantObservations, logs)
 				}
 				if !slices.Equal(gotHTTP, wantHTTP) || !slices.Equal(gotOTel, wantOTel) {
 					t.Fatalf("Stop%d HTTP=%v OTel=%v, want HTTP=%v OTel=%v; logs: %s", stop, gotHTTP, gotOTel, wantHTTP, wantOTel, logs)
@@ -367,7 +378,7 @@ func TestHookGenerationTransport(t *testing.T) {
 				t.Fatal(err)
 			}
 			if tc.wantFailure {
-				if got := state.Load(sessionID); !reflect.DeepEqual(got, prior) {
+				if got := withoutRecordedMetrics(state.Load(sessionID)); !reflect.DeepEqual(got, prior) {
 					t.Fatalf("failure changed state: %+v; logs: %s", got, logs.String())
 				}
 				if tc.recordFailure && !strings.Contains(logs.String(), "enqueue: recorder:") {

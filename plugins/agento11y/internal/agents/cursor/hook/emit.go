@@ -43,11 +43,23 @@ func setupOTelIfConfigured(ctx context.Context, instanceID string, logger *log.L
 // sessionStart saved is the primary source and the live payload is the
 // fallback for a conversation whose session file was never written.
 func buildClient(p Payload, session *fragment.Session, cfg config.Config, providers *otel.Providers, logger *log.Logger) (*agento11y.Client, error) {
+	return emit.NewClient(clientOptions(p, session, cfg, providers, logger))
+}
+
+// buildClientWithoutMetrics builds the client sessionEnd sends a generation
+// through when an earlier hook already delivered its metrics.
+func buildClientWithoutMetrics(p Payload, session *fragment.Session, cfg config.Config, providers *otel.Providers, logger *log.Logger) (*agento11y.Client, error) {
+	opts := clientOptions(p, session, cfg, providers, logger)
+	opts.WithoutMetrics = true
+	return emit.NewClient(opts)
+}
+
+func clientOptions(p Payload, session *fragment.Session, cfg config.Config, providers *otel.Providers, logger *log.Logger) emit.ClientOptions {
 	userID := strings.TrimSpace(cfg.UserIDOverride)
 	if userID == "" {
 		userID = autoTagUserEmail(p, session)
 	}
-	return emit.NewClient(emit.ClientOptions{
+	return emit.ClientOptions{
 		InstrumentationName: otelInstrumentationName,
 		ContentCapture:      cfg.ContentCapture,
 		Providers:           providers,
@@ -57,7 +69,27 @@ func buildClient(p Payload, session *fragment.Session, cfg config.Config, provid
 			Cwd:    autoTagWorkspaceRoot(p, session),
 			UserID: userID,
 		}, logger),
-	})
+	}
+}
+
+// rememberDeliveredMetrics notes on fragments kept for a retry that their
+// metrics were delivered, so sessionEnd does not count those turns again.
+// When the metrics did not arrive either, nothing is noted and the retry
+// records them.
+func rememberDeliveredMetrics(providers *otel.Providers, frags []*fragment.Fragment, logger *log.Logger) {
+	// Without OTel providers no metrics were recorded.
+	if len(frags) == 0 || providers == nil || providers.FlushMetrics() != nil {
+		return
+	}
+	for _, frag := range frags {
+		if frag.MetricsRecorded {
+			continue
+		}
+		frag.MetricsRecorded = true
+		if err := fragment.Save(frag); err != nil {
+			logger.Printf("save recorded metrics gen=%s: %v", frag.GenerationID, err)
+		}
+	}
 }
 
 func autoTagWorkspaceRoot(p Payload, session *fragment.Session) string {

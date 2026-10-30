@@ -3,6 +3,8 @@ package hook
 import (
 	"context"
 	"log"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -68,10 +70,36 @@ func SessionEnd(p Payload, cfg config.Config, logger *log.Logger) {
 		_ = client.Shutdown(cleanupCtx)
 	}()
 
+	// A fragment whose metrics an earlier hook delivered goes through a client
+	// without metrics, so a retried turn is counted once.
+	var quiet *agento11y.Client
+	defer func() {
+		if quiet == nil {
+			return
+		}
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		_ = quiet.Shutdown(cleanupCtx)
+	}()
+	recorded := map[string]*fragment.Fragment{}
+	clientFor := func(generationID string, frag *fragment.Fragment) (*agento11y.Client, error) {
+		if !frag.MetricsRecorded {
+			recorded[generationID] = frag
+			return client, nil
+		}
+		if quiet == nil {
+			var err error
+			if quiet, err = buildClientWithoutMetrics(p, session, cfg, providers, logger); err != nil {
+				return nil, err
+			}
+		}
+		return quiet, nil
+	}
+
 	allEmitted := true
 	var emittedIDs []string
 	for _, gid := range ids {
-		emitted, ok := emitOneStranded(ctx, client, session, p.ConversationID, gid, cfg, logger)
+		emitted, ok := emitOneStranded(ctx, clientFor, session, p.ConversationID, gid, cfg, logger)
 		if !ok {
 			allEmitted = false
 		}
@@ -85,14 +113,24 @@ func SessionEnd(p Payload, cfg config.Config, logger *log.Logger) {
 		flushOK = false
 		logger.Printf("sessionEnd: flush: %v", err)
 	}
+	if quiet != nil {
+		if err := quiet.Flush(ctx); err != nil {
+			flushOK = false
+			logger.Printf("sessionEnd: flush: %v", err)
+		}
+	}
 	if flushOK {
 		for _, gid := range emittedIDs {
 			if err := fragment.Delete(p.ConversationID, gid); err != nil {
 				logger.Printf("sessionEnd: delete gen=%s: %v", gid, err)
 				allEmitted = false
+				continue
 			}
+			delete(recorded, gid)
 		}
 	}
+	// What is left was recorded but stays on disk for the next sessionEnd.
+	rememberDeliveredMetrics(providers, slices.Collect(maps.Values(recorded)), logger)
 
 	if err := providers.ForceFlush(); err != nil {
 		logger.Printf("sessionEnd: otel flush: %v", err)
@@ -109,7 +147,7 @@ func SessionEnd(p Payload, cfg config.Config, logger *log.Logger) {
 // Emitted fragments must remain on disk until the caller confirms the batch.
 func emitOneStranded(
 	ctx context.Context,
-	client *agento11y.Client,
+	clientFor func(generationID string, frag *fragment.Fragment) (*agento11y.Client, error),
 	session *fragment.Session,
 	conversationID, generationID string,
 	cfg config.Config,
@@ -164,6 +202,11 @@ func emitOneStranded(
 		Now:                 time.Now(),
 	})
 
+	client, err := clientFor(generationID, frag)
+	if err != nil {
+		logger.Printf("sessionEnd: build client gen=%s: %v", generationID, err)
+		return false, false
+	}
 	if err := emitGeneration(ctx, client, frag, mapped, logger); err != nil {
 		logger.Printf("sessionEnd: emit gen=%s: %v", generationID, err)
 		return false, false

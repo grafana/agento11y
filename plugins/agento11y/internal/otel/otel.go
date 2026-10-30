@@ -133,6 +133,18 @@ func (p *Providers) ForceFlush() error {
 	return errors.Join(first, p.traceExport.takeError())
 }
 
+// FlushMetrics exports pending metrics and returns the export error, if any.
+// A hook whose generations failed to export uses it to learn whether the
+// turn's metrics were already delivered, so its retry records them once.
+func (p *Providers) FlushMetrics() error {
+	if p == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return p.mp.ForceFlush(ctx)
+}
+
 // Shutdown flushes and shuts down all providers concurrently. The
 // caller's context is honoured; when it has no deadline we apply a 3 s
 // budget so a stuck exporter can't pin the process.

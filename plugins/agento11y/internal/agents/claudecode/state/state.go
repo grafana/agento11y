@@ -33,6 +33,11 @@ type Session struct {
 	// subagent whose parent turn was exported earlier still links correctly.
 	SubagentParents map[string]string `json:"subagent_parents,omitempty"`
 	SubagentNames   map[string]string `json:"subagent_names,omitempty"`
+	// MetricsRecorded keys the generations and tool executions whose metrics
+	// an earlier hook delivered before its export failed. That hook kept its
+	// offset, so the next one sends them again, without metrics. Cleared once
+	// an export succeeds.
+	MetricsRecorded []string `json:"metrics_recorded,omitempty"`
 }
 
 func dir() string {
