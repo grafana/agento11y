@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.26.0] - 2026-10-30
+
+### Features
+
+- **sdk**: add skill identity to tool execution metrics (#979)
+
+### Bug Fixes
+
+- **plugins/opencode**: record the guard-redacted text on OpenCode 2 (#904)
+
 ## [0.25.0] - 2026-10-28
 
 ### Features
