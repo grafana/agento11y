@@ -164,25 +164,29 @@ func TestHookResumedConversationKeepsSessionMetadata(t *testing.T) {
 				t.Fatalf("exported ids = %v, %v", before["id"], after["id"])
 			}
 
-			want := map[string]string{
-				"user_id":    "dev@example.com",
-				"title":      "list go files",
-				"version":    "2.0.1",
-				"cwd":        workspace,
-				"git.branch": "feature/resume",
-			}
-			if tc.autoTags {
-				want["repo"] = "grafana/agento11y"
-				want["user"] = "dev@example.com"
-			}
-			for label, gen := range map[string]map[string]any{"before close": before, "after reopen": after} {
-				if label == "after reopen" {
-					want["title"] = tc.wantTitle
+			for _, check := range []struct {
+				label string
+				gen   map[string]any
+				title string
+			}{
+				{label: "before close", gen: before, title: "list go files"},
+				{label: "after reopen", gen: after, title: tc.wantTitle},
+			} {
+				want := map[string]string{
+					"user_id":    "dev@example.com",
+					"title":      check.title,
+					"version":    "2.0.1",
+					"cwd":        workspace,
+					"git.branch": "feature/resume",
 				}
-				got := exportedSessionFields(gen)
+				if tc.autoTags {
+					want["repo"] = "grafana/agento11y"
+					want["user"] = "dev@example.com"
+				}
+				got := exportedSessionFields(check.gen)
 				for key, value := range want {
 					if got[key] != value {
-						t.Errorf("%s: %s = %q, want %q", label, key, got[key], value)
+						t.Errorf("%s: %s = %q, want %q", check.label, key, got[key], value)
 					}
 				}
 			}
