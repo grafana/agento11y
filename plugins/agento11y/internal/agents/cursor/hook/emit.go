@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/grafana/agento11y/go/agento11y"
 
@@ -72,22 +73,32 @@ func clientOptions(p Payload, session *fragment.Session, cfg config.Config, prov
 	}
 }
 
+// recordedFragment is a fragment this hook recorded, and when its recorder
+// ended, which is when its metrics were recorded.
+type recordedFragment struct {
+	frag *fragment.Fragment
+	at   time.Time
+}
+
 // rememberDeliveredMetrics notes on fragments kept for a retry that their
-// metrics were delivered, so sessionEnd does not count those turns again.
-// When the metrics did not arrive either, nothing is noted and the retry
-// records them.
-func rememberDeliveredMetrics(providers *otel.Providers, frags []*fragment.Fragment, logger *log.Logger) {
+// metrics were delivered, so sessionEnd does not count those turns again. A
+// fragment counts as delivered when an export collected after its record
+// reached the collector, even if a later export failed. Otherwise nothing is
+// noted and the retry records its metrics.
+func rememberDeliveredMetrics(providers *otel.Providers, recorded []recordedFragment, logger *log.Logger) {
 	// Without OTel providers no metrics were recorded.
-	if len(frags) == 0 || providers == nil || providers.FlushMetrics() != nil {
+	if len(recorded) == 0 || providers == nil {
 		return
 	}
-	for _, frag := range frags {
-		if frag.MetricsRecorded {
+	_ = providers.FlushMetrics()
+	deliveredAt := providers.MetricsDeliveredAt()
+	for _, r := range recorded {
+		if r.frag.MetricsRecorded || r.at.After(deliveredAt) {
 			continue
 		}
-		frag.MetricsRecorded = true
-		if err := fragment.Save(frag); err != nil {
-			logger.Printf("save recorded metrics gen=%s: %v", frag.GenerationID, err)
+		r.frag.MetricsRecorded = true
+		if err := fragment.Save(r.frag); err != nil {
+			logger.Printf("save recorded metrics gen=%s: %v", r.frag.GenerationID, err)
 		}
 	}
 }

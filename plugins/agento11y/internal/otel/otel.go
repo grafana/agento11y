@@ -52,7 +52,9 @@ type Providers struct {
 	tp          *sdktrace.TracerProvider
 	mp          *sdkmetric.MeterProvider
 	traceExport *checkedTraceExporter
-	generation  *generationProvider
+	// metricExport tracks which metrics reached the collector.
+	metricExport *deliveryTrackingExporter
+	generation   *generationProvider
 }
 
 // A batch can fail before ForceFlush runs. The SDK reports that failure to its
@@ -134,8 +136,7 @@ func (p *Providers) ForceFlush() error {
 }
 
 // FlushMetrics exports pending metrics and returns the export error, if any.
-// A hook whose generations failed to export uses it to learn whether the
-// turn's metrics were already delivered, so its retry records them once.
+// When it succeeds, MetricsDeliveredAt covers everything recorded before it.
 func (p *Providers) FlushMetrics() error {
 	if p == nil {
 		return nil
@@ -143,6 +144,18 @@ func (p *Providers) FlushMetrics() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return p.mp.ForceFlush(ctx)
+}
+
+// MetricsDeliveredAt returns when the newest metrics that reached the
+// collector were collected. A value recorded before then was delivered, even
+// when a later export failed. A hook whose generations failed to export uses
+// it so its retry records each turn's metrics once. Zero when nothing was
+// delivered.
+func (p *Providers) MetricsDeliveredAt() time.Time {
+	if p == nil {
+		return time.Time{}
+	}
+	return p.metricExport.lastDelivered()
 }
 
 // Shutdown flushes and shuts down all providers concurrently. The
@@ -281,11 +294,12 @@ func SetupWithOptions(ctx context.Context, instanceID string, opts Options) (*Pr
 		_ = tp.Shutdown(ctx)
 		return nil, err
 	}
+	trackedMetrics := &deliveryTrackingExporter{Exporter: metricExp}
 	mp := sdkmetric.NewMeterProvider(
-		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExp, sdkmetric.WithInterval(time.Second))),
+		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(trackedMetrics, sdkmetric.WithInterval(time.Second))),
 		sdkmetric.WithResource(res),
 	)
-	p := &Providers{tp: tp, mp: mp, traceExport: checked}
+	p := &Providers{tp: tp, mp: mp, traceExport: checked, metricExport: trackedMetrics}
 	if protocol == agento11y.GenerationExportProtocolOTel {
 		generationExp, err := otlptracehttp.New(setupCtx, traceOptions(cfg)...)
 		if err != nil {

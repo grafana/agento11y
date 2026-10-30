@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"slices"
+	"time"
 
 	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/state"
@@ -22,8 +23,8 @@ type recordClients struct {
 	quiet       *agento11y.Client
 	// earlier holds the keys from state.Session.MetricsRecorded.
 	earlier map[string]bool
-	// recorded holds the keys whose metrics this hook recorded.
-	recorded []string
+	// recordedAt holds when this hook finished recording each key's metrics.
+	recordedAt map[string]time.Time
 }
 
 func newRecordClients(client *agento11y.Client, cfg agento11y.Config, earlier []string) *recordClients {
@@ -31,23 +32,24 @@ func newRecordClients(client *agento11y.Client, cfg agento11y.Config, earlier []
 	for _, key := range earlier {
 		set[key] = true
 	}
-	return &recordClients{metrics: client, quietConfig: cfg, earlier: set}
+	return &recordClients{metrics: client, quietConfig: cfg, earlier: set, recordedAt: map[string]time.Time{}}
 }
 
 func generationRecordKey(id string) string { return "generation:" + id }
 
 func toolRecordKey(key string) string { return "tool:" + key }
 
-// forRecord returns the client to send the record with key through.
-func (c *recordClients) forRecord(key string) *agento11y.Client {
+// forRecord returns the client to send the record with key through, and a
+// function to call once the record has ended, which is when its metrics are
+// recorded.
+func (c *recordClients) forRecord(key string) (*agento11y.Client, func()) {
 	if !c.earlier[key] {
-		c.recorded = append(c.recorded, key)
-		return c.metrics
+		return c.metrics, func() { c.recordedAt[key] = time.Now() }
 	}
 	if c.quiet == nil {
 		c.quiet = agento11y.NewClient(emit.WithoutMetrics(c.quietConfig))
 	}
-	return c.quiet
+	return c.quiet, func() {}
 }
 
 // flush flushes both clients. The client without metrics is flushed only
@@ -70,16 +72,19 @@ func (c *recordClients) shutdownQuiet(ctx context.Context) {
 	}
 }
 
-// keys returns the earlier keys, plus this hook's when its metrics were
-// delivered. Undelivered metrics are recorded again by the retry, so the
-// turn is still counted once.
-func (c *recordClients) keys(delivered bool) []string {
-	keys := make([]string, 0, len(c.earlier)+len(c.recorded))
+// keys returns the earlier keys, plus this hook's keys recorded before
+// deliveredAt, when the newest delivered metrics were collected. A record
+// made after that has no delivered metrics, so the retry records it again
+// and the turn is still counted once.
+func (c *recordClients) keys(deliveredAt time.Time) []string {
+	keys := make([]string, 0, len(c.earlier)+len(c.recordedAt))
 	for key := range c.earlier {
 		keys = append(keys, key)
 	}
-	if delivered {
-		keys = append(keys, c.recorded...)
+	for key, at := range c.recordedAt {
+		if !at.After(deliveredAt) {
+			keys = append(keys, key)
+		}
 	}
 	slices.Sort(keys)
 	return slices.Compact(keys)

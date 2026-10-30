@@ -81,19 +81,18 @@ func SessionEnd(p Payload, cfg config.Config, logger *log.Logger) {
 		defer cleanupCancel()
 		_ = quiet.Shutdown(cleanupCtx)
 	}()
-	recorded := map[string]*fragment.Fragment{}
-	clientFor := func(generationID string, frag *fragment.Fragment) (*agento11y.Client, error) {
+	recorded := map[string]recordedFragment{}
+	clientFor := func(generationID string, frag *fragment.Fragment) (*agento11y.Client, func(), error) {
 		if !frag.MetricsRecorded {
-			recorded[generationID] = frag
-			return client, nil
+			return client, func() { recorded[generationID] = recordedFragment{frag: frag, at: time.Now()} }, nil
 		}
 		if quiet == nil {
 			var err error
 			if quiet, err = buildClientWithoutMetrics(p, session, cfg, providers, logger); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		}
-		return quiet, nil
+		return quiet, func() {}, nil
 	}
 
 	allEmitted := true
@@ -147,7 +146,7 @@ func SessionEnd(p Payload, cfg config.Config, logger *log.Logger) {
 // Emitted fragments must remain on disk until the caller confirms the batch.
 func emitOneStranded(
 	ctx context.Context,
-	clientFor func(generationID string, frag *fragment.Fragment) (*agento11y.Client, error),
+	clientFor func(generationID string, frag *fragment.Fragment) (client *agento11y.Client, recorded func(), err error),
 	session *fragment.Session,
 	conversationID, generationID string,
 	cfg config.Config,
@@ -202,13 +201,16 @@ func emitOneStranded(
 		Now:                 time.Now(),
 	})
 
-	client, err := clientFor(generationID, frag)
+	client, recorded, err := clientFor(generationID, frag)
 	if err != nil {
 		logger.Printf("sessionEnd: build client gen=%s: %v", generationID, err)
 		return false, false
 	}
-	if err := emitGeneration(ctx, client, frag, mapped, logger); err != nil {
-		logger.Printf("sessionEnd: emit gen=%s: %v", generationID, err)
+	// The recorder records metrics when it ends, even when it then fails.
+	emitErr := emitGeneration(ctx, client, frag, mapped, logger)
+	recorded()
+	if emitErr != nil {
+		logger.Printf("sessionEnd: emit gen=%s: %v", generationID, emitErr)
 		return false, false
 	}
 

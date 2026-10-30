@@ -566,12 +566,14 @@ func emitPendingTools(ctx context.Context, clients *recordClients, st *state.Ses
 				end.Result = result
 			}
 		}
-		_, rec := clients.forRecord(toolRecordKey(key)).StartToolExecution(toolParentContext(ctx, p.Parent), start)
+		client, recorded := clients.forRecord(toolRecordKey(key))
+		_, rec := client.StartToolExecution(toolParentContext(ctx, p.Parent), start)
 		if p.Result.IsError {
 			rec.SetExecError(fmt.Errorf("tool returned error"))
 		}
 		rec.SetResult(end)
 		rec.End()
+		recorded()
 		if p.Name == "Agent" && len(p.Result.ChildIDs) == 0 {
 			p.Emitted = true
 			continue

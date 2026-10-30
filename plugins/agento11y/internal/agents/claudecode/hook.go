@@ -303,16 +303,21 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 		if otelProviders == nil {
 			return // no OTLP endpoint, so no metrics were recorded
 		}
-		delivered := otelProviders.FlushMetrics() == nil
-		rememberRecordedMetrics(input.SessionID, clients.keys(delivered), logger)
+		// Send what is still pending. If that fails, an earlier periodic
+		// export may still have delivered some records.
+		_ = otelProviders.FlushMetrics()
+		rememberRecordedMetrics(input.SessionID, clients.keys(otelProviders.MetricsDeliveredAt()), logger)
 	}
 	t0 := time.Now()
 
 	for i, gen := range gens {
 		var parentContext trace.SpanContext
-		err := emit.Record(hookCtx, clients.forRecord(generationRecordKey(gen.ID)), generationStart(gen), gen, nil, func(genCtx context.Context) {
+		recordClient, recorded := clients.forRecord(generationRecordKey(gen.ID))
+		err := emit.Record(hookCtx, recordClient, generationStart(gen), gen, nil, func(genCtx context.Context) {
 			parentContext = trace.SpanContextFromContext(genCtx)
 		})
+		// The recorder records metrics when it ends, even when it then fails.
+		recorded()
 		if err != nil {
 			logger.Printf("enqueue: %v", err)
 			if protocol == agento11y.GenerationExportProtocolOTel {

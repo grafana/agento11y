@@ -22,16 +22,19 @@ import (
 
 // A stop whose generation export fails keeps the fragment, and sessionEnd
 // sends it again. Sigil stores a generation ID once, so the token metric must
-// count the turn once too: not again when stop's metrics arrived, and still
-// once when they did not.
+// count the turn once too: not again when stop's metrics arrived, even if
+// only an earlier periodic export delivered them, and still once when they did
+// not.
 func TestHookRetryAfterFailedStopCountsTokensOnce(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		// metricsFail rejects stop's metric exports as well.
-		metricsFail bool
+		// metrics is what happens to stop's metric exports: all delivered,
+		// the first delivered and the rest rejected, or all rejected.
+		metrics string
 	}{
-		{name: "metrics delivered"},
-		{name: "metrics also failed", metricsFail: true},
+		{name: "metrics delivered", metrics: "delivered"},
+		{name: "metrics delivered before the final flush failed", metrics: "first"},
+		{name: "metrics also failed", metrics: "rejected"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			state := t.TempDir()
@@ -42,7 +45,9 @@ func TestHookRetryAfterFailedStopCountsTokensOnce(t *testing.T) {
 			var (
 				mu      sync.Mutex
 				failing = true
-				stored  = map[string]int{}
+				// failedHookMetricExports counts metric exports while the export fails.
+				failedHookMetricExports int
+				stored                  = map[string]int{}
 				// Cumulative histograms repeat their running total on every
 				// export, so keep the latest sum per series. Each hook process
 				// starts new series.
@@ -78,10 +83,13 @@ func TestHookRetryAfterFailedStopCountsTokensOnce(t *testing.T) {
 					w.Header().Set("Content-Type", "application/json")
 					_ = json.NewEncoder(w).Encode(map[string]any{"results": results})
 				case "/v1/metrics":
-					if failing && tc.metricsFail {
-						// A permanent rejection, so the exporter doesn't back off.
-						w.WriteHeader(http.StatusBadRequest)
-						return
+					if failing {
+						failedHookMetricExports++
+						if tc.metrics == "rejected" || (tc.metrics == "first" && failedHookMetricExports > 1) {
+							// A permanent rejection, so the exporter doesn't back off.
+							w.WriteHeader(http.StatusBadRequest)
+							return
+						}
 					}
 					var request colmetricpb.ExportMetricsServiceRequest
 					if err := proto.Unmarshal(body, &request); err != nil {
