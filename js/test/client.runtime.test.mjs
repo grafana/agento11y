@@ -729,30 +729,40 @@ test('no-op tracing omits generation correlation IDs from snapshots and exports'
 test('bound tools share client empty-name no-op and shutdown checks', async () => {
   const client = newClient(new MockGenerationExporter(), { batchSize: 10, flushIntervalMs: 60_000 });
   const generation = client.startGeneration(seedGeneration('noop-tool'));
+  const parent = generation.startToolExecution({ toolName: 'parent' });
   try {
     for (const toolName of ['', ' \t\n ']) {
       for (const create of [
         () => client.startToolExecution({ toolName }),
         () => generation.startToolExecution({ toolName }),
+        () => parent.startToolExecution({ toolName }),
       ]) {
         const tool = create();
-        tool.setResult({ arguments: { ignored: true }, result: 'ignored' });
-        tool.setCallError(new Error('ignored'));
-        tool.end();
-        tool.end();
-        assert.equal(tool.getError(), undefined);
+        const child = tool.startToolExecution({ toolName: 'ignored-child' });
+        const grandchild = child.startToolExecution({ toolName: 'ignored-grandchild' });
+        for (const recorder of [grandchild, child, tool]) {
+          recorder.setResult({ arguments: { ignored: true }, result: 'ignored' });
+          recorder.setCallError(new Error('ignored'));
+          recorder.end();
+          recorder.end();
+          assert.equal(recorder.getError(), undefined);
+        }
       }
     }
     assert.equal(client.debugSnapshot().toolExecutions.length, 0);
+    parent.end();
     generation.end();
     const shutdown = client.shutdown();
     for (const toolName of ['', 'weather']) {
       assert.throws(() => client.startToolExecution({ toolName }), /client is shutdown/);
       assert.throws(() => generation.startToolExecution({ toolName }), /client is shutdown/);
+      assert.throws(() => parent.startToolExecution({ toolName }), /client is shutdown/);
     }
     await shutdown;
     assert.throws(() => generation.startToolExecution({ toolName: 'weather' }), /client is shutdown/);
+    assert.throws(() => parent.startToolExecution({ toolName: 'weather' }), /client is shutdown/);
   } finally {
+    parent.end();
     generation.end();
     await client.shutdown();
   }
@@ -762,12 +772,19 @@ test('bound tools retain client-level result validation and idempotent finalizat
   const client = newClient(new MockGenerationExporter(), { batchSize: 10, flushIntervalMs: 60_000 });
   try {
     const generation = client.startGeneration(seedGeneration('invalid-tool'));
-    const tool = generation.startToolExecution({ toolName: 'weather', startedAt: new Date('2026-01-02') });
-    tool.setResult({ completedAt: new Date('2026-01-01') });
-    tool.end();
-    tool.end();
-    assert.match(tool.getError()?.message ?? '', /completedAt/);
+    const parent = generation.startToolExecution({ toolName: 'parent' });
+    for (const source of [generation, parent]) {
+      const tool = source.startToolExecution({ toolName: 'weather', startedAt: new Date('2026-01-02') });
+      tool.setResult({ completedAt: new Date('2026-01-01') });
+      tool.end();
+      tool.end();
+      assert.match(tool.getError()?.message ?? '', /completedAt/);
+    }
     assert.equal(client.debugSnapshot().toolExecutions.length, 0);
+    parent.end();
+    parent.end();
+    assert.equal(parent.getError(), undefined);
+    assert.equal(client.debugSnapshot().toolExecutions.length, 1);
     generation.end();
   } finally {
     await client.shutdown();

@@ -457,14 +457,14 @@ describe("pi session conformance", () => {
 
     const pi = new FakePi();
     registerExtension(pi as any);
+    let visibleBranch = branch.filter((entry) => copied.has(String(entry.id)));
     const ctx = {
+      cwd: process.cwd(),
       sessionManager: {
         getSessionFile: () => sessionPath,
         getSessionId: () => String(header.id ?? ""),
         getSessionName: () => sessionName,
-        // The whole tree, copied entries included: lineage has to walk into
-        // them to recognise a parent that belongs to the trunk.
-        getBranch: () => branch,
+        getBranch: () => visibleBranch,
       },
     };
 
@@ -481,11 +481,22 @@ describe("pi session conformance", () => {
       if (entry.message.role !== "assistant") continue;
 
       const toolResults = toolResultsFor(branch, entry) as any[];
+      visibleBranch = branch.slice(0, branch.indexOf(entry));
       await pi.emit("turn_start", {}, ctx);
       for (const user of pendingUsers) {
         await pi.emit("message_end", { message: user }, ctx);
       }
       pendingUsers = [];
+      await pi.emit(
+        "context_with_system",
+        {
+          messages: visibleBranch
+            .filter((item) => item.type === "message")
+            .map((item) => item.message),
+        },
+        ctx,
+      );
+      visibleBranch = branch.slice(0, branch.indexOf(entry) + 1);
       await pi.emit("message_end", { message: { role: "assistant" } }, ctx);
       // Pi runs each tool between the assistant message and turn_end. The
       // plugin reads the tool names off these events when the host exposes no

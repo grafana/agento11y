@@ -2,6 +2,8 @@
 
 [Pi](https://github.com/earendil-works/pi) agent extension that sends LLM generations to [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/).
 
+The tested host is Pi 1.4.0. Older hosts are not verified.
+
 By default only metadata is sent (token counts, cost, model, tool names, recognized skill names, durations). Set `AGENTO11Y_CONTENT_CAPTURE_MODE` to `full`, `no_tool_content`, `metadata_only`, or `full_with_metadata_spans` to control what is sent. `default` is accepted as an alias for `metadata_only`. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md) for the full reference.
 
 ## 1. Install and launch
@@ -106,12 +108,12 @@ agento11y pi --tag project=hackathon --tag team=ai
 agento11y pi --tag team=ai -- --resume
 ```
 
-`--tag` is shorthand for `AGENTO11Y_TAGS`; flag tags merge onto (and override) any `AGENTO11Y_TAGS` already in the environment or `~/.config/agento11y/config.env`. The merge happens in the SDK, so user tags reach every generation without the plugin reparsing them.
+`--tag` is shorthand for `AGENTO11Y_TAGS`; flag tags override matching values from the environment or `~/.config/agento11y/config.env`. Guards use the same precedence as generation exports: automatic tags, configured tags, then built-in tags.
 
 The plugin always attaches two built-in tags to every generation:
 
 - `git.branch` — current branch from the working directory, or a 12-char short SHA on detached HEAD. Omitted when not inside a git checkout.
-- `cwd` — the process working directory.
+- `cwd` — the session working directory.
 
 One more tag appears on generations pi produces outside a user turn:
 
@@ -154,22 +156,41 @@ Guards do two things when enabled: block tool calls that match a deny rule, and 
 AGENTO11Y_GUARDS_ENABLED=true agento11y pi
 ```
 
-By default, transport errors and timeouts let the request through. Set `AGENTO11Y_GUARDS_FAIL_OPEN=false` to block tool calls on errors instead. Raise or lower `AGENTO11Y_GUARDS_TIMEOUT_MS` (default `1500`) to trade latency against tolerance for slow evaluators.
+By default, transport errors and timeouts let the request through. Set `AGENTO11Y_GUARDS_FAIL_OPEN=false` to block tools and cancel supported summaries on evaluation failures. Raise or lower `AGENTO11Y_GUARDS_TIMEOUT_MS` (default `1500`) to trade latency against tolerance for slow evaluators.
+
+Guard readiness is independent of capture readiness. If guard initialization fails, strict mode blocks tool calls as evaluation failures. Fail-open mode allows tools with a fixed warning. Disabled guards do not block tools when capture fails. An OTLP setup failure does not disable a working guard client. Failed local receiver discovery never selects Cloud as a fallback.
 
 The same three variables are honored by the [Claude Code plugin](../claude-code/README.md); both plugins read them from `~/.config/agento11y/config.env`.
 
 ### Transform guards (redaction)
 
-When guards are enabled, pi also applies [Transform guards](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/guides/guards/) — regex redaction rules you configure in Grafana — in two places:
+When guards are enabled, pi also applies [Transform guards](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/guides/guards/) — regex redaction rules you configure in Grafana — in these paths:
 
-- **Preflight (message redaction).** Before each model call, the outgoing conversation is sent to Agent Observability; redacted text replaces the original, so the placeholder (e.g. `[REDACTED]`) reaches the model instead of the secret.
-- **Postflight (tool-argument redaction).** Before a tool runs, its arguments are sent to Agent Observability; if a Transform rule matches, the redacted arguments replace what the tool receives.
+- Preflight message redaction runs at Pi's `context_with_system` hook. Validated replacements update request-local copies, not stored history. Supported content includes user and assistant text, tool arguments and results, custom messages, included Bash executions, summaries, and visible system updates.
+- Postflight tool-argument redaction runs before a tool executes. Matching Transform rules replace the arguments the tool receives.
+- Built-in summary guards evaluate compaction and branch-summary preparation. See [Summary guard coverage](#summary-guard-coverage).
 
 Limits:
 
-- Each guarded model call adds one synchronous hook round-trip (`AGENTO11Y_GUARDS_TIMEOUT_MS`, default `1500`). Transform redaction always fails open: on a transport error or timeout the original messages or tool arguments pass through unchanged.
-- A preflight deny verdict cannot stop the model call, only the transform output is applied. Enforced blocking happens at the tool-call (postflight) level.
-- Redaction rewrites text content only. `thinking` blocks on assistant messages are left unchanged so multi-turn continuity is preserved.
+- Each ordinary request adds one synchronous hook round-trip (`AGENTO11Y_GUARDS_TIMEOUT_MS`, default `1500`). This hook cannot cancel a request. Denied, failed, or invalid evaluations leave the request unchanged, log content-free warnings only when debug logging is enabled, and omit incremental user-message bodies from `Generation.input`. This omission does not suppress cached system prompts or offered-tool definitions; their export still follows the content-capture mode.
+- Exported incremental user input and prompt-derived titles use only successfully observed content. Missing or ambiguous correspondence with finalized entries omits the body instead of reading raw history.
+- Ordinary guards use the current physical model selection. Tool guards use the assistant's reported dispatch model. Unknown or virtual selections remain unknown.
+- Pi substitutes forced prompts and filters hidden tools after this hook. Later extensions can change the request again. This is not a final provider boundary.
+- Images, thinking blocks, signatures, and unrelated fields remain unchanged. Guards do not evaluate that opaque content.
+
+### Summary guard coverage
+
+Each summary preparation adds one synchronous guard request, even when split compaction makes two model calls.
+
+Compaction guards cover messages, split-turn prefixes, previous summary text, tracked file paths, and custom instructions. Approved replacements update preparation copies, leaving persisted entries unchanged. Pi has no consumed compaction-instruction override, so a required instruction rewrite cancels compaction.
+
+Branch-summary guards replace prepared entries with sanitized clones, retaining the original array. They cover message and custom-message content, prior summaries, tracked file paths, and supported custom-instruction overrides. Tree navigation without summarization does not evaluate a summary guard.
+
+A deny verdict or invalid required transformation cancels the summary, even with fail-open enabled. Evaluation failures continue with a fixed warning in fail-open mode; strict mode cancels. The plugin returns cancellation explicitly because Pi ignores exceptions from these hooks.
+
+Cancellation does not undo earlier host changes. Manual compaction can already have aborted active work. Overflow-recovery edits remain. Cancelling threshold compaction can still allow the next foreground request. Cancelling a tree summary cancels that navigation.
+
+These hooks do not protect virtual-router internal calls, opaque content, or later extension changes. Earlier tree-instruction overrides are not exposed as effective preparation, and later hook results can replace this plugin's instruction override. Summary guards are not a final provider boundary.
 
 ## All options
 
@@ -190,10 +211,14 @@ Limits:
 | `AGENTO11Y_EXPORT_TIMEOUT_MS` | `30000` | Timeout for each generation export request. Use a base-10 integer from `1` through `2147483647` milliseconds. |
 | `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP HTTP endpoint. Falls back to `OTEL_EXPORTER_OTLP_ENDPOINT`. |
 | `AGENTO11Y_OTEL_AUTH_TOKEN` | `AGENTO11Y_AUTH_TOKEN` | Override the OTLP password. |
-| `AGENTO11Y_GUARDS_ENABLED` | `false` | Evaluate `tool_call` requests against Agent Observability policy. |
-| `AGENTO11Y_GUARDS_TIMEOUT_MS` | `1500` | Per-call timeout for guard requests, in milliseconds. |
-| `AGENTO11Y_GUARDS_FAIL_OPEN` | `true` | Allow tools through when the guard call fails. Set `false` for strict mode. |
+| `AGENTO11Y_GUARDS_ENABLED` | `false` | Evaluate ordinary requests, tool calls, and supported summaries against Agent Observability policy. |
+| `AGENTO11Y_GUARDS_TIMEOUT_MS` | `1500` | Per-call timeout in milliseconds, from `1` through `2147483647`. Invalid values use `1500`. |
+| `AGENTO11Y_GUARDS_FAIL_OPEN` | `true` | Allow tools and supported summaries on evaluation failure. Does not override policy denies or invalid summary transformations. |
 
 File format: one `KEY=value` per line, `#` line comments, optional `export ` prefix, optional matching single or double quotes around the value. Only the following keys are honoured — anything else (including stray `PATH=…` lines) is ignored: any `AGENTO11Y_*` or `SIGIL_*` key plus `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_INSECURE`, and `OTEL_SERVICE_NAME`.
 
 A non-empty OS env value always wins over the file; an empty or whitespace-only OS value is treated as unset and gets filled from `config.env`. Missing files are silent.
+
+For recognized alias pairs, shell values take precedence across spellings: shell `AGENTO11Y_*`, shell `SIGIL_*`, file `AGENTO11Y_*`, then file `SIGIL_*`. This includes `QUEUE_SIZE`, `MAX_RETRIES`, and `MAX_BACKOFF_MS`. File edits and removals take effect at the next session start, including extension reload.
+
+Restart Pi once after upgrading from the older dotenv loader. The older loader does not retain ownership across module replacement, so the new loader cannot distinguish its injected values from shell exports. Later reloads retain configuration ownership without retaining clients or session contexts.

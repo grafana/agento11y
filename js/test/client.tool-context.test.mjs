@@ -31,11 +31,15 @@ test.after(() => {
   contextManager.disable();
 });
 
-for (const method of ['startGeneration', 'startStreamingGeneration']) {
+for (const [method, start] of [
+  ['startGeneration', generationStart],
+  ['startStreamingGeneration', generationStart],
+  ['startToolExecution', { toolName: 'parent' }],
+]) {
   test(`${method}: bound tools honor call-time suppression across await`, async () => {
     const harness = newHarness();
     try {
-      const generation = context.with(ROOT_CONTEXT, () => harness.client[method](generationStart));
+      const generation = context.with(ROOT_CONTEXT, () => harness.client[method](start));
       assert.equal(harness.starts[0].span.isRecording(), true);
       await context.with(suppressTracing(ROOT_CONTEXT), async () => {
         await Promise.resolve();
@@ -51,18 +55,18 @@ for (const method of ['startGeneration', 'startStreamingGeneration']) {
       assert.equal(toolStart.span.spanContext().traceId, '0'.repeat(32));
       assert.equal(toolSpans(harness).length, 0);
       assert.equal(harness.spanExporter.getFinishedSpans().length, 1);
-      assert.equal(harness.client.debugSnapshot().toolExecutions.length, 1);
+      assert.equal(harness.client.debugSnapshot().toolExecutions.length, method === 'startToolExecution' ? 2 : 1);
     } finally {
       await shutdownHarness(harness);
     }
   });
 
-  test(`${method}: generation-time suppression does not suppress a later bound tool`, async () => {
+  test(`${method}: parent-time suppression does not suppress a later bound tool`, async () => {
     const harness = newHarness();
     try {
       const generation = await context.with(suppressTracing(ROOT_CONTEXT), async () => {
         await Promise.resolve();
-        return harness.client[method](generationStart);
+        return harness.client[method](start);
       });
       await context.with(ROOT_CONTEXT, async () => {
         await Promise.resolve();
@@ -93,7 +97,7 @@ for (const method of ['startGeneration', 'startStreamingGeneration']) {
         .setValue(staleInput, 'old');
       const generation = await context.with(oldContext, async () => {
         await Promise.resolve();
-        return harness.client[method](generationStart);
+        return harness.client[method](start);
       });
       const unrelated = trace.wrapSpanContext({
         traceId: '1'.repeat(32),
@@ -130,11 +134,11 @@ for (const method of ['startGeneration', 'startStreamingGeneration']) {
     ['record', 'drop'],
     ['drop', 'record'],
   ]) {
-    test(`${method}: baggage-dependent sampler uses tool-time ${atCall}, not generation-time ${before}`, async () => {
+    test(`${method}: baggage-dependent sampler uses tool-time ${atCall}, not parent-time ${before}`, async () => {
       const sampled = [];
       const sampler = {
         shouldSample(parentContext, _traceId, name) {
-          if (!name.startsWith('execute_tool')) {
+          if (!name.startsWith('execute_tool') || name === 'execute_tool parent') {
             return { decision: SamplingDecision.RECORD_AND_SAMPLED };
           }
           const policy = propagation.getBaggage(parentContext)?.getEntry('tool-policy')?.value;
@@ -153,7 +157,7 @@ for (const method of ['startGeneration', 'startStreamingGeneration']) {
       try {
         const generation = await context.with(policyContext(before), async () => {
           await Promise.resolve();
-          return harness.client[method](generationStart);
+          return harness.client[method](start);
         });
         await context.with(policyContext(atCall), async () => {
           await Promise.resolve();
@@ -208,7 +212,11 @@ async function shutdownHarness(harness) {
 function toolSpans(harness) {
   return harness.spanExporter
     .getFinishedSpans()
-    .filter((span) => span.attributes['gen_ai.operation.name'] === 'execute_tool');
+    .filter(
+      (span) =>
+        span.attributes['gen_ai.operation.name'] === 'execute_tool' &&
+        span.spanContext().spanId !== harness.starts[0].span.spanContext().spanId,
+    );
 }
 
 function assertParentage(harness) {

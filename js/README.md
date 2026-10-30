@@ -168,7 +168,10 @@ The built-in sanitizer:
 - redacts email addresses by default
 - redacts the conversation title and call error
 - redacts historic assistant turns and tool messages in input
+- redacts secret formats and key/value secrets in `generation.tools` descriptions and encoded schemas
 - leaves user input unchanged unless input redaction is enabled
+
+Tool-definition redaction uses copied definitions, not the application's executable tools. The sanitizer validates schema JSON before and after redacting the complete encoded string. If either validation fails, it omits the schema body instead of restoring raw content. Names and types remain unchanged. This coverage is JS-only; Go, Python, and .NET sanitizers still lack tool-definition redaction.
 
 To preserve email addresses, opt out explicitly:
 
@@ -265,7 +268,7 @@ metric exporter, and why analytics stays empty when this step is skipped.
 ## Core API
 
 - `startGeneration(...)` and `startStreamingGeneration(...)`
-- `client.startToolExecution(...)` and `GenerationRecorder.startToolExecution(...)`
+- `client.startToolExecution(...)`, `GenerationRecorder.startToolExecution(...)`, and `ToolExecutionRecorder.startToolExecution(...)`
 - Recorder methods: `setResult(...)`, `setCallError(...)`, `end()`, `getError()`
 - Lifecycle: `flush()`, `shutdown()`
 
@@ -334,6 +337,8 @@ TraceQL examples:
 ## Tool Execution Example
 
 Use `GenerationRecorder.startToolExecution(...)` to parent a tool span to that generation, including across `await`, without a global context manager. The method does not change active context or inherit generation capture settings, identity, or request model. Set those tool options explicitly when they must match the generation. `client.startToolExecution(...)` remains available and uses the active OpenTelemetry context.
+
+`ToolExecutionRecorder.startToolExecution(...)` parents a child span to that tool, including nested children and concurrent siblings. It binds only trace parentage. Baggage, suppression, sampling inputs, identity, and capture policy resolve at the child call. End each child yourself. Empty-name no-op recorders also return no-op descendants.
 
 ```ts
 await client.startGeneration(

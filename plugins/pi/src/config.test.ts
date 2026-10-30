@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { configFromEnv } from "@grafana/agento11y";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearAgento11yEnv as clearEnv } from "./testEnv.js";
 
@@ -18,7 +19,13 @@ vi.mock("./local.js", async (importOriginal) => {
   return { ...actual, resolveLocalReceiver: resolveLocalReceiverMock };
 });
 
-import { loadConfig, resolveConfig } from "./config.js";
+import * as autotag from "./autotag.js";
+import {
+  loadConfig,
+  loadGuardIntent,
+  resolveConfig,
+  resolveLocalConfig,
+} from "./config.js";
 import { LocalReceiverError } from "./local.js";
 
 describe("resolveConfig", () => {
@@ -410,17 +417,20 @@ describe("resolveConfig guards", () => {
     });
   });
 
-  it("env values populate the guards block", () => {
+  it.each([
+    2500,
+    2 ** 31 - 1,
+  ])("accepts supported guard timeout %s", (timeoutMs) => {
     process.env.SIGIL_ENDPOINT = "http://localhost:8080";
     process.env.SIGIL_GUARDS_ENABLED = "true";
-    process.env.SIGIL_GUARDS_TIMEOUT_MS = "2500";
+    process.env.SIGIL_GUARDS_TIMEOUT_MS = String(timeoutMs);
     process.env.SIGIL_GUARDS_FAIL_OPEN = "false";
 
     const cfg = resolveConfig();
 
     expect(cfg?.guards).toEqual({
       enabled: true,
-      timeoutMs: 2500,
+      timeoutMs,
       failOpen: false,
     });
   });
@@ -462,11 +472,17 @@ describe("resolveConfig guards", () => {
     warn.mockRestore();
   });
 
-  it("rejects SIGIL_GUARDS_TIMEOUT_MS=0 so the SDK does not fall back to its 15s default", () => {
+  it.each([
+    0,
+    -1,
+    1.5,
+    2 ** 31,
+    Number.MAX_SAFE_INTEGER,
+  ])("rejects unsupported guard timeout %s", (timeoutMs) => {
     const warn = loggerMock.warn;
     warn.mockClear();
     process.env.SIGIL_ENDPOINT = "http://localhost:8080";
-    process.env.SIGIL_GUARDS_TIMEOUT_MS = "0";
+    process.env.SIGIL_GUARDS_TIMEOUT_MS = String(timeoutMs);
     const cfg = resolveConfig();
     expect(cfg?.guards.timeoutMs).toBe(1500);
     expect(warn).toHaveBeenCalledWith(
@@ -503,9 +519,83 @@ describe("resolveConfig guards", () => {
   });
 });
 
+describe("resolveConfig configured tags", () => {
+  beforeEach(clearEnv);
+  afterEach(clearEnv);
+
+  it.each<[string, Record<string, string>]>([
+    ["team=prod,team=", { team: "" }],
+    ["team=,team=prod", { team: "prod" }],
+    ["team=prod,team=dev", { team: "dev" }],
+    ["team=", { team: "" }],
+    ["team=prod, team=  , region=us=east", { team: "", region: "us=east" }],
+    ["missing,=ignored, team = prod", { team: "prod" }],
+  ])("snapshots SDK tags for %s", (raw, expected) => {
+    for (const spelling of ["AGENTO11Y_TAGS", "SIGIL_TAGS"]) {
+      clearEnv();
+      process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+      process.env[spelling] = raw;
+      const sdkTags = configFromEnv().tags;
+      expect(sdkTags).toEqual(expected);
+      expect(resolveConfig()?.configuredTags).toEqual(sdkTags);
+      expect(
+        resolveLocalConfig({
+          endpoint: "http://127.0.0.1:8768",
+          otlpEndpoint: "http://127.0.0.1:8768",
+        }).configuredTags,
+      ).toEqual(sdkTags);
+    }
+  });
+
+  it.each([
+    "user=",
+    "user=prod,user=",
+  ])("does not replace an explicit empty automatic tag: %s", (raw) => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS = "true";
+    process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES = "user";
+    process.env.AGENTO11Y_USER_ID = "automatic-user";
+    process.env.AGENTO11Y_TAGS = raw;
+    const config = resolveConfig();
+    expect(config?.configuredTags).toEqual({ user: "" });
+    expect(config?.autoTags).toBeUndefined();
+  });
+});
+
 describe("resolveConfig auto-tags", () => {
   beforeEach(clearEnv);
   afterEach(clearEnv);
+
+  it.each([
+    "cloud",
+    "local",
+  ])("resolves %s automatic tags from session cwd", (destination) => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS = "true";
+    const resolve = vi
+      .spyOn(autotag, "resolveAutoTags")
+      .mockReturnValue({ repo: "session" });
+    try {
+      const cwd = "/synthetic/session-workspace";
+      const config =
+        destination === "cloud"
+          ? resolveConfig(cwd)
+          : resolveLocalConfig(
+              {
+                endpoint: "http://127.0.0.1:8768",
+                otlpEndpoint: "http://127.0.0.1:8768",
+              },
+              cwd,
+            );
+      expect(config?.autoTags).toEqual({ repo: "session" });
+      expect(resolve).toHaveBeenCalledWith(
+        expect.any(Set),
+        expect.objectContaining({ cwd }),
+      );
+    } finally {
+      resolve.mockRestore();
+    }
+  });
 
   it("leaves auto-tags unset when the switch is off", () => {
     process.env.SIGIL_ENDPOINT = "http://localhost:8080";
@@ -794,6 +884,20 @@ describe("loadConfig in local mode", () => {
       new LocalReceiverError("no local receiver is running"),
     );
 
-    await expect(loadConfig()).rejects.toBeInstanceOf(LocalReceiverError);
+    let intent: ReturnType<typeof loadGuardIntent>;
+    resolveLocalReceiverMock.mockImplementationOnce(async () => {
+      expect(intent).toEqual({
+        enabled: true,
+        failOpen: false,
+        timeoutMs: 1500,
+      });
+      throw new LocalReceiverError("no local receiver is running");
+    });
+    process.env.AGENTO11Y_GUARDS_ENABLED = "true";
+    process.env.AGENTO11Y_GUARDS_FAIL_OPEN = "false";
+    intent = loadGuardIntent();
+    await expect(loadConfig("/session", intent)).rejects.toBeInstanceOf(
+      LocalReceiverError,
+    );
   });
 });

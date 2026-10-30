@@ -223,33 +223,39 @@ describe("pi plugin: real-SDK golden export", () => {
 
     const { userMsg, assistantMsg, toolResult } = piTurnFixture();
 
-    // Static session branch matching the fixture: user u1 -> assistant a1.
     // Lineage resolution hashes (conversationId, entry id) so the
     // generation id in the golden stays stable across runs.
+    let appended = false;
     const ctx = {
+      cwd: process.cwd(),
       sessionManager: {
         getSessionFile: () => "pi-session.jsonl",
         getSessionId: () => "pi-conv-1",
-        getBranch: () => [
-          {
-            type: "message",
-            id: "u1",
-            parentId: null,
-            message: userMsg,
-          },
-          {
-            type: "message",
-            id: "a1",
-            parentId: "u1",
-            message: assistantMsg,
-          },
-        ],
+        getBranch: () =>
+          appended
+            ? [
+                {
+                  type: "message",
+                  id: "u1",
+                  parentId: null,
+                  message: userMsg,
+                },
+                {
+                  type: "message",
+                  id: "a1",
+                  parentId: "u1",
+                  message: assistantMsg,
+                },
+              ]
+            : [],
       },
     };
 
     await pi.emit("session_start", {}, ctx);
     await pi.emit("turn_start", {}, ctx);
     await pi.emit("message_end", { message: userMsg }, ctx);
+    appended = true;
+    await pi.emit("context_with_system", { messages: [userMsg] }, ctx);
     await pi.emit(
       "message_update",
       {
@@ -348,6 +354,7 @@ describe("pi plugin: real-SDK golden export", () => {
     // Branch: user u1 -> assistant a1 -> compaction c1. The compaction is the
     // leaf, which is where pi appends it, and a1 becomes its lineage parent.
     const ctx = {
+      cwd: process.cwd(),
       sessionManager: {
         getSessionFile: () => "pi-session.jsonl",
         getSessionId: () => "pi-conv-1",

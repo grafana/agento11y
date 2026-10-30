@@ -5,12 +5,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   loadConfigMock,
+  loadGuardIntentMock,
   createAgento11yClientMock,
   createTelemetryProvidersMock,
   resolveGitBranchMock,
   loggerMock,
 } = vi.hoisted(() => ({
   loadConfigMock: vi.fn(),
+  loadGuardIntentMock: vi.fn(),
   createAgento11yClientMock: vi.fn(),
   createTelemetryProvidersMock: vi.fn(),
   resolveGitBranchMock: vi.fn(),
@@ -24,6 +26,7 @@ vi.mock("./config.js", async (importOriginal) => {
   return {
     ...actual,
     loadConfig: loadConfigMock,
+    loadGuardIntent: loadGuardIntentMock,
   };
 });
 
@@ -39,7 +42,11 @@ vi.mock("./git.js", () => ({
   resolveGitBranch: resolveGitBranchMock,
 }));
 
-import type { Agento11yClient } from "@grafana/agento11y";
+import type { Agento11yClient, HookEvaluateRequest } from "@grafana/agento11y";
+import type {
+  SessionBeforeCompactEvent,
+  SessionBeforeTreeEvent,
+} from "@mariozechner/pi-coding-agent";
 import registerExtension, { emitToolSpans } from "./index.js";
 import { stablePiGenerationId } from "./lineage.js";
 import { LocalReceiverError } from "./local.js";
@@ -138,7 +145,16 @@ class FakePi {
 // `id`.
 const defaultModel = { provider: "anthropic", id: "claude-sonnet-4" };
 
+beforeEach(() => {
+  loadGuardIntentMock.mockReset().mockReturnValue({
+    enabled: false,
+    failOpen: true,
+    timeoutMs: 1500,
+  });
+});
+
 const defaultCtx = {
+  cwd: process.cwd(),
   sessionManager: {
     getSessionFile: () => "session-1",
     getSessionId: () => "sess-default-id",
@@ -161,6 +177,7 @@ function makeCtx({
       : () => sessionFile ?? "session-1";
   const idFn = typeof sessionId === "function" ? sessionId : () => sessionId;
   return {
+    cwd: process.cwd(),
     sessionManager: {
       getSessionFile: fileFn,
       getSessionId: idFn,
@@ -197,6 +214,7 @@ function ctxWithBranch(
   const model = opts ? (opts.model ?? undefined) : defaultModel;
   const branchFn = typeof branch === "function" ? branch : () => branch;
   return {
+    cwd: process.cwd(),
     sessionManager: {
       getSessionFile: () => "pi-session.jsonl",
       getSessionId: () => sessionId,
@@ -205,6 +223,102 @@ function ctxWithBranch(
     model,
   };
 }
+
+// Finalized entries appear only after all message_end handlers settle.
+function requestCtx(sessionId = "request-session") {
+  const entries: FakeBranchEntry[] = [];
+  const ctx = ctxWithBranch(sessionId, entries);
+  Object.assign(ctx.sessionManager, { getEntries: () => entries });
+  return { ctx, entries };
+}
+
+async function appendObservedUser(
+  pi: FakePi,
+  ctx: ReturnType<typeof ctxWithBranch>,
+  entries: FakeBranchEntry[],
+  text: string,
+  timestamp = entries.length + 1,
+) {
+  const message = { role: "user", content: text, timestamp };
+  await pi.emit("message_end", { message }, ctx);
+  entries.push({
+    type: "message",
+    id: `u-${entries.length}`,
+    parentId: null,
+    message,
+  });
+  await pi.emit(
+    "context_with_system",
+    { messages: entries.map((entry) => entry.message) },
+    ctx,
+  );
+}
+
+function compactionGuardEvent(): SessionBeforeCompactEvent {
+  return {
+    type: "session_before_compact",
+    reason: "manual",
+    willRetry: false,
+    signal: new AbortController().signal,
+    branchEntries: [],
+    customInstructions: "Falcon instructions",
+    preparation: {
+      firstKeptEntryId: "kept",
+      tokensBefore: 400,
+      isSplitTurn: true,
+      settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 50 },
+      messagesToSummarize: [
+        { role: "user", content: "Falcon user", timestamp: 1 },
+      ],
+      turnPrefixMessages: [
+        { role: "user", content: "Falcon prefix", timestamp: 2 },
+      ],
+      previousSummary: "Falcon previous",
+      fileOps: {
+        read: new Set(["Falcon/read"]),
+        written: new Set(["Falcon/written"]),
+        edited: new Set(["Falcon/edited"]),
+      },
+    },
+  };
+}
+
+function treeGuardEvent(): SessionBeforeTreeEvent {
+  return {
+    type: "session_before_tree",
+    signal: new AbortController().signal,
+    preparation: {
+      targetId: "target",
+      oldLeafId: "leaf",
+      commonAncestorId: "common",
+      userWantsSummary: true,
+      customInstructions: "Falcon instructions",
+      replaceInstructions: true,
+      entriesToSummarize: [
+        {
+          type: "message",
+          id: "user",
+          parentId: null,
+          timestamp: "2026-01-01T00:00:00Z",
+          message: { role: "user", content: "Falcon user", timestamp: 1 },
+        },
+      ],
+    },
+  };
+}
+
+const summaryGuardCases = [
+  {
+    eventName: "session_before_compact",
+    callKind: "compaction",
+    createEvent: compactionGuardEvent,
+  },
+  {
+    eventName: "session_before_tree",
+    callKind: "branch_summary",
+    createEvent: treeGuardEvent,
+  },
+];
 
 function assistantMessage() {
   return {
@@ -585,17 +699,20 @@ describe("extension lifecycle", () => {
     const pi = new FakePi();
     registerExtension(pi as any);
 
-    await pi.emit("session_start");
-    await pi.emit("turn_start");
-    await pi.emit("message_end", {
-      message: { role: "user", content: "hey", timestamp: Date.now() },
-    });
+    const { ctx, entries } = requestCtx();
+    await pi.emit("session_start", {}, ctx);
+    await pi.emit("turn_start", {}, ctx);
+    await appendObservedUser(pi, ctx, entries, "hey");
     await pi.emit("tool_execution_start", {
       toolCallId: "c1",
       toolName: "read",
     });
     await pi.emit("tool_execution_end", { toolCallId: "c1", isError: false });
-    await pi.emit("turn_end", { message: assistantMessage(), toolResults: [] });
+    await pi.emit(
+      "turn_end",
+      { message: assistantMessage(), toolResults: [] },
+      ctx,
+    );
 
     expect(sigil.startStreamingGeneration).toHaveBeenCalledTimes(1);
     expect(recorder.setResult).toHaveBeenCalledTimes(1);
@@ -765,18 +882,30 @@ describe("extension lifecycle", () => {
     const pi = new FakePi();
     registerExtension(pi as any);
 
-    await pi.emit("session_start");
+    const { ctx, entries } = requestCtx();
+    await pi.emit("session_start", {}, ctx);
 
-    // Turn 1: user types, assistant calls a tool.
-    await pi.emit("turn_start");
-    await pi.emit("message_end", {
-      message: { role: "user", content: "hey", timestamp: Date.now() },
-    });
-    await pi.emit("turn_end", { message: assistantMessage(), toolResults: [] });
+    // Turn 1: a finalized user occurrence is observed in the request.
+    await pi.emit("turn_start", {}, ctx);
+    await appendObservedUser(pi, ctx, entries, "hey");
+    await pi.emit(
+      "turn_end",
+      { message: assistantMessage(), toolResults: [] },
+      ctx,
+    );
 
-    // Turn 2: agent loop continues with no new user input.
-    await pi.emit("turn_start");
-    await pi.emit("turn_end", { message: assistantMessage(), toolResults: [] });
+    // Turn 2: observing the same occurrence must not capture it twice.
+    await pi.emit("turn_start", {}, ctx);
+    await pi.emit(
+      "context_with_system",
+      { messages: entries.map((entry) => entry.message) },
+      ctx,
+    );
+    await pi.emit(
+      "turn_end",
+      { message: assistantMessage(), toolResults: [] },
+      ctx,
+    );
 
     expect(sigil.startStreamingGeneration).toHaveBeenCalledTimes(2);
     expect(recorder.setResult).toHaveBeenCalledTimes(2);
@@ -1216,7 +1345,21 @@ describe("extension lifecycle", () => {
     expect(capturedSeed!.conversationId).toBeUndefined();
   });
 
-  describe("guards (context redaction recording)", () => {
+  describe.each(
+    (
+      [
+        "full",
+        "no_tool_content",
+        "full_with_metadata_spans",
+        "metadata_only",
+      ] as const
+    ).flatMap((capture) =>
+      (["parts", "content"] as const).map((form) => ({ capture, form })),
+    ),
+  )("guards (context redaction recording: $capture, $form)", ({
+    capture,
+    form,
+  }) => {
     // A guard-only pattern: the plugin's own secret redaction doesn't know it,
     // so only the guard's transform can remove it from what is recorded.
     const PROMPT = "Status update on Project Falcon for the board";
@@ -1238,7 +1381,10 @@ describe("extension lifecycle", () => {
                 messages: [
                   {
                     role: "user",
-                    parts: [{ type: "text", text: transformedText }],
+                    name: "pi:0",
+                    ...(form === "content"
+                      ? { content: transformedText }
+                      : { parts: [{ type: "text", text: transformedText }] }),
                   },
                 ],
               },
@@ -1264,21 +1410,37 @@ describe("extension lifecycle", () => {
         endpoint: "http://localhost:8080/api/v1/generations:export",
         auth: { mode: "none" },
         agentName: "pi",
-        contentCapture: "full",
+        contentCapture: capture,
         guards: { enabled: true, timeoutMs: 1500, failOpen: true },
       });
       createAgento11yClientMock.mockReturnValue(sigil);
       return { seeds, recorder, evaluateHook };
     }
 
-    async function runTurn(pi: FakePi, ctx: unknown = defaultCtx) {
+    async function runTurn(pi: FakePi, baseCtx = defaultCtx) {
+      const { ctx: request, entries } = requestCtx();
+      const ctx = {
+        ...baseCtx,
+        sessionManager: {
+          ...baseCtx.sessionManager,
+          ...request.sessionManager,
+        },
+      };
       await pi.emit("session_start", {}, ctx);
       await pi.emit("turn_start", {}, ctx);
-      const user = { role: "user", content: PROMPT, timestamp: Date.now() };
+      const user = { role: "user", content: PROMPT, timestamp: 1 };
       await pi.emit("message_end", { message: user }, ctx);
-      // pi hands the context hook its own copy of the conversation.
+      entries.push({
+        type: "message",
+        id: "u1",
+        parentId: null,
+        message: user,
+      });
       const event = { messages: [{ ...user }] };
-      const result = await pi.handlers.get("context")!(event, ctx);
+      const result = (await pi.handlers.get("context_with_system")!(
+        event,
+        ctx,
+      )) as { messages: typeof event.messages } | undefined;
       await pi.emit("message_end", { message: { role: "assistant" } }, ctx);
       await pi.emit(
         "turn_end",
@@ -1314,12 +1476,20 @@ describe("extension lifecycle", () => {
       const pi = new FakePi();
       registerExtension(pi as any);
 
-      const { event } = await runTurn(pi);
+      const { event, result } = await runTurn(pi);
 
       expect(evaluateHook).toHaveBeenCalledTimes(1);
-      expect((event.messages[0] as { content: string }).content).toBe(REDACTED);
-      expect(recordedInputText(recorder)).toEqual([REDACTED]);
-      expect(seeds[0]!.conversationTitle).toContain("[REDACTED]");
+      expect(event.messages[0]!.content).toBe(PROMPT);
+      expect(result?.messages).not.toBe(event.messages);
+      expect(result?.messages[0]?.content).toBe(REDACTED);
+      expect(recordedInputText(recorder)).toEqual(
+        capture === "metadata_only" ? [] : [REDACTED],
+      );
+      if (capture === "metadata_only") {
+        expect(seeds[0]!.conversationTitle).toBe("request-session");
+      } else {
+        expect(seeds[0]!.conversationTitle).toContain("[REDACTED]");
+      }
       expect(seeds[0]!.conversationTitle).not.toContain("Falcon");
     });
 
@@ -1341,11 +1511,8 @@ describe("extension lifecycle", () => {
 
     // A guard that redacts the whole prompt doesn't say which part was
     // sensitive, so a name quoting any of the prompt is redacted word by word.
-    it.each([
-      ["to nothing", ""],
-      ["to one token", "[REDACTED]"],
-    ])("redacts a session name quoting a prompt redacted %s", async (_case, transformed) => {
-      const { seeds } = setupGuardedTurn(transformed);
+    it("redacts a session name quoting a prompt redacted to one token", async () => {
+      const { seeds } = setupGuardedTurn("[REDACTED]");
       const pi = new FakePi();
       registerExtension(pi as any);
 
@@ -1355,16 +1522,17 @@ describe("extension lifecycle", () => {
       expect(seeds[0]!.conversationTitle).not.toContain("Falcon");
     });
 
-    it("records a prompt the guard redacted to nothing", async () => {
+    it("omits capture and preserves native text for an invalid empty transform", async () => {
       const { seeds, recorder } = setupGuardedTurn("");
       const pi = new FakePi();
       registerExtension(pi as any);
 
-      const { event } = await runTurn(pi);
+      const { event, result } = await runTurn(pi);
 
-      expect((event.messages[0] as { content: string }).content).toBe("");
-      expect(recordedInputText(recorder)).toEqual([""]);
-      // With no prompt text left, the title falls back to the session id.
+      expect(event.messages[0]!.content).toBe(PROMPT);
+      expect(result).toBeUndefined();
+      expect(recordedInputText(recorder)).toEqual([]);
+      // An unprovable transform cannot authorize a body or prompt title.
       const seed = seeds[0] as {
         conversationTitle?: string;
         conversationId?: string;
@@ -1380,8 +1548,14 @@ describe("extension lifecycle", () => {
 
       await runTurn(pi);
 
-      expect(recordedInputText(recorder)).toEqual([PROMPT]);
-      expect(seeds[0]!.conversationTitle).toContain("Falcon");
+      expect(recordedInputText(recorder)).toEqual(
+        capture === "metadata_only" ? [] : [PROMPT],
+      );
+      if (capture === "metadata_only") {
+        expect(seeds[0]!.conversationTitle).toBe("request-session");
+      } else {
+        expect(seeds[0]!.conversationTitle).toContain("Falcon");
+      }
     });
   });
 
@@ -1777,7 +1951,7 @@ describe("extension lifecycle", () => {
       registerExtension(fakePi as any);
 
       await fakePi.emit("session_start");
-      const handler = fakePi.handlers.get("context")!;
+      const handler = fakePi.handlers.get("context_with_system")!;
       const result = await handler(
         {
           messages: [{ role: "user", content: "hello", timestamp: 1 }],
@@ -1797,6 +1971,7 @@ describe("extension lifecycle", () => {
           messages: [
             {
               role: "user",
+              name: "pi:0",
               parts: [
                 {
                   type: "text",
@@ -1815,7 +1990,7 @@ describe("extension lifecycle", () => {
       registerExtension(fakePi as any);
 
       await fakePi.emit("session_start");
-      const handler = fakePi.handlers.get("context")!;
+      const handler = fakePi.handlers.get("context_with_system")!;
       const piMessages = [
         {
           role: "user",
@@ -1830,9 +2005,16 @@ describe("extension lifecycle", () => {
       expect(override).toEqual({
         enabled: true,
         phases: ["preflight"],
+        failOpen: false,
+        strictTransforms: true,
       });
-      expect(result).toEqual({ messages: piMessages });
-      expect(piMessages[0]!.content).toBe("my email is [REDACTED_EMAIL]");
+      expect(result).toEqual({
+        messages: [
+          { ...piMessages[0], content: "my email is [REDACTED_EMAIL]" },
+        ],
+      });
+      expect((result as any).messages).not.toBe(piMessages);
+      expect(piMessages[0]!.content).toBe("my email is leak@example.com");
     });
 
     it("reads the current session ID for every context guard", async () => {
@@ -1855,7 +2037,7 @@ describe("extension lifecycle", () => {
       });
 
       await fakePi.emit("session_start", {}, ctx);
-      const handler = fakePi.handlers.get("context")!;
+      const handler = fakePi.handlers.get("context_with_system")!;
       const event = {
         messages: [{ role: "user", content: "hello", timestamp: 1 }],
       };
@@ -1887,7 +2069,7 @@ describe("extension lifecycle", () => {
       registerExtension(fakePi as any);
 
       await fakePi.emit("session_start");
-      const handler = fakePi.handlers.get("context")!;
+      const handler = fakePi.handlers.get("context_with_system")!;
       const piMessages = [{ role: "user", content: "hello", timestamp: 1 }];
       const result = await handler({ messages: piMessages }, defaultCtx);
       expect(result).toBeUndefined();
@@ -1904,7 +2086,7 @@ describe("extension lifecycle", () => {
       registerExtension(fakePi as any);
 
       await fakePi.emit("session_start");
-      const handler = fakePi.handlers.get("context")!;
+      const handler = fakePi.handlers.get("context_with_system")!;
       const piMessages = [
         { role: "user", content: "hello secret@example.com", timestamp: 1 },
       ];
@@ -1922,8 +2104,16 @@ describe("extension lifecycle", () => {
         evaluations: [],
         transformedInput: {
           messages: [
-            { role: "user", parts: [{ type: "text", text: "a" }] },
-            { role: "user", parts: [{ type: "text", text: "b" }] },
+            {
+              role: "user",
+              name: "pi:0",
+              parts: [{ type: "text", text: "a" }],
+            },
+            {
+              role: "user",
+              name: "pi:1",
+              parts: [{ type: "text", text: "b" }],
+            },
           ],
         },
       });
@@ -1935,12 +2125,12 @@ describe("extension lifecycle", () => {
       registerExtension(fakePi as any);
 
       await fakePi.emit("session_start");
-      const handler = fakePi.handlers.get("context")!;
+      const handler = fakePi.handlers.get("context_with_system")!;
       const piMessages = [{ role: "user", content: "original", timestamp: 1 }];
       const result = await handler({ messages: piMessages }, defaultCtx);
       expect(result).toBeUndefined();
       expect(piMessages[0]!.content).toBe("original");
-      expect(loggerMock.debug).toHaveBeenCalledWith(
+      expect(loggerMock.warn).toHaveBeenCalledWith(
         expect.stringContaining("preflight transform dropped"),
       );
     });
@@ -1951,9 +2141,14 @@ describe("extension lifecycle", () => {
         evaluations: [],
         transformedInput: {
           messages: [
-            { role: "user", parts: [{ type: "text", text: "hi [REDACTED]" }] },
+            {
+              role: "user",
+              name: "pi:0",
+              parts: [{ type: "text", text: "hi [REDACTED]" }],
+            },
             {
               role: "assistant",
+              name: "pi:1",
               parts: [{ type: "text", text: "answer" }],
             },
           ],
@@ -1967,7 +2162,7 @@ describe("extension lifecycle", () => {
       registerExtension(fakePi as any);
 
       await fakePi.emit("session_start");
-      const handler = fakePi.handlers.get("context")!;
+      const handler = fakePi.handlers.get("context_with_system")!;
       const piMessages = [
         { role: "user", content: "hi secret@example.com", timestamp: 1 },
         {
@@ -1989,12 +2184,18 @@ describe("extension lifecycle", () => {
           timestamp: 2,
         },
       ];
-      await handler({ messages: piMessages }, defaultCtx);
+      const result = (await handler(
+        { messages: piMessages },
+        defaultCtx,
+      )) as any;
 
-      // User text overwritten.
-      expect(piMessages[0]!.content).toBe("hi [REDACTED]");
-      // Thinking part preserved unchanged on the assistant message.
-      const asst = piMessages[1] as unknown as {
+      expect(piMessages[0]!.content).toBe("hi secret@example.com");
+      expect(result.messages[0]!.content).toBe("hi [REDACTED]");
+      // Thinking part preserved unchanged on the copied assistant message.
+      expect(result.messages[1].content[0]).toBe(
+        (piMessages[1]!.content as any[])[0],
+      );
+      const asst = result.messages[1] as {
         content: Array<{ type: string; text?: string; thinking?: string }>;
       };
       expect(asst.content[0]).toEqual({
@@ -2007,7 +2208,7 @@ describe("extension lifecycle", () => {
       });
     });
 
-    it("sends provider/name = unknown on the first preflight (no assistant turn yet)", async () => {
+    it("uses the current model on the first ordinary preflight", async () => {
       const evaluateHook = vi
         .fn()
         .mockResolvedValue({ action: "allow", evaluations: [] });
@@ -2019,7 +2220,7 @@ describe("extension lifecycle", () => {
       registerExtension(fakePi as any);
 
       await fakePi.emit("session_start");
-      const handler = fakePi.handlers.get("context")!;
+      const handler = fakePi.handlers.get("context_with_system")!;
       await handler(
         {
           messages: [{ role: "user", content: "hello", timestamp: 1 }],
@@ -2030,9 +2231,76 @@ describe("extension lifecycle", () => {
         context: { model: { provider: string; name: string } };
       };
       expect(req.context.model).toEqual({
-        provider: "unknown",
-        name: "unknown",
+        provider: defaultModel.provider,
+        name: defaultModel.id,
       });
+    });
+
+    it.each([
+      {
+        model: { provider: "openai", id: "switched-model" },
+        expected: { provider: "openai", name: "switched-model" },
+      },
+      {
+        model: { provider: "pi", id: "virtual", api: "pi-virtual" },
+        expected: { provider: "unknown", name: "unknown" },
+      },
+      { model: undefined, expected: { provider: "unknown", name: "unknown" } },
+    ])("uses current ordinary model $model, but the previous assistant for tool guards", async ({
+      model,
+      expected,
+    }) => {
+      const evaluateHook = vi
+        .fn()
+        .mockResolvedValue({ action: "allow", evaluations: [] });
+      loadConfigMock.mockResolvedValue({
+        ...preflightConfig(),
+        autoTags: {
+          user: "auto-user",
+          team: "auto-team",
+          "git.branch": "auto-branch",
+        },
+        configuredTags: {
+          team: "configured-team",
+          cwd: "configured-cwd",
+          "git.branch": "configured-branch",
+        },
+      });
+      resolveGitBranchMock.mockReturnValue("builtin-branch");
+      createAgento11yClientMock.mockReturnValue(
+        makeAgento11yLike(evaluateHook),
+      );
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      const ctx = { ...defaultCtx, cwd: "/workspace", model };
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit("message_end", { message: assistantMessage() }, ctx);
+      await pi.emit(
+        "context_with_system",
+        { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+        ctx,
+      );
+      await pi.emit(
+        "tool_call",
+        { toolCallId: "c1", toolName: "bash", input: { command: "ls" } },
+        ctx,
+      );
+      expect(evaluateHook).toHaveBeenCalledTimes(2);
+      const ordinary = evaluateHook.mock.calls[0]![0] as any;
+      const tool = evaluateHook.mock.calls[1]![0] as any;
+      expect(ordinary.context.model).toEqual(expected);
+      expect(tool.context.model).toEqual({
+        provider: "anthropic",
+        name: "claude-sonnet-4",
+      });
+      const tags = {
+        user: "auto-user",
+        team: "configured-team",
+        cwd: "/workspace",
+        "git.branch": "builtin-branch",
+      };
+      expect(ordinary.context.tags).toEqual(tags);
+      expect(tool.context.tags).toEqual(tags);
     });
 
     it("applies redacted tool-result content from the server's tool_result part", async () => {
@@ -2045,9 +2313,14 @@ describe("extension lifecycle", () => {
         evaluations: [],
         transformedInput: {
           messages: [
-            { role: "user", parts: [{ type: "text", text: "run it" }] },
+            {
+              role: "user",
+              name: "pi:0",
+              parts: [{ type: "text", text: "run it" }],
+            },
             {
               role: "tool",
+              name: "pi:1",
               parts: [
                 {
                   type: "tool_result",
@@ -2055,7 +2328,6 @@ describe("extension lifecycle", () => {
                     toolCallId: "c1",
                     name: "bash",
                     content: "token=[REDACTED_API_KEY]",
-                    isError: false,
                   },
                 },
               ],
@@ -2071,7 +2343,7 @@ describe("extension lifecycle", () => {
       registerExtension(fakePi as any);
 
       await fakePi.emit("session_start");
-      const handler = fakePi.handlers.get("context")!;
+      const handler = fakePi.handlers.get("context_with_system")!;
       const piMessages = [
         { role: "user", content: "run it", timestamp: 1 },
         {
@@ -2084,8 +2356,10 @@ describe("extension lifecycle", () => {
         },
       ];
       const result = await handler({ messages: piMessages }, defaultCtx);
-      expect(result).toEqual({ messages: piMessages });
-      const tr = piMessages[1] as unknown as {
+      expect((result as any).messages).not.toBe(piMessages);
+      expect((result as any).messages[0]).toBe(piMessages[0]);
+      expect((piMessages[1]!.content as any[])[0].text).toBe("token=sk-LEAKED");
+      const tr = (result as any).messages[1] as {
         content: Array<{ type: string; text?: string }>;
       };
       expect(tr.content[0]).toMatchObject({
@@ -2145,15 +2419,22 @@ describe("extension lifecycle", () => {
 
       await pi.emit("session_start");
       await pi.emit("turn_start");
-      await pi.emit("turn_end", {
-        message: assistantMessage(),
-        toolResults: [],
-      });
+      const ctx = { ...defaultCtx, cwd: "/session/workspace" };
+      await pi.emit(
+        "turn_end",
+        {
+          message: assistantMessage(),
+          toolResults: [],
+        },
+        ctx,
+      );
 
-      expect(resolveGitBranchMock, `mode=${mode}`).toHaveBeenCalledTimes(1);
+      expect(resolveGitBranchMock, `mode=${mode}`).toHaveBeenCalledWith(
+        ctx.cwd,
+      );
       expect(capturedSeed!.tags, `mode=${mode}`).toEqual({
         "git.branch": "feature-x",
-        cwd: process.cwd(),
+        cwd: ctx.cwd,
       });
     }
   });
@@ -3149,6 +3430,235 @@ describe("extension lifecycle", () => {
     });
   });
 
+  describe("guards (summary readiness and wiring)", () => {
+    function setup({ enabled = true, failOpen = false } = {}) {
+      const guards = { enabled, failOpen, timeoutMs: 1500 };
+      loadGuardIntentMock.mockReturnValue(guards);
+      loadConfigMock.mockResolvedValue({
+        endpoint: "http://localhost:8080/api/v1/generations:export",
+        auth: { mode: "none" },
+        agentName: "summary-agent",
+        agentVersion: "summary-version",
+        contentCapture: "metadata_only",
+        guards,
+        autoTags: {
+          user: "auto-user",
+          team: "auto-team",
+          "git.branch": "auto-branch",
+          "pi.call_kind": "auto-kind",
+        },
+        configuredTags: {
+          team: "configured-team",
+          cwd: "configured-cwd",
+          "git.branch": "configured-branch",
+          "pi.call_kind": "configured-kind",
+        },
+      });
+      const evaluateHook = vi
+        .fn()
+        .mockResolvedValue({ action: "allow", evaluations: [] });
+      createAgento11yClientMock.mockReturnValue({
+        evaluateHook,
+        startStreamingGeneration: vi.fn(),
+        startToolExecution: vi.fn(),
+        shutdown: vi.fn(async () => {}),
+      });
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      return { pi, evaluateHook };
+    }
+
+    function redact(request: HookEvaluateRequest) {
+      return {
+        action: "allow",
+        transformedInput: {
+          messages: JSON.parse(
+            JSON.stringify(request.input?.messages).replaceAll(
+              "Falcon",
+              "[REDACTED]",
+            ),
+          ),
+        },
+      };
+    }
+
+    it.each(
+      summaryGuardCases.flatMap((summary) =>
+        [true, false].map((failOpen) => ({ ...summary, failOpen })),
+      ),
+    )("leaves $eventName untouched when guards are disabled (failOpen=$failOpen)", async ({
+      eventName,
+      createEvent,
+      failOpen,
+    }) => {
+      const { pi, evaluateHook } = setup({ enabled: false, failOpen });
+      await pi.emit("session_start");
+      const event = createEvent();
+      const original = structuredClone(event.preparation);
+      const result = await pi.handlers.get(eventName)!(event, defaultCtx);
+
+      expect(result).toBeUndefined();
+      expect(event.preparation).toEqual(original);
+      expect(evaluateHook).not.toHaveBeenCalled();
+      expect(loggerMock.warn).not.toHaveBeenCalled();
+    });
+
+    it.each(
+      summaryGuardCases.flatMap((summary) =>
+        [
+          {
+            model: { provider: "openai", id: "current-physical" },
+            expected: { provider: "openai", name: "current-physical" },
+          },
+          {
+            model: { provider: "pi", id: "virtual", api: "pi-virtual" },
+            expected: { provider: "unknown", name: "unknown" },
+          },
+          {
+            model: undefined,
+            expected: { provider: "unknown", name: "unknown" },
+          },
+        ].map((modelCase) => ({ ...summary, ...modelCase })),
+      ),
+    )("evaluates $eventName with effective tags and current model $model", async ({
+      eventName,
+      callKind,
+      createEvent,
+      model,
+      expected,
+    }) => {
+      const { pi, evaluateHook } = setup();
+      await pi.emit("session_start");
+      await pi.emit("message_end", { message: assistantMessage() });
+      const ctx = {
+        ...makeCtx({ sessionId: "summary-session" }),
+        cwd: "/summary/workspace",
+        model,
+      };
+      resolveGitBranchMock.mockReturnValue("summary-branch");
+      const event = createEvent();
+      const original = structuredClone(event.preparation);
+      const result = await pi.handlers.get(eventName)!(event, ctx);
+
+      expect(result).toBeUndefined();
+      expect(event.preparation).toEqual(original);
+      expect(evaluateHook).toHaveBeenCalledExactlyOnceWith(
+        {
+          phase: "preflight",
+          context: {
+            agentName: "summary-agent",
+            agentVersion: "summary-version",
+            conversationId: "summary-session",
+            model: expected,
+            tags: {
+              user: "auto-user",
+              team: "configured-team",
+              cwd: ctx.cwd,
+              "git.branch": "summary-branch",
+              "pi.call_kind": callKind,
+            },
+          },
+          input: {
+            messages: expect.arrayContaining([
+              expect.objectContaining({
+                role: "user",
+                parts: [{ type: "text", text: "Falcon user" }],
+              }),
+              expect.objectContaining({
+                role: "user",
+                parts: [{ type: "text", text: "Falcon instructions" }],
+              }),
+            ]),
+          },
+        },
+        {
+          enabled: true,
+          phases: ["preflight"],
+          failOpen: false,
+          strictTransforms: true,
+          signal: event.signal,
+        },
+      );
+      expect(resolveGitBranchMock).toHaveBeenLastCalledWith(ctx.cwd);
+      expect(loggerMock.warn).not.toHaveBeenCalled();
+    });
+
+    it("cancels an approved compaction instruction rewrite without changing any preparation", async () => {
+      const { pi, evaluateHook } = setup({ failOpen: true });
+      evaluateHook.mockImplementation(redact);
+      await pi.emit("session_start");
+      const event = compactionGuardEvent();
+      const preparation = event.preparation;
+      const original = structuredClone(preparation);
+      const messages = preparation.messagesToSummarize;
+      const prefix = preparation.turnPrefixMessages;
+      const fileOps = preparation.fileOps;
+      const result = await pi.handlers.get("session_before_compact")!(event, {
+        ...defaultCtx,
+        hasUI: true,
+        ui: { notify: vi.fn() },
+      });
+
+      expect(evaluateHook).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ cancel: true });
+      expect(event.preparation).toBe(preparation);
+      expect(preparation).toEqual(original);
+      expect(preparation.messagesToSummarize).toBe(messages);
+      expect(preparation.turnPrefixMessages).toBe(prefix);
+      expect(preparation.fileOps).toBe(fileOps);
+      expect(event.customInstructions).toBe("Falcon instructions");
+      expect(loggerMock.warn).toHaveBeenCalledWith(
+        expect.stringContaining("summary cancelled"),
+      );
+    });
+
+    it.each([
+      true,
+      false,
+    ])("returns approved tree instructions while preserving replaceInstructions=%s", async (replaceInstructions) => {
+      const { pi, evaluateHook } = setup();
+      evaluateHook.mockImplementation(redact);
+      await pi.emit("session_start");
+      const event = treeGuardEvent();
+      event.preparation.replaceInstructions = replaceInstructions;
+      const entries = event.preparation.entriesToSummarize;
+      const persisted = entries[0]!;
+      const original = structuredClone(persisted);
+      const result = await pi.handlers.get("session_before_tree")!(
+        event,
+        defaultCtx,
+      );
+
+      expect(evaluateHook).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ customInstructions: "[REDACTED] instructions" });
+      expect(event.preparation.customInstructions).toBe("Falcon instructions");
+      expect(event.preparation.replaceInstructions).toBe(replaceInstructions);
+      expect(event.preparation.entriesToSummarize).toBe(entries);
+      expect(entries[0]).toMatchObject({
+        message: { content: "[REDACTED] user" },
+      });
+      expect(entries[0]).not.toBe(persisted);
+      expect(persisted).toEqual(original);
+    });
+
+    it("skips ready guards for tree navigation without a summary", async () => {
+      const { pi, evaluateHook } = setup();
+      await pi.emit("session_start");
+      const event = treeGuardEvent();
+      event.preparation.userWantsSummary = false;
+      const original = structuredClone(event.preparation);
+      const result = await pi.handlers.get("session_before_tree")!(
+        event,
+        defaultCtx,
+      );
+
+      expect(result).toBeUndefined();
+      expect(event.preparation).toEqual(original);
+      expect(evaluateHook).not.toHaveBeenCalled();
+      expect(loggerMock.warn).not.toHaveBeenCalled();
+    });
+  });
+
   // --- Host summarization calls (compaction, branch summary) ---
   //
   // These run outside pi's agent loop: no turn_*, message_*, or provider
@@ -3288,6 +3798,8 @@ describe("extension lifecycle", () => {
       const entry = compactionEntry();
       if (reasoning !== undefined) Object.assign(entry.usage!, { reasoning });
       const ctx = ctxWithBranch("pi-conv-1", branchWith(entry));
+      ctx.cwd = "/session/summary-workspace";
+      resolveGitBranchMock.mockReturnValue("summary-branch");
 
       const pi = new FakePi();
       registerExtension(pi as any);
@@ -3311,6 +3823,11 @@ describe("extension lifecycle", () => {
       expect(seeds[0]!.id).toMatch(/^pi-[a-f0-9]{24}$/);
       expect(seeds[0]!.id).toBe(stablePiGenerationId("pi-conv-1", "c1"));
       expect(seeds[0]!.tags?.["pi.call_kind"]).toBe("compaction");
+      expect(seeds[0]!.tags).toMatchObject({
+        cwd: ctx.cwd,
+        "git.branch": "summary-branch",
+      });
+      expect(resolveGitBranchMock).toHaveBeenCalledWith(ctx.cwd);
       expect(seeds[0]!.conversationId).toBe("pi-conv-1");
       expect(seeds[0]!.agentName).toBe("pi");
       expect(seeds[0]!.model).toEqual({
@@ -4078,35 +4595,38 @@ describe("extension lifecycle", () => {
       const { sigil, turnResults } = setupClient();
       useConfig(sigil, "full");
       const msg = assistantMessage();
-      const ctx = ctxWithBranch("pi-conv-1", branchWith());
+      const branch = branchWith();
+      const ctx = ctxWithBranch("pi-conv-1", branch);
 
       const pi = new FakePi();
       registerExtension(pi as any);
       await pi.emit("session_start", {}, ctx);
       await pi.emit("turn_start", {}, ctx);
-      await pi.emit(
-        "message_end",
-        {
-          message: {
-            role: "user",
-            content: "abandoned prompt",
-            timestamp: Date.now(),
-          },
-        },
-        ctx,
-      );
+      await appendObservedUser(pi, ctx, branch, "abandoned prompt");
       await pi.emit("session_before_compact", { reason: "manual" }, ctx);
 
-      // Next turn, with a fresh prompt.
+      // The compacted request no longer includes the abandoned occurrence,
+      // even though the legacy getBranch API still exposes persisted history.
       await pi.emit("turn_start", {}, ctx);
+      const fresh = {
+        role: "user",
+        content: "fresh prompt",
+        timestamp: branch.length + 1,
+      };
+      await pi.emit("message_end", { message: fresh }, ctx);
+      branch.push({
+        type: "message",
+        id: "fresh",
+        parentId: branch.at(-1)!.id,
+        message: fresh,
+      });
       await pi.emit(
-        "message_end",
+        "context_with_system",
         {
-          message: {
-            role: "user",
-            content: "fresh prompt",
-            timestamp: Date.now(),
-          },
+          messages: [
+            { role: "compactionSummary", summary: "Compacted context" },
+            fresh,
+          ],
         },
         ctx,
       );
@@ -5604,6 +6124,200 @@ describe("local mode session_start", () => {
     loggerMock.debug.mockReset();
     loggerMock.warn.mockReset();
     loggerMock.error.mockReset();
+  });
+
+  it.each(
+    [
+      "local",
+      "config",
+      "missing-endpoint",
+      "client-null",
+      "client-throw",
+      "intent",
+    ].flatMap((failure) =>
+      [
+        { enabled: false, failOpen: false },
+        { enabled: true, failOpen: true },
+        { enabled: true, failOpen: false },
+      ].map((intent) => ({ failure, ...intent })),
+    ),
+  )("keeps guard policy after $failure failure (enabled=$enabled, failOpen=$failOpen)", async ({
+    failure,
+    enabled,
+    failOpen,
+  }) => {
+    const intent = { enabled, failOpen, timeoutMs: 1500 };
+    loadGuardIntentMock.mockReturnValue(intent);
+    const config = { ...localConfig(), guards: intent };
+    loadConfigMock.mockResolvedValue(config);
+    const evaluateHook = vi.fn();
+    createAgento11yClientMock.mockReturnValue({
+      ...fakeClient(),
+      evaluateHook,
+    });
+    const pi = new FakePi();
+    registerExtension(pi as any);
+    const ctx = { ...uiCtx(true), cwd: "/session/workspace" };
+    if (failure === "intent") {
+      await pi.emit("session_start", {}, ctx);
+      loadGuardIntentMock.mockImplementation(() => {
+        throw new Error("private config detail");
+      });
+    } else if (failure === "local") {
+      loadConfigMock.mockRejectedValue(
+        new LocalReceiverError("private receiver detail"),
+      );
+    } else if (failure === "config") {
+      loadConfigMock.mockRejectedValue(new Error("private config detail"));
+    } else if (failure === "missing-endpoint") {
+      loadConfigMock.mockResolvedValue(null);
+    } else if (failure === "client-null") {
+      createAgento11yClientMock.mockReturnValue(null);
+    } else {
+      createAgento11yClientMock.mockImplementation(() => {
+        throw new Error("private client detail");
+      });
+    }
+    await pi.emit("session_start", {}, ctx);
+    const summaryCtx = { ...ctx, ui: { notify: vi.fn() } };
+    for (const { eventName, createEvent } of summaryGuardCases) {
+      for (const aborted of [false, true]) {
+        loggerMock.warn.mockClear();
+        summaryCtx.ui.notify.mockClear();
+        const event = createEvent();
+        if (aborted) {
+          const controller = new AbortController();
+          controller.abort(new Error("private host reason"));
+          event.signal = controller.signal;
+        }
+        const original = structuredClone(event.preparation);
+        const result = await pi.handlers.get(eventName)!(event, summaryCtx);
+        expect(result).toEqual(
+          aborted || (enabled && !failOpen) ? { cancel: true } : undefined,
+        );
+        expect(event.preparation).toEqual(original);
+        if (enabled && !aborted) {
+          expect(loggerMock.warn).toHaveBeenCalledExactlyOnceWith(
+            failOpen
+              ? "Agent Observability: summary guards are unavailable; continuing with fail-open enabled."
+              : "Agent Observability: summary cancelled because guards are unavailable.",
+          );
+        } else {
+          expect(loggerMock.warn).not.toHaveBeenCalled();
+          expect(summaryCtx.ui.notify).not.toHaveBeenCalled();
+        }
+      }
+    }
+    loggerMock.warn.mockClear();
+    summaryCtx.ui.notify.mockClear();
+    const navigation = treeGuardEvent();
+    navigation.preparation.userWantsSummary = false;
+    const originalNavigation = structuredClone(navigation.preparation);
+    expect(
+      await pi.handlers.get("session_before_tree")!(navigation, summaryCtx),
+    ).toBeUndefined();
+    expect(navigation.preparation).toEqual(originalNavigation);
+    expect(loggerMock.warn).not.toHaveBeenCalled();
+    expect(summaryCtx.ui.notify).not.toHaveBeenCalled();
+    expect(evaluateHook).not.toHaveBeenCalled();
+
+    const toolCall = pi.handlers.get("tool_call")!;
+    const call = {
+      toolCallId: "guard-not-ready",
+      toolName: "bash",
+      input: { command: "secret" },
+    };
+    const result = await toolCall(call, ctx);
+    if (enabled && !failOpen) {
+      expect(result).toEqual({
+        block: true,
+        reason: expect.stringContaining("could not evaluate"),
+      });
+      expect(JSON.stringify(result)).not.toMatch(/private|secret/);
+    } else {
+      expect(result).toBeUndefined();
+    }
+    if (enabled && failOpen) {
+      const warning =
+        "Agent Observability: guards are unavailable; tool calls are allowed by fail-open configuration.";
+      expect(ctx.ui.notify).toHaveBeenCalledWith(warning, "warning");
+      expect(loggerMock.warn).toHaveBeenCalledWith(warning);
+      await toolCall(call, ctx);
+      expect(
+        ctx.ui.notify.mock.calls.filter(([, kind]) => kind === "warning"),
+      ).toHaveLength(1);
+    } else {
+      expect(
+        ctx.ui.notify.mock.calls.filter(([, kind]) => kind === "warning"),
+      ).toHaveLength(0);
+    }
+    expect(createTelemetryProvidersMock).not.toHaveBeenCalled();
+    expect(loadConfigMock).toHaveBeenCalledWith(ctx.cwd, intent);
+    if (
+      failure === "local" ||
+      failure === "config" ||
+      failure === "missing-endpoint"
+    ) {
+      expect(createAgento11yClientMock).not.toHaveBeenCalled();
+    }
+  });
+
+  it("keeps a functioning guard client when OTLP setup fails", async () => {
+    const intent = { enabled: true, failOpen: false, timeoutMs: 1500 };
+    loadGuardIntentMock.mockReturnValue(intent);
+    loadConfigMock.mockResolvedValue({
+      ...localConfig(),
+      guards: intent,
+      otlp: { endpoint: "http://127.0.0.1:8768", headers: {} },
+    });
+    createTelemetryProvidersMock.mockImplementation(() => {
+      throw new Error("private OTLP detail");
+    });
+    const evaluateHook = vi
+      .fn()
+      .mockResolvedValue({ decision: { verdict: "allow" } });
+    createAgento11yClientMock.mockReturnValue({
+      ...fakeClient(),
+      evaluateHook,
+    });
+    const pi = new FakePi();
+    registerExtension(pi as any);
+    await pi.emit("session_start");
+    await pi.handlers.get("tool_call")!(
+      { toolCallId: "otel-failure", toolName: "bash", input: {} },
+      defaultCtx,
+    );
+    expect(evaluateHook).toHaveBeenCalledTimes(1);
+  });
+
+  it("warns on stderr without leaking details when fail-open has no UI", async () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    try {
+      loadGuardIntentMock.mockReturnValue({
+        enabled: true,
+        failOpen: true,
+        timeoutMs: 1500,
+      });
+      loadConfigMock.mockRejectedValue(new Error("private configuration"));
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      const ctx = uiCtx(false);
+      await pi.emit("session_start", {}, ctx);
+      await pi.handlers.get("tool_call")!(
+        {
+          toolCallId: "headless",
+          toolName: "bash",
+          input: { secret: "hidden" },
+        },
+        ctx,
+      );
+      expect(stderr).toHaveBeenCalledWith(
+        "Agent Observability: guards are unavailable; tool calls are allowed by fail-open configuration.\n",
+      );
+      expect(ctx.ui.notify).not.toHaveBeenCalled();
+    } finally {
+      stderr.mockRestore();
+    }
   });
 
   it("names the receiver the session records to", async () => {

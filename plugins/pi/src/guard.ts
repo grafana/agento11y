@@ -1,6 +1,7 @@
 import type {
   Agento11yClient,
   HookEvaluateRequest,
+  HookInput,
   Message,
 } from "@grafana/agento11y";
 
@@ -13,6 +14,7 @@ export interface GuardArgs {
   toolCallId: string;
   toolName: string;
   input: Record<string, unknown>;
+  tags?: Record<string, string>;
   failOpen: boolean;
   logger?: { warn: (msg: string) => void };
 }
@@ -72,7 +74,7 @@ const EVALUATION_FAILURE_RULE_ID = "__agento11y_guard_evaluation_failure";
  *
  * Mirrors `formatEvalFailure` in the Go guard helper. Keep the wording aligned.
  */
-function formatEvalFailure(
+export function formatEvalFailure(
   toolName: string,
   detail: string | undefined,
 ): string {
@@ -91,52 +93,68 @@ export interface PreflightTransformArgs {
   model: { provider: string; name: string };
   conversationId?: string;
   messages: Message[];
+  signal?: AbortSignal;
+  tags?: Record<string, string>;
   logger?: { warn: (msg: string) => void };
 }
 
-export type PreflightTransformResult = { messages: Message[] } | undefined;
+export type PreflightEvaluation =
+  | { kind: "allow" }
+  | { kind: "transform"; input: HookInput & { messages: Message[] } }
+  | { kind: "deny" }
+  | { kind: "invalid" }
+  | { kind: "failure" };
 
-/**
- * Evaluates the Agent Observability preflight hook against the outgoing conversation and
- * returns the redacted messages from `transformedInput.messages`, or
- * `undefined` when no usable transform was applied or evaluation failed.
- *
- * Always fails open: pi's `ContextEventResult` has no `block` field, so a
- * preflight deny cannot be enforced here, and any eval error or timeout
- * forwards the original messages. `SIGIL_GUARDS_FAIL_OPEN` only governs the
- * postflight tool-call block decision, so it has no effect here.
- */
-export async function runPreflightTransform(
+export async function evaluatePreflight(
   args: PreflightTransformArgs,
-): Promise<PreflightTransformResult> {
+): Promise<PreflightEvaluation> {
   try {
     const conversationId = args.conversationId?.trim();
-    const req: HookEvaluateRequest = {
-      phase: "preflight",
-      context: {
-        agentName: args.agentName,
-        agentVersion: args.agentVersion,
-        ...(conversationId ? { conversationId } : {}),
-        model: args.model,
+    const response = await args.client.evaluateHook(
+      {
+        phase: "preflight",
+        context: {
+          agentName: args.agentName,
+          agentVersion: args.agentVersion,
+          ...(conversationId ? { conversationId } : {}),
+          model: args.model,
+          tags: args.tags,
+        },
+        input: { messages: args.messages },
       },
-      input: {
-        messages: args.messages,
+      {
+        enabled: true,
+        phases: ["preflight"],
+        failOpen: false,
+        strictTransforms: true,
+        ...(args.signal ? { signal: args.signal } : {}),
       },
+    );
+    if (response.action === "deny")
+      return {
+        kind:
+          response.ruleId === EVALUATION_FAILURE_RULE_ID ? "failure" : "deny",
+      };
+    if (!response.transformedInput) return { kind: "allow" };
+    if (
+      Object.keys(response.transformedInput).some(
+        (key) => key !== "messages",
+      ) ||
+      !Array.isArray(response.transformedInput.messages) ||
+      response.transformedInput.messages.length === 0
+    )
+      return { kind: "invalid" };
+    return {
+      kind: "transform",
+      input: { messages: response.transformedInput.messages },
     };
-
-    const resp = await args.client.evaluateHook(req, {
-      enabled: true,
-      phases: ["preflight"],
-    });
-
-    const transformed = resp.transformedInput?.messages;
-    if (!transformed || transformed.length === 0) {
-      return undefined;
-    }
-    return { messages: transformed };
-  } catch (err) {
-    args.logger?.warn(`preflight transform eval failed: ${err}`);
-    return undefined;
+  } catch (error) {
+    return {
+      kind:
+        error instanceof Error && error.name === "HookTransformError"
+          ? "invalid"
+          : "failure",
+    };
   }
 }
 
@@ -160,6 +178,7 @@ export async function runToolCallGuard(args: GuardArgs): Promise<GuardResult> {
         agentVersion: args.agentVersion,
         ...(conversationId ? { conversationId } : {}),
         model: args.model,
+        tags: args.tags,
       },
       input: {
         output: [

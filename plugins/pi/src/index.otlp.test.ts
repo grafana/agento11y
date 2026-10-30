@@ -668,6 +668,7 @@ describe("pi skill executions: actual SDK telemetry", () => {
       (api: any) => {
         api.on("before_agent_start", (event: any) => {
           beforeStarts++;
+          if (event.messageType !== "user") return;
           event.systemPromptOptions.skills = [
             {
               name: "temporary",
@@ -793,7 +794,7 @@ describe("pi skill executions: actual SDK telemetry", () => {
         },
         { triggerTurn: true },
       );
-      expect(beforeStarts).toBe(1);
+      expect(beforeStarts).toBe(2);
       expect(requests).toHaveLength(5);
       expect(JSON.stringify(requests[0].skills)).toContain("temporary");
       expect(requests[3].skills).toBeUndefined();
@@ -882,6 +883,7 @@ describe("pi skill executions: actual SDK telemetry", () => {
       "../pi-agent-core/dist/agent-loop.js",
     );
     let resultEvents = 0;
+    let blockedCalls = 0;
     const extension = {
       path: "telemetry",
       handlers: new Map(
@@ -895,6 +897,7 @@ describe("pi skill executions: actual SDK telemetry", () => {
           "tool_call",
           [
             async (event: any) => {
+              blockedCalls++;
               await new Promise<void>((resolve) => setTimeout(resolve, 0));
               event.input.path = latest;
               return { block: true, reason: "blocked after rewrite" };
@@ -921,13 +924,19 @@ describe("pi skill executions: actual SDK telemetry", () => {
     runner.onError((error: unknown) => {
       throw new Error(JSON.stringify(error));
     });
-    const session = { agent: {}, _extensionRunner: runner } as any;
+    const session = Object.assign(Object.create(AgentSession.prototype), {
+      agent: {},
+      _extensionRunner: runner,
+    });
     AgentSession.prototype._installAgentToolHooks.call(session);
     await runner.emit({ type: "session_start" });
-    await runner.emitBeforeAgentStart("review", undefined, {
-      cwd,
-      skills: [{ name: "review", filePath: join(cwd, "guide.md") }],
-    });
+    await runner.emitBeforeAgentStart(
+      { messageType: "user", prompt: "review" },
+      {
+        cwd,
+        skills: [{ name: "review", filePath: join(cwd, "guide.md") }],
+      },
+    );
     const message = {
       role: "assistant",
       provider: "synthetic",
@@ -990,6 +999,7 @@ describe("pi skill executions: actual SDK telemetry", () => {
     expect(tool.parentSpanContext?.spanId).toBe(
       generation.spanContext().spanId,
     );
+    expect(blockedCalls).toBe(1);
     expect(resultEvents).toBe(0);
     await expectToolMetrics(
       [{ ids: ["native-blocked"], skill, error: true }],
@@ -1075,7 +1085,7 @@ describe("pi skill executions: actual SDK telemetry", () => {
       if (call.id === "blocked-later-in") input.path = "missing.md";
       if (call.id === "blocked-later-out") input.path = "ordinary.md";
       const blocked = call.id.startsWith("blocked");
-      // Pi 0.87.1 blocked calls end without invoking tool_result.
+      // Blocked calls end without invoking tool_result.
       if (!blocked) {
         await pi.emit(
           "tool_result",

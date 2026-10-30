@@ -453,6 +453,180 @@ describe("applyAgento11yDotenv", () => {
     expect(process.env.AGENTO11Y_AUTH_TOKEN).toBe("tok");
   });
 
+  describe.each([
+    "QUEUE_SIZE",
+    "MAX_RETRIES",
+    "MAX_BACKOFF_MS",
+  ])("%s aliases", (suffix) => {
+    const preferred = `AGENTO11Y_${suffix}`;
+    const legacy = `SIGIL_${suffix}`;
+
+    function expectBoth(value: string | undefined): void {
+      expect(process.env[preferred]).toBe(value);
+      expect(process.env[legacy]).toBe(value);
+    }
+
+    it.each([
+      ["legacy file", undefined, undefined, undefined, "10", "10"],
+      ["preferred file", undefined, undefined, "20", "10", "20"],
+      ["legacy shell over preferred file", undefined, "30", "20", "10", "30"],
+      ["preferred shell over legacy shell", "40", "30", "20", "10", "40"],
+      ["blank shell values", "  ", "", "20", "10", "20"],
+      ["blank preferred shell", "", "30", "20", "10", "30"],
+      ["blank preferred file", undefined, undefined, "  ", "10", "10"],
+      ["zero shell value", undefined, "0", "20", "10", "0"],
+    ])("%s", (_name, shellPreferred, shellLegacy, filePreferred, fileLegacy, winner) => {
+      if (shellPreferred !== undefined) process.env[preferred] = shellPreferred;
+      if (shellLegacy !== undefined) process.env[legacy] = shellLegacy;
+      writeConfig(
+        `${preferred}="${filePreferred ?? ""}"\n${legacy}="${fileLegacy ?? ""}"\n`,
+      );
+      applyAgento11yDotenv();
+      expectBoth(winner);
+
+      writeConfig("");
+      applyAgento11yDotenv();
+      expectBoth(shellPreferred?.trim() || shellLegacy?.trim() || undefined);
+    });
+
+    it("refreshes edits across spellings and clears removals", () => {
+      writeConfig(`${legacy}=10\n`);
+      applyAgento11yDotenv();
+      expectBoth("10");
+
+      writeConfig(`${preferred}=20\n`);
+      applyAgento11yDotenv();
+      expectBoth("20");
+
+      writeConfig("");
+      applyAgento11yDotenv();
+      expectBoth(undefined);
+    });
+
+    it.each([
+      "AGENTO11Y",
+      "SIGIL",
+    ])("keeps a runtime override under %s after file removal", (prefix) => {
+      writeConfig(`${preferred}=10\n`);
+      applyAgento11yDotenv();
+      process.env[`${prefix}_${suffix}`] = "30";
+
+      writeConfig(`${preferred}=20\n`);
+      applyAgento11yDotenv();
+      expectBoth("30");
+
+      writeConfig("");
+      applyAgento11yDotenv();
+      expectBoth("30");
+    });
+  });
+
+  it("refreshes and removes owned values after module replacement", async () => {
+    writeConfig(
+      "SIGIL_AUTH_TOKEN=first\nAGENTO11Y_QUEUE_SIZE=10\nOTEL_SERVICE_NAME=first\nAGENTO11Y_CUSTOM=first\n",
+    );
+    applyAgento11yDotenv();
+
+    vi.resetModules();
+    const replacement = await import("./agento11yDotenv.js");
+    expect(replacement.applyAgento11yDotenv).not.toBe(applyAgento11yDotenv);
+
+    writeConfig(
+      "AGENTO11Y_AUTH_TOKEN=second\nSIGIL_QUEUE_SIZE=20\nOTEL_SERVICE_NAME=second\nAGENTO11Y_CUSTOM=second\n",
+    );
+    replacement.applyAgento11yDotenv();
+    for (const key of [
+      "AGENTO11Y_AUTH_TOKEN",
+      "SIGIL_AUTH_TOKEN",
+      "OTEL_SERVICE_NAME",
+      "AGENTO11Y_CUSTOM",
+    ]) {
+      expect(process.env[key]).toBe("second");
+    }
+    expect(process.env.AGENTO11Y_QUEUE_SIZE).toBe("20");
+    expect(process.env.SIGIL_QUEUE_SIZE).toBe("20");
+
+    vi.resetModules();
+    const nextReplacement = await import("./agento11yDotenv.js");
+    writeConfig("");
+    nextReplacement.applyAgento11yDotenv();
+    for (const key of [
+      "AGENTO11Y_AUTH_TOKEN",
+      "SIGIL_AUTH_TOKEN",
+      "AGENTO11Y_QUEUE_SIZE",
+      "SIGIL_QUEUE_SIZE",
+      "OTEL_SERVICE_NAME",
+      "AGENTO11Y_CUSTOM",
+    ]) {
+      expect(process.env[key]).toBeUndefined();
+    }
+  });
+
+  it("preserves shell provenance and runtime overrides after module replacement", async () => {
+    process.env.SIGIL_MAX_RETRIES = "3";
+    process.env.OTEL_SERVICE_NAME = "shell-service";
+    writeConfig(
+      "AGENTO11Y_MAX_RETRIES=10\nAGENTO11Y_MAX_BACKOFF_MS=100\nOTEL_SERVICE_NAME=file-service\nAGENTO11Y_CUSTOM=first\n",
+    );
+    applyAgento11yDotenv();
+
+    vi.resetModules();
+    const replacement = await import("./agento11yDotenv.js");
+    process.env.SIGIL_MAX_RETRIES = "4";
+    process.env.SIGIL_MAX_BACKOFF_MS = "200";
+    process.env.AGENTO11Y_CUSTOM = "runtime";
+    writeConfig(
+      "AGENTO11Y_MAX_RETRIES=20\nAGENTO11Y_MAX_BACKOFF_MS=300\nOTEL_SERVICE_NAME=edited-service\nAGENTO11Y_CUSTOM=second\n",
+    );
+    replacement.applyAgento11yDotenv();
+    expect(process.env.AGENTO11Y_MAX_RETRIES).toBe("4");
+    expect(process.env.SIGIL_MAX_RETRIES).toBe("4");
+    expect(process.env.AGENTO11Y_MAX_BACKOFF_MS).toBe("200");
+    expect(process.env.SIGIL_MAX_BACKOFF_MS).toBe("200");
+    expect(process.env.OTEL_SERVICE_NAME).toBe("shell-service");
+    expect(process.env.AGENTO11Y_CUSTOM).toBe("runtime");
+
+    writeConfig("");
+    replacement.applyAgento11yDotenv();
+    expect(process.env.AGENTO11Y_MAX_RETRIES).toBe("4");
+    expect(process.env.SIGIL_MAX_RETRIES).toBe("4");
+    expect(process.env.AGENTO11Y_MAX_BACKOFF_MS).toBe("200");
+    expect(process.env.SIGIL_MAX_BACKOFF_MS).toBe("200");
+    expect(process.env.OTEL_SERVICE_NAME).toBe("shell-service");
+    expect(process.env.AGENTO11Y_CUSTOM).toBe("runtime");
+  });
+
+  it("retains ownership on failed reads after module replacement", async () => {
+    const warn = loggerMock.warn;
+    warn.mockClear();
+    writeConfig("SIGIL_QUEUE_SIZE=10\nOTEL_SERVICE_NAME=first\n");
+    applyAgento11yDotenv();
+
+    vi.resetModules();
+    const replacement = await import("./agento11yDotenv.js");
+    rmSync(configPath());
+    mkdirSync(configPath());
+    replacement.applyAgento11yDotenv();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(process.env.AGENTO11Y_QUEUE_SIZE).toBe("10");
+    expect(process.env.SIGIL_QUEUE_SIZE).toBe("10");
+    expect(process.env.OTEL_SERVICE_NAME).toBe("first");
+
+    rmSync(configPath(), { recursive: true });
+    writeConfig("AGENTO11Y_QUEUE_SIZE=20\nOTEL_SERVICE_NAME=second\n");
+    replacement.applyAgento11yDotenv();
+    expect(process.env.AGENTO11Y_QUEUE_SIZE).toBe("20");
+    expect(process.env.SIGIL_QUEUE_SIZE).toBe("20");
+    expect(process.env.OTEL_SERVICE_NAME).toBe("second");
+
+    rmSync(configPath());
+    replacement.applyAgento11yDotenv();
+    expect(process.env.AGENTO11Y_QUEUE_SIZE).toBeUndefined();
+    expect(process.env.SIGIL_QUEUE_SIZE).toBeUndefined();
+    expect(process.env.OTEL_SERVICE_NAME).toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
   it("materializes export timeout under both spellings", () => {
     writeConfig("SIGIL_EXPORT_TIMEOUT_MS=2500\n");
     applyAgento11yDotenv();

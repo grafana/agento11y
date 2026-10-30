@@ -2,18 +2,30 @@ import { randomUUID } from "node:crypto";
 import type {
   Agento11yClient,
   ContentCaptureMode,
-  Message,
   ToolExecutionRecorder,
   ToolExecutionStart,
 } from "@grafana/agento11y";
 import { redactSecretText } from "@grafana/agento11y";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  SessionBeforeCompactEvent,
+  SessionBeforeTreeEvent,
+} from "@mariozechner/pi-coding-agent";
 import { createAgento11yClient } from "./client.js";
-import type { Agento11yPiConfig } from "./config.js";
-import { loadConfig } from "./config.js";
+import type { Agento11yPiConfig, GuardsFeatureConfig } from "./config.js";
+import { loadConfig, loadGuardIntent } from "./config.js";
 import { detectPiVersion } from "./detectPiVersion.js";
 import { resolveGitBranch } from "./git.js";
-import { runPreflightTransform, runToolCallGuard } from "./guard.js";
+import {
+  evaluatePreflight,
+  formatEvalFailure,
+  runToolCallGuard,
+} from "./guard.js";
+import {
+  applyGuardTransform,
+  projectGuardMessages,
+} from "./guardProjection.js";
 import {
   type PiGenerationParent,
   resolvePiGenerationLineage,
@@ -23,16 +35,13 @@ import {
 import { LocalReceiverError } from "./local.js";
 import { logger } from "./logger.js";
 import {
-  applyRedactedText,
   type CachedRequestControls,
   extractRequestControls,
-  mapAgentMessagesForHook,
   mapGenerationResult,
   mapGenerationStart,
   mapSummaryGenerationResult,
   mapSummaryGenerationStart,
   mapTools,
-  mapUserMessage,
   PI_USAGE_TOKEN_FIELDS,
   type PiAssistantMessage,
   type PiSummaryEntryLike,
@@ -40,17 +49,14 @@ import {
   type PiToolInfo,
   type PiToolResult,
   type PiUsageLike,
-  type PiUserMessage,
   redactSharedWords,
   redactSpans,
   removedSpans,
   resolveConversationTitle,
   type ToolTiming,
   toolResultText,
-  userMessageText,
-  userTextRedactions,
-  withRedactedUserText,
 } from "./mappers.js";
+import { RequestObservation } from "./requestObservation.js";
 import {
   type ConversationRecord,
   NOT_FORKED,
@@ -64,16 +70,31 @@ import {
   type SkillIdentity,
   snapshotSkills,
 } from "./skills.js";
-import { buildBuiltinTags } from "./tags.js";
+import { guardCompaction, guardTreeSummary } from "./summaryGuards.js";
+import { buildBuiltinTags, effectiveTags } from "./tags.js";
 import {
   createTelemetryProviders,
   type TelemetryProviders,
 } from "./telemetry.js";
 
+type GuardReadiness =
+  | { kind: "disabled" }
+  | { kind: "unavailable"; failOpen: boolean; reason: string }
+  | { kind: "ready"; client: Agento11yClient };
+
 export default function (pi: ExtensionAPI) {
   let sigil: Agento11yClient | null = null;
   let config: Agento11yPiConfig | null = null;
   let telemetry: TelemetryProviders | null = null;
+  let guardIntent: GuardsFeatureConfig | undefined;
+  let guardReadiness: GuardReadiness = { kind: "disabled" };
+  let guardUnavailableWarned = false;
+
+  function invalidateGuards(reason: string) {
+    guardReadiness = guardIntent?.enabled
+      ? { kind: "unavailable", failOpen: guardIntent.failOpen, reason }
+      : { kind: "disabled" };
+  }
   // Cached from the latest assistant message. `tool_call` events carry no model
   // metadata, so guards read it from `message_end` before the tool runs.
   let lastSeenModel: { provider: string; name: string } | null = null;
@@ -136,19 +157,7 @@ export default function (pi: ExtensionAPI) {
   }
   const turnToolTimings: ToolTiming[] = [];
 
-  // User messages observed since the previous turn_end. Consumed at the next
-  // turn_end and attached to GenerationResult.input. Filled by the
-  // `message_end` handler (user role only). Per pi's agent loop, `turn_start`
-  // fires BEFORE the user `message_end` for fresh prompts, so this buffer
-  // must NOT be cleared at turn_start — only after consume and on session
-  // boundaries.
-  const pendingInputMessages: Message[] = [];
-
-  // First user prompt text seen in this session, used to derive a
-  // conversation title when pi has no user-set session name. First prompt
-  // wins, so it persists across turns and is only cleared on session
-  // boundaries (never in resetTurnState).
-  let firstUserText: string | undefined;
+  const requestObservation = new RequestObservation();
 
   // Text a redact guard removed from this session's prompts. The title can
   // come from pi's session name, which no guard sees, so title sources are
@@ -222,8 +231,7 @@ export default function (pi: ExtensionAPI) {
       telemetry = null;
     }
     resetTurnState();
-    pendingInputMessages.length = 0;
-    firstUserText = undefined;
+    requestObservation.reset({});
     guardSpans.clear();
     wholeRedactions.clear();
     lastSeenModel = null;
@@ -325,10 +333,10 @@ export default function (pi: ExtensionAPI) {
     // timestamp written by another machine) must not invert the window.
     const startedAt = Math.min(extras.startedAt ?? completedAt, completedAt);
 
-    const summaryCwd = process.cwd();
+    const summaryCwd = ctx.cwd;
     const tags = buildBuiltinTags({
       cwd: summaryCwd,
-      gitBranch: resolveGitBranch(summaryCwd),
+      gitBranch: summaryCwd ? resolveGitBranch(summaryCwd) : undefined,
     });
 
     let sessionName: string | undefined;
@@ -356,7 +364,7 @@ export default function (pi: ExtensionAPI) {
       conversationId,
       conversationTitle: resolveConversationTitle({
         sessionName: guardSafeName(sessionName),
-        firstUserText: guardSafe(firstUserText),
+        firstUserText: guardSafe(requestObservation.firstUserText),
         conversationId,
         contentCapture: config.contentCapture,
       }),
@@ -437,6 +445,8 @@ export default function (pi: ExtensionAPI) {
   }
 
   pi.on("session_start", async (event, ctx) => {
+    guardUnavailableWarned = false;
+    invalidateGuards("initialization incomplete");
     try {
       if (sigil) {
         try {
@@ -449,6 +459,9 @@ export default function (pi: ExtensionAPI) {
       sigil = null;
       const trunk = currentConversation;
       await resetSessionState();
+      requestObservation.reset(ctx.sessionManager);
+      guardIntent = loadGuardIntent();
+      invalidateGuards("initialization incomplete");
 
       // Resolve the origin here, while the conversation the session came
       // from is still known: with `--no-session` the header cannot say.
@@ -468,7 +481,7 @@ export default function (pi: ExtensionAPI) {
       }
 
       try {
-        config = await loadConfig();
+        config = await loadConfig(ctx.cwd, guardIntent);
       } catch (err) {
         if (!(err instanceof LocalReceiverError)) throw err;
         // Local mode was chosen for this machine, and no receiver answered.
@@ -485,6 +498,8 @@ export default function (pi: ExtensionAPI) {
         return;
       }
       if (!config) return;
+      guardIntent = config.guards ?? guardIntent;
+      invalidateGuards("client unavailable");
 
       if (!config.agentVersion) {
         config = { ...config, agentVersion: detectPiVersion() };
@@ -518,6 +533,9 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
+      if (guardIntent?.enabled)
+        guardReadiness = { kind: "ready", client: sigil };
+
       logger.debug(
         `enabled, endpoint=${config.endpoint} auth=${config.auth.mode}${
           config.local ? " local=true" : ""
@@ -533,6 +551,7 @@ export default function (pi: ExtensionAPI) {
         );
       }
     } catch (err) {
+      invalidateGuards("initialization failed");
       logger.error("session_start failed", err);
       sigil = null;
       await resetSessionState();
@@ -617,13 +636,6 @@ export default function (pi: ExtensionAPI) {
         }
         return;
       }
-      if (!isUserMessage(message)) return;
-      if (firstUserText === undefined) {
-        const text = userMessageText(message).trim();
-        if (text.length > 0) firstUserText = text;
-      }
-      const mapped = mapUserMessage(message, config.contentCapture);
-      if (mapped) pendingInputMessages.push(mapped);
     } catch (err) {
       logger.error("message_end failed", err);
     }
@@ -642,80 +654,86 @@ export default function (pi: ExtensionAPI) {
     firstTokenTime = Date.now();
   });
 
-  pi.on("context", async (event, ctx) => {
-    if (!sigil || !config?.guards.enabled) return;
+  pi.on("context_with_system", async (event, ctx) => {
+    if (!config) return;
+    let observed = event.messages;
+    requestObservation.observe(ctx.sessionManager, []);
     try {
-      const piMessages = event.messages;
-      if (!Array.isArray(piMessages) || piMessages.length === 0) return;
-
-      const forward = mapAgentMessagesForHook(piMessages);
-      if (forward.length === 0) return;
-
-      const result = await runPreflightTransform({
-        client: sigil,
-        agentName: config.agentName,
-        agentVersion: config.agentVersion,
-        model: lastSeenModel ?? { provider: "unknown", name: "unknown" },
-        conversationId: readSessionId(ctx.sessionManager),
-        messages: forward,
-        logger: { warn: (msg: string) => logger.warn(msg) },
-      });
-      if (!result) return;
-
-      // The server returns one redacted message per forwarded message. If the
-      // counts diverge we cannot align the redaction by index, so drop it and
-      // forward the originals unchanged.
-      if (result.messages.length !== forward.length) {
-        logger.debug(
-          `preflight transform dropped: got ${result.messages.length} messages, expected ${forward.length}`,
-        );
-        return;
-      }
-
-      const applied = applyRedactedText(piMessages, result.messages);
-      if (!applied) {
-        logger.debug(
-          "preflight transform dropped: could not align redacted messages with the outgoing conversation",
-        );
-        return;
-      }
-
-      // The recorded input and the title were captured at message_end, before
-      // this redaction. Record what the model receives instead.
-      const redactions = userTextRedactions(forward, result.messages);
-      if (redactions.size > 0) {
-        for (const [before, after] of redactions) {
-          for (const span of removedSpans(before, after)) {
-            guardSpans.add(span);
-            if (span === before.trim()) wholeRedactions.add(span);
-          }
-        }
-        pendingInputMessages.forEach((message, i) => {
-          pendingInputMessages[i] = withRedactedUserText(message, redactions);
-        });
-        if (firstUserText !== undefined) {
-          for (const [before, after] of redactions) {
-            if (before.trim() === firstUserText) {
-              firstUserText = after.trim();
-              break;
+      if (guardReadiness.kind === "ready") {
+        const projection = projectGuardMessages(event.messages);
+        if (projection.messages.length > 0) {
+          const result = await evaluatePreflight({
+            client: guardReadiness.client,
+            agentName: config.agentName,
+            agentVersion: config.agentVersion,
+            model: currentGuardModel(ctx.model),
+            conversationId: readSessionId(ctx.sessionManager),
+            tags: effectiveTags(
+              config,
+              buildBuiltinTags({
+                cwd: ctx.cwd,
+                gitBranch: resolveGitBranch(ctx.cwd),
+              }),
+            ),
+            messages: projection.messages,
+          });
+          if (result.kind === "transform") {
+            observed = applyGuardTransform(
+              event.messages,
+              projection,
+              result.input.messages,
+            );
+            const transformed = projectGuardMessages(observed);
+            for (const slot of projection.slots) {
+              const before =
+                projection.messages[slot.message]?.parts?.[slot.part];
+              const after =
+                transformed.messages[slot.message]?.parts?.[slot.part];
+              if (before?.type !== "text" || after?.type !== "text") continue;
+              for (const span of removedSpans(before.text, after.text)) {
+                guardSpans.add(span);
+                if (span === before.text.trim()) wholeRedactions.add(span);
+              }
             }
+          } else if (result.kind !== "allow") {
+            logger.warn(
+              "Agent Observability: ordinary preflight unavailable or refused; Pi cannot cancel at this hook.",
+            );
+            return;
           }
         }
       }
-
-      // applyRedactedText mutated piMessages (pi's own AgentMessage[]) in
-      // place; returning it hands the redacted conversation back to pi.
-      return { messages: piMessages };
-    } catch (err) {
-      // Pi runs `context` handlers serially; any error here would otherwise
-      // surface as a turn failure. Drop the transform and let the original
-      // messages flow through.
-      logger.warn(`context handler failed: ${err}`);
+      requestObservation.observe(ctx.sessionManager, observed);
+      return observed === event.messages ? undefined : { messages: observed };
+    } catch {
+      logger.warn(
+        "Agent Observability: preflight transform dropped because its source could not be validated.",
+      );
       return;
     }
   });
 
   pi.on("tool_call", async (event, ctx) => {
+    if (guardReadiness.kind === "unavailable") {
+      if (!guardReadiness.failOpen) {
+        return {
+          block: true,
+          reason: formatEvalFailure(event.toolName, undefined),
+        };
+      }
+      if (!guardUnavailableWarned) {
+        guardUnavailableWarned = true;
+        const warning =
+          "Agent Observability: guards are unavailable; tool calls are allowed by fail-open configuration.";
+        logger.warn(warning);
+        if (ctx.hasUI) notify(ctx, warning, "warning");
+        else {
+          try {
+            process.stderr.write(`${warning}\n`);
+          } catch {}
+        }
+      }
+    }
     if (!sigil) return;
     updateSkillCandidate(
       event.toolCallId,
@@ -724,9 +742,9 @@ export default function (pi: ExtensionAPI) {
       ctx.cwd,
       true,
     );
-    if (!config?.guards.enabled) return;
+    if (guardReadiness.kind !== "ready" || !config) return;
     const res = await runToolCallGuard({
-      client: sigil,
+      client: guardReadiness.client,
       agentName: config.agentName,
       agentVersion: config.agentVersion,
       model: lastSeenModel ?? { provider: "unknown", name: "unknown" },
@@ -734,7 +752,14 @@ export default function (pi: ExtensionAPI) {
       toolCallId: event.toolCallId,
       toolName: event.toolName,
       input: event.input as Record<string, unknown>,
-      failOpen: config.guards.failOpen,
+      tags: effectiveTags(
+        config,
+        buildBuiltinTags({
+          cwd: ctx.cwd,
+          gitBranch: resolveGitBranch(ctx.cwd),
+        }),
+      ),
+      failOpen: guardIntent?.failOpen ?? true,
       logger: { warn: (msg: string) => logger.warn(msg) },
     });
     if (!res) return;
@@ -902,7 +927,7 @@ export default function (pi: ExtensionAPI) {
       // generation. Always sent, regardless of content capture mode:
       // `git.branch` and `cwd` are low-cardinality session metadata,
       // not message content, matching claude-code/cursor.
-      const turnCwd = process.cwd();
+      const turnCwd = ctx.cwd;
       const builtinTags = buildBuiltinTags({
         cwd: turnCwd,
         gitBranch: resolveGitBranch(turnCwd),
@@ -936,9 +961,13 @@ export default function (pi: ExtensionAPI) {
       } catch (err) {
         logger.debug("getSessionName failed", err);
       }
+      const observedInput = requestObservation.consume(
+        ctx.sessionManager,
+        contentCapture,
+      );
       const conversationTitle = resolveConversationTitle({
         sessionName: guardSafeName(sessionName),
-        firstUserText: guardSafe(firstUserText),
+        firstUserText: guardSafe(requestObservation.firstUserText),
         conversationId,
         contentCapture,
       });
@@ -959,13 +988,11 @@ export default function (pi: ExtensionAPI) {
       });
 
       const toolResults = (event.toolResults ?? []) as PiToolResult[];
-      // Snapshot the buffer; the finally below clears it in place and
-      // GenerationResult.input would otherwise alias the cleared array.
       const result = mapGenerationResult(
         msg,
         toolResults,
         contentCapture,
-        pendingInputMessages.slice(),
+        observedInput,
         completedAtMs,
       );
 
@@ -1014,17 +1041,69 @@ export default function (pi: ExtensionAPI) {
     } finally {
       toolStarts.clear();
       turnToolTimings.length = 0;
-      pendingInputMessages.length = 0;
       currentRequestControls = {};
     }
   });
 
+  async function protectSummary(
+    event: SessionBeforeCompactEvent | SessionBeforeTreeEvent,
+    ctx: ExtensionContext,
+  ) {
+    if (
+      event.type === "session_before_tree" &&
+      !event.preparation.userWantsSummary
+    )
+      return;
+    if (event.signal?.aborted) return { cancel: true };
+    if (guardReadiness.kind === "disabled") return;
+    const warn = (message: string) => {
+      logger.warn(message);
+      if (ctx.hasUI) notify(ctx, message, "warning");
+      else {
+        try {
+          process.stderr.write(`${message}\n`);
+        } catch {}
+      }
+    };
+    if (guardReadiness.kind === "unavailable" || !config) {
+      const failOpen =
+        guardReadiness.kind === "unavailable" && guardReadiness.failOpen;
+      warn(
+        failOpen
+          ? "Agent Observability: summary guards are unavailable; continuing with fail-open enabled."
+          : "Agent Observability: summary cancelled because guards are unavailable.",
+      );
+      return failOpen ? undefined : { cancel: true };
+    }
+    const args = {
+      client: guardReadiness.client,
+      agentName: config.agentName,
+      agentVersion: config.agentVersion,
+      model: currentGuardModel(ctx.model),
+      conversationId: readSessionId(ctx.sessionManager),
+      tags: effectiveTags(config, {
+        ...buildBuiltinTags({
+          cwd: ctx.cwd,
+          gitBranch: resolveGitBranch(ctx.cwd),
+        }),
+        "pi.call_kind":
+          event.type === "session_before_compact"
+            ? "compaction"
+            : "branch_summary",
+      }),
+      failOpen: guardIntent?.failOpen ?? true,
+      logger: { warn },
+    };
+    return event.type === "session_before_compact"
+      ? guardCompaction(event, args)
+      : guardTreeSummary(event, args);
+  }
+
   // Pi runs compaction and branch summarization outside the agent loop, so
   // none of the turn/message events fire for them. The `session_before_*`
   // events are the only start signal, and registering a handler is what makes
-  // pi emit them at all (`hasHandlers`-gated). These handlers must not return
-  // a value: pi reads a returned object as a cancel/replace instruction.
-  pi.on("session_before_compact", async (_event, _ctx) => {
+  // pi emit them at all (`hasHandlers`-gated).
+  pi.on("session_before_compact", async (event, ctx) => {
     compactionStartedAt = Date.now();
     // Manual /compact disconnects from the agent before aborting the in-flight
     // turn, so that turn's `turn_end` never reaches us. Drop its buffered
@@ -1033,12 +1112,13 @@ export default function (pi: ExtensionAPI) {
     // compaction run after `turn_end`, where this is a no-op: the buffer is
     // already drained and the next `turn_start` resets the timers.
     resetTurnState();
-    pendingInputMessages.length = 0;
     currentRequestControls = {};
+    return protectSummary(event, ctx);
   });
 
-  pi.on("session_before_tree", async (_event, _ctx) => {
+  pi.on("session_before_tree", async (event, ctx) => {
     branchSummaryStartedAt = Date.now();
+    return protectSummary(event, ctx);
   });
 
   pi.on("session_compact", async (event, ctx) => {
@@ -1092,6 +1172,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", async (_event, _ctx) => {
+    invalidateGuards("session ended");
     if (sigil) {
       try {
         await sigil.shutdown();
@@ -1141,6 +1222,7 @@ function notify(
  * be read without importing pi's model types.
  */
 interface PiSummaryContext {
+  cwd?: string;
   sessionManager?: SessionManagerLike &
     SessionHeaderSourceLike & {
       getSessionId?: () => string | undefined;
@@ -1386,13 +1468,10 @@ function isAssistantMessage(message: unknown): message is PiAssistantMessage {
   );
 }
 
-function isUserMessage(message: unknown): message is PiUserMessage {
-  if (!message || typeof message !== "object") return false;
-  const candidate = message as Partial<PiUserMessage>;
-  return (
-    candidate.role === "user" &&
-    (typeof candidate.content === "string" ||
-      Array.isArray(candidate.content)) &&
-    typeof candidate.timestamp === "number"
-  );
+function currentGuardModel(
+  model: { provider?: string; id?: string; api?: string } | undefined,
+) {
+  return model?.provider && model.id && model.api !== "pi-virtual"
+    ? { provider: model.provider, name: model.id }
+    : { provider: "unknown", name: "unknown" };
 }

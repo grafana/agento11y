@@ -54,6 +54,7 @@ import type {
   GenerationRecorder,
   GenerationResult,
   GenerationStart,
+  HookEvaluateOptions,
   HookEvaluateRequest,
   HookEvaluateResponse,
   HooksConfig,
@@ -603,11 +604,12 @@ export class Agento11yClient {
    *
    * Framework adapters can pass `hooksConfigOverride` to override specific
    * fields of the client's hooks config (e.g., force `enabled: true` when the
-   * adapter has its own `enableHooks` option).
+   * adapter has its own `enableHooks` option). Pass `signal` in the same options
+   * to cancel the HTTP request. Caller cancellation rejects regardless of `failOpen`.
    */
   async evaluateHook(
     request: HookEvaluateRequest,
-    hooksConfigOverride?: Partial<HooksConfig>,
+    hooksConfigOverride?: HookEvaluateOptions,
   ): Promise<HookEvaluateResponse> {
     this.assertOpen();
     const effectiveHooks: HooksConfig =
@@ -618,6 +620,7 @@ export class Agento11yClient {
       extraHeaders: this.config.generationExport.headers,
       hooks: effectiveHooks,
       request,
+      signal: hooksConfigOverride?.signal,
       logger: this.logger,
     });
   }
@@ -2021,6 +2024,10 @@ class ToolExecutionRecorderImpl implements ToolExecutionRecorder {
     this.span = this.client.internalStartToolExecutionSpan(this.seed, this.startedAt, parentContext);
   }
 
+  startToolExecution(start: ToolExecutionStart): ToolExecutionRecorder {
+    return this.client.internalStartToolExecution(start, trace.setSpan(context.active(), this.span));
+  }
+
   setResult(result: ToolExecutionResult): void {
     if (this.ended) {
       return;
@@ -2090,6 +2097,10 @@ class ToolExecutionRecorderImpl implements ToolExecutionRecorder {
 }
 
 class NoopToolExecutionRecorder implements ToolExecutionRecorder {
+  startToolExecution(_start: ToolExecutionStart): ToolExecutionRecorder {
+    return this;
+  }
+
   setResult(_result: ToolExecutionResult): void {}
 
   setCallError(_error: unknown): void {}

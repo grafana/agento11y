@@ -451,6 +451,18 @@ test('tool execution content capture modes', async () => {
       legacy: true,
       wantContent: false,
     },
+    {
+      name: 'client no_tool_content uses legacy inclusion',
+      clientMode: 'no_tool_content',
+      legacy: true,
+      wantContent: true,
+    },
+    {
+      name: 'client metadata spans suppress content',
+      clientMode: 'full_with_metadata_spans',
+      legacy: true,
+      wantContent: false,
+    },
     // Per-tool overrides.
     {
       name: 'tool full overrides client metadata_only',
@@ -466,35 +478,56 @@ test('tool execution content capture modes', async () => {
       legacy: true,
       wantContent: false,
     },
+    {
+      name: 'tool metadata spans override client full',
+      clientMode: 'full',
+      toolMode: 'full_with_metadata_spans',
+      legacy: true,
+      wantContent: false,
+    },
   ];
 
   for (const tc of cases) {
-    const harness = newHarness({ contentCapture: tc.clientMode });
+    for (const depth of [0, 1, 2]) {
+      const harness = newHarness({ contentCapture: tc.clientMode });
+      const parents = [];
+      try {
+        let source = harness.client;
+        for (let index = 0; index < depth; index++) {
+          source = source.startToolExecution({
+            toolName: `parent-${index}`,
+            contentCapture: tc.wantContent ? 'metadata_only' : 'full',
+            agentName: 'parent-agent',
+            conversationId: 'parent-conversation',
+            requestModel: 'parent-model',
+            includeContent: !tc.legacy,
+          });
+          parents.push(source);
+        }
+        const recorder = source.startToolExecution({
+          toolName: 'test_tool',
+          contentCapture: tc.toolMode,
+          includeContent: tc.legacy,
+        });
+        recorder.setResult({
+          arguments: { city: 'Paris' },
+          result: { temp: 18 },
+        });
+        recorder.end();
+        assert.equal(recorder.getError(), undefined, `case "${tc.name}", depth=${depth}: unexpected error`);
 
-    try {
-      const recorder = harness.client.startToolExecution({
-        toolName: 'test_tool',
-        contentCapture: tc.toolMode,
-        includeContent: tc.legacy,
-      });
-      recorder.setResult({
-        arguments: { city: 'Paris' },
-        result: { temp: 18 },
-      });
-      recorder.end();
-      assert.equal(recorder.getError(), undefined, `case "${tc.name}": unexpected error`);
-
-      const span = singleToolSpan(harness.spanExporter);
-      const hasArgs = 'gen_ai.tool.call.arguments' in span.attributes;
-      assert.equal(
-        hasArgs,
-        tc.wantContent,
-        `case "${tc.name}": tool arguments present=${hasArgs}, want=${tc.wantContent}`,
-      );
-
-      assert.ok('gen_ai.tool.name' in span.attributes, `case "${tc.name}": tool name always present`);
-    } finally {
-      await shutdownHarness(harness);
+        const span = singleToolSpan(harness.spanExporter);
+        for (const key of ['gen_ai.tool.call.arguments', 'gen_ai.tool.call.result']) {
+          assert.equal(key in span.attributes, tc.wantContent, `${tc.name}, depth=${depth}, ${key}`);
+        }
+        assert.equal(span.attributes['gen_ai.tool.name'], 'test_tool');
+        for (const key of ['gen_ai.agent.name', 'gen_ai.conversation.id', 'gen_ai.request.model']) {
+          assert.equal(span.attributes[key], undefined, `${tc.name}, depth=${depth}, ${key}`);
+        }
+      } finally {
+        for (const parent of parents.reverse()) parent.end();
+        await shutdownHarness(harness);
+      }
     }
   }
 });
@@ -614,32 +647,33 @@ for (const tc of [
   });
 }
 
-test('tool execution with resolver overriding client mode', async () => {
-  const harness = newHarness({
-    contentCapture: 'full',
-    contentCaptureResolver: () => 'metadata_only',
-  });
-
-  try {
-    const recorder = harness.client.startToolExecution({
-      toolName: 'test_tool',
-      includeContent: true,
+test('tool execution uses the call-time resolver rather than its parent mode', async () => {
+  for (const [before, atCall] of [
+    ['full', 'metadata_only'],
+    ['metadata_only', 'full'],
+  ]) {
+    let mode = before;
+    const harness = newHarness({
+      contentCapture: 'full',
+      contentCaptureResolver: () => mode,
     });
-    recorder.setResult({
-      arguments: 'args',
-      result: 'result',
-    });
-    recorder.end();
-    assert.equal(recorder.getError(), undefined);
+    const parent = harness.client.startToolExecution({ toolName: 'parent' });
+    try {
+      mode = atCall;
+      const recorder = parent.startToolExecution({
+        toolName: 'test_tool',
+        includeContent: true,
+      });
+      recorder.setResult({ arguments: 'args', result: 'result' });
+      recorder.end();
+      assert.equal(recorder.getError(), undefined);
 
-    const span = singleToolSpan(harness.spanExporter);
-    assert.equal(
-      'gen_ai.tool.call.arguments' in span.attributes,
-      false,
-      'resolver metadata_only should suppress tool content',
-    );
-  } finally {
-    await shutdownHarness(harness);
+      const span = singleToolSpan(harness.spanExporter);
+      assert.equal('gen_ai.tool.call.arguments' in span.attributes, atCall === 'full', `${before} to ${atCall}`);
+    } finally {
+      parent.end();
+      await shutdownHarness(harness);
+    }
   }
 });
 

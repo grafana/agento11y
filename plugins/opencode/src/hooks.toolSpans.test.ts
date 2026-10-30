@@ -1,5 +1,5 @@
 import { createServer, type Server } from "node:http";
-import type { ToolExecutionStart } from "@grafana/agento11y";
+import type { ToolExecutionRecorder, ToolExecutionStart } from "@grafana/agento11y";
 import type { Part } from "@opencode-ai/sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Agento11yOpencodeConfig } from "./config.js";
@@ -25,7 +25,7 @@ function mockAgento11yClient() {
     ended: boolean;
   }> = [];
 
-  const client = vi.fn((start: ToolExecutionStart) => {
+  const client = vi.fn((start: ToolExecutionStart): ToolExecutionRecorder => {
     const rec = {
       start: { ...start },
       result: undefined as Record<string, unknown> | undefined,
@@ -34,6 +34,7 @@ function mockAgento11yClient() {
     };
     recorders.push(rec);
     return {
+      startToolExecution: (child) => client(child),
       setResult: vi.fn((r: Record<string, unknown>) => {
         rec.result = r;
       }),

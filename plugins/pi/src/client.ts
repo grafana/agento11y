@@ -57,8 +57,8 @@ export function createAgento11yClient(
       hooks: {
         enabled: config.guards.enabled,
         // The pi plugin's default hook evaluations are postflight (tool-arg
-        // redaction and deny). The preflight `context` path passes its own
-        // `phases: ["preflight"]` override to `evaluateHook`, which fully
+        // redaction and deny). The `context_with_system` and summary paths pass
+        // their own `phases: ["preflight"]` override to `evaluateHook`, which fully
         // replaces this list for that call (see `Agento11yClient.evaluateHook`
         // — `{ ...this.config.hooks, ...override }`), so preflight does not
         // need to be listed here.

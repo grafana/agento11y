@@ -1,6 +1,6 @@
-import type { ContentCaptureMode } from "@grafana/agento11y";
+import { type ContentCaptureMode, configFromEnv } from "@grafana/agento11y";
 import { applyAgento11yDotenv } from "./agento11yDotenv.js";
-import { parseTagPairs, resolveAutoTags, selectAutoTags } from "./autotag.js";
+import { resolveAutoTags, selectAutoTags } from "./autotag.js";
 import { normalizeBaseEndpoint } from "./endpoint.js";
 import { type LocalReceiver, resolveLocalReceiver } from "./local.js";
 import { logger } from "./logger.js";
@@ -40,6 +40,7 @@ export interface Agento11yPiConfig {
    * but undefined keeps the client config free of an empty `tags` object.
    */
   autoTags?: Record<string, string>;
+  configuredTags?: Record<string, string>;
   /**
    * True when this session records to the local receiver instead of Grafana
    * Cloud. index.ts reads it to name the destination; client.ts never passes
@@ -48,17 +49,24 @@ export interface Agento11yPiConfig {
   local?: boolean;
 }
 
-export async function loadConfig(): Promise<Agento11yPiConfig | null> {
+export function loadGuardIntent(): GuardsFeatureConfig {
   // Read the shared agento11y dotenv file so plain `pi` and `agento11y pi --` resolve
   // credentials from the same place. Shell values in process.env always beat
   // config.env values, across both env-var spellings.
   applyAgento11yDotenv();
+  return resolveGuards();
+}
+
+export async function loadConfig(
+  cwd = process.cwd(),
+  guards = loadGuardIntent(),
+): Promise<Agento11yPiConfig | null> {
   // A saved AGENTO11Y_LOCAL=true means this session records to the machine,
   // whatever Cloud endpoint config.env also holds. Resolving the receiver can
   // fail; the caller reports that and captures nothing rather than falling
   // back to Cloud.
-  if (!envBoolOr("LOCAL", false)) return resolveConfig();
-  return resolveLocalConfig(await resolveLocalReceiver());
+  if (!envBoolOr("LOCAL", false)) return resolveConfig(cwd, guards);
+  return resolveLocalConfig(await resolveLocalReceiver(), cwd, guards);
 }
 
 // local.LaunchEnv fills a missing tenant or token with this stand-in. The
@@ -77,12 +85,16 @@ const LOCAL_AUTH_PLACEHOLDER = "local";
  * session start, so an override that leaked into the environment would follow
  * a later non-local session.
  */
-export function resolveLocalConfig(receiver: LocalReceiver): Agento11yPiConfig {
+export function resolveLocalConfig(
+  receiver: LocalReceiver,
+  cwd = process.cwd(),
+  guards = resolveGuards(),
+): Agento11yPiConfig {
   const tenantId =
     brandedEnv("AUTH_TENANT_ID")?.value ?? LOCAL_AUTH_PLACEHOLDER;
   const token = brandedEnv("AUTH_TOKEN")?.value ?? LOCAL_AUTH_PLACEHOLDER;
   return {
-    ...resolveSharedConfig(),
+    ...resolveSharedConfig(cwd, guards),
     endpoint: receiver.endpoint,
     auth: {
       mode: "basic",
@@ -102,12 +114,15 @@ export function resolveLocalConfig(receiver: LocalReceiver): Agento11yPiConfig {
   };
 }
 
-export function resolveConfig(): Agento11yPiConfig | null {
+export function resolveConfig(
+  cwd = process.cwd(),
+  guards = resolveGuards(),
+): Agento11yPiConfig | null {
   const endpoint = normalizeBaseEndpoint(brandedEnv("ENDPOINT")?.value ?? "");
   if (!endpoint) return null;
 
   return {
-    ...resolveSharedConfig(),
+    ...resolveSharedConfig(cwd, guards),
     endpoint,
     auth: resolveAuth(),
     contentCapture: resolveContentCapture(),
@@ -118,16 +133,21 @@ export function resolveConfig(): Agento11yPiConfig | null {
 // The settings a local session reads exactly as a Cloud one does. The two
 // resolvers differ only in where the session goes, how it authenticates, and
 // how much of it is captured.
-function resolveSharedConfig(): Omit<
-  Agento11yPiConfig,
-  "endpoint" | "auth" | "contentCapture" | "otlp"
-> {
+function resolveSharedConfig(
+  cwd: string,
+  guards: GuardsFeatureConfig,
+): Omit<Agento11yPiConfig, "endpoint" | "auth" | "contentCapture" | "otlp"> {
+  const configuredTags = configFromEnv({
+    AGENTO11Y_TAGS: process.env.AGENTO11Y_TAGS,
+    SIGIL_TAGS: process.env.SIGIL_TAGS,
+  }).tags;
   return {
     agentName: brandedEnv("AGENT_NAME")?.value ?? "pi",
     agentVersion: brandedEnv("AGENT_VERSION")?.value,
     redactInputMessages: envBoolOr("REDACT_INPUT_MESSAGES", true),
-    guards: resolveGuards(),
-    autoTags: resolveAutoTagValues(),
+    guards,
+    autoTags: resolveAutoTagValues(cwd, configuredTags),
+    configuredTags,
   };
 }
 
@@ -140,15 +160,18 @@ function resolveSharedConfig(): Omit<
 // session start: a checkout that changes mid-session keeps the metric label it
 // started with. The per-generation `git.branch` tag (tags.ts) is resolved per
 // turn and does follow the checkout.
-function resolveAutoTagValues(): Record<string, string> | undefined {
+function resolveAutoTagValues(
+  cwd: string,
+  configuredTags: Record<string, string> | undefined,
+): Record<string, string> | undefined {
   const { enabled } = selectAutoTags(brandedEnv, (message) =>
     logger.warn(message),
   );
   if (enabled.size === 0) return undefined;
   return resolveAutoTags(enabled, {
-    cwd: process.cwd(),
+    cwd,
     userId: brandedEnv("USER_ID")?.value,
-    explicitTags: parseTagPairs(brandedEnv("TAGS")?.value),
+    explicitTags: configuredTags,
   });
 }
 
@@ -302,7 +325,13 @@ function envPositiveIntOr(suffix: string, defaultValue: number): number {
   const resolved = brandedEnv(suffix);
   if (resolved === undefined) return defaultValue;
   const n = Number(resolved.value);
-  if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) {
+  // Node reduces timer delays above this limit to 1ms.
+  if (
+    !Number.isFinite(n) ||
+    !Number.isInteger(n) ||
+    n <= 0 ||
+    n > 2 ** 31 - 1
+  ) {
     logger.warn(
       `invalid integer value for ${resolved.key}: "${resolved.value}" — using default ${defaultValue}`,
     );

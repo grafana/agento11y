@@ -3,9 +3,9 @@
 // Drives the @grafana/agento11y-pi extension through a faked pi host, but unlike
 // the handler-wiring unit tests (index.test.ts) the agento11y client here is the
 // real JS SDK pointed at a local HTTP server. Each test exercises the full
-// preflight (`context`) or postflight (`tool_call`) path end to end: real
-// Agento11yClient.evaluateHook -> HTTP hooks:evaluate round-trip -> wire parse ->
-// in-place write-back into pi's messages / tool input.
+// preflight (`context_with_system`) or postflight (`tool_call`) end to end:
+// real Agento11yClient.evaluateHook -> HTTP hooks:evaluate -> wire parse ->
+// copy-on-write native messages / in-place tool input.
 //
 // The unit suites already prove the mapper/guard branches; this suite adds the
 // transport + wire-decode dimension and asserts both what the plugin sent and
@@ -24,6 +24,7 @@ import { restoreEnv, snapshotAndClearTestEnv } from "./testEnv.js";
 import {
   type Agento11yTestServer,
   closeServer,
+  type HookCall,
   type HookResponse,
   startAgento11yTestServer,
 } from "./testHttp.js";
@@ -44,6 +45,8 @@ class FakePi {
 }
 
 const ctx = {
+  cwd: "/nonexistent-guards-workspace",
+  model: { provider: "anthropic", id: "claude-sonnet-4" },
   sessionManager: {
     getSessionFile: () => "guards-session.jsonl",
     getSessionId: () => "guards-conv-1",
@@ -74,13 +77,13 @@ function userMsg(content: PiUserMessage["content"]): PiUserMessage {
   return { role: "user", content, timestamp: 1 };
 }
 
-function toolResultMsg(text: string): PiToolResult {
+function toolResultMsg(text: string, isError = false): PiToolResult {
   return {
     role: "toolResult",
     toolCallId: "tc-1",
     toolName: "bash",
     content: [{ type: "text", text }],
-    isError: false,
+    isError,
     timestamp: 1,
   };
 }
@@ -89,7 +92,16 @@ function toolResultMsg(text: string): PiToolResult {
 // emits and what js/src/hooks.ts parses.
 function preflightTransform(messages: unknown[]): HookResponse {
   return {
-    json: { action: "allow", evaluations: [], transformed_input: { messages } },
+    json: {
+      action: "allow",
+      evaluations: [],
+      transformed_input: {
+        messages: messages.map((message, index) => ({
+          name: `pi:${index}`,
+          ...(message as object),
+        })),
+      },
+    },
   };
 }
 function postflightTransform(output: unknown[]): HookResponse {
@@ -118,10 +130,22 @@ describe("pi guards: real-SDK over HTTP", () => {
   let server: Agento11yTestServer;
   let savedEnv: Record<string, string | undefined> = {};
   // Set per-test before setup() runs the session_start that builds the client.
-  let nextHook: (call: { phase: string }) => HookResponse = () => ALLOW;
+  let nextHook: (call: HookCall) => HookResponse = () => ALLOW;
+  let generations: any[];
 
   beforeEach(async () => {
     server = await startAgento11yTestServer({ hook: (call) => nextHook(call) });
+    generations = [];
+    server.server.on("request", (req) => {
+      if (req.url !== "/api/v1/generations:export") return;
+      let raw = "";
+      req.on("data", (chunk) => {
+        raw += chunk;
+      });
+      req.on("end", () => {
+        generations.push(...JSON.parse(raw).generations);
+      });
+    });
     nextHook = () => ALLOW;
     savedEnv = snapshotAndClearTestEnv();
 
@@ -146,8 +170,8 @@ describe("pi guards: real-SDK over HTTP", () => {
     savedEnv = {};
   });
 
-  // Boot a session and cache an assistant model so preflight forwards a real
-  // model rather than the unknown fallback.
+  // Cache a previous assistant model for tool guards. Ordinary preflight uses
+  // ctx.model instead (including before any assistant has completed).
   async function setup(): Promise<FakePi> {
     const pi = new FakePi();
     registerExtension(pi as any);
@@ -162,8 +186,13 @@ describe("pi guards: real-SDK over HTTP", () => {
     messages: PiAgentMessage[],
   ): Promise<{ result: unknown; event: { messages: PiAgentMessage[] } }> {
     const event = { messages };
-    const result = await pi.handlers.get("context")!(event, ctx);
-    return { result, event };
+    const before = structuredClone(messages);
+    const result = await pi.handlers.get("context_with_system")!(event, ctx);
+    expect(event.messages).toBe(messages);
+    expect(messages).toEqual(before);
+    if (result) expect(result.messages).not.toBe(messages);
+    // Simulate Pi accepting the returned replacement for the provider request.
+    return { result, event: { messages: result?.messages ?? messages } };
   }
 
   async function runToolCall(
@@ -175,7 +204,46 @@ describe("pi guards: real-SDK over HTTP", () => {
     return { result, event };
   }
 
-  describe("preflight (context)", () => {
+  describe.each([
+    "AGENTO11Y_TAGS",
+    "SIGIL_TAGS",
+  ])("%s guard/export tag parity", (spelling) => {
+    it.each<[string, Record<string, string>]>([
+      ["team=prod,team=", { team: "" }],
+      ["team=,team=prod", { team: "prod" }],
+      ["team=prod,team=dev", { team: "dev" }],
+      ["team=", { team: "" }],
+      ["user=prod,user=", { user: "" }],
+    ])("uses the same effective tags for %s", async (raw, expected) => {
+      process.env[spelling] = raw;
+      process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS = "true";
+      process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES = "user";
+      process.env.AGENTO11Y_USER_ID = "automatic-user";
+      const pi = await setup();
+      await runContext(pi, [userMsg("hello")]);
+      await runToolCall(pi, { command: "true" });
+      await pi.emit(
+        "turn_end",
+        { message: assistantFixture(), toolResults: [] },
+        ctx,
+      );
+      await pi.emit("session_shutdown", {}, ctx);
+
+      expect(generations).toHaveLength(1);
+      const tags = {
+        user: "automatic-user",
+        ...expected,
+        cwd: ctx.cwd,
+      };
+      expect(generations[0].tags).toEqual(tags);
+      expect(server.hookCalls).toHaveLength(2);
+      for (const call of server.hookCalls)
+        expect(call.body.context?.tags).toEqual(generations[0].tags);
+      expect(server.errors).toEqual([]);
+    });
+  });
+
+  describe("preflight (context_with_system)", () => {
     interface PreflightCase {
       name: string;
       env?: GuardEnv;
@@ -214,45 +282,52 @@ describe("pi guards: real-SDK over HTTP", () => {
           ]);
         },
       },
-      {
-        name: "redacts tool-result content via the tool_result part",
-        hook: preflightTransform([
-          {
-            role: "tool",
-            parts: [
+      ...[false, true].map(
+        (isError): PreflightCase => ({
+          name: `redacts tool-result content with isError=${isError}`,
+          hook: preflightTransform([
+            {
+              role: "tool",
+              parts: [
+                {
+                  type: "tool_result",
+                  toolResult: {
+                    tool_call_id: "tc-1",
+                    name: "bash",
+                    content: "out [REDACTED_API_KEY]",
+                    ...(isError ? { is_error: true } : {}),
+                  },
+                },
+              ],
+            },
+          ]),
+          messages: () => [toolResultMsg("out sk-deadbeef", isError)],
+          assert: ({ event, server }) => {
+            expect(
+              (event.messages[0] as PiToolResult).content[0],
+            ).toMatchObject({
+              type: "text",
+              text: "out [REDACTED_API_KEY]",
+            });
+            expect((event.messages[0] as PiToolResult).isError).toBe(isError);
+            // The server dispatches on the snake_case `kind`. An untagged
+            // tool_result part arrives empty, so redaction has nothing to
+            // rewrite. conformance/hooks/README.md.
+            const sent = server.hookCalls[0]!.body.input?.messages;
+            expect(sent?.[0]?.parts).toEqual([
               {
-                type: "tool_result",
-                toolResult: {
+                kind: "tool_result",
+                tool_result: {
                   tool_call_id: "tc-1",
                   name: "bash",
-                  content: "out [REDACTED_API_KEY]",
+                  content: "out sk-deadbeef",
+                  ...(isError ? { is_error: true } : {}),
                 },
               },
-            ],
+            ]);
           },
-        ]),
-        messages: () => [toolResultMsg("out sk-deadbeef")],
-        assert: ({ event, server }) => {
-          expect((event.messages[0] as PiToolResult).content[0]).toMatchObject({
-            type: "text",
-            text: "out [REDACTED_API_KEY]",
-          });
-          // The server dispatches on the snake_case `kind`. An untagged
-          // tool_result part arrives empty, so redaction has nothing to
-          // rewrite. conformance/hooks/README.md.
-          const sent = server.hookCalls[0]!.body.input?.messages;
-          expect(sent?.[0]?.parts).toEqual([
-            {
-              kind: "tool_result",
-              tool_result: {
-                tool_call_id: "tc-1",
-                name: "bash",
-                content: "out sk-deadbeef",
-              },
-            },
-          ]);
-        },
-      },
+        }),
+      ),
       {
         name: "keeps assistant thinking parts untouched while redacting text",
         hook: preflightTransform([
@@ -276,7 +351,7 @@ describe("pi guards: real-SDK over HTTP", () => {
             type: "text",
             text: "answer red",
           });
-          // `mapAssistantMessageForHook` drops thinking blocks on purpose
+          // The ordinary projection drops thinking blocks on purpose
           // (their provider signature must round-trip unchanged), so the
           // assistant message goes out as one text part.
           const sent = server.hookCalls[0]!.body.input?.messages;
@@ -292,7 +367,13 @@ describe("pi guards: real-SDK over HTTP", () => {
             action: "allow",
             evaluations: [],
             transformed_input: {
-              messages: [{ role: 1, parts: [{ Payload: { Text: "hi [R]" } }] }],
+              messages: [
+                {
+                  role: 1,
+                  name: "pi:0",
+                  parts: [{ Payload: { Text: "hi [R]" } }],
+                },
+              ],
             },
           },
         },
@@ -388,6 +469,302 @@ describe("pi guards: real-SDK over HTTP", () => {
       const pi = await setup();
       const { result, event } = await runContext(pi, messages());
       assert({ result, event, server });
+      expect(server.errors).toEqual([]);
+    });
+  });
+
+  describe("ordinary request observation and export", () => {
+    interface Entry {
+      type: "message";
+      id: string;
+      parentId: string | null;
+      message: PiAgentMessage;
+    }
+
+    function session(entries: Entry[] = []) {
+      return {
+        ...ctx,
+        sessionManager: {
+          ...ctx.sessionManager,
+          getEntries: () => entries,
+          getBranch: () => entries,
+          buildSessionProjection: () => ({
+            entries: entries.map((sourceEntry) => ({
+              sourceEntry,
+              messages: [sourceEntry.message],
+            })),
+          }),
+        },
+      };
+    }
+
+    async function boot(liveCtx: ReturnType<typeof session>) {
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, liveCtx);
+      await pi.emit("turn_start", {}, liveCtx);
+      return pi;
+    }
+
+    async function finish(
+      pi: FakePi,
+      liveCtx: ReturnType<typeof session>,
+      entries: Entry[],
+    ) {
+      const message = assistantFixture();
+      await pi.emit("message_end", { message }, liveCtx);
+      entries.push({
+        type: "message",
+        id: `a-${entries.length}`,
+        parentId: entries.at(-1)?.id ?? null,
+        message,
+      });
+      await pi.emit("turn_end", { message, toolResults: [] }, liveCtx);
+    }
+
+    function redactFalcon(call: HookCall): HookResponse {
+      if (call.phase !== "preflight") return ALLOW;
+      return {
+        json: {
+          action: "allow",
+          evaluations: [],
+          transformed_input: {
+            messages: call.body.input!.messages!.map((message) => ({
+              ...message,
+              parts: message.parts!.map((part) =>
+                part.kind === "text"
+                  ? {
+                      ...part,
+                      text: part.text!.replaceAll(
+                        "Project Falcon",
+                        "[REDACTED]",
+                      ),
+                    }
+                  : part,
+              ),
+            })),
+          },
+        },
+      };
+    }
+
+    it("records only finalized, observed, guard-safe input/title after an earlier context prefix", async () => {
+      nextHook = redactFalcon;
+      const history = { ...userMsg("restored private history"), timestamp: 0 };
+      const entries: Entry[] = [
+        { type: "message", id: "restored", parentId: null, message: history },
+      ];
+      const liveCtx = session(entries);
+      const pi = await boot(liveCtx);
+      expect(pi.handlers.has("context")).toBe(false);
+      // Pi awaits every message_end handler before appending. A later handler
+      // replaces the entire message: the plugin must never capture this early body.
+      const event = { message: userMsg("EARLY PRIVATE BODY") };
+      await pi.emit("message_end", event, liveCtx);
+      event.message = userMsg("Status update on Project Falcon for the board");
+      entries.push({
+        type: "message",
+        id: "new-user",
+        parentId: "restored",
+        message: event.message,
+      });
+      // Simulate an earlier context handler adding a system prefix and an
+      // opaque thinking-only message. Native ordinals must survive the gap.
+      const prefix = { role: "system", content: "Earlier context prefix" };
+      const opaque = assistantFixture([
+        { type: "thinking", thinking: "signed-private-reasoning" },
+      ]);
+      const native = [prefix, history, opaque, structuredClone(event.message)];
+      const result = await pi.emit(
+        "context_with_system",
+        { messages: native },
+        liveCtx,
+      );
+      expect(native[3]).toEqual(event.message);
+      expect(result.messages).not.toBe(native);
+      expect(result.messages[0]).toBe(prefix);
+      expect(result.messages[2]).toBe(opaque);
+      expect(result.messages[3].content).toBe(
+        "Status update on [REDACTED] for the board",
+      );
+      expect(
+        server.hookCalls[0]!.body.input!.messages!.map(
+          (message) => message.name,
+        ),
+      ).toEqual(["pi:0", "pi:1", "pi:3"]);
+      const sent = JSON.stringify(server.hookCalls[0]!.body);
+      expect(sent).toContain("Project Falcon");
+      expect(sent).not.toContain("EARLY PRIVATE BODY");
+      expect(sent).not.toContain("signed-private-reasoning");
+      await finish(pi, liveCtx, entries);
+      // A tool-loop request sees the same occurrence, but may not record it twice.
+      await pi.emit("turn_start", {}, liveCtx);
+      await pi.emit(
+        "context_with_system",
+        { messages: result.messages },
+        liveCtx,
+      );
+      await finish(pi, liveCtx, entries);
+      await pi.emit("session_shutdown", {}, liveCtx);
+      expect(generations).toHaveLength(2);
+      expect(generations[0].input).toEqual([
+        {
+          role: "MESSAGE_ROLE_USER",
+          name: "",
+          parts: [{ text: "Status update on [REDACTED] for the board" }],
+        },
+      ]);
+      expect(generations[0].metadata["agento11y.conversation.title"]).toContain(
+        "[REDACTED]",
+      );
+      expect(generations[1].input ?? []).toEqual([]);
+      const exported = JSON.stringify(generations);
+      for (const privateText of [
+        "Falcon",
+        "EARLY PRIVATE BODY",
+        "restored private history",
+        "signed-private-reasoning",
+      ])
+        expect(exported).not.toContain(privateText);
+      expect(server.errors).toEqual([]);
+    });
+
+    it.each([
+      "duplicate metadata",
+      "missing observation",
+      "empty transform",
+      "missing identity",
+      "wrong identity",
+      "changed true tool-result flag",
+    ])("omits body/title rather than using raw text: %s", async (failure) => {
+      nextHook = (call) => {
+        if (failure === "empty transform")
+          return preflightTransform([
+            { role: "user", parts: [{ type: "text", text: "" }] },
+          ]);
+        if (failure === "missing identity" || failure === "wrong identity")
+          return {
+            json: {
+              action: "allow",
+              evaluations: [],
+              transformed_input: {
+                messages: [
+                  {
+                    role: "user",
+                    ...(failure === "wrong identity" ? { name: "pi:9" } : {}),
+                    parts: [{ type: "text", text: "[REDACTED]" }],
+                  },
+                ],
+              },
+            },
+          };
+        const response = redactFalcon(call);
+        if (failure === "changed true tool-result flag")
+          response.json = JSON.parse(
+            JSON.stringify(response.json).replaceAll(
+              '"is_error":true',
+              '"is_error":false',
+            ),
+          );
+        return response;
+      };
+      const entries: Entry[] = [];
+      const liveCtx = session(entries);
+      const pi = await boot(liveCtx);
+      const message = userMsg("Project Falcon private prompt");
+      await pi.emit("message_end", { message }, liveCtx);
+      entries.push({ type: "message", id: "u1", parentId: null, message });
+      if (failure === "duplicate metadata") {
+        // Distinct occurrences with the same role/timestamp cannot be joined
+        // by text, even though the guard safely transforms both bodies.
+        const duplicate = { ...message };
+        await pi.emit("message_end", { message: duplicate }, liveCtx);
+        entries.push({
+          type: "message",
+          id: "u2",
+          parentId: "u1",
+          message: duplicate,
+        });
+      }
+      if (failure === "changed true tool-result flag") {
+        // Changing status must invalidate the complete replacement.
+        const tool = toolResultMsg("Project Falcon tool output", true);
+        await pi.emit("message_end", { message: tool }, liveCtx);
+        entries.push({
+          type: "message",
+          id: "tool",
+          parentId: "u1",
+          message: tool,
+        });
+      }
+      const native = entries.map((entry) => structuredClone(entry.message));
+      if (failure !== "missing observation") {
+        const result = await pi.emit(
+          "context_with_system",
+          { messages: native },
+          liveCtx,
+        );
+        if (failure === "duplicate metadata")
+          expect(
+            result.messages.map((message: PiUserMessage) => message.content),
+          ).toEqual(["[REDACTED] private prompt", "[REDACTED] private prompt"]);
+        else expect(result).toBeUndefined();
+      }
+      expect(native[0]).toEqual(message);
+      await finish(pi, liveCtx, entries);
+      await pi.emit("session_shutdown", {}, liveCtx);
+      expect(generations).toHaveLength(1);
+      expect(generations[0].input ?? []).toEqual([]);
+      expect(generations[0].metadata["agento11y.conversation.title"]).toBe(
+        "guards-conv-1",
+      );
+      expect(JSON.stringify(generations)).not.toContain("Falcon");
+      expect(server.errors).toEqual([]);
+    });
+
+    it.each([
+      {
+        model: { provider: "openai", id: "switched-model" },
+        expected: { provider: "openai", name: "switched-model" },
+      },
+      {
+        model: { provider: "pi", id: "virtual", api: "pi-virtual" },
+        expected: { provider: "unknown", name: "unknown" },
+      },
+    ])("sends effective tags and current ordinary model $model, not the previous assistant", async ({
+      model,
+      expected,
+    }) => {
+      process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS = "true";
+      process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES = "user";
+      process.env.AGENTO11Y_USER_ID = "auto-user";
+      process.env.AGENTO11Y_TAGS = "team=configured-team,cwd=configured-cwd";
+      const liveCtx = { ...session(), model };
+      const pi = await boot(liveCtx);
+      await pi.emit("message_end", { message: assistantFixture() }, liveCtx);
+      await pi.emit(
+        "context_with_system",
+        { messages: [userMsg("hello")] },
+        liveCtx,
+      );
+      await pi.emit(
+        "tool_call",
+        { toolCallId: "tc-1", toolName: "bash", input: { command: "ls" } },
+        liveCtx,
+      );
+      await pi.emit("session_shutdown", {}, liveCtx);
+      expect(server.hookCalls).toHaveLength(2);
+      expect(server.hookCalls[0]!.body.context!.model).toEqual(expected);
+      expect(server.hookCalls[1]!.body.context!.model).toEqual({
+        provider: "anthropic",
+        name: "claude-sonnet-4",
+      });
+      for (const call of server.hookCalls)
+        expect((call.body.context as any).tags).toEqual({
+          user: "auto-user",
+          team: "configured-team",
+          cwd: ctx.cwd,
+        });
       expect(server.errors).toEqual([]);
     });
   });
@@ -548,6 +925,150 @@ describe("pi guards: real-SDK over HTTP", () => {
         input ?? { command: "echo sk-real-secret" },
       );
       assert({ result, event, server });
+      expect(server.errors).toEqual([]);
+    });
+  });
+
+  describe("built-in summary preparation over HTTP", () => {
+    function summaryEvent(kind: "compaction" | "tree") {
+      return kind === "compaction"
+        ? {
+            type: "session_before_compact" as const,
+            reason: "manual",
+            willRetry: false,
+            signal: new AbortController().signal,
+            branchEntries: [],
+            customInstructions: "keep decisions",
+            preparation: {
+              messagesToSummarize: [
+                userMsg("Project Falcon user"),
+                assistantFixture([
+                  {
+                    type: "toolCall",
+                    id: "tc-1",
+                    name: "bash",
+                    arguments: { command: "Project Falcon command" },
+                  },
+                ]),
+                toolResultMsg("Project Falcon result"),
+              ],
+              turnPrefixMessages: [userMsg("Project Falcon prefix")],
+              previousSummary: "Project Falcon previous",
+              fileOps: {
+                read: new Set(["Project Falcon/read"]),
+                written: new Set(),
+                edited: new Set(),
+              },
+              firstKeptEntryId: "kept",
+              tokensBefore: 100,
+              isSplitTurn: true,
+              settings: {
+                enabled: true,
+                keepRecentTokens: 0,
+                reserveTokens: 10,
+              },
+            },
+          }
+        : {
+            type: "session_before_tree" as const,
+            signal: new AbortController().signal,
+            preparation: {
+              userWantsSummary: true,
+              targetId: "target",
+              oldLeafId: "leaf",
+              commonAncestorId: null,
+              customInstructions: "Project Falcon focus",
+              replaceInstructions: true,
+              entriesToSummarize: [
+                {
+                  type: "message",
+                  id: "u",
+                  parentId: null,
+                  timestamp: "time",
+                  message: userMsg("Project Falcon user"),
+                },
+              ],
+            },
+          };
+    }
+    it.each([
+      "compaction",
+      "tree",
+    ] as const)("applies validated %s preparation replacements through the real decoder", async (kind) => {
+      nextHook = (call) => ({
+        json: {
+          action: "allow",
+          evaluations: [],
+          transformed_input: {
+            messages: JSON.parse(
+              JSON.stringify(call.body.input?.messages).replaceAll(
+                "Project Falcon",
+                "[R]",
+              ),
+            ),
+          },
+        },
+      });
+      const pi = await setup();
+      const event = summaryEvent(kind);
+      const original = structuredClone(event.preparation);
+      const result = await pi.handlers.get(event.type)!(event, ctx);
+      if (event.type === "session_before_compact") {
+        expect(result).toBeUndefined();
+        expect(event.preparation.messagesToSummarize[0]?.content).toBe(
+          "[R] user",
+        );
+        expect(event.preparation.previousSummary).toBe("[R] previous");
+        expect([...event.preparation.fileOps.read]).toEqual(["[R]/read"]);
+      } else {
+        expect(result).toEqual({ customInstructions: "[R] focus" });
+        expect(event.preparation.entriesToSummarize[0]?.message.content).toBe(
+          "[R] user",
+        );
+      }
+      expect(JSON.stringify(original)).toContain("Project Falcon");
+      expect(
+        server.hookCalls.at(-1)?.body.context?.tags?.["pi.call_kind"],
+      ).toBe(kind === "compaction" ? "compaction" : "branch_summary");
+      await pi.emit("session_shutdown", {}, ctx);
+      expect(server.errors).toEqual([]);
+    });
+
+    it.each([
+      { outcome: "failure", failOpen: false, cancel: true },
+      { outcome: "failure", failOpen: true, cancel: false },
+      { outcome: "deny", failOpen: false, cancel: true },
+      { outcome: "deny", failOpen: true, cancel: true },
+      { outcome: "invalid", failOpen: false, cancel: true },
+      { outcome: "invalid", failOpen: true, cancel: true },
+    ])("handles $outcome with failOpen=$failOpen without raw fallback", async ({
+      outcome,
+      failOpen,
+      cancel,
+    }) => {
+      setGuardEnv({ failOpen });
+      nextHook = () =>
+        outcome === "failure"
+          ? { status: 500, json: { error: "private evaluator detail" } }
+          : outcome === "deny"
+            ? deny("private policy detail")
+            : {
+                json: {
+                  action: "allow",
+                  evaluations: [],
+                  transformed_input: { messages: [] },
+                },
+              };
+      const pi = await setup();
+      for (const kind of ["compaction", "tree"] as const) {
+        const event = summaryEvent(kind);
+        const original = structuredClone(event.preparation);
+        expect(await pi.handlers.get(event.type)!(event, ctx)).toEqual(
+          cancel ? { cancel: true } : undefined,
+        );
+        expect(event.preparation).toEqual(original);
+      }
+      await pi.emit("session_shutdown", {}, ctx);
       expect(server.errors).toEqual([]);
     });
   });

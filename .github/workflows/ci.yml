@@ -278,6 +278,10 @@ jobs:
       - name: Test pi plugin
         run: pnpm --filter @grafana/agento11y-pi run test
 
+      - name: Test pi plugin through the native file loader
+        timeout-minutes: 10
+        run: mise run test:ts:plugin-pi-native
+
       - name: Lint opencode plugin
         run: mise run lint:ts:plugin-opencode
 

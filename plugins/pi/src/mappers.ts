@@ -734,9 +734,8 @@ export function applyRedactedText(
  * for the user messages the guard changed. `forward` and `redacted` are the
  * index-aligned arrays `applyRedactedText` accepted.
  *
- * The recorded input and the conversation title are captured at
- * `message_end`, before the `context` hook redacts the outgoing messages, so
- * the plugin uses this map to record what the model actually receives.
+ * Incremental input and prompt-derived titles use `RequestObservation`,
+ * independently of this text-keyed map.
  */
 export function userTextRedactions(
   forward: Message[],
