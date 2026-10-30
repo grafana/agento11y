@@ -601,7 +601,7 @@ func TestToolDelayedContentValidation(t *testing.T) {
 				}
 			}
 			client := agento11y.NewClient(agento11y.Config{ContentCapture: agento11y.ContentCaptureModeFull, GenerationExport: agento11y.GenerationExportConfig{Protocol: agento11y.GenerationExportProtocolNone}})
-			emitPendingTools(context.Background(), client, &st, agento11y.ContentCaptureModeFull, nil)
+			emitPendingTools(context.Background(), newRecordClients(client, agento11y.Config{}, nil), &st, agento11y.ContentCaptureModeFull, nil)
 			_ = client.Shutdown(context.Background())
 			tools := spansByName(rec.Ended(), "execute_tool")
 			if len(tools) != 1 {
@@ -671,7 +671,7 @@ func TestToolRecordValidationReadiness(t *testing.T) {
 			}
 			st := state.Load(rawSession)
 			if protocol == "otel" {
-				if !reflect.DeepEqual(st, state.Session{}) {
+				if !reflect.DeepEqual(withoutRecordedMetrics(st), state.Session{}) {
 					t.Fatalf("OTel error changed state: %+v", st)
 				}
 				return

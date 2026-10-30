@@ -1502,7 +1502,7 @@ func TestEmitPendingTools(t *testing.T) {
 			}
 
 			pending := pendingToolFixture(t, tt.gen, results, tt.resultAt)
-			emitPendingTools(context.Background(), client, &pending, tt.contentMode, nil)
+			emitPendingTools(context.Background(), newRecordClients(client, agento11y.Config{}, nil), &pending, tt.contentMode, nil)
 			_ = client.Shutdown(context.Background())
 
 			toolSpans := spansByName(recorder.Ended(), "execute_tool")
@@ -1569,7 +1569,7 @@ func TestEmitPendingTools_ErrorStatus(t *testing.T) {
 	}
 
 	pending := pendingToolFixture(t, gen, results, nil)
-	emitPendingTools(context.Background(), client, &pending, agento11y.ContentCaptureModeMetadataOnly, nil)
+	emitPendingTools(context.Background(), newRecordClients(client, agento11y.Config{}, nil), &pending, agento11y.ContentCaptureModeMetadataOnly, nil)
 	_ = client.Shutdown(context.Background())
 
 	spans := spansByName(recorder.Ended(), "execute_tool")

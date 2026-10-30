@@ -116,13 +116,20 @@ func Stop(p Payload, cfg config.Config, logger *log.Logger) {
 		Now:                 time.Now(),
 	})
 
-	if err := emitGeneration(ctx, client, frag, mapped, logger); err != nil {
-		logger.Printf("stop: emit gen=%s (preserving fragment for sessionEnd retry): %v", p.GenerationID, err)
+	// The recorder records the turn's metrics when it ends, even when the
+	// export then fails, so a fragment kept for the sessionEnd retry notes
+	// whether they arrived.
+	emitErr := emitGeneration(ctx, client, frag, mapped, logger)
+	recorded := []recordedFragment{{frag: frag, at: time.Now()}}
+	if emitErr != nil {
+		logger.Printf("stop: emit gen=%s (preserving fragment for sessionEnd retry): %v", p.GenerationID, emitErr)
+		rememberDeliveredMetrics(providers, recorded, logger)
 		return
 	}
 
 	if err := client.Flush(ctx); err != nil {
 		logger.Printf("stop: flush gen=%s (preserving fragment for sessionEnd retry): %v", p.GenerationID, err)
+		rememberDeliveredMetrics(providers, recorded, logger)
 		return
 	}
 

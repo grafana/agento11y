@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/grafana/agento11y/go/agento11y"
 
@@ -43,11 +44,23 @@ func setupOTelIfConfigured(ctx context.Context, instanceID string, logger *log.L
 // sessionStart saved is the primary source and the live payload is the
 // fallback for a conversation whose session file was never written.
 func buildClient(p Payload, session *fragment.Session, cfg config.Config, providers *otel.Providers, logger *log.Logger) (*agento11y.Client, error) {
+	return emit.NewClient(clientOptions(p, session, cfg, providers, logger))
+}
+
+// buildClientWithoutMetrics builds the client sessionEnd sends a generation
+// through when an earlier hook already delivered its metrics.
+func buildClientWithoutMetrics(p Payload, session *fragment.Session, cfg config.Config, providers *otel.Providers, logger *log.Logger) (*agento11y.Client, error) {
+	opts := clientOptions(p, session, cfg, providers, logger)
+	opts.WithoutMetrics = true
+	return emit.NewClient(opts)
+}
+
+func clientOptions(p Payload, session *fragment.Session, cfg config.Config, providers *otel.Providers, logger *log.Logger) emit.ClientOptions {
 	userID := strings.TrimSpace(cfg.UserIDOverride)
 	if userID == "" {
 		userID = autoTagUserEmail(p, session)
 	}
-	return emit.NewClient(emit.ClientOptions{
+	return emit.ClientOptions{
 		InstrumentationName: otelInstrumentationName,
 		ContentCapture:      cfg.ContentCapture,
 		Providers:           providers,
@@ -57,7 +70,37 @@ func buildClient(p Payload, session *fragment.Session, cfg config.Config, provid
 			Cwd:    autoTagWorkspaceRoot(p, session),
 			UserID: userID,
 		}, logger),
-	})
+	}
+}
+
+// recordedFragment is a fragment this hook recorded, and when its recorder
+// ended, which is when its metrics were recorded.
+type recordedFragment struct {
+	frag *fragment.Fragment
+	at   time.Time
+}
+
+// rememberDeliveredMetrics notes on fragments kept for a retry that their
+// metrics were delivered, so sessionEnd does not count those turns again. A
+// fragment counts as delivered when an export collected after its record
+// reached the collector, even if a later export failed. Otherwise nothing is
+// noted and the retry records its metrics.
+func rememberDeliveredMetrics(providers *otel.Providers, recorded []recordedFragment, logger *log.Logger) {
+	// Without OTel providers no metrics were recorded.
+	if len(recorded) == 0 || providers == nil {
+		return
+	}
+	_ = providers.FlushMetrics()
+	deliveredAt := providers.MetricsDeliveredAt()
+	for _, r := range recorded {
+		if r.frag.MetricsRecorded || r.at.After(deliveredAt) {
+			continue
+		}
+		r.frag.MetricsRecorded = true
+		if err := fragment.Save(r.frag); err != nil {
+			logger.Printf("save recorded metrics gen=%s: %v", r.frag.GenerationID, err)
+		}
+	}
 }
 
 func autoTagWorkspaceRoot(p Payload, session *fragment.Session) string {

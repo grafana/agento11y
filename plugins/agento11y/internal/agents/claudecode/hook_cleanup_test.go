@@ -163,7 +163,7 @@ func TestHookTerminalFailureCleanup(t *testing.T) {
 			}
 			if fault != "success-control" && fault != "child-read" {
 				before.Tools.Pending, before.Tools.Spawns, before.Tools.CompletedChildren = nil, nil, nil
-				if !reflect.DeepEqual(got, before) {
+				if !reflect.DeepEqual(withoutRecordedMetrics(got), before) {
 					t.Error("failed terminal path changed state beyond tool cleanup")
 				}
 				if fault != "record" && fault != "flush" && len(rec.Ended()) != spansBefore {

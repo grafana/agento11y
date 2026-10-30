@@ -290,17 +290,39 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 		defer cancel()
 		_ = client.Shutdown(cleanupCtx)
 	}()
+	clients := newRecordClients(client, cfg, st.MetricsRecorded)
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		clients.shutdownQuiet(cleanupCtx)
+	}()
+	// An export failure keeps the offset, so the next hook sends these records
+	// again. Remember the ones whose metrics were delivered, so that hook does
+	// not count them a second time.
+	exportFailed := func() {
+		if otelProviders == nil {
+			return // no OTLP endpoint, so no metrics were recorded
+		}
+		// Send what is still pending. If that fails, an earlier periodic
+		// export may still have delivered some records.
+		_ = otelProviders.FlushMetrics()
+		rememberRecordedMetrics(input.SessionID, clients.keys(otelProviders.MetricsDeliveredAt()), logger)
+	}
 	t0 := time.Now()
 
 	for i, gen := range gens {
 		var parentContext trace.SpanContext
-		err := emit.Record(hookCtx, client, generationStart(gen), gen, nil, func(genCtx context.Context) {
+		recordClient, recorded := clients.forRecord(generationRecordKey(gen.ID))
+		err := emit.Record(hookCtx, recordClient, generationStart(gen), gen, nil, func(genCtx context.Context) {
 			parentContext = trace.SpanContextFromContext(genCtx)
 		})
+		// The recorder records metrics when it ends, even when it then fails.
+		recorded()
 		if err != nil {
 			logger.Printf("enqueue: %v", err)
 			if protocol == agento11y.GenerationExportProtocolOTel {
-				emitPendingTools(hookCtx, client, &st, contentMode, r)
+				emitPendingTools(hookCtx, clients, &st, contentMode, r)
+				exportFailed()
 				return nil
 			}
 			continue
@@ -309,10 +331,11 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 		// make their pending tools ready, even if a span context was captured.
 		captureToolParent(parents[i], parentContext)
 	}
-	emitPendingTools(hookCtx, client, &st, contentMode, r)
+	emitPendingTools(hookCtx, clients, &st, contentMode, r)
 
-	if err := client.Flush(hookCtx); err != nil {
+	if err := clients.flush(hookCtx); err != nil {
 		logger.Printf("flush: %v", err)
+		exportFailed()
 		return nil
 	}
 
@@ -325,6 +348,8 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 	if parentReady {
 		st.Offset = safeOffset
 	}
+	// Every record sent again this time is now exported.
+	st.MetricsRecorded = nil
 	pruneToolSpawns(&st, input.TranscriptPath)
 	if strings.TrimSpace(input.HookEventName) == "SessionEnd" {
 		st.Tools.Pending = nil

@@ -13,7 +13,6 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/emit"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/otel"
-	"go.opentelemetry.io/otel/metric/noop"
 )
 
 // Metadata keys carried with each backfilled generation. They are the minimal
@@ -199,13 +198,8 @@ func NewTargetExporter(ctx context.Context, target Target, logger *log.Logger) (
 	// Spans and generations carry their own timestamps, but a metric point is
 	// stamped when it is exported, so recording an imported turn would count
 	// weeks of history as usage on the import day. An import records no
-	// metrics; dashboards read imported history from its generations. Both
-	// are replaced after the transport is set: the client records through
-	// Meter, and the OTel generation transport through MeterProvider.
-	noMetrics := noop.NewMeterProvider()
-	cfg.MeterProvider = noMetrics
-	cfg.Meter = noMetrics.Meter("agento11y.history")
-	client := agento11y.NewClient(cfg)
+	// metrics; dashboards read imported history from its generations.
+	client := agento11y.NewClient(emit.WithoutMetrics(cfg))
 	cleanup := func(ctx context.Context) error {
 		// A cancelled import must still drain the client before its providers.
 		// Each stage gets a fresh deadline, so one cannot exhaust the other.

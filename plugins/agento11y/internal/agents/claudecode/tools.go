@@ -533,7 +533,7 @@ func toolSpanWindow(callAt, resultAt time.Time) (time.Time, time.Time) {
 	return callAt, resultAt
 }
 
-func emitPendingTools(ctx context.Context, client *agento11y.Client, st *state.Session, mode agento11y.ContentCaptureMode, r *redact.Redactor) {
+func emitPendingTools(ctx context.Context, clients *recordClients, st *state.Session, mode agento11y.ContentCaptureMode, r *redact.Redactor) {
 	// Stable order also makes adjacent tools deterministic for local consumers.
 	for _, key := range slices.Sorted(maps.Keys(st.Tools.Pending)) {
 		p := st.Tools.Pending[key]
@@ -566,12 +566,14 @@ func emitPendingTools(ctx context.Context, client *agento11y.Client, st *state.S
 				end.Result = result
 			}
 		}
+		client, recorded := clients.forRecord(toolRecordKey(key))
 		_, rec := client.StartToolExecution(toolParentContext(ctx, p.Parent), start)
 		if p.Result.IsError {
 			rec.SetExecError(fmt.Errorf("tool returned error"))
 		}
 		rec.SetResult(end)
 		rec.End()
+		recorded()
 		if p.Name == "Agent" && len(p.Result.ChildIDs) == 0 {
 			p.Emitted = true
 			continue

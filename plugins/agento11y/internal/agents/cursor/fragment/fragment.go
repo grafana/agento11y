@@ -74,6 +74,10 @@ type Fragment struct {
 	// fails the fragment stays on disk with this set so sessionEnd can replay
 	// with the original status instead of "aborted". Absent → stop never ran.
 	PendingStop *PendingStop `json:"pendingStop,omitempty"`
+	// MetricsRecorded is set when a hook delivered this generation's metrics
+	// but failed to export the generation. The sessionEnd retry then sends it
+	// without metrics, so the turn is counted once.
+	MetricsRecorded bool `json:"metricsRecorded,omitempty"`
 }
 
 // PendingStop pairs the stop event's status and error so they always move

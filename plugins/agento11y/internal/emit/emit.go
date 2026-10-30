@@ -29,6 +29,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/localhealth"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/otel"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/timeutil"
+	"go.opentelemetry.io/otel/metric/noop"
 )
 
 // ExportEndpoint returns the generations export URL derived from the branded
@@ -77,6 +78,21 @@ type ClientOptions struct {
 	// Auth overrides generation-export auth; an empty mode defaults to basic
 	// with a user and token, tenant with a tenant ID, otherwise none.
 	Auth agento11y.AuthConfig
+	// WithoutMetrics builds a client that records no metrics (see
+	// WithoutMetrics).
+	WithoutMetrics bool
+}
+
+// WithoutMetrics returns cfg with no-op metric instruments, for a client that
+// sends records whose metrics are already counted: a retry, or an import of
+// past turns. The client records through Meter and the OTel generation
+// transport through MeterProvider, so both are replaced. Call it after
+// ConfigureGenerationTransport, which sets MeterProvider.
+func WithoutMetrics(cfg agento11y.Config) agento11y.Config {
+	noMetrics := noop.NewMeterProvider()
+	cfg.MeterProvider = noMetrics
+	cfg.Meter = noMetrics.Meter("agento11y")
+	return cfg
 }
 
 // exportConfig builds the shared HTTP generation export config.
@@ -146,6 +162,9 @@ func NewClient(opts ClientOptions) (*agento11y.Client, error) {
 	}
 	if err := ConfigureGenerationTransport(&c, opts.Providers, protocol); err != nil {
 		return nil, err
+	}
+	if opts.WithoutMetrics {
+		c = WithoutMetrics(c)
 	}
 	return agento11y.NewClient(c), nil
 }
