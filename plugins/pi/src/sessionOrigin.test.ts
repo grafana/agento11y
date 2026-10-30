@@ -225,7 +225,7 @@ describe("resolveSessionOrigin", () => {
     { name: "a session manager with neither method", sm: () => ({}) },
     {
       name: "getHeader reporting a non-forked session",
-      sm: () => ({ getHeader: () => ({ type: "session", id: TRUNK_ID }) }),
+      sm: () => ({ getHeader: () => trunkHeader() }),
     },
     {
       name: "a getSessionFile that points at a missing file",
@@ -235,18 +235,20 @@ describe("resolveSessionOrigin", () => {
       name: "a getSessionFile returning undefined (in-memory session)",
       sm: () => fileOnlyManager(undefined),
     },
-  ])("returns not-forked for $name", ({ sm }) => {
+  ])("resolves safe ancestry for $name", ({ name, sm }) => {
     expect(resolveSessionOrigin(sm())).toEqual<SessionOrigin>({
-      forked: false,
+      forked: ![
+        "a header without parentSession",
+        "a header with an empty parentSession",
+        "getHeader reporting a non-forked session",
+      ].includes(name),
     });
   });
 
   it("logs when no header can be read at all", () => {
-    // The one degradation that puts a fork back on a dangling parent id, so
-    // it must not be silent.
     expect(
       resolveSessionOrigin(fileOnlyManager(join(dir, "gone.jsonl"))),
-    ).toEqual<SessionOrigin>({ forked: false });
+    ).toEqual<SessionOrigin>({ forked: true });
     expect(loggerMock.debug).toHaveBeenCalledWith(
       expect.stringContaining("no session header available"),
     );
@@ -353,16 +355,13 @@ describe("resolveSessionOrigin", () => {
         },
       },
     },
-  ])("returns not-forked when $name throws", ({ sm }) => {
-    expect(resolveSessionOrigin(sm)).toEqual<SessionOrigin>({ forked: false });
+  ])("suppresses ancestry when $name throws", ({ sm }) => {
+    expect(resolveSessionOrigin(sm)).toEqual<SessionOrigin>({ forked: true });
     expect(loggerMock.debug).toHaveBeenCalled();
   });
 });
 
 describe("resolveSessionStart", () => {
-  const trunkRecord = { id: TRUNK_ID, startedAt: TRUNK_STARTED_AT };
-  const now = new Date("2021-09-09T09:09:09.000Z");
-
   it("reports when a fresh session began, and that it is not a fork", () => {
     const session = writeSession("plain.jsonl", trunkHeader());
 
@@ -381,11 +380,6 @@ describe("resolveSessionStart", () => {
     expect(
       resolveSessionStart(fileOnlyManager(fork), {
         forked: true,
-        trunk: {
-          id: "another-conversation",
-          startedAt: "2020-06-01T00:00:00.000Z",
-        },
-        now,
       }),
     ).toEqual({
       startedAt: FORKED_AT,
@@ -414,56 +408,157 @@ describe("resolveSessionStart", () => {
     });
   });
 
-  it("falls back to the in-process record when the header cannot say", () => {
-    // `--no-session`: createBranchedSession writes no parentSession, so the
-    // header of an in-memory fork looks like a fresh session. Its timestamp
-    // is still the fork instant.
-    const facts = resolveSessionStart(
-      {
-        getHeader: () => ({
-          type: "session",
-          id: FORK_ID,
-          timestamp: FORKED_AT,
-        }),
-      },
-      { forked: true, trunk: trunkRecord, now },
-    );
-
+  it.each([
+    { name: "observed trunk", timestamp: TRUNK_STARTED_AT },
+    { name: "unknown trunk start", timestamp: undefined },
+    { name: "invalid trunk start", timestamp: "invalid" },
+  ])("restores an in-memory fork of $name after module re-evaluation", async ({
+    timestamp,
+  }) => {
+    let header = { type: "session", id: TRUNK_ID, timestamp };
+    const manager = { getHeader: () => header };
+    resolveSessionStart(manager, { forked: false });
+    header = { type: "session", id: FORK_ID, timestamp: FORKED_AT };
+    const facts = resolveSessionStart(manager, { forked: true });
     expect(facts).toEqual({
       startedAt: FORKED_AT,
       origin: {
         forked: true,
         forkedAt: FORKED_AT,
         trunkConversationId: TRUNK_ID,
-        trunkStartedAt: TRUNK_STARTED_AT,
+        trunkStartedAt: timestamp === TRUNK_STARTED_AT ? timestamp : undefined,
       },
     });
+    expect(Object.isFrozen(facts.origin)).toBe(true);
+    const registry = (globalThis as Record<symbol, WeakMap<object, object>>)[
+      Symbol.for("grafana.agento11y.pi.session-origin.v1")
+    ]!;
+    const stored = registry.get(manager)!;
+    expect(Object.keys(stored).sort()).toEqual(["id", "origin", "startedAt"]);
+    expect(Object.isFrozen(stored)).toBe(true);
+    vi.resetModules();
+    const reloaded = await import("./sessionOrigin.js");
+    expect(reloaded.resolveSessionStart).not.toBe(resolveSessionStart);
+    expect(reloaded.resolveSessionStart(manager, { forked: false })).toEqual(
+      facts,
+    );
   });
 
-  it("stamps the fork instant itself when the header carries no timestamp", () => {
-    const facts = resolveSessionStart(
-      { getHeader: () => ({ type: "session", id: FORK_ID }) },
-      { forked: true, trunk: trunkRecord, now },
-    );
-
-    expect(facts).toEqual({
+  it.each([
+    undefined,
+    "invalid",
+  ])("does not invent a missing fork timestamp (%s)", (timestamp) => {
+    let header = {
+      type: "session",
+      id: TRUNK_ID,
+      timestamp: TRUNK_STARTED_AT as string | undefined,
+    };
+    const manager = { getHeader: () => header };
+    resolveSessionStart(manager, { forked: false });
+    header = { type: "session", id: FORK_ID, timestamp };
+    expect(resolveSessionStart(manager, { forked: true })).toEqual({
       startedAt: undefined,
       origin: {
         forked: true,
-        forkedAt: now.toISOString(),
+        forkedAt: undefined,
         trunkConversationId: TRUNK_ID,
         trunkStartedAt: TRUNK_STARTED_AT,
       },
     });
   });
 
-  it("still reports a fork when the trunk conversation is unknown", () => {
-    // No trunk to name, but the copied entries must still lose their edge.
+  it.each([
+    false,
+    true,
+  ])("does not correlate independent managers (fork=%s)", (forked) => {
+    resolveSessionStart({ getHeader: () => trunkHeader() }, { forked: false });
+    const manager = {
+      getHeader: () => ({ type: "session", id: FORK_ID, timestamp: FORKED_AT }),
+    };
+    const facts = resolveSessionStart(manager, { forked });
+    expect(facts.origin.trunkConversationId).toBeUndefined();
+    expect(facts.origin.forked).toBe(forked);
+  });
+
+  it("does not restore another manager's origin for the same session id", () => {
+    const header = { type: "session", id: FORK_ID, timestamp: FORKED_AT };
+    const first = { getHeader: () => header };
+    const second = { getHeader: () => header };
+    resolveSessionStart(first, { forked: true });
+    expect(resolveSessionStart(second, { forked: false }).origin).toEqual({
+      forked: false,
+    });
+    expect(resolveSessionStart(first, { forked: false }).origin.forked).toBe(
+      true,
+    );
+  });
+
+  it("does not reuse a snapshot after an unidentified session", () => {
+    let header: ReturnType<typeof trunkHeader> | undefined = trunkHeader();
+    const manager = { getHeader: () => header };
+    resolveSessionStart(manager, { forked: false });
+    header = undefined;
+    resolveSessionStart(manager, { forked: false });
+    header = { type: "session", id: FORK_ID, timestamp: FORKED_AT };
     expect(
-      resolveSessionStart(undefined, { forked: true, now }).origin,
-    ).toEqual<SessionOrigin>({
+      resolveSessionStart(manager, { forked: true }).origin.trunkConversationId,
+    ).toBeUndefined();
+  });
+
+  it("does not make the same session its own trunk on a repeated fork start", () => {
+    const manager = {
+      getHeader: () => ({ type: "session", id: FORK_ID, timestamp: FORKED_AT }),
+    };
+    const first = resolveSessionStart(manager, { forked: true });
+    expect(resolveSessionStart(manager, { forked: true })).toEqual(first);
+    expect(first.origin.trunkConversationId).toBeUndefined();
+  });
+
+  it("uses only the immediate prior snapshot for another fork", () => {
+    let header = { type: "session", id: TRUNK_ID, timestamp: TRUNK_STARTED_AT };
+    const manager = { getHeader: () => header };
+    resolveSessionStart(manager, { forked: false });
+    header = { type: "session", id: FORK_ID, timestamp: FORKED_AT };
+    resolveSessionStart(manager, { forked: true });
+    header = {
+      type: "session",
+      id: "third",
+      timestamp: "2020-01-01T00:02:00.000Z",
+    };
+    expect(resolveSessionStart(manager, { forked: true }).origin).toMatchObject(
+      {
+        trunkConversationId: FORK_ID,
+        trunkStartedAt: FORKED_AT,
+      },
+    );
+  });
+
+  it("prefers persisted parentSession over an observed in-memory fork", () => {
+    const trunk = writeSession("trunk.jsonl", trunkHeader());
+    let header = {
+      type: "session",
+      id: "unrelated",
+      timestamp: TRUNK_STARTED_AT,
+    };
+    const manager = { getHeader: () => header };
+    resolveSessionStart(manager, { forked: false });
+    header = forkHeader(trunk) as typeof header;
+    expect(resolveSessionStart(manager, { forked: true }).origin).toMatchObject(
+      {
+        trunkConversationId: TRUNK_ID,
+        trunkStartedAt: TRUNK_STARTED_AT,
+      },
+    );
+  });
+
+  it.each([
+    undefined,
+    null,
+    {},
+    { getHeader: () => ({ type: "session" }) },
+  ])("suppresses ancestry without usable origin: %s", (manager) => {
+    expect(resolveSessionStart(manager, { forked: false }).origin).toEqual({
       forked: true,
-      forkedAt: now.toISOString(),
     });
   });
 });

@@ -8,8 +8,8 @@ import {
   type ToolDefinition,
 } from "@grafana/agento11y";
 
-// includesToolBodies decides whether tool argument JSON, tool result content,
-// and tool description/schema are included in the proto export.
+// includesToolBodies decides whether tool argument JSON and tool result content
+// are included in the proto export.
 //
 // Both `full` and `full_with_metadata_spans` ship full content in the proto
 // export per the SDK contract (see go/agento11y/content_capture.go on
@@ -30,30 +30,6 @@ function includesToolBodies(contentCapture: ContentCaptureMode): boolean {
 const PI_CALL_KIND_TAG = "pi.call_kind";
 
 /**
- * Pi's ToolInfo shape from @mariozechner/pi-coding-agent.
- * Declared here to avoid a hard import of pi types (treated as external at
- * runtime); the structural fields match `ToolInfo` in pi's `ExtensionAPI`.
- */
-export interface PiToolInfo {
-  name: string;
-  description?: string;
-  parameters?: unknown;
-}
-
-/**
- * Request controls extracted from a `before_provider_request` payload.
- * Defensive shape: every field is optional because providers differ in
- * which controls they accept and what names they use.
- */
-export interface CachedRequestControls {
-  maxTokens?: number;
-  temperature?: number;
-  topP?: number;
-  toolChoice?: string;
-  thinkingBudgetTokens?: number;
-}
-
-/**
  * Pi's AssistantMessage shape from @mariozechner/pi-ai.
  * Declared here to avoid hard import (pi types are external at runtime).
  */
@@ -62,6 +38,7 @@ export interface PiAssistantMessage {
   content: PiContentBlock[];
   provider: string;
   model: string;
+  responseModel?: string | null;
   responseId?: string;
   usage: {
     input: number;
@@ -69,6 +46,7 @@ export interface PiAssistantMessage {
     reasoning?: number;
     cacheRead: number;
     cacheWrite: number;
+    cacheWrite1h?: number;
     totalTokens: number;
     cost?: {
       input: number;
@@ -90,7 +68,7 @@ export type PiContentBlock =
       type: "toolCall";
       id: string;
       name: string;
-      arguments: Record<string, unknown>;
+      arguments?: Record<string, unknown>;
     };
 
 /** Pi's TextContent / ImageContent / UserMessage shapes from @mariozechner/pi-ai. */
@@ -117,6 +95,7 @@ export interface PiToolResult {
   toolName: string;
   content: Array<{ type: string; text?: string }>;
   details?: unknown;
+  usage?: PiUsageLike;
   isError: boolean;
   timestamp: number;
 }
@@ -223,10 +202,9 @@ export interface MapGenerationStartOptions {
   agentName: string;
   agentVersion?: string;
   startedAt: number;
-  tools?: ToolDefinition[];
+  /** Names from finalized assistant proposals, not the offered catalog. */
+  tools?: Pick<ToolDefinition, "name">[];
   tags?: Record<string, string>;
-  systemPrompt?: string;
-  requestControls?: CachedRequestControls;
   /**
    * Deterministic generation ID. When set, overrides the SDK's random
    * `gen-*` ID so Agent Observability can link this generation in the dependency graph.
@@ -238,10 +216,7 @@ export interface MapGenerationStartOptions {
    * previous assistant turn on the same branch.
    */
   parentGenerationIds?: string[];
-  /**
-   * Extra generation metadata. Merged with the metadata this mapper derives
-   * from `requestControls`; derived keys win on collision.
-   */
+  /** Extra generation metadata, e.g. the fork's trunk link. */
   metadata?: Record<string, unknown>;
 }
 
@@ -258,8 +233,6 @@ export function mapGenerationStart(
     startedAt,
     tools,
     tags,
-    systemPrompt,
-    requestControls,
     generationId,
     parentGenerationIds,
     metadata,
@@ -274,7 +247,7 @@ export function mapGenerationStart(
     effectiveVersion: agentVersion,
     model: { provider: msg.provider, name: msg.model },
     startedAt: new Date(startedAt),
-    ...(tools && tools.length > 0 ? { tools } : {}),
+    ...(tools && tools.length > 0 ? { tools: mapTools(tools) } : {}),
     ...(tags && Object.keys(tags).length > 0 ? { tags } : {}),
   };
   if (generationId) {
@@ -286,38 +259,17 @@ export function mapGenerationStart(
   if (msg.content.some((b) => b.type === "thinking")) {
     start.thinkingEnabled = true;
   }
-  if (systemPrompt && systemPrompt.length > 0) {
-    start.systemPrompt = systemPrompt;
-  }
-  const startMetadata: Record<string, unknown> = { ...metadata };
-  if (requestControls) {
-    if (typeof requestControls.maxTokens === "number") {
-      start.maxTokens = requestControls.maxTokens;
-    }
-    if (typeof requestControls.temperature === "number") {
-      start.temperature = requestControls.temperature;
-    }
-    if (typeof requestControls.topP === "number") {
-      start.topP = requestControls.topP;
-    }
-    if (typeof requestControls.toolChoice === "string") {
-      start.toolChoice = requestControls.toolChoice;
-    }
-    if (typeof requestControls.thinkingBudgetTokens === "number") {
-      // The SDK reads `agento11y.gen_ai.request.thinking.budget_tokens` from
-      // generation metadata and surfaces it as the matching span attribute.
-      startMetadata["agento11y.gen_ai.request.thinking.budget_tokens"] =
-        requestControls.thinkingBudgetTokens;
-    }
-  }
-  if (Object.keys(startMetadata).length > 0) {
-    start.metadata = startMetadata;
+  if (metadata && Object.keys(metadata).length > 0) {
+    start.metadata = { ...metadata };
   }
   return start;
 }
 
 /**
  * Build the GenerationResult from an assistant message.
+ *
+ * `toolResults` must contain finalized top-level messages. Pi already folds nested
+ * usage into those messages; execution observations must not be added here.
  *
  * `completedAtMs` should be the time the provider stream finished
  * (assistant `message_end`). `msg.timestamp` is unreliable as a completion
@@ -335,12 +287,17 @@ export function mapGenerationResult(
 ): GenerationResult {
   const result: GenerationResult = {
     responseId: msg.responseId,
-    responseModel: msg.model,
+    responseModel: msg.responseModel ?? msg.model,
     usage: mapPiUsage(msg.usage),
     stopReason: mapStopReason(msg.stopReason),
     completedAt: new Date(completedAtMs ?? msg.timestamp),
-    metadata:
-      msg.usage.cost !== undefined ? { cost_usd: msg.usage.cost.total } : {},
+    metadata: {
+      ...(msg.usage.cost !== undefined
+        ? { cost_usd: msg.usage.cost.total }
+        : {}),
+      ...mapCacheWrite1hMetadata(msg.usage),
+      ...mapToolUsageMetadata(toolResults),
+    },
   };
 
   if (input && input.length > 0) {
@@ -373,6 +330,7 @@ export interface PiUsageLike {
   reasoning?: number;
   cacheRead?: number;
   cacheWrite?: number;
+  cacheWrite1h?: number;
   totalTokens?: number;
   cost?: { total?: number };
 }
@@ -381,11 +339,9 @@ export interface PiUsageLike {
  * Map pi usage to the SDK's `TokenUsage`. Shared by the turn path and the
  * summary path so the two cannot drift.
  *
- * The field set is narrower than pi's `Usage`. `cacheWrite1h` is not
- * forwarded, and `totalTokens` is passed through as pi computes it
- * (`input + output + cacheRead + cacheWrite`) instead of being recomputed to
- * the Go launchers' `input + output`. Either change would move existing golden
- * fixtures, so both stay as they are.
+ * Pi already includes `cacheWrite1h` in `cacheWrite` and reasoning in `output`.
+ * Keep those subsets separate from totals. Preserve Pi's reported `totalTokens`
+ * rather than recomputing it.
  */
 export function mapPiUsage(usage: PiUsageLike): TokenUsage {
   return {
@@ -398,6 +354,57 @@ export function mapPiUsage(usage: PiUsageLike): TokenUsage {
       ? { reasoningTokens: usage.reasoning }
       : {}),
   };
+}
+
+function isUsageNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function mapCacheWrite1hMetadata(usage?: PiUsageLike): Record<string, number> {
+  return isUsageNumber(usage?.cacheWrite1h)
+    ? { "pi.usage.cache_write_1h_input_tokens": usage.cacheWrite1h }
+    : {};
+}
+
+const TOOL_USAGE_FIELDS = [
+  ["input", "input_tokens"],
+  ["output", "output_tokens"],
+  ["totalTokens", "total_tokens"],
+  ["cacheRead", "cache_read_input_tokens"],
+  ["cacheWrite", "cache_write_input_tokens"],
+  ["reasoning", "reasoning_tokens"],
+  ["cacheWrite1h", "cache_write_1h_input_tokens"],
+] as const;
+
+// Pi folds nested usage into each finalized top-level ToolResultMessage.usage.
+// Do not read execution events, details, or nestedCalls here, or count them again.
+function mapToolUsageMetadata(
+  toolResults: PiToolResult[],
+): Record<string, number> {
+  const metadata: Record<string, number> = {};
+  const overflowed = new Set<string>();
+  const add = (field: string, value: unknown): void => {
+    if (!isUsageNumber(value)) return;
+    const key = `pi.tool_usage.${field}`;
+    if (overflowed.has(key)) return;
+    const sum = (metadata[key] ?? 0) + value;
+    if (!Number.isFinite(sum)) {
+      // A partial sum would underreport usage. Omit the overflowing field entirely.
+      delete metadata[key];
+      overflowed.add(key);
+    } else {
+      metadata[key] = sum;
+    }
+  };
+  for (const result of toolResults) {
+    const usage = result.usage;
+    if (!usage) continue;
+    for (const [source, field] of TOOL_USAGE_FIELDS) {
+      add(field, usage[source]);
+    }
+    add("cost_usd", usage.cost?.total);
+  }
+  return metadata;
 }
 
 /** Token-count fields on pi's `Usage`. The `cost` block is not one of them. */
@@ -421,7 +428,7 @@ function hasPiTokenCounts(usage: PiUsageLike): boolean {
 }
 
 /**
- * Which host summarization call produced a generation. `compaction` covers
+ * Which host summary operation produced a generation. `compaction` covers
  * manual `/compact`, `ctx.compact()`, threshold auto-compaction, and
  * context-overflow recovery; `branch_summary` covers tree-navigation
  * summaries.
@@ -429,10 +436,7 @@ function hasPiTokenCounts(usage: PiUsageLike): boolean {
 export type PiSummaryKind = "compaction" | "branch_summary";
 
 /**
- * Fields read off pi's persisted `CompactionEntry` / `BranchSummaryEntry`.
- * Structural and fully optional: `usage` was added to those entries after the
- * dev-pinned pi version, so it must degrade to `undefined` rather than fail
- * type checking.
+ * Fields read from persisted summary entries. Older entries can omit usage.
  */
 export interface PiSummaryEntryLike {
   id?: string;
@@ -452,7 +456,7 @@ export interface MapSummaryGenerationStartOptions {
   conversationTitle?: string;
   agentName: string;
   agentVersion?: string;
-  model: { provider: string; name: string };
+  model?: { provider: string; name: string };
   startedAt: number;
   tags?: Record<string, string>;
   generationId?: string;
@@ -462,7 +466,7 @@ export interface MapSummaryGenerationStartOptions {
 }
 
 /**
- * Build the `GenerationStart` seed for a host summarization call.
+ * Build the `GenerationStart` seed for a host summary operation.
  *
  * No `operationName` is set on purpose: the SYNC path (`startGeneration`)
  * defaults it to `generateText`, which discriminates these calls from turns
@@ -479,7 +483,7 @@ export function mapSummaryGenerationStart(
     agentName: opts.agentName,
     agentVersion: opts.agentVersion,
     effectiveVersion: opts.agentVersion,
-    model: opts.model,
+    model: { provider: "unknown", name: "unknown" },
     startedAt: new Date(opts.startedAt),
     tags: { ...opts.tags, [PI_CALL_KIND_TAG]: opts.kind },
   };
@@ -489,9 +493,18 @@ export function mapSummaryGenerationStart(
   if (opts.parentGenerationIds && opts.parentGenerationIds.length > 0) {
     start.parentGenerationIds = opts.parentGenerationIds;
   }
-  if (opts.metadata && Object.keys(opts.metadata).length > 0) {
-    start.metadata = { ...opts.metadata };
-  }
+  // Summary entries do not identify physical calls; one operation can include several.
+  start.metadata = {
+    ...opts.metadata,
+    "pi.summary.model_attribution": "unknown",
+    "pi.summary.operation_aggregate": true,
+    ...(opts.model
+      ? {
+          "pi.summary.selected_model": opts.model.name,
+          "pi.summary.selected_provider": opts.model.provider,
+        }
+      : {}),
+  };
   return start;
 }
 
@@ -500,7 +513,6 @@ export interface MapSummaryGenerationResultOptions {
   entry: PiSummaryEntryLike;
   contentCapture: ContentCaptureMode;
   completedAt: number;
-  responseModel?: string;
   /** `manual` | `threshold` | `overflow`, compaction only. */
   reason?: string;
   /** True when the aborted turn is retried after this compaction. */
@@ -508,7 +520,7 @@ export interface MapSummaryGenerationResultOptions {
 }
 
 /**
- * Build the `GenerationResult` for a host summarization call.
+ * Build the `GenerationResult` for a host summary operation.
  *
  * The summary text goes in `output` as a single assistant text part, never in
  * metadata or tags: content capture strips `output` but never touches
@@ -531,7 +543,9 @@ export function mapSummaryGenerationResult(
 ): GenerationResult {
   const { entry, contentCapture, completedAt } = opts;
 
-  const metadata: Record<string, unknown> = {};
+  const metadata: Record<string, unknown> = mapCacheWrite1hMetadata(
+    entry.usage,
+  );
   const cost = entry.usage?.cost?.total;
   if (typeof cost === "number") {
     metadata.cost_usd = cost;
@@ -551,9 +565,6 @@ export function mapSummaryGenerationResult(
     completedAt: new Date(completedAt),
     metadata,
   };
-  if (opts.responseModel) {
-    result.responseModel = opts.responseModel;
-  }
   if (entry.usage && hasPiTokenCounts(entry.usage)) {
     result.usage = mapPiUsage(entry.usage);
   }
@@ -734,9 +745,8 @@ export function applyRedactedText(
  * for the user messages the guard changed. `forward` and `redacted` are the
  * index-aligned arrays `applyRedactedText` accepted.
  *
- * The recorded input and the conversation title are captured at
- * `message_end`, before the `context` hook redacts the outgoing messages, so
- * the plugin uses this map to record what the model actually receives.
+ * Incremental input and prompt-derived titles use `RequestObservation`,
+ * independently of this text-keyed map.
  */
 export function userTextRedactions(
   forward: Message[],
@@ -1044,137 +1054,18 @@ export function userMessageText(msg: PiUserMessage): string {
     .join("\n");
 }
 
-/**
- * Map the active tool catalog to ToolDefinition[]. Filters `toolCatalog` by
- * `activeNames` so the seed reflects what was offered to the model, not the
- * full registry. `activeNames === null` means "no filter" (the active-set
- * API is unavailable); an empty Set means "no tools offered this turn" and
- * produces an empty result. `description` and `inputSchemaJSON` are body
- * content and are only emitted when the mode includes tool bodies (`full` or
- * `full_with_metadata_spans`); otherwise the definitions are name-only,
- * matching how `git.branch` is gated.
- */
+/** Assistant proposals do not establish execution or the offered catalog. */
 export function mapTools(
-  toolCatalog: PiToolInfo[],
-  activeNames: Set<string> | null,
-  contentCapture: ContentCaptureMode,
+  tools: Pick<ToolDefinition, "name">[],
 ): ToolDefinition[] {
   const defs: ToolDefinition[] = [];
   const seen = new Set<string>();
-  const includeBody = includesToolBodies(contentCapture);
-
-  for (const tool of toolCatalog) {
-    if (!tool || typeof tool.name !== "string") continue;
-    if (activeNames !== null && !activeNames.has(tool.name)) continue;
-    if (seen.has(tool.name)) continue;
+  for (const tool of tools) {
+    if (!tool || typeof tool.name !== "string" || seen.has(tool.name)) continue;
     seen.add(tool.name);
-
-    const def: ToolDefinition = { name: tool.name };
-    if (includeBody) {
-      if (typeof tool.description === "string" && tool.description.length > 0) {
-        def.description = tool.description;
-      }
-      if (tool.parameters !== undefined) {
-        try {
-          def.inputSchemaJSON = JSON.stringify(tool.parameters);
-        } catch {
-          // Non-serializable schema (cycles, BigInt, etc.) — skip silently.
-        }
-      }
-    }
-    defs.push(def);
+    defs.push({ name: tool.name });
   }
   return defs;
-}
-
-/**
- * Read provider-specific request controls from a `before_provider_request`
- * payload. Pi emits provider-shaped payloads:
- *   - Anthropic / OpenAI Chat / OpenAI Responses: fields at the top level
- *     (`max_tokens`, `temperature`, `top_p`, `tool_choice`, `thinking`).
- *   - Gemini (`@google/genai` SDK): wrapped in `config` (`config.temperature`,
- *     `config.maxOutputTokens`, `config.toolConfig.functionCallingConfig.mode`,
- *     `config.thinkingConfig.thinkingBudget`).
- * Unknown shapes degrade to `{}`.
- */
-export function extractRequestControls(
-  payload: unknown,
-): CachedRequestControls {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return {};
-  }
-  const obj = payload as Record<string, unknown>;
-  const out: CachedRequestControls = {};
-
-  const asObject = (v: unknown): Record<string, unknown> | undefined =>
-    v && typeof v === "object" && !Array.isArray(v)
-      ? (v as Record<string, unknown>)
-      : undefined;
-
-  // Gemini wraps controls in `config`. The legacy REST shape used
-  // `generationConfig`; accept both so older pi versions or compat layers
-  // still work.
-  const geminiConfig = asObject(obj.config) ?? asObject(obj.generationConfig);
-
-  const readNumber = (...candidates: unknown[]): number | undefined => {
-    for (const c of candidates) {
-      if (typeof c === "number" && Number.isFinite(c)) return c;
-    }
-    return undefined;
-  };
-
-  const maxTokens = readNumber(
-    obj.max_tokens,
-    obj.max_completion_tokens,
-    obj.max_output_tokens,
-    geminiConfig?.maxOutputTokens,
-  );
-  if (maxTokens !== undefined) out.maxTokens = maxTokens;
-
-  const temperature = readNumber(obj.temperature, geminiConfig?.temperature);
-  if (temperature !== undefined) out.temperature = temperature;
-
-  const topP = readNumber(obj.top_p, obj.topP, geminiConfig?.topP);
-  if (topP !== undefined) out.topP = topP;
-
-  // `tool_choice` is a string for some providers and an object for others.
-  // Anthropic forced-tool uses `{type: "tool", name: "<tool>"}` — encode as
-  // `"tool:<name>"` so the forced tool isn't lost.
-  // Gemini uses `config.toolConfig.functionCallingConfig.mode`.
-  const tc = obj.tool_choice ?? obj.toolChoice;
-  if (typeof tc === "string") {
-    out.toolChoice = tc;
-  } else {
-    const tcObj = asObject(tc);
-    if (tcObj) {
-      const t = tcObj.type;
-      const name = tcObj.name;
-      if (typeof t === "string") {
-        out.toolChoice =
-          t === "tool" && typeof name === "string" && name.length > 0
-            ? `tool:${name}`
-            : t;
-      }
-    }
-  }
-  if (out.toolChoice === undefined && geminiConfig) {
-    const fc = asObject(geminiConfig.toolConfig)?.functionCallingConfig;
-    const mode = asObject(fc)?.mode;
-    if (typeof mode === "string") out.toolChoice = mode;
-  }
-
-  const thinking = asObject(obj.thinking);
-  if (thinking && typeof thinking.budget_tokens === "number") {
-    out.thinkingBudgetTokens = thinking.budget_tokens;
-  }
-  if (out.thinkingBudgetTokens === undefined && geminiConfig) {
-    const thinkingConfig = asObject(geminiConfig.thinkingConfig);
-    if (thinkingConfig && typeof thinkingConfig.thinkingBudget === "number") {
-      out.thinkingBudgetTokens = thinkingConfig.thinkingBudget;
-    }
-  }
-
-  return out;
 }
 
 /**
@@ -1222,7 +1113,7 @@ function mapAssistantOutput(
                 id: block.id,
                 name: block.name,
                 inputJSON: includesToolBodies(contentCapture)
-                  ? JSON.stringify(block.arguments)
+                  ? (JSON.stringify(block.arguments) ?? "")
                   : "",
               },
             },

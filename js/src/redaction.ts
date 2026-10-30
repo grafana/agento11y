@@ -145,6 +145,24 @@ export function createSecretRedactionSanitizer(
       sanitized.callError = redactor.redactLightweight(sanitized.callError);
     }
 
+    for (const tool of sanitized.tools ?? []) {
+      if (tool.description !== undefined) {
+        tool.description = redactor.redact(tool.description);
+      }
+      if (tool.inputSchemaJSON !== undefined) {
+        try {
+          JSON.parse(tool.inputSchemaJSON);
+          // Scan encoded JSON so secret member names and key/value pairs are covered.
+          const schema = redactor.redact(tool.inputSchemaJSON);
+          JSON.parse(schema);
+          tool.inputSchemaJSON = schema;
+        } catch {
+          // Redaction can break JSON escapes; never export the raw schema instead.
+          delete tool.inputSchemaJSON;
+        }
+      }
+    }
+
     for (const message of sanitized.input ?? []) {
       sanitizeMessage(
         message,

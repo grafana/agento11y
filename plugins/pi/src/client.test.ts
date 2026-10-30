@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Agento11yPiConfig } from "./config.js";
 
 const { loggerMock } = vi.hoisted(() => ({
@@ -25,7 +25,20 @@ vi.mock("@grafana/agento11y", () => ({
   userAgent: () => "agento11y-sdk-js/0.0.0-test",
 }));
 
-import { createAgento11yClient } from "./client.js";
+import { createAgento11yClient, reportExportFailure } from "./client.js";
+
+const WARNING =
+  "Agent Observability: some telemetry could not be exported and may be lost.";
+const PRIVATE_DETAIL =
+  "https://private.example/evaluator response-body-private DATABASE_PASSWORD=secret";
+const FAILURE_CATEGORIES = [
+  "agento11y generation enqueue failed",
+  "agento11y generation validation failed",
+  "agento11y generation rejected",
+  "agento11y generation export failed",
+  "agento11y generation export flush on shutdown failed",
+  "agento11y generation exporter shutdown failed",
+];
 
 function makeConfig(overrides?: Partial<Agento11yPiConfig>): Agento11yPiConfig {
   return {
@@ -54,6 +67,10 @@ describe("createAgento11yClient", () => {
     Agento11yClientMock.mockImplementation(function () {
       return {};
     });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("creates sdk client with no auth", () => {
@@ -199,41 +216,130 @@ describe("createAgento11yClient", () => {
     );
   });
 
-  it("routes sdk logs through the file logger by level", () => {
-    createAgento11yClient(makeConfig());
-    const [{ logger }] = Agento11yClientMock.mock.calls[0]!;
-    logger.debug("debug");
-    logger.warn("warn");
-    logger.error("error");
+  describe.each([
+    "debug",
+    "warn",
+    "error",
+  ] as const)("SDK %s bridge", (level) => {
+    it.each(
+      FAILURE_CATEGORIES,
+    )("reports %s and drops appended error text and arguments", (category) => {
+      const sink = vi.fn();
+      const client = createAgento11yClient(makeConfig(), {
+        onExportFailure: sink,
+      })!;
+      const [{ logger }] = Agento11yClientMock.mock.calls[0]!;
+      logger[level](
+        `${category}${category.endsWith("rejected") ? " id=private-id" : ""}: ${PRIVATE_DETAIL}`,
+        new Error(PRIVATE_DETAIL),
+        { evaluatorBody: PRIVATE_DETAIL },
+      );
+      reportExportFailure(client);
+      logger[level](category, PRIVATE_DETAIL);
 
-    expect(loggerMock.debug).toHaveBeenCalledWith("debug");
-    expect(loggerMock.warn).toHaveBeenCalledWith("warn");
-    expect(loggerMock.error).toHaveBeenCalledWith("error");
+      expect(sink.mock.calls).toEqual([[WARNING]]);
+      expect(loggerMock[level].mock.calls).toEqual([[category], [category]]);
+    });
+
+    it("replaces unknown SDK diagnostics without forwarding arguments", () => {
+      const sink = vi.fn();
+      createAgento11yClient(makeConfig(), { onExportFailure: sink });
+      const [{ logger }] = Agento11yClientMock.mock.calls[0]!;
+      logger[level](PRIVATE_DETAIL, new Error(PRIVATE_DETAIL));
+      logger[level](`agento11y generation export failedness ${PRIVATE_DETAIL}`);
+      expect(loggerMock[level].mock.calls).toEqual([
+        ["agento11y SDK diagnostic"],
+        ["agento11y SDK diagnostic"],
+      ]);
+      expect(sink).not.toHaveBeenCalled();
+    });
   });
 
-  it("downgrades best-effort export sdk logs to debug", () => {
-    createAgento11yClient(makeConfig());
+  it.each([
+    "metadata_only",
+    "no_tool_content",
+    "full",
+    "full_with_metadata_spans",
+  ] as const)("reports failure independently of %s capture", (contentCapture) => {
+    const sink = vi.fn();
+    const client = createAgento11yClient(makeConfig({ contentCapture }), {
+      onExportFailure: sink,
+    })!;
+    reportExportFailure(client);
     const [{ logger }] = Agento11yClientMock.mock.calls[0]!;
-    logger.warn("agento11y generation export failed: transport down");
-    logger.warn("agento11y generation rejected id=g-1: invalid");
+    for (const category of FAILURE_CATEGORIES) {
+      logger.warn(`${category}: ${PRIVATE_DETAIL}`);
+    }
+    expect(sink.mock.calls).toEqual([[WARNING]]);
+  });
 
-    // Best-effort export failures are demoted to debug, never warn.
-    expect(loggerMock.warn).not.toHaveBeenCalled();
-    expect(loggerMock.debug).toHaveBeenCalledWith(
-      "agento11y generation export failed: transport down",
-    );
-    expect(loggerMock.debug).toHaveBeenCalledWith(
-      "agento11y generation rejected id=g-1: invalid",
-    );
+  it.each([
+    { name: "configured sink", sink: "ok", stderrThrows: false },
+    { name: "absent sink", sink: "absent", stderrThrows: false },
+    { name: "throwing sink", sink: "throws", stderrThrows: false },
+    { name: "throwing sink and stderr", sink: "throws", stderrThrows: true },
+    {
+      name: "absent sink and throwing stderr",
+      sink: "absent",
+      stderrThrows: true,
+    },
+  ])("safely reports once with $name", ({ sink: kind, stderrThrows }) => {
+    const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => {
+      if (stderrThrows) throw new Error(PRIVATE_DETAIL);
+      return true;
+    });
+    const sink = vi.fn(() => {
+      if (kind === "throws") throw new Error(PRIVATE_DETAIL);
+    });
+    const client = createAgento11yClient(makeConfig(), {
+      ...(kind !== "absent" ? { onExportFailure: sink } : {}),
+    })!;
+    expect(() => {
+      reportExportFailure(client);
+      const [{ logger }] = Agento11yClientMock.mock.calls[0]!;
+      logger.warn(`agento11y generation export failed: ${PRIVATE_DETAIL}`);
+      reportExportFailure(client);
+    }).not.toThrow();
+    expect(sink.mock.calls).toEqual(kind === "absent" ? [] : [[WARNING]]);
+    expect(stderr.mock.calls).toEqual(kind === "ok" ? [] : [[`${WARNING}\n`]]);
+    expect(stdout).not.toHaveBeenCalled();
+  });
+
+  it("deduplicates separately for each client", () => {
+    const sink = vi.fn();
+    const first = createAgento11yClient(makeConfig(), {
+      onExportFailure: sink,
+    })!;
+    const second = createAgento11yClient(makeConfig(), {
+      onExportFailure: sink,
+    })!;
+    reportExportFailure(first);
+    reportExportFailure(first);
+    reportExportFailure(second);
+    expect(sink.mock.calls).toEqual([[WARNING], [WARNING]]);
+  });
+
+  it("deduplicates before calling a reentrant notification sink", () => {
+    const sink = vi.fn(() => reportExportFailure(client));
+    const client = createAgento11yClient(makeConfig(), {
+      onExportFailure: sink,
+    })!;
+    reportExportFailure(client);
+    expect(sink.mock.calls).toEqual([[WARNING]]);
   });
 
   it("returns null when sdk constructor throws", () => {
-    Agento11yClientMock.mockImplementationOnce(() => {
-      throw new Error("boom");
+    // biome-ignore lint/complexity/useArrowFunction: must be constructable
+    Agento11yClientMock.mockImplementationOnce(function () {
+      throw new Error(PRIVATE_DETAIL);
     });
 
     const client = createAgento11yClient(makeConfig());
     expect(client).toBeNull();
+    expect(loggerMock.error.mock.calls).toEqual([
+      ["failed to create Agento11yClient"],
+    ]);
   });
 
   it("wires input redaction into the sanitizer", () => {

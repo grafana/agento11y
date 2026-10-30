@@ -32,6 +32,11 @@ const REALSDK_PRESERVED_KEYS = [
   "HOME",
   "USERPROFILE",
   "XDG_CONFIG_HOME",
+  "XDG_CACHE_HOME",
+  "XDG_DATA_HOME",
+  "XDG_STATE_HOME",
+  "PI_CODING_AGENT_DIR",
+  "PI_CODING_AGENT_SESSION_DIR",
 ] as const;
 
 function isManagedRealSdkKey(key: string): boolean {

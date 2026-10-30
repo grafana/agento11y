@@ -91,26 +91,98 @@ test('flushes generation exports by interval', async () => {
   }
 });
 
-test('flush retries failed exports with backoff and succeeds', async () => {
-  const exporter = new MockGenerationExporter(2);
-  const client = newClient(exporter, {
-    batchSize: 10,
-    flushIntervalMs: 60_000,
-    maxRetries: 2,
-    initialBackoffMs: 1,
-    maxBackoffMs: 1,
+for (const { outcome, flushMode, attempts, backoffs, warnings } of [
+  { outcome: 'retry success', flushMode: 'explicit', attempts: 3, backoffs: [1, 2], warnings: [] },
+  {
+    outcome: 'partial rejection',
+    flushMode: 'explicit',
+    attempts: 1,
+    backoffs: [],
+    warnings: ['agento11y generation rejected id=gen-14: invalid generation'],
+  },
+  {
+    outcome: 'partial rejection',
+    flushMode: 'background',
+    attempts: 1,
+    backoffs: [],
+    warnings: ['agento11y generation rejected id=gen-14: invalid generation'],
+  },
+  { outcome: 'retry exhaustion', flushMode: 'explicit', attempts: 3, backoffs: [1, 2], warnings: [] },
+  {
+    outcome: 'retry exhaustion',
+    flushMode: 'background',
+    attempts: 3,
+    backoffs: [1, 2],
+    warnings: ['agento11y generation export failed: forced export failure'],
+  },
+]) {
+  test(`generation ${outcome} signals with ${flushMode} flush`, async () => {
+    const exporter = new MockGenerationExporter(
+      outcome === 'retry success' ? 2 : outcome === 'retry exhaustion' ? 3 : 0,
+    );
+    if (outcome === 'partial rejection') {
+      const exportGenerations = exporter.exportGenerations.bind(exporter);
+      exporter.exportGenerations = async (request) => {
+        const response = await exportGenerations(request);
+        response.results[1] = { generationId: 'gen-14', accepted: false, error: 'invalid generation' };
+        return response;
+      };
+    }
+    const loggedWarnings = [];
+    const sleeps = [];
+    const client = newClient(
+      exporter,
+      {
+        batchSize: flushMode === 'background' ? 2 : 10,
+        flushIntervalMs: 60_000,
+        maxRetries: 2,
+        initialBackoffMs: 1,
+        maxBackoffMs: 2,
+      },
+      {
+        logger: { warn: (message) => loggedWarnings.push(message) },
+        sleep: async (durationMs) => {
+          sleeps.push(durationMs);
+        },
+      },
+    );
+    const recorders = [4, 14].map((seed) => client.startGeneration({ ...seedGeneration(seed), id: `gen-${seed}` }));
+
+    try {
+      recorders.forEach((recorder, index) => {
+        endWithSuccess(recorder, index);
+      });
+      if (flushMode === 'background') {
+        await waitFor(() => loggedWarnings.length === warnings.length);
+      } else if (outcome === 'retry exhaustion') {
+        await assert.rejects(client.flush(), { message: 'forced export failure' });
+      } else {
+        await client.flush();
+      }
+
+      assert.deepEqual(
+        recorders.map((recorder) => recorder.getError()),
+        [undefined, undefined],
+      );
+      assert.equal(client.debugSnapshot().queueSize, 0);
+      assert.deepEqual(loggedWarnings, warnings);
+      assert.deepEqual(sleeps, backoffs);
+      assert.equal(exporter.attempts, attempts);
+      assert.deepEqual(
+        exporter.requests.map(({ generations }) => generations.map(({ id }) => id)),
+        Array.from({ length: attempts }, () => ['gen-4', 'gen-14']),
+      );
+
+      await client.flush();
+      await client.shutdown();
+      assert.equal(exporter.attempts, attempts);
+      assert.equal(exporter.shutdownCalls, 1);
+      assert.deepEqual(loggedWarnings, warnings);
+    } finally {
+      await client.shutdown();
+    }
   });
-
-  try {
-    endWithSuccess(client.startGeneration(seedGeneration(4)), 4);
-
-    await client.flush();
-    assert.equal(exporter.attempts, 3);
-    assert.equal(exporter.requests.length, 3);
-  } finally {
-    await client.shutdown();
-  }
-});
+}
 
 test('flushes workflow step exports and records debug snapshots', async () => {
   const exporter = new MockGenerationExporter();
@@ -345,6 +417,7 @@ test('shutdown gives a collector the configured export timeout before closing th
   }
 
   const order = [];
+  const warnings = [];
   let attempts = 0;
   const httpExporter = new HTTPGenerationExporter(`http://127.0.0.1:${address.port}`, undefined, 60_000);
   const exporter = {
@@ -364,6 +437,7 @@ test('shutdown gives a collector the configured export timeout before closing th
     {
       logger: {
         warn: (message) => {
+          warnings.push(message);
           if (message.includes('exceeded 45000ms shutdown deadline')) {
             order.push('flush deadline');
           }
@@ -372,7 +446,8 @@ test('shutdown gives a collector the configured export timeout before closing th
     },
   );
 
-  endWithSuccess(client.startGeneration(seedGeneration(12)), 12);
+  const recorder = client.startGeneration(seedGeneration(12));
+  endWithSuccess(recorder, 12);
   t.mock.timers.enable({ apis: ['setTimeout'] });
 
   try {
@@ -385,6 +460,12 @@ test('shutdown gives a collector the configured export timeout before closing th
     order.push('shutdown resolved');
 
     assert.deepEqual(order, ['flush deadline', 'exporter shutdown', 'shutdown resolved']);
+    assert.deepEqual(warnings, [
+      'agento11y generation export flush on shutdown failed: generation export flush exceeded 45000ms shutdown deadline; agento11y discarded the remaining exports without a retry',
+    ]);
+    assert.equal(recorder.getError(), undefined);
+    assert.equal(client.debugSnapshot().queueSize, 0);
+    await client.shutdown();
     assert.equal(attempts, 1);
   } finally {
     httpExporter.shutdown();
@@ -536,27 +617,34 @@ test('defaultSleep clears its timer when the signal aborts', async () => {
 
 test('queue-full recorder local error is exposed and callback style throws', async () => {
   const exporter = new MockGenerationExporter();
-  const client = newClient(exporter, {
-    batchSize: 10,
-    queueSize: 1,
-    flushIntervalMs: 60_000,
-  });
+  const warnings = [];
+  const client = newClient(
+    exporter,
+    { batchSize: 10, queueSize: 1, flushIntervalMs: 60_000 },
+    { logger: { warn: (message) => warnings.push(message) } },
+  );
 
   try {
     endWithSuccess(client.startGeneration(seedGeneration(6)), 6);
 
     const recorder = client.startGeneration(seedGeneration(7));
     recorder.setResult({ output: [{ role: 'assistant', content: 'full' }] });
+    assert.equal(recorder.getError(), undefined);
+    assert.doesNotThrow(() => recorder.end());
     recorder.end();
 
-    assert.match(recorder.getError()?.message ?? '', /queue is full/);
+    assert.equal(recorder.getError()?.message, 'generation queue is full');
 
     await assert.rejects(
       client.startGeneration(seedGeneration(8), async (callbackRecorder) => {
         callbackRecorder.setResult({ output: [{ role: 'assistant', content: 'callback' }] });
       }),
-      /queue is full/,
+      { message: 'generation queue is full' },
     );
+    assert.deepEqual(warnings, [
+      'agento11y generation enqueue failed: generation queue is full',
+      'agento11y generation enqueue failed: generation queue is full',
+    ]);
     assert.deepEqual(
       client.debugSnapshot().generations.map(({ conversationId }) => conversationId),
       ['conv-6', 'conv-7', 'conv-8'],
@@ -564,6 +652,8 @@ test('queue-full recorder local error is exposed and callback style throws', asy
     assert.equal(client.debugSnapshot().queueSize, 1);
     await client.flush();
     assert.equal(exporter.requests[0].generations.length, 1);
+    assert.equal(recorder.getError()?.message, 'generation queue is full');
+    assert.equal(warnings.length, 2);
   } finally {
     await client.shutdown();
   }
@@ -729,30 +819,40 @@ test('no-op tracing omits generation correlation IDs from snapshots and exports'
 test('bound tools share client empty-name no-op and shutdown checks', async () => {
   const client = newClient(new MockGenerationExporter(), { batchSize: 10, flushIntervalMs: 60_000 });
   const generation = client.startGeneration(seedGeneration('noop-tool'));
+  const parent = generation.startToolExecution({ toolName: 'parent' });
   try {
     for (const toolName of ['', ' \t\n ']) {
       for (const create of [
         () => client.startToolExecution({ toolName }),
         () => generation.startToolExecution({ toolName }),
+        () => parent.startToolExecution({ toolName }),
       ]) {
         const tool = create();
-        tool.setResult({ arguments: { ignored: true }, result: 'ignored' });
-        tool.setCallError(new Error('ignored'));
-        tool.end();
-        tool.end();
-        assert.equal(tool.getError(), undefined);
+        const child = tool.startToolExecution({ toolName: 'ignored-child' });
+        const grandchild = child.startToolExecution({ toolName: 'ignored-grandchild' });
+        for (const recorder of [grandchild, child, tool]) {
+          recorder.setResult({ arguments: { ignored: true }, result: 'ignored' });
+          recorder.setCallError(new Error('ignored'));
+          recorder.end();
+          recorder.end();
+          assert.equal(recorder.getError(), undefined);
+        }
       }
     }
     assert.equal(client.debugSnapshot().toolExecutions.length, 0);
+    parent.end();
     generation.end();
     const shutdown = client.shutdown();
     for (const toolName of ['', 'weather']) {
       assert.throws(() => client.startToolExecution({ toolName }), /client is shutdown/);
       assert.throws(() => generation.startToolExecution({ toolName }), /client is shutdown/);
+      assert.throws(() => parent.startToolExecution({ toolName }), /client is shutdown/);
     }
     await shutdown;
     assert.throws(() => generation.startToolExecution({ toolName: 'weather' }), /client is shutdown/);
+    assert.throws(() => parent.startToolExecution({ toolName: 'weather' }), /client is shutdown/);
   } finally {
+    parent.end();
     generation.end();
     await client.shutdown();
   }
@@ -762,12 +862,19 @@ test('bound tools retain client-level result validation and idempotent finalizat
   const client = newClient(new MockGenerationExporter(), { batchSize: 10, flushIntervalMs: 60_000 });
   try {
     const generation = client.startGeneration(seedGeneration('invalid-tool'));
-    const tool = generation.startToolExecution({ toolName: 'weather', startedAt: new Date('2026-01-02') });
-    tool.setResult({ completedAt: new Date('2026-01-01') });
-    tool.end();
-    tool.end();
-    assert.match(tool.getError()?.message ?? '', /completedAt/);
+    const parent = generation.startToolExecution({ toolName: 'parent' });
+    for (const source of [generation, parent]) {
+      const tool = source.startToolExecution({ toolName: 'weather', startedAt: new Date('2026-01-02') });
+      tool.setResult({ completedAt: new Date('2026-01-01') });
+      tool.end();
+      tool.end();
+      assert.match(tool.getError()?.message ?? '', /completedAt/);
+    }
     assert.equal(client.debugSnapshot().toolExecutions.length, 0);
+    parent.end();
+    parent.end();
+    assert.equal(parent.getError(), undefined);
+    assert.equal(client.debugSnapshot().toolExecutions.length, 1);
     generation.end();
   } finally {
     await client.shutdown();

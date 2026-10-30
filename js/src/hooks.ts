@@ -64,9 +64,11 @@ export async function evaluateHook(params: {
   hooks: HooksConfig;
   request: HookEvaluateRequest;
   fetchImpl?: typeof fetch;
+  signal?: AbortSignal;
   /** Receives a warning whenever a failure is swallowed by `failOpen`. */
   logger?: Agento11yLogger;
 }): Promise<HookEvaluateResponse> {
+  params.signal?.throwIfAborted();
   const fetchImpl = params.fetchImpl ?? fetch;
   if (!params.hooks.enabled) {
     return allowResponse();
@@ -79,12 +81,15 @@ export async function evaluateHook(params: {
 
   const timeoutMs = params.hooks.timeoutMs > 0 ? params.hooks.timeoutMs : 15_000;
   const controller = new AbortController();
+  const onAbort = () => controller.abort(params.signal?.reason);
+  params.signal?.addEventListener('abort', onAbort, { once: true });
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const url = buildHooksEvaluateEndpoint(params.apiEndpoint, params.insecure);
     const body = serializeRequest(params.request);
 
+    params.signal?.throwIfAborted();
     const response = await fetchImpl(url, {
       method: 'POST',
       signal: controller.signal,
@@ -97,6 +102,7 @@ export async function evaluateHook(params: {
     });
 
     const responseText = (await response.text()).trim();
+    params.signal?.throwIfAborted();
     if (!response.ok) {
       return failOpenOrThrow(
         params.hooks.failOpen,
@@ -127,12 +133,14 @@ export async function evaluateHook(params: {
 
     return parseEvaluateResponse(payload, params.hooks.strictTransforms === true);
   } catch (error) {
+    params.signal?.throwIfAborted();
     if (params.hooks.strictTransforms === true && error instanceof HookTransformError) {
       throw error;
     }
     return failOpenOrThrow(params.hooks.failOpen, hookTransportError(error), params.logger);
   } finally {
     clearTimeout(timer);
+    params.signal?.removeEventListener('abort', onAbort);
   }
 }
 

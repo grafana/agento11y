@@ -317,6 +317,174 @@ function singleSpan(spanExporter) {
   return spans[0];
 }
 
+const toolDefinitionSecret = 'glc_abcdefghijklmnopqrstuvwxyz1234';
+const toolDefinitionEmail = 'tool-owner@example.com';
+
+function secretToolDefinitionFixture(redactEmailAddresses = true) {
+  const tools = [
+    {
+      name: 'lookup',
+      type: 'function',
+      description: `Use ${toolDefinitionSecret}. DATABASE_PASSWORD=description-secret contact ${toolDefinitionEmail}`,
+      inputSchemaJSON: JSON.stringify(
+        {
+          type: 'object',
+          properties: {
+            [toolDefinitionSecret]: { type: 'string', default: toolDefinitionSecret },
+            query: { type: 'string', description: toolDefinitionSecret },
+          },
+          required: [toolDefinitionSecret],
+          additionalProperties: false,
+          examples: [
+            {
+              password: 'schema-secret',
+              note: 'DATABASE_PASSWORD=schema-env-secret',
+              contact: toolDefinitionEmail,
+              escaped: `line one\n"quoted"\\path ${toolDefinitionSecret}`,
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    },
+    {
+      name: 'malformed_original',
+      type: 'function',
+      inputSchemaJSON: '{"type":',
+    },
+    {
+      name: 'repairable_original',
+      type: 'function',
+      inputSchemaJSON: '{"description":"-----BEGIN PRIVATE KEY-----"bad-original-secret"-----END PRIVATE KEY-----"}',
+    },
+    {
+      name: 'malformed_after_redaction',
+      type: 'function',
+      inputSchemaJSON: JSON.stringify({ password: 'broken-schema-prefix"broken-schema-suffix' }),
+    },
+    { name: 'without_content', type: 'function' },
+    { name: 'valid_after_invalid', type: 'function', description: 'Safe description', inputSchemaJSON: '{}' },
+  ];
+  const expectedTools = tools.map((tool, index) => {
+    const expected = { ...tool };
+    if (index === 0) {
+      expected.description = expected.description
+        .replaceAll(toolDefinitionSecret, '[REDACTED:grafana-cloud-token]')
+        .replace('description-secret', '[REDACTED:env-secret-value]');
+      expected.inputSchemaJSON = expected.inputSchemaJSON
+        .replaceAll(toolDefinitionSecret, '[REDACTED:grafana-cloud-token]')
+        .replace('schema-secret', '[REDACTED:json-secret-field]')
+        .replace('schema-env-secret', '[REDACTED:env-secret-value]');
+      if (redactEmailAddresses) {
+        expected.description = expected.description.replace(toolDefinitionEmail, '[REDACTED:email]');
+        expected.inputSchemaJSON = expected.inputSchemaJSON.replace(toolDefinitionEmail, '[REDACTED:email]');
+      }
+    } else if (index < 4) {
+      delete expected.inputSchemaJSON;
+    }
+    return expected;
+  });
+  return { tools, expectedTools };
+}
+
+test('secret redaction sanitizer sanitizes copied tool definitions without changing executable originals', () => {
+  const { tools, expectedTools } = secretToolDefinitionFixture();
+  const generation = { ...buildUserSecretGeneration(), tools };
+  const original = structuredClone(generation);
+  const sanitized = createSecretRedactionSanitizer({}, {})(generation);
+
+  assert.deepEqual(sanitized.tools, expectedTools);
+  assert.notEqual(sanitized.tools, tools);
+  for (const [index, tool] of tools.entries()) {
+    assert.notEqual(sanitized.tools[index], tool);
+  }
+  assert.deepEqual(generation, original);
+  assert.equal(sanitized.input[0].parts[0].text, generation.input[0].parts[0].text);
+  assert.equal('inputSchemaJSON' in sanitized.tools[1], false);
+  assert.equal('inputSchemaJSON' in sanitized.tools[2], false);
+  assert.equal('inputSchemaJSON' in sanitized.tools[3], false);
+});
+
+for (const contentCapture of ['no_tool_content', 'full', 'full_with_metadata_spans', 'metadata_only']) {
+  for (const redactInputMessages of [false, true]) {
+    for (const redactEmailAddresses of [true, false]) {
+      for (const source of ['start', 'result']) {
+        test(`tool definitions: ${contentCapture}, input=${redactInputMessages}, email=${redactEmailAddresses}, ${source}`, async () => {
+          const { spanExporter, traceProvider, tracer } = newSpanCapture();
+          const exporter = new CapturingExporter();
+          const client = newSanitizingClient(
+            exporter,
+            createSecretRedactionSanitizer({ redactInputMessages, redactEmailAddresses }, {}),
+            { tracer, contentCapture },
+          );
+          const { tools, expectedTools } = secretToolDefinitionFixture(redactEmailAddresses);
+          const start = {
+            model: { provider: 'openai', name: 'gpt-5' },
+            tools: source === 'start' ? tools : [{ name: 'overridden', description: toolDefinitionSecret }],
+          };
+          const result = {
+            ...(source === 'result' ? { tools } : {}),
+            input: [{ role: 'user', content: toolDefinitionSecret }],
+            output: [{ role: 'assistant', content: 'Done' }],
+          };
+          const originalStart = structuredClone(start);
+          const originalResult = structuredClone(result);
+          const originalTools = structuredClone(tools);
+
+          try {
+            const recorder = client.startGeneration(start);
+            recorder.setResult(result);
+            recorder.end();
+            assert.equal(recorder.getError(), undefined);
+            await client.flush();
+
+            assert.equal(exporter.requests.length, 1);
+            const generation = exporter.requests[0].generations[0];
+            assert.equal(generation.metadata['agento11y.sdk.content_capture_mode'], contentCapture);
+            if (contentCapture === 'metadata_only') {
+              assert.deepEqual(
+                generation.tools,
+                tools.map((tool) => ({ ...tool, description: '', inputSchemaJSON: '' })),
+              );
+              assert.equal(generation.input[0].content, '');
+            } else {
+              assert.deepEqual(generation.tools, expectedTools);
+              assert.equal(
+                generation.input[0].content,
+                redactInputMessages ? '[REDACTED:grafana-cloud-token]' : toolDefinitionSecret,
+              );
+            }
+
+            const span = singleSpan(spanExporter);
+            assert.equal('gen_ai.tool.definitions' in span.attributes, false);
+            assert.doesNotMatch(
+              JSON.stringify([span.attributes, span.events, span.status]),
+              /glc_|description-secret|schema-secret|schema-env-secret|bad-original-secret|broken-schema-(prefix|suffix)/,
+            );
+            const exportedTools = JSON.stringify(generation.tools);
+            assert.doesNotMatch(
+              exportedTools,
+              /glc_|description-secret|schema-secret|schema-env-secret|bad-original-secret|broken-schema-(prefix|suffix)/,
+            );
+            if (redactEmailAddresses || contentCapture === 'metadata_only') {
+              assert.ok(!exportedTools.includes(toolDefinitionEmail));
+            } else {
+              assert.ok(exportedTools.includes(toolDefinitionEmail));
+            }
+            assert.deepEqual(start, originalStart);
+            assert.deepEqual(result, originalResult);
+            assert.deepEqual(tools, originalTools);
+          } finally {
+            await client.shutdown();
+            await traceProvider.shutdown();
+          }
+        });
+      }
+    }
+  }
+}
+
 test('secret redaction sanitizer also redacts the title and call error on the span', async () => {
   const { spanExporter, traceProvider, tracer } = newSpanCapture();
   const client = newSanitizingClient(new CapturingExporter(), createSecretRedactionSanitizer(), { tracer });

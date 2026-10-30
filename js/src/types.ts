@@ -630,6 +630,8 @@ export interface GenerationRecorder {
 
 /** Recorder API for tool execution lifecycle. */
 export interface ToolExecutionRecorder {
+  /** Binds only parentage; other options resolve at the child call. The caller must end the child. */
+  startToolExecution(start: ToolExecutionStart): ToolExecutionRecorder;
   setResult(result: ToolExecutionResult): void;
   setCallError(error: unknown): void;
   end(): void;
@@ -676,6 +678,11 @@ export interface HooksConfig {
   failOpen: boolean;
   /** Invalid transforms must throw even when evaluator failures are allowed. Defaults to false. */
   strictTransforms?: boolean;
+}
+
+export interface HookEvaluateOptions extends Partial<HooksConfig> {
+  /** Aborts the HTTP request and rejects with the signal's reason, even when `failOpen` is true. */
+  signal?: AbortSignal;
 }
 
 /** Identifies the upstream LLM call for hook rule matching. */

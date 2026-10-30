@@ -310,12 +310,13 @@ type piMessage struct {
 	Content json.RawMessage `json:"content"`
 
 	// Assistant fields.
-	Provider     string   `json:"provider"`
-	Model        string   `json:"model"`
-	ResponseID   string   `json:"responseId"`
-	StopReason   string   `json:"stopReason"`
-	ErrorMessage string   `json:"errorMessage"`
-	Usage        *piUsage `json:"usage"`
+	Provider      string   `json:"provider"`
+	Model         string   `json:"model"`
+	ResponseModel *string  `json:"responseModel"`
+	ResponseID    string   `json:"responseId"`
+	StopReason    string   `json:"stopReason"`
+	ErrorMessage  string   `json:"errorMessage"`
+	Usage         *piUsage `json:"usage"`
 	// Timestamp is unix milliseconds, stamped when the provider builds the
 	// message object, which is before the HTTP request goes out.
 	Timestamp int64 `json:"timestamp"`
@@ -537,6 +538,10 @@ func piGeneration(
 	msg := entry.Message
 	src := log.sourceRef(index, conversationID, sourcePath)
 	blocks := piBlocks(msg.Content)
+	responseModel := msg.Model
+	if msg.ResponseModel != nil {
+		responseModel = *msg.ResponseModel
+	}
 
 	gen := agento11y.Generation{
 		ID:                src.GenerationID(),
@@ -549,7 +554,7 @@ func piGeneration(
 		OperationName: "streamText",
 		Model:         agento11y.ModelRef{Provider: msg.Provider, Name: msg.Model},
 		ResponseID:    msg.ResponseID,
-		ResponseModel: msg.Model,
+		ResponseModel: responseModel,
 		StopReason:    piStopReason(msg.StopReason),
 		Usage:         piMapUsage(msg.Usage),
 		Input:         input,

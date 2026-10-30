@@ -35,7 +35,19 @@ test('overlapping async generations parent bound tools without an ambient contex
           recorders.push(generation);
           await ready;
           const tool = generation.startToolExecution({ toolName: `tool-${index}` });
-          await Promise.resolve();
+          await Promise.all(
+            [0, 1].map(async (childIndex) => {
+              await Promise.resolve();
+              const child = tool.startToolExecution({ toolName: `child-${index}-${childIndex}` });
+              await Promise.resolve();
+              const leaf = child.startToolExecution({ toolName: `leaf-${index}-${childIndex}` });
+              leaf.end();
+              child.end();
+              assert.equal(leaf.getError(), undefined);
+              assert.equal(child.getError(), undefined);
+              assert.equal(context.active(), activeContext);
+            }),
+          );
           tool.setResult({ result: index });
           tool.end();
           assert.equal(tool.getError(), undefined);
@@ -52,13 +64,21 @@ test('overlapping async generations parent bound tools without an ambient contex
     const generations = generationSpans(harness.spanExporter);
     const tools = toolSpans(harness.spanExporter);
     assert.equal(generations.length, 2);
-    assert.equal(tools.length, 2);
+    assert.equal(tools.length, 10);
     assert.notEqual(generations[0].spanContext().traceId, generations[1].spanContext().traceId);
     for (const index of [0, 1]) {
       const parent = generations.find((span) => span.attributes['agento11y.generation.id'] === `generation-${index}`);
       const tool = tools.find((span) => span.attributes['gen_ai.tool.name'] === `tool-${index}`);
       assert.equal(tool.spanContext().traceId, parent.spanContext().traceId);
       assert.equal(tool.parentSpanContext?.spanId, parent.spanContext().spanId);
+      for (const childIndex of [0, 1]) {
+        const child = tools.find((span) => span.attributes['gen_ai.tool.name'] === `child-${index}-${childIndex}`);
+        const leaf = tools.find((span) => span.attributes['gen_ai.tool.name'] === `leaf-${index}-${childIndex}`);
+        assert.equal(child.parentSpanContext?.spanId, tool.spanContext().spanId);
+        assert.equal(leaf.parentSpanContext?.spanId, child.spanContext().spanId);
+        assert.equal(child.spanContext().traceId, parent.spanContext().traceId);
+        assert.equal(leaf.spanContext().traceId, parent.spanContext().traceId);
+      }
       const exported = harness.generationExporter.requests.flatMap((request) => request.generations);
       const generation = exported.find((item) => item.id === `generation-${index}`);
       assert.equal(generation.traceId, parent.spanContext().traceId);
@@ -113,13 +133,15 @@ test('bound tools reuse tool semantics without inheriting generation identity or
   }
 });
 
-test('valid nonrecording generation contexts are exported and explicitly passed to bound tool spans', async () => {
+test('valid nonrecording contexts are exported and explicitly passed to recursive tool spans', async () => {
   const spanContext = { traceId: '1234567890abcdef1234567890abcdef', spanId: '1234567890abcdef', traceFlags: 0 };
+  const toolContext = { ...spanContext, spanId: 'fedcba0987654321' };
   const starts = [];
   const tracer = {
     startSpan(name, options, parentContext) {
-      starts.push({ name, options, parentContext });
-      return trace.wrapSpanContext(spanContext);
+      const span = trace.wrapSpanContext(starts.length === 0 ? spanContext : toolContext);
+      starts.push({ name, options, parentContext, span });
+      return span;
     },
   };
   const harness = newHarness({ tracer });
@@ -127,14 +149,19 @@ test('valid nonrecording generation contexts are exported and explicitly passed 
   try {
     const generation = harness.client.startGeneration({ model: { provider: 'openai', name: 'gpt-5' } });
     const tool = generation.startToolExecution({ toolName: 'weather' });
+    const child = tool.startToolExecution({ toolName: 'nested-weather' });
+    child.end();
     tool.end();
     generation.end();
     await harness.client.flush();
 
-    assert.equal(starts.length, 2);
+    assert.equal(starts.length, 3);
     assert.ok(starts[1].parentContext);
     assert.deepEqual(trace.getSpanContext(starts[1].parentContext), spanContext);
     assert.equal(starts[1].options.attributes['gen_ai.tool.name'], 'weather');
+    assert.deepEqual(trace.getSpanContext(starts[2].parentContext), toolContext);
+    assert.equal(trace.getSpan(starts[2].parentContext), starts[1].span);
+    assert.equal(starts[2].options.attributes['gen_ai.tool.name'], 'nested-weather');
     const exported = harness.generationExporter.requests[0].generations[0];
     assert.equal(exported.traceId, spanContext.traceId);
     assert.equal(exported.spanId, spanContext.spanId);
