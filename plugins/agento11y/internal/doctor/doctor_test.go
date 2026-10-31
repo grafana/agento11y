@@ -18,6 +18,7 @@ import (
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/clihelp"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
 )
 
 // mergeEnv returns the union of the given env maps, later entries winning.
@@ -59,10 +60,11 @@ func isolateEnv(t *testing.T) string {
 // tests stay hermetic.
 func stubSeams(t *testing.T) {
 	t.Helper()
-	prevAgents, prevConv, prevOTLP, prevReceiverSupported := collectAgents, probeConversationsFn, probeOTLPFn, receiverSupported
+	prevAgents, prevConv, prevOTLP, prevReceiverSupported, prevStatus := collectAgents, probeConversationsFn, probeOTLPFn, receiverSupported, loadLocalStatus
 	t.Cleanup(func() {
-		collectAgents, probeConversationsFn, probeOTLPFn, receiverSupported = prevAgents, prevConv, prevOTLP, prevReceiverSupported
+		collectAgents, probeConversationsFn, probeOTLPFn, receiverSupported, loadLocalStatus = prevAgents, prevConv, prevOTLP, prevReceiverSupported, prevStatus
 	})
+	loadLocalStatus = func(string) (*local.Status, error) { return nil, nil }
 	collectAgents = func(context.Context, string) []AgentStatus { return nil }
 	probeConversationsFn = func(context.Context, string, envValue, string, bool, string) *ProbeResult {
 		return &ProbeResult{StatusCode: 200, OK: true}

@@ -1776,7 +1776,7 @@ func TestServer_Config_RoundTrip(t *testing.T) {
 	assert.True(t, got.Settings.AutoUpdate)
 	assert.Equal(t, guardsOff, got.Settings.Guards)
 	assert.False(t, got.Settings.LocalForward)
-	assert.Equal(t, forwardStatus{Mode: forwardModeOff}, got.ForwardStatus)
+	assert.Equal(t, forwardStatus{Mode: forwardModeOff, Destinations: []forwardDestinationStatus{}, ForwardingPath: filepath.Join(filepath.Dir(srv.configPath), forwardingFile)}, got.ForwardStatus)
 	assert.Empty(t, got.ForwardStatus.Reason, "forwarding off by default is not a paused state")
 
 	// Save a non-default configuration.
@@ -1811,11 +1811,13 @@ func TestServer_Config_RoundTrip(t *testing.T) {
 	// endpoint was configured, so that leg reports why it stays off. Guards
 	// were saved on, so the hook leg is live as well.
 	assert.Equal(t, forwardStatus{
-		Enabled:     true,
-		Mode:        forwardModeMetadataOnly,
-		Generations: true,
-		Hooks:       true,
-		OTLPReason:  "no OTLP endpoint configured, so traces and metrics are not forwarded",
+		Destinations:   []forwardDestinationStatus{{ForwardDestinationInfo: ForwardDestinationInfo{Name: "primary", Endpoint: "https://cloud.example.test/api/v1/generations:export", HTTPGenerations: true}, Revision: 1}},
+		ForwardingPath: filepath.Join(filepath.Dir(srv.configPath), forwardingFile),
+		Enabled:        true,
+		Mode:           forwardModeMetadataOnly,
+		Generations:    true,
+		Hooks:          true,
+		OTLPReason:     "no OTLP endpoint configured, so traces and metrics are not forwarded",
 	}, saved.ForwardStatus)
 
 	// Preview and on-disk file agree, sorted with the managed header.
@@ -3507,30 +3509,54 @@ func TestServer_HookEvaluate_RelayKeepsBytesWhenNothingMatched(t *testing.T) {
 // marker, Cloud auth, and the budget derived from the calling agent's own
 // deadline.
 func TestServer_HookEvaluate_RelayShape(t *testing.T) {
-	cloud := newHookCloud(t)
-	cloud.respond = `{"action":"allow"}`
-	s, _ := newForwardingTestServer(t, cloud.srv, hookEnv(cloud.srv.URL, nil))
+	for _, tc := range []struct {
+		name   string
+		extras bool
+	}{
+		{name: "primary_only"},
+		{name: "with_extra", extras: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cloud := newHookCloud(t)
+			cloud.respond = `{"action":"allow"}`
+			s, _ := newForwardingTestServer(t, cloud.srv, hookEnv(cloud.srv.URL, nil))
+			t.Cleanup(s.Close)
+			var extra *destinationSink
+			if tc.extras {
+				extra = newDestinationSink(t, "")
+				writeDestinationSidecar(t, s.configPath, extra)
+				require.Len(t, s.forward.load().destinations, 2)
+			} else {
+				require.Len(t, s.forward.load().destinations, 1)
+			}
 
-	// A preflight request carrying a field this daemon's SDK version does not
-	// know about. Relaying the bytes is what keeps that field intact.
-	body := `{"phase":"preflight","context":{"agent_name":"pi"},"future_field":{"trace_id":"t1"}}`
-	status, out := postHook(t, s, body, map[string]string{legacyHookTimeoutHeader: "5000"})
-	require.Equal(t, http.StatusOK, status)
-	assert.Equal(t, agento11y.HookActionAllow, out.Action)
+			// A preflight request carrying a field this daemon's SDK version does not
+			// know about. Relaying the bytes is what keeps that field intact.
+			body := `{"phase":"preflight","context":{"agent_name":"pi"},"future_field":{"trace_id":"t1"}}`
+			status, out := postHook(t, s, body, map[string]string{legacyHookTimeoutHeader: "5000"})
+			require.Equal(t, http.StatusOK, status)
+			assert.Equal(t, agento11y.HookActionAllow, out.Action)
 
-	require.Equal(t, 1, cloud.count())
-	_, sent, headers := cloud.lastCall()
-	assert.Equal(t, body, sent)
-	assert.NotEmpty(t, headers.Get(ForwardMarkerHeader))
-	assert.Equal(t, "t", headers.Get(wire.TenantHeaderName))
-	assert.True(t, strings.HasPrefix(headers.Get("Authorization"), "Basic "))
-	// The branded spelling carries the remaining budget after local
-	// evaluation, which is at most the agent header minus the margin.
-	ms, err := strconv.Atoi(headers.Get(hookTimeoutHeader))
-	require.NoError(t, err)
-	assert.Positive(t, ms)
-	assert.LessOrEqual(t, ms, 4750)
-	assert.Greater(t, ms, 1000, "local evaluation of an empty ruleset must leave Cloud a usable window")
+			s.forward.wait()
+			require.Equal(t, 1, cloud.count())
+			path, sent, headers := cloud.lastCall()
+			assert.Equal(t, "/api/v1/hooks:evaluate", path)
+			assert.Equal(t, body, sent)
+			assert.Equal(t, "1", headers.Get(ForwardMarkerHeader))
+			assert.Equal(t, "t", headers.Get(wire.TenantHeaderName))
+			assert.True(t, strings.HasPrefix(headers.Get("Authorization"), "Basic "))
+			// The branded spelling carries the remaining budget after local
+			// evaluation, which is at most the agent header minus the margin.
+			ms, err := strconv.Atoi(headers.Get(hookTimeoutHeader))
+			require.NoError(t, err)
+			assert.Positive(t, ms)
+			assert.LessOrEqual(t, ms, 4750)
+			assert.Greater(t, ms, 1000, "local evaluation of an empty ruleset must leave Cloud a usable window")
+			if extra != nil {
+				assert.Empty(t, extra.calls, "extra destinations are telemetry-only, never guard recipients")
+			}
+		})
+	}
 }
 
 // TestServer_HookEvaluate_DoesNotChainRelayedRequest covers the loop guard: a
@@ -3826,7 +3852,11 @@ func TestServer_Forwarding_ToggleOffStopsForwarding(t *testing.T) {
 	var saved configResponse
 	decodeJSON(t, resp.Body, &saved)
 	assert.False(t, saved.Settings.LocalForward)
-	assert.Equal(t, forwardStatus{Mode: forwardModeOff}, saved.ForwardStatus)
+	assert.False(t, saved.ForwardStatus.Enabled)
+	assert.Equal(t, forwardModeOff, saved.ForwardStatus.Mode)
+	require.Len(t, saved.ForwardStatus.Destinations, 1)
+	assert.Equal(t, "primary", saved.ForwardStatus.Destinations[0].Name)
+	assert.Equal(t, filepath.Join(filepath.Dir(s.configPath), forwardingFile), saved.ForwardStatus.ForwardingPath)
 
 	onDisk, err := os.ReadFile(s.configPath)
 	require.NoError(t, err)

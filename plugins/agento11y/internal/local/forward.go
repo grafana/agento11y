@@ -1,8 +1,7 @@
 package local
 
 import (
-	"bytes"
-	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -34,7 +34,7 @@ import (
 )
 
 // maxInFlightForwards bounds the number of concurrent best-effort Cloud
-// forwards. Local capture never blocks on forwarding, so excess payloads are
+// forwards per destination. Local capture never blocks on forwarding, so excess payloads are
 // dropped (and recorded) rather than queued.
 const maxInFlightForwards = 8
 
@@ -87,6 +87,11 @@ const ForwardMarkerHeader = "X-Agento11y-Local-Forwarded"
 // the way the real exporter does. Either can be live while the other is
 // refused, and the matching reason field says why.
 type forwardConfig struct {
+	forwarding      bool
+	snapshot        uint64
+	destinations    []forwardDestination
+	forwardingPath  string
+	forwardingError string
 	// enabled reports whether any leg would forward.
 	enabled bool
 	// strip reports whether the forwarded copy must be reduced to
@@ -152,15 +157,28 @@ type forwardLoader struct {
 	logger *log.Logger
 	client *http.Client
 
-	sem chan struct{}
-	wg  sync.WaitGroup
+	wg sync.WaitGroup
 
-	mu           sync.Mutex
-	haveStat     bool
-	statMtime    time.Time
-	statSize     int64
-	cached       forwardConfig
-	loggedReason string // last refusal logged, so we log it only once
+	dispatchMu       sync.Mutex
+	runtimes         map[string]*forwardRuntime
+	retired          []*forwardRuntime
+	prep             chan struct{}
+	revision         uint64
+	dispatchSnapshot uint64
+	dispatchConfig   forwardConfig
+
+	mu               sync.Mutex
+	haveStat         bool
+	statMtime        time.Time
+	statSize         int64
+	cached           forwardConfig
+	loggedReason     string // last refusal logged, so we log it only once
+	extraDigest      [sha256.Size]byte
+	extraLoaded      bool
+	extras           []forwardDestination
+	extraError       string
+	snapshotDigest   [sha256.Size]byte
+	snapshotRevision uint64
 
 	// failMu guards delivery state written by forward goroutines and the hook
 	// handler and read by the status endpoint.
@@ -178,7 +196,6 @@ func newForwardLoader(path string, logger *log.Logger) *forwardLoader {
 		path:   path,
 		logger: logger,
 		client: &http.Client{Timeout: 10 * time.Second},
-		sem:    make(chan struct{}, maxInFlightForwards),
 		legs:   make(map[string]forwardLeg),
 	}
 }
@@ -197,7 +214,7 @@ func (l *forwardLoader) load() forwardConfig {
 	switch {
 	case err == nil:
 		if l.haveStat && info.Size() == l.statSize && info.ModTime().Equal(l.statMtime) {
-			return l.cached
+			return l.snapshotLocked(l.cached)
 		}
 		var readErr error
 		l.cached, readErr = l.resolve()
@@ -215,7 +232,62 @@ func (l *forwardLoader) load() forwardConfig {
 		l.cached = l.unreadableConfig(err)
 		l.haveStat = false
 	}
-	return l.cached
+	return l.snapshotLocked(l.cached)
+}
+
+func (l *forwardLoader) snapshotLocked(primary forwardConfig) forwardConfig {
+	cfg := primary
+	var data []byte
+	err := os.ErrNotExist
+	if l.path != "" {
+		cfg.forwardingPath = filepath.Join(filepath.Dir(l.path), forwardingFile)
+		data, err = os.ReadFile(cfg.forwardingPath)
+	}
+	switch {
+	case os.IsNotExist(err):
+		l.extras, l.extraError, l.extraLoaded = nil, "", false
+	case err != nil:
+		l.extras, l.extraError, l.extraLoaded = nil, "forwarding.toml is unreadable", false
+	default:
+		digest := sha256.Sum256(data)
+		if !l.extraLoaded || l.extraDigest != digest {
+			l.extras, err = parseForwardDestinations(data)
+			l.extraError = ""
+			if err != nil {
+				l.extras = nil
+				l.extraError = err.Error()
+			}
+			l.extraDigest, l.extraLoaded = digest, true
+		}
+	}
+	cfg.forwardingError = l.extraError
+	if primary.genURL != "" || primary.otlpEndpoint != "" {
+		cfg.destinations = append(cfg.destinations, forwardDestination{name: "primary", config: primary})
+	}
+	all := append(slices.Clone(cfg.destinations), l.extras...)
+	if err := validateForwardDestinationRoutes(all); err != nil {
+		cfg.forwardingError = "forwarding.toml duplicates a primary signal route"
+	} else {
+		cfg.destinations = all
+	}
+	if cfg.forwarding {
+		for _, destination := range cfg.destinations {
+			cfg.enabled = cfg.enabled || destination.config.genURL != "" || destination.config.otlpEndpoint != ""
+		}
+	}
+	h := sha256.New()
+	_, _ = fmt.Fprintf(h, "%t/%t", cfg.forwarding, cfg.strip)
+	for _, destination := range cfg.destinations {
+		_, _ = fmt.Fprintf(h, "/%s/%x", destination.name, destinationFingerprint(destination.config, false, false))
+	}
+	digest := [sha256.Size]byte(h.Sum(nil))
+	if digest != l.snapshotDigest || l.snapshotRevision == 0 {
+		l.snapshotDigest = digest
+		l.snapshotRevision++
+	}
+	cfg.snapshot = l.snapshotRevision
+	l.syncDestinations(cfg)
+	return cfg
 }
 
 // forwardStatus is a snapshot of how the daemon forwards captured sessions to
@@ -223,6 +295,9 @@ func (l *forwardLoader) load() forwardConfig {
 // the same resolved configuration the forward path uses, so the two cannot
 // disagree.
 type forwardStatus struct {
+	Destinations    []forwardDestinationStatus `json:"destinations"`
+	ForwardingPath  string                     `json:"forwardingPath,omitempty"`
+	ForwardingError string                     `json:"forwardingError,omitempty"`
 	// Enabled reports whether a forwarded copy would actually be sent.
 	Enabled bool `json:"enabled"`
 	// Mode is one of forwardMode{Off,MetadataOnly,Full}.
@@ -263,13 +338,18 @@ type forwardStatus struct {
 // forwardFailure is one failed forward attempt, kept so the viewer can show
 // that a live-looking posture is not delivering.
 type forwardFailure struct {
-	At     string `json:"at"`
-	Label  string `json:"label"`
-	Detail string `json:"detail"`
+	Destination string `json:"destination,omitempty"`
+	At          string `json:"at"`
+	Label       string `json:"label"`
+	Detail      string `json:"detail"`
 }
 
 // forwardLeg keeps the last delivery and failure after the failure ring clears.
 type forwardLeg struct {
+	Attempted         uint64 `json:"attempted"`
+	Succeeded         uint64 `json:"succeeded"`
+	Failed            uint64 `json:"failed"`
+	Dropped           uint64 `json:"dropped"`
 	LastSuccessAt     string `json:"lastSuccessAt,omitempty"`
 	LastFailureAt     string `json:"lastFailureAt,omitempty"`
 	LastFailureDetail string `json:"lastFailureDetail,omitempty"`
@@ -297,18 +377,43 @@ func (c forwardConfig) generationStatus() (bool, string) {
 func (l *forwardLoader) status() forwardStatus {
 	cfg := l.load()
 	generations, generationReason := cfg.generationStatus()
+	destinations := l.destinationStatuses(cfg)
 	st := forwardStatus{
-		Enabled:       cfg.enabled,
-		Mode:          forwardModeOff,
-		Generations:   generations,
-		OTLP:          cfg.otlpEndpoint != "",
-		Hooks:         cfg.hookURL != "",
-		Reason:        generationReason,
-		OTLPReason:    cfg.otlpReason,
-		HookReason:    cfg.hookReason,
-		Failures:      l.recentFailures(),
-		Legs:          l.recentLegs(),
-		HookFailOpens: l.recentFailOpens(),
+		Destinations:    destinations,
+		ForwardingPath:  cfg.forwardingPath,
+		ForwardingError: cfg.forwardingError,
+		Enabled:         cfg.enabled,
+		Mode:            forwardModeOff,
+		Generations:     generations,
+		OTLP:            cfg.otlpEndpoint != "",
+		Hooks:           cfg.hookURL != "",
+		Reason:          generationReason,
+		OTLPReason:      cfg.otlpReason,
+		HookReason:      cfg.hookReason,
+		Failures:        l.recentFailures(),
+		Legs:            l.recentLegs(),
+		HookFailOpens:   l.recentFailOpens(),
+	}
+	for _, destination := range destinations {
+		if cfg.forwarding {
+			st.OTLP = st.OTLP || destination.OTLP
+			if destination.Name != "primary" && cfg.generationError == "" {
+				supportsGenerations := destination.HTTPGenerations
+				if cfg.generationProtocol == agento11y.GenerationExportProtocolOTel {
+					supportsGenerations = destination.OTLP
+				}
+				if supportsGenerations {
+					st.Generations, st.Reason = true, ""
+				}
+			}
+		}
+		st.Failures = append(st.Failures, destination.Failures...)
+		if destination.Name == "primary" {
+			if st.Legs == nil && len(destination.Legs) > 0 {
+				st.Legs = make(map[string]forwardLeg)
+			}
+			maps.Copy(st.Legs, destination.Legs)
+		}
 	}
 	switch {
 	case !cfg.enabled:
@@ -364,7 +469,11 @@ func resolveForwardConfig(logger *log.Logger, get envReader) forwardConfig {
 	// Refusing every leg still resolves the guard policy to its defaults, so
 	// no caller can read a half-built config as an explicit "fail closed".
 	off := forwardConfig{failOpen: true, timeoutMs: envconfig.DefaultGuardsTimeoutMs}
+	routes := resolvePrimaryForwardRoutes(get)
 	if !boolFamily(logger, get, "LOCAL_FORWARD", false) {
+		if routes.genURL != "" || routes.otlpEndpoint != "" {
+			off.destinations = []forwardDestination{{name: "primary", config: routes}}
+		}
 		return off
 	}
 
@@ -372,7 +481,8 @@ func resolveForwardConfig(logger *log.Logger, get envReader) forwardConfig {
 	tenant, _ := get.family("AUTH_TENANT_ID")
 	token, _ := get.family("AUTH_TOKEN")
 
-	cfg := off
+	cfg := routes
+	cfg.forwarding = true
 	cfg.strip = contentModeFamily(logger, get) != agento11y.ContentCaptureModeFull
 	protocol, err := envconfig.ResolveGenerationTransportWith(func(suffix string) (string, string, bool) {
 		value, key := get.family(suffix)
@@ -381,23 +491,6 @@ func resolveForwardConfig(logger *log.Logger, get envReader) forwardConfig {
 	cfg.generationProtocol = protocol
 	if err != nil {
 		cfg.generationError = err.Error()
-	}
-
-	if reason := forwardDisabledReason(endpoint, tenant, token); reason != "" {
-		cfg.genReason = reason
-	} else if genURL, err := wire.NormalizeGenerationExportURL(endpoint, false); err != nil {
-		cfg.genReason = "generation endpoint: " + err.Error()
-	} else {
-		cfg.genURL = genURL
-		cfg.genHeaders = generationForwardHeaders(tenant, token)
-	}
-
-	otlpEndpoint, otlpReason := otlpForwardTarget(get)
-	if otlpReason != "" {
-		cfg.otlpReason = otlpReason
-	} else {
-		cfg.otlpEndpoint = otlpEndpoint
-		cfg.otlpHeaders = otlpForwardHeaders(get, tenant)
 	}
 
 	// The guard knobs are resolved through the same file-first reader as
@@ -416,6 +509,31 @@ func resolveForwardConfig(logger *log.Logger, get envReader) forwardConfig {
 	}
 
 	cfg.enabled = cfg.genURL != "" || cfg.otlpEndpoint != "" || cfg.hookURL != ""
+	return cfg
+}
+
+func resolvePrimaryForwardRoutes(get envReader) forwardConfig {
+	endpoint, _ := get.family("ENDPOINT")
+	tenant, _ := get.family("AUTH_TENANT_ID")
+	token, _ := get.family("AUTH_TOKEN")
+
+	var cfg forwardConfig
+	if reason := forwardDisabledReason(endpoint, tenant, token); reason != "" {
+		cfg.genReason = reason
+	} else if genURL, err := wire.NormalizeGenerationExportURL(endpoint, false); err != nil {
+		cfg.genReason = "generation endpoint: " + err.Error()
+	} else {
+		cfg.genURL = genURL
+		cfg.genHeaders = generationForwardHeaders(tenant, token)
+	}
+
+	otlpEndpoint, otlpReason := otlpForwardTarget(get)
+	if otlpReason != "" {
+		cfg.otlpReason = otlpReason
+	} else {
+		cfg.otlpEndpoint = otlpEndpoint
+		cfg.otlpHeaders = otlpForwardHeaders(get, tenant)
+	}
 	return cfg
 }
 
@@ -736,42 +854,9 @@ func (l *forwardLoader) recentLegs() map[string]forwardLeg {
 	return maps.Clone(l.legs)
 }
 
-// enqueue runs fn on a bounded goroutine. When the in-flight limit is reached
-// the payload is dropped (best-effort) rather than blocking the caller. The
-// drop is recorded under the leg's own label so that leg's next success clears
-// it.
-func (l *forwardLoader) enqueue(label string, fn func()) {
-	l.wg.Add(1)
-	select {
-	case l.sem <- struct{}{}:
-		go func() {
-			defer l.wg.Done()
-			defer func() { <-l.sem }()
-			fn()
-		}()
-	default:
-		l.wg.Done()
-		l.recordFailuref(label, "%d forwards in flight, dropping payload", cap(l.sem))
-	}
-}
-
 // wait blocks until all in-flight forwards complete. Used by tests; the daemon
 // never calls it.
 func (l *forwardLoader) wait() { l.wg.Wait() }
-
-// forwardGenerations relays the given raw proto-JSON generations to Cloud,
-// stripping content first when cfg.strip is set.
-func (l *forwardLoader) forwardGenerations(cfg forwardConfig, raw []json.RawMessage) {
-	if !cfg.enabled || cfg.genURL == "" || len(raw) == 0 {
-		return
-	}
-	payload, err := buildGenerationPayload(raw, cfg.strip)
-	if err != nil {
-		l.recordFailuref(forwardLabelGenerations, "build payload: %v (dropping payload)", err)
-		return
-	}
-	l.post(cfg.genURL, wire.ContentTypeJSON, "", cfg.genHeaders, payload, forwardLabelGenerations)
-}
 
 // buildGenerationPayload wraps the raw generations back into an
 // ExportGenerationsRequest envelope. When strip is set it decodes the proto,
@@ -823,44 +908,6 @@ func relabelContentCaptureMode(g *agento11yv1.Generation) {
 		g.Metadata = &structpb.Struct{Fields: map[string]*structpb.Value{}}
 	}
 	g.Metadata.Fields[model.MetadataKeyContentCaptureMode] = structpb.NewStringValue(model.ContentCaptureModeMetadataOnly)
-}
-
-// forwardOTLP relays an OTLP payload to the corresponding Cloud signal URL.
-// Metrics and full traces are relayed byte-for-byte with the inbound
-// Content-Encoding preserved. Traces under a reduced content mode have content
-// attributes, exception events, and error status messages stripped before
-// relay; that path decompresses a gzip body so the proto can be parsed and
-// relays the re-marshaled payload uncompressed.
-func (l *forwardLoader) forwardOTLP(cfg forwardConfig, signal, contentType, contentEncoding string, body []byte) {
-	l.forwardOTLPWithLabel(cfg, signal, contentType, contentEncoding, body, otlpForwardLabel(signal))
-}
-
-func (l *forwardLoader) forwardOTLPWithLabel(cfg forwardConfig, signal, contentType, contentEncoding string, body []byte, label string) {
-	if !cfg.enabled || cfg.otlpEndpoint == "" || len(body) == 0 {
-		return
-	}
-	out, ct, enc := body, contentType, contentEncoding
-	if signal == "traces" && cfg.strip {
-		decoded := body
-		if isGzipEncoding(contentEncoding) {
-			d, err := gunzipLimited(body, maxOTLPTraceBodyBytes)
-			if err != nil {
-				l.recordFailuref(label, "gunzip: %v (dropping payload)", err)
-				return
-			}
-			decoded = d
-		}
-		stripped, newCT, err := stripTracePayload(decoded, contentType)
-		if err != nil {
-			l.recordFailuref(label, "strip content: %v (dropping payload)", err)
-			return
-		}
-		out, ct, enc = stripped, newCT, ""
-	}
-	if strings.TrimSpace(ct) == "" {
-		ct = wire.ContentTypeProto
-	}
-	l.post(otel.SignalEndpointURL(cfg.otlpEndpoint, signal), ct, enc, cfg.otlpHeaders, out, label)
 }
 
 // isGzipEncoding reports whether a Content-Encoding header value is gzip.
@@ -1024,60 +1071,6 @@ func stripSpanEvents(events []*tracepb.Span_Event) []*tracepb.Span_Event {
 		out = append(out, e)
 	}
 	return out
-}
-
-// post issues a best-effort POST. Failures are recorded, never returned: a
-// Cloud error must not affect the already-completed local store or the child's
-// ack. The outcome lands in forwardStatus, which is the only channel that
-// reaches a user without debug logging enabled.
-func (l *forwardLoader) post(url, contentType, contentEncoding string, headers map[string]string, body []byte, label string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		l.recordFailuref(label, "build request for %s: %v", url, err)
-		return
-	}
-	req.Header.Set("Content-Type", contentType)
-	if contentEncoding != "" {
-		req.Header.Set("Content-Encoding", contentEncoding)
-	}
-	req.Header.Set(ForwardMarkerHeader, "1")
-	for k, v := range headers {
-		if v != "" {
-			req.Header.Set(k, v)
-		}
-	}
-	resp, err := l.client.Do(req)
-	if err != nil {
-		l.recordFailuref(label, "POST %s: %v", url, err)
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		// The body names the offending field when ingest validation rejects a
-		// stripped payload, which is the only way a drift between this
-		// daemon's field list and the SDK's becomes diagnosable.
-		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		l.recordFailuref(label, "POST %s status %d: %s", url, resp.StatusCode, strings.TrimSpace(string(snippet)))
-		return
-	}
-	if signal, ok := strings.CutPrefix(label, "otlp/"); ok {
-		if label == forwardLabelOTLPGenerations {
-			signal = "traces"
-		}
-		responseType := resp.Header.Get("Content-Type")
-		if responseType == "" {
-			responseType = contentType
-		}
-		if err := checkOTLPForwardResponse(resp.Body, responseType, signal); err != nil {
-			l.recordFailuref(label, "POST %s: %v", url, err)
-			return
-		}
-	} else {
-		_, _ = io.Copy(io.Discard, resp.Body)
-	}
-	l.recordSuccess(label)
 }
 
 func checkOTLPForwardResponse(body io.Reader, contentType, signal string) error {

@@ -3,6 +3,7 @@ package local
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -23,6 +24,110 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestFetchForwardPostureValidation(t *testing.T) {
+	const status = `{"enabled":true,"mode":"metadata_only","generations":true,"otlp":false,"hooks":false}`
+	wrap := func(status string) string { return `{"forwardStatus":` + status + `}` }
+	cases := []struct{ name, body string }{
+		{"missing status", `{}`},
+		{"null status", wrap(`null`)},
+		{"array status", wrap(`[]`)},
+		{"string status", wrap(`"off"`)},
+		{"malformed JSON", `{"forwardStatus":`},
+		{"trailing JSON", wrap(status) + `{}`},
+		{"trailing text", wrap(status) + `secret`},
+		{"unknown mode", wrap(strings.Replace(status, `metadata_only`, `unknown`, 1))},
+		{"enabled off mode", wrap(strings.Replace(status, `metadata_only`, `off`, 1))},
+		{"disabled full mode", wrap(`{"enabled":false,"mode":"full","generations":false,"otlp":false,"hooks":false}`)},
+		{"boolean as string", wrap(strings.Replace(status, `"enabled":true`, `"enabled":"true"`, 1))},
+		{"destinations object", wrap(strings.TrimSuffix(status, `}`) + `,"destinations":{}}`)},
+		{"destinations null", wrap(strings.TrimSuffix(status, `}`) + `,"destinations":null}`)},
+		{"incomplete destination", wrap(strings.TrimSuffix(status, `}`) + `,"destinations":[{"name":"extra"}]}`)},
+		{"legs array", wrap(strings.TrimSuffix(status, `}`) + `,"legs":[]}`)},
+		{"null leg", wrap(strings.TrimSuffix(status, `}`) + `,"legs":{"traces":null}}`)},
+		{"bad counter", wrap(strings.TrimSuffix(status, `}`) + `,"legs":{"traces":{"attempted":"1"}}}`)},
+		{"incomplete counters", wrap(strings.TrimSuffix(status, `}`) + `,"legs":{"traces":{"attempted":1}}}`)},
+		{"failures object", wrap(strings.TrimSuffix(status, `}`) + `,"failures":{}}`)},
+		{"incomplete failure", wrap(strings.TrimSuffix(status, `}`) + `,"failures":[{}]}`)},
+	}
+	for _, key := range []string{"enabled", "mode", "generations", "otlp", "hooks"} {
+		var fields map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal([]byte(status), &fields))
+		delete(fields, key)
+		data, err := json.Marshal(fields)
+		require.NoError(t, err)
+		cases = append(cases, struct{ name, body string }{"missing " + key, wrap(string(data))})
+		fields[key] = json.RawMessage(`null`)
+		data, err = json.Marshal(fields)
+		require.NoError(t, err)
+		cases = append(cases, struct{ name, body string }{"null " + key, wrap(string(data))})
+	}
+	const destination = `{"name":"archive","endpoint":"","otlpEndpoint":"https://archive.example","httpGenerations":false,"otlp":true,"revision":1}`
+	for _, key := range []string{"name", "endpoint", "otlpEndpoint", "httpGenerations", "otlp", "revision"} {
+		var fields map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal([]byte(destination), &fields))
+		delete(fields, key)
+		data, err := json.Marshal(fields)
+		require.NoError(t, err)
+		cases = append(cases, struct{ name, body string }{"destination missing " + key, wrap(strings.TrimSuffix(status, `}`) + `,"destinations":[` + string(data) + `]}`)})
+	}
+	for _, malformed := range []struct{ name, destination string }{
+		{"null destination", `null`},
+		{"bad revision", strings.Replace(destination, `"revision":1`, `"revision":"1"`, 1)},
+		{"bad endpoint", strings.Replace(destination, `"endpoint":""`, `"endpoint":12`, 1)},
+		{"bad destination legs", strings.TrimSuffix(destination, `}`) + `,"legs":{"traces":[]}}`},
+		{"destination missing counters", strings.TrimSuffix(destination, `}`) + `,"legs":{"traces":{"lastSuccessAt":"success"}}}`},
+		{"bad destination failures", strings.TrimSuffix(destination, `}`) + `,"failures":[null]}`},
+	} {
+		cases = append(cases, struct{ name, body string }{malformed.name, wrap(strings.TrimSuffix(status, `}`) + `,"destinations":[` + malformed.destination + `]}`)})
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, "/api/v1/config", r.URL.Path)
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer ts.Close()
+			posture, err := FetchForwardPosture(context.Background(), ts.URL)
+			require.Error(t, err)
+			assert.Equal(t, ForwardPosture{}, posture, "invalid posture must be unknown, not off")
+			assert.NotContains(t, err.Error(), "secret")
+		})
+	}
+}
+
+func TestFetchForwardPostureSnapshots(t *testing.T) {
+	for _, tc := range []struct {
+		name, status string
+		count        int
+	}{
+		{"legacy off", `{"enabled":false,"mode":"off","generations":false,"otlp":false,"hooks":false}`, 0},
+		{"legacy enabled", `{"enabled":true,"mode":"full","generations":true,"otlp":true,"hooks":true,"legs":{"traces":{"lastSuccessAt":"2026-01-01T00:00:00Z"}}}`, 1},
+		{"extra only", `{"enabled":true,"mode":"metadata_only","generations":true,"otlp":true,"hooks":false,"destinations":[{"name":"archive","endpoint":"","otlpEndpoint":"https://archive.example/otlp","httpGenerations":false,"otlp":true,"revision":7,"legs":{"traces":{"attempted":4,"succeeded":1,"failed":2,"dropped":1,"lastSuccessAt":"success","lastFailureAt":"failure","lastFailureDetail":"timeout"}},"failures":[{"at":"failure","label":"traces","detail":"timeout","destination":"archive"}]}],"forwardingPath":"/config/forwarding.toml","forwardingError":"invalid extra config","failures":[{"at":"failure","label":"traces","detail":"timeout","destination":"archive"}]}`, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = fmt.Fprintf(w, `{"forwardStatus":%s,"localGuards":{"rules":2}} `, tc.status)
+			}))
+			defer ts.Close()
+			posture, err := FetchForwardPosture(context.Background(), ts.URL)
+			require.NoError(t, err)
+			assert.Equal(t, tc.count, posture.DestinationCount)
+			assert.Equal(t, 2, posture.LocalRules)
+			if tc.name == "extra only" {
+				require.Len(t, posture.Destinations, 1)
+				assert.False(t, posture.Hooks)
+				assert.Empty(t, posture.Legs, "top-level legs describe primary, not extras")
+				assert.Equal(t, uint64(7), posture.Destinations[0].Revision)
+				assert.Equal(t, uint64(4), posture.Destinations[0].Legs["traces"].Attempted)
+				assert.Equal(t, "timeout", posture.Destinations[0].Legs["traces"].LastFailureDetail)
+				assert.Equal(t, "archive", posture.Failures[0].Destination)
+				assert.Equal(t, "/config/forwarding.toml", posture.ForwardingPath)
+				assert.NotEmpty(t, posture.ForwardingError)
+			}
+		})
+	}
+}
 
 func TestStop_RemovesStatusWhenProcessGone(t *testing.T) {
 	dir := t.TempDir()

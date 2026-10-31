@@ -436,14 +436,25 @@ func imageIsDaemon(exe string) bool {
 	return strings.HasPrefix(base, "agento11y") || strings.HasPrefix(base, "sigil") || base == "main"
 }
 
-// ForwardPosture is what a running daemon would send to Cloud right now, for
+// ForwardPosture is what a running daemon would send to its recipients right now, for
 // callers outside the viewer. The launcher prints a privacy claim before
 // handing the terminal to the agent, and only the daemon knows the resolved
 // answer: it reads config.env ahead of its own environment, so the launcher's
 // process environment can disagree with it.
 type ForwardPosture struct {
-	// Enabled reports whether captured sessions are forwarded at all.
-	Enabled bool
+	// Enabled reports whether forwarding is configured, not whether delivery succeeded.
+	Enabled     bool
+	Generations bool
+	OTLP        bool
+	// DestinationCount includes the primary telemetry recipient, when configured.
+	// Older daemons without a destination list count as one when enabled.
+	DestinationCount int
+	Destinations     []ForwardDestinationPosture
+	Legs             map[string]ForwardDeliveryLeg
+	Failures         []ForwardDeliveryFailure
+	HookFailOpens    int
+	ForwardingPath   string
+	ForwardingError  string
 	// Mode is the content level of the forwarded copy (forwardMode*).
 	Mode string
 	// Hooks reports whether guard evaluation is relayed to Cloud, which sends
@@ -455,6 +466,12 @@ type ForwardPosture struct {
 	// its own environment because that is what the agent child inherits.
 	LocalRules int
 }
+
+// ForwardDestinationPosture contains the daemon's best-effort delivery snapshot.
+// Hooks and the top-level legs still refer only to the primary destination.
+type ForwardDestinationPosture = forwardDestinationStatus
+type ForwardDeliveryLeg = forwardLeg
+type ForwardDeliveryFailure = forwardFailure
 
 // FetchForwardPosture asks a running daemon what it would forward. A non-nil
 // error means the daemon could not be reached or did not answer in time, in
@@ -482,16 +499,140 @@ func FetchForwardPosture(ctx context.Context, endpoint string) (ForwardPosture, 
 	if resp.StatusCode != http.StatusOK {
 		return ForwardPosture{}, fmt.Errorf("GET %s returned HTTP %d", req.URL, resp.StatusCode)
 	}
-	var body configResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&body); err != nil {
-		return ForwardPosture{}, fmt.Errorf("decode config from %s: %w", req.URL, err)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
+	if err != nil || len(data) > 1<<20 {
+		return ForwardPosture{}, errors.New("could not read daemon forwarding status: the read failed or the response exceeded 1 MiB")
+	}
+	return DecodeForwardPosture(data)
+}
+
+// DecodeForwardPosture rejects incomplete status instead of inferring a privacy claim from zero values.
+func DecodeForwardPosture(data []byte) (ForwardPosture, error) {
+	invalid := errors.New("invalid daemon forwarding status; check daemon availability with `agento11y local status`. Use `agento11y --version` for the installed binary's version, which may differ from the running daemon")
+	var body struct {
+		ForwardStatus json.RawMessage   `json:"forwardStatus"`
+		LocalGuards   localGuardsStatus `json:"localGuards"`
+	}
+	if json.Unmarshal(data, &body) != nil {
+		return ForwardPosture{}, invalid
+	}
+	fields, err := forwardPostureObject(body.ForwardStatus, "enabled", "mode", "generations", "otlp", "hooks")
+	if err != nil {
+		return ForwardPosture{}, invalid
+	}
+	var status forwardStatus
+	if json.Unmarshal(body.ForwardStatus, &status) != nil {
+		return ForwardPosture{}, invalid
+	}
+	switch status.Mode {
+	case forwardModeOff:
+		if status.Enabled || status.Generations || status.OTLP || status.Hooks {
+			return ForwardPosture{}, invalid
+		}
+	case forwardModeMetadataOnly, forwardModeFull:
+		if !status.Enabled {
+			return ForwardPosture{}, invalid
+		}
+	default:
+		return ForwardPosture{}, invalid
+	}
+	if raw, ok := fields["destinations"]; ok {
+		var destinations []json.RawMessage
+		if json.Unmarshal(raw, &destinations) != nil || destinations == nil {
+			return ForwardPosture{}, invalid
+		}
+		seen := map[string]bool{}
+		for i, raw := range destinations {
+			if _, err := forwardPostureObject(raw, "name", "endpoint", "otlpEndpoint", "httpGenerations", "otlp", "revision"); err != nil {
+				return ForwardPosture{}, invalid
+			}
+			destination := status.Destinations[i]
+			if strings.TrimSpace(destination.Name) == "" || hasForwardControl(destination.Name) || seen[destination.Name] {
+				return ForwardPosture{}, invalid
+			}
+			seen[destination.Name] = true
+			if !validForwardDeliveryShape(raw, true) {
+				return ForwardPosture{}, invalid
+			}
+		}
+	}
+	if !validForwardDeliveryShape(body.ForwardStatus, false) {
+		return ForwardPosture{}, invalid
+	}
+	count := len(status.Destinations)
+	if _, ok := fields["destinations"]; !ok && status.Enabled {
+		count = 1
 	}
 	return ForwardPosture{
-		Enabled:    body.ForwardStatus.Enabled,
-		Mode:       body.ForwardStatus.Mode,
-		Hooks:      body.ForwardStatus.Hooks,
-		LocalRules: body.LocalGuards.Rules,
+		Enabled: status.Enabled, Mode: status.Mode, Generations: status.Generations,
+		OTLP: status.OTLP, Hooks: status.Hooks, LocalRules: body.LocalGuards.Rules,
+		DestinationCount: count, Destinations: status.Destinations,
+		Legs: status.Legs, Failures: status.Failures, HookFailOpens: status.HookFailOpens,
+		ForwardingPath: status.ForwardingPath, ForwardingError: status.ForwardingError,
 	}, nil
+}
+
+func forwardPostureObject(data []byte, required ...string) (map[string]json.RawMessage, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil || fields == nil {
+		return nil, errors.New("expected an object")
+	}
+	for _, value := range fields {
+		if strings.TrimSpace(string(value)) == "null" {
+			return nil, errors.New("unexpected null field")
+		}
+	}
+	for _, key := range required {
+		if _, ok := fields[key]; !ok {
+			return nil, errors.New("missing required field")
+		}
+	}
+	return fields, nil
+}
+
+func validForwardDeliveryShape(data []byte, destination bool) bool {
+	fields, err := forwardPostureObject(data)
+	if err != nil {
+		return false
+	}
+	if raw, ok := fields["legs"]; ok {
+		legs, err := forwardPostureObject(raw)
+		if err != nil {
+			return false
+		}
+		for _, raw := range legs {
+			leg, err := forwardPostureObject(raw)
+			if err != nil {
+				return false
+			}
+			// Older daemons report primary timestamps without counters.
+			// Require all four counters for per-destination legs, and for any leg with a counter.
+			counters := []string{"attempted", "succeeded", "failed", "dropped"}
+			requireCounters := destination
+			for _, key := range counters {
+				if _, ok := leg[key]; ok {
+					requireCounters = true
+				}
+			}
+			if requireCounters {
+				if _, err := forwardPostureObject(raw, counters...); err != nil {
+					return false
+				}
+			}
+		}
+	}
+	if raw, ok := fields["failures"]; ok {
+		var failures []json.RawMessage
+		if json.Unmarshal(raw, &failures) != nil || failures == nil {
+			return false
+		}
+		for _, raw := range failures {
+			if _, err := forwardPostureObject(raw, "at", "label", "detail"); err != nil {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // endpointAlive returns true when GET <endpoint>/healthz responds within

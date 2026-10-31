@@ -34,6 +34,12 @@ agento11y doctor dev
   ! these auto tags are also set in AGENTO11Y_TAGS, which wins: repo
   ! the AGENTO11Y_LOCAL value is not a boolean; local mode stays off
 
+! Local forwarding
+  extra destinations: /home/u/.config/agento11y/forwarding.toml
+  ! forwarding.toml is invalid; fix forwarding.toml and rerun doctor
+  configured targets: none
+  delivery:           not checked (local daemon unavailable)
+
 Coding agents
   copilot:            install state unknown (hook-based; stat /home/u/.copilot/hooks/agento11y.json: operation not permitted)
   pi:                 on PATH, plugin not installed
@@ -41,6 +47,7 @@ Coding agents
   auto-update:        disabled (AGENTO11Y_AUTO_UPDATE, config.env)
 
 ✗ 2 problem(s): conversations, analytics misconfigured
+! local forwarding has warnings; see Local forwarding above
 
 Need help? Paste this to your coding agent:
 Run `agento11y skills show setup-coding-agent` and follow it to set up Grafana Agent observability for my coding agent.

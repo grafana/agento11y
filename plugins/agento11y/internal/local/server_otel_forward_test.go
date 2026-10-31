@@ -164,6 +164,9 @@ func TestReceiverOTelGenerationForwarding(t *testing.T) {
 					delivered <- traceDelivery{body: body, persisted: err == nil && len(detail.Generations) == 1 && len(detail.Generations[0].Input) == 1 && len(detail.Generations[0].Input[0].Parts) == 1 && detail.Generations[0].Input[0].Parts[0].Text == "secret input", marker: r.Header.Get(ForwardMarkerHeader)}
 				} else if r.URL.Path == wire.GenerationExportHTTPPath {
 					httpGenerations.Add(1)
+					r.Body = io.NopCloser(bytes.NewReader(body))
+					writeAcceptedGenerationResponse(w, r)
+					return
 				}
 				w.Header().Set("Content-Type", wire.ContentTypeProto)
 				w.WriteHeader(http.StatusOK)

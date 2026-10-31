@@ -1977,7 +1977,7 @@ func TestRenderLocalBanner_PrivacyClaimTracksPosture(t *testing.T) {
 		{
 			name:     "forwarding_on",
 			posture:  local.ForwardPosture{Enabled: true, Mode: "metadata_only"},
-			want:     []string{"forwarded to Grafana Cloud", "metadata_only"},
+			want:     []string{"configured for forwarding to 1 destination", "metadata_only", "Delivery is best-effort, not guaranteed"},
 			wantNone: []string{"stays on this machine", "Guard checks"},
 		},
 		{
@@ -1987,14 +1987,14 @@ func TestRenderLocalBanner_PrivacyClaimTracksPosture(t *testing.T) {
 			// Naming only tool calls would be too narrow: pi checks the
 			// outgoing conversation before it is sent to the model, and that
 			// request is relayed too.
-			want:     []string{"forwarded to Grafana Cloud", "Guard checks send tool calls", "before it is sent"},
+			want:     []string{"configured for forwarding to 1 destination", "Guard checks send tool calls", "before model submission", "only to the primary destination"},
 			wantNone: []string{"stays on this machine"},
 		},
 		{
 			name:     "daemon_hooks_with_guards_off",
 			posture:  local.ForwardPosture{Enabled: true, Mode: "metadata_only", Hooks: true, LocalRules: 2},
-			want:     []string{"forwarded to Grafana Cloud", "2 local guard rules are not evaluated"},
-			wantNone: []string{"Guard checks send", "before it is sent"},
+			want:     []string{"configured for forwarding to 1 destination", "2 local guard rules are not evaluated"},
+			wantNone: []string{"Guard checks send", "before model submission"},
 		},
 		{
 			// Rules are evaluated on the machine with nothing forwarded, so the
@@ -2019,6 +2019,27 @@ func TestRenderLocalBanner_PrivacyClaimTracksPosture(t *testing.T) {
 			posture:  local.ForwardPosture{LocalRules: 2},
 			want:     []string{"2 local guard rules are not evaluated: AGENTO11Y_GUARDS_ENABLED is off"},
 			wantNone: []string{"Grafana Cloud"},
+		},
+		{
+			name:          "extra_only",
+			posture:       local.ForwardPosture{Enabled: true, Mode: "full", DestinationCount: 2},
+			guardsEnabled: true,
+			want:          []string{"configured for forwarding to 2 destinations (full)", "best-effort, not guaranteed"},
+			wantNone:      []string{"Grafana Cloud", "stays on this machine", "Guard checks", "is also forwarded"},
+		},
+		{
+			name: "primary_and_extras_with_failures",
+			posture: local.ForwardPosture{Enabled: true, Mode: "metadata_only", DestinationCount: 4, Hooks: true,
+				Failures: []local.ForwardDeliveryFailure{{Destination: "archive", Detail: "timeout"}}},
+			guardsEnabled: true,
+			want:          []string{"4 destinations", "best-effort", "recent forwarding failures", "only to the primary destination"},
+			wantNone:      []string{"stays on this machine", "is also forwarded"},
+		},
+		{
+			name:     "off_with_retained_recipients_and_invalid_file",
+			posture:  local.ForwardPosture{DestinationCount: 2, ForwardingError: "invalid"},
+			want:     []string{"stays on this machine", "Extra forwarding configuration could not be loaded", "Check forwarding.toml"},
+			wantNone: []string{"configured for forwarding", "Guard checks"},
 		},
 		{
 			// The daemon did not answer, so no posture may be claimed either

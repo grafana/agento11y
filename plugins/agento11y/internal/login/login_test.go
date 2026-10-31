@@ -440,6 +440,68 @@ func TestAutoTagNamesValue(t *testing.T) {
 // text wherever the tests run.
 var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
+func TestLoginPreservesExtraDestinationSources(t *testing.T) {
+	const forwarding = `[[destinations]]
+name = "archive"
+otlp_endpoint = "https://archive.example/otlp"
+otlp_token = "extra-secret"
+`
+	for _, action := range []string{"credentials only", "full capture and forwarding", "forwarding off", "local only"} {
+		t.Run(action, func(t *testing.T) {
+			clearSeededEnv(t)
+			path := writeDotenv(t, "SIGIL_ENDPOINT=https://primary.example\nSIGIL_AUTH_TENANT_ID=123\nSIGIL_AUTH_TOKEN=primary-secret\nSIGIL_LOCAL_FORWARD=true\nSIGIL_CONTENT_CAPTURE_MODE=metadata_only\n")
+			forwardingPath := filepath.Join(filepath.Dir(path), "forwarding.toml")
+			if err := os.WriteFile(forwardingPath, []byte(forwarding), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			switch action {
+			case "credentials only":
+				out, err := runNonInteractive(t, RunOpts{ConfigPath: path, Endpoint: "https://primary.example", TenantID: "123", Token: "primary-secret", SkipVerify: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if out != "" {
+					t.Errorf("flag-only login produced unexpected output: %q", out)
+				}
+			case "local only":
+				if _, err := enableLocalMode(path, RunOpts{Stderr: io.Discard}); err != nil {
+					t.Fatal(err)
+				}
+			default:
+				v := formValues{endpoint: "https://primary.example", tenantID: "123", token: "primary-secret", localDaemonPrompted: true,
+					localDaemon: action == "full capture and forwarding", capturePrompted: true, contentMode: contentModeFull, guards: guardsOff}
+				if err := dotenv.WriteDotenv(path, buildUpdates(v, false), nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+			data, err := os.ReadFile(forwardingPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(data) != forwarding {
+				t.Error("login changed forwarding.toml")
+			}
+			saved := dotenv.LoadDotenv(path, nil)
+			for key, want := range map[string]string{
+				"SIGIL_ENDPOINT":       "https://primary.example",
+				"SIGIL_AUTH_TENANT_ID": "123",
+				"SIGIL_AUTH_TOKEN":     "primary-secret",
+			} {
+				if saved[key] != want {
+					t.Errorf("login changed saved primary credential %s", key)
+				}
+			}
+			wantForward := "true"
+			if action == "forwarding off" || action == "local only" {
+				wantForward = "false"
+			}
+			if saved["SIGIL_LOCAL_FORWARD"] != wantForward {
+				t.Errorf("forwarding switch = %q, want %q", saved["SIGIL_LOCAL_FORWARD"], wantForward)
+			}
+		})
+	}
+}
+
 // TestPreferenceGroupsMarkTheAnswer renders the preferences group and pins how
 // the questions the cursor is not on are drawn. huh draws every field of the
 // group, and a blurred list used to draw all of its options the same way, so a
@@ -462,6 +524,9 @@ func TestPreferenceGroupsMarkTheAnswer(t *testing.T) {
 	}
 	form := huh.NewForm(preferenceGroups(v)...).WithTheme(grafanaTheme()).WithWidth(100).WithHeight(40)
 	form.Init()
+	if !strings.Contains(form.GetFocusedField().View(), "Local web UI") {
+		t.Fatal("settings must start on preferences without a recipient disclosure page")
+	}
 	view := ansiEscape.ReplaceAllString(form.View(), "")
 
 	// The first field holds the cursor, so it carries the focused marker; the
