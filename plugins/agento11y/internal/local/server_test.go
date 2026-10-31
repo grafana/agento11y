@@ -1645,31 +1645,6 @@ func TestServer_APITokenMetrics(t *testing.T) {
 		assert.Equal(t, 2, body.Points[0].Calls)
 	})
 
-	t.Run("since skips older files without decoding them", func(t *testing.T) {
-		requireUnreadableFilesSupported(t)
-		writeGen(t, storage, "conv-old", "g3", agento11y.Generation{
-			Model:       agento11y.ModelRef{Provider: "anthropic", Name: "claude-sonnet-4"},
-			StartedAt:   mustParse(t, "2026-05-01T10:00:00Z"),
-			CompletedAt: mustParse(t, "2026-05-01T10:00:01Z"),
-			Usage:       agento11y.TokenUsage{InputTokens: 999},
-		}, "2026-05-01T10:00:01Z")
-		// Unreadable, so a request that opens it fails instead of quietly
-		// paying for the decode the modification-time break exists to avoid.
-		blockConversationFile(t, storage, "conv-old")
-
-		req := newLocalRequest(http.MethodGet, "/api/v1/metrics/tokens?since=2026-05-21T09:00:00Z&interval=3600", nil)
-		rr := httptest.NewRecorder()
-		srv.ServeHTTP(rr, req)
-		require.Equal(t, http.StatusOK, rr.Code)
-
-		var body struct {
-			Points []TokenUsagePoint `json:"points"`
-		}
-		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body))
-		require.Len(t, body.Points, 1)
-		assert.Equal(t, int64(107), body.Points[0].FreshInput, "the older file contributes nothing")
-	})
-
 	t.Run("invalid parameters rejected", func(t *testing.T) {
 		for _, path := range []string{
 			"/api/v1/metrics/tokens?since=last-tuesday",

@@ -56,6 +56,13 @@ func (s *Storage) SearchConversations(query string, limit int) ([]SearchHit, err
 	if len(terms) == 0 {
 		return nil, nil
 	}
+	ready, err := s.sqliteReadsReady()
+	if err != nil {
+		return nil, err
+	}
+	if ready {
+		return s.searchConversationsSQL(terms, limit)
+	}
 	dir := filepath.Join(s.dir, ConversationsDir)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -92,6 +99,194 @@ func (s *Storage) SearchConversations(query string, limit int) ([]SearchHit, err
 		out = out[:limit]
 	}
 	return out, nil
+}
+
+type sqlSearchBodyRow struct {
+	RowID  int64  `gorm:"column:rowid"`
+	ConvID string `gorm:"column:conv_id"`
+	Body   string `gorm:"column:body"`
+}
+
+type sqlSearchScore struct {
+	convID     string
+	matchCount int
+	firstRowID int64
+}
+
+const sqlSearchBatchSize = 500
+
+func (s *Storage) searchConversationsSQL(terms []string, limit int) ([]SearchHit, error) {
+	termMatches := map[string]int{}
+	for _, term := range terms {
+		var convIDs []string
+		if err := s.sql.db.Raw(`SELECT DISTINCT conv_id FROM gen_fts WHERE gen_fts MATCH ?`, ftsPrefixTerm(term)).Scan(&convIDs).Error; err != nil {
+			return nil, err
+		}
+		for _, convID := range convIDs {
+			termMatches[convID]++
+		}
+	}
+	convIDs := make([]string, 0, len(termMatches))
+	for convID, count := range termMatches {
+		if count == len(terms) {
+			convIDs = append(convIDs, convID)
+		}
+	}
+	if len(convIDs) == 0 {
+		return []SearchHit{}, nil
+	}
+	sort.Strings(convIDs)
+
+	// Stream searchable bodies and retain only a score and one rowid per
+	// conversation. A broad prefix can match most generations in the store;
+	// returning body and raw for all of them would make search memory follow
+	// store size before the result limit is applied.
+	scores := make(map[string]*sqlSearchScore, len(convIDs))
+	for start := 0; start < len(convIDs); start += sqlSearchBatchSize {
+		end := min(start+sqlSearchBatchSize, len(convIDs))
+		rows, err := s.sql.db.Model(&sqlGeneration{}).
+			Select("rowid, conv_id, body").
+			Where("conv_id IN ?", convIDs[start:end]).
+			Order("conv_id ASC, rowid ASC").Rows()
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var row sqlSearchBodyRow
+			if err := s.sql.db.ScanRows(rows, &row); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			lower := strings.ToLower(row.Body)
+			count := 0
+			for _, term := range terms {
+				count += strings.Count(lower, term)
+			}
+			if count == 0 {
+				continue
+			}
+			score := scores[row.ConvID]
+			if score == nil {
+				score = &sqlSearchScore{convID: row.ConvID}
+				scores[row.ConvID] = score
+			}
+			score.matchCount += count
+			if score.firstRowID == 0 {
+				score.firstRowID = row.RowID
+			}
+		}
+		if err := rows.Close(); err != nil {
+			return nil, err
+		}
+	}
+
+	summaryByID := make(map[string]sqlConversation, len(convIDs))
+	for start := 0; start < len(convIDs); start += sqlSearchBatchSize {
+		end := min(start+sqlSearchBatchSize, len(convIDs))
+		var summaries []sqlConversation
+		if err := s.sql.db.Where("conv_id IN ?", convIDs[start:end]).Find(&summaries).Error; err != nil {
+			return nil, err
+		}
+		for _, summary := range summaries {
+			summaryByID[summary.ConvID] = summary
+		}
+	}
+	ranked := make([]*sqlSearchScore, 0, len(scores))
+	for _, score := range scores {
+		if score.matchCount > 0 {
+			ranked = append(ranked, score)
+		}
+	}
+	sort.SliceStable(ranked, func(i, j int) bool {
+		if ranked[i].matchCount != ranked[j].matchCount {
+			return ranked[i].matchCount > ranked[j].matchCount
+		}
+		iSummary := summaryByID[ranked[i].convID]
+		jSummary := summaryByID[ranked[j].convID]
+		if !iSummary.Activity.Equal(jSummary.Activity) {
+			return iSummary.Activity.After(jSummary.Activity)
+		}
+		return ranked[i].convID < ranked[j].convID
+	})
+	if limit > 0 && len(ranked) > limit {
+		ranked = ranked[:limit]
+	}
+
+	rowIDs := make([]int64, 0, len(ranked))
+	for _, score := range ranked {
+		rowIDs = append(rowIDs, score.firstRowID)
+	}
+	snippetByRowID := make(map[int64]sqlGeneration, len(rowIDs))
+	for start := 0; start < len(rowIDs); start += sqlSearchBatchSize {
+		end := min(start+sqlSearchBatchSize, len(rowIDs))
+		var snippetRows []sqlGeneration
+		if err := s.sql.db.Select("rowid, conv_id, raw").Where("rowid IN ?", rowIDs[start:end]).Find(&snippetRows).Error; err != nil {
+			return nil, err
+		}
+		for _, row := range snippetRows {
+			snippetByRowID[row.RowID] = row
+		}
+	}
+
+	out := make([]SearchHit, 0, len(ranked))
+	for _, score := range ranked {
+		summary := summaryByID[score.convID]
+		hit := SearchHit{
+			ID:           summary.ConvID,
+			Title:        summary.Title,
+			LastActivity: summary.Activity,
+			TotalTokens:  summary.TotalTokens,
+			Calls:        summary.Calls,
+			Status:       summary.Status,
+			MatchCount:   score.matchCount,
+			TokenBuckets: TokenBuckets{
+				FreshInput: summary.FreshInput,
+				CacheRead:  summary.CacheRead,
+				CacheWrite: summary.CacheWrite,
+				Output:     summary.Output,
+				Reasoning:  summary.Reasoning,
+			},
+		}
+		var err error
+		hit.Agents, err = decodeSQLStringList(summary.Agents)
+		if err != nil {
+			return nil, err
+		}
+		hit.Models, err = decodeSQLStringList(summary.Models)
+		if err != nil {
+			return nil, err
+		}
+		row := snippetByRowID[score.firstRowID]
+		gen, err := storedGenerationFromRaw(row.Raw, row.ConvID)
+		if err != nil {
+			return nil, err
+		}
+		hit.Snippet = generationSearchSnippet(gen, terms)
+		hit.GenerationID = gen.ID
+		out = append(out, hit)
+	}
+	return out, nil
+}
+
+func ftsPrefixTerm(term string) string {
+	return `"` + strings.ReplaceAll(term, `"`, `""`) + `"*`
+}
+
+func generationSearchSnippet(gen storedGeneration, terms []string) string {
+	var snippet string
+	visitGenerationSearchText(gen, func(text string) {
+		if snippet != "" || text == "" {
+			return
+		}
+		lower := strings.ToLower(text)
+		for _, term := range terms {
+			if strings.Contains(lower, term) {
+				snippet = buildSnippet(text, lower, term)
+				return
+			}
+		}
+	})
+	return snippet
 }
 
 // searchTerms splits the user query into lower-cased terms. Whitespace is
@@ -158,17 +353,7 @@ func searchConversationFile(path string, terms []string) (SearchHit, bool, int, 
 			hasError = true
 		}
 
-		// last_activity tracks the latest known timestamp on any
-		// generation, falling back to received_at when started/completed
-		// aren't populated — same rule as decodeFileSummary.
-		when := gen.CompletedAt
-		if when.IsZero() {
-			when = gen.StartedAt
-		}
-		if when.IsZero() {
-			when, _ = time.Parse(time.RFC3339Nano, r.ReceivedAt)
-		}
-		if when.After(lastActivity) {
+		if when := recordActivity(gen.summaryGeneration, r.ReceivedAt); when.After(lastActivity) {
 			lastActivity = when
 		}
 
@@ -198,18 +383,7 @@ func searchConversationFile(path string, terms []string) (SearchHit, bool, int, 
 			}
 		}
 
-		// Always include the cheap fields so a search on the agent or
-		// model name surfaces sessions that never wrote matching content.
-		visit(gen.AgentName)
-		visit(gen.modelName())
-		visit(gen.title())
-
-		for _, msg := range gen.inputMessages() {
-			visitMessageParts(msg, visit)
-		}
-		for _, msg := range gen.outputMessages() {
-			visitMessageParts(msg, visit)
-		}
+		visitGenerationSearchText(gen, visit)
 	})
 	if err != nil {
 		return SearchHit{}, false, skipped, err

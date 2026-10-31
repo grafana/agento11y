@@ -26,13 +26,16 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 	// The pure-Go SQLite driver, for the Cursor history importer. The release
 	// binary builds with CGO_ENABLED=0, so a cgo driver cannot be used.
-	modernc.org/sqlite v1.56.0
+	modernc.org/sqlite v1.56.0 // indirect
 )
 
 require (
 	github.com/evanw/esbuild v0.28.2
+	github.com/glebarez/go-sqlite v1.21.2
+	github.com/glebarez/sqlite v1.11.0
 	github.com/gobwas/glob v0.2.3
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.45.0
+	gorm.io/gorm v1.31.2
 )
 
 require (
@@ -54,6 +57,8 @@ require (
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
+	github.com/jinzhu/inflection v1.0.0 // indirect
+	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/mattn/go-localereader v0.0.1 // indirect
