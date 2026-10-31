@@ -267,16 +267,14 @@ describe("resolveAutoTags", () => {
     ).toBeUndefined();
   });
 
-  it("prefers the configured user id over the OS account name", () => {
+  it("uses the configured user id", () => {
     expect(
       resolveAutoTags(enable("user"), { userId: "alice@example.com" }),
     ).toEqual({ user: "alice@example.com" });
   });
 
-  it("falls back to the OS account name", () => {
-    const tags = resolveAutoTags(enable("user"), {});
-    expect(tags?.user).toBeTruthy();
-    expect(tags?.user).not.toBe("");
+  it("never falls back to the OS account name", () => {
+    expect(resolveAutoTags(enable("user"), {})).toBeUndefined();
   });
 
   it("trims and caps a resolved value", () => {

@@ -355,8 +355,8 @@ func setupOTelIfConfigured(ctx context.Context, instanceID string, protocol agen
 
 // buildClient constructs the agento11y client for one exported turn. cwd is
 // the turn's working directory, which auto-tags resolve the repository and
-// branch from; vibe payloads carry no user identity, so that falls back to the
-// configured AGENTO11Y_USER_ID or the OS account name.
+// branch from; vibe payloads carry no user identity, so the user tag comes only
+// from a configured AGENTO11Y_USER_ID.
 func buildClient(mode agento11y.ContentCaptureMode, providers *otel.Providers, protocol agento11y.GenerationExportProtocol, endpoint, tenantID, authToken, cwd string, logger *log.Logger) (*agento11y.Client, error) {
 	cfg := agento11y.Config{
 		ContentCapture:   mode,

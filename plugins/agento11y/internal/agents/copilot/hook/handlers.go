@@ -750,8 +750,8 @@ func shouldPreferTranscriptSnapshot(current transcript.Snapshot, haveCurrent boo
 // and token to the SDK's automatic SIGIL_* env resolution, so it only needs the
 // shared HTTP/basic-auth export defaults plus the OTel wiring. cwd is the
 // turn's working directory, which auto-tags resolve the repository and branch
-// from; copilot payloads carry no user identity, so that falls back to the
-// configured AGENTO11Y_USER_ID or the OS account name.
+// from; copilot payloads carry no user identity, so the user tag comes only
+// from a configured AGENTO11Y_USER_ID.
 func buildClient(cfg config.Config, cwd string, providers *otel.Providers, logger *log.Logger) (*agento11y.Client, error) {
 	return emit.NewClient(emit.ClientOptions{
 		InstrumentationName: otelInstrumentationName,

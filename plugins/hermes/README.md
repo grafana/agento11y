@@ -80,7 +80,7 @@ The plugin requires Python SDK 0.22.0 or later for content capture and secret re
 - Prompt redaction defaults to on. `AGENTO11Y_REDACT_INPUT_MESSAGES=false` disables only user-prompt redaction; invalid values keep it on. Assistant text and errors use lightweight patterns. System prompts and tool payloads also use key/value patterns. Email addresses are redacted.
 - No automatic `cwd` tag is emitted. Automatic user, repository, and branch tags are off by default.
 
-Opt into automatic client tags with `AGENTO11Y_AUTO_CODING_AGENT_TAGS=true`. Narrow them with `AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=user,repo`; accepted names are `user`, `repo`, `branch`, or `all`. The allowlist alone enables nothing. Explicit `AGENTO11Y_TAGS` values win over automatic values.
+Opt into automatic client tags with `AGENTO11Y_AUTO_CODING_AGENT_TAGS=true`. Narrow them with `AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=user,repo`; accepted names are `user`, `repo`, `branch`, or `all`. The allowlist alone enables nothing. Explicit `AGENTO11Y_TAGS` values win over automatic values. The automatic `user` tag comes only from `AGENTO11Y_USER_ID`, so without it no `user` tag is attached; earlier versions used the operating-system account name.
 
 These tags reach generations, spans, and metric labels. User identities can be personal data, and branch names increase metric cardinality. Hermes caches its client for the process, so automatic values do not follow later directory or branch changes. Capture modes do not remove custom tags or metadata; never put secrets there.
 
