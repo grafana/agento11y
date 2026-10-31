@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -112,7 +113,14 @@ func (c *agentOTLPCapture) snapshot() ([]*coltracepb.ExportTraceServiceRequest, 
 	return traces, metrics, append([]error(nil), c.errors...)
 }
 
-func (c *agentOTLPCapture) validate(agent string) error {
+// validate checks the traces and metrics of a metadata-only run for what the
+// Coding agents page reads: identity and tags on every span and histogram
+// datapoint, the conversation and generation IDs that join spans to the run's
+// generations, token usage, tool durations, and the units that name the
+// Prometheus series. An empty user means none may carry a user in any form,
+// since the page lists users from the agento11y.tag.user label and finds their
+// sessions by user.id.
+func (c *agentOTLPCapture) validate(agent, user, conversation string, generationIDs map[string]bool) error {
 	wantGenerations, provider, tool := 1, "openai", "Bash"
 	switch agent {
 	case "claude-code":
@@ -127,7 +135,10 @@ func (c *agentOTLPCapture) validate(agent string) error {
 	}
 	identity := map[string]string{
 		"gen_ai.agent.name": agent, "gen_ai.provider.name": provider, "gen_ai.request.model": fakeModelName,
-		"agento11y.tag.user": fixtureEmail, "agento11y.tag.repo": fixtureRepo, "agento11y.tag.git.branch": fixtureBranch,
+		"agento11y.tag.user": user, "agento11y.tag.repo": fixtureRepo, "agento11y.tag.git.branch": fixtureBranch,
+	}
+	if user == "" {
+		identity["user.id"] = ""
 	}
 	generations, tools := 0, 0
 	seen := map[string]bool{}
@@ -148,6 +159,9 @@ func (c *agentOTLPCapture) validate(agent string) error {
 						return fmt.Errorf("span %q has invalid timestamps", span.Name)
 					}
 					attrs := agentOTLPAttrs(span.Attributes)
+					if attrs["gen_ai.conversation.id"] != conversation {
+						return fmt.Errorf("span %q gen_ai.conversation.id = %q, want %q", span.GetName(), attrs["gen_ai.conversation.id"], conversation)
+					}
 					switch attrs["gen_ai.operation.name"] {
 					case "execute_tool":
 						if err := agentOTLPWantAttrs(span.Attributes, map[string]string{
@@ -161,9 +175,12 @@ func (c *agentOTLPCapture) validate(agent string) error {
 						if id == "" || seen[id] {
 							return fmt.Errorf("missing or duplicate generation ID %q", id)
 						}
+						if !generationIDs[id] {
+							return fmt.Errorf("span generation ID %q matches no exported generation", id)
+						}
 						seen[id] = true
-						if attrs["user.id"] != fixtureEmail {
-							return fmt.Errorf("generation %q identity user.id = %q, want %q", id, attrs["user.id"], fixtureEmail)
+						if err := agentOTLPWantAttrs(span.Attributes, map[string]string{"user.id": user}); err != nil {
+							return fmt.Errorf("generation %q identity: %w", id, err)
 						}
 						generations++
 					default:
@@ -177,6 +194,7 @@ func (c *agentOTLPCapture) validate(agent string) error {
 		return fmt.Errorf("span counts: generations=%d tools=%d, want %d and 1", generations, tools, wantGenerations)
 	}
 	peakTokenCounts := map[string]uint64{}
+	toolDurations := false
 	for _, request := range metrics {
 		if err := agentOTLPNoContent(request); err != nil {
 			return fmt.Errorf("metric export: %w", err)
@@ -184,6 +202,29 @@ func (c *agentOTLPCapture) validate(agent string) error {
 		for _, resource := range request.GetResourceMetrics() {
 			for _, scope := range resource.GetScopeMetrics() {
 				for _, metric := range scope.GetMetrics() {
+					// The page's filters apply to every series, so every datapoint carries the identity.
+					for _, point := range metric.GetHistogram().GetDataPoints() {
+						if err := agentOTLPWantAttrs(point.GetAttributes(), identity); err != nil {
+							return fmt.Errorf("%s datapoint: %w", metric.GetName(), err)
+						}
+					}
+					// The unit names the series the page queries, as gen_ai_client_operation_duration_seconds.
+					if want := map[string]string{"gen_ai.client.operation.duration": "s", "gen_ai.client.token.usage": "{token}"}[metric.GetName()]; want != "" && metric.GetUnit() != want {
+						return fmt.Errorf("%s unit = %q, want %q", metric.GetName(), metric.GetUnit(), want)
+					}
+					if metric.GetName() == "gen_ai.client.operation.duration" {
+						// The Tools tab and the Workspaces sparkline count these by tool and repository.
+						for _, point := range metric.GetHistogram().GetDataPoints() {
+							attrs := agentOTLPAttrs(point.Attributes)
+							if attrs["gen_ai.operation.name"] != "execute_tool" {
+								continue
+							}
+							if attrs["gen_ai.tool.name"] != tool {
+								return fmt.Errorf("tool duration gen_ai.tool.name = %q, want %q", attrs["gen_ai.tool.name"], tool)
+							}
+							toolDurations = toolDurations || point.Count > 0
+						}
+					}
 					if metric.GetName() != "gen_ai.client.token.usage" {
 						continue
 					}
@@ -192,9 +233,9 @@ func (c *agentOTLPCapture) validate(agent string) error {
 						return errors.New("token usage requires histogram datapoints")
 					}
 					for _, point := range histogram.DataPoints {
-						// user.id identifies spans, not metric series. The user tag is a metric dimension.
-						if err := agentOTLPWantAttrs(point.GetAttributes(), identity); err != nil {
-							return fmt.Errorf("token usage datapoint: %w", err)
+						// The page reads input and output tokens only from inclusive series.
+						if semantics := agentOTLPAttrs(point.Attributes)["gen_ai.token.semantics"]; semantics != "inclusive" {
+							return fmt.Errorf("token usage gen_ai.token.semantics = %q, want inclusive", semantics)
 						}
 						tokenType := agentOTLPAttrs(point.Attributes)["gen_ai.token.type"]
 						value := float64(0)
@@ -222,6 +263,9 @@ func (c *agentOTLPCapture) validate(agent string) error {
 	if peakTokenCounts["input"] != uint64(wantGenerations) || peakTokenCounts["output"] != uint64(wantGenerations) {
 		return fmt.Errorf("missing input/output token usage observations: counts=%v, want %d each", peakTokenCounts, wantGenerations)
 	}
+	if !toolDurations {
+		return errors.New("missing execute_tool duration observations")
+	}
 	return nil
 }
 
@@ -233,6 +277,8 @@ func agentOTLPAttrs(attrs []*commonpb.KeyValue) map[string]string {
 	return out
 }
 
+// agentOTLPWantAttrs checks attrs for duplicates and for each wanted value. An
+// empty wanted value means the key must be absent.
 func agentOTLPWantAttrs(attrs []*commonpb.KeyValue, want map[string]string) error {
 	seen := map[string]bool{}
 	for _, attr := range attrs {
@@ -243,6 +289,9 @@ func agentOTLPWantAttrs(attrs []*commonpb.KeyValue, want map[string]string) erro
 	}
 	got := agentOTLPAttrs(attrs)
 	for key, value := range want {
+		if _, present := got[key]; value == "" && present {
+			return fmt.Errorf("attribute %s = %q, want it absent", key, got[key])
+		}
 		if got[key] != value {
 			return fmt.Errorf("attribute %s = %q, want %q", key, got[key], value)
 		}
@@ -408,7 +457,7 @@ func TestAgentOTLPCaptureRejectsRequests(t *testing.T) {
 				require.Empty(t, traces)
 				require.Empty(t, metrics)
 				require.Len(t, errs, 1)
-				require.ErrorContains(t, capture.validate("claude-code"), "OTLP receiver")
+				require.ErrorContains(t, capture.validate("claude-code", fixtureEmail, "fixture-session", nil), "OTLP receiver")
 			})
 		}
 	}
@@ -551,10 +600,11 @@ func agentOTLPFixture(agent string) (*coltracepb.ExportTraceServiceRequest, *col
 			Name: "fixture", TraceId: bytes.Repeat([]byte{1}, 16), SpanId: bytes.Repeat([]byte{byte(i + 1)}, 8),
 			StartTimeUnixNano: 100, EndTimeUnixNano: 200, Attributes: identity(),
 		}
+		conversation := attr("gen_ai.conversation.id", "fixture-session")
 		if i < count {
-			span.Attributes = append(span.Attributes, attr("gen_ai.operation.name", "generateText"), attr("agento11y.generation.id", fmt.Sprintf("gen-%d", i)), attr("user.id", fixtureEmail))
+			span.Attributes = append(span.Attributes, attr("gen_ai.operation.name", "generateText"), attr("agento11y.generation.id", fmt.Sprintf("gen-%d", i)), conversation, attr("user.id", fixtureEmail))
 		} else {
-			span.Attributes = append(span.Attributes, attr("gen_ai.operation.name", "execute_tool"), attr("gen_ai.tool.name", tool), attr("gen_ai.tool.call.id", fakeToolCallID), attr("gen_ai.tool.type", "function"))
+			span.Attributes = append(span.Attributes, attr("gen_ai.operation.name", "execute_tool"), conversation, attr("gen_ai.tool.name", tool), attr("gen_ai.tool.call.id", fakeToolCallID), attr("gen_ai.tool.type", "function"))
 		}
 		spans = append(spans, span)
 	}
@@ -566,11 +616,14 @@ func agentOTLPFixture(agent string) (*coltracepb.ExportTraceServiceRequest, *col
 	}{{"input", input}, {"output", output}} {
 		sum := token.value * float64(count)
 		points = append(points, &metricpb.HistogramDataPoint{
-			Attributes: append(identity(), attr("gen_ai.token.type", token.name)), Count: uint64(count), Sum: &sum,
+			Attributes: append(identity(), attr("gen_ai.token.type", token.name), attr("gen_ai.token.semantics", "inclusive")), Count: uint64(count), Sum: &sum,
 		})
 	}
+	duration := &metricpb.HistogramDataPoint{Attributes: append(identity(), attr("gen_ai.operation.name", "execute_tool"), attr("gen_ai.tool.name", tool)), Count: 1}
 	metrics := &colmetricpb.ExportMetricsServiceRequest{ResourceMetrics: []*metricpb.ResourceMetrics{{ScopeMetrics: []*metricpb.ScopeMetrics{{Metrics: []*metricpb.Metric{{
-		Name: "gen_ai.client.token.usage", Data: &metricpb.Metric_Histogram{Histogram: &metricpb.Histogram{DataPoints: points}},
+		Name: "gen_ai.client.token.usage", Unit: "{token}", Data: &metricpb.Metric_Histogram{Histogram: &metricpb.Histogram{DataPoints: points}},
+	}, {
+		Name: "gen_ai.client.operation.duration", Unit: "s", Data: &metricpb.Metric_Histogram{Histogram: &metricpb.Histogram{DataPoints: []*metricpb.HistogramDataPoint{duration}}},
 	}}}}}}}
 	return traces, metrics
 }
@@ -578,11 +631,61 @@ func agentOTLPFixture(agent string) (*coltracepb.ExportTraceServiceRequest, *col
 func TestAgentOTLPValidate(t *testing.T) {
 	for _, agent := range []string{"claude-code", "codex"} {
 		for _, tc := range []struct {
-			name    string
-			mutate  func(*coltracepb.ExportTraceServiceRequest, *colmetricpb.ExportMetricsServiceRequest)
-			wantErr string
+			name       string
+			noIdentity bool
+			mutate     func(*coltracepb.ExportTraceServiceRequest, *colmetricpb.ExportMetricsServiceRequest)
+			wantErr    string
 		}{
 			{name: "valid without metric or tool user.id"},
+			{name: "no identity", noIdentity: true, mutate: func(r *coltracepb.ExportTraceServiceRequest, m *colmetricpb.ExportMetricsServiceRequest) {
+				agentOTLPStripUser(r, m)
+			}},
+			{name: "user without identity", noIdentity: true, wantErr: "want it absent"},
+			{name: "user tag without identity", noIdentity: true, mutate: func(r *coltracepb.ExportTraceServiceRequest, m *colmetricpb.ExportMetricsServiceRequest) {
+				agentOTLPStripUser(r, m)
+				point := m.ResourceMetrics[0].ScopeMetrics[0].Metrics[1].GetHistogram().DataPoints[0]
+				point.Attributes = append(point.Attributes, &commonpb.KeyValue{Key: "agento11y.tag.user", Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: "os-login"}}})
+			}, wantErr: "agento11y.tag.user = \"os-login\", want it absent"},
+			{name: "unknown generation ID", mutate: func(r *coltracepb.ExportTraceServiceRequest, _ *colmetricpb.ExportMetricsServiceRequest) {
+				r.ResourceSpans[0].ScopeSpans[0].Spans[0].Attributes[7].Value.Value = &commonpb.AnyValue_StringValue{StringValue: "gen-9"}
+			}, wantErr: "matches no exported generation"},
+			{name: "wrong duration unit", mutate: func(_ *coltracepb.ExportTraceServiceRequest, m *colmetricpb.ExportMetricsServiceRequest) {
+				m.ResourceMetrics[0].ScopeMetrics[0].Metrics[1].Unit = "ms"
+			}, wantErr: "unit"},
+			{name: "untagged generation duration", mutate: func(_ *coltracepb.ExportTraceServiceRequest, m *colmetricpb.ExportMetricsServiceRequest) {
+				histogram := m.ResourceMetrics[0].ScopeMetrics[0].Metrics[1].GetHistogram()
+				histogram.DataPoints = append(histogram.DataPoints, &metricpb.HistogramDataPoint{Count: 1, Attributes: []*commonpb.KeyValue{
+					{Key: "gen_ai.operation.name", Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: "generateText"}}},
+				}})
+			}, wantErr: "gen_ai.client.operation.duration datapoint"},
+			{name: "user.id without identity", noIdentity: true, mutate: func(r *coltracepb.ExportTraceServiceRequest, m *colmetricpb.ExportMetricsServiceRequest) {
+				agentOTLPStripUser(r, m)
+				span := r.ResourceSpans[0].ScopeSpans[0].Spans[0]
+				span.Attributes = append(span.Attributes, &commonpb.KeyValue{Key: "user.id", Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: "os-login"}}})
+			}, wantErr: "user.id = \"os-login\", want it absent"},
+			{name: "missing conversation ID", mutate: func(r *coltracepb.ExportTraceServiceRequest, _ *colmetricpb.ExportMetricsServiceRequest) {
+				spans := r.ResourceSpans[0].ScopeSpans[0].Spans
+				tool := spans[len(spans)-1]
+				tool.Attributes = slices.DeleteFunc(tool.Attributes, func(a *commonpb.KeyValue) bool { return a.GetKey() == "gen_ai.conversation.id" })
+			}, wantErr: "gen_ai.conversation.id"},
+			{name: "wrong conversation ID", mutate: func(r *coltracepb.ExportTraceServiceRequest, _ *colmetricpb.ExportMetricsServiceRequest) {
+				r.ResourceSpans[0].ScopeSpans[0].Spans[0].Attributes[8].Value.Value = &commonpb.AnyValue_StringValue{StringValue: "other-session"}
+			}, wantErr: "gen_ai.conversation.id"},
+			{name: "missing tool duration", mutate: func(_ *coltracepb.ExportTraceServiceRequest, m *colmetricpb.ExportMetricsServiceRequest) {
+				scope := m.ResourceMetrics[0].ScopeMetrics[0]
+				scope.Metrics = scope.Metrics[:1]
+			}, wantErr: "execute_tool duration"},
+			{name: "wrong tool duration name", mutate: func(_ *coltracepb.ExportTraceServiceRequest, m *colmetricpb.ExportMetricsServiceRequest) {
+				attrs := m.ResourceMetrics[0].ScopeMetrics[0].Metrics[1].GetHistogram().DataPoints[0].Attributes
+				attrs[len(attrs)-1].Value.Value = &commonpb.AnyValue_StringValue{StringValue: "exec_command"}
+			}, wantErr: "gen_ai.tool.name"},
+			{name: "wrong tool duration repository", mutate: func(_ *coltracepb.ExportTraceServiceRequest, m *colmetricpb.ExportMetricsServiceRequest) {
+				m.ResourceMetrics[0].ScopeMetrics[0].Metrics[1].GetHistogram().DataPoints[0].Attributes[4].Value.Value = &commonpb.AnyValue_StringValue{StringValue: "wrong"}
+			}, wantErr: "agento11y.tag.repo"},
+			{name: "missing token semantics", mutate: func(_ *coltracepb.ExportTraceServiceRequest, m *colmetricpb.ExportMetricsServiceRequest) {
+				point := m.ResourceMetrics[0].ScopeMetrics[0].Metrics[0].GetHistogram().DataPoints[0]
+				point.Attributes = point.Attributes[:len(point.Attributes)-1]
+			}, wantErr: "gen_ai.token.semantics"},
 			{name: "missing generation", mutate: func(r *coltracepb.ExportTraceServiceRequest, _ *colmetricpb.ExportMetricsServiceRequest) {
 				r.ResourceSpans[0].ScopeSpans[0].Spans = r.ResourceSpans[0].ScopeSpans[0].Spans[1:]
 			}, wantErr: "span counts"},
@@ -654,13 +757,31 @@ func TestAgentOTLPValidate(t *testing.T) {
 					tc.mutate(traces, metrics)
 				}
 				capture := &agentOTLPCapture{traceReqs: []*coltracepb.ExportTraceServiceRequest{traces}, metricReqs: []*colmetricpb.ExportMetricsServiceRequest{metrics}}
-				err := capture.validate(agent)
+				user := fixtureEmail
+				if tc.noIdentity {
+					user = ""
+				}
+				err := capture.validate(agent, user, "fixture-session", map[string]bool{"gen-0": true, "gen-1": true})
 				if tc.wantErr == "" {
 					require.NoError(t, err)
 				} else {
 					require.ErrorContains(t, err, tc.wantErr)
 				}
 			})
+		}
+	}
+}
+
+// agentOTLPStripUser removes the user from every span and datapoint, as a run
+// with no identity exports them.
+func agentOTLPStripUser(traces *coltracepb.ExportTraceServiceRequest, metrics *colmetricpb.ExportMetricsServiceRequest) {
+	isUser := func(a *commonpb.KeyValue) bool { return a.GetKey() == "agento11y.tag.user" || a.GetKey() == "user.id" }
+	for _, span := range traces.ResourceSpans[0].ScopeSpans[0].Spans {
+		span.Attributes = slices.DeleteFunc(span.Attributes, isUser)
+	}
+	for _, metric := range metrics.ResourceMetrics[0].ScopeMetrics[0].Metrics {
+		for _, point := range metric.GetHistogram().DataPoints {
+			point.Attributes = slices.DeleteFunc(point.Attributes, isUser)
 		}
 	}
 }
