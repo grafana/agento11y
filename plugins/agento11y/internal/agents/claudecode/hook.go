@@ -199,8 +199,15 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 	}
 	initToolState(&st, input.TranscriptPath, subFiles)
 	stop := strings.TrimSpace(input.HookEventName) == "Stop"
+	// SessionEnd reads once. Stop already waited for the closing turn, and
+	// Claude Code cancels SessionEnd hooks 1.5s into its exit, so a wait here
+	// loses the turns that did complete when a session ends mid-turn.
+	settle := transcriptSettleWindow
+	if strings.TrimSpace(input.HookEventName) == "SessionEnd" {
+		settle = 0
+	}
 	readFrom := toolReadOffset(&st, input.TranscriptPath, st.Offset)
-	raw, readPos, titles, err := readLiveSettled(hookCtx, input.TranscriptPath, readFrom, st.Offset, stop, logger)
+	raw, readPos, titles, err := readLiveSettled(hookCtx, input.TranscriptPath, readFrom, st.Offset, settle, stop, logger)
 	if err != nil {
 		return nil
 	}
@@ -450,7 +457,7 @@ func handleUserPromptSubmit(ctx context.Context, stdout io.Writer, input *hookIn
 // caller can distinguish "nothing to read" from "read but nothing complete",
 // and the title lines Claude Code wrote in the range.
 func readTranscriptSettled(ctx context.Context, path string, offset int64, stop bool, logger *log.Logger) ([]transcript.Line, int64, int, transcript.Titles) {
-	raw, _, titles, err := readLiveSettled(ctx, path, offset, offset, stop, logger)
+	raw, _, titles, err := readLiveSettled(ctx, path, offset, offset, transcriptSettleWindow, stop, logger)
 	if err != nil {
 		return nil, 0, 0, transcript.Titles{}
 	}
@@ -461,8 +468,8 @@ func readTranscriptSettled(ctx context.Context, path string, offset int64, stop 
 // A test seam for transient I/O faults. Each accepted batch feeds both consumers.
 var readLiveComplete = transcript.ReadCompleteWithTitles
 
-func readLiveSettled(ctx context.Context, path string, offset, generationOffset int64, stop bool, logger *log.Logger) ([]transcript.Line, int64, transcript.Titles, error) {
-	deadline := time.Now().Add(transcriptSettleWindow)
+func readLiveSettled(ctx context.Context, path string, offset, generationOffset int64, settle time.Duration, stop bool, logger *log.Logger) ([]transcript.Line, int64, transcript.Titles, error) {
+	deadline := time.Now().Add(settle)
 	for {
 		raw, pos, titles, err := readLiveComplete(path, offset)
 		if err != nil && (!stop || !errors.Is(err, fs.ErrNotExist)) {
