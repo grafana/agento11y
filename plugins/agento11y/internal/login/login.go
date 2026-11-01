@@ -60,6 +60,7 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/browser"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/clihelp"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/doctor"
@@ -1319,12 +1320,14 @@ func validateBlockPreferences(env map[string]string) error {
 		ok            func(string) bool
 	}{
 		{"CONTENT_CAPTURE_MODE", "use full, metadata_only, no_tool_content, or full_with_metadata_spans", func(raw string) bool {
-			return normalizeContentMode(raw) == strings.ToLower(raw)
+			// The parser envconfig.ResolveContentModeValue applies at runtime,
+			// which also takes "default".
+			var mode agento11y.ContentCaptureMode
+			return mode.UnmarshalText([]byte(raw)) == nil
 		}},
 		{"TAGS", "use comma-separated key=value pairs", func(raw string) bool { return validateTags(raw) == nil }},
 		{"GUARDS_ENABLED", "use true or false", func(raw string) bool { _, ok := envconfig.ParseBoolValue(raw); return ok }},
 		{"GUARDS_FAIL_OPEN", "use true or false", func(raw string) bool { _, ok := envconfig.ParseBoolValue(raw); return ok }},
-		{"GUARDS_TIMEOUT_MS", "use a positive whole number of milliseconds", func(raw string) bool { return validateGuardTimeout(raw) == nil }},
 		{"STACK_URL", "use the https stack URL, such as https://example.grafana.net", func(raw string) bool {
 			origin, err := stackOrigin(raw)
 			return err == nil && requireBlockURL(origin) == nil
@@ -1358,6 +1361,11 @@ var blockReadSuffixes = []string{"ENDPOINT", "AUTH_TENANT_ID", "AUTH_TOKEN", "OT
 // code on, read the sessions of, or collect requests from every machine set
 // up from it. A block chooses the stack it reports to, and nothing else that
 // leaves the machine.
+// The auth mode other than the setup page's basic, the export headers, and
+// the guard timeout are refused because guard checks go out with the export
+// auth and headers and fail open by default: any of the three could make
+// every check fail, and so let every tool call through, while export kept
+// working.
 // LOCAL and LOCAL_FORWARD are written by login itself on every Cloud
 // setup, so a block's value would not survive the save.
 var blockRefusalReasons = map[string]string{
@@ -1372,15 +1380,19 @@ var blockRefusalReasons = map[string]string{
 	"AGENT_VERSION":                  "agento11y works these out for each agent",
 	"COPILOT_HOOK_SURFACE":           "agento11y works these out for each agent",
 	"USER_ID":                        "a block cannot give everyone who logs in with it the same user",
+	"AUTH_MODE":                      blockReasonGuardChecks,
+	"HEADERS":                        blockReasonGuardChecks,
+	"GUARDS_TIMEOUT_MS":              blockReasonGuardChecks,
 	"LOCAL":                          "login sets these itself",
 	"LOCAL_FORWARD":                  "login sets these itself",
 }
 
 const (
-	blockReasonDowngrade  = "a block cannot turn off redaction, TLS, guards, or updates"
-	blockReasonUsageStats = "a block cannot turn on usage stats, which go to Grafana, not its stack"
-	blockReasonKeyName    = "a setting name must be upper case"
-	blockReasonUnknown    = "login does not save this setting from a block"
+	blockReasonGuardChecks = "guard checks fail open, so a block cannot change their auth mode, headers, or timeout"
+	blockReasonDowngrade   = "a block cannot turn off redaction, TLS, guards, or updates"
+	blockReasonUsageStats  = "a block cannot turn on usage stats, which go to Grafana, not its stack"
+	blockReasonKeyName     = "a setting name must be upper case"
+	blockReasonUnknown     = "login does not save this setting from a block"
 )
 
 // blockRefusal is a key login did not take from a block, and why.
@@ -1423,9 +1435,9 @@ func blockDowngrade(key, suffix, value string) bool {
 // key is refused, so a setting added later is not saved from a shared block
 // until someone decides it can be.
 var blockSettingSuffixes = []string{
-	"PROTOCOL", "INSECURE", "HEADERS", "EXPORT_TIMEOUT_MS", "AUTH_MODE", "TAGS",
+	"PROTOCOL", "INSECURE", "EXPORT_TIMEOUT_MS", "TAGS",
 	"CONTENT_CAPTURE_MODE", "DEBUG", "REDACT_INPUT_MESSAGES", "OTEL_EXPORTER_OTLP_INSECURE",
-	"OTEL_AUTH_TOKEN", "GUARDS_ENABLED", "GUARDS_FAIL_OPEN", "GUARDS_TIMEOUT_MS",
+	"OTEL_AUTH_TOKEN", "GUARDS_ENABLED", "GUARDS_FAIL_OPEN",
 	"AUTO_UPDATE", "THEME", "USER_ID_SOURCE", usagestats.EnvSuffix,
 	// Not an alias family: the SDK reads only the AGENTO11Y_ spelling, which
 	// PROTOCOL=otel needs.
@@ -1433,21 +1445,25 @@ var blockSettingSuffixes = []string{
 }
 
 // blockFormSuffixes are the settings form's preferences other than automatic
-// tags and the stack URL, which have their own handling. A pasted block fills
-// them in as answers the user can still change (presetFormPreferences);
-// --env-file, which shows no form, writes the ones the block sets.
-var blockFormSuffixes = []string{"CONTENT_CAPTURE_MODE", "TAGS", "GUARDS_ENABLED", "GUARDS_FAIL_OPEN", "GUARDS_TIMEOUT_MS"}
+// tags and the stack URL, which have their own handling, and the guard
+// timeout, which a block never sets. A pasted block fills them in as answers
+// the user can still change (presetFormPreferences); --env-file, which shows
+// no form, writes the ones the block sets.
+var blockFormSuffixes = []string{"CONTENT_CAPTURE_MODE", "TAGS", "GUARDS_ENABLED", "GUARDS_FAIL_OPEN"}
 
 // blockExportCredentialSuffixes carry a copy of the export credential, like
 // the block's OTLP headers: OTEL_AUTH_TOKEN wins over the token for OTLP, and
-// HEADERS can carry an Authorization value. They follow the headers' rule, so
-// a flag that replaces the tenant or the token drops them, and so does a block
-// without its own OTLP endpoint.
+// HEADERS can carry an Authorization value. A saved copy is deleted when the
+// credential changes (markCredentialCopies). A block never sets HEADERS, and
+// its OTEL_AUTH_TOKEN follows the headers' rule, so a flag that replaces the
+// tenant or the token drops it, and so does a block without its own OTLP
+// endpoint.
 var blockExportCredentialSuffixes = []string{"OTEL_AUTH_TOKEN", "HEADERS"}
 
 // blockDefaultValues are the PROTOCOL and AUTH_MODE values the setup page's
 // block always carries. They are the defaults, so login does not write them
-// over a saved choice such as PROTOCOL=otel; any other value is written.
+// over a saved choice such as PROTOCOL=otel, and does not name them as
+// refused; any other PROTOCOL is written, and any other AUTH_MODE refused.
 var blockDefaultValues = map[string]string{"PROTOCOL": "http", "AUTH_MODE": "basic"}
 
 // blockKeys sorts a block's keys by what login does with them. settings are
@@ -1487,6 +1503,9 @@ func blockKeys(env map[string]string, writeFormKeys, dropExportCredentials bool)
 		case !dotenv.AllowedDotenvKey(key) || readIntoForm[key]:
 		case suffix == "" && !strings.HasPrefix(key, "OTEL_"):
 			// A bare AGENTO11Y_ or SIGIL_ names no setting.
+		case value != "" && strings.EqualFold(value, blockDefaultValues[suffix]):
+			// Before the refusals, so the setup page's AUTH_MODE=basic is
+			// skipped without a notice.
 		case blockRefusalReasons[suffix] != "":
 			refused = append(refused, blockRefusal{key, blockRefusalReasons[suffix]})
 		case suffix == usagestats.EnvSuffix && blockDowngrade(key, suffix, value):
@@ -1503,7 +1522,7 @@ func blockKeys(env map[string]string, writeFormKeys, dropExportCredentials bool)
 		case dropExportCredentials && slices.Contains(blockExportCredentialSuffixes, suffix):
 		case slices.Contains(blockFormSuffixes, suffix) && !writeFormKeys:
 		default:
-			if value == "" || strings.EqualFold(value, blockDefaultValues[suffix]) {
+			if value == "" {
 				continue
 			}
 			if slices.Contains(blockFormSuffixes, suffix) {
@@ -1553,7 +1572,8 @@ func presetFormPreferences(v *formValues, env map[string]string) {
 		v.tags = tags
 	}
 	// A value blockKeys refuses is not preset either, so the form and the
-	// report agree; the user can still choose it in the form.
+	// report agree; the user can still choose it in the form. The same goes
+	// for the guard timeout, which a block never sets.
 	enabled, _, _ := envconfig.LookupMap(env, "GUARDS_ENABLED")
 	failOpen, _, _ := envconfig.LookupMap(env, "GUARDS_FAIL_OPEN")
 	if blockDowngrade("", "GUARDS_ENABLED", enabled) {
@@ -1571,9 +1591,6 @@ func presetFormPreferences(v *formValues, env map[string]string) {
 			open = envconfig.ParseBool(failOpen)
 		}
 		v.guards = seedGuards(strconv.FormatBool(on), strconv.FormatBool(open))
-	}
-	if timeout, _, _ := envconfig.LookupMap(env, "GUARDS_TIMEOUT_MS"); timeout != "" {
-		v.guardTimeout = timeout
 	}
 	// A stack the user already chose in this run stays: the block came from
 	// that stack's setup page, and the form has no field to show a swap.

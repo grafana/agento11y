@@ -2,11 +2,16 @@ package login
 
 import (
 	"bytes"
+	"cmp"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"maps"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -15,9 +20,11 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/guard"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/doctor"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
@@ -925,8 +932,8 @@ const blockCreds = "AGENTO11Y_ENDPOINT=https://block.example.com\n" +
 	"AGENTO11Y_AUTH_TOKEN=glc_block\n"
 
 // runBlockForTest runs a promptless login with block over a config.env that
-// holds existing, with only shell exported, and returns the saved file and
-// stderr. Run exports what it saves and a shell value beats config.env, so
+// holds existing, at opts.ConfigPath or in a new directory, with only shell
+// exported, and returns the saved file and stderr. Run exports what it saves and a shell value beats config.env, so
 // every seeded family is cleared first.
 func runBlockForTest(t *testing.T, existing string, shell map[string]string, opts RunOpts) (map[string]string, string, error) {
 	t.Helper()
@@ -939,7 +946,7 @@ func runBlockForTest(t *testing.T, existing string, shell map[string]string, opt
 	for k, v := range shell {
 		t.Setenv(k, v)
 	}
-	path := filepath.Join(t.TempDir(), "config.env")
+	path := cmp.Or(opts.ConfigPath, filepath.Join(t.TempDir(), "config.env"))
 	if existing != "" {
 		if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
 			t.Fatal(err)
@@ -1274,10 +1281,12 @@ func TestApplyPaste(t *testing.T) {
 				contentMode:   contentModeFull,
 				tags:          "team=core",
 				guards:        guardsClosed,
-				guardTimeout:  "900",
 				stackURL:      "https://team.grafana.net",
 				blockSettings: map[string]string{"AGENTO11Y_DEBUG": "true"},
-				blockRefused:  []blockRefusal{{"AGENTO11Y_BIN", "a block cannot choose what agento11y runs, loads, or answers"}},
+				blockRefused: []blockRefusal{
+					{"AGENTO11Y_BIN", "a block cannot choose what agento11y runs, loads, or answers"},
+					{"AGENTO11Y_GUARDS_TIMEOUT_MS", blockReasonGuardChecks},
+				},
 			},
 			wantFilled: pasteFilled{token: true},
 		},
@@ -1461,9 +1470,12 @@ func TestApplyPaste(t *testing.T) {
 			block: "AGENTO11Y_AUTH_TOKEN=glc_test\n" +
 				"OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.example.invalid\n" +
 				"AGENTO11Y_OTEL_AUTH_TOKEN=glc_team\nAGENTO11Y_HEADERS=Authorization=Bearer team\n",
-			fixed:      fixedValues{tenantID: "789"},
-			seed:       formValues{tenantID: "789"},
-			want:       formValues{tenantID: "789", token: "glc_test", otelEndpoint: "https://otlp.example.invalid"},
+			fixed: fixedValues{tenantID: "789"},
+			seed:  formValues{tenantID: "789"},
+			want: formValues{
+				tenantID: "789", token: "glc_test", otelEndpoint: "https://otlp.example.invalid",
+				blockRefused: []blockRefusal{{"AGENTO11Y_HEADERS", blockReasonGuardChecks}},
+			},
 			wantFilled: pasteFilled{token: true, otelEndpoint: true},
 		},
 		{
@@ -1473,9 +1485,12 @@ func TestApplyPaste(t *testing.T) {
 			block: "AGENTO11Y_AUTH_TOKEN=glc_test\n" +
 				"OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.example.invalid\n" +
 				"AGENTO11Y_OTEL_AUTH_TOKEN=glc_team\nAGENTO11Y_HEADERS=Authorization=Bearer team\n",
-			fixed:      fixedValues{otelEndpoint: "https://my-own-collector.example"},
-			seed:       formValues{otelEndpoint: "https://my-own-collector.example"},
-			want:       formValues{otelEndpoint: "https://my-own-collector.example", token: "glc_test"},
+			fixed: fixedValues{otelEndpoint: "https://my-own-collector.example"},
+			seed:  formValues{otelEndpoint: "https://my-own-collector.example"},
+			want: formValues{
+				otelEndpoint: "https://my-own-collector.example", token: "glc_test",
+				blockRefused: []blockRefusal{{"AGENTO11Y_HEADERS", blockReasonGuardChecks}},
+			},
 			wantFilled: pasteFilled{token: true},
 		},
 	}
@@ -1637,10 +1652,14 @@ func TestValidatePastedBlock(t *testing.T) {
 			notIn:   "everything",
 		},
 		{
-			name:    "a guard timeout that is not a number",
-			in:      "AGENTO11Y_AUTH_TOKEN=glc_test\nAGENTO11Y_GUARDS_TIMEOUT_MS=soon\n",
-			wantErr: "AGENTO11Y_GUARDS_TIMEOUT_MS is not usable",
-			notIn:   "soon",
+			// A block never sets the guard timeout, so its value is not
+			// checked; login names the key as refused instead.
+			name: "a guard timeout that is not a number",
+			in:   "AGENTO11Y_AUTH_TOKEN=glc_test\nAGENTO11Y_GUARDS_TIMEOUT_MS=soon\n",
+		},
+		{
+			name: "the content capture mode the runtime reads as metadata_only",
+			in:   "AGENTO11Y_AUTH_TOKEN=glc_test\nAGENTO11Y_CONTENT_CAPTURE_MODE=Default\n",
 		},
 		{
 			name:    "session tags without a value",
@@ -1686,23 +1705,6 @@ func TestValidatePastedBlock(t *testing.T) {
 		},
 		{name: "a block of only comments fills nothing", in: "# AGENTO11Y block\n# nothing yet\n", wantErr: "no credentials"},
 		{name: "a key with no value fills nothing", in: "AGENTO11Y_AUTH_TOKEN\nAGENTO11Y_ENDPOINT=\n", wantErr: "no credentials"},
-		{
-			name:    "a zero guard timeout",
-			in:      "AGENTO11Y_AUTH_TOKEN=glc_test\nAGENTO11Y_GUARDS_TIMEOUT_MS=0\n",
-			wantErr: "AGENTO11Y_GUARDS_TIMEOUT_MS is not usable: use a positive whole number of milliseconds",
-		},
-		{
-			name:    "a negative guard timeout",
-			in:      "AGENTO11Y_AUTH_TOKEN=glc_test\nSIGIL_GUARDS_TIMEOUT_MS=-250\n",
-			wantErr: "SIGIL_GUARDS_TIMEOUT_MS is not usable",
-			notIn:   "-250",
-		},
-		{
-			name:    "a guard timeout past the integer range",
-			in:      "AGENTO11Y_AUTH_TOKEN=glc_test\nAGENTO11Y_GUARDS_TIMEOUT_MS=99999999999999999999\n",
-			wantErr: "AGENTO11Y_GUARDS_TIMEOUT_MS is not usable",
-			notIn:   "99999999999999999999",
-		},
 		{
 			name:    "a guards switch spelled as a word the parser does not know",
 			in:      "AGENTO11Y_AUTH_TOKEN=glc_test\nAGENTO11Y_GUARDS_ENABLED=enabled\n",
@@ -3418,16 +3420,19 @@ func TestRun_Block(t *testing.T) {
 			wantFile: map[string]string{"AGENTO11Y_STACK_URL": "https://team.grafana.net"},
 		},
 		{
-			name:       "a protocol and auth mode in the block are set",
-			existing:   "AGENTO11Y_PROTOCOL=http\n",
-			opts:       RunOpts{Block: block + "AGENTO11Y_PROTOCOL=otel\nAGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true\nSIGIL_AUTH_MODE=Tenant\n"},
-			wantStderr: "set AGENTO11Y_AUTH_MODE, AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES, AGENTO11Y_PROTOCOL from the block.",
+			// The auth mode is refused: guard checks use it, and they fail
+			// open.
+			name:     "a protocol in the block is set and an auth mode refused",
+			existing: "AGENTO11Y_PROTOCOL=http\n",
+			opts:     RunOpts{Block: block + "AGENTO11Y_PROTOCOL=otel\nAGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true\nSIGIL_AUTH_MODE=Tenant\n"},
+			wantStderr: "set AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES, AGENTO11Y_PROTOCOL from the block.\n" +
+				"agento11y login: did not set SIGIL_AUTH_MODE from the block: " + blockReasonGuardChecks + ".\n",
 			wantFile: map[string]string{
 				"AGENTO11Y_PROTOCOL":                     "otel",
 				"SIGIL_PROTOCOL":                         "otel",
 				"AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "true",
-				"SIGIL_AUTH_MODE":                        "Tenant",
-				"AGENTO11Y_AUTH_MODE":                    "Tenant",
+				"SIGIL_AUTH_MODE":                        "",
+				"AGENTO11Y_AUTH_MODE":                    "",
 			},
 		},
 		{
@@ -3727,8 +3732,8 @@ func TestRun_BlockEdgeCases(t *testing.T) {
 		},
 		{
 			name:     "only the SIGIL_ spelling is saved under both",
-			opts:     RunOpts{Block: blockCreds + "SIGIL_DEBUG=true\nSIGIL_GUARDS_TIMEOUT_MS=900\n"},
-			wantFile: map[string]string{"AGENTO11Y_DEBUG": "true", "SIGIL_DEBUG": "true", "AGENTO11Y_GUARDS_TIMEOUT_MS": "900"},
+			opts:     RunOpts{Block: blockCreds + "SIGIL_DEBUG=true\nSIGIL_EXPORT_TIMEOUT_MS=900\n"},
+			wantFile: map[string]string{"AGENTO11Y_DEBUG": "true", "SIGIL_DEBUG": "true", "AGENTO11Y_EXPORT_TIMEOUT_MS": "900"},
 		},
 		{
 			name: "the SIGIL_ spelling of every denied key is refused",
@@ -4093,25 +4098,33 @@ func TestRun_BlockRefusesDowngradesAndUnknownKeys(t *testing.T) {
 	}
 }
 
-// TestRun_BlockCorpusAgainstV055 is the corpus of the differential run against
-// v0.55.0 for #919. v0.55.0 has no --env-file, and its paste field read only
-// the endpoint, tenant ID, token, OTLP endpoint, and OTLP headers, so it saved
-// none of these lines. saved is what --env-file does with the last line of
-// extra now.
-func TestRun_BlockCorpusAgainstV055(t *testing.T) {
-	envconfig.PinAliasEnvBlank(t)
+// blockCorpus is the corpus of the differential run against v0.55.0 for #919.
+// v0.55.0 has no --env-file, and its paste field read only the endpoint,
+// tenant ID, token, OTLP endpoint, and OTLP headers, so it saved none of these
+// lines. saved is what --env-file does with the last line of extra now.
+var blockCorpus = func() []struct {
+	existing, extra string
+	saved           bool
+} {
 	const otlp = "OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.block.example.com/otlp\n"
-	for _, c := range []struct {
+	return []struct {
 		existing, extra string
 		saved           bool
 	}{
 		{extra: "AGENTO11Y_PROTOCOL=otel", saved: true},
 		{extra: "AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true", saved: true},
-		{extra: "AGENTO11Y_AUTH_MODE=tenant", saved: true},
+		{extra: "AGENTO11Y_AUTH_MODE=tenant"},
+		{extra: "AGENTO11Y_AUTH_MODE=none"},
+		{extra: "AGENTO11Y_AUTH_MODE=bearer"},
+		{extra: "SIGIL_AUTH_MODE=Tenant"},
+		{extra: "AGENTO11Y_AUTH_MODE=basic"},
 		{extra: "AGENTO11Y_INSECURE=true"},
 		{extra: "AGENTO11Y_INSECURE=false", saved: true},
 		{extra: "AGENTO11Y_HEADERS=X-Team=core"},
-		{extra: otlp + "AGENTO11Y_HEADERS=X-Team=core", saved: true},
+		{extra: otlp + "AGENTO11Y_HEADERS=X-Team=core"},
+		{extra: otlp + "AGENTO11Y_HEADERS=Authorization=Bearer glc_FAKEHEADER"},
+		{extra: otlp + "SIGIL_HEADERS=authorization=Basic Z2xjX0ZBS0U="},
+		{extra: otlp + "AGENTO11Y_HEADERS=X-Agento11y-Hook-Timeout-Ms=1"},
 		{extra: otlp + "AGENTO11Y_OTEL_AUTH_TOKEN=glc_FAKEOTEL", saved: true},
 		{extra: "AGENTO11Y_EXPORT_TIMEOUT_MS=15000", saved: true},
 		{extra: "AGENTO11Y_AGENT_NAME=renamed"},
@@ -4121,6 +4134,7 @@ func TestRun_BlockCorpusAgainstV055(t *testing.T) {
 		{extra: "AGENTO11Y_AUTO_CODING_AGENT_TAGS=true", saved: true},
 		{extra: "AGENTO11Y_AUTO_CODING_AGENT_TAGS=true\nAGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=user,repo", saved: true},
 		{existing: "AGENTO11Y_CONTENT_CAPTURE_MODE=metadata_only", extra: "AGENTO11Y_CONTENT_CAPTURE_MODE=full", saved: true},
+		{extra: "AGENTO11Y_CONTENT_CAPTURE_MODE=default", saved: true},
 		{extra: "AGENTO11Y_DEBUG=true", saved: true},
 		{extra: "SIGIL_DEBUG=true", saved: true},
 		{extra: "AGENTO11Y_REDACT_INPUT_MESSAGES=false"},
@@ -4132,7 +4146,9 @@ func TestRun_BlockCorpusAgainstV055(t *testing.T) {
 		{extra: "AGENTO11Y_GUARDS_ENABLED=true", saved: true},
 		{existing: "AGENTO11Y_GUARDS_ENABLED=true\nAGENTO11Y_GUARDS_FAIL_OPEN=false", extra: "AGENTO11Y_GUARDS_FAIL_OPEN=true"},
 		{extra: "AGENTO11Y_GUARDS_ENABLED=true\nAGENTO11Y_GUARDS_FAIL_OPEN=false", saved: true},
-		{extra: "AGENTO11Y_GUARDS_TIMEOUT_MS=900", saved: true},
+		{extra: "AGENTO11Y_GUARDS_TIMEOUT_MS=900"},
+		{extra: "AGENTO11Y_GUARDS_TIMEOUT_MS=1"},
+		{extra: "SIGIL_GUARDS_TIMEOUT_MS=1"},
 		{extra: "AGENTO11Y_AUTO_UPDATE=false"},
 		{extra: "AGENTO11Y_AUTO_UPDATE=true", saved: true},
 		{extra: "AGENTO11Y_THEME=dark", saved: true},
@@ -4156,7 +4172,14 @@ func TestRun_BlockCorpusAgainstV055(t *testing.T) {
 		{extra: "OTEL_SERVICE_NAME=team"},
 		{extra: "AGENTO11Y_Bin=/tmp/evil"},
 		{extra: "AGENTO11Y_OTEL_AUTH_TOKEN: glc_FAKEFAKE=="},
-	} {
+	}
+}()
+
+// TestRun_BlockCorpusAgainstV055 runs blockCorpus through --env-file and
+// checks which lines are saved.
+func TestRun_BlockCorpusAgainstV055(t *testing.T) {
+	envconfig.PinAliasEnvBlank(t)
+	for _, c := range blockCorpus {
 		t.Run(c.extra, func(t *testing.T) {
 			existing, extra := c.existing, c.extra
 			got, stderr, err := runBlockForTest(t, existing, nil, RunOpts{Block: blockCreds + extra + "\n"})
@@ -4177,6 +4200,146 @@ func TestRun_BlockCorpusAgainstV055(t *testing.T) {
 				t.Errorf("%s saved = %v, want %v (file %s=%q, stderr %q)", line, saved, c.saved, name, got[name], stderr)
 			}
 		})
+	}
+}
+
+// TestBlockCannotWeakenGuards checks the rule behind the block lists rather
+// than the lists: no block weakens guards. Each blockCorpus row is logged in
+// through --env-file and through the paste field over a config.env that has
+// guards on, the file is applied as a hook process applies it, and a real
+// guard check goes to a stack that denies the call. Guards fail open by
+// default, so a saved key that makes the check fail (no credentials, a header
+// over Authorization, a timeout shorter than the stack takes) turns that deny
+// into an allow while export keeps working.
+func TestBlockCannotWeakenGuards(t *testing.T) {
+	const tenant, token, ruleID = "456", "glc_test", "deny-rm"
+	wantAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte(tenant+":"+token))
+	stack := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The stack takes 20 ms and, as Sigil's hookDeadline does, gives up
+		// at the deadline the request's timeout header names.
+		if ms, err := strconv.Atoi(r.Header.Get("X-Agento11y-Hook-Timeout-Ms")); err == nil && ms > 0 && ms < 20 {
+			time.Sleep(time.Duration(ms) * time.Millisecond)
+			http.Error(w, "deadline exceeded", http.StatusInternalServerError)
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+		if r.URL.Path != "/api/v1/hooks:evaluate" || r.Header.Get("Authorization") != wantAuth {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"action":"deny","rule_id":%q}`, ruleID)
+	}))
+	t.Cleanup(stack.Close)
+	creds := "AGENTO11Y_ENDPOINT=" + stack.URL + "\nAGENTO11Y_AUTH_TENANT_ID=" + tenant + "\nAGENTO11Y_AUTH_TOKEN=" + token + "\n"
+
+	// Every key login writes, so a value Run or dotenv.ApplyEnv exports is
+	// cleared between rows and restored after the test.
+	written := []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS", "OTEL_EXPORTER_OTLP_INSECURE"}
+	for _, suffix := range append(slices.Clone(envconfig.AliasSuffixes), "STACK_URL", "ENABLE_EXPERIMENTAL_FEATURES") {
+		written = append(written, envconfig.PreferredKey(suffix), envconfig.LegacyKey(suffix))
+	}
+	for _, k := range written {
+		t.Setenv(k, "")
+	}
+	clearEnv := func() {
+		for _, k := range written {
+			_ = os.Setenv(k, "")
+		}
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	path := dotenv.FilePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	paths := map[string]func(t *testing.T, existing, block string){
+		"env-file": func(t *testing.T, existing, block string) {
+			if _, stderr, err := runBlockForTest(t, existing, nil, RunOpts{ConfigPath: path, Block: block}); err != nil {
+				t.Fatalf("Run: %v (stderr %q)", err, stderr)
+			}
+		},
+		"paste": func(t *testing.T, existing, block string) {
+			writeConfigForTest(t, path, existing)
+			pasteBlockForTest(t, path, block)
+		},
+	}
+	for name, login := range paths {
+		for _, c := range blockCorpus {
+			t.Run(name+"/"+c.extra, func(t *testing.T) {
+				clearEnv()
+				login(t, "AGENTO11Y_GUARDS_ENABLED=true\n"+c.existing, creds+c.extra+"\n")
+				saved, err := dotenv.ReadDotenv(path, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for k := range saved {
+					if !slices.Contains(written, k) {
+						t.Fatalf("login wrote %s, which this test does not clear between rows", k)
+					}
+				}
+				// A hook process starts from the shell, here empty, and
+				// applies config.env over it.
+				clearEnv()
+				dotenv.ApplyEnv(nil)
+				res := guard.EvaluateToolCall(context.Background(), envconfig.ResolveGuards(nil), guard.ToolCallInput{
+					AgentName:     "claude-code",
+					ToolName:      "Bash",
+					ToolInputJSON: json.RawMessage(`{"command":"rm -rf ~"}`),
+				}, nil)
+				if !res.Blocked() || res.RuleID != ruleID {
+					t.Errorf("guard verdict = %s (rule %q), want the stack's deny; saved %v", res.Action, res.RuleID, saved)
+				}
+			})
+		}
+	}
+}
+
+// writeConfigForTest replaces the config.env at path with contents, or
+// removes it when contents is empty.
+func writeConfigForTest(t *testing.T, path, contents string) {
+	t.Helper()
+	if contents == "" {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		return
+	}
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// pasteBlockForTest saves what login saves when block is pasted into the
+// form over the config.env at path and every other answer is submitted as
+// the form shows it: Run's seeds, the paste, and Run's steps after the form.
+func pasteBlockForTest(t *testing.T, path, block string) {
+	t.Helper()
+	if err := validatePastedBlock(fixedValues{}, block); err != nil {
+		t.Fatalf("validatePastedBlock: %v", err)
+	}
+	seeds, err := loadSeeds(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := dotenv.ReadDotenv(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := formValues{
+		contentMode:  normalizeContentMode(seeds["SIGIL_CONTENT_CAPTURE_MODE"]),
+		tags:         seeds["SIGIL_TAGS"],
+		autoTags:     seedAutoTags(seeds[envconfig.LegacyKey(envconfig.AutoTagsSuffix)]),
+		autoTagNames: seedAutoTagNames(seeds[envconfig.LegacyKey(envconfig.AutoTagNamesSuffix)]),
+		guards:       seedGuards(seeds["SIGIL_GUARDS_ENABLED"], seeds["SIGIL_GUARDS_FAIL_OPEN"]),
+		// promptValues shows the default when no timeout is saved.
+		guardTimeout: cmp.Or(seeds["SIGIL_GUARDS_TIMEOUT_MS"], strconv.Itoa(envconfig.DefaultGuardsTimeoutMs)),
+		otlpHeaders:  seeds["OTEL_EXPORTER_OTLP_HEADERS"],
+	}
+	applyPaste(&v, fixedValues{}, block)
+	v.capturePrompted = true
+	markCredentialCopies(&v, saved)
+	if err := dotenv.WriteDotenv(path, buildUpdates(v, false), nil); err != nil {
+		t.Fatal(err)
 	}
 }
 
