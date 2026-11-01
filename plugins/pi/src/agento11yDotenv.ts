@@ -35,6 +35,9 @@ const ALIAS_SUFFIXES = [
   "INSECURE",
   "HEADERS",
   "EXPORT_TIMEOUT_MS",
+  "QUEUE_SIZE",
+  "MAX_RETRIES",
+  "MAX_BACKOFF_MS",
   "AUTH_MODE",
   "AUTH_TENANT_ID",
   "AUTH_TOKEN",
@@ -191,15 +194,6 @@ export function loadAgento11yDotenv(path: string): Record<string, string> {
   return readAgento11yDotenv(path).env;
 }
 
-// Maps each non-family key this function has copied from config.env to the
-// exact value it wrote into process.env on the last call. We track the value
-// (not just the key) so a later writer — a shell-style assignment from
-// another loader, an extension, or test setup — can be distinguished from
-// our own previously-written value. Once process.env[key] no longer
-// matches what we wrote, ownership is released and the key is treated as
-// OS-supplied: OS env wins per key, on every call, not just the first.
-const ownedValues = new Map<string, string>();
-
 // Family-level ownership for the alias suffixes. `value` is what we last
 // materialized under BOTH spellings; `shell` records the values that were in
 // process.env before that write (the true shell/runtime layer), so repeated
@@ -210,7 +204,28 @@ interface OwnedFamily {
   shell: { preferred: string | undefined; legacy: string | undefined };
 }
 
-const ownedFamilies = new Map<string, OwnedFamily>();
+interface DotenvOwnership {
+  ownedValues: Map<string, string>;
+  ownedFamilies: Map<string, OwnedFamily>;
+}
+
+// Module replacement must not turn file-owned values into shell overrides.
+const dotenvRegistryKey = Symbol.for("grafana.agento11y.pi.dotenv.v1");
+const processState = globalThis as typeof globalThis & {
+  [dotenvRegistryKey]?: DotenvOwnership;
+};
+processState[dotenvRegistryKey] ??= {
+  ownedValues: new Map(),
+  ownedFamilies: new Map(),
+};
+// Maps each non-family key this function has copied from config.env to the
+// exact value it wrote into process.env on the last call. We track the value
+// (not just the key) so a later writer — a shell-style assignment from
+// another loader, an extension, or test setup — can be distinguished from
+// our own previously-written value. Once process.env[key] no longer
+// matches what we wrote, ownership is released and the key is treated as
+// OS-supplied: OS env wins per key, on every call, not just the first.
+const { ownedValues, ownedFamilies } = processState[dotenvRegistryKey];
 
 /**
  * Read the sigil dotenv file and synchronize its contents with `process.env`.

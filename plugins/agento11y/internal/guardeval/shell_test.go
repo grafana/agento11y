@@ -2,6 +2,8 @@ package guardeval
 
 import (
 	"encoding/json"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/grafana/agento11y/go/agento11y"
@@ -121,10 +123,12 @@ func TestShellCommandTarget_RegexDeniesAcrossToolsAndKeys(t *testing.T) {
 			wantAction: agento11y.HookActionAllow,
 		},
 		{
-			name:       "shell tool with no command key projects nothing",
+			// A host that names its command key differently is still judged:
+			// with no command key, the call's string values are its commands.
+			name:       "shell tool with no command key is judged by its string values",
 			tool:       "Bash",
-			input:      `{"description":"rm -rf /var/tmp"}`,
-			wantAction: agento11y.HookActionAllow,
+			input:      `{"input":"rm -rf /var/tmp"}`,
+			wantAction: agento11y.HookActionDeny,
 		},
 		{
 			// Each command is judged on its own, so a pattern cannot match text
@@ -257,19 +261,56 @@ func TestShellCommands(t *testing.T) {
 			in:   agento11y.HookInput{Output: msg(agento11y.Part{Kind: agento11y.PartKindText, Text: "rm -rf /"})},
 		},
 		{
-			name: "command key wins over cmd and script",
+			// Every command key is read, as Grafana Cloud reads them: a host
+			// runs one, and which one depends on its parser.
+			name: "every command key is read",
 			in:   agento11y.HookInput{Output: msg(call("Bash", `{"script":"c","cmd":"b","command":"a"}`))},
-			want: []string{"a"},
+			want: []string{"a", "b", "c"},
 		},
 		{
-			name: "cmd wins over script",
+			name: "cmd and script are both read",
 			in:   agento11y.HookInput{Output: msg(call("Bash", `{"script":"c","cmd":"b"}`))},
-			want: []string{"b"},
+			want: []string{"b", "c"},
 		},
 		{
 			name: "an argv array is joined for matching",
 			in:   agento11y.HookInput{Output: msg(call("Bash", `{"command":["rm","-rf","/"]}`))},
 			want: []string{"rm -rf /"},
+		},
+		{
+			// An argv list is read with its arguments quoted, and also judged
+			// joined as sent, so a pattern for rm -rf /tmp/* still matches.
+			name: "an argv list keeps its plain form",
+			in:   agento11y.HookInput{Output: msg(call("Bash", `{"command":["rm","-rf","/tmp/*"]}`))},
+			want: []string{`rm -rf '/tmp/*'`, `rm -rf /tmp/\*`, "rm -rf /tmp/*"},
+		},
+		{
+			// A call with no command key is not cleared by having none.
+			name: "a call with no command key reads its string values",
+			in:   agento11y.HookInput{Output: msg(call("Bash", `{"input":"cat .env","options":{"note":"ls"}}`))},
+			want: []string{"cat .env", "ls"},
+		},
+		{
+			// Codex's local_shell nests its command under action; the argv
+			// list is one command, not one subject per word.
+			name: "a nested command is read as one command",
+			in:   agento11y.HookInput{Output: msg(call("local_shell", `{"action":{"type":"exec","command":["git","reset","--hard"]}}`))},
+			want: []string{"git reset --hard"},
+		},
+		{
+			name: "a top-level command does not hide a nested one",
+			in:   agento11y.HookInput{Output: msg(call("local_shell", `{"command":"ls","action":{"command":["git","reset","--hard"]}}`))},
+			want: []string{"ls", "git reset --hard"},
+		},
+		{
+			name: "an argv list under an unknown key is one command",
+			in:   agento11y.HookInput{Output: msg(call("Bash", `{"args":["git","reset","--hard"]}`))},
+			want: []string{"git reset --hard"},
+		},
+		{
+			name: "a list of one string stays that string",
+			in:   agento11y.HookInput{Output: msg(call("Bash", `{"input":["cat .env"]}`))},
+			want: []string{"cat .env"},
 		},
 		{
 			name: "a non-string non-array command falls through to the next key",
@@ -302,21 +343,22 @@ func TestShellCommands(t *testing.T) {
 			in:   agento11y.HookInput{Messages: msg(call("Bash", `{"command":"git reset --hard"}`))},
 		},
 		{
-			name: "malformed and empty arguments are skipped",
+			// Arguments that are not JSON are read as text.
+			name: "malformed arguments are read as text, empty ones skipped",
 			in: agento11y.HookInput{Output: msg(
 				call("Bash", `not json`),
 				call("Bash", ""),
 				call("Bash", `{"command":"   "}`),
 				call("Bash", `{"command":"echo kept"}`),
 			)},
-			want: []string{"echo kept"},
+			want: []string{"not json", "echo kept"},
 		},
 		{
-			// bash -c is not unwrapped: the projection is the literal command the
-			// agent asked for, because unwrapping it means implementing a shell.
-			name: "bash -c is not unwrapped",
+			// The command as written, unquoted, and the code bash -c runs,
+			// split into its commands.
+			name: "bash -c is decoded",
 			in:   agento11y.HookInput{Output: msg(call("Bash", `{"command":"bash -c \"rm -rf /\""}`))},
-			want: []string{`bash -c "rm -rf /"`},
+			want: []string{`bash -c "rm -rf /"`, `bash -c rm\ -rf\ /`, `rm -rf /`},
 		},
 	}
 	for _, tc := range cases {
@@ -395,4 +437,174 @@ func TestCompileEvaluator_InvalidShellConfigSkipsTheRule(t *testing.T) {
 	require.Empty(t, rules)
 	require.Len(t, errs, 1)
 	assert.Contains(t, errs[0].Error(), "tool_names")
+}
+
+func TestShellUnquotedForm(t *testing.T) {
+	for in, want := range map[string]string{
+		`git "reset" --hard`:   `git reset --hard`,
+		`git 'reset' --hard`:   `git reset --hard`,
+		`g\it re""set --hard`:  `git reset --hard`,
+		`rm -r /tmp/"path -f"`: `rm -r /tmp/path\ -f`,
+		`echo 'a; b' && ls`:    `echo a\;\ b && ls`,
+		`chmod -R 755 "~/"`:    `chmod -R 755 \~/`,
+		`echo "$HOME" '$HOME'`: `echo $HOME \$HOME`,
+		`echo "a \"b\" \\ \x"`: `echo a\ \"b\"\ \\\ \\x`,
+		`git reset --hard "`:   `git reset --hard \"`,
+		`git reset --hard 'x`:  `git reset --hard \'x`,
+		// An apostrophe in a comment or a heredoc body opens no quote. The
+		// shell runs no comment, so it is dropped, and a heredoc body is data,
+		// written escaped.
+		`git "reset" --hard # don't`:                           `git reset --hard `,
+		"git \"reset\" --hard\necho '":                         "git reset --hard\necho \\'",
+		"cat <<EOF\nit's \"x\"\nEOF\ngit \"reset\" --hard":     "cat <<EOF\nit\\'s\\ \\\"x\\\"\\\nEOF\ngit reset --hard",
+		"cat <<-'END' >f\n\tit's\n\tEND\ngit \"reset\" --hard": "cat <<-'END' >f\n\\\tit\\'s\\\n\\\tEND\ngit reset --hard",
+		`echo $((1<<2)) "x y"`:                                 `echo $((1<<2)) x\ y`,
+		`echo a#b "c"`:                                         `echo a#b c`,
+		// A here-string and a shift in arithmetic open no heredoc, and a # after
+		// a ) is part of the word.
+		"cat <<< EOF\ngit \"reset\" --hard":    "cat <<< EOF\ngit reset --hard",
+		"echo $((a<<b))\ngit \"reset\" --hard": "echo $((a<<b))\ngit reset --hard",
+		"(( x << y ))\ngit \"reset\" --hard":   "(( x << y ))\ngit reset --hard",
+		"echo $(pwd)#; git re\"set\" --hard":   "echo $(pwd)#; git reset --hard",
+		// $'...' and $"..." quote like '...' and "...".
+		`git $'reset' --hard`:    `git reset --hard`,
+		`git $"reset" --hard`:    `git reset --hard`,
+		`rm $'-rf' /tmp/x`:       `rm -rf /tmp/x`,
+		`echo $'it\'s' x`:        `echo it\'s x`,
+		`git $'\x72eset' --hard`: `git reset --hard`,
+		`echo $'\101\x42\q'`:     `echo AB\\q`,
+		`echo $HOME $'`:          `echo $HOME $\'`,
+		`trailing \`:             `trailing \`,
+		`no quotes at all`:       `no quotes at all`,
+	} {
+		full, _ := lexShell(in, 0)
+		assert.Equal(t, want, full, in)
+	}
+}
+
+// TestShellSimpleCommands checks how a shell command splits into the simple
+// commands pack patterns judge from their start.
+func TestShellSimpleCommands(t *testing.T) {
+	for _, tt := range []struct {
+		in   string
+		want []string
+	}{
+		// The shell splits commands at ;, &&, ||, |, &, newlines and groups.
+		{"cd repo && git reset --hard", []string{"cd repo", "git reset --hard"}},
+		{"a; b | c || d & e", []string{"a", "b", "c", "d", "e"}},
+		{"(cd x; git reset --hard)", []string{"cd x", "git reset --hard"}},
+		{"{ git reset --hard; }", []string{"git reset --hard"}},
+		// Each is also read from its name on, without keywords, wrappers and
+		// redirections.
+		{"if true; then git reset --hard; fi", []string{"if true", "then git reset --hard", "fi", "true", "git reset --hard"}},
+		{"echo hi 2>&1 | tee log &>/dev/null", []string{"echo hi 2>&1", "tee log &>/dev/null", "echo hi", "tee log"}},
+		{"xargs -I{} rm -rf {}", []string{"xargs -I{} rm -rf {}", "rm -rf {}"}},
+		// Quoted text, comments and heredoc bodies are no commands.
+		{`git commit -m "fix; git reset --hard"`, []string{`git commit -m fix\;\ git\ reset\ --hard`}},
+		{"git log -5 # before git reset --hard", []string{"git log -5"}},
+		{"cat <<'EOF' > notes\ngit reset --hard\nEOF\nls", []string{"cat <<'EOF' > notes", "ls", "cat"}},
+		{"git commit -m \"$(cat <<'EOF'\nUse git checkout . and git reset --hard. Don't \"quote\".\nEOF\n)\"", []string{"git commit -m $", "cat <<'EOF'", "cat"}},
+		// The code in substitutions, sh -c, eval, trap, find -exec and a heredoc
+		// fed to a shell is.
+		{"echo $(git reset --hard) `rm -rf x`", []string{"echo $ $", "git reset --hard", "rm -rf x"}},
+		{"git push --force`printf %s -with-lease`", []string{"git push --force$", "printf %s -with-lease"}},
+		{`sudo bash -lc 'git reset --hard && rm -rf /'`, []string{`sudo bash -lc git\ reset\ --hard\ \&\&\ rm\ -rf\ /`, `bash -lc git\ reset\ --hard\ \&\&\ rm\ -rf\ /`, "git reset --hard", "rm -rf /"}},
+		{`eval "git reset --hard"`, []string{`eval git\ reset\ --hard`, "git reset --hard"}},
+		{`trap 'rm -rf /tmp/x' EXIT`, []string{`trap rm\ -rf\ /tmp/x EXIT`, "rm -rf /tmp/x"}},
+		{`find . -name x -exec rm -rf {} \;`, []string{`find . -name x -exec rm -rf {} \;`, "rm -rf {}"}},
+		{"bash <<'EOF'\ngit reset --hard\nEOF", []string{"bash <<'EOF'", "bash", "git reset --hard"}},
+		// Long wrapper options and their values come before the command name.
+		{"sudo --user deploy git reset --hard", []string{"sudo --user deploy git reset --hard", "git reset --hard"}},
+		{"timeout --signal=KILL 5 git reset --hard", []string{"timeout --signal=KILL 5 git reset --hard", "git reset --hard"}},
+		{"env --split-string 'git reset --hard'", []string{`env --split-string git\ reset\ --hard`, "git reset --hard"}},
+		// xargs --replace takes its value only as =VALUE.
+		{"xargs --replace git reset --hard", []string{"xargs --replace git reset --hard", "git reset --hard"}},
+		// $'...' decodes the escapes the shell decodes.
+		{`git $'\u0072eset' --hard`, []string{"git reset --hard"}},
+		{`git $'\U00000072eset' --hard`, []string{"git reset --hard"}},
+		{`printf $'\e[1m\cA'`, []string{"printf \x1b\\[1m\x01"}},
+	} {
+		_, got := lexShell(tt.in, 0)
+		assert.Equal(t, tt.want, got, tt.in)
+	}
+}
+
+// TestShellReadsCommands checks which commands lexShell reads out of a shell
+// command: those the shell runs, and not text it only writes or prints.
+func TestShellReadsCommands(t *testing.T) {
+	for _, tt := range []struct {
+		in, want, notWant string
+	}{
+		// An unquoted heredoc body runs its $(...) and backticks as the shell
+		// expands it; a quoted delimiter keeps the body as data.
+		{in: "cat > notes.md <<EOF\nNever run `rm -rf ~`\nEOF", want: "rm -rf ~"},
+		{in: "cat <<EOF\n$(git reset --hard)\nEOF", want: "git reset --hard"},
+		{in: "cat <<'EOF'\n$(git reset --hard)\nEOF", notWant: "git reset --hard"},
+		{in: "cat <<\"EOF\"\n`rm -rf ~`\nEOF", notWant: "rm -rf ~"},
+		{in: "cat <<\\EOF\n`rm -rf ~`\nEOF", notWant: "rm -rf ~"},
+		{in: "cat <<EOF\nprice: \\$(rm -rf ~)\nEOF", notWant: "rm -rf ~"},
+		// Any word is a heredoc delimiter.
+		{in: "cat <<'END-OF-SCRIPT' > s.sh\nrm -rf build\nEND-OF-SCRIPT\nls", want: "ls", notWant: "rm -rf build"},
+		{in: "cat <<'EOF.sh'\nrm -rf build\nEOF.sh", notWant: "rm -rf build"},
+		{in: "cat <<-'X Y'\n\trm -rf build\n\tX Y\nls", want: "ls", notWant: "rm -rf build"},
+		// Wrapper options and their values, and the code in them.
+		{in: "sudo -u deploy bash -c 'git reset --hard'", want: "git reset --hard"},
+		{in: "env -u X find ~ -exec rm -rf {} +", want: "rm -rf {}"},
+		{in: "xargs -I % sh -c 'rm -rf %'", want: "rm -rf %"},
+		{in: "timeout -s KILL 60 bash -c 'git reset --hard'", want: "git reset --hard"},
+		{in: "env -S 'git reset --hard'", want: "git reset --hard"},
+		{in: "coproc git reset --hard", want: "git reset --hard"},
+		{in: "flock -n /tmp/lock git reset --hard", want: "git reset --hard"},
+		{in: "watch -n 5 'git reset --hard'", want: "git reset --hard"},
+		{in: "script -q /dev/null git reset --hard", want: "git reset --hard"},
+		{in: "script -c 'git reset --hard' log", want: "git reset --hard"},
+		{in: "ionice -c 3 nice -n 10 git reset --hard", want: "git reset --hard"},
+		// Shell options before -c.
+		{in: "bash -o pipefail -c 'git reset --hard'", want: "git reset --hard"},
+		{in: "bash -O extglob -c 'git reset --hard'", want: "git reset --hard"},
+		{in: "bash --norc -c 'git reset --hard'", want: "git reset --hard"},
+		{in: "bash -c -- 'git reset --hard'", want: "git reset --hard"},
+		{in: "bash --norc <<'EOF'\ngit reset --hard\nEOF", want: "git reset --hard"},
+		{in: "bash script.sh <<'EOF'\ngit reset --hard\nEOF", notWant: "git reset --hard"},
+		// Redirections before or inside a command.
+		{in: ">/dev/null git reset --hard", want: "git reset --hard"},
+		{in: "2>&1 git reset --hard", want: "git reset --hard"},
+		{in: "git 2>/dev/null reset --hard", want: "git reset --hard"},
+		{in: "2> /dev/null rm -rf ~", want: "rm -rf ~"},
+		// Code at the last level is read as written.
+		{in: `bash -c "bash -c \"bash -c 'git reset --hard'\""`, want: "git reset --hard"},
+		// find -exec inside find -exec is bounded like other code.
+		{in: "find . -exec find . -exec rm -rf {} + +", want: "rm -rf {}"},
+	} {
+		_, got := lexShell(tt.in, 0)
+		if tt.want != "" && !slices.Contains(got, tt.want) {
+			t.Errorf("lexShell(%q) = %q, want it to read %q", tt.in, got, tt.want)
+		}
+		if tt.notWant != "" && slices.Contains(got, tt.notWant) {
+			t.Errorf("lexShell(%q) = %q, read %q, which the shell does not run", tt.in, got, tt.notWant)
+		}
+	}
+}
+
+// TestShellSubjectsBounded checks that a crafted command cannot make the lexer
+// produce much more text than it read, which every pattern would then scan,
+// and that one longer than maxShellCommandBytes is not read at all.
+func TestShellSubjectsBounded(t *testing.T) {
+	for _, in := range []string{
+		strings.Repeat("find -exec ", (maxShellCommandBytes-16)/11),
+		strings.Repeat("cat <<A ", 4000) + "\n" + strings.Repeat("x\nA\n", 4000),
+		strings.Repeat("bash -c ", 4000) + "x",
+	} {
+		total := 0
+		for _, s := range shellSubjects(in) {
+			total += len(s)
+		}
+		if total > 16*len(in) {
+			t.Errorf("shellSubjects made %d bytes of subjects from a %d byte command", total, len(in))
+		}
+	}
+	long := strings.Repeat("a; ", maxShellCommandBytes/3+1)
+	if got := shellSubjects(long); len(got) != 1 || got[0] != long {
+		t.Errorf("shellSubjects read a command longer than the cap")
+	}
 }

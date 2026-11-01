@@ -638,19 +638,24 @@ func TestConversationMetricsToolCallOutsideItsGeneration(t *testing.T) {
 	writeToolGeneration(t, s, "conv-late-span", "g1", "/repo", generatedAt, "call-1", "Bash", false)
 	spanAt := mustParse(t, "2026-08-21T11:30:00Z")
 	_, err := s.appendToolSpans([]toolSpanRecord{
-		analyticsSpan("conv-late-span", "trace-1", "span-1", "call-1", "Bash", spanAt, 2*time.Second, false),
+		skillSpan("conv-late-span", "span-1", "call-1", "Bash", "org:Review", spanAt, 2*time.Second, false),
+		skillSpan("standalone", "span-only", "call-only", "Bash", "org:Review", spanAt, time.Second, false),
 	})
 	require.NoError(t, err)
 
-	bash := "Bash"
+	bash, skill := "Bash", "org:Review"
 	for _, tc := range []struct {
 		name   string
 		status string
+		skill  bool
 		want   []string
 	}{
 		{name: "no status facet", want: []string{"conv-late-span"}},
 		{name: "ok status keeps observation-only session", status: "ok", want: []string{"conv-late-span"}},
 		{name: "error status excludes observation-only session", status: "err"},
+		{name: "skill keeps observation-only session", skill: true, want: []string{"conv-late-span"}},
+		{name: "skill ok status keeps observation-only session", skill: true, status: "ok", want: []string{"conv-late-span"}},
+		{name: "skill error status excludes observation-only session", skill: true, status: "err"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			opts := ConversationListOptions{
@@ -659,6 +664,9 @@ func TestConversationMetricsToolCallOutsideItsGeneration(t *testing.T) {
 				Tool:   &bash,
 				Status: tc.status,
 				Exact:  true,
+			}
+			if tc.skill {
+				opts.Tool, opts.Skill = nil, &skill
 			}
 			listed, _, err := s.ListConversations(opts)
 			require.NoError(t, err)
@@ -676,6 +684,139 @@ func TestConversationMetricsToolCallOutsideItsGeneration(t *testing.T) {
 				assert.Equal(t, "ok", rows[0].Status)
 			}
 		})
+	}
+}
+
+func TestConversationSkillIdentityAndTimestampEligibility(t *testing.T) {
+	s := newStorage(t)
+	lower := mustParse(t, "2026-08-21T10:00:00Z")
+	upper := lower.Add(time.Hour)
+	for _, tc := range []struct {
+		id, skill, workspace string
+		at                   time.Time
+	}{
+		{"exact", " org:Review ", "/repo", lower},
+		{"case", "org:review", "/repo", lower.Add(time.Minute)},
+		{"namespace", "other:Review", "/repo", lower.Add(2 * time.Minute)},
+		{"unqualified", "Review", "/repo", lower.Add(3 * time.Minute)},
+		{"unknown", "org:Review", "", lower.Add(4 * time.Minute)},
+		{"blank", " \t ", "/repo", lower.Add(5 * time.Minute)},
+		{"before", "org:Review", "/repo", lower.Add(-time.Nanosecond)},
+		{"upper", "org:Review", "/repo", upper},
+		{"zero", "org:Review", "/repo", time.Time{}},
+		{"ancient", "org:Review", "/repo", mustParse(t, "1600-01-01T00:00:00Z")},
+		{"future", "org:Review", "/repo", mustParse(t, "2300-01-01T00:00:00Z")},
+	} {
+		writeToolGeneration(t, s, tc.id, "g1", tc.workspace, lower, "generation-call", "org:Review", false)
+		_, err := s.appendToolSpans([]toolSpanRecord{
+			skillSpan(tc.id, "span-"+tc.id, "span-call", "Read", tc.skill, tc.at, time.Second, false),
+		})
+		require.NoError(t, err)
+	}
+	// Reconciliation must precede range and timestamp checks: a missing span
+	// start falls back to the generation time, but an invalid or out-of-range
+	// nonzero span start replaces it and cannot select the in-range generation.
+	for _, tc := range []struct {
+		id string
+		at time.Time
+	}{
+		{"matched-fallback", time.Time{}},
+		{"matched-upper", upper},
+		{"matched-invalid", mustParse(t, "2300-01-01T00:00:00Z")},
+	} {
+		writeToolGeneration(t, s, tc.id, "g1", "/repo", lower, "call", "Read", false)
+		_, err := s.appendToolSpans([]toolSpanRecord{
+			skillSpan(tc.id, "span-"+tc.id, "call", "Read", "org:Matched", tc.at, time.Second, false),
+		})
+		require.NoError(t, err)
+	}
+	writeToolGeneration(t, s, "unmarked", "g1", "/repo", lower, "call", "org:Review", false)
+
+	repo, unknown, missing := "/repo", "", "/missing"
+	for _, tc := range []struct {
+		name, skill string
+		workspace   *string
+		unbounded   bool
+		want        []string
+	}{
+		{name: "trim only", skill: " \torg:Review\n", workspace: &repo, want: []string{"exact"}},
+		{name: "case sensitive", skill: "org:review", want: []string{"case"}},
+		{name: "namespace sensitive", skill: "other:Review", want: []string{"namespace"}},
+		{name: "unqualified distinct", skill: "Review", want: []string{"unqualified"}},
+		{name: "reconciled timestamps", skill: "org:Matched", want: []string{"matched-fallback"}},
+		{name: "wrong case", skill: "ORG:Review"},
+		{name: "blank", skill: ""},
+		{name: "whitespace", skill: " \t\n"},
+		{name: "unknown workspace", skill: "org:Review", workspace: &unknown, want: []string{"unknown"}},
+		{name: "missing workspace", skill: "org:Review", workspace: &missing},
+		{name: "invalid timestamps excluded even unbounded", skill: "org:Review", workspace: &repo, unbounded: true, want: []string{"exact", "before", "upper"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := ConversationListOptions{Skill: &tc.skill, Workspace: tc.workspace, Exact: true}
+			if !tc.unbounded {
+				opts.Since, opts.Before = lower, upper
+			}
+			listed, _, err := s.ListConversations(opts)
+			require.NoError(t, err)
+			assert.ElementsMatch(t, tc.want, summaryIDs(listed), "list")
+			rows, matched, _, err := s.ConversationMetrics(opts)
+			require.NoError(t, err)
+			assert.ElementsMatch(t, tc.want, summaryIDs(rows), "metrics")
+			assert.Equal(t, len(tc.want), matched)
+			analytics, err := s.SkillsToolsMetrics(ToolAnalyticsOptions{Since: opts.Since, Before: opts.Before, Workspace: opts.Workspace})
+			require.NoError(t, err)
+			sessions := 0
+			for _, row := range analytics.Skills.Rows {
+				if row.Name == skillNameKey(tc.skill) {
+					sessions = row.Sessions
+				}
+			}
+			assert.Equal(t, sessions, matched, "drilldown and analytics select the same session set")
+		})
+	}
+}
+
+func TestConversationSkillFiltersBeforeLimits(t *testing.T) {
+	s := newStorage(t)
+	lower := mustParse(t, "2026-08-21T10:00:00Z")
+	repo, skill := "/repo", "org:Review"
+	const matches = 205
+	var spans []toolSpanRecord
+	for i := range matches + 3 {
+		id := "conv-" + strconv.Itoa(i)
+		workspace, marker, at := repo, skill, lower.Add(time.Duration(i)*time.Second)
+		switch i {
+		case matches:
+			workspace = "/other"
+		case matches + 1:
+			marker = "org:review"
+		case matches + 2:
+			at = lower.Add(time.Hour)
+		}
+		writeGen(t, s, id, "g1", agento11y.Generation{
+			StartedAt: at, Tags: map[string]string{"cwd": workspace},
+			Usage: agento11y.TokenUsage{InputTokens: 7},
+		}, at.Format(time.RFC3339Nano))
+		spans = append(spans, skillSpan(id, "span-"+id, "call", "Read", marker, at, time.Second, false))
+	}
+	_, err := s.appendToolSpans(spans)
+	require.NoError(t, err)
+	for _, limit := range []int{1, 200} {
+		opts := ConversationListOptions{Limit: limit, Skill: &skill, Workspace: &repo, Since: lower, Before: lower.Add(time.Hour), Exact: true}
+		listed, total, err := s.ListConversations(opts)
+		require.NoError(t, err)
+		assert.Equal(t, matches+3, total)
+		require.Len(t, listed, limit)
+		assert.Equal(t, "conv-204", listed[0].ID, "newer nonmatches do not consume the limit")
+		rows, matched, aggregate, err := s.ConversationMetrics(opts)
+		require.NoError(t, err)
+		require.Len(t, rows, limit)
+		assert.Equal(t, summaryIDs(listed), summaryIDs(rows))
+		assert.Equal(t, matches, matched)
+		assert.Equal(t, matches, aggregate.Calls)
+		assert.Equal(t, int64(matches*7), aggregate.TokenBuckets.FreshInput)
+		require.Len(t, aggregate.WorkspaceRows, 1)
+		assert.Equal(t, matches, aggregate.WorkspaceRows[0].Sessions)
 	}
 }
 

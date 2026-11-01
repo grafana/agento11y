@@ -105,10 +105,10 @@ In JS/TS, `GenerationRecorder.startToolExecution(...)` explicitly parents the to
 The SDKs and Go `otelgenai` support the OpenTelemetry conventions for loading skills, reading skill resources, and running commands.
 These conventions come from [GenAI #498](https://github.com/open-telemetry/semantic-conventions-genai/pull/498) and have Development status.
 The global schema URL remains on the legacy schema because other signals still use it.
-Each execution still creates one `INTERNAL` span with `gen_ai.operation.name=execute_tool`, without new metric labels.
+Each execution still creates one `INTERNAL` span with `gen_ai.operation.name=execute_tool`.
 
 Callers select an execution kind explicitly. The execution kind controls span naming and standard `gen_ai.skill.*` and `process.*` attributes.
-The SDK does not emit the execution kind as an attribute.
+The SDK does not emit the execution kind as a span attribute.
 `ToolType` still describes categories such as `function` or `extension`.
 Unset or unknown execution kinds keep generic behavior and omit skill and process attributes, even when callers supply those fields.
 The SDKs do not detect skills or infer execution kinds from tool names, arguments, paths, or results.
@@ -122,6 +122,27 @@ Generic convenience loops (`execute_tool_calls` / `executeToolCalls` and the .NE
 
 Resource reads and commands never append a skill name alone. Resource naming takes precedence over executable naming.
 Names are trimmed; blank values are omitted. The SDKs do not resolve names or paths through filesystem or network lookups.
+
+### Client metrics
+
+The five SDK clients enrich the existing `gen_ai.client.operation.duration` histogram for `load_skill`, `read_skill_resource`, and `command`:
+
+- `agento11y.tool.execution.kind` contains the lowercase execution kind. This vendor attribute is metric-only, not an OpenTelemetry standard attribute.
+- `gen_ai.skill.name` contains the trimmed, nonblank name supplied at start, including failed attempts. A recognized kind without a name retains only the kind.
+
+Unset or unknown kinds add neither label. Generic convenience loops remain generic.
+The clients use copied start fields independently of tracing, sampling, capture mode, and debug history.
+Names describe attempts or associations, not successful loading or influence on later activity.
+No resource name, description, source URI, process field, payload, conversation ID, or call ID becomes an automatic metric dimension.
+Each execution still records once, with unchanged seconds, buckets, error classification, and exemplar context.
+Standalone Go `otelgenai` automatic dimensions remain unchanged; callers can still supply `Invocation.MetricAttributes` explicitly.
+
+Prometheus translates the new labels to `gen_ai_skill_name` and `agento11y_tool_execution_kind`.
+Filter the existing count or bucket series by `agento11y_tool_execution_kind="load_skill"` for load-only queries.
+For errors, also filter count series by `error_type!=""`.
+These are tool-load intervals, not whole-skill runtime or token cost. Claude intervals can include approval or wait time.
+Skill names remain under metric retention even in reduced capture modes. Use stable, nonsensitive names.
+The labels split histogram series; storage cost is unknown without workload cardinality data.
 
 ### API fields and applicability
 

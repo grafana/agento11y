@@ -15,10 +15,9 @@ type ToolAnalyticsOptions struct {
 	Interval  time.Duration
 }
 
-// SkillsToolsMetricsResponse is deliberately ready for a future sibling
-// skills section. This release only serializes tools.
 type SkillsToolsMetricsResponse struct {
-	Tools ToolAnalytics `json:"tools"`
+	Tools  ToolAnalytics  `json:"tools"`
+	Skills SkillAnalytics `json:"skills"`
 }
 
 type ToolAnalytics struct {
@@ -75,6 +74,7 @@ type toolObservation struct {
 	HasSpan        bool
 	CallID         string
 	Name           string
+	SkillName      string
 	Timestamp      time.Time
 	Failed         bool
 	Duration       *time.Duration
@@ -95,13 +95,44 @@ func (s *Storage) ToolAnalytics(opts ToolAnalyticsOptions) (ToolAnalytics, error
 		return ToolAnalytics{}, err
 	}
 
-	facets := aggregateToolWorkspaceFacets(observations, opts.Since, opts.Before)
+	return toolAnalyticsFromObservations(observations, opts), nil
+}
+
+func toolAnalyticsFromObservations(observations []toolObservation, opts ToolAnalyticsOptions) ToolAnalytics {
+	aggregated := executionAnalyticsFromObservations(observations, opts, toolObservationName, toolNameKey)
+	return ToolAnalytics{
+		Totals: ToolAnalyticsTotals{
+			Calls: aggregated.Calls, Failures: aggregated.Failures, Tools: len(aggregated.Rows),
+			Sessions: aggregated.Sessions, DurationSamples: aggregated.DurationSamples,
+		},
+		Rows: aggregated.Rows, Buckets: aggregated.Buckets, Workspaces: aggregated.Workspaces,
+		IntervalSeconds: aggregated.IntervalSeconds, Coverage: aggregated.Coverage,
+	}
+}
+
+func toolObservationName(observation toolObservation) string {
+	return strings.TrimSpace(observation.Name)
+}
+
+type executionAnalytics struct {
+	Calls, Failures, Sessions, DurationSamples int
+	Rows                                       []ToolAnalyticsRow
+	Buckets                                    []ToolAnalyticsBucket
+	Workspaces                                 []ToolWorkspaceFacet
+	IntervalSeconds                            int64
+	Coverage                                   ToolAnalyticsCoverage
+}
+
+func executionAnalyticsFromObservations(observations []toolObservation, opts ToolAnalyticsOptions,
+	displayName func(toolObservation) string, identityKey func(string) string,
+) executionAnalytics {
+	facets := aggregateExecutionWorkspaceFacets(observations, opts.Since, opts.Before, displayName)
 	selected := make([]toolObservation, 0, len(observations))
 	var first, last time.Time
 	for _, observation := range observations {
 		if !nanosRepresentable(observation.Timestamp) ||
 			!inPeriod(observation.Timestamp, opts.Since, opts.Before) ||
-			!workspaceMatches(observation.Workspace, opts.Workspace) || observation.Name == "" {
+			!workspaceMatches(observation.Workspace, opts.Workspace) || displayName(observation) == "" {
 			continue
 		}
 		selected = append(selected, observation)
@@ -117,10 +148,10 @@ func (s *Storage) ToolAnalytics(opts ToolAnalyticsOptions) (ToolAnalytics, error
 	if interval <= 0 {
 		interval = tokenUsageIntervalFor(last.Sub(first))
 	}
-	analytics := aggregateToolAnalytics(selected, interval)
+	analytics := aggregateExecutionAnalytics(selected, interval, displayName, identityKey)
 	analytics.Workspaces = facets
 	analytics.IntervalSeconds = int64(interval.Seconds())
-	return analytics, nil
+	return analytics
 }
 
 // toolObservations returns one observation per reconciled generation call or
@@ -250,6 +281,7 @@ func reconcileToolSource(source *conversationToolSource) []toolObservation {
 
 func mergeToolSpan(observation *toolObservation, span toolSpanRecord) {
 	observation.HasSpan = true
+	observation.SkillName = strings.TrimSpace(span.SkillName)
 	if name := strings.TrimSpace(span.ToolName); observation.Name == "" {
 		observation.Name = name
 	}
@@ -263,7 +295,9 @@ func mergeToolSpan(observation *toolObservation, span toolSpanRecord) {
 	}
 }
 
-func aggregateToolAnalytics(observations []toolObservation, interval time.Duration) ToolAnalytics {
+func aggregateExecutionAnalytics(observations []toolObservation, interval time.Duration,
+	displayName func(toolObservation) string, identityKey func(string) string,
+) executionAnalytics {
 	type rowAccumulator struct {
 		row       ToolAnalyticsRow
 		durations []time.Duration
@@ -293,8 +327,8 @@ func aggregateToolAnalytics(observations []toolObservation, interval time.Durati
 		if observation.HasGeneration && observation.HasSpan {
 			coverage.MatchedCalls++
 		}
-		name := strings.TrimSpace(observation.Name)
-		nameKey := toolNameKey(name)
+		name := displayName(observation)
+		nameKey := identityKey(name)
 		row := rows[nameKey]
 		if row == nil {
 			row = &rowAccumulator{sessions: map[string]struct{}{}, spellings: map[string]int{}}
@@ -326,23 +360,22 @@ func aggregateToolAnalytics(observations []toolObservation, interval time.Durati
 		}
 	}
 
-	analytics := ToolAnalytics{
+	analytics := executionAnalytics{
 		Rows:       make([]ToolAnalyticsRow, 0, len(rows)),
 		Buckets:    make([]ToolAnalyticsBucket, 0, len(buckets)),
 		Workspaces: []ToolWorkspaceFacet{},
 	}
 	analytics.Coverage = coverage
-	analytics.Totals.Calls = totalCalls
-	analytics.Totals.Tools = len(rows)
-	analytics.Totals.Sessions = len(sessions)
+	analytics.Calls = totalCalls
+	analytics.Sessions = len(sessions)
 	displayNames := make(map[string]string, len(rows))
 	for key, accumulator := range rows {
 		accumulator.row.Name = preferredToolSpelling(accumulator.spellings)
 		displayNames[key] = accumulator.row.Name
 		accumulator.row.Sessions = len(accumulator.sessions)
 		accumulator.row.DurationSamples = len(accumulator.durations)
-		analytics.Totals.Failures += accumulator.row.Failures
-		analytics.Totals.DurationSamples += accumulator.row.DurationSamples
+		analytics.Failures += accumulator.row.Failures
+		analytics.DurationSamples += accumulator.row.DurationSamples
 		if len(accumulator.durations) > 0 {
 			slices.Sort(accumulator.durations)
 			p50 := nearestRankDuration(accumulator.durations, 0.50).Seconds()
@@ -376,7 +409,9 @@ func nearestRankDuration(sorted []time.Duration, percentile float64) time.Durati
 	return sorted[rank-1]
 }
 
-func aggregateToolWorkspaceFacets(observations []toolObservation, since, before time.Time) []ToolWorkspaceFacet {
+func aggregateExecutionWorkspaceFacets(observations []toolObservation, since, before time.Time,
+	displayName func(toolObservation) string,
+) []ToolWorkspaceFacet {
 	type accumulator struct {
 		facet    ToolWorkspaceFacet
 		sessions map[string]struct{}
@@ -384,7 +419,7 @@ func aggregateToolWorkspaceFacets(observations []toolObservation, since, before 
 	byPath := map[string]*accumulator{}
 	for _, observation := range observations {
 		if !nanosRepresentable(observation.Timestamp) ||
-			!inPeriod(observation.Timestamp, since, before) || observation.Name == "" {
+			!inPeriod(observation.Timestamp, since, before) || displayName(observation) == "" {
 			continue
 		}
 		entry := byPath[observation.Workspace]

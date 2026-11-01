@@ -30,6 +30,7 @@ test('setCacheDiagnostics stamps metadata on generation', async () => {
   const exporter = new MockGenerationExporter();
   const defaults = defaultConfig();
   const client = new Agento11yClient({
+    debugBufferSize: 1,
     tracer: trace.getTracer('agento11y-sdk-js-test'),
     generationExport: {
       ...defaults.generationExport,
@@ -66,6 +67,7 @@ test('setCacheDiagnostics ignores empty reason', async () => {
   const exporter = new MockGenerationExporter();
   const defaults = defaultConfig();
   const client = new Agento11yClient({
+    debugBufferSize: 1,
     tracer: trace.getTracer('agento11y-sdk-js-test'),
     generationExport: {
       ...defaults.generationExport,

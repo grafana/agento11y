@@ -17,10 +17,8 @@ You are acting as a coding agent inside this repository. Your goal is to add or 
 4. Add or update tests for changed instrumentation behavior.
 5. Explain what was instrumented and why.
 
-Agent Observability is a Grafana Cloud-only product for user-facing setup. Do not suggest
-non-Cloud or development-only endpoints in docs, examples, or generated
-instructions. Use the Grafana Cloud API URL from Agent Observability configuration
-and Cloud `basic` auth.
+For application instrumentation, use the Grafana Cloud API URL from Agent Observability configuration and Cloud `basic` auth.
+Do not invent Cloud or development endpoints. Coding-agent capture also supports the shared launcher's local mode, without Cloud credentials or Tempo.
 
 ## Output contract (required)
 
@@ -178,9 +176,15 @@ On generation and tool spans, capture or preserve these when available:
 The SDKs and Go `otelgenai` support the OpenTelemetry conventions for loading skills, reading skill resources, and running commands.
 These conventions come from [GenAI #498](https://github.com/open-telemetry/semantic-conventions-genai/pull/498) and have Development status.
 The global schema declaration remains on the legacy schema while other signals still use it.
-Each execution creates one `INTERNAL` span with `gen_ai.operation.name=execute_tool`; no metric labels are added.
+Each execution creates one `INTERNAL` span with `gen_ai.operation.name=execute_tool`.
 The execution kind selects span naming and standard `gen_ai.skill.*` and `process.*` attributes.
-The SDK does not emit the execution kind as an attribute.
+The SDK does not emit the execution kind as a span attribute.
+For the three recognized kinds, the five SDK clients add metric-only `agento11y.tool.execution.kind` to `gen_ai.client.operation.duration`.
+They also include the trimmed, nonblank `gen_ai.skill.name` supplied at start, including failed attempts and reduced capture modes.
+A recognized kind without a name retains only the kind; unset or unknown kinds add neither label.
+No other skill or process dimensions are added automatically. Standalone Go `otelgenai` automatic dimensions remain unchanged.
+Skill names remain under metric retention; use stable, nonsensitive names.
+See [client metrics](https://github.com/grafana/agento11y/blob/main/docs/concepts/tool-call-vs-tool-execution.md#client-metrics) for query labels and cardinality.
 
 | Execution kind | Use | Suffix after `execute_tool {tool}` |
 | --- | --- | --- |
@@ -216,12 +220,26 @@ Skill source URIs exported from typed fields lose all user information, query pa
 Malformed values are omitted without filesystem/network lookups.
 In Go `otelgenai`, raw `Invocation.Attributes` and attributes returned by end hooks bypass capture filtering and URI scrubbing.
 They can override typed attributes. Callers must filter private attributes and sanitize source URIs themselves.
-Core recorders can retain private inputs. JS/Java completed-tool debug snapshots retain raw arguments, results, and error text even in reduced modes.
+Core recorders can retain private inputs. JS/Java completed debug history defaults to disabled (`debugBufferSize: 0`).
+To retain completed records in debug snapshots, use JS `new Agento11yClient({ debugBufferSize: 64 })` or Java `new Agento11yClientConfig().setDebugBufferSize(64)`.
+No environment variable sets `debugBufferSize`; verbose `debug` and `AGENTO11Y_DEBUG` do not control history.
+The client retains the newest `debugBufferSize` entries of each record type across all conversations.
+Snapshots return those entries oldest first by recording order, including after shutdown.
+Queue counters remain available with history disabled. Retention does not change exports, queue limits, spans, metrics, or capture policy.
+When enabled, tool snapshots retain raw arguments, results, and error text even in reduced modes.
+Arguments and results still reference the original payload objects.
+The capacity counts records, not bytes. Active recorders, pending exports, and caller-held snapshots can retain additional data.
 The `no_tool_content` arguments/results opt-in is unchanged and does not bypass reduced effective modes.
 See [capture-mode privacy](https://github.com/grafana/agento11y/blob/main/docs/concepts/content-capture-modes.md#skill-and-process-attribute-privacy).
 
 The shared local receiver stores optional skill/resource/executable names and int64 exit codes in tool-span sidecars, never the three private attributes.
-It prefers nonblank `gen_ai.skill.name` and accepts legacy `agento11y.skill.name`. Old sidecars have no backfill; no UI or analytics are added.
+It prefers nonblank `gen_ai.skill.name` and accepts legacy `agento11y.skill.name`. Local **Analytics > Skills** counts retained marked calls, including loads, resource reads, commands, and failures.
+**Tools** and **Skills** overlap; never add their counts together. See [Local skill analytics](https://github.com/grafana/agento11y/tree/main/plugins/agento11y#local-skill-analytics) for exact identifiers, duration coverage, and session drilldowns.
+Older recordings without skill markers stay unmarked; history import does not reconstruct missing skill metadata. Local recording and analytics need no Tempo.
+
+Live recognition supports Claude Code's native `Skill`, Pi's catalog-matched instruction reads, and OpenCode's standard `skill` tool, not arbitrary resource reads or commands.
+OpenCode retains the requested identifier, not a resolved directory basename, trimming only surrounding whitespace. A recognized attempt can fail and does not explain later activity.
+See [OpenCode recognition limits](https://github.com/grafana/agento11y/tree/main/plugins/opencode#3-verify). Cloud skill visibility requires retained tool and generation spans in Tempo plus deployed Sigil consumer support.
 
 ## Multi-agent dependency tracking
 

@@ -1,7 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { buildBuiltinTags } from "./tags.js";
+import { buildBuiltinTags, effectiveTags } from "./tags.js";
 
 describe("buildBuiltinTags", () => {
+  it("uses generation-equivalent tag precedence for guards", () => {
+    expect(
+      effectiveTags(
+        {
+          autoTags: { owner: "auto", cwd: "auto", auto: "yes" },
+          configuredTags: { owner: "config", cwd: "config" },
+        },
+        { cwd: "/session", "git.branch": "main" },
+      ),
+    ).toEqual({
+      owner: "config",
+      cwd: "/session",
+      auto: "yes",
+      "git.branch": "main",
+    });
+    expect(effectiveTags({})).toEqual({});
+  });
   const cases: {
     name: string;
     in: Parameters<typeof buildBuiltinTags>[0];

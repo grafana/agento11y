@@ -1,0 +1,1291 @@
+{
+  "cases": [
+    {
+      "pack": "git",
+      "command": "git commit -m \"$(cat \u003c\u003c'EOF'\nUndo with git checkout . or git reset --hard, never \"git push --force\".\nEOF\n)\"",
+      "deny": false
+    },
+    {
+      "pack": "destructive",
+      "command": "gh pr create --title x --body \"$(cat \u003c\u003c'EOF'\nThe destructive pack blocks rm -rf /.\nEOF\n)\"",
+      "deny": false
+    },
+    {
+      "pack": "git",
+      "command": "git log -5 # before git reset --hard",
+      "deny": false
+    },
+    {
+      "pack": "git",
+      "command": "echo \"run git reset --hard to start over\"",
+      "deny": false
+    },
+    {
+      "pack": "git",
+      "command": "git commit -m 'git push --force is blocked'",
+      "deny": false
+    },
+    {
+      "pack": "destructive",
+      "command": "grep -r \"rm -rf\" .",
+      "deny": false
+    },
+    {
+      "pack": "files",
+      "command": "git commit -m \"add .env to .gitignore\"",
+      "deny": false
+    },
+    {
+      "pack": "destructive",
+      "command": "cat \u003e notes.md \u003c\u003cEOF\nnever run rm -rf /\nEOF",
+      "deny": false
+    },
+    {
+      "pack": "destructive",
+      "command": "cat \u003e notes.md \u003c\u003c\\EOF\nnever run rm -rf /\nEOF",
+      "deny": false
+    },
+    {
+      "pack": "git",
+      "command": "git commit -F - \u003c\u003cEOF\nrevert: stop calling git reset --hard\nEOF",
+      "deny": false
+    },
+    {
+      "pack": "git",
+      "command": "cd repo \u0026\u0026 git reset --hard",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "GIT_DIR=x git reset --hard",
+      "deny": true
+    },
+    {
+      "pack": "destructive",
+      "command": "sudo rm -rf /",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "env FOO=1 git push --force",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "/usr/bin/git reset --hard",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "\\git reset --hard",
+      "deny": true
+    },
+    {
+      "pack": "destructive",
+      "command": "xargs rm -rf",
+      "deny": true
+    },
+    {
+      "pack": "destructive",
+      "command": "find . | xargs -I{} rm -rf {}",
+      "deny": true
+    },
+    {
+      "pack": "destructive",
+      "command": "find . -name build -exec rm -rf {} \\;",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "bash -lc 'git reset --hard'",
+      "deny": true
+    },
+    {
+      "pack": "destructive",
+      "command": "sh -c \"rm -rf /tmp/x\"",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "eval \"git reset --hard\"",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "bash \u003c\u003c'EOF'\ngit reset --hard\nEOF",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "echo $(git reset --hard)",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "echo \"$(git reset --hard)\"",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "(cd x; git reset --hard)",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "{ git reset --hard; }",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "if true; then git reset --hard; fi",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "time git push --force",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "timeout 30 git clean -fdx",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "cat \u003c\u003cEOF \u003e notes\nhi\nEOF\ngit reset --hard",
+      "deny": true
+    },
+    {
+      "pack": "files",
+      "command": "cat .env",
+      "deny": true
+    },
+    {
+      "pack": "files",
+      "command": "cat \".env\"",
+      "deny": true
+    },
+    {
+      "pack": "files",
+      "command": "echo x \u003e .env",
+      "deny": true
+    },
+    {
+      "pack": "files",
+      "command": "source .env \u0026\u0026 npm start",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "git reset --hard HEAD~1",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "git push --force origin main",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "git push -f",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "git clean -fdx",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "git checkout -- .",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "git stash drop",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "git branch -D feature",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "bash -c \"git reset --hard\"",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "git -C repo reset --hard",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "tool": "exec_command",
+      "input": {
+        "cmd": "git reset --hard"
+      },
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "tool": "local_shell",
+      "input": {
+        "command": [
+          "bash",
+          "-lc",
+          "git reset --hard"
+        ]
+      },
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "tool": "run_shell_command",
+      "input": {
+        "command": "git reset --hard"
+      },
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "tool": "run_in_terminal",
+      "input": {
+        "command": "git reset --hard"
+      },
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "tool": "exec_command",
+      "input": {
+        "cmd": "git status"
+      },
+      "deny": false
+    },
+    {
+      "pack": "git",
+      "command": "git reset \\\n--hard",
+      "deny": true
+    },
+    {
+      "pack": "destructive",
+      "command": "rm \\\n-rf /tmp/x",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "git \"reset\" --hard",
+      "deny": true
+    },
+    {
+      "pack": "destructive",
+      "command": "pkexec rm -rf /",
+      "deny": true
+    },
+    {
+      "pack": "destructive",
+      "command": "chroot / rm -rf /",
+      "deny": true
+    },
+    {
+      "pack": "destructive",
+      "command": "strace -f rm -rf /",
+      "deny": true
+    },
+    {
+      "pack": "destructive",
+      "command": "runuser -u x -- rm -rf /",
+      "deny": true
+    },
+    {
+      "pack": "destructive",
+      "command": "taskset -c 0 rm -rf /",
+      "deny": true
+    },
+    {
+      "pack": "destructive",
+      "command": "ssh host rm -rf /",
+      "deny": true
+    },
+    {
+      "pack": "destructive",
+      "command": "docker exec c rm -rf /",
+      "deny": true
+    },
+    {
+      "pack": "destructive",
+      "command": "mise exec -- rm -rf /",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "pkexec git reset --hard",
+      "deny": true
+    },
+    {
+      "pack": "destructive",
+      "command": "echo hi\npkexec rm -rf /",
+      "deny": true
+    },
+    {
+      "pack": "destructive",
+      "command": "bash \u003c\u003cEOF\nrm -rf /\nEOF",
+      "deny": true
+    },
+    {
+      "pack": "destructive",
+      "command": "docker exec -e \"A=x\ny\" c rm -rf /",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "tool": "exec_command",
+      "input": {
+        "cmd": [
+          "git",
+          "commit",
+          "-m",
+          "drop git reset --hard"
+        ]
+      },
+      "deny": true
+    },
+    {
+      "pack": "destructive",
+      "command": "pkexec a#b rm -rf /",
+      "deny": true
+    },
+    {
+      "pack": "destructive",
+      "command": "echo rm -rf /",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "git log -5 # before git reset --hard",
+      "deny": false
+    },
+    {
+      "pack": "git",
+      "command": "git 'reset' --hard",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "g\\it re\"\"set --hard",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "git checkout \".\"",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "git checkout \\*",
+      "deny": true
+    },
+    {
+      "pack": "destructive",
+      "command": "rm $'-rf' /tmp/x",
+      "deny": true
+    },
+    {
+      "pack": "permissions",
+      "command": "chmod -R 755 \"~/\"",
+      "deny": false
+    },
+    {
+      "pack": "git",
+      "command": "g\\it 'reset' --hard",
+      "deny": true
+    },
+    {
+      "pack": "destructive",
+      "command": "rm \"-rf\" /tmp/x",
+      "deny": true
+    },
+    {
+      "pack": "destructive",
+      "command": "rm -r /tmp/\"path -f\"",
+      "deny": false
+    },
+    {
+      "pack": "git",
+      "command": "git checkout .",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "git checkout -f main",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "git restore src/main.go",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "git restore --staged --worktree .",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "git push origin +main",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "git restore --staged .",
+      "deny": false
+    },
+    {
+      "pack": "git",
+      "command": "git diff --name-only | xargs git restore",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "git restore --staged --pathspec-from-file -",
+      "deny": false
+    },
+    {
+      "pack": "git",
+      "command": "git reset --ha",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "git -P reset --hard",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "git switch --di main",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "cat \u003c\u003c\u003c EOF\ngit \"reset\" --hard",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "echo $((a\u003c\u003cb))\ngit \"reset\" --hard",
+      "deny": true
+    },
+    {
+      "pack": "permissions",
+      "command": "chmod -R 777 ~/.",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "git restore --source HEAD --staged src/a.go",
+      "deny": false
+    },
+    {
+      "pack": "git",
+      "command": "git restore . --staged",
+      "deny": false
+    },
+    {
+      "pack": "git",
+      "command": "git checkout '*'",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "git $'reset' --hard",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "git \"reset\" --hard # don't",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "cat \u003c\u003cEOF \u003e notes.md\nit's done\nEOF\ngit \"reset\" --hard",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "git checkout -b feature",
+      "deny": false
+    },
+    {
+      "pack": "git",
+      "command": "git status",
+      "deny": false
+    },
+    {
+      "pack": "git",
+      "command": "git push origin main",
+      "deny": false
+    },
+    {
+      "pack": "git",
+      "command": "git branch -d merged",
+      "deny": false
+    },
+    {
+      "pack": "git",
+      "command": "git reset --soft HEAD~1",
+      "deny": false
+    },
+    {
+      "pack": "destructive",
+      "command": "rm -rf /tmp/cache",
+      "deny": true
+    },
+    {
+      "pack": "destructive",
+      "command": "rm -fr build",
+      "deny": true
+    },
+    {
+      "pack": "destructive",
+      "command": "rm -r -f dist",
+      "deny": true
+    },
+    {
+      "pack": "destructive",
+      "command": "rm file.txt",
+      "deny": false
+    },
+    {
+      "pack": "destructive",
+      "command": "rm -r empty-dir",
+      "deny": false
+    },
+    {
+      "pack": "permissions",
+      "command": "chmod -R 755 /",
+      "deny": true
+    },
+    {
+      "pack": "permissions",
+      "command": "chown -R root $HOME",
+      "deny": true
+    },
+    {
+      "pack": "permissions",
+      "command": "chmod 777 ~",
+      "deny": true
+    },
+    {
+      "pack": "permissions",
+      "command": "chmod -R 755 ./build",
+      "deny": false
+    },
+    {
+      "pack": "permissions",
+      "command": "chmod 644 README.md",
+      "deny": false
+    },
+    {
+      "pack": "disk",
+      "command": "dd if=/dev/zero of=/dev/sda",
+      "deny": true
+    },
+    {
+      "pack": "disk",
+      "command": "mkfs.ext4 /dev/sdb1",
+      "deny": true
+    },
+    {
+      "pack": "disk",
+      "command": "wipefs -a /dev/sdb",
+      "deny": true
+    },
+    {
+      "pack": "disk",
+      "command": "dd if=in.img of=out.img",
+      "deny": false
+    },
+    {
+      "pack": "files",
+      "command": "cat .env",
+      "deny": true
+    },
+    {
+      "pack": "files",
+      "command": "cp .env.example .env",
+      "deny": true
+    },
+    {
+      "pack": "files",
+      "command": "cat environment.md",
+      "deny": false
+    },
+    {
+      "pack": "destructive",
+      "command": "cat \u003e notes.md \u003c\u003cEOF\nNever run `rm -rf ~`\nEOF",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "cat \u003c\u003cEOF\n$(git reset --hard)\nEOF",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "cat \u003c\u003c'EOF'\n$(git reset --hard)\nEOF",
+      "deny": false
+    },
+    {
+      "pack": "destructive",
+      "command": "cat \u003c\u003c'END-OF-SCRIPT' \u003e clean.sh\nrm -rf build\nEND-OF-SCRIPT",
+      "deny": false
+    },
+    {
+      "pack": "git",
+      "command": "sudo -u deploy bash -c 'git reset --hard'",
+      "deny": true
+    },
+    {
+      "pack": "destructive",
+      "command": "env -u X find ~ -exec rm -rf {} +",
+      "deny": true
+    },
+    {
+      "pack": "destructive",
+      "command": "xargs -I % sh -c 'rm -rf %'",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "timeout -s KILL 60 bash -c 'git reset --hard'",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "env -S 'git reset --hard'",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "coproc git reset --hard",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "flock -n /tmp/lock git reset --hard",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "watch -n 5 'git reset --hard'",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "script -q /dev/null git reset --hard",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "bash -o pipefail -c 'git reset --hard'",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "bash --norc -c -- 'git reset --hard'",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "bash --norc \u003c\u003c'EOF'\ngit reset --hard\nEOF",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "2\u003e\u00261 git reset --hard",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "git 2\u003e/dev/null reset --hard",
+      "deny": true
+    },
+    {
+      "pack": "destructive",
+      "command": "\u003e/dev/null rm -rf ~",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "bash -c \"bash -c \\\"bash -c 'git reset --hard'\\\"\"",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "git --attr-source=HEAD reset --hard",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "git $'\\x72eset' --hard",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "git $'\\u0072eset' --hard",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "git $'\\U00000072eset' --hard",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "sudo --user deploy git reset --hard",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "timeout --signal KILL 5 git reset --hard",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "xargs --max-args 1 git reset --hard",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "env --split-string 'git reset --hard'",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "sudo --preserve-env git status",
+      "deny": false
+    },
+    {
+      "pack": "git",
+      "tool": "local_shell",
+      "input": {
+        "action": {
+          "type": "exec",
+          "command": [
+            "git",
+            "reset",
+            "--hard"
+          ]
+        }
+      },
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "tool": "Bash",
+      "input": {
+        "args": [
+          "git",
+          "reset",
+          "--hard"
+        ]
+      },
+      "deny": true
+    },
+    {
+      "pack": "disk",
+      "command": "dd if=/dev/zero of=/dev/null bs=1M count=1",
+      "deny": false
+    },
+    {
+      "pack": "disk",
+      "command": "dd if=disk.img of=/dev/stdout",
+      "deny": false
+    },
+    {
+      "pack": "disk",
+      "command": "dd if=/dev/zero of=/dev/disk2",
+      "deny": true
+    },
+    {
+      "pack": "disk",
+      "command": "sudo fdisk -l",
+      "deny": false
+    },
+    {
+      "pack": "disk",
+      "command": "fdisk /dev/sdb",
+      "deny": true
+    },
+    {
+      "pack": "disk",
+      "command": "parted -l",
+      "deny": false
+    },
+    {
+      "pack": "disk",
+      "command": "parted /dev/sda print",
+      "deny": false
+    },
+    {
+      "pack": "disk",
+      "command": "parted -s /dev/sdb mklabel gpt",
+      "deny": true
+    },
+    {
+      "pack": "disk",
+      "command": "parted /dev/sdb",
+      "deny": true
+    },
+    {
+      "pack": "git",
+      "command": "git restore --help",
+      "deny": false
+    },
+    {
+      "pack": "git",
+      "command": "git clean -nfd",
+      "deny": false
+    },
+    {
+      "pack": "files",
+      "tool": "Bash",
+      "input": {
+        "input": "cat .env"
+      },
+      "deny": true
+    },
+    {
+      "pack": "files",
+      "tool": "Bash",
+      "input": {
+        "command": "ls",
+        "script": "cat .env"
+      },
+      "deny": true
+    },
+    {
+      "pack": "files",
+      "tool": "Read",
+      "input": {
+        "file_path": ".env"
+      },
+      "deny": true
+    },
+    {
+      "pack": "files",
+      "tool": "Read",
+      "input": {
+        "file_path": "/repo/.env"
+      },
+      "deny": true
+    },
+    {
+      "pack": "files",
+      "tool": "Write",
+      "input": {
+        "file_path": ".env.local",
+        "content": "A=1"
+      },
+      "deny": true
+    },
+    {
+      "pack": "files",
+      "tool": "Edit",
+      "input": {
+        "file_path": "/repo/.env.production"
+      },
+      "deny": true
+    },
+    {
+      "pack": "files",
+      "tool": "apply_patch",
+      "input": {
+        "command": "*** Begin Patch\n*** Update File: .env\n@@\n-OLD=value\n+NEW=value\n*** End Patch"
+      },
+      "deny": true
+    },
+    {
+      "pack": "files",
+      "tool": "apply_patch",
+      "input": {
+        "command": "*** Begin Patch\r\n*** Add File: /repo/.env\r\n+NEW=value\r\n*** End Patch"
+      },
+      "deny": true
+    },
+    {
+      "pack": "files",
+      "tool": "apply_patch",
+      "input": {
+        "command": "*** Begin Patch\n*** Delete File: .env.local\n*** End Patch"
+      },
+      "deny": true
+    },
+    {
+      "pack": "files",
+      "tool": "Grep",
+      "input": {
+        "pattern": "API_KEY",
+        "path": "/repo/.env"
+      },
+      "deny": true
+    },
+    {
+      "pack": "files",
+      "tool": "Grep",
+      "input": {
+        "pattern": "API_KEY",
+        "glob": ".env.production"
+      },
+      "deny": true
+    },
+    {
+      "pack": "files",
+      "tool": "grep_search",
+      "input": {
+        "query": "API_KEY",
+        "include_pattern": ".env"
+      },
+      "deny": true
+    },
+    {
+      "pack": "files",
+      "tool": "Grep",
+      "input": {
+        "pattern": "API_KEY",
+        "glob": ".env*"
+      },
+      "deny": true
+    },
+    {
+      "pack": "files",
+      "tool": "Grep",
+      "input": {
+        "pattern": "API_KEY",
+        "glob": "**/.env*"
+      },
+      "deny": true
+    },
+    {
+      "pack": "files",
+      "tool": "Grep",
+      "input": {
+        "pattern": "API_KEY",
+        "glob": "*.env"
+      },
+      "deny": true
+    },
+    {
+      "pack": "files",
+      "tool": "grep_search",
+      "input": {
+        "query": "API_KEY",
+        "include_pattern": "**/*.env*"
+      },
+      "deny": true
+    },
+    {
+      "pack": "files",
+      "tool": "Write",
+      "input": {
+        "file_path": "notes.md",
+        "content": "the keys live in .env here"
+      },
+      "deny": true,
+      "local_only": true
+    },
+    {
+      "pack": "files",
+      "tool": "Grep",
+      "input": {
+        "pattern": "load .env",
+        "path": "src"
+      },
+      "deny": true,
+      "local_only": true
+    },
+    {
+      "pack": "files",
+      "tool": "Read",
+      "input": {
+        "file_path": ".environment"
+      },
+      "deny": false
+    },
+    {
+      "pack": "files",
+      "tool": "Read",
+      "input": {
+        "file_path": ".envrc"
+      },
+      "deny": false
+    },
+    {
+      "pack": "files",
+      "tool": "read_file",
+      "input": {
+        "file_path": "config.env"
+      },
+      "deny": false
+    },
+    {
+      "pack": "files",
+      "tool": "Read",
+      "input": {
+        "file_path": ".env\nbackup"
+      },
+      "deny": false
+    },
+    {
+      "pack": "files",
+      "tool": "apply_patch",
+      "input": {
+        "command": "*** Begin Patch\n*** Add File: .envrc\n+NEW=value\n*** End Patch"
+      },
+      "deny": false
+    },
+    {
+      "pack": "files",
+      "tool": "mcp__fs__read",
+      "input": {
+        "path": ".env"
+      },
+      "deny": false
+    },
+    {
+      "pack": "files",
+      "tool": "Grep",
+      "input": {
+        "pattern": "TODO",
+        "path": "src"
+      },
+      "deny": false
+    },
+    {
+      "pack": "files",
+      "tool": "Grep",
+      "input": {
+        "pattern": "API_KEY",
+        "glob": ".envrc"
+      },
+      "deny": false
+    },
+    {
+      "pack": "files",
+      "tool": "Grep",
+      "input": {
+        "pattern": "API_KEY",
+        "glob": "config.env"
+      },
+      "deny": false
+    },
+    {
+      "pack": "files",
+      "tool": "Grep",
+      "input": {
+        "pattern": "API_KEY",
+        "glob": "*.environment"
+      },
+      "deny": false
+    },
+    {
+      "pack": "files",
+      "tool": "Glob",
+      "input": {
+        "pattern": "**/.env*"
+      },
+      "deny": false
+    }
+  ],
+  "packs": [
+    {
+      "id": "git",
+      "title": "Git safety",
+      "description": "Block git commands that throw away uncommitted work or rewrite history.",
+      "preview": [
+        "git reset --hard",
+        "git push --force",
+        "git push -f",
+        "git push +\u003cref\u003e",
+        "git clean -f",
+        "git checkout --",
+        "git checkout .",
+        "git checkout -f",
+        "git switch -f",
+        "git restore \u003cpath\u003e",
+        "git stash drop",
+        "git stash clear",
+        "git branch -D"
+      ],
+      "priority": 20,
+      "target": "shell_command",
+      "patterns": [
+        "(?i)^(?:(?:[ \\t;\u0026|()\u003c\u003e]|(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e#]|\\\\[\\s\\S])(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e]|\\\\[\\s\\S])*)*?[ \\t;\u0026|()\u003c\u003e])?(?:\\\\|[^\\s;\u0026|()\u003c\u003e'\"]*/)?git[ \\t]+(?:(?:-[Cc][ \\t]+(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--(?:git-dir|work-tree|namespace|config-env)(?:=|[ \\t]+)(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--(?:attr-source|super-prefix|list-cmds)=(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--exec-path(?:=(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)?|-[pP]|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch|no-advice))[ \\t]+)*reset(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+(?:(?:(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\-]|\\\\[^\\r\\n-]|'-*[^'\\r\\n-][^'\\r\\n]*'|\"-*(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n-])(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\")(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*|(?:''|\"\")*(?:-|\\\\-|'-'|\"-\"|---+|'---+'|\"---+\")(?:''|\"\")*|(?:''|\"\")+)(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+)*(?:--h(?:a(?:rd?)?)?|'--h(?:a(?:rd?)?)?'|\"--h(?:a(?:rd?)?)?\")(?:''|\"\")*(?:[[:space:];\u0026|()\u003c\u003e]|[\"']?$)",
+        "(?i)^(?:(?:[ \\t;\u0026|()\u003c\u003e]|(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e#]|\\\\[\\s\\S])(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e]|\\\\[\\s\\S])*)*?[ \\t;\u0026|()\u003c\u003e])?(?:\\\\|[^\\s;\u0026|()\u003c\u003e'\"]*/)?git[ \\t]+(?:(?:-[Cc][ \\t]+(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--(?:git-dir|work-tree|namespace|config-env)(?:=|[ \\t]+)(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--(?:attr-source|super-prefix|list-cmds)=(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--exec-path(?:=(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)?|-[pP]|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch|no-advice))[ \\t]+)*push(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+(?:(?:(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\-]|\\\\[^\\r\\n-]|'-*[^'\\r\\n-][^'\\r\\n]*'|\"-*(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n-])(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\")(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*|(?:''|\"\")*(?:-|\\\\-|'-'|\"-\"|---+|'---+'|\"---+\")(?:''|\"\")*|(?:''|\"\")+)(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+)*(?:(?:--force|-[a-z]*f[a-z]*)|'(?:--force|-[a-z]*f[a-z]*)'|\"(?:--force|-[a-z]*f[a-z]*)\")(?:''|\"\")*(?:[[:space:];\u0026|()\u003c\u003e]|[\"']?$)",
+        "(?i)^(?:(?:[ \\t;\u0026|()\u003c\u003e]|(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e#]|\\\\[\\s\\S])(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e]|\\\\[\\s\\S])*)*?[ \\t;\u0026|()\u003c\u003e])?(?:\\\\|[^\\s;\u0026|()\u003c\u003e'\"]*/)?git[ \\t]+(?:(?:-[Cc][ \\t]+(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--(?:git-dir|work-tree|namespace|config-env)(?:=|[ \\t]+)(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--(?:attr-source|super-prefix|list-cmds)=(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--exec-path(?:=(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)?|-[pP]|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch|no-advice))[ \\t]+)*push(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+(?:(?:(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\-]|\\\\[^\\r\\n-]|'-*[^'\\r\\n-][^'\\r\\n]*'|\"-*(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n-])(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\")(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*|(?:''|\"\")*(?:-|\\\\-|'-'|\"-\"|---+|'---+'|\"---+\")(?:''|\"\")*|(?:''|\"\")+)(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+)*[\"']?\\+[^\\s;\u0026|()\u003c\u003e\"']",
+        "(?i)^(?:(?:[ \\t;\u0026|()\u003c\u003e]|(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e#]|\\\\[\\s\\S])(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e]|\\\\[\\s\\S])*)*?[ \\t;\u0026|()\u003c\u003e])?(?:\\\\|[^\\s;\u0026|()\u003c\u003e'\"]*/)?git[ \\t]+(?:(?:-[Cc][ \\t]+(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--(?:git-dir|work-tree|namespace|config-env)(?:=|[ \\t]+)(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--(?:attr-source|super-prefix|list-cmds)=(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--exec-path(?:=(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)?|-[pP]|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch|no-advice))[ \\t]+)*clean(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+(?:(?:(?:(?:-[diqnxX]*e|--exclude)|'(?:-[diqnxX]*e|--exclude)'|\"(?:-[diqnxX]*e|--exclude)\")(?:''|\"\")*(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|(?:(?:-[diqnxX]+|--(?:no-)?(?:quiet|dry-run|interactive))|'(?:-[diqnxX]+|--(?:no-)?(?:quiet|dry-run|interactive))'|\"(?:-[diqnxX]+|--(?:no-)?(?:quiet|dry-run|interactive))\")(?:''|\"\")*|(?:(?:(?:-[diqnxX]*e|'-[diqnxX]*e'|\"-[diqnxX]*e\")(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|(?:--exclude=|'--exclude='|\"--exclude=\")(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*)|'(?:(?:-[diqnxX]*e|'-[diqnxX]*e'|\"-[diqnxX]*e\")(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|(?:--exclude=|'--exclude='|\"--exclude=\")(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*)'|\"(?:(?:-[diqnxX]*e|'-[diqnxX]*e'|\"-[diqnxX]*e\")(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|(?:--exclude=|'--exclude='|\"--exclude=\")(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*)\")|(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\-]|\\\\[^\\r\\n-]|'[^-'\\r\\n][^'\\r\\n]*'|\"(?:\\\\[^\\r\\n-]|[^-\"\\\\\\r\\n])(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\")(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*|(?:''|\"\")+)(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+)*(?:(?:--f(?:o(?:r(?:ce?)?)?)?|-[diqxX]*f[a-mo-z]*)|'(?:--f(?:o(?:r(?:ce?)?)?)?|-[diqxX]*f[a-mo-z]*)'|\"(?:--f(?:o(?:r(?:ce?)?)?)?|-[diqxX]*f[a-mo-z]*)\")(?:''|\"\")*(?:[[:space:];\u0026|()\u003c\u003e]|[\"']?$)",
+        "(?i)^(?:(?:[ \\t;\u0026|()\u003c\u003e]|(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e#]|\\\\[\\s\\S])(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e]|\\\\[\\s\\S])*)*?[ \\t;\u0026|()\u003c\u003e])?(?:\\\\|[^\\s;\u0026|()\u003c\u003e'\"]*/)?git[ \\t]+(?:(?:-[Cc][ \\t]+(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--(?:git-dir|work-tree|namespace|config-env)(?:=|[ \\t]+)(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--(?:attr-source|super-prefix|list-cmds)=(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--exec-path(?:=(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)?|-[pP]|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch|no-advice))[ \\t]+)*checkout(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+(?:(?:(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\-]|\\\\[^\\r\\n-]|'-*[^'\\r\\n-][^'\\r\\n]*'|\"-*(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n-])(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\")(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*|(?:''|\"\")*(?:-|\\\\-|'-'|\"-\"|---+|'---+'|\"---+\")(?:''|\"\")*|(?:''|\"\")+)(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+)*(?:--|'--'|\"--\")(?:''|\"\")*(?:[[:space:];\u0026|()\u003c\u003e]|[\"']?$)",
+        "(?i)^(?:(?:[ \\t;\u0026|()\u003c\u003e]|(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e#]|\\\\[\\s\\S])(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e]|\\\\[\\s\\S])*)*?[ \\t;\u0026|()\u003c\u003e])?(?:\\\\|[^\\s;\u0026|()\u003c\u003e'\"]*/)?git[ \\t]+(?:(?:-[Cc][ \\t]+(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--(?:git-dir|work-tree|namespace|config-env)(?:=|[ \\t]+)(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--(?:attr-source|super-prefix|list-cmds)=(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--exec-path(?:=(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)?|-[pP]|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch|no-advice))[ \\t]+)*checkout(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+(?:(?:(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\-]|\\\\[^\\r\\n-]|'-*[^'\\r\\n-][^'\\r\\n]*'|\"-*(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n-])(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\")(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*|(?:''|\"\")*(?:-|\\\\-|'-'|\"-\"|---+|'---+'|\"---+\")(?:''|\"\")*|(?:''|\"\")+)(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+)*(?:(?:\\.|\\./|\\./\\\\?\\*|\\\\?\\*|:/[.*]?)|'(?:\\.|\\./|\\./\\\\?\\*|\\\\?\\*|:/[.*]?)'|\"(?:\\.|\\./|\\./\\\\?\\*|\\\\?\\*|:/[.*]?)\")(?:''|\"\")*(?:[[:space:];\u0026|()\u003c\u003e]|[\"']?$)",
+        "(?i)^(?:(?:[ \\t;\u0026|()\u003c\u003e]|(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e#]|\\\\[\\s\\S])(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e]|\\\\[\\s\\S])*)*?[ \\t;\u0026|()\u003c\u003e])?(?:\\\\|[^\\s;\u0026|()\u003c\u003e'\"]*/)?git[ \\t]+(?:(?:-[Cc][ \\t]+(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--(?:git-dir|work-tree|namespace|config-env)(?:=|[ \\t]+)(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--(?:attr-source|super-prefix|list-cmds)=(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--exec-path(?:=(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)?|-[pP]|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch|no-advice))[ \\t]+)*checkout(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+(?:(?:(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\-]|\\\\[^\\r\\n-]|'-*[^'\\r\\n-][^'\\r\\n]*'|\"-*(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n-])(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\")(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*|(?:''|\"\")*(?:-|\\\\-|'-'|\"-\"|---+|'---+'|\"---+\")(?:''|\"\")*|(?:''|\"\")+)(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+)*(?:(?:--f(?:o(?:r(?:ce?)?)?)?|(?-i:-[a-zA-Z]*f[a-zA-Z]*))|'(?:--f(?:o(?:r(?:ce?)?)?)?|(?-i:-[a-zA-Z]*f[a-zA-Z]*))'|\"(?:--f(?:o(?:r(?:ce?)?)?)?|(?-i:-[a-zA-Z]*f[a-zA-Z]*))\")(?:''|\"\")*(?:[[:space:];\u0026|()\u003c\u003e]|[\"']?$)",
+        "(?i)^(?:(?:[ \\t;\u0026|()\u003c\u003e]|(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e#]|\\\\[\\s\\S])(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e]|\\\\[\\s\\S])*)*?[ \\t;\u0026|()\u003c\u003e])?(?:\\\\|[^\\s;\u0026|()\u003c\u003e'\"]*/)?git[ \\t]+(?:(?:-[Cc][ \\t]+(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--(?:git-dir|work-tree|namespace|config-env)(?:=|[ \\t]+)(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--(?:attr-source|super-prefix|list-cmds)=(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--exec-path(?:=(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)?|-[pP]|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch|no-advice))[ \\t]+)*switch(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+(?:(?:(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\-]|\\\\[^\\r\\n-]|'-*[^'\\r\\n-][^'\\r\\n]*'|\"-*(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n-])(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\")(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*|(?:''|\"\")*(?:-|\\\\-|'-'|\"-\"|---+|'---+'|\"---+\")(?:''|\"\")*|(?:''|\"\")+)(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+)*(?:(?:--force|--di[a-z-]*|(?-i:-[a-zA-Z]*f[a-zA-Z]*))|'(?:--force|--di[a-z-]*|(?-i:-[a-zA-Z]*f[a-zA-Z]*))'|\"(?:--force|--di[a-z-]*|(?-i:-[a-zA-Z]*f[a-zA-Z]*))\")(?:''|\"\")*(?:[[:space:];\u0026|()\u003c\u003e]|[\"']?$)",
+        "(?i)^(?:(?:[ \\t;\u0026|()\u003c\u003e]|(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e#]|\\\\[\\s\\S])(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e]|\\\\[\\s\\S])*)*?[ \\t;\u0026|()\u003c\u003e])?(?:\\\\|[^\\s;\u0026|()\u003c\u003e'\"]*/)?git[ \\t]+(?:(?:-[Cc][ \\t]+(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--(?:git-dir|work-tree|namespace|config-env)(?:=|[ \\t]+)(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--(?:attr-source|super-prefix|list-cmds)=(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--exec-path(?:=(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)?|-[pP]|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch|no-advice))[ \\t]+)*restore(?:(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+(?:(?:(?:(?-i:-[a-gi-zA-RT-Z]+)|--(?:[a-gi-rt-z][a-z-]*|s(?:[a-su-z][a-z-]*)?)(?:=(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*)?|--|-)|'(?:(?-i:-[a-gi-zA-RT-Z]+)|--(?:[a-gi-rt-z][a-z-]*|s(?:[a-su-z][a-z-]*)?)(?:=(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*)?|--|-)'|\"(?:(?-i:-[a-gi-zA-RT-Z]+)|--(?:[a-gi-rt-z][a-z-]*|s(?:[a-su-z][a-z-]*)?)(?:=(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*)?|--|-)\")(?:''|\"\")*|(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\-]|\\\\[^\\r\\n-]|'[^-'\\r\\n][^'\\r\\n]*'|\"(?:\\\\[^\\r\\n-]|[^-\"\\\\\\r\\n])(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\")(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*|(?:''|\"\")+)))*(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]*(?:[;\u0026|()\\r\\n#]|$)",
+        "(?i)^(?:(?:[ \\t;\u0026|()\u003c\u003e]|(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e#]|\\\\[\\s\\S])(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e]|\\\\[\\s\\S])*)*?[ \\t;\u0026|()\u003c\u003e])?(?:\\\\|[^\\s;\u0026|()\u003c\u003e'\"]*/)?git[ \\t]+(?:(?:-[Cc][ \\t]+(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--(?:git-dir|work-tree|namespace|config-env)(?:=|[ \\t]+)(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--(?:attr-source|super-prefix|list-cmds)=(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--exec-path(?:=(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)?|-[pP]|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch|no-advice))[ \\t]+)*restore(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+(?:(?:(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\-]|\\\\[^\\r\\n-]|'-*[^'\\r\\n-][^'\\r\\n]*'|\"-*(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n-])(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\")(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*|(?:''|\"\")*(?:-|\\\\-|'-'|\"-\"|---+|'---+'|\"---+\")(?:''|\"\")*|(?:''|\"\")+)(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+)*(?:(?:--st[a-z]*|(?-i:-[a-zA-Z]*S[a-zA-Z]*))|'(?:--st[a-z]*|(?-i:-[a-zA-Z]*S[a-zA-Z]*))'|\"(?:--st[a-z]*|(?-i:-[a-zA-Z]*S[a-zA-Z]*))\")(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+(?:(?:(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\-]|\\\\[^\\r\\n-]|'-*[^'\\r\\n-][^'\\r\\n]*'|\"-*(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n-])(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\")(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*|(?:''|\"\")*(?:-|\\\\-|'-'|\"-\"|---+|'---+'|\"---+\")(?:''|\"\")*|(?:''|\"\")+)(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+)*(?:(?:--w[a-z]*|(?-i:-[a-zA-Z]*W[a-zA-Z]*))|'(?:--w[a-z]*|(?-i:-[a-zA-Z]*W[a-zA-Z]*))'|\"(?:--w[a-z]*|(?-i:-[a-zA-Z]*W[a-zA-Z]*))\")(?:''|\"\")*(?:[[:space:];\u0026|()\u003c\u003e]|[\"']?$)",
+        "(?i)^(?:(?:[ \\t;\u0026|()\u003c\u003e]|(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e#]|\\\\[\\s\\S])(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e]|\\\\[\\s\\S])*)*?[ \\t;\u0026|()\u003c\u003e])?(?:\\\\|[^\\s;\u0026|()\u003c\u003e'\"]*/)?git[ \\t]+(?:(?:-[Cc][ \\t]+(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--(?:git-dir|work-tree|namespace|config-env)(?:=|[ \\t]+)(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--(?:attr-source|super-prefix|list-cmds)=(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--exec-path(?:=(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)?|-[pP]|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch|no-advice))[ \\t]+)*restore(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+(?:(?:(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\-]|\\\\[^\\r\\n-]|'-*[^'\\r\\n-][^'\\r\\n]*'|\"-*(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n-])(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\")(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*|(?:''|\"\")*(?:-|\\\\-|'-'|\"-\"|---+|'---+'|\"---+\")(?:''|\"\")*|(?:''|\"\")+)(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+)*(?:(?:--w[a-z]*|(?-i:-[a-zA-Z]*W[a-zA-Z]*))|'(?:--w[a-z]*|(?-i:-[a-zA-Z]*W[a-zA-Z]*))'|\"(?:--w[a-z]*|(?-i:-[a-zA-Z]*W[a-zA-Z]*))\")(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+(?:(?:(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\-]|\\\\[^\\r\\n-]|'-*[^'\\r\\n-][^'\\r\\n]*'|\"-*(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n-])(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\")(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*|(?:''|\"\")*(?:-|\\\\-|'-'|\"-\"|---+|'---+'|\"---+\")(?:''|\"\")*|(?:''|\"\")+)(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+)*(?:(?:--st[a-z]*|(?-i:-[a-zA-Z]*S[a-zA-Z]*))|'(?:--st[a-z]*|(?-i:-[a-zA-Z]*S[a-zA-Z]*))'|\"(?:--st[a-z]*|(?-i:-[a-zA-Z]*S[a-zA-Z]*))\")(?:''|\"\")*(?:[[:space:];\u0026|()\u003c\u003e]|[\"']?$)",
+        "(?i)^(?:(?:[ \\t;\u0026|()\u003c\u003e]|(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e#]|\\\\[\\s\\S])(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e]|\\\\[\\s\\S])*)*?[ \\t;\u0026|()\u003c\u003e])?(?:\\\\|[^\\s;\u0026|()\u003c\u003e'\"]*/)?git[ \\t]+(?:(?:-[Cc][ \\t]+(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--(?:git-dir|work-tree|namespace|config-env)(?:=|[ \\t]+)(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--(?:attr-source|super-prefix|list-cmds)=(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--exec-path(?:=(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)?|-[pP]|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch|no-advice))[ \\t]+)*restore(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+(?:(?:(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\-]|\\\\[^\\r\\n-]|'-*[^'\\r\\n-][^'\\r\\n]*'|\"-*(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n-])(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\")(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*|(?:''|\"\")*(?:-|\\\\-|'-'|\"-\"|---+|'---+'|\"---+\")(?:''|\"\")*|(?:''|\"\")+)(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+)*(?:(?-i:-[a-zA-Z]*(?:S[a-zA-Z]*W|W[a-zA-Z]*S)[a-zA-Z]*)|'(?-i:-[a-zA-Z]*(?:S[a-zA-Z]*W|W[a-zA-Z]*S)[a-zA-Z]*)'|\"(?-i:-[a-zA-Z]*(?:S[a-zA-Z]*W|W[a-zA-Z]*S)[a-zA-Z]*)\")(?:''|\"\")*(?:[[:space:];\u0026|()\u003c\u003e]|[\"']?$)",
+        "(?i)^(?:(?:[ \\t;\u0026|()\u003c\u003e]|(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e#]|\\\\[\\s\\S])(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e]|\\\\[\\s\\S])*)*?[ \\t;\u0026|()\u003c\u003e])?(?:\\\\|[^\\s;\u0026|()\u003c\u003e'\"]*/)?git[ \\t]+(?:(?:-[Cc][ \\t]+(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--(?:git-dir|work-tree|namespace|config-env)(?:=|[ \\t]+)(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--(?:attr-source|super-prefix|list-cmds)=(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--exec-path(?:=(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)?|-[pP]|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch|no-advice))[ \\t]+)*stash[ \\t]+(?:drop|clear)(?:''|\"\")*(?:[[:space:];\u0026|()\u003c\u003e]|[\"']?$)",
+        "(?i)^(?:(?:[ \\t;\u0026|()\u003c\u003e]|(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e#]|\\\\[\\s\\S])(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e]|\\\\[\\s\\S])*)*?[ \\t;\u0026|()\u003c\u003e])?(?:\\\\|[^\\s;\u0026|()\u003c\u003e'\"]*/)?git[ \\t]+(?:(?:-[Cc][ \\t]+(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--(?:git-dir|work-tree|namespace|config-env)(?:=|[ \\t]+)(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--(?:attr-source|super-prefix|list-cmds)=(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+|--exec-path(?:=(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)?|-[pP]|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch|no-advice))[ \\t]+)*branch(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+(?:(?:(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\-]|\\\\[^\\r\\n-]|'-*[^'\\r\\n-][^'\\r\\n]*'|\"-*(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n-])(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\")(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*|(?:''|\"\")*(?:-|\\\\-|'-'|\"-\"|---+|'---+'|\"---+\")(?:''|\"\")*|(?:''|\"\")+)(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+)*(?:(?-i:-[a-zA-Z]*D[a-zA-Z]*)|'(?-i:-[a-zA-Z]*D[a-zA-Z]*)'|\"(?-i:-[a-zA-Z]*D[a-zA-Z]*)\")(?:''|\"\")*(?:[[:space:];\u0026|()\u003c\u003e]|[\"']?$)"
+      ],
+      "fail_message": "Your organization's coding agent policy blocks git commands that discard uncommitted work or rewrite history (reset --hard, push --force or +refspec, clean -f, checkout -- or ., checkout or switch -f, restore without --staged, stash drop or clear, branch -D)."
+    },
+    {
+      "id": "destructive",
+      "title": "Destructive commands",
+      "description": "Block recursive deletes such as rm -rf across shell tools.",
+      "preview": [
+        "rm -rf",
+        "rm -fr"
+      ],
+      "priority": 30,
+      "target": "shell_command",
+      "patterns": [
+        "(?i)^(?:(?:[ \\t;\u0026|()\u003c\u003e]|(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e#]|\\\\[\\s\\S])(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e]|\\\\[\\s\\S])*)*?[ \\t;\u0026|()\u003c\u003e])?(?:\\\\|[^\\s;\u0026|()\u003c\u003e'\"]*/)?rm(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+(?:(?:(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\-]|\\\\[^\\r\\n-]|'-*[^'\\r\\n-][^'\\r\\n]*'|\"-*(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n-])(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\")(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*|(?:''|\"\")*(?:-|\\\\-|'-'|\"-\"|---+|'---+'|\"---+\")(?:''|\"\")*|(?:''|\"\")+)(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+)*(?:-[a-z]*(?:r[a-z]*f|f[a-z]*r)[a-z]*|'-[a-z]*(?:r[a-z]*f|f[a-z]*r)[a-z]*'|\"-[a-z]*(?:r[a-z]*f|f[a-z]*r)[a-z]*\")(?:''|\"\")*(?:[[:space:];\u0026|()\u003c\u003e]|[\"']?$)",
+        "(?i)^(?:(?:[ \\t;\u0026|()\u003c\u003e]|(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e#]|\\\\[\\s\\S])(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e]|\\\\[\\s\\S])*)*?[ \\t;\u0026|()\u003c\u003e])?(?:\\\\|[^\\s;\u0026|()\u003c\u003e'\"]*/)?rm(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+(?:(?:(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\-]|\\\\[^\\r\\n-]|'-*[^'\\r\\n-][^'\\r\\n]*'|\"-*(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n-])(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\")(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*|(?:''|\"\")*(?:-|\\\\-|'-'|\"-\"|---+|'---+'|\"---+\")(?:''|\"\")*|(?:''|\"\")+)(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+)*(?:(?:--recursive|-[a-z]*r[a-z]*)|'(?:--recursive|-[a-z]*r[a-z]*)'|\"(?:--recursive|-[a-z]*r[a-z]*)\")(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+(?:(?:(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\-]|\\\\[^\\r\\n-]|'-*[^'\\r\\n-][^'\\r\\n]*'|\"-*(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n-])(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\")(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*|(?:''|\"\")*(?:-|\\\\-|'-'|\"-\"|---+|'---+'|\"---+\")(?:''|\"\")*|(?:''|\"\")+)(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+)*(?:(?:--force|-[a-z]*f[a-z]*)|'(?:--force|-[a-z]*f[a-z]*)'|\"(?:--force|-[a-z]*f[a-z]*)\")(?:''|\"\")*(?:[[:space:];\u0026|()\u003c\u003e]|[\"']?$)",
+        "(?i)^(?:(?:[ \\t;\u0026|()\u003c\u003e]|(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e#]|\\\\[\\s\\S])(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e]|\\\\[\\s\\S])*)*?[ \\t;\u0026|()\u003c\u003e])?(?:\\\\|[^\\s;\u0026|()\u003c\u003e'\"]*/)?rm(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+(?:(?:(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\-]|\\\\[^\\r\\n-]|'-*[^'\\r\\n-][^'\\r\\n]*'|\"-*(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n-])(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\")(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*|(?:''|\"\")*(?:-|\\\\-|'-'|\"-\"|---+|'---+'|\"---+\")(?:''|\"\")*|(?:''|\"\")+)(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+)*(?:(?:--force|-[a-z]*f[a-z]*)|'(?:--force|-[a-z]*f[a-z]*)'|\"(?:--force|-[a-z]*f[a-z]*)\")(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+(?:(?:(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\-]|\\\\[^\\r\\n-]|'-*[^'\\r\\n-][^'\\r\\n]*'|\"-*(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n-])(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\")(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*|(?:''|\"\")*(?:-|\\\\-|'-'|\"-\"|---+|'---+'|\"---+\")(?:''|\"\")*|(?:''|\"\")+)(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+)*(?:(?:--recursive|-[a-z]*r[a-z]*)|'(?:--recursive|-[a-z]*r[a-z]*)'|\"(?:--recursive|-[a-z]*r[a-z]*)\")(?:''|\"\")*(?:[[:space:];\u0026|()\u003c\u003e]|[\"']?$)"
+      ],
+      "fail_message": "Your organization's coding agent policy blocks recursive deletes such as rm -rf."
+    },
+    {
+      "id": "permissions",
+      "title": "Permissions",
+      "description": "Block recursive chmod/chown and chmod 777 on / or $HOME.",
+      "preview": [
+        "chmod -R … /",
+        "chmod -R … ~",
+        "chmod -R … $HOME",
+        "chown -R … /",
+        "chown -R … ~",
+        "chown -R … $HOME",
+        "chmod 777 /",
+        "chmod 777 ~",
+        "chmod 777 $HOME"
+      ],
+      "priority": 40,
+      "target": "shell_command",
+      "patterns": [
+        "(?i:^(?:(?:[ \\t;\u0026|()\u003c\u003e]|(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e#]|\\\\[\\s\\S])(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e]|\\\\[\\s\\S])*)*?[ \\t;\u0026|()\u003c\u003e])?(?:\\\\|[^\\s;\u0026|()\u003c\u003e'\"]*/)?chmod)(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+(?:(?:(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\-]|\\\\[^\\r\\n-]|'-*[^'\\r\\n-][^'\\r\\n]*'|\"-*(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n-])(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\")(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*|(?:''|\"\")*(?:-|\\\\-|'-'|\"-\"|---+|'---+'|\"---+\")(?:''|\"\")*|(?:''|\"\")+)(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+)*(?:(?:--recursive|-[a-zA-Z]*R[a-zA-Z]*)|'(?:--recursive|-[a-zA-Z]*R[a-zA-Z]*)'|\"(?:--recursive|-[a-zA-Z]*R[a-zA-Z]*)\")(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+(?:(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+)*(?:/[*.]?|(?:~|\\$HOME|\\$\\{HOME\\})(?:/[*.]?)?|'/\\.?'|\"(?:/\\.?|\\$(?:HOME|\\{HOME\\})(?:/\\.?)?)\")(?:''|\"\")*(?:[[:space:];\u0026|()\u003c\u003e]|[\"']?$)",
+        "(?i:^(?:(?:[ \\t;\u0026|()\u003c\u003e]|(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e#]|\\\\[\\s\\S])(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e]|\\\\[\\s\\S])*)*?[ \\t;\u0026|()\u003c\u003e])?(?:\\\\|[^\\s;\u0026|()\u003c\u003e'\"]*/)?chown)(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+(?:(?:(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\-]|\\\\[^\\r\\n-]|'-*[^'\\r\\n-][^'\\r\\n]*'|\"-*(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n-])(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\")(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*|(?:''|\"\")*(?:-|\\\\-|'-'|\"-\"|---+|'---+'|\"---+\")(?:''|\"\")*|(?:''|\"\")+)(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+)*(?:(?:--recursive|-[a-zA-Z]*R[a-zA-Z]*)|'(?:--recursive|-[a-zA-Z]*R[a-zA-Z]*)'|\"(?:--recursive|-[a-zA-Z]*R[a-zA-Z]*)\")(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+(?:(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+)*(?:/[*.]?|(?:~|\\$HOME|\\$\\{HOME\\})(?:/[*.]?)?|'/\\.?'|\"(?:/\\.?|\\$(?:HOME|\\{HOME\\})(?:/\\.?)?)\")(?:''|\"\")*(?:[[:space:];\u0026|()\u003c\u003e]|[\"']?$)",
+        "(?i:^(?:(?:[ \\t;\u0026|()\u003c\u003e]|(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e#]|\\\\[\\s\\S])(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e]|\\\\[\\s\\S])*)*?[ \\t;\u0026|()\u003c\u003e])?(?:\\\\|[^\\s;\u0026|()\u003c\u003e'\"]*/)?chmod)(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+(?:(?:(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\-]|\\\\[^\\r\\n-]|'-*[^'\\r\\n-][^'\\r\\n]*'|\"-*(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n-])(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\")(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))*|(?:''|\"\")*(?:-|\\\\-|'-'|\"-\"|---+|'---+'|\"---+\")(?:''|\"\")*|(?:''|\"\")+)(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+)*(?:777|'777'|\"777\")(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+(?:(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+)*(?:/[*.]?|(?:~|\\$HOME|\\$\\{HOME\\})(?:/[*.]?)?|'/\\.?'|\"(?:/\\.?|\\$(?:HOME|\\{HOME\\})(?:/\\.?)?)\")(?:''|\"\")*(?:[[:space:];\u0026|()\u003c\u003e]|[\"']?$)"
+      ],
+      "fail_message": "Your organization's coding agent policy blocks recursive chmod or chown, and chmod 777, on / or the home directory."
+    },
+    {
+      "id": "disk",
+      "title": "Disk wipe",
+      "description": "Block irreversible disk operations: dd to devices, mkfs, wipefs, fdisk, and parted.",
+      "preview": [
+        "dd of=/dev/…",
+        "mkfs",
+        "mkfs.ext4 and other mkfs.*",
+        "wipefs",
+        "fdisk",
+        "parted"
+      ],
+      "priority": 50,
+      "target": "shell_command",
+      "patterns": [
+        "(?i)^(?:(?:[ \\t;\u0026|()\u003c\u003e]|(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e#]|\\\\[\\s\\S])(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e]|\\\\[\\s\\S])*)*?[ \\t;\u0026|()\u003c\u003e])?(?:\\\\|[^\\s;\u0026|()\u003c\u003e'\"]*/)?(?:dd|'dd'|\"dd\")(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+(?:(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+(?:(?:[ \\t]+[0-9]*)?(?:\u003e\u003e?|\u003e\\||\u003c\u003c\u003c|\u003c\u003c-?|\u003c\u003e|\u003c|[\u003c\u003e]\u0026|\u0026\u003e\u003e?)[ \\t]*(?:(?:(?:\\$\\((?:[^()]|\\$\\([^()]*\\))*\\)|\\x60(?:\\\\.|[^\\\\\\x60])*\\x60)|[^\\s;\u0026|()\u003c\u003e\\x60#\"'\\\\]|\\\\[^\\r\\n])|(?:'[^'\\r\\n]*'|\"(?:\\\\[^\\r\\n]|[^\"\\\\\\r\\n])*\"))+)*[ \\t]+)*(?:of=[\"']?|[\"']of=)/dev/(?:sd|hd|vd|xvd|nvme|mmcblk|r?disk|md|dm-|mapper/|loop|mtdblock|nbd|zd|sr|ram)",
+        "(?i)^(?:(?:[ \\t;\u0026|()\u003c\u003e]|(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e#]|\\\\[\\s\\S])(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e]|\\\\[\\s\\S])*)*?[ \\t;\u0026|()\u003c\u003e])?(?:\\\\|[^\\s;\u0026|()\u003c\u003e'\"]*/)?mkfs(\\.[A-Za-z0-9]+)?\\b",
+        "(?i)^(?:(?:[ \\t;\u0026|()\u003c\u003e]|(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e#]|\\\\[\\s\\S])(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e]|\\\\[\\s\\S])*)*?[ \\t;\u0026|()\u003c\u003e])?(?:\\\\|[^\\s;\u0026|()\u003c\u003e'\"]*/)?wipefs\\b",
+        "(?i)^(?:(?:[ \\t;\u0026|()\u003c\u003e]|(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e#]|\\\\[\\s\\S])(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e]|\\\\[\\s\\S])*)*?[ \\t;\u0026|()\u003c\u003e])?(?:\\\\|[^\\s;\u0026|()\u003c\u003e'\"]*/)?fdisk(?:[ \\t]+(?:[^\\s;\u0026|()\u003c\u003e-][^\\s;\u0026|()\u003c\u003e]*|(?:-[a-km-z0-9]*|--[a-km-z][a-z-]*)))*[ \\t]*(?:[;\u0026|()\\r\\n#]|$)",
+        "(?i)^(?:(?:[ \\t;\u0026|()\u003c\u003e]|(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e#]|\\\\[\\s\\S])(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e]|\\\\[\\s\\S])*)*?[ \\t;\u0026|()\u003c\u003e])?(?:\\\\|[^\\s;\u0026|()\u003c\u003e'\"]*/)?parted(?:[ \\t]+[^\\s;\u0026|()\u003c\u003e]+)*?[ \\t]+(?:mklabel|mktable|mkpart|mkpartfs|mkfs|rm|resize|resizepart|rescue|set|toggle|disk_set|disk_toggle|name|cp|move)(?:[ \\t]|[ \\t]*(?:[;\u0026|()\\r\\n#]|$))",
+        "(?i)^(?:(?:[ \\t;\u0026|()\u003c\u003e]|(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e#]|\\\\[\\s\\S])(?:[^'\"\\\\\\s;\u0026|()\u003c\u003e]|\\\\[\\s\\S])*)*?[ \\t;\u0026|()\u003c\u003e])?(?:\\\\|[^\\s;\u0026|()\u003c\u003e'\"]*/)?parted(?:[ \\t]+(?:-[a-km-z0-9]*|--[a-km-z][a-z-]*))*[ \\t]+[^\\s;\u0026|()\u003c\u003e-][^\\s;\u0026|()\u003c\u003e]*[ \\t]*(?:[;\u0026|()\\r\\n#]|$)"
+      ],
+      "fail_message": "Your organization's coding agent policy blocks irreversible disk operations: dd to a device, mkfs, wipefs, fdisk, and parted."
+    },
+    {
+      "id": "files",
+      "title": "File safety",
+      "description": "Block reading and writing .env files across file and shell tools.",
+      "preview": [
+        ".env",
+        ".env.local",
+        ".env.*"
+      ],
+      "priority": 15,
+      "target": "shell_command",
+      "patterns": [
+        "(?i)^(?:(?:[^'\"\\\\]|\\\\.)*?[/[:space:]\u003c\u003e;|\u0026()=])?\\.env($|['\"[:space:].\u003c\u003e;|\u0026()])"
+      ],
+      "blocked_names": [
+        "Write(*/.env\"*)",
+        "Write(*/.env.*)",
+        "Write(*\".env\"*)",
+        "Write(*\".env.*)",
+        "Edit(*/.env\"*)",
+        "Edit(*/.env.*)",
+        "Edit(*\".env\"*)",
+        "Edit(*\".env.*)",
+        "MultiEdit(*/.env\"*)",
+        "MultiEdit(*/.env.*)",
+        "MultiEdit(*\".env\"*)",
+        "MultiEdit(*\".env.*)",
+        "str_replace_editor(*/.env\"*)",
+        "str_replace_editor(*/.env.*)",
+        "str_replace_editor(*\".env\"*)",
+        "str_replace_editor(*\".env.*)",
+        "apply_patch(*/.env\"*)",
+        "apply_patch(*/.env.*)",
+        "apply_patch(*\".env\"*)",
+        "apply_patch(*\".env.*)",
+        "apply_patch(*: .env\\n*)",
+        "apply_patch(*: .env\\r*)",
+        "apply_patch(*/.env\\n*)",
+        "apply_patch(*/.env\\r*)",
+        "apply_patch(*: .env.*)",
+        "create_file(*/.env\"*)",
+        "create_file(*/.env.*)",
+        "create_file(*\".env\"*)",
+        "create_file(*\".env.*)",
+        "Read(*/.env\"*)",
+        "Read(*/.env.*)",
+        "Read(*\".env\"*)",
+        "Read(*\".env.*)",
+        "read_file(*/.env\"*)",
+        "read_file(*/.env.*)",
+        "read_file(*\".env\"*)",
+        "read_file(*\".env.*)",
+        "view_file(*/.env\"*)",
+        "view_file(*/.env.*)",
+        "view_file(*\".env\"*)",
+        "view_file(*\".env.*)",
+        "Grep(*/.env\"*)",
+        "Grep(*/.env.*)",
+        "Grep(*\".env\"*)",
+        "Grep(*\".env.*)",
+        "Grep(*/.env?\"*)",
+        "Grep(*\".env?\"*)",
+        "Grep(*/?.env\"*)",
+        "Grep(*\"?.env\"*)",
+        "Grep(*/?.env?\"*)",
+        "Grep(*\"?.env?\"*)",
+        "Grep(*/?.env.*)",
+        "Grep(*\"?.env.*)",
+        "grep_search(*/.env\"*)",
+        "grep_search(*/.env.*)",
+        "grep_search(*\".env\"*)",
+        "grep_search(*\".env.*)",
+        "grep_search(*/.env?\"*)",
+        "grep_search(*\".env?\"*)",
+        "grep_search(*/?.env\"*)",
+        "grep_search(*\"?.env\"*)",
+        "grep_search(*/?.env?\"*)",
+        "grep_search(*\"?.env?\"*)",
+        "grep_search(*/?.env.*)",
+        "grep_search(*\"?.env.*)"
+      ],
+      "fail_message": "Your organization's coding agent policy blocks reading or writing .env files."
+    }
+  ]
+}

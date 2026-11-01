@@ -1301,6 +1301,7 @@ async function captureSession(run, options = {}) {
   const exporter = new CapturingExporter();
   const defaults = defaultConfig();
   const client = new Agento11yClient({
+    debugBufferSize: 64,
     generationExport: {
       ...defaults.generationExport,
       batchSize: 10,

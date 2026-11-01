@@ -423,6 +423,22 @@ describe("createAgento11yHooks OTLP wiring", () => {
         failed: true,
       },
       {
+        id: "retained",
+        tool: "skill",
+        before: "team:retained",
+        after: undefined,
+        terminal: "old",
+        failed: false,
+      },
+      {
+        id: "failure-cleared",
+        tool: "skill",
+        before: "old",
+        after: "two words",
+        terminal: "old",
+        failed: true,
+      },
+      {
         id: "cleared",
         tool: "skill",
         before: "old",
@@ -478,17 +494,23 @@ describe("createAgento11yHooks OTLP wiring", () => {
       { session: { message: fetchMessage } } as any,
     );
     if (!hooks) throw new Error("expected hooks");
+    const now = vi.spyOn(Date, "now");
     try {
       for (const spec of specs) {
         const call = { sessionID, callID: spec.id, tool: spec.tool };
-        const args = { name: spec.before };
+        const args = { name: spec.before as string | undefined };
+        now.mockReturnValue(1_700_000_001_200);
         await hooks.toolExecuteBefore(call, { args });
+        now.mockReturnValue(1_700_000_001_500);
         if (spec.failed) {
           // A later plugin mutates the shared arguments, then the tool throws.
           args.name = spec.after;
         } else {
           hooks.toolExecuteAfter(
-            { ...call, args: { name: spec.after } },
+            {
+              ...call,
+              args: spec.after === undefined ? undefined : { name: spec.after },
+            },
             {
               title: privatePath,
               output: "tool-result-marker",
@@ -512,6 +534,7 @@ describe("createAgento11yHooks OTLP wiring", () => {
       await emitMessageUpdated(hooks, message);
       await emitMessageUpdated(hooks, message);
     } finally {
+      now.mockRestore();
       await hooks.dispose();
     }
     expect(fetchMessage).toHaveBeenCalledTimes(
@@ -555,13 +578,13 @@ describe("createAgento11yHooks OTLP wiring", () => {
           ? "team:effective"
           : spec.id === "failure"
             ? "team:failed"
-            : undefined;
+            : spec.id === "retained"
+              ? "team:retained"
+              : undefined;
       expect(span.traceId).toBe(generation.traceId);
       expect(span.parentSpanId).toBe(generation.spanId);
-      if (contentCapture !== "metadata_only") {
-        expect(BigInt(span.startTimeUnixNano)).toBe(1_700_000_001_200_000_000n);
-        expect(BigInt(span.endTimeUnixNano)).toBe(1_700_000_001_500_000_000n);
-      }
+      expect(BigInt(span.startTimeUnixNano)).toBe(1_700_000_001_200_000_000n);
+      expect(BigInt(span.endTimeUnixNano)).toBe(1_700_000_001_500_000_000n);
       expect(span.name).toBe(
         `execute_tool ${spec.tool}${expectedSkill ? ` ${expectedSkill}` : ""}`,
       );
@@ -599,36 +622,119 @@ describe("createAgento11yHooks OTLP wiring", () => {
     const duration = metrics
       .filter((metric) => metric.name === SIGIL_OPERATION_DURATION_METRIC)
       .flatMap((metric) => metric.histogram?.dataPoints ?? []);
-    const toolDuration = duration.filter(
-      (point) => attrs(point)["gen_ai.operation.name"] === "execute_tool",
+    expect([...new Set(metrics.map((metric) => metric.name))].sort()).toEqual([
+      "gen_ai.client.operation.duration",
+      "gen_ai.client.token.usage",
+      "gen_ai.client.tool_calls_per_operation",
+    ]);
+    const bounds = [
+      0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12, 10.24, 20.48,
+      40.96, 81.92,
+    ];
+    const identity = {
+      "gen_ai.agent.name": "opencode:build",
+      "gen_ai.agent.version": "test-version",
+      "gen_ai.provider.name": "anthropic",
+      "gen_ai.request.model": "claude-sonnet-4",
+    };
+    const expectedTools = [
+      { tool: "skill", skill: "team:effective", failed: false, count: 1 },
+      { tool: "skill", skill: "team:failed", failed: true, count: 1 },
+      { tool: "skill", skill: "team:retained", failed: false, count: 1 },
+      { tool: "skill", skill: undefined, failed: false, count: 2 },
+      { tool: "skill", skill: undefined, failed: true, count: 1 },
+      { tool: "bash", skill: undefined, failed: false, count: 1 },
+    ].map(({ tool, skill, failed, count }) => ({
+      attributes: {
+        ...identity,
+        "gen_ai.operation.name": "execute_tool",
+        "gen_ai.tool.name": tool,
+        "error.type": failed ? "tool_execution_error" : "",
+        "error.category": failed ? "sdk_error" : "",
+        ...(skill && {
+          "agento11y.tool.execution.kind": "load_skill",
+          "gen_ai.skill.name": skill,
+        }),
+      },
+      count,
+      sum: 0.3 * count,
+      min: 0.3,
+      max: 0.3,
+      explicitBounds: bounds,
+      bucketCounts: bounds
+        .concat(Infinity)
+        .map((_, index) => (index === 5 ? count : 0)),
+    }));
+    const expectedDuration = [
+      ...expectedTools,
+      {
+        attributes: {
+          ...identity,
+          "gen_ai.operation.name": "streamText",
+          "error.type": generationError ? "provider_call_error" : "",
+          "error.category": generationError ? "sdk_error" : "",
+        },
+        count: 1,
+        sum: 1.5,
+        min: 1.5,
+        max: 1.5,
+        explicitBounds: bounds,
+        bucketCounts: bounds
+          .concat(Infinity)
+          .map((_, index) => (index === 8 ? 1 : 0)),
+      },
+    ];
+    const actualDuration = duration.map((point) => ({
+      attributes: attrs(point),
+      count: Number(point.count),
+      sum: point.sum,
+      min: point.min,
+      max: point.max,
+      explicitBounds: point.explicitBounds,
+      bucketCounts: point.bucketCounts.map(Number),
+    }));
+    expect(actualDuration).toHaveLength(expectedDuration.length);
+    expect(actualDuration).toEqual(expect.arrayContaining(expectedDuration));
+    expect(actualDuration.reduce((sum, point) => sum + point.count, 0)).toBe(
+      specs.length + 1,
     );
-    expect(
-      toolDuration.reduce((sum, point) => sum + Number(point.count), 0),
-    ).toBe(specs.length);
-    for (const point of toolDuration) {
-      const attributes = attrs(point);
-      expect(Object.keys(attributes).sort()).toEqual([
-        "error.category",
-        "error.type",
-        "gen_ai.agent.name",
-        "gen_ai.agent.version",
-        "gen_ai.operation.name",
-        "gen_ai.provider.name",
-        "gen_ai.request.model",
-        "gen_ai.tool.name",
-      ]);
-      expect(["skill", "bash"]).toContain(attributes["gen_ai.tool.name"]);
-    }
+    const allowedKeys = new Set([
+      ...Object.keys(identity),
+      "gen_ai.operation.name",
+      "gen_ai.tool.name",
+      "error.type",
+      "error.category",
+      "agento11y.tool.execution.kind",
+      "gen_ai.skill.name",
+      "gen_ai.token.type",
+      "gen_ai.token.semantics",
+    ]);
     for (const metric of metrics) {
       const points =
         metric.histogram?.dataPoints ?? metric.sum?.dataPoints ?? [];
       for (const point of points) {
         for (const key of Object.keys(attrs(point))) {
-          expect(key).not.toMatch(
-            /skill|call\.id|arguments|result|path|uri|description/,
+          expect(allowedKeys.has(key), key).toBe(true);
+        }
+        if (attrs(point)["gen_ai.operation.name"] !== "execute_tool") {
+          expect(attrs(point)).not.toHaveProperty("gen_ai.skill.name");
+          expect(attrs(point)).not.toHaveProperty(
+            "agento11y.tool.execution.kind",
           );
         }
       }
+    }
+    const metricWire = JSON.stringify(metrics);
+    for (const value of [
+      secret,
+      privatePath,
+      privateURI,
+      "private skill description",
+      "tool-result-marker",
+      "two words",
+      "old",
+    ]) {
+      expect(metricWire).not.toContain(value);
     }
   });
 

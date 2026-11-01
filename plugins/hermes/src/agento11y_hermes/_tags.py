@@ -8,7 +8,6 @@ without subprocesses so exporter credentials never reach a child process.
 from __future__ import annotations
 
 import configparser
-import getpass
 import os
 import re
 from urllib.parse import urlsplit
@@ -62,7 +61,7 @@ def _resolve() -> dict[str, str]:
             continue
         try:
             if name == "user":
-                value = _env("USER_ID") or getpass.getuser()
+                value = _env("USER_ID")
             else:
                 cwd = os.getcwd()
                 value = _git_repo(cwd) if name == "repo" else _git_branch(cwd)
@@ -70,7 +69,7 @@ def _resolve() -> dict[str, str]:
             if value:
                 tags[key] = value
         except Exception:
-            # Telemetry must not interrupt the agent if account or Git lookup fails.
+            # Telemetry must not interrupt the agent if Git lookup fails.
             continue
     return tags
 

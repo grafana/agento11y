@@ -28,6 +28,7 @@ import (
 type Event struct {
 	ToolCallID  string    `json:"tool_call_id"`
 	ToolName    string    `json:"tool_name,omitempty"`
+	SkillName   string    `json:"skill_name,omitempty"`
 	Status      string    `json:"status,omitempty"`
 	DurationMs  float64   `json:"duration_ms,omitempty"`
 	Error       string    `json:"error,omitempty"`

@@ -7,6 +7,16 @@
 // precedence on collisions because the SDK merges per-generation Tags atop
 // client-level Tags.
 
+export function effectiveTags(
+  config: {
+    autoTags?: Record<string, string>;
+    configuredTags?: Record<string, string>;
+  },
+  builtins?: Record<string, string>,
+): Record<string, string> {
+  return { ...config.autoTags, ...config.configuredTags, ...builtins };
+}
+
 export interface BuiltinTagInputs {
   cwd?: string;
   gitBranch?: string;

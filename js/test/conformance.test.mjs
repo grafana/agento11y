@@ -615,6 +615,7 @@ for (const fixture of toolExecutionKinds.cases) {
       assert.equal(metrics[0].dataPoints.length, 1);
       const point = metrics[0].dataPoints[0];
       assert.equal(point.value.count, 1);
+      assert.ok(Object.hasOwn(fixture, 'client_metric_attributes'));
       assert.deepEqual(point.attributes, {
         'gen_ai.operation.name': 'execute_tool',
         'gen_ai.tool.name': start.tool_name.trim(),
@@ -623,6 +624,7 @@ for (const fixture of toolExecutionKinds.cases) {
         'gen_ai.agent.name': '',
         'error.type': fixture.error ? 'tool_execution_error' : '',
         'error.category': fixture.error ? 'sdk_error' : '',
+        ...fixture.client_metric_attributes,
       });
       assert.equal(env.receivedRequests.length, 0);
     } finally {

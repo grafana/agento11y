@@ -4,10 +4,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.grafana.agento11y.sdk.Agento11yEnvConfig.EnvResolveResult;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -33,10 +39,90 @@ class Agento11yEnvConfigTest {
         assertThat(cfg.getUserId()).isEmpty();
         assertThat(cfg.getTags()).isEmpty();
         assertThat(cfg.getDebug()).isNull();
+        assertThat(cfg.getDebugBufferSize()).isZero();
         assertThat(cfg.getGenerationExport().getInsecure()).isNull();
         assertThat(cfg.getGenerationExport().getEndpoint())
                 .isEqualTo("http://localhost:8080");
         assertThat(result.warnings()).isEmpty();
+    }
+
+    static Stream<Arguments> debugBufferSizeCases() {
+        return Stream.of(
+                Arguments.of(0),
+                Arguments.of(1),
+                Arguments.of(32),
+                Arguments.of(Integer.MAX_VALUE),
+                Arguments.of(-1),
+                Arguments.of(Integer.MIN_VALUE));
+    }
+
+    @ParameterizedTest
+    @MethodSource("debugBufferSizeCases")
+    void debugBufferSizeSurvivesCopyAndEnvResolution(int capacity) {
+        Agento11yClientConfig base = new Agento11yClientConfig();
+        assertThat(base.setDebugBufferSize(capacity)).isSameAs(base);
+        Agento11yClientConfig copy = base.copy();
+        Agento11yClientConfig resolved = Agento11yEnvConfig.resolveFromEnv(Map.<String, String>of()::get, base).config();
+        base.setDebugBufferSize(7);
+        assertThat(copy.getDebugBufferSize()).isEqualTo(capacity);
+        assertThat(resolved.getDebugBufferSize()).isEqualTo(capacity);
+    }
+
+    @Test
+    void debugBufferSizeIsProgrammaticOnlyAndIndependentOfDebug() {
+        for (String prefix : new String[] {"AGENTO11Y_", "SIGIL_"}) {
+            Map<String, String> env = Map.of(prefix + "DEBUG", "true", prefix + "DEBUG_BUFFER_SIZE", "99");
+            Agento11yClientConfig defaults = resolve(env).config();
+            assertThat(defaults.getDebug()).isTrue();
+            assertThat(defaults.getDebugBufferSize()).isZero();
+            for (Boolean debug : new Boolean[] {null, Boolean.FALSE, Boolean.TRUE}) {
+                Agento11yClientConfig base = new Agento11yClientConfig().setDebug(debug).setDebugBufferSize(16);
+                Agento11yClientConfig resolved = Agento11yEnvConfig.resolveFromEnv(env::get, base).config();
+                assertThat(resolved.getDebugBufferSize()).isEqualTo(16);
+                resolved.setGenerationExport(new GenerationExportConfig().setProtocol(GenerationExportProtocol.NONE));
+                try (Agento11yClient client = new Agento11yClient(resolved)) {
+                    assertThat(client).extracting("debugBufferSize").isEqualTo(16);
+                }
+            }
+        }
+    }
+
+    @Test
+    void negativeDebugBufferSizeWarnsOnceAtConstructionAndFallsBackToZero() {
+        List<LogRecord> records = new ArrayList<>();
+        Logger logger = Logger.getAnonymousLogger();
+        logger.setUseParentHandlers(false);
+        logger.setLevel(Level.ALL);
+        logger.addHandler(new Handler() {
+            @Override
+            public void publish(LogRecord record) {
+                records.add(record);
+            }
+
+            @Override
+            public void flush() {
+            }
+
+            @Override
+            public void close() {
+            }
+        });
+        Agento11yClientConfig base = new Agento11yClientConfig()
+                .setLogger(logger)
+                .setDebugBufferSize(-1)
+                .setGenerationExport(new GenerationExportConfig().setProtocol(GenerationExportProtocol.NONE));
+        assertThat(records).isEmpty();
+        try (Agento11yClient client = new Agento11yClient(base)) {
+            assertThat(client).extracting("debugBufferSize").isEqualTo(0);
+            assertThat(base.getDebugBufferSize()).isEqualTo(-1);
+            assertThat(records).singleElement().satisfies(record -> {
+                assertThat(record.getLevel()).isEqualTo(Level.WARNING);
+                assertThat(record.getMessage()).contains("debugBufferSize", "-1", "0", "disabled");
+            });
+            client.debugSnapshot();
+            client.debugSnapshot();
+        }
+        assertThat(records).hasSize(1);
     }
 
     @Test

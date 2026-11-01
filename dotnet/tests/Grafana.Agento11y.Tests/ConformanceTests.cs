@@ -629,13 +629,23 @@ public sealed class ConformanceTests
         Assert.Empty(env.Ingest.Requests);
         var metric = Assert.Single(env.MetricMeasurements);
         Assert.Equal("gen_ai.client.operation.duration", metric.Name);
-        Assert.Equal(new[]
+        var expectedMetricTags = new Dictionary<string, object?>
         {
-            "error.category", "error.type", "gen_ai.agent.name", "gen_ai.operation.name",
-            "gen_ai.provider.name", "gen_ai.request.model", "gen_ai.tool.name",
-        }, metric.Tags.Keys.OrderBy(key => key, StringComparer.Ordinal));
-        Assert.DoesNotContain(metric.Tags.Keys, key => key.Contains("skill", StringComparison.Ordinal)
-            || key.StartsWith("process.", StringComparison.Ordinal));
+            ["gen_ai.operation.name"] = "execute_tool",
+            ["gen_ai.provider.name"] = string.Empty,
+            ["gen_ai.request.model"] = string.Empty,
+            ["gen_ai.tool.name"] = Text(start, "tool_name").Trim(),
+            ["gen_ai.agent.name"] = string.Empty,
+            ["error.type"] = error.Length > 0 ? "tool_execution_error" : string.Empty,
+            ["error.category"] = error.Length > 0 ? "sdk_error" : string.Empty,
+        };
+        foreach (var attribute in testCase.GetProperty("client_metric_attributes").EnumerateObject())
+        {
+            expectedMetricTags.Add(attribute.Name, attribute.Value.GetString());
+        }
+        Assert.Equal(expectedMetricTags.OrderBy(pair => pair.Key, StringComparer.Ordinal),
+            metric.Tags.OrderBy(pair => pair.Key, StringComparer.Ordinal));
+        Assert.DoesNotContain("gen_ai.execute_tool.duration", env.MetricNames.Keys);
     }
 
     [Theory]

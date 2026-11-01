@@ -2,6 +2,8 @@
 
 `agento11y-openai-agents` provides callback handlers that map OpenAI Agents lifecycle events into agento11y generation recorder lifecycles.
 
+See the [getting-started cookbook](../../examples/getting-started/python-openai-agents/) for a two-turn tool-using agent with standard OpenTelemetry and native agento11y variants.
+
 ## Installation
 
 ```bash

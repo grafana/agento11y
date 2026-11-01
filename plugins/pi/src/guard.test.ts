@@ -7,12 +7,12 @@ import type {
 } from "@grafana/agento11y";
 import { describe, expect, it, vi } from "vitest";
 import {
+  evaluatePreflight,
   type GuardArgs,
   type GuardBlockResult,
   type GuardResult,
   type GuardTransformResult,
   type PreflightTransformArgs,
-  runPreflightTransform,
   runToolCallGuard,
 } from "./guard.js";
 
@@ -759,14 +759,16 @@ function makePreflightArgs(
   };
 }
 
-describe("runPreflightTransform", () => {
+describe("evaluatePreflight", () => {
   it("sends a preflight request with phases override", async () => {
     const { client, calls } = makeClient(async () => ({
       action: "allow",
       evaluations: [],
     }));
 
-    await runPreflightTransform(makePreflightArgs({ client }));
+    await evaluatePreflight(
+      makePreflightArgs({ client, tags: { owner: "test" } }),
+    );
 
     expect(calls).toHaveLength(1);
     const { req, override } = calls[0]!;
@@ -776,13 +778,19 @@ describe("runPreflightTransform", () => {
       agentVersion: "1.0.0",
       conversationId: "pi-session-1",
       model: { provider: "anthropic", name: "claude-sonnet-4" },
+      tags: { owner: "test" },
     });
     expect((req.input as HookInput).messages).toEqual([
       { role: "user", parts: [{ type: "text", text: "hi" }] },
     ]);
-    expect(override).toEqual({ enabled: true, phases: ["preflight"] });
+    expect(override).toEqual({
+      enabled: true,
+      phases: ["preflight"],
+      failOpen: false,
+      strictTransforms: true,
+    });
 
-    await runPreflightTransform(
+    await evaluatePreflight(
       makePreflightArgs({ client, conversationId: undefined }),
     );
     expect(calls[1]!.req.context).not.toHaveProperty("conversationId");
@@ -798,58 +806,72 @@ describe("runPreflightTransform", () => {
       transformedInput: { messages: redacted },
     }));
 
-    const result = await runPreflightTransform(makePreflightArgs({ client }));
-    expect(result).toEqual({ messages: redacted });
+    const result = await evaluatePreflight(makePreflightArgs({ client }));
+    expect(result).toEqual({
+      kind: "transform",
+      input: { messages: redacted },
+    });
   });
 
-  it("returns undefined when the server does not emit transformedInput", async () => {
+  it("classifies an allow without a transform", async () => {
     const { client } = makeClient(async () => ({
       action: "allow",
       evaluations: [],
     }));
 
-    const result = await runPreflightTransform(makePreflightArgs({ client }));
-    expect(result).toBeUndefined();
+    const result = await evaluatePreflight(makePreflightArgs({ client }));
+    expect(result).toEqual({ kind: "allow" });
   });
 
-  it("returns undefined when the server returns an empty messages list", async () => {
+  it("classifies an empty transform as invalid", async () => {
     const { client } = makeClient(async () => ({
       action: "allow",
       evaluations: [],
       transformedInput: { messages: [] },
     }));
 
-    const result = await runPreflightTransform(makePreflightArgs({ client }));
-    expect(result).toBeUndefined();
+    const result = await evaluatePreflight(makePreflightArgs({ client }));
+    expect(result).toEqual({ kind: "invalid" });
   });
 
-  it("fails open on transport errors, logging a warning", async () => {
+  it("classifies transport errors without exposing their details", async () => {
     const { client } = makeClient(async () => {
       throw new Error("network down");
     });
     const warn = vi.fn();
 
-    const result = await runPreflightTransform(
+    const result = await evaluatePreflight(
       makePreflightArgs({ client, logger: { warn } }),
     );
-    expect(result).toBeUndefined();
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("preflight transform eval failed"),
-    );
+    expect(result).toEqual({ kind: "failure" });
+    expect(warn).not.toHaveBeenCalled();
   });
 
-  it("surfaces a preflight deny without a transform as no-op (cannot block via context)", async () => {
-    // The pi `context` event has no `block` field, so a preflight deny
-    // verdict cannot be enforced here. Without transformedInput there is
-    // nothing to apply, so we surface no transform and let the original
-    // messages flow through.
+  it("classifies a preflight deny separately from allow", async () => {
     const { client } = makeClient(async () => ({
       action: "deny",
       reason: "preflight deny",
       evaluations: [],
     }));
 
-    const result = await runPreflightTransform(makePreflightArgs({ client }));
-    expect(result).toBeUndefined();
+    const result = await evaluatePreflight(makePreflightArgs({ client }));
+    expect(result).toEqual({ kind: "deny" });
+  });
+  it.each([
+    { output: [] },
+    { tools: [] },
+    { future: true },
+  ])("rejects unsupported transformed input %s", async (extra) => {
+    const { client } = makeClient(async () => ({
+      action: "allow",
+      evaluations: [],
+      transformedInput: {
+        messages: [{ role: "user", content: "safe" }],
+        ...extra,
+      },
+    }));
+    expect(await evaluatePreflight(makePreflightArgs({ client }))).toEqual({
+      kind: "invalid",
+    });
   });
 });

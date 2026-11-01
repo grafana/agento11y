@@ -10,7 +10,7 @@
           "name": "claude-sonnet-4-pi"
         },
         "response_id": "resp-pi-1",
-        "response_model": "claude-sonnet-4-pi",
+        "response_model": "claude-sonnet-4-physical",
         "mode": "STREAM",
         "operation_name": "streamText",
         "stop_reason": "end_turn",

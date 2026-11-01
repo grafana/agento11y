@@ -1,16 +1,16 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.10"
 resolution-markers = [
     "python_full_version >= '3.14'",
     "python_full_version == '3.13.*'",
     "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "(python_full_version < '3.13' and sys_platform != 'emscripten') or (python_full_version < '3.12' and sys_platform == 'emscripten')",
+    "python_full_version < '3.12' or (python_full_version == '3.12.*' and sys_platform != 'emscripten')",
 ]
 
 [[package]]
 name = "agento11y"
-version = "0.20.0"
+version = "0.22.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "grpcio" },
@@ -22,14 +22,14 @@ dependencies = [
     { name = "protobuf" },
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c8/80/4561d04b2ef398dc1b7eddc3a8b1ac2e869cefd74e4f3dc9608a592f63be/agento11y-0.20.0.tar.gz", hash = "sha256:c7983383fb25d488db0bdae475944c5b6e5890f48f2be4e50f72dc7d1da8dd0a", size = 307208, upload-time = "2026-10-13T14:30:46.623Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/93/76/f67e60379581d15b2ab79e6a830213e6a838d18560b760c11d7458d5c0c6/agento11y-0.22.0.tar.gz", hash = "sha256:994bcde9da09658e3b577bf9914766c3638ea9eb4553246af99a0fbbaa7ce066", size = 330587, upload-time = "2026-10-29T15:37:19.068Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/de/10/519b81dcd2c6a6f6c9222a2fe49fd97730f55b15d9956dc0ff07c38656a5/agento11y-0.20.0-py3-none-any.whl", hash = "sha256:04ce9192ce3081454e1d25810e3cf0b8e2eab26543669c7b38beb864f38778f1", size = 174778, upload-time = "2026-10-13T14:30:45.185Z" },
+    { url = "https://files.pythonhosted.org/packages/e2/9e/594609b386420caec0f28682d6533afd5b8d183c4656e5134e72415ef668/agento11y-0.22.0-py3-none-any.whl", hash = "sha256:3df41647ee5dc9a57d5fb13a98c645ab8daff49804e38cd0fe07563ec9eb1158", size = 182044, upload-time = "2026-10-29T15:37:17.401Z" },
 ]
 
 [[package]]
 name = "agento11y-deepeval"
-version = "0.20.0"
+version = "0.22.0"
 source = { editable = "." }
 dependencies = [
     { name = "agento11y" },
@@ -43,7 +43,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agento11y", specifier = ">=0.20.0" },
+    { name = "agento11y", specifier = ">=0.22.0" },
     { name = "deepeval", specifier = ">=4.2.0,<5.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.2.0" },
 ]
@@ -522,7 +522,7 @@ name = "exceptiongroup"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "(python_full_version < '3.13' and sys_platform != 'emscripten') or (python_full_version < '3.12' and sys_platform == 'emscripten')" },
+    { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/50/79/66800aadf48771f6b62f7eb014e352e5d06856655206165d775e675a02c9/exceptiongroup-1.3.1.tar.gz", hash = "sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219", size = 30371, upload-time = "2025-11-21T23:01:54.787Z" }
 wheels = [
@@ -756,8 +756,8 @@ name = "httpcore2"
 version = "2.13.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "h11", marker = "python_full_version != '3.12.*' or sys_platform != 'emscripten'" },
-    { name = "truststore", marker = "python_full_version != '3.12.*' or sys_platform != 'emscripten'" },
+    { name = "h11" },
+    { name = "truststore" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/15/8c/e925b1c92018abb3a1863ce1549d76d2381e334d21d65d4ac8f65dabd78a/httpcore2-2.13.0.tar.gz", hash = "sha256:2adc8be4fb285fbcd6d894298db3b52c177e74b6674eda3a76bd36be3292a3db", size = 67740, upload-time = "2026-09-14T14:18:04.717Z" }
 wheels = [

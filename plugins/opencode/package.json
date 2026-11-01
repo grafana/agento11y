@@ -1,6 +1,6 @@
 {
   "name": "@grafana/agento11y-opencode",
-  "version": "0.23.0",
+  "version": "0.26.0",
   "description": "OpenCode plugin for Grafana Agent Observability",
   "repository": {
     "type": "git",
@@ -63,7 +63,7 @@
     "@opentelemetry/sdk-metrics": "2.6.1",
     "@opentelemetry/sdk-trace-base": "2.6.1",
     "@types/node": "24.19.2",
-    "esbuild": "0.28.1",
+    "esbuild": "0.28.2",
     "typescript": "6.0.2",
     "vitest": "4.1.11"
   }

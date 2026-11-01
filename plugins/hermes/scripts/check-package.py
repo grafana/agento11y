@@ -26,6 +26,15 @@ def check_installed(expected: str) -> None:
 
     from agento11y_hermes._version import plugin_user_agent
 
+    start = agento11y.ToolExecutionStart(
+        tool_name="skill_view",
+        execution_kind=agento11y.ToolExecutionKind.LOAD_SKILL,
+        skill_name="checklist",
+    )
+    require(
+        start.execution_kind == agento11y.ToolExecutionKind.LOAD_SKILL and start.skill_name == "checklist",
+        "Installed SDK does not preserve skill identity",
+    )
     dist = importlib.metadata.distribution(DISTRIBUTION)
     require(dist.version == expected, f"Installed version {dist.version} != {expected}")
     entries = [ep for ep in dist.entry_points if ep.group == "hermes_agent.plugins" and ep.name == "agento11y"]

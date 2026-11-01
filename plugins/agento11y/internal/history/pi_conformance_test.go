@@ -380,6 +380,13 @@ func TestPiSessionFixtureComparisonNamesDivergentFields(t *testing.T) {
 			wantPath: "usage.total_tokens",
 		},
 		{
+			name: "response model replaced with another identity",
+			mutate: func(gen *piNormalizedGeneration) {
+				gen.ResponseModel = "unrelated-response-model"
+			},
+			wantPath: "response_model",
+		},
+		{
 			name: "stop reason passed through unmapped",
 			mutate: func(gen *piNormalizedGeneration) {
 				gen.StopReason = "toolUse"

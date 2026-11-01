@@ -54,6 +54,7 @@ import type {
   GenerationRecorder,
   GenerationResult,
   GenerationStart,
+  HookEvaluateOptions,
   HookEvaluateRequest,
   HookEvaluateResponse,
   HooksConfig,
@@ -66,6 +67,7 @@ import type {
   ToolExecutionRecorder,
   ToolExecutionResult,
   ToolExecutionStart,
+  ToolResultPart,
   WorkflowStep,
 } from './types.js';
 import {
@@ -227,6 +229,31 @@ function buildToolResultMessage(
   };
 }
 
+class DebugBuffer<T> {
+  private readonly items: T[] = [];
+  private next = 0;
+
+  constructor(
+    private readonly capacity: number,
+    private readonly clone: (value: T) => T,
+  ) {}
+
+  push(value: T): void {
+    if (this.capacity === 0) return;
+    const copy = this.clone(value);
+    if (this.items.length < this.capacity) {
+      this.items.push(copy);
+    } else {
+      this.items[this.next] = copy;
+      this.next = (this.next + 1) % this.capacity;
+    }
+  }
+
+  snapshot(): T[] {
+    return this.items.map((_, index) => this.clone(this.items[(this.next + index) % this.items.length] as T));
+  }
+}
+
 export class Agento11yClient {
   private readonly config: Agento11ySdkConfig;
   private readonly nowFn: () => Date;
@@ -240,9 +267,9 @@ export class Agento11yClient {
   private readonly tokenUsageHistogram: Histogram;
   private readonly ttftHistogram: Histogram;
   private readonly toolCallsHistogram: Histogram;
-  private readonly generations: Generation[] = [];
-  private readonly workflowSteps: WorkflowStep[] = [];
-  private readonly toolExecutions: ToolExecution[] = [];
+  private readonly generations: DebugBuffer<Generation>;
+  private readonly workflowSteps: DebugBuffer<WorkflowStep>;
+  private readonly toolExecutions: DebugBuffer<ToolExecution>;
   private readonly pendingGenerations: Generation[] = [];
   private readonly pendingWorkflowSteps: WorkflowStep[] = [];
 
@@ -261,6 +288,10 @@ export class Agento11yClient {
    */
   constructor(inputConfig: Agento11ySdkConfigInput = {}) {
     this.config = mergeConfig(inputConfig);
+    const debugBufferSize = this.config.debugBufferSize ?? 0;
+    this.generations = new DebugBuffer(debugBufferSize, cloneGeneration);
+    this.workflowSteps = new DebugBuffer(debugBufferSize, cloneWorkflowStep);
+    this.toolExecutions = new DebugBuffer(debugBufferSize, cloneToolExecution);
     this.nowFn = this.config.now ?? (() => new Date());
     this.sleepFn = this.config.sleep ?? defaultSleep;
     this.logger = this.config.logger ?? defaultLogger;
@@ -309,7 +340,7 @@ export class Agento11yClient {
     // debug buffer only after a successful enqueue keeps debugSnapshot from
     // listing a step the caller was told failed to enqueue.
     this.internalEnqueueWorkflowStep(normalized);
-    this.workflowSteps.push(cloneWorkflowStep(normalized));
+    this.workflowSteps.push(normalized);
   }
 
   /**
@@ -573,11 +604,12 @@ export class Agento11yClient {
    *
    * Framework adapters can pass `hooksConfigOverride` to override specific
    * fields of the client's hooks config (e.g., force `enabled: true` when the
-   * adapter has its own `enableHooks` option).
+   * adapter has its own `enableHooks` option). Pass `signal` in the same options
+   * to cancel the HTTP request. Caller cancellation rejects regardless of `failOpen`.
    */
   async evaluateHook(
     request: HookEvaluateRequest,
-    hooksConfigOverride?: Partial<HooksConfig>,
+    hooksConfigOverride?: HookEvaluateOptions,
   ): Promise<HookEvaluateResponse> {
     this.assertOpen();
     const effectiveHooks: HooksConfig =
@@ -588,6 +620,7 @@ export class Agento11yClient {
       extraHeaders: this.config.generationExport.headers,
       hooks: effectiveHooks,
       request,
+      signal: hooksConfigOverride?.signal,
       logger: this.logger,
     });
   }
@@ -630,9 +663,9 @@ export class Agento11yClient {
   /** Returns a cloned in-memory snapshot for debugging and tests. */
   debugSnapshot(): Agento11yDebugSnapshot {
     return {
-      generations: this.generations.map(cloneGeneration),
-      workflowSteps: this.workflowSteps.map(cloneWorkflowStep),
-      toolExecutions: this.toolExecutions.map(cloneToolExecution),
+      generations: this.generations.snapshot(),
+      workflowSteps: this.workflowSteps.snapshot(),
+      toolExecutions: this.toolExecutions.snapshot(),
       queueSize: this.pendingGenerations.length,
       workflowStepQueueSize: this.pendingWorkflowSteps.length,
     };
@@ -669,11 +702,11 @@ export class Agento11yClient {
   }
 
   internalRecordGeneration(generation: Generation): void {
-    this.generations.push(cloneGeneration(generation));
+    this.generations.push(generation);
   }
 
   internalRecordToolExecution(toolExecution: ToolExecution): void {
-    this.toolExecutions.push(cloneToolExecution(toolExecution));
+    this.toolExecutions.push(toolExecution);
   }
 
   internalEnqueueGeneration(generation: Generation): void {
@@ -794,6 +827,83 @@ export class Agento11yClient {
       throw new Error('generation sanitizer must return a generation');
     }
     return cloneGeneration(sanitized);
+  }
+
+  /**
+   * Runs the generation sanitizer over the text a tool span shows. The
+   * sanitizer only takes generations, so the text goes in one built from the
+   * tool, where the same text sits in a real generation: the title in
+   * conversationTitle, the arguments in a tool_call part, and the result and
+   * the error in tool_result parts, the error one marked isError. Each gets
+   * the redaction it gets there. Text the sanitizer drops, or hands back as
+   * something other than a string, stays off the span. Returns undefined
+   * when the sanitizer throws or returns parts the SDK cannot read.
+   */
+  internalSanitizeToolSpanText(tool: ToolExecutionStart, text: ToolSpanText): ToolSpanText | undefined {
+    const output: Message[] = [];
+    if (text.arguments !== undefined) {
+      output.push({
+        role: 'assistant',
+        parts: [
+          { type: 'tool_call', toolCall: { id: tool.toolCallId, name: tool.toolName, inputJSON: text.arguments } },
+        ],
+      });
+    }
+    const toolResults: ToolResultPart[] = [];
+    if (text.result !== undefined) {
+      toolResults.push({ toolCallId: tool.toolCallId, name: tool.toolName, content: text.result });
+    }
+    if (text.error !== undefined) {
+      toolResults.push({ toolCallId: tool.toolCallId, name: tool.toolName, content: text.error, isError: true });
+    }
+    if (toolResults.length > 0) {
+      output.push({ role: 'tool', parts: toolResults.map((toolResult) => ({ type: 'tool_result', toolResult })) });
+    }
+    const now = this.internalNow();
+    try {
+      const sanitized = this.internalSanitizeGeneration({
+        id: tool.toolCallId ?? '',
+        conversationId: tool.conversationId,
+        conversationTitle: text.title,
+        agentName: tool.agentName,
+        agentVersion: tool.agentVersion,
+        mode: 'SYNC',
+        operationName: 'execute_tool',
+        model: { provider: tool.requestProvider ?? '', name: tool.requestModel ?? '' },
+        input: [],
+        output,
+        tools: [],
+        startedAt: now,
+        completedAt: now,
+        tags: {},
+        metadata: {},
+      });
+
+      let toolArguments: unknown;
+      let toolResult: unknown;
+      let toolError: unknown;
+      for (const message of sanitized.output ?? []) {
+        for (const part of message.parts ?? []) {
+          if (part.type === 'tool_call') {
+            toolArguments ??= part.toolCall.inputJSON;
+          } else if (part.type === 'tool_result' && part.toolResult.isError === true) {
+            toolError ??= part.toolResult.content;
+          } else if (part.type === 'tool_result') {
+            toolResult ??= part.toolResult.content;
+          }
+        }
+      }
+      // Only the fields the caller passed come back.
+      return {
+        title: text.title === undefined ? undefined : textOrUndefined(sanitized.conversationTitle),
+        arguments: text.arguments === undefined ? undefined : textOrUndefined(toolArguments),
+        result: text.result === undefined ? undefined : textOrUndefined(toolResult),
+        error: text.error === undefined ? undefined : textOrUndefined(toolError),
+      };
+    } catch (error) {
+      this.internalLogWarn('agento11y tool span sanitization failed; leaving its text off the span', error);
+      return undefined;
+    }
   }
 
   internalStartGenerationSpan(
@@ -1010,49 +1120,81 @@ export class Agento11yClient {
       span.setAttribute('process.exit.code', toolExecution.processExitCode);
     }
 
+    let toolArguments: string | undefined;
+    let toolResult: string | undefined;
     if (toolExecution.includeContent) {
       const argumentsResult = serializeToolContent(toolExecution.arguments);
       if (argumentsResult.error !== undefined && localError === undefined) {
         localError = argumentsResult.error;
-      } else if (argumentsResult.value !== undefined) {
-        span.setAttribute(spanAttrToolCallArguments, argumentsResult.value);
+      } else {
+        toolArguments = argumentsResult.value;
       }
 
       const resultValue = serializeToolContent(toolExecution.result);
       if (resultValue.error !== undefined && localError === undefined) {
         localError = resultValue.error;
-      } else if (resultValue.value !== undefined) {
-        span.setAttribute(spanAttrToolCallResult, resultValue.value);
+      } else {
+        toolResult = resultValue.value;
       }
     }
 
     // Tools have no proto export; under both stripped modes the span must
     // not echo raw provider exception text via recordException events or the
     // status description.
-    const redactSpanErrors =
-      contentCaptureMode === 'metadata_only' || contentCaptureMode === 'full_with_metadata_spans';
+    let redactSpanErrors = contentCaptureMode === 'metadata_only' || contentCaptureMode === 'full_with_metadata_spans';
+
+    // The generation sanitizer redacts the same arguments, result and error
+    // on the generation, where the error is an error tool result, so the
+    // span shows them redacted too. If it throws, none of that text goes on
+    // the span.
+    const sanitizing = !redactSpanErrors && this.config.generationSanitizer !== undefined;
+    let errorText = toolExecution.callError ?? localError?.message;
+    if (sanitizing && (toolArguments !== undefined || toolResult !== undefined || errorText !== undefined)) {
+      const sanitized = this.internalSanitizeToolSpanText(toolExecution, {
+        arguments: toolArguments,
+        result: toolResult,
+        error: errorText,
+      });
+      toolArguments = sanitized?.arguments;
+      toolResult = sanitized?.result;
+      errorText = sanitized?.error;
+      if (sanitized === undefined) {
+        redactSpanErrors = true;
+      }
+    }
+    if (toolArguments !== undefined) {
+      span.setAttribute(spanAttrToolCallArguments, toolArguments);
+    }
+    if (toolResult !== undefined) {
+      span.setAttribute(spanAttrToolCallResult, toolResult);
+    }
 
     if (toolExecution.callError !== undefined) {
       const errorCategory = errorCategoryFromError(toolExecution.callError, true);
-      if (!redactSpanErrors) {
-        span.recordException(new Error(toolExecution.callError));
+      // A sanitizer that cleared the error leaves only its category.
+      const message = sanitizing ? errorText : toolExecution.callError;
+      if (!redactSpanErrors && message !== undefined) {
+        span.recordException(new Error(message));
       }
       span.setAttribute(spanAttrErrorType, 'tool_execution_error');
       span.setAttribute(spanAttrErrorCategory, errorCategory);
       span.setStatus({
         code: SpanStatusCode.ERROR,
-        message: redactSpanErrors ? errorCategory : toolExecution.callError,
+        message: redactSpanErrors ? errorCategory : (message ?? errorCategory),
       });
     } else if (localError !== undefined) {
       const errorCategory = errorCategoryFromError(localError, true);
-      if (!redactSpanErrors) {
-        span.recordException(localError);
+      const message = sanitizing ? errorText : localError.message;
+      if (!redactSpanErrors && message !== undefined) {
+        // The error's own stack starts with its raw message, so a sanitized
+        // exception leaves the stack out.
+        span.recordException(sanitizing ? { name: localError.name, message } : localError);
       }
       span.setAttribute(spanAttrErrorType, 'tool_execution_error');
       span.setAttribute(spanAttrErrorCategory, errorCategory);
       span.setStatus({
         code: SpanStatusCode.ERROR,
-        message: redactSpanErrors ? errorCategory : localError.message,
+        message: redactSpanErrors ? errorCategory : (message ?? errorCategory),
       });
     } else {
       span.setStatus({ code: SpanStatusCode.OK });
@@ -1180,8 +1322,21 @@ export class Agento11yClient {
     const durationSeconds = Math.max(0, (completedMs - startedMs) / 1_000);
     const errorType = finalError === undefined ? '' : 'tool_execution_error';
     const errorCategory = finalError === undefined ? '' : errorCategoryFromError(finalError, true);
+    const skillAttributes: Record<string, string> = {};
+    if (
+      toolExecution.executionKind === 'load_skill' ||
+      toolExecution.executionKind === 'read_skill_resource' ||
+      toolExecution.executionKind === 'command'
+    ) {
+      skillAttributes['agento11y.tool.execution.kind'] = toolExecution.executionKind;
+      const skillName = toolExecution.skillName?.trim();
+      if (skillName) {
+        skillAttributes['gen_ai.skill.name'] = skillName;
+      }
+    }
     this.operationDurationHistogram.record(durationSeconds, {
       [spanAttrOperationName]: 'execute_tool',
+      ...skillAttributes,
       [spanAttrToolName]: toolExecution.toolName.trim(),
       ...metricIdentityAttributes(
         toolExecution.requestProvider ?? '',
@@ -1857,10 +2012,20 @@ class ToolExecutionRecorderImpl implements ToolExecutionRecorder {
     if (this.toolMode === 'metadata_only' || this.toolMode === 'full_with_metadata_spans') {
       this.seed.conversationTitle = undefined;
       this.seed.toolDescription = undefined;
+    } else if (notEmpty(this.seed.conversationTitle) && this.client.internalHasGenerationSanitizer()) {
+      // The sanitizer redacts this title on the generation, so the tool span
+      // shows it redacted too.
+      this.seed.conversationTitle = this.client.internalSanitizeToolSpanText(this.seed, {
+        title: this.seed.conversationTitle,
+      })?.title;
     }
     this.resolvedIncludeContent = shouldIncludeToolContent(this.toolMode, this.seed.includeContent ?? false);
     this.startedAt = this.seed.startedAt ?? this.client.internalNow();
     this.span = this.client.internalStartToolExecutionSpan(this.seed, this.startedAt, parentContext);
+  }
+
+  startToolExecution(start: ToolExecutionStart): ToolExecutionRecorder {
+    return this.client.internalStartToolExecution(start, trace.setSpan(context.active(), this.span));
   }
 
   setResult(result: ToolExecutionResult): void {
@@ -1932,6 +2097,10 @@ class ToolExecutionRecorderImpl implements ToolExecutionRecorder {
 }
 
 class NoopToolExecutionRecorder implements ToolExecutionRecorder {
+  startToolExecution(_start: ToolExecutionStart): ToolExecutionRecorder {
+    return this;
+  }
+
   setResult(_result: ToolExecutionResult): void {}
 
   setCallError(_error: unknown): void {}
@@ -2313,6 +2482,14 @@ function setEmbeddingEndSpanAttributes(
       span.setAttribute(spanAttrEmbeddingInputTexts, texts);
     }
   }
+}
+
+/** The text on a tool span that the generation sanitizer redacts. */
+interface ToolSpanText {
+  title?: string;
+  arguments?: string;
+  result?: string;
+  error?: string;
 }
 
 function toolSpanAttributes(tool: ToolExecutionStart): Record<string, string> {
@@ -2738,6 +2915,10 @@ function isJSON(value: string): boolean {
 
 function notEmpty(value: string | undefined): value is string {
   return value !== undefined && value.trim().length > 0;
+}
+
+function textOrUndefined(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
 }
 
 /**

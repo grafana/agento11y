@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.28.0] - 2026-10-30
+
+### Features
+
+- **sdk**: add skill identity to tool execution metrics (#979)
+
+### Bug Fixes
+
+- **plugins/pi**: record the guard-redacted prompt and title (#903)
+
+## [0.27.0] - 2026-10-28
+
+### Features
+
+- **plugins/agento11y**: add local skill analytics (#963)
+
+## [0.26.0] - 2026-10-26
+
+### Features
+
+- trace tool context and skill loads across agents (#925)
+- **python**: run published suite versions and gate them in CI (#865)
+
+### Bug Fixes
+
+- **plugins/pi**: redact the conversation title before clipping it (#884)
+- **plugins/pi**: preserve reasoning token counts (#872)
+- **security**: resolve medium+ CVEs in npm dependencies (#863)
+- **security**: resolve medium+ CVEs in Go and Python dependencies (#862)
+
 ## [0.25.0] - 2026-09-16
 
 ### Features

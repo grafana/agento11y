@@ -187,6 +187,9 @@ func TestCodexTurnsMapThroughTheLiveMapper(t *testing.T) {
 	if turn.Gen.Usage.InputTokens != 100 || turn.Gen.Usage.OutputTokens != 20 {
 		t.Fatalf("Usage = %+v, want the token_count snapshot", turn.Gen.Usage)
 	}
+	if turn.Gen.Usage.InputSemantics != agento11y.TokenInputSemanticsInclusive {
+		t.Fatalf("InputSemantics = %v, want inclusive like the live hook", turn.Gen.Usage.InputSemantics)
+	}
 	if turn.Quality.ApproxUsage {
 		t.Error("ApproxUsage = true, but the rollout recorded a token count")
 	}

@@ -211,6 +211,46 @@ func TestPostTool_RecordsEventWhenOTelConfigured(t *testing.T) {
 	}
 }
 
+func TestPostToolSkillIdentity(t *testing.T) {
+	for _, mode := range []string{"full", "no_tool_content", "full_with_metadata_spans", "metadata_only"} {
+		for _, event := range []string{"after_tool", "post_tool"} {
+			for _, tt := range []struct{ name, tool, input, status, want string }{
+				{"success", "skill", `{"name":"effective","private":"private-input"}`, "success", "effective"},
+				{"failure", "skill", `{"name":"effective"}`, "failure", "effective"},
+				{"cancelled", "skill", `{"name":"effective"}`, "cancelled", "effective"},
+				{"read", "read", `{"name":"effective"}`, "success", ""},
+				{"unified harness", "skill.read", `{"name":"effective"}`, "success", ""},
+				{"unsafe", "skill", `{"name":"/private/review"}`, "success", ""},
+				{"secret", "skill", `{"name":"glc_abcdefghijklmnopqrstuvwxyz"}`, "success", ""},
+				{"missing", "skill", ``, "success", ""},
+			} {
+				t.Run(mode+"/"+event+"/"+tt.name, func(t *testing.T) {
+					t.Setenv("XDG_STATE_HOME", t.TempDir())
+					t.Setenv("AGENTO11Y_CONTENT_CAPTURE_MODE", mode)
+					t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:4318")
+					PostTool(Payload{HookEventName: event, SessionID: "sess", ToolCallIDValue: "call-1",
+						ToolNameValue: tt.tool, ToolInputValue: json.RawMessage(tt.input), ToolStatusValue: tt.status,
+						DurationMsValue: new(1234.0)}, discardLogger())
+					events := toolevents.Load("sess")
+					if len(events) != 1 || events["call-1"].SkillName != tt.want {
+						t.Fatalf("events = %+v, want name %q", events, tt.want)
+					}
+					if events["call-1"].Status != tt.status || events["call-1"].DurationMs != 1234 {
+						t.Fatalf("changed event: %+v", events["call-1"])
+					}
+					data, err := json.Marshal(events)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if strings.Contains(string(data), "private-input") {
+						t.Fatal("persisted raw arguments")
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestPostTool_NoOpWithoutOTel(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
@@ -220,6 +260,8 @@ func TestPostTool_NoOpWithoutOTel(t *testing.T) {
 		HookEventName:   "post_tool",
 		SessionID:       "sess-noop",
 		ToolCallIDValue: "tc-1",
+		ToolNameValue:   "skill",
+		ToolInputValue:  json.RawMessage(`{"name":"review"}`),
 		ToolStatusValue: "success",
 	}, discardLogger())
 

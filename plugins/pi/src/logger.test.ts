@@ -1,7 +1,14 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { inspect } from "node:util";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   logFilePath,
   logger,
@@ -55,6 +62,7 @@ describe("logger", () => {
   const saved = {
     sigil: process.env.SIGIL_DEBUG,
     agento11y: process.env.AGENTO11Y_DEBUG,
+    xdg: process.env.XDG_STATE_HOME,
   };
 
   beforeEach(() => {
@@ -71,6 +79,10 @@ describe("logger", () => {
     else process.env.SIGIL_DEBUG = saved.sigil;
     if (saved.agento11y === undefined) delete process.env.AGENTO11Y_DEBUG;
     else process.env.AGENTO11Y_DEBUG = saved.agento11y;
+    if (saved.xdg === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = saved.xdg;
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
     resetLoggerForTests();
   });
 
@@ -103,6 +115,85 @@ describe("logger", () => {
     expect(body).toContain("nope");
     // One line per call plus the Error's multi-line stack trace.
     expect(body.split("agento11y[pi]:")).toHaveLength(4);
+  });
+
+  describe.each([
+    "metadata_only",
+    "no_tool_content",
+    "full",
+    "full_with_metadata_spans",
+  ])("debug sanitation with %s capture", (mode) => {
+    it.each([
+      "debug",
+      "warn",
+      "error",
+    ] as const)("redacts formatted %s messages and arguments even when capture redaction is disabled", (level) => {
+      vi.stubEnv("AGENTO11Y_CONTENT_CAPTURE_MODE", mode);
+      vi.stubEnv("SIGIL_CONTENT_CAPTURE_MODE", mode);
+      vi.stubEnv("AGENTO11Y_REDACT_INPUT_MESSAGES", "false");
+      vi.stubEnv("AGENTO11Y_REDACT_SECRETS", "false");
+      process.env.AGENTO11Y_DEBUG = "true";
+      const token = "glc_abcdefghijklmnopqrstuvwxyz1234";
+      logger[level](`message ${token}`);
+      logger[level]("token=%s", token);
+      logger[level]("object=%j", { password: "json-secret-private" });
+      logger[level](
+        "failure",
+        new Error("DATABASE_PASSWORD=error-secret-private"),
+      );
+      logger[level]("object", { token });
+
+      const body = readLog();
+      expect(body).toContain("[REDACTED:");
+      expect(body).not.toContain(token);
+      expect(body).not.toContain("json-secret-private");
+      expect(body).not.toContain("error-secret-private");
+    });
+  });
+
+  it("swallows formatting errors without logging their raw details", () => {
+    process.env.AGENTO11Y_DEBUG = "true";
+    const value = {
+      [inspect.custom]() {
+        throw new Error("private formatter error");
+      },
+    };
+    expect(() => logger.warn("value %s", value)).not.toThrow();
+    logger.debug("still running");
+    const body = readLog();
+    expect(body).toContain("still running");
+    expect(body).not.toContain("private formatter error");
+    expect(body).not.toContain("value");
+  });
+
+  it("does not format arguments while debug logging is disabled", () => {
+    const formatValue = vi.fn(() => {
+      throw new Error("private formatter error");
+    });
+    logger.error("%s", { [inspect.custom]: formatValue });
+    expect(formatValue).not.toHaveBeenCalled();
+    expect(() => readLog()).toThrow();
+  });
+
+  it.each([
+    "mkdir",
+    "append",
+    "cached directory removed",
+  ])("swallows filesystem failures during %s without writing to the terminal", (failure) => {
+    process.env.AGENTO11Y_DEBUG = "true";
+    const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    if (failure === "mkdir") {
+      writeFileSync(join(dir, "agento11y"), "not a directory");
+    } else if (failure === "append") {
+      mkdirSync(logFilePath(), { recursive: true });
+    } else {
+      logger.debug("initial write");
+      rmSync(join(dir, "agento11y"), { recursive: true });
+    }
+    expect(() => logger.error("DATABASE_PASSWORD=private-error")).not.toThrow();
+    expect(stdout).not.toHaveBeenCalled();
+    expect(stderr).not.toHaveBeenCalled();
   });
 
   it("re-reads SIGIL_DEBUG per call so dotenv-applied values take effect", () => {

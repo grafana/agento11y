@@ -57,6 +57,7 @@ export interface HookRequestBody {
     agent_name?: string;
     agent_version?: string;
     conversation_id?: string;
+    tags?: Record<string, string>;
   };
   input?: {
     messages?: WireMessage[];
@@ -76,30 +77,38 @@ export interface HookResponse {
   delayMs?: number;
 }
 
+export interface ExportRequestBody {
+  generations?: Array<{ id?: string; [key: string]: unknown }>;
+}
+
 export interface Agento11yTestServer {
   server: Server;
   baseUrl: string;
   hookCalls: HookCall[];
-  /** Number of accepted `generations:export` requests. */
+  /** Number of received `generations:export` requests. */
   exportCount: number;
+  exports: ExportRequestBody[];
   /** Non-empty when the server saw an unexpected path or invalid JSON. */
   errors: string[];
 }
 
 /**
  * Start a server on 127.0.0.1 that captures `hooks:evaluate` requests and acks
- * `generations:export`. `hook()` is called once per hook request to produce the
+ * `generations:export` by default. `export()` can override the response.
+ * When provided, `hook()` is called once per hook request to produce the
  * response, so a test can vary behavior across the preflight and postflight
  * calls of a single turn by returning different values on successive calls.
  */
 export function startAgento11yTestServer(opts: {
-  hook: (call: HookCall) => HookResponse;
+  hook?: (call: HookCall) => HookResponse;
+  export?: (body: ExportRequestBody) => HookResponse;
 }): Promise<Agento11yTestServer> {
   const state: Agento11yTestServer = {
     server: undefined as unknown as Server,
     baseUrl: "",
     hookCalls: [],
     exportCount: 0,
+    exports: [],
     errors: [],
   };
 
@@ -113,11 +122,11 @@ export function startAgento11yTestServer(opts: {
         const url = req.url ?? "";
 
         if (url === EXPORT_PATH) {
-          handleExport(raw, res, state);
+          handleExport(raw, res, state, opts.export);
           return;
         }
         if (url === HOOKS_PATH) {
-          handleHook(raw, res, state, opts.hook);
+          handleHook(raw, res, state, opts.hook ?? (() => ({})));
           return;
         }
 
@@ -143,8 +152,9 @@ function handleExport(
   raw: string,
   res: import("node:http").ServerResponse,
   state: Agento11yTestServer,
+  respond?: (body: ExportRequestBody) => HookResponse,
 ): void {
-  let parsed: { generations?: Array<{ id?: string }> };
+  let parsed: ExportRequestBody;
   try {
     parsed = JSON.parse(raw);
   } catch (err) {
@@ -154,12 +164,12 @@ function handleExport(
     return;
   }
   state.exportCount += 1;
+  state.exports.push(parsed);
   const results = (parsed.generations ?? []).map((g) => ({
     generation_id: g?.id ?? "",
     accepted: true,
   }));
-  res.setHeader("Content-Type", "application/json");
-  res.end(JSON.stringify({ results }));
+  sendResponse(res, respond?.(parsed) ?? { json: { results } });
 }
 
 function handleHook(
@@ -180,8 +190,13 @@ function handleHook(
 
   const call: HookCall = { phase: body.phase ?? "", body };
   state.hookCalls.push(call);
-  const response = hook(call);
+  sendResponse(res, hook(call));
+}
 
+function sendResponse(
+  res: import("node:http").ServerResponse,
+  response: HookResponse,
+): void {
   // The client aborts on timeout, so a delayed response may write to a closed
   // socket. Swallow those errors instead of crashing the server callback.
   res.on("error", () => {});

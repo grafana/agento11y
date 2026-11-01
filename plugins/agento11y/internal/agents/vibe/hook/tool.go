@@ -11,6 +11,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/guard"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe/mapper"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe/meta"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe/skilldetect"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe/toolevents"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/otel"
@@ -78,7 +79,9 @@ func PostTool(p Payload, logger *log.Logger) {
 		logger.Print("post_tool: missing session_id or tool_call_id")
 		return
 	}
+	skillName, _ := skilldetect.Detect(p.ToolName(), p.ToolInput())
 	ev := toolevents.Event{
+		SkillName:   skillName,
 		ToolCallID:  p.ToolCallID(),
 		ToolName:    p.ToolName(),
 		Status:      p.ToolStatus(),

@@ -1,12 +1,44 @@
 package fragment
 
 import (
+	"encoding/json"
 	"io"
 	"log"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 )
+
+func TestToolRecordCompatibility(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		record ToolRecord
+	}{
+		{"legacy", ToolRecord{ToolName: "skill", ToolUseID: "call-1"}},
+		{"recognized", ToolRecord{ToolName: "skill", ToolUseID: "call-1", SkillName: "org:review"}},
+		{"ambiguous", ToolRecord{ToolName: "skill", ToolUseID: "call-1", SkillAttributionAmbiguous: true}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			f := &Fragment{SessionID: "sess", TurnID: "turn", Tools: []ToolRecord{tt.record}}
+			if err := Save(f); err != nil {
+				t.Fatal(err)
+			}
+			got := LoadTolerant("sess", "turn", log.New(io.Discard, "", 0))
+			if !reflect.DeepEqual(f, got) {
+				t.Fatalf("round trip = %+v, want %+v", got, f)
+			}
+			data, err := json.Marshal(tt.record)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.name == "legacy" && string(data) != `{"toolName":"skill","toolUseId":"call-1"}` {
+				t.Fatalf("legacy encoding = %s", data)
+			}
+		})
+	}
+}
 
 func TestStartNextTurnAndClear(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())

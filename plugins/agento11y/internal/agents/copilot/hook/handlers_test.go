@@ -1034,3 +1034,70 @@ func TestEmitToolSpans_RedactsContent(t *testing.T) {
 	}
 	assert.Contains(t, attrs["gen_ai.tool.call.arguments"], "deploy.sh", "non-secret argument dropped")
 }
+
+func TestSkillCompletionIdentity(t *testing.T) {
+	for _, mode := range []agento11y.ContentCaptureMode{
+		agento11y.ContentCaptureModeFull, agento11y.ContentCaptureModeNoToolContent,
+		agento11y.ContentCaptureModeFullWithMetadataSpans, agento11y.ContentCaptureModeMetadataOnly,
+	} {
+		for _, tt := range []struct {
+			name, surface, input string
+			pending              int
+			failed               bool
+			want                 string
+		}{
+			{"rewritten completion", "copilot-cli", `{"skill":"effective","private":"private-input"}`, 1, false, "effective"},
+			{"post only", "copilot-cli", `"{\"skill\":\"effective\"}"`, 0, false, "effective"},
+			{"stale failure", "copilot-cli", `{"skill":"original"}`, 1, true, ""},
+			{"post only failure", "copilot-cli", `{"skill":"original"}`, 0, true, ""},
+			{"VS Code", "vscode", `{"skill":"effective"}`, 1, false, ""},
+			{"unknown surface", "", `{"skill":"effective"}`, 1, false, ""},
+			{"missing completion input", "copilot-cli", ``, 1, false, ""},
+			{"malformed completion input", "copilot-cli", `{"skill":`, 1, false, ""},
+			{"unsafe name", "copilot-cli", `{"skill":"/private/review"}`, 1, false, ""},
+			{"secret name", "copilot-cli", `{"skill":"glc_abcdefghijklmnopqrstuvwxyz"}`, 1, false, ""},
+			{"concurrent reversed completions", "copilot-cli", `{"skill":"second"}`, 2, false, ""},
+			{"concurrent failure then success", "copilot-cli", `{"skill":"second"}`, 2, true, ""},
+		} {
+			t.Run(mode.String()+"/"+tt.name, func(t *testing.T) {
+				t.Setenv("XDG_STATE_HOME", t.TempDir())
+				logger := log.New(io.Discard, "", 0)
+				cfg := config.Config{ContentCapture: mode}
+				p := Payload{SessionIDJSON: "sess", ToolNameJS: "skill", SurfaceMarker: tt.surface,
+					Timestamp:  json.RawMessage(`"2026-05-18T12:00:02Z"`),
+					ToolArgsJS: json.RawMessage(`{"skill":"original","private":"private-input"}`)}
+				for range tt.pending {
+					PreToolUse(context.Background(), io.Discard, p, cfg, logger)
+				}
+				if tt.pending > 0 {
+					f := fragment.LoadTolerant("sess", "turn-000001", logger)
+					for _, tool := range f.Tools {
+						require.Empty(t, tool.SkillName, "pre input is not effective-input evidence")
+					}
+				}
+				p.ToolArgsJS = json.RawMessage(tt.input)
+				p.ToolResultJS = json.RawMessage(`{"text_result_for_llm":"private-result"}`)
+				p.Timestamp = json.RawMessage(`"2026-05-18T12:00:03Z"`)
+				PostToolUse(p, cfg, logger, tt.failed)
+				if tt.pending > 1 {
+					p.ToolArgsJS = json.RawMessage(`{"skill":"first"}`)
+					PostToolUse(p, cfg, logger, false)
+				}
+				f := fragment.LoadTolerant("sess", "turn-000001", logger)
+				require.Len(t, f.Tools, max(1, tt.pending))
+				for _, tool := range f.Tools {
+					require.Equal(t, tt.want, tool.SkillName)
+					if tt.pending > 1 {
+						require.True(t, tool.SkillAttributionAmbiguous)
+					}
+				}
+				if mode != agento11y.ContentCaptureModeFull {
+					data, err := os.ReadFile(fragment.FragmentFilePath("sess", "turn-000001"))
+					require.NoError(t, err)
+					require.NotContains(t, string(data), "private-input")
+					require.NotContains(t, string(data), "private-result")
+				}
+			})
+		}
+	}
+}

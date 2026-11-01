@@ -25,6 +25,7 @@ test('strands hook provider records model, tool, and conversation metadata', asy
   const exporter = new CapturingExporter();
   const client = new Agento11yClient({
     generationExporter: exporter,
+    debugBufferSize: 8,
     generationExport: { protocol: 'none' },
   });
   const provider = new Agento11yStrandsHookProvider(client, {

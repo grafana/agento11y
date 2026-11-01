@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -185,10 +186,14 @@ type ConversationListOptions struct {
 	// when Exact is true. A non-nil pointer to an empty string matches no valid
 	// tool.
 	Tool *string
+	// Skill selects an explicit reconciled skill identity, trimming whitespace
+	// but preserving case and namespaces. A present blank value matches nothing.
+	// Like Tool, lists apply it only when Exact is true; metrics always do.
+	Skill *string
 	// Order selects the metrics row order. "tokens" uses tokens in the
 	// requested time range, counted once. Empty keeps newest activity first.
 	Order string
-	// Exact applies the workspace, tool, and half-open generation-time filters
+	// Exact applies the workspace, tool/skill, and half-open generation-time filters
 	// before Limit. The plain list leaves this false to retain its bounded
 	// file-order fast path.
 	Exact bool
@@ -293,8 +298,8 @@ func (s *Storage) ListConversations(opts ConversationListOptions) (page []Conver
 	}
 	out := make([]ConversationSummary, 0, capacity)
 	var toolMatches map[string]toolMatch
-	if opts.Exact && opts.Tool != nil {
-		toolMatches, err = s.conversationToolMatches(*opts.Tool, opts.Since, opts.Before, opts.Workspace)
+	if opts.Exact && (opts.Tool != nil || opts.Skill != nil) {
+		toolMatches, err = s.conversationExecutionMatches(opts)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -303,9 +308,9 @@ func (s *Storage) ListConversations(opts ConversationListOptions) (page []Conver
 	defer func() { s.logSkipped("list conversations", skipped) }()
 	for _, f := range files {
 		// A generation-side lower bound can stop on file activity. A tool
-		// sidecar can be newer than its conversation file, so a tool-filtered
-		// walk must inspect every conversation candidate before limiting.
-		if !opts.Since.IsZero() && opts.Tool == nil && f.modTime.Before(opts.Since) {
+		// sidecar can be newer than its conversation file, so tool/skill-filtered
+		// walks must inspect every conversation candidate before limiting.
+		if !opts.Since.IsZero() && opts.Tool == nil && opts.Skill == nil && f.modTime.Before(opts.Since) {
 			break
 		}
 		entry, err := s.summaries.get(f)
@@ -321,7 +326,7 @@ func (s *Storage) ListConversations(opts ConversationListOptions) (page []Conver
 			if !workspaceMatches(entry.summary.Workspace, opts.Workspace) {
 				continue
 			}
-			if opts.Tool != nil {
+			if opts.Tool != nil || opts.Skill != nil {
 				match, matched := toolMatches[f.id]
 				if !matched {
 					continue
@@ -352,7 +357,7 @@ func entryHasGenerationInPeriod(entry *fileSummary, since, before time.Time) boo
 	return false
 }
 
-// toolMatch records the first and last matching observation timestamps.
+// toolMatch records the first and last matching tool/skill observation timestamps.
 // Reconciliation can put an observation inside the requested period while all
 // generation timestamps are outside it, so metrics use these bounds for the
 // resulting zero-usage row.
@@ -360,15 +365,31 @@ type toolMatch struct {
 	first, last time.Time
 }
 
+func (s *Storage) conversationExecutionMatches(opts ConversationListOptions) (map[string]toolMatch, error) {
+	if opts.Skill != nil {
+		key := skillNameKey(*opts.Skill)
+		return s.conversationObservationMatches(opts.Since, opts.Before, opts.Workspace, func(observation toolObservation) bool {
+			return key != "" && skillObservationName(observation) == key && nanosRepresentable(observation.Timestamp)
+		})
+	}
+	return s.conversationToolMatches(*opts.Tool, opts.Since, opts.Before, opts.Workspace)
+}
+
 func (s *Storage) conversationToolMatches(tool string, since, before time.Time, workspace *string) (map[string]toolMatch, error) {
+	key := toolNameKey(tool)
+	return s.conversationObservationMatches(since, before, workspace, func(observation toolObservation) bool {
+		return key != "" && toolNameKey(observation.Name) == key
+	})
+}
+
+func (s *Storage) conversationObservationMatches(since, before time.Time, workspace *string, accepts func(toolObservation) bool) (map[string]toolMatch, error) {
 	observations, err := s.toolObservations()
 	if err != nil {
 		return nil, err
 	}
 	matches := map[string]toolMatch{}
-	toolKey := toolNameKey(tool)
 	for _, observation := range observations {
-		if observation.HasSession && toolNameKey(observation.Name) == toolKey && toolKey != "" && inPeriod(observation.Timestamp, since, before) &&
+		if observation.HasSession && accepts(observation) && inPeriod(observation.Timestamp, since, before) &&
 			workspaceMatches(observation.Workspace, workspace) {
 			match, seen := matches[observation.ConversationID]
 			if !seen || observation.Timestamp.Before(match.first) {
@@ -414,7 +435,7 @@ func toolCallOnlySummary(entry *fileSummary, match toolMatch) ConversationSummar
 // the period does not match one. ListConversations tests a period request the
 // same way, so both endpoints select one set.
 //
-// A tool filter selects on the observation's own timestamp, which a reconciled
+// A tool or skill filter selects on the observation's own timestamp, which a reconciled
 // span can place outside its generation's period. Such a conversation is kept
 // with zero usage and the call times as its bounds, so the list and these
 // totals still count one set.
@@ -425,8 +446,8 @@ func (s *Storage) ConversationMetrics(opts ConversationListOptions) ([]Conversat
 	}
 	out := make([]ConversationSummary, 0, len(files))
 	var toolMatches map[string]toolMatch
-	if opts.Tool != nil {
-		toolMatches, err = s.conversationToolMatches(*opts.Tool, opts.Since, opts.Before, opts.Workspace)
+	if opts.Tool != nil || opts.Skill != nil {
+		toolMatches, err = s.conversationExecutionMatches(opts)
 		if err != nil {
 			return nil, 0, ConversationMetricsAggregate{}, err
 		}
@@ -435,8 +456,8 @@ func (s *Storage) ConversationMetrics(opts ConversationListOptions) ([]Conversat
 	defer func() { s.logSkipped("conversation metrics", skipped) }()
 	for _, f := range files {
 		// A tool sidecar can be newer than its conversation file, so a
-		// tool-filtered walk has to inspect every candidate, as the list does.
-		if !opts.Since.IsZero() && opts.Tool == nil && f.modTime.Before(opts.Since) {
+		// tool/skill-filtered walk must inspect every candidate, as the list does.
+		if !opts.Since.IsZero() && opts.Tool == nil && opts.Skill == nil && f.modTime.Before(opts.Since) {
 			break
 		}
 		entry, err := s.summaries.get(f)
@@ -448,12 +469,12 @@ func (s *Storage) ConversationMetrics(opts ConversationListOptions) ([]Conversat
 			continue
 		}
 		match, matchedTool := toolMatches[f.id]
-		if opts.Tool != nil && !matchedTool {
+		if (opts.Tool != nil || opts.Skill != nil) && !matchedTool {
 			continue
 		}
 		summary, ok := clippedConversationSummary(entry, opts.Since, opts.Before)
 		if !ok {
-			if opts.Tool == nil {
+			if opts.Tool == nil && opts.Skill == nil {
 				continue
 			}
 			summary = toolCallOnlySummary(entry, match)
@@ -753,6 +774,15 @@ type conversationFile struct {
 // across requests. A missing directory yields no files and no error.
 func (s *Storage) conversationFiles() ([]conversationFile, error) {
 	dir := filepath.Join(s.dir, ConversationsDir)
+	// Windows can list a regular file as an empty directory.
+	if info, err := os.Stat(dir); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	} else if !info.IsDir() {
+		return nil, fmt.Errorf("%s is not a directory", dir)
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {

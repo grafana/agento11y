@@ -30,27 +30,28 @@ export function conversationsPath(workspace: string | null = null) {
   return `/?workspace=${encodeURIComponent(workspace)}`;
 }
 
-export interface ToolSessionFilters {
-  tool: string;
+export type ExecutionSessionFilters = {
   workspace: string | null;
   since?: string;
   before?: string;
-}
+} & ({ kind: 'tool'; name: string } | { kind: 'skill'; name: string });
 
-export function toolSessionsPath(filters: ToolSessionFilters) {
-  const params = new URLSearchParams({ tool: filters.tool });
+export function executionSessionsPath(filters: ExecutionSessionFilters) {
+  const params = new URLSearchParams({ [filters.kind]: filters.name });
   if (filters.workspace != null) params.set('workspace', filters.workspace);
   if (filters.since) params.set('since', filters.since);
   if (filters.before) params.set('before', filters.before);
   return `/?${params}`;
 }
 
-export function toolSessionFiltersFromLocation(): ToolSessionFilters | null {
+export function executionSessionFiltersFromLocation(): ExecutionSessionFilters | null {
   if (typeof window === 'undefined' || window.location.pathname.replace(/\/$/, '') !== '') return null;
   const params = new URLSearchParams(window.location.search);
-  if (!params.has('tool')) return null;
+  const kind = params.has('skill') ? 'skill' : params.has('tool') ? 'tool' : null;
+  if (!kind) return null;
   return {
-    tool: params.get('tool') ?? '',
+    kind,
+    name: params.get(kind) ?? '',
     workspace: params.has('workspace') ? (params.get('workspace') ?? '') : null,
     since: params.get('since') || undefined,
     before: params.get('before') || undefined,
@@ -90,15 +91,17 @@ export function analyticsRouteActive() {
   return window.location.pathname.replace(/\/$/, '') === '/analytics';
 }
 
-export type AnalyticsTab = 'overview' | 'skills';
+export type AnalyticsTab = 'overview' | 'tools' | 'skills';
 
 export function analyticsTabFromLocation(): AnalyticsTab {
   if (typeof window === 'undefined') return 'overview';
-  return new URLSearchParams(window.location.search).get('tab') === 'skills' ? 'skills' : 'overview';
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('tab') !== 'skills') return 'overview';
+  return params.get('mode') === 'skills' ? 'skills' : 'tools';
 }
 
 export function analyticsPath(tab: AnalyticsTab = 'overview') {
-  return tab === 'skills' ? '/analytics?tab=skills&mode=tools' : '/analytics';
+  return tab === 'overview' ? '/analytics' : `/analytics?tab=skills&mode=${tab}`;
 }
 
 // The mouse-event fields the test reads. React's synthetic mouse events and

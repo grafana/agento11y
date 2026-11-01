@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -304,8 +305,10 @@ func TestLaunch_UpdateFailureHintUsesInstalledKey(t *testing.T) {
 			wantLines: []string{
 				"claude plugin marketplace update grafana-sigil\n",
 				"claude plugin update agento11y-claude-code@grafana-sigil\n",
+				"claude plugin marketplace add grafana/agento11y &&\n" +
+					"           claude plugin install agento11y-claude-code@agento11y &&\n" +
+					"           claude plugin uninstall agento11y-claude-code@grafana-sigil\n",
 			},
-			absentLines: []string{"claude plugin install"},
 		},
 		{
 			name:      "legacy key adds the install fallback",
@@ -314,6 +317,9 @@ func TestLaunch_UpdateFailureHintUsesInstalledKey(t *testing.T) {
 				"claude plugin marketplace update grafana-sigil\n",
 				"claude plugin update sigil-cc@grafana-sigil\n",
 				"claude plugin install agento11y-claude-code@grafana-sigil",
+				"claude plugin marketplace add grafana/agento11y &&\n" +
+					"           claude plugin install agento11y-claude-code@agento11y &&\n" +
+					"           claude plugin uninstall sigil-cc@grafana-sigil\n",
 			},
 		},
 	}
@@ -680,9 +686,13 @@ func TestDefaultRunInstall_TriesCurrentNamesFirst(t *testing.T) {
 }
 
 func TestDefaultRunUpdate_CommandSequences(t *testing.T) {
+	const cwd = "/work/current-project"
 	cases := []struct {
 		name           string
 		installed      string // installed_plugins.json content; empty means not written
+		fail           []string
+		wantErr        bool
+		wantMoved      bool
 		wantSteps      [][]string
 		wantCandidates [][]string // empty means runFirst not called
 	}{
@@ -718,6 +728,132 @@ func TestDefaultRunUpdate_CommandSequences(t *testing.T) {
 				{"plugin", "update", "agento11y-claude-code@agento11y"},
 			},
 		},
+		{
+			name:      "failed legacy marketplace update moves the renamed plugin",
+			installed: `{"version":2,"plugins":{"agento11y-claude-code@grafana-sigil":[{"scope":"user"}]}}`,
+			fail:      []string{"plugin marketplace update grafana-sigil"},
+			wantMoved: true,
+			wantSteps: [][]string{
+				{"plugin", "marketplace", "update", "grafana-sigil"},
+				{"plugin", "marketplace", "add", "grafana/agento11y"},
+				{"plugin", "install", "agento11y-claude-code@agento11y"},
+				{"plugin", "uninstall", "agento11y-claude-code@grafana-sigil"},
+			},
+		},
+		{
+			name:      "failed legacy marketplace update moves the legacy plugin",
+			installed: `{"version":2,"plugins":{"sigil-cc@grafana-sigil":[{"scope":"user"}]}}`,
+			fail:      []string{"plugin marketplace update grafana-sigil"},
+			wantMoved: true,
+			wantSteps: [][]string{
+				{"plugin", "marketplace", "update", "grafana-sigil"},
+				{"plugin", "marketplace", "add", "grafana/agento11y"},
+				{"plugin", "install", "agento11y-claude-code@agento11y"},
+				{"plugin", "uninstall", "sigil-cc@grafana-sigil"},
+			},
+		},
+		{
+			name:      "failed legacy marketplace update moves user scope after matching project scope",
+			installed: `{"version":2,"plugins":{"agento11y-claude-code@grafana-sigil":[{"scope":"project","projectPath":"` + cwd + `"},{"scope":"user"}]}}`,
+			fail:      []string{"plugin marketplace update grafana-sigil"},
+			wantMoved: true,
+			wantSteps: [][]string{
+				{"plugin", "marketplace", "update", "grafana-sigil"},
+				{"plugin", "marketplace", "add", "grafana/agento11y"},
+				{"plugin", "install", "agento11y-claude-code@agento11y"},
+				{"plugin", "uninstall", "agento11y-claude-code@grafana-sigil"},
+			},
+		},
+		{
+			name:      "failed legacy marketplace update moves user scope after matching local scope",
+			installed: `{"version":2,"plugins":{"agento11y-claude-code@grafana-sigil":[{"scope":"local","projectPath":"` + cwd + `"},{"scope":"user"}]}}`,
+			fail:      []string{"plugin marketplace update grafana-sigil"},
+			wantMoved: true,
+			wantSteps: [][]string{
+				{"plugin", "marketplace", "update", "grafana-sigil"},
+				{"plugin", "marketplace", "add", "grafana/agento11y"},
+				{"plugin", "install", "agento11y-claude-code@agento11y"},
+				{"plugin", "uninstall", "agento11y-claude-code@grafana-sigil"},
+			},
+		},
+		{
+			name:      "failed legacy marketplace update moves legacy user scope after matching project scope",
+			installed: `{"version":2,"plugins":{"sigil-cc@grafana-sigil":[{"scope":"project","projectPath":"` + cwd + `"},{"scope":"user"}]}}`,
+			fail:      []string{"plugin marketplace update grafana-sigil"},
+			wantMoved: true,
+			wantSteps: [][]string{
+				{"plugin", "marketplace", "update", "grafana-sigil"},
+				{"plugin", "marketplace", "add", "grafana/agento11y"},
+				{"plugin", "install", "agento11y-claude-code@agento11y"},
+				{"plugin", "uninstall", "sigil-cc@grafana-sigil"},
+			},
+		},
+		{
+			name:      "failed legacy marketplace update moves legacy user scope after matching local scope",
+			installed: `{"version":2,"plugins":{"sigil-cc@grafana-sigil":[{"scope":"local","projectPath":"` + cwd + `"},{"scope":"user"}]}}`,
+			fail:      []string{"plugin marketplace update grafana-sigil"},
+			wantMoved: true,
+			wantSteps: [][]string{
+				{"plugin", "marketplace", "update", "grafana-sigil"},
+				{"plugin", "marketplace", "add", "grafana/agento11y"},
+				{"plugin", "install", "agento11y-claude-code@agento11y"},
+				{"plugin", "uninstall", "sigil-cc@grafana-sigil"},
+			},
+		},
+		{
+			name:      "failed current marketplace update does not move",
+			installed: `{"version":2,"plugins":{"agento11y-claude-code@agento11y":[{"scope":"user"}]}}`,
+			fail:      []string{"plugin marketplace update agento11y"},
+			wantErr:   true,
+			wantSteps: [][]string{{"plugin", "marketplace", "update", "agento11y"}},
+		},
+		{
+			name:      "failed legacy marketplace update does not move project scope",
+			installed: `{"version":2,"plugins":{"agento11y-claude-code@grafana-sigil":[{"scope":"project","projectPath":"` + cwd + `"}]}}`,
+			fail:      []string{"plugin marketplace update grafana-sigil"},
+			wantErr:   true,
+			wantSteps: [][]string{{"plugin", "marketplace", "update", "grafana-sigil"}},
+		},
+		{
+			name:      "failed legacy marketplace update does not move local scope",
+			installed: `{"version":2,"plugins":{"agento11y-claude-code@grafana-sigil":[{"scope":"local","projectPath":"` + cwd + `"}]}}`,
+			fail:      []string{"plugin marketplace update grafana-sigil"},
+			wantErr:   true,
+			wantSteps: [][]string{{"plugin", "marketplace", "update", "grafana-sigil"}},
+		},
+		{
+			name:      "failed marketplace add keeps the legacy install",
+			installed: `{"version":2,"plugins":{"agento11y-claude-code@grafana-sigil":[{"scope":"user"}]}}`,
+			fail:      []string{"plugin marketplace update grafana-sigil", "plugin marketplace add grafana/agento11y"},
+			wantErr:   true,
+			wantSteps: [][]string{
+				{"plugin", "marketplace", "update", "grafana-sigil"},
+				{"plugin", "marketplace", "add", "grafana/agento11y"},
+			},
+		},
+		{
+			name:      "failed current install keeps the legacy install",
+			installed: `{"version":2,"plugins":{"agento11y-claude-code@grafana-sigil":[{"scope":"user"}]}}`,
+			fail:      []string{"plugin marketplace update grafana-sigil", "plugin install agento11y-claude-code@agento11y"},
+			wantErr:   true,
+			wantSteps: [][]string{
+				{"plugin", "marketplace", "update", "grafana-sigil"},
+				{"plugin", "marketplace", "add", "grafana/agento11y"},
+				{"plugin", "install", "agento11y-claude-code@agento11y"},
+			},
+		},
+		{
+			name:      "failed legacy uninstall is best effort",
+			installed: `{"version":2,"plugins":{"agento11y-claude-code@grafana-sigil":[{"scope":"user"}]}}`,
+			fail:      []string{"plugin marketplace update grafana-sigil", "plugin uninstall agento11y-claude-code@grafana-sigil"},
+			wantMoved: true,
+			wantSteps: [][]string{
+				{"plugin", "marketplace", "update", "grafana-sigil"},
+				{"plugin", "marketplace", "add", "grafana/agento11y"},
+				{"plugin", "install", "agento11y-claude-code@agento11y"},
+				{"plugin", "uninstall", "agento11y-claude-code@grafana-sigil"},
+			},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -726,14 +862,39 @@ func TestDefaultRunUpdate_CommandSequences(t *testing.T) {
 				writeInstalled(t, dir, tc.installed)
 			}
 			t.Setenv("CLAUDE_CONFIG_DIR", dir)
-			steps, candidates := recordCommands(t)
+			withGetwd(t, func() (string, error) { return cwd, nil })
+			var steps, candidates [][]string
+			withRunSteps(t, func(_ context.Context, _ string, _ io.Writer, commands [][]string) error {
+				for _, command := range commands {
+					steps = append(steps, command)
+					if joined := strings.Join(command, " "); slices.Contains(tc.fail, joined) {
+						return errors.New(joined + " failed")
+					}
+				}
+				return nil
+			})
+			withRunFirst(t, func(_ context.Context, _ string, _ io.Writer, commands [][]string) (int, error) {
+				candidates = append(candidates, commands...)
+				return 0, nil
+			})
 
-			require.NoError(t, defaultRunUpdate(context.Background(), "/usr/local/bin/claude", io.Discard))
-			require.Equal(t, tc.wantSteps, *steps)
-			if len(tc.wantCandidates) == 0 {
-				require.Empty(t, *candidates)
+			var output bytes.Buffer
+			err := defaultRunUpdate(context.Background(), "/usr/local/bin/claude", &output)
+			if tc.wantErr {
+				require.Error(t, err)
+				for _, command := range tc.fail {
+					require.Contains(t, err.Error(), command)
+				}
 			} else {
-				require.Equal(t, tc.wantCandidates, *candidates)
+				require.NoError(t, err)
+			}
+			require.Equal(t, tc.wantSteps, steps)
+			require.Equal(t, tc.wantCandidates, candidates)
+			if tc.wantMoved {
+				key := tc.wantSteps[len(tc.wantSteps)-1][2]
+				require.Contains(t, output.String(), "agento11y: moved "+key+" to agento11y-claude-code@agento11y\n")
+			} else {
+				require.NotContains(t, output.String(), "agento11y: moved")
 			}
 		})
 	}
@@ -873,6 +1034,20 @@ func TestStatus(t *testing.T) {
 		{
 			name:          "project scope for this directory",
 			installed:     `{"version":2,"plugins":{"agento11y-claude-code@agento11y":[{"scope":"project","projectPath":"/here","version":"1.2.3"}]}}`,
+			cwd:           "/here",
+			wantInstalled: true,
+			wantVersion:   "1.2.3",
+		},
+		{
+			name:          "matching project scope before user scope keeps its version",
+			installed:     `{"version":2,"plugins":{"agento11y-claude-code@grafana-sigil":[{"scope":"project","projectPath":"/here","version":"1.2.3"},{"scope":"user","version":"4.5.6"}]}}`,
+			cwd:           "/here",
+			wantInstalled: true,
+			wantVersion:   "1.2.3",
+		},
+		{
+			name:          "matching local scope before user scope keeps its version",
+			installed:     `{"version":2,"plugins":{"agento11y-claude-code@grafana-sigil":[{"scope":"local","projectPath":"/here","version":"1.2.3"},{"scope":"user","version":"4.5.6"}]}}`,
 			cwd:           "/here",
 			wantInstalled: true,
 			wantVersion:   "1.2.3",

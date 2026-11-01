@@ -204,7 +204,6 @@ def test_off_never_resolves(switch, monkeypatch):
     monkeypatch.setattr(_tags, "_git_branch", lambda _: pytest.fail("git lookup"))
     monkeypatch.setattr(_tags, "_git_repo", lambda _: pytest.fail("repo lookup"))
     monkeypatch.setattr(os, "getcwd", lambda: pytest.fail("cwd lookup"))
-    monkeypatch.setattr(_tags.getpass, "getuser", lambda: pytest.fail("user lookup"))
     assert _tags.builtin_tags() == {"entrypoint": "hermes"}
 
 
@@ -256,7 +255,7 @@ def test_legacy_selection_and_user(monkeypatch):
 def test_values_trimmed_capped_or_omitted(name, value, monkeypatch):
     monkeypatch.setenv("AGENTO11Y_AUTO_CODING_AGENT_TAGS", "true")
     monkeypatch.setenv("AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES", name)
-    monkeypatch.setattr(_tags.getpass, "getuser", lambda: value)
+    monkeypatch.setenv("AGENTO11Y_USER_ID", value)
     monkeypatch.setattr(_tags, "_git_repo", lambda _: value)
     monkeypatch.setattr(_tags, "_git_branch", lambda _: value)
     tags = _tags.client_tags()
@@ -267,21 +266,17 @@ def test_values_trimmed_capped_or_omitted(name, value, monkeypatch):
         assert key not in tags
 
 
-def test_configured_user_wins_without_account_lookup(monkeypatch):
+def test_configured_user_is_the_tag(monkeypatch):
     monkeypatch.setenv("AGENTO11Y_AUTO_CODING_AGENT_TAGS", "true")
     monkeypatch.setenv("AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES", "user")
     monkeypatch.setenv("AGENTO11Y_USER_ID", " configured ")
-    monkeypatch.setattr(_tags.getpass, "getuser", lambda: pytest.fail("account lookup"))
     assert _tags.client_tags()["user"] == "configured"
 
 
-def test_account_failure_keeps_other_tags(monkeypatch):
+def test_never_falls_back_to_the_os_account_name(monkeypatch):
+    # The process always runs as some OS account, so a fallback to it would
+    # make this fail on any machine.
     monkeypatch.setenv("AGENTO11Y_AUTO_CODING_AGENT_TAGS", "true")
-
-    def deny():
-        raise KeyError("account unavailable")
-
-    monkeypatch.setattr(_tags.getpass, "getuser", deny)
     monkeypatch.setattr(_tags, "_git_repo", lambda _: "owner/repo")
     monkeypatch.setattr(_tags, "_git_branch", lambda _: "main")
     assert _tags.builtin_tags() == {"entrypoint": "hermes", "repo": "owner/repo", "git.branch": "main"}
@@ -299,7 +294,6 @@ def test_explicit_tags_skip_resolution_and_sdk_collisions(monkeypatch):
     }
     monkeypatch.setenv("AGENTO11Y_TAGS", ",".join(f"{k}={v}" for k, v in explicit.items()))
     monkeypatch.setattr(os, "getcwd", lambda: pytest.fail("cwd lookup"))
-    monkeypatch.setattr(_tags.getpass, "getuser", lambda: pytest.fail("user lookup"))
     assert not (explicit.keys() & _tags.client_tags().keys())
     assert _tags._explicit_tags() == explicit
     assert _tags.seed_tags() == {}

@@ -395,3 +395,27 @@ func TestPackUpdatesPreserveEnabledState(t *testing.T) {
 		}
 	}
 }
+
+// TestReleasedPackRulesUpgrade loads the pack rules each release saved and
+// checks that the git pack judges the forms added since, so a user who turned
+// it on in a release gets them without turning it on again.
+func TestReleasedPackRulesUpgrade(t *testing.T) {
+	for name, snapshot := range map[string][]byte{
+		"v0.46.0": legacyGuardPacks,
+		"v0.48.0": releasedGuardPacksV048,
+		"v0.52.0": releasedGuardPacksV052,
+	} {
+		t.Run(name, func(t *testing.T) {
+			engine := NewGuardsEngineFromContents("guards.toml", snapshot, nil)
+			require.Empty(t, engine.Status().Errors)
+			for _, command := range []string{"git checkout .", "git restore src/main.go", `git "reset" --hard`} {
+				input, err := json.Marshal(map[string]string{"command": command})
+				require.NoError(t, err)
+				assert.Equal(t, agento11y.HookActionDeny, engine.Evaluate(packRequest("Bash", string(input))).Action, command)
+			}
+			input, err := json.Marshal(map[string]string{"command": "git restore --staged ."})
+			require.NoError(t, err)
+			assert.Equal(t, agento11y.HookActionAllow, engine.Evaluate(packRequest("Bash", string(input))).Action)
+		})
+	}
+}

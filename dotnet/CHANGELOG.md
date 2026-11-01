@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0] - 2026-10-29
+
+### Features
+
+- **sdk**: add skill identity to tool execution metrics (#979)
+- **sdk**: trace skill loads, resource reads, and commands (#920)
+
 ## [0.6.0] - 2026-08-25
 
 ### Features

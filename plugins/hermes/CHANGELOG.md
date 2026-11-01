@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- Take the automatic `user` tag only from `AGENTO11Y_USER_ID`. Earlier versions fell back to the operating-system account name; set `AGENTO11Y_USER_ID` to keep a `user` label.
+
 ## [0.11.0] - 2026-10-03
 
 - Rename the distribution to `agento11y-hermes` and the Python module to `agento11y_hermes`. Uninstall `grafana-agento11y-hermes` before installing the renamed package; keep the `agento11y` enabled key in Hermes.

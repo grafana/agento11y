@@ -223,33 +223,44 @@ describe("pi plugin: real-SDK golden export", () => {
 
     const { userMsg, assistantMsg, toolResult } = piTurnFixture();
 
-    // Static session branch matching the fixture: user u1 -> assistant a1.
     // Lineage resolution hashes (conversationId, entry id) so the
     // generation id in the golden stays stable across runs.
+    let appended = false;
     const ctx = {
+      cwd: process.cwd(),
       sessionManager: {
         getSessionFile: () => "pi-session.jsonl",
         getSessionId: () => "pi-conv-1",
-        getBranch: () => [
-          {
-            type: "message",
-            id: "u1",
-            parentId: null,
-            message: userMsg,
-          },
-          {
-            type: "message",
-            id: "a1",
-            parentId: "u1",
-            message: assistantMsg,
-          },
-        ],
+        getHeader: () => ({
+          type: "session",
+          id: "pi-conv-1",
+          timestamp: "2024-01-01T00:00:00.000Z",
+        }),
+        getBranch: () =>
+          appended
+            ? [
+                {
+                  type: "message",
+                  id: "u1",
+                  parentId: null,
+                  message: userMsg,
+                },
+                {
+                  type: "message",
+                  id: "a1",
+                  parentId: "u1",
+                  message: assistantMsg,
+                },
+              ]
+            : [],
       },
     };
 
     await pi.emit("session_start", {}, ctx);
     await pi.emit("turn_start", {}, ctx);
     await pi.emit("message_end", { message: userMsg }, ctx);
+    appended = true;
+    await pi.emit("context_with_system", { messages: [userMsg] }, ctx);
     await pi.emit(
       "message_update",
       {
@@ -258,14 +269,14 @@ describe("pi plugin: real-SDK golden export", () => {
       },
       ctx,
     );
-    await pi.emit(
-      "tool_execution_start",
-      { toolCallId: "tc-pi-1", toolName: "Bash" },
-      ctx,
-    );
+    const call = { toolCallId: "tc-pi-1", toolName: "Bash" };
+    const args = { command: "ls *.go" };
+    await pi.emit("tool_execution_start", { ...call, args }, ctx);
+    await pi.emit("tool_call", { ...call, input: args }, ctx);
+    await pi.emit("tool_result", { ...toolResult, input: args }, ctx);
     await pi.emit(
       "tool_execution_end",
-      { toolCallId: "tc-pi-1", isError: false },
+      { ...call, result: toolResult, isError: false },
       ctx,
     );
     await pi.emit("message_end", { message: { role: "assistant" } }, ctx);
@@ -348,9 +359,15 @@ describe("pi plugin: real-SDK golden export", () => {
     // Branch: user u1 -> assistant a1 -> compaction c1. The compaction is the
     // leaf, which is where pi appends it, and a1 becomes its lineage parent.
     const ctx = {
+      cwd: process.cwd(),
       sessionManager: {
         getSessionFile: () => "pi-session.jsonl",
         getSessionId: () => "pi-conv-1",
+        getHeader: () => ({
+          type: "session",
+          id: "pi-conv-1",
+          timestamp: "2024-01-01T00:00:00.000Z",
+        }),
         getBranch: () => [
           { type: "message", id: "u1", parentId: null, message: userMsg },
           { type: "message", id: "a1", parentId: "u1", message: assistantMsg },
@@ -403,6 +420,14 @@ describe("pi plugin: real-SDK golden export", () => {
     expect(compaction.conversation_id).toBe("pi-conv-1");
     expect(compaction.id).toMatch(/^pi-[a-f0-9]{24}$/);
     expect(compaction.parent_generation_ids).toHaveLength(1);
+    expect(compaction.model).toEqual({ provider: "unknown", name: "unknown" });
+    expect(compaction.response_model).toBe("");
+    expect(compaction.metadata).toMatchObject({
+      "pi.summary.model_attribution": "unknown",
+      "pi.summary.operation_aggregate": true,
+      "pi.summary.selected_model": "claude-sonnet-4-pi",
+      "pi.summary.selected_provider": "anthropic",
+    });
     expect(compaction.tags["pi.call_kind"]).toBe("compaction");
     expect(String(compaction.usage.input_tokens)).toBe("120000");
     expect(String(compaction.usage.output_tokens)).toBe("8000");

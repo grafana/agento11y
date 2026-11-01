@@ -4,9 +4,27 @@ import { AnalyticsPage } from './analytics-page';
 import { ChartXLabels, ChartYAxis, TimeRangePicker, type WorkspaceAggregate, WorkspaceFacet } from './conversations';
 import { formatBucketLabel, formatInteger, timeRangeOption } from './formatters';
 import { Notice, SurfaceCard } from './notices';
-import { type AnalyticsTab, isPlainLeftClick, type ToolSessionFilters, toolSessionsPath } from './routing';
+import { type AnalyticsTab, type ExecutionSessionFilters, executionSessionsPath, isPlainLeftClick } from './routing';
 import { Icon, iconBtn } from './shell';
-import type { ToolAnalytics, ToolAnalyticsBucket, ToolAnalyticsRow, ToolAnalyticsTotals } from './types';
+import type {
+  SkillAnalytics,
+  ToolAnalytics,
+  ToolAnalyticsBucket,
+  ToolAnalyticsRow,
+  ToolAnalyticsTotals,
+} from './types';
+
+type ExecutionAnalytics = ToolAnalytics | SkillAnalytics;
+export type SkillsToolsMode = 'tools' | 'skills';
+
+function identityCount(data: ExecutionAnalytics | null) {
+  if (!data) return 0;
+  return 'skills' in data.totals ? data.totals.skills : data.totals.tools;
+}
+
+export function activeExecutionAnalytics(data: ExecutionAnalytics | null, mode: SkillsToolsMode, mcpOnly: boolean) {
+  return mode === 'skills' ? data : filterToolAnalytics(data as ToolAnalytics | null, mcpOnly);
+}
 
 const SEARCH_DEBOUNCE_MS = 150;
 const SKELETON_ROWS = ['one', 'two', 'three', 'four', 'five', 'six'] as const;
@@ -20,7 +38,9 @@ const TOOL_COLORS = [
 ] as const;
 
 export interface SkillsToolsViewProps {
-  data: ToolAnalytics | null;
+  mode?: SkillsToolsMode;
+  data: ExecutionAnalytics | null;
+  unsupported?: boolean;
   loading: boolean;
   error: string | null;
   timeRange: string;
@@ -31,7 +51,7 @@ export interface SkillsToolsViewProps {
   onRefresh: () => void;
   refreshing: boolean;
   onSelectTab: (tab: AnalyticsTab) => void;
-  onOpenSessions: (filters: ToolSessionFilters) => void;
+  onOpenSessions: (filters: ExecutionSessionFilters) => void;
   mcpToolsOnly?: boolean;
   onMcpToolsOnlyChange?: (value: boolean) => void;
 }
@@ -75,13 +95,15 @@ function duration(value: number | undefined) {
 }
 
 function sessionFilters(
-  tool: string,
+  name: string,
+  mode: SkillsToolsMode,
   workspace: string | null,
   window: SkillsToolsViewProps['window'],
   bounds?: { since: string; before: string },
-): ToolSessionFilters {
+): ExecutionSessionFilters {
+  const kind = mode === 'skills' ? 'skill' : 'tool';
   if (!bounds) {
-    return { tool, workspace, since: window?.since, before: window?.before };
+    return { kind, name, workspace, since: window?.since, before: window?.before };
   }
   const windowSince = window?.since ? Date.parse(window.since) : Number.NEGATIVE_INFINITY;
   const windowBefore = window?.before ? Date.parse(window.before) : Number.POSITIVE_INFINITY;
@@ -90,7 +112,8 @@ function sessionFilters(
   const since = Math.max(windowSince, boundSince);
   const before = Math.min(windowBefore, boundBefore);
   return {
-    tool,
+    kind,
+    name,
     workspace,
     since: Number.isFinite(since) ? new Date(since).toISOString() : undefined,
     before: Number.isFinite(before) ? new Date(before).toISOString() : undefined,
@@ -174,9 +197,10 @@ function sortToolRows(rows: ToolAnalyticsRow[], sort: ToolTableSort): ToolAnalyt
 }
 
 interface ToolTableProps {
+  mode: SkillsToolsMode;
   rows: ToolAnalyticsRow[];
   allCalls: number;
-  data: ToolAnalytics | null;
+  data: ExecutionAnalytics | null;
   loading: boolean;
   error: string | null;
   filtered: boolean;
@@ -189,6 +213,7 @@ interface ToolTableProps {
 }
 
 function ToolTable({
+  mode,
   rows,
   allCalls,
   data,
@@ -207,7 +232,7 @@ function ToolTable({
     <SurfaceCard className="tools-table-panel" style={{ marginBottom: 12 }}>
       <div className="tools-panel-header">
         <div className="tools-mode-label">
-          Tools <span>{formatInteger(Math.max(0, data?.totals.tools || 0))}</span>
+          {mode === 'skills' ? 'Skills' : 'Tools'} <span>{formatInteger(Math.max(0, identityCount(data)))}</span>
         </div>
         <div className="tools-panel-caption">
           {formatInteger(Math.max(0, data?.totals.failures || 0))} of{' '}
@@ -220,7 +245,7 @@ function ToolTable({
           <thead>
             <tr>
               <th scope="col">#</th>
-              <ToolSortHeader label="Tool" sortKey="name" sort={sort} onSort={onSort} />
+              <ToolSortHeader label={mode === 'skills' ? 'Skill' : 'Tool'} sortKey="name" sort={sort} onSort={onSort} />
               <ToolSortHeader label="Share" sortKey="share" sort={sort} onSort={onSort} />
               <ToolSortHeader label="Calls" sortKey="calls" sort={sort} onSort={onSort} />
               <ToolSortHeader label="Failed" sortKey="failures" sort={sort} onSort={onSort} />
@@ -242,7 +267,7 @@ function ToolTable({
             {!loading && error && (
               <tr>
                 <td colSpan={8} className="tools-state-cell">
-                  <Notice kind="error" title="Failed to load tool analytics">
+                  <Notice kind="error" title={`Failed to load ${mode === 'skills' ? 'skill' : 'tool'} analytics`}>
                     {error}
                   </Notice>
                 </td>
@@ -251,19 +276,27 @@ function ToolTable({
             {!loading && !error && rows.length === 0 && (
               <tr>
                 <td colSpan={8} className="tools-state-cell">
-                  {filtered ? filterEmpty : 'No tools recorded in this range. Try a wider time range.'}
+                  {filtered
+                    ? filterEmpty
+                    : mode === 'skills'
+                      ? 'No skill-associated calls were recorded in this range. Try a wider time range.'
+                      : 'No tools recorded in this range. Try a wider time range.'}
                 </td>
               </tr>
             )}
             {rows.map((row, index) => {
-              const filters = sessionFilters(row.name, workspace, window);
+              const filters = sessionFilters(row.name, mode, workspace, window);
               const failureRate = row.calls > 0 ? row.failures / row.calls : 0;
               return (
-                <tr key={row.name} data-tool-row={row.name}>
+                <tr
+                  key={row.name}
+                  data-tool-row={mode === 'tools' ? row.name : undefined}
+                  data-skill-row={mode === 'skills' ? row.name : undefined}
+                >
                   <td>{index + 1}</td>
                   <th scope="row">
                     <a
-                      href={toolSessionsPath(filters)}
+                      href={executionSessionsPath(filters)}
                       onClick={(event) => {
                         if (!isPlainLeftClick(event)) return;
                         event.preventDefault();
@@ -304,6 +337,7 @@ function ToolTable({
 }
 
 interface ToolChartProps {
+  mode: SkillsToolsMode;
   buckets: ToolAnalyticsBucket[];
   intervalSeconds: number;
   workspace: string | null;
@@ -313,7 +347,17 @@ interface ToolChartProps {
   onOpenSessions: SkillsToolsViewProps['onOpenSessions'];
 }
 
-function ToolChart({ buckets, intervalSeconds, workspace, window, loading, error, onOpenSessions }: ToolChartProps) {
+function ToolChart({
+  mode,
+  buckets,
+  intervalSeconds,
+  workspace,
+  window,
+  loading,
+  error,
+  onOpenSessions,
+}: ToolChartProps) {
+  const callsLabel = mode === 'skills' ? 'skill-associated calls' : 'tool calls';
   const intervalMs = Math.max(1, intervalSeconds) * 1000;
   const chart = useMemo(() => {
     const callsByTool = new Map<string, number>();
@@ -362,8 +406,8 @@ function ToolChart({ buckets, intervalSeconds, workspace, window, loading, error
   return (
     <SurfaceCard className="tools-chart-panel">
       <div className="tools-chart-header">
-        <div className="tools-chart-title">Tool calls over time</div>
-        <ul className="tools-chart-legend" aria-label="Tool chart legend">
+        <div className="tools-chart-title">{mode === 'skills' ? 'Skill-associated' : 'Tool'} calls over time</div>
+        <ul className="tools-chart-legend" aria-label={mode === 'skills' ? 'Skill chart legend' : 'Tool chart legend'}>
           {chart.series.map((series) => (
             <li key={series.name}>
               <i style={{ background: series.color }} /> {series.name}
@@ -374,11 +418,13 @@ function ToolChart({ buckets, intervalSeconds, workspace, window, loading, error
       </div>
       <div className="tools-chart-body">
         {loading && buckets.length === 0 ? (
-          <div className="tools-chart-state">Loading tool calls…</div>
+          <div className="tools-chart-state">Loading {callsLabel}…</div>
         ) : error && buckets.length === 0 ? (
-          <div className="tools-chart-state">Failed to load tool calls: {error}</div>
+          <div className="tools-chart-state">
+            Failed to load {callsLabel}: {error}
+          </div>
         ) : chart.columns.length === 0 ? (
-          <div className="tools-chart-state">No tool calls to chart in this range.</div>
+          <div className="tools-chart-state">No {callsLabel} to chart in this range.</div>
         ) : (
           <div style={{ position: 'relative' }}>
             <ChartYAxis top={formatInteger(chart.max)} mid={formatInteger(Math.ceil(chart.max / 2))} />
@@ -391,14 +437,14 @@ function ToolChart({ buckets, intervalSeconds, workspace, window, loading, error
                       if (calls === 0) return null;
                       const start = new Date(column.start).toISOString();
                       const before = new Date(column.start + intervalMs).toISOString();
-                      const filters = sessionFilters(series.name, workspace, window, { since: start, before });
+                      const filters = sessionFilters(series.name, mode, workspace, window, { since: start, before });
                       if (filters.since && filters.before && Date.parse(filters.since) >= Date.parse(filters.before)) {
                         return null;
                       }
                       return (
                         <a
                           key={series.name}
-                          href={toolSessionsPath(filters)}
+                          href={executionSessionsPath(filters)}
                           aria-label={`${series.name}, ${calls} ${calls === 1 ? 'call' : 'calls'}, ${formatBucketLabel(column.start, intervalMs)}`}
                           title={`${series.name}: ${formatInteger(calls)} ${calls === 1 ? 'call' : 'calls'}`}
                           style={{ flex: calls, background: series.color }}
@@ -422,35 +468,47 @@ function ToolChart({ buckets, intervalSeconds, workspace, window, loading, error
           </div>
         )}
       </div>
-      <div className="tools-panel-footnote">Calls per bucket, stacked by tool.</div>
+      <div className="tools-panel-footnote">Calls per bucket, stacked by {mode === 'skills' ? 'skill' : 'tool'}.</div>
     </SurfaceCard>
   );
 }
 
 export type SkillsToolsContentProps = Omit<SkillsToolsViewProps, 'onSelectTab'>;
 
-export function skillsToolsHeroStats(data: ToolAnalytics | null) {
+export function skillsToolsHeroStats(data: ExecutionAnalytics | null, mode: SkillsToolsMode = 'tools') {
   return [
-    { label: 'Sessions with tool calls', value: formatInteger(Math.max(0, data?.totals.sessions || 0)) },
-    { label: 'Tools', value: formatInteger(Math.max(0, data?.totals.tools || 0)) },
+    {
+      label: mode === 'skills' ? 'Sessions with skill-associated calls' : 'Sessions with tool calls',
+      value: formatInteger(Math.max(0, data?.totals.sessions || 0)),
+    },
+    { label: mode === 'skills' ? 'Skills' : 'Tools', value: formatInteger(Math.max(0, identityCount(data))) },
     { label: 'Calls', value: formatInteger(Math.max(0, data?.totals.calls || 0)) },
   ];
 }
 
 export function SkillsToolsContent(props: SkillsToolsContentProps) {
+  const mode = props.mode ?? 'tools';
+  const skills = mode === 'skills';
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [localMcpOnly, setLocalMcpOnly] = useState(false);
   const [sort, setSort] = useState<ToolTableSort>({ key: 'calls', direction: 'desc' });
-  const mcpToolsOnly = props.mcpToolsOnly ?? localMcpOnly;
+  const mcpToolsOnly = !skills && (props.mcpToolsOnly ?? localMcpOnly);
   const setMcpToolsOnly = props.onMcpToolsOnlyChange ?? setLocalMcpOnly;
   useEffect(() => {
     const id = window.setTimeout(() => setDebouncedQuery(query.trim().toLowerCase()), SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(id);
   }, [query]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: each mode starts with a fresh table search and sort
+  useEffect(() => {
+    setQuery('');
+    setDebouncedQuery('');
+    setSort({ key: 'calls', direction: 'desc' });
+  }, [mode]);
+
   const source = props.data;
-  const data = useMemo(() => filterToolAnalytics(source, mcpToolsOnly), [source, mcpToolsOnly]);
+  const data = useMemo(() => activeExecutionAnalytics(source, mode, mcpToolsOnly), [source, mode, mcpToolsOnly]);
   const rows = useMemo(
     () =>
       sortToolRows(
@@ -494,13 +552,13 @@ export function SkillsToolsContent(props: SkillsToolsContentProps) {
   return (
     <>
       <div className="tools-stat-strip">
-        {stat('tool calls', formatInteger(Math.max(0, data?.totals.calls || 0)))}
+        {stat(skills ? 'skill-associated calls' : 'tool calls', formatInteger(Math.max(0, data?.totals.calls || 0)))}
         {stat(
           'failed',
           `${formatInteger(Math.max(0, data?.totals.failures || 0))} · ${failureRate.toFixed(1)}%`,
           (data?.totals.failures || 0) > 0 ? 'var(--error-text)' : undefined,
         )}
-        {stat('tools used', formatInteger(Math.max(0, data?.totals.tools || 0)))}
+        {stat(skills ? 'skills recorded' : 'tools used', formatInteger(Math.max(0, identityCount(data))))}
         {stat(
           'slowest p95',
           slowest ? duration(slowest.p95_duration_seconds) : '-',
@@ -517,13 +575,15 @@ export function SkillsToolsContent(props: SkillsToolsContentProps) {
       <div className="tools-filter-bar">
         <label className="tools-search">
           <Icon name="search" size={14} />
-          <span className="sr-only">Filter tools</span>
-          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter tools" />
+          <span className="sr-only">Filter {mode}</span>
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Filter ${mode}`} />
         </label>
-        <label className="tools-mcp-filter">
-          <input type="checkbox" checked={mcpToolsOnly} onChange={(event) => setMcpToolsOnly(event.target.checked)} />
-          Only MCP tools
-        </label>
+        {!skills && (
+          <label className="tools-mcp-filter">
+            <input type="checkbox" checked={mcpToolsOnly} onChange={(event) => setMcpToolsOnly(event.target.checked)} />
+            Only MCP tools
+          </label>
+        )}
         <div className="tools-filter-spacer" />
         <WorkspaceFacet
           workspaces={workspaces}
@@ -533,7 +593,7 @@ export function SkillsToolsContent(props: SkillsToolsContentProps) {
           totalCost={null}
           now={Date.now()}
           rangeLabel={range.label}
-          countLabel="workspaces with tool calls"
+          countLabel={skills ? 'workspaces with skill-associated calls' : 'workspaces with tool calls'}
         />
         <TimeRangePicker value={props.timeRange} onChange={props.onTimeRangeChange} />
         <button
@@ -541,36 +601,57 @@ export function SkillsToolsContent(props: SkillsToolsContentProps) {
           onClick={props.onRefresh}
           disabled={props.refreshing}
           title="Refresh"
-          aria-label="Refresh tool analytics"
+          aria-label={`Refresh ${skills ? 'skill' : 'tool'} analytics`}
           style={{ ...iconBtn }}
           className="tools-refresh"
         >
           <Icon name="refresh" size={14} />
         </button>
       </div>
-      <ToolTable
-        rows={rows}
-        allCalls={data?.totals.calls || 0}
-        data={data}
-        loading={props.loading}
-        error={props.error}
-        filtered={nameFiltered || mcpToolsOnly}
-        filterEmpty={nameFiltered ? 'No tools match that filter.' : 'No MCP tools in this range.'}
-        sort={sort}
-        onSort={onSort}
-        workspace={props.workspace}
-        window={props.window}
-        onOpenSessions={props.onOpenSessions}
-      />
-      <ToolChart
-        buckets={data?.buckets || []}
-        intervalSeconds={data?.interval_seconds || 60}
-        workspace={props.workspace}
-        window={props.window}
-        loading={props.loading}
-        error={props.error}
-        onOpenSessions={props.onOpenSessions}
-      />
+      {skills && (
+        <div className="tools-panel-footnote">
+          Counts every recorded tool call marked with a nonblank skill name, including loads, resource reads, commands,
+          and failures. Durations are tool-call durations, not skill effectiveness or cost. Name search filters the
+          table only, not totals or the chart.
+        </div>
+      )}
+      {props.unsupported && !props.loading && !props.error ? (
+        <Notice title="A newer daemon is required." />
+      ) : (
+        <>
+          <ToolTable
+            mode={mode}
+            rows={rows}
+            allCalls={data?.totals.calls || 0}
+            data={data}
+            loading={props.loading}
+            error={props.error}
+            filtered={nameFiltered || mcpToolsOnly}
+            filterEmpty={
+              skills
+                ? 'No skills match that filter.'
+                : nameFiltered
+                  ? 'No tools match that filter.'
+                  : 'No MCP tools in this range.'
+            }
+            sort={sort}
+            onSort={onSort}
+            workspace={props.workspace}
+            window={props.window}
+            onOpenSessions={props.onOpenSessions}
+          />
+          <ToolChart
+            mode={mode}
+            buckets={data?.buckets || []}
+            intervalSeconds={data?.interval_seconds || 60}
+            workspace={props.workspace}
+            window={props.window}
+            loading={props.loading}
+            error={props.error}
+            onOpenSessions={props.onOpenSessions}
+          />
+        </>
+      )}
     </>
   );
 }
@@ -582,8 +663,11 @@ export function SkillsToolsView(props: SkillsToolsViewProps) {
   const setMcpToolsOnly = onMcpToolsOnlyChange ?? setLocalMcpOnly;
   return (
     <AnalyticsPage
-      stats={skillsToolsHeroStats(filterToolAnalytics(props.data, mcpToolsOnly))}
-      tabs={{ active: 'skills', onSelect: onSelectTab }}
+      stats={skillsToolsHeroStats(
+        activeExecutionAnalytics(props.data, props.mode ?? 'tools', mcpToolsOnly),
+        props.mode,
+      )}
+      tabs={{ active: props.mode ?? 'tools', onSelect: onSelectTab }}
       style={{ paddingBottom: 40 }}
     >
       <SkillsToolsContent {...contentProps} mcpToolsOnly={mcpToolsOnly} onMcpToolsOnlyChange={setMcpToolsOnly} />

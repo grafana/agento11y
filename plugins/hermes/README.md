@@ -71,7 +71,7 @@ Set variables in the environment that starts Hermes. Hermes loads `~/.hermes/.en
 
 ## Privacy
 
-The plugin uses Python SDK 0.17.x for content capture and secret redaction.
+The plugin requires Python SDK 0.22.0 or later for content capture and secret redaction.
 
 - `metadata_only` is the default. Message structure, tool names, model, usage, timing, IDs, and sampling parameters can leave the machine. Prompt text, responses, system prompts, tool schemas, tool I/O, and detailed error text do not.
 - Set `AGENTO11Y_CONTENT_CAPTURE_MODE=full` only when you want content exported. `no_tool_content` still exports generation content. `full_with_metadata_spans` sends content only through generation ingest.
@@ -80,7 +80,7 @@ The plugin uses Python SDK 0.17.x for content capture and secret redaction.
 - Prompt redaction defaults to on. `AGENTO11Y_REDACT_INPUT_MESSAGES=false` disables only user-prompt redaction; invalid values keep it on. Assistant text and errors use lightweight patterns. System prompts and tool payloads also use key/value patterns. Email addresses are redacted.
 - No automatic `cwd` tag is emitted. Automatic user, repository, and branch tags are off by default.
 
-Opt into automatic client tags with `AGENTO11Y_AUTO_CODING_AGENT_TAGS=true`. Narrow them with `AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=user,repo`; accepted names are `user`, `repo`, `branch`, or `all`. The allowlist alone enables nothing. Explicit `AGENTO11Y_TAGS` values win over automatic values.
+Opt into automatic client tags with `AGENTO11Y_AUTO_CODING_AGENT_TAGS=true`. Narrow them with `AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=user,repo`; accepted names are `user`, `repo`, `branch`, or `all`. The allowlist alone enables nothing. Explicit `AGENTO11Y_TAGS` values win over automatic values. The automatic `user` tag comes only from `AGENTO11Y_USER_ID`, so without it no `user` tag is attached; earlier versions used the operating-system account name.
 
 These tags reach generations, spans, and metric labels. User identities can be personal data, and branch names increase metric cardinality. Hermes caches its client for the process, so automatic values do not follow later directory or branch changes. Capture modes do not remove custom tags or metadata; never put secrets there.
 

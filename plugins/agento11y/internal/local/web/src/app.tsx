@@ -29,15 +29,15 @@ import {
   conversationIDFromPath,
   conversationPath,
   conversationsPath,
+  type ExecutionSessionFilters,
+  executionSessionFiltersFromLocation,
+  executionSessionsPath,
   IMPORT_ACTIVE_TTL_MS,
   IMPORT_REFRESH_DEBOUNCE_MS,
   REFRESH_DEBOUNCE_MS,
   securityRouteActive,
   settingsRouteActive,
   summaryFromDetail,
-  type ToolSessionFilters,
-  toolSessionFiltersFromLocation,
-  toolSessionsPath,
   usePersistedState,
   workspaceFromLocation,
 } from './routing';
@@ -59,7 +59,7 @@ import {
   useHistoryImport,
 } from './settings-screen';
 import { TopBar } from './shell';
-import { filterToolAnalytics, SkillsToolsContent, skillsToolsHeroStats } from './skills-tools';
+import { activeExecutionAnalytics, SkillsToolsContent, skillsToolsHeroStats } from './skills-tools';
 import type {
   BranchMergeResponse,
   BranchMetricsAggregate,
@@ -75,7 +75,6 @@ import type {
   TokenBucketKey,
   TokenUsagePoint,
   TokenUsageResponse,
-  ToolAnalytics,
 } from './types';
 
 // ============================================================
@@ -161,7 +160,7 @@ function applySessionFacets(params: URLSearchParams, facets: SessionFacets) {
 
 interface SessionScope {
   timeRange: string;
-  toolFilter: ToolSessionFilters | null;
+  executionSessionFilters: ExecutionSessionFilters | null;
   workspace: string | null;
   facets: SessionFacets;
 }
@@ -178,11 +177,12 @@ interface SessionScope {
 // happens to be recent, which is the rule the totals already use.
 function sessionRequestParams(scope: SessionScope, now: number): URLSearchParams {
   const params = new URLSearchParams({ limit: String(LIST_PAGE_SIZE) });
-  if (scope.toolFilter) {
-    params.set('tool', scope.toolFilter.tool);
-    if (scope.toolFilter.workspace != null) params.set('workspace', scope.toolFilter.workspace);
-    if (scope.toolFilter.since) params.set('since', scope.toolFilter.since);
-    if (scope.toolFilter.before) params.set('before', scope.toolFilter.before);
+  if (scope.executionSessionFilters) {
+    const filters = scope.executionSessionFilters;
+    params.set(filters.kind, filters.name);
+    if (filters.workspace != null) params.set('workspace', filters.workspace);
+    if (filters.since) params.set('since', filters.since);
+    if (filters.before) params.set('before', filters.before);
   } else {
     const range = timeRangeOption(scope.timeRange);
     if (range.ms != null) {
@@ -193,6 +193,15 @@ function sessionRequestParams(scope: SessionScope, now: number): URLSearchParams
   }
   applySessionFacets(params, scope.facets);
   return params;
+}
+
+interface SessionConfirmation {
+  scope: string;
+  supported: boolean;
+}
+
+function confirmsAppliedSkill(body: { applied_skill?: string }, params: URLSearchParams): boolean {
+  return !params.has('skill') || body.applied_skill === params.get('skill');
 }
 
 /** One frame of the /api/v1/events stream. */
@@ -214,8 +223,8 @@ export function App() {
   const [showAnalytics, setShowAnalytics] = useState(analyticsRouteActive);
   const [analyticsTab, setAnalyticsTab] = useState<AnalyticsTab>(analyticsTabFromLocation);
   const [mcpToolsOnly, setMcpToolsOnly] = useState(false);
-  const [toolSessionFilters, setToolSessionFilters] = useState<ToolSessionFilters | null>(
-    toolSessionFiltersFromLocation,
+  const [executionSessionFilters, setExecutionSessionFilters] = useState<ExecutionSessionFilters | null>(
+    executionSessionFiltersFromLocation,
   );
   // The settings tab is part of the route, so it is owned here with the rest
   // of it: the header chip opens the Cloud tab from any view, including from
@@ -223,6 +232,9 @@ export function App() {
   const [settingsTab, setSettingsTab] = useState(settingsTabFromLocation);
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [workspaceFacetConversations, setWorkspaceFacetConversations] = useState<ConversationSummary[]>([]);
+  const [listConfirmation, setListConfirmation] = useState<SessionConfirmation | null>(null);
+  const [metricsConfirmation, setMetricsConfirmation] = useState<SessionConfirmation | null>(null);
+  const [workspaceFacetScope, setWorkspaceFacetScope] = useState<string | null>(null);
   // storeCount is the number of conversations the daemon holds, before
   // the list's page and range bounds. The list itself is range-scoped,
   // so only this count distinguishes an empty store from a quiet range.
@@ -326,7 +338,9 @@ export function App() {
   const [analyticsTokenPoints, setAnalyticsTokenPoints] = useState<TokenUsagePoint[]>([]);
   const [analyticsTokenIntervalMs, setAnalyticsTokenIntervalMs] = useState(0);
   const [analyticsHeatmapPoints, setAnalyticsHeatmapPoints] = useState<TokenUsagePoint[]>([]);
-  const [skillsTools, setSkillsTools] = useState<ToolAnalytics | null>(null);
+  const [skillsTools, setSkillsTools] = useState<SkillsToolsMetricsResponse | null>(null);
+  const executionMode = analyticsTab === 'skills' ? 'skills' : 'tools';
+  const executionData = skillsTools?.[executionMode] ?? null;
   const [skillsToolsWindow, setSkillsToolsWindow] = useState<{ since?: string; before: string } | null>(null);
   const [loadingSkillsTools, setLoadingSkillsTools] = useState(false);
   const [errSkillsTools, setErrSkillsTools] = useState<string | null>(null);
@@ -461,18 +475,18 @@ export function App() {
   // bucket boundaries belong to the old window.
   const changeTimeRange = useCallback(
     (v: string) => {
-      if (toolSessionFilters) {
+      if (executionSessionFilters) {
         window.history.pushState({}, '', conversationsPath(workspace));
-        setToolSessionFilters(null);
+        setExecutionSessionFilters(null);
       }
       setBucketSel(null);
       setTimeRange(v);
     },
-    [setTimeRange, toolSessionFilters, workspace],
+    [setTimeRange, executionSessionFilters, workspace],
   );
-  const clearToolSessionFilter = useCallback(() => {
+  const clearExecutionSessionFilter = useCallback(() => {
     window.history.pushState({}, '', conversationsPath(workspace));
-    setToolSessionFilters(null);
+    setExecutionSessionFilters(null);
   }, [workspace]);
 
   const pageTitle =
@@ -508,6 +522,31 @@ export function App() {
   // page as if it were the whole answer. A refresh in place (SSE flush,
   // backstop, the refresh button) keeps the rows and swaps them when the
   // response lands.
+  // Exclude refresh timestamps from the scope key so refreshes keep visible data.
+  // Scope changes hide stale data before effects run.
+  const sessionScopeKey = sessionRequestParams(
+    {
+      timeRange,
+      executionSessionFilters,
+      workspace,
+      facets: { agent: agentFilter, model: modelFilter, status: statusFilter },
+    },
+    0,
+  ).toString();
+  const skillScope = executionSessionFilters?.kind === 'skill';
+  const skillScopeConfirmed =
+    !skillScope ||
+    (listConfirmation?.scope === sessionScopeKey &&
+      listConfirmation.supported &&
+      metricsConfirmation?.scope === sessionScopeKey &&
+      metricsConfirmation.supported);
+  const sessionRowsVisible = skillScopeConfirmed && listConfirmation?.scope === sessionScopeKey;
+  const sessionMetricsVisible = skillScopeConfirmed && metricsConfirmation?.scope === sessionScopeKey;
+  const skillScopeUnsupported =
+    skillScope &&
+    ((listConfirmation?.scope === sessionScopeKey && !listConfirmation.supported) ||
+      (metricsConfirmation?.scope === sessionScopeKey && !metricsConfirmation.supported));
+  const sessionVerificationPending = !errList && !errSessionMetrics && !skillScopeUnsupported;
   const listSeqRef = useRef(0);
   const fetchList = useCallback(
     (reset = false) => {
@@ -517,11 +556,13 @@ export function App() {
       if (reset) {
         setConversations([]);
         setWorkspaceFacetConversations([]);
+        setListConfirmation(null);
+        setWorkspaceFacetScope(null);
       }
       const params = sessionRequestParams(
         {
           timeRange,
-          toolFilter: toolSessionFilters,
+          executionSessionFilters,
           workspace,
           facets: { agent: agentFilter, model: modelFilter, status: statusFilter },
         },
@@ -533,7 +574,10 @@ export function App() {
         void fetch(`/api/v1/conversations?${facetParams}`)
           .then((r) => (r.ok ? r.json() : r.text().then((t) => Promise.reject(new Error(t || `HTTP ${r.status}`)))))
           .then((body: ConversationListResponse) => {
-            if (listSeqRef.current === seq) setWorkspaceFacetConversations(body.conversations || []);
+            if (listSeqRef.current !== seq) return;
+            const supported = confirmsAppliedSkill(body, facetParams);
+            setWorkspaceFacetConversations(supported ? body.conversations || [] : []);
+            setWorkspaceFacetScope(supported ? sessionScopeKey : null);
           })
           .catch(() => undefined);
       }
@@ -541,13 +585,24 @@ export function App() {
         .then((r) => (r.ok ? r.json() : r.text().then((t) => Promise.reject(new Error(t || `HTTP ${r.status}`)))))
         .then((body: ConversationListResponse) => {
           if (listSeqRef.current !== seq) return;
+          const supported = confirmsAppliedSkill(body, params);
+          setListConfirmation({ scope: sessionScopeKey, supported });
+          if (!supported) {
+            setConversations([]);
+            setStoreCount(null);
+            return;
+          }
           const rows = body.conversations || [];
           setConversations(rows);
-          if (!params.has('workspace')) setWorkspaceFacetConversations(rows);
+          if (!params.has('workspace')) {
+            setWorkspaceFacetConversations(rows);
+            setWorkspaceFacetScope(sessionScopeKey);
+          }
           setStoreCount(Number.isFinite(body.total_conversations) ? body.total_conversations : null);
         })
         .catch((e) => {
           if (listSeqRef.current !== seq) return;
+          if (params.has('skill')) setListConfirmation(null);
           setErrList(String(e.message || e));
         })
         .finally(() => {
@@ -555,7 +610,7 @@ export function App() {
           setLoadingList(false);
         });
     },
-    [timeRange, toolSessionFilters, workspace, agentFilter, modelFilter, statusFilter],
+    [timeRange, executionSessionFilters, workspace, agentFilter, modelFilter, statusFilter, sessionScopeKey],
   );
 
   // fetchSessionMetrics is what makes the Sessions headline numbers exact:
@@ -572,11 +627,12 @@ export function App() {
       if (reset) {
         setSessionAggregate(null);
         setSessionMatched(null);
+        setMetricsConfirmation(null);
       }
       const params = sessionRequestParams(
         {
           timeRange,
-          toolFilter: toolSessionFilters,
+          executionSessionFilters,
           workspace,
           facets: { agent: agentFilter, model: modelFilter, status: statusFilter },
         },
@@ -586,6 +642,13 @@ export function App() {
         .then((r) => (r.ok ? r.json() : r.text().then((t) => Promise.reject(new Error(t || `HTTP ${r.status}`)))))
         .then((body: ConversationMetricsResponse) => {
           if (sessionMetricsSeqRef.current !== seq) return;
+          const supported = confirmsAppliedSkill(body, params);
+          setMetricsConfirmation({ scope: sessionScopeKey, supported });
+          if (!supported) {
+            setSessionAggregate(null);
+            setSessionMatched(null);
+            return;
+          }
           setSessionAggregate(body.aggregate || null);
           setSessionMatched(Number.isFinite(body.matched_conversations) ? body.matched_conversations : null);
         })
@@ -593,6 +656,7 @@ export function App() {
           if (sessionMetricsSeqRef.current !== seq) return;
           setSessionAggregate(null);
           setSessionMatched(null);
+          setMetricsConfirmation(null);
           setErrSessionMetrics(String(e.message || e));
         })
         .finally(() => {
@@ -600,7 +664,7 @@ export function App() {
           setLoadingSessionMetrics(false);
         });
     },
-    [timeRange, toolSessionFilters, workspace, agentFilter, modelFilter, statusFilter],
+    [timeRange, executionSessionFilters, workspace, agentFilter, modelFilter, statusFilter, sessionScopeKey],
   );
 
   // Token points back the usage chart. The server aggregates them per
@@ -628,12 +692,12 @@ export function App() {
       }
       const w = requestWindow(timeRange, LIST_PAGE_SIZE);
       const params = new URLSearchParams();
-      if (toolSessionFilters) {
-        if (toolSessionFilters.since) params.set('since', toolSessionFilters.since);
-        if (toolSessionFilters.before) params.set('before', toolSessionFilters.before);
-        if (toolSessionFilters.workspace != null) params.set('workspace', toolSessionFilters.workspace);
-        const since = toolSessionFilters.since ? Date.parse(toolSessionFilters.since) : Number.NaN;
-        const before = toolSessionFilters.before ? Date.parse(toolSessionFilters.before) : Number.NaN;
+      if (executionSessionFilters) {
+        if (executionSessionFilters.since) params.set('since', executionSessionFilters.since);
+        if (executionSessionFilters.before) params.set('before', executionSessionFilters.before);
+        if (executionSessionFilters.workspace != null) params.set('workspace', executionSessionFilters.workspace);
+        const since = executionSessionFilters.since ? Date.parse(executionSessionFilters.since) : Number.NaN;
+        const before = executionSessionFilters.before ? Date.parse(executionSessionFilters.before) : Number.NaN;
         if (Number.isFinite(since) && Number.isFinite(before) && since < before) {
           params.set('interval', String(Math.round(chartBucketMs(before - since) / 1000)));
         }
@@ -656,7 +720,7 @@ export function App() {
         })
         .catch(() => {});
     },
-    [timeRange, toolSessionFilters, workspace],
+    [timeRange, executionSessionFilters, workspace],
   );
 
   const analyticsSeqRef = useRef(0);
@@ -928,7 +992,7 @@ export function App() {
         .then((response) => readJSON<SkillsToolsMetricsResponse>(response))
         .then((body) => {
           if (skillsToolsSeqRef.current !== seq) return;
-          setSkillsTools(body.tools);
+          setSkillsTools(body);
           setSkillsToolsWindow({ since, before });
         })
         .catch((error) => {
@@ -987,7 +1051,7 @@ export function App() {
     analyticsRefreshInFlightRef.current = true;
     const now = Date.now();
     const request =
-      analyticsTab === 'skills'
+      analyticsTab !== 'overview'
         ? fetchSkillsTools()
         : Promise.all([fetchAnalytics(false, now), fetchAnalyticsHeaviest(false, now), fetchAnalyticsHeatmap()]);
     Promise.resolve(request).finally(() => {
@@ -1097,9 +1161,10 @@ export function App() {
     if (view === 'analytics' && analyticsTab === 'overview') fetchAnalyticsHeatmap(true);
   }, [view, analyticsTab, fetchAnalyticsHeatmap]);
 
+  const executionAnalyticsActive = view === 'analytics' && analyticsTab !== 'overview';
   useEffect(() => {
-    if (view === 'analytics' && analyticsTab === 'skills') fetchSkillsTools(true);
-  }, [view, analyticsTab, fetchSkillsTools]);
+    if (executionAnalyticsActive) fetchSkillsTools(true);
+  }, [executionAnalyticsActive, fetchSkillsTools]);
 
   useEffect(() => {
     const onPopState = () => {
@@ -1116,7 +1181,13 @@ export function App() {
       setShowAnalytics(nextAnalytics);
       setSettingsTab(settingsTabFromLocation());
       setAnalyticsTab(analyticsTabFromLocation());
-      setToolSessionFilters(toolSessionFiltersFromLocation());
+      const filters = executionSessionFiltersFromLocation();
+      if (filters) {
+        resetSessionFacets();
+        setQuery('');
+        setBucketSel(null);
+      }
+      setExecutionSessionFilters(filters);
       setWorkspace(workspaceFromLocation());
     };
     window.addEventListener('popstate', onPopState);
@@ -1274,7 +1345,7 @@ export function App() {
     setShowAnalytics(false);
     setSelectedID(null);
     setWorkspace(null);
-    setToolSessionFilters(null);
+    setExecutionSessionFilters(null);
   };
   const backFromDetail = () => {
     setShowSecurity(false);
@@ -1284,7 +1355,7 @@ export function App() {
     if (state?.view === 'analytics') {
       const path = state.returnPath || analyticsPath('overview');
       window.history.pushState({}, '', path);
-      setAnalyticsTab(path.includes('tab=skills') ? 'skills' : 'overview');
+      setAnalyticsTab(analyticsTabFromLocation());
       setShowAnalytics(true);
       return;
     }
@@ -1293,8 +1364,13 @@ export function App() {
     window.history.pushState({}, '', path);
     resetSessionFacets();
     setShowAnalytics(false);
-    setWorkspace(returnWorkspace);
-    setToolSessionFilters(toolSessionFiltersFromLocation());
+    const filters = executionSessionFiltersFromLocation();
+    setWorkspace(filters ? filters.workspace : returnWorkspace);
+    setExecutionSessionFilters(filters);
+    if (filters) {
+      setQuery('');
+      setBucketSel(null);
+    }
   };
   const goAnalytics = () => {
     setShowSecurity(false);
@@ -1308,16 +1384,17 @@ export function App() {
     window.history.pushState({}, '', analyticsPath(tab));
     setAnalyticsTab(tab);
   };
-  const openToolSessions = (filters: ToolSessionFilters) => {
+  const openExecutionSessions = (filters: ExecutionSessionFilters) => {
     setShowSecurity(false);
-    window.history.pushState({}, '', toolSessionsPath(filters));
+    window.history.pushState({}, '', executionSessionsPath(filters));
     resetSessionFacets();
     setTimeRange(analyticsRange);
     setShowSettings(false);
     setShowAnalytics(false);
     setSelectedID(null);
     setWorkspace(filters.workspace);
-    setToolSessionFilters(filters);
+    setExecutionSessionFilters(filters);
+    setQuery('');
     setBucketSel(null);
   };
   const openAnalyticsBucket = (span: TimeSpan) => {
@@ -1330,7 +1407,7 @@ export function App() {
     setShowSettings(false);
     setShowAnalytics(false);
     setSelectedID(null);
-    setToolSessionFilters(null);
+    setExecutionSessionFilters(null);
   };
   const openAnalyticsWorkspace = (path: string) => {
     setShowSecurity(false);
@@ -1342,13 +1419,18 @@ export function App() {
     setShowSettings(false);
     setShowAnalytics(false);
     setSelectedID(null);
-    setToolSessionFilters(null);
+    setExecutionSessionFilters(null);
   };
   const selectConversationWorkspace = (path: string | null) => {
-    const filters = toolSessionFilters ? { ...toolSessionFilters, workspace: path } : null;
-    window.history.pushState({}, '', filters ? toolSessionsPath(filters) : conversationsPath(path));
+    const filters = executionSessionFilters ? { ...executionSessionFilters, workspace: path } : null;
+    window.history.pushState({}, '', filters ? executionSessionsPath(filters) : conversationsPath(path));
     setWorkspace(path);
-    setToolSessionFilters(filters);
+    setExecutionSessionFilters(filters);
+    if (filters) {
+      resetSessionFacets();
+      setQuery('');
+      setBucketSel(null);
+    }
   };
   const goSecurity = () => {
     window.history.pushState({}, '', '/security');
@@ -1388,7 +1470,7 @@ export function App() {
       setShowSettings(false);
       setShowAnalytics(false);
       setWorkspace(null);
-      setToolSessionFilters(null);
+      setExecutionSessionFilters(null);
       setTimeout(focus, 0);
       return;
     }
@@ -1487,10 +1569,13 @@ export function App() {
                     aggregate: analyticsAggregate,
                     totalConversations: analyticsTotalConversations,
                   })
-                : skillsToolsHeroStats(filterToolAnalytics(skillsTools, mcpToolsOnly))
+                : skillsToolsHeroStats(
+                    activeExecutionAnalytics(executionData, executionMode, mcpToolsOnly),
+                    executionMode,
+                  )
             }
             tabs={{ active: analyticsTab, onSelect: selectAnalyticsTab }}
-            style={analyticsTab === 'skills' ? { paddingBottom: 40 } : undefined}
+            style={analyticsTab !== 'overview' ? { paddingBottom: 40 } : undefined}
           >
             {analyticsTab === 'overview' ? (
               <AnalyticsOverviewContent
@@ -1538,7 +1623,9 @@ export function App() {
               />
             ) : (
               <SkillsToolsContent
-                data={skillsTools}
+                mode={executionMode}
+                data={executionData}
+                unsupported={executionMode === 'skills' && skillsTools != null && skillsTools.skills == null}
                 loading={loadingSkillsTools}
                 error={errSkillsTools}
                 timeRange={analyticsRange}
@@ -1548,7 +1635,7 @@ export function App() {
                 window={skillsToolsWindow}
                 onRefresh={refreshAnalytics}
                 refreshing={loadingSkillsTools}
-                onOpenSessions={openToolSessions}
+                onOpenSessions={openExecutionSessions}
                 mcpToolsOnly={mcpToolsOnly}
                 onMcpToolsOnlyChange={setMcpToolsOnly}
               />
@@ -1557,16 +1644,19 @@ export function App() {
         )}
         {view === 'conversations' && (
           <ConversationsView
-            conversations={conversations}
-            workspaceFacetConversations={workspaceFacetConversations}
-            storeCount={storeCount}
-            aggregate={sessionAggregate}
-            matchedConversations={sessionMatched}
-            metricsLoading={loadingSessionMetrics}
+            conversations={sessionRowsVisible ? conversations : []}
+            workspaceFacetConversations={
+              sessionRowsVisible && workspaceFacetScope === sessionScopeKey ? workspaceFacetConversations : []
+            }
+            storeCount={sessionRowsVisible ? storeCount : null}
+            aggregate={sessionMetricsVisible ? sessionAggregate : null}
+            matchedConversations={sessionMetricsVisible ? sessionMatched : null}
+            metricsLoading={loadingSessionMetrics || (!sessionMetricsVisible && sessionVerificationPending)}
+            unsupported={skillScopeUnsupported}
             metricsError={errSessionMetrics}
             tokenPoints={tokenPoints}
             tokenIntervalMs={tokenIntervalMs}
-            loading={loadingList}
+            loading={loadingList || (!sessionRowsVisible && sessionVerificationPending)}
             error={errList}
             query={query}
             setQuery={setQuery}
@@ -1596,9 +1686,9 @@ export function App() {
             refreshing={loadingList}
             onOpenSettings={goSettings}
             history={history}
-            {...(toolSessionFilters
-              ? { toolFilter: toolSessionFilters, onClearToolFilter: clearToolSessionFilter }
-              : { toolFilter: null })}
+            {...(executionSessionFilters
+              ? { executionSessionFilters, onClearExecutionFilter: clearExecutionSessionFilter }
+              : { executionSessionFilters: null })}
           />
         )}
         {view === 'conversation' && selected && (

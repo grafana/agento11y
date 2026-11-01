@@ -1,0 +1,29 @@
+{
+  "preToolUse": {
+    "input": {
+      "sessionId": "fixture-session",
+      "timestamp": 1700000000000,
+      "cwd": "/fixture/repo",
+      "toolName": "skill",
+      "toolArgs": "{\"skill\":\"original-review\"}"
+    },
+    "output": {
+      "modifiedArgs": {
+        "skill": "missing-review"
+      }
+    }
+  },
+  "completion": {
+    "hookType": "postToolUseFailure",
+    "input": {
+      "sessionId": "fixture-session",
+      "timestamp": 1700000000001,
+      "cwd": "/fixture/repo",
+      "toolName": "skill",
+      "toolArgs": {
+        "skill": "original-review"
+      },
+      "error": "Skill not found: missing-review"
+    }
+  }
+}

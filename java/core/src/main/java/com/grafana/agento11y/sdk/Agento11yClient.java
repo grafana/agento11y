@@ -22,6 +22,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -139,10 +140,11 @@ public final class Agento11yClient implements AutoCloseable {
     private final EmbeddingCaptureConfig embeddingCaptureConfig;
     private final Logger logger;
     private final Clock clock;
+    private final int debugBufferSize;
     private final HttpClient ratingHttpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
-    private final List<Generation> generations = new ArrayList<>();
-    private final List<ToolExecution> toolExecutions = new ArrayList<>();
+    private final ArrayDeque<Generation> generations = new ArrayDeque<>();
+    private final ArrayDeque<ToolExecution> toolExecutions = new ArrayDeque<>();
     private final Object debugLock = new Object();
 
     private final Object queueLock = new Object();
@@ -183,6 +185,11 @@ public final class Agento11yClient implements AutoCloseable {
         this.logger = config.getLogger();
         this.clock = config.getClock();
         Agento11yEnvConfig.logWarnings(this.logger, envResult.warnings());
+        int requestedDebugBufferSize = config.getDebugBufferSize();
+        if (requestedDebugBufferSize < 0) {
+            logWarn("agento11y: ignoring negative debugBufferSize " + requestedDebugBufferSize + "; using 0 (disabled)", null);
+        }
+        this.debugBufferSize = Math.max(0, requestedDebugBufferSize);
         this.embeddingCaptureConfig = normalizeEmbeddingCaptureConfig(config.getEmbeddingCapture());
 
         GenerationExportConfig exportConfig = config.getGenerationExport();
@@ -626,7 +633,8 @@ public final class Agento11yClient implements AutoCloseable {
     /** Returns an in-memory snapshot of recorded generations, tool executions, and queue size. */
     public Agento11yDebugSnapshot debugSnapshot() {
         synchronized (debugLock) {
-            return new Agento11yDebugSnapshot(generations, toolExecutions, pendingGenerations.size());
+            return new Agento11yDebugSnapshot(
+                    new ArrayList<>(generations), new ArrayList<>(toolExecutions), pendingGenerations.size());
         }
     }
 
@@ -668,14 +676,28 @@ public final class Agento11yClient implements AutoCloseable {
     }
 
     void recordGeneration(Generation generation) {
+        if (debugBufferSize == 0) {
+            return;
+        }
         synchronized (debugLock) {
-            generations.add(generation.copy());
+            Generation copy = generation.copy();
+            if (generations.size() == debugBufferSize) {
+                generations.removeFirst();
+            }
+            generations.addLast(copy);
         }
     }
 
     void recordToolExecution(ToolExecution toolExecution) {
+        if (debugBufferSize == 0) {
+            return;
+        }
         synchronized (debugLock) {
-            toolExecutions.add(toolExecution.copy());
+            ToolExecution copy = toolExecution.copy();
+            if (toolExecutions.size() == debugBufferSize) {
+                toolExecutions.removeFirst();
+            }
+            toolExecutions.addLast(copy);
         }
     }
 
@@ -1518,16 +1540,43 @@ public final class Agento11yClient implements AutoCloseable {
             errorCategory = errorCategoryFromThrowable(finalError, true);
         }
 
-        operationDurationHistogram.record(
-                durationSeconds,
-                metricIdentityAttributes(seed.getRequestProvider(), seed.getRequestModel(), seed.getAgentName(), seed.getAgentVersion())
-                        .put(SPAN_ATTR_OPERATION_NAME, TOOL_EXECUTION_OPERATION_NAME)
-                        .put(SPAN_ATTR_TOOL_NAME, seed.getToolName().trim())
-                        .putAll(clientTagAttributes())
-                        .put(SPAN_ATTR_ERROR_TYPE, errorType)
-                        .put(SPAN_ATTR_ERROR_CATEGORY, errorCategory)
-                        .build()
-        );
+        AttributesBuilder attributes = metricIdentityAttributes(
+                seed.getRequestProvider(), seed.getRequestModel(), seed.getAgentName(), seed.getAgentVersion())
+                .put(SPAN_ATTR_OPERATION_NAME, TOOL_EXECUTION_OPERATION_NAME)
+                .put(SPAN_ATTR_TOOL_NAME, seed.getToolName().trim())
+                .putAll(clientTagAttributes())
+                .put(SPAN_ATTR_ERROR_TYPE, errorType)
+                .put(SPAN_ATTR_ERROR_CATEGORY, errorCategory);
+        String executionKind = seed.getExecutionKind() == null ? null : switch (seed.getExecutionKind()) {
+            case LOAD_SKILL -> "load_skill";
+            case READ_SKILL_RESOURCE -> "read_skill_resource";
+            case COMMAND -> "command";
+            default -> null;
+        };
+        if (executionKind != null) {
+            attributes.put("agento11y.tool.execution.kind", executionKind);
+            String skillName = trimUnicodeWhitespace(seed.getSkillName());
+            if (!skillName.isEmpty()) {
+                attributes.put(SPAN_ATTR_SKILL_NAME, skillName);
+            }
+        }
+        operationDurationHistogram.record(durationSeconds, attributes.build());
+    }
+
+    private static String trimUnicodeWhitespace(String value) {
+        int start = 0;
+        int end = value.length();
+        while (start < end && isUnicodeWhitespace(value.charAt(start))) {
+            start++;
+        }
+        while (end > start && isUnicodeWhitespace(value.charAt(end - 1))) {
+            end--;
+        }
+        return value.substring(start, end);
+    }
+
+    private static boolean isUnicodeWhitespace(char value) {
+        return value <= ' ' || Character.isWhitespace(value) || Character.isSpaceChar(value) || value == '\u0085';
     }
 
     static String errorCategoryFromThrowable(Throwable error, boolean fallbackSdk) {

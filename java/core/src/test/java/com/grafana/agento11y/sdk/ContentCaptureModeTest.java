@@ -1149,7 +1149,7 @@ class ContentCaptureModeTest {
     void strippedModes_toolSpan_omitsContentAttrs(StrippedMode mode) {
         // The full set of content-bearing attributes the tool span path can
         // carry. Under either stripped mode none of them should appear.
-        try (ContentCaptureTestEnv env = ContentCaptureTestEnv.builder(mode.mode).build()) {
+        try (ContentCaptureTestEnv env = ContentCaptureTestEnv.builder(mode.mode).debugBufferSize(1).build()) {
             try (ToolExecutionRecorder rec = env.client.startToolExecution(new ToolExecutionStart()
                     .setToolName("weather")
                     .setToolCallId("call_1")
@@ -1202,7 +1202,7 @@ class ContentCaptureModeTest {
         // Tools have no proto export — the raw provider error must not echo
         // on the span path under either stripped mode.
         String rawError = "provider returned HTTP 400: blocked content '" + LEAK_MARKER + "'";
-        try (ContentCaptureTestEnv env = ContentCaptureTestEnv.builder(mode.mode).build()) {
+        try (ContentCaptureTestEnv env = ContentCaptureTestEnv.builder(mode.mode).debugBufferSize(1).build()) {
             try (ToolExecutionRecorder rec = env.client.startToolExecution(new ToolExecutionStart()
                     .setToolName("weather")
                     .setToolCallId("call_1")

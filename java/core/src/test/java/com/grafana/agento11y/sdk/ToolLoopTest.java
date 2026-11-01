@@ -94,7 +94,8 @@ class ToolLoopTest {
                     .addSpanProcessor(SimpleSpanProcessor.create(spans)).build();
                 Agento11yClient client = new Agento11yClient(new Agento11yClientConfig()
                         .setTracer(provider.get("test"))
-                        .setGenerationExporter(new TestFixtures.CapturingExporter()))) {
+                        .setGenerationExporter(new TestFixtures.CapturingExporter())
+                        .setDebugBufferSize(4))) {
             List<String> names = List.of("load_skill", "read_skill_resource", "run_skill_script", "exec_command");
             for (String name : names) {
                 Message message = new Message().setRole(MessageRole.ASSISTANT).setParts(List.of(
@@ -105,6 +106,7 @@ class ToolLoopTest {
                 client.executeToolCalls(List.of(message), (tool, bytes) -> Map.of("process_exit_code", 0), null);
             }
             assertThat(spans.getFinishedSpanItems()).hasSize(names.size());
+            assertThat(client.debugSnapshot().getToolExecutions()).hasSize(names.size());
             for (int i = 0; i < names.size(); i++) {
                 SpanData span = spans.getFinishedSpanItems().get(i);
                 assertThat(span.getName()).isEqualTo("execute_tool " + names.get(i));
@@ -134,6 +136,7 @@ class ToolLoopTest {
                         .setFlushInterval(Duration.ofHours(1))
                         .setMaxRetries(1));
 
+        config.setDebugBufferSize(1);
         try (Agento11yClient client = new Agento11yClient(config)) {
             Message m = new Message().setRole(MessageRole.ASSISTANT);
             m.getParts()

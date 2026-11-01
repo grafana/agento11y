@@ -180,6 +180,34 @@ describe('analytics workspace routing', () => {
 });
 
 describe('App analytics loading', () => {
+  it.each([
+    ['/analytics?tab=skills', 'Tools'],
+    ['/analytics?tab=skills&mode=tools', 'Tools'],
+    ['/analytics?tab=skills&mode=skills', 'Skills'],
+  ])('restores the Analytics tab from the shared parser on detail return to %s', async (returnPath, label) => {
+    window.history.replaceState({ view: 'analytics', returnPath }, '', '/conversations/session-costly');
+    const stored = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => stored.get(key) ?? null,
+      setItem: (key: string, value: string) => stored.set(key, value),
+    });
+    const response = (body: unknown) => ({ ok: true, status: 200, json: () => Promise.resolve(body) }) as Response;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        if (String(input) === '/api/v1/conversations/session-costly') {
+          return Promise.resolve(response({ id: 'session-costly', generations: [] }));
+        }
+        return Promise.resolve(response({}));
+      }),
+    );
+    render(<App />);
+    fireEvent.click(await screen.findByRole('link', { name: 'Back to Analytics' }));
+    expect(`${window.location.pathname}${window.location.search}`).toBe(returnPath);
+    expect(screen.getByRole('link', { name: label }).getAttribute('aria-current')).toBe('page');
+    await waitFor(() => expect(screen.queryByText(/Loading .*calls…/)).toBeNull());
+  });
+
   it('renders analytics and returns from a session', async () => {
     window.history.replaceState({}, '', '/analytics');
     const stored = new Map<string, string>();
@@ -1130,6 +1158,7 @@ describe('AnalyticsView', () => {
 
     const hero = screen.getByRole('heading', { name: 'Analytics' }).parentElement?.parentElement;
     expect(hero?.textContent).not.toContain('Range');
+    expect((hero?.lastElementChild as HTMLElement).style.flexWrap).toBe('wrap');
 
     const measure = screen.getByRole('group', { name: 'Measure in' });
     const refresh = screen.getByRole('button', { name: 'Refresh analytics' });

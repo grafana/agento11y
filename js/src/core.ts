@@ -56,6 +56,7 @@ export type {
   GenerationStart,
   HookAction,
   HookContext,
+  HookEvaluateOptions,
   HookEvaluateRequest,
   HookEvaluateResponse,
   HookEvaluation,

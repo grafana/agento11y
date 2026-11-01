@@ -102,12 +102,9 @@ func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.
 				legacyMarketplaceAlias, PluginName, legacyMarketplaceAlias)
 		},
 		Update: runUpdate,
-		// The hint mirrors what defaultRunUpdate just attempted: the installed
-		// key's alias, not the current one, since pre-rename registrations
-		// keep the sticky legacy alias and commands against the current alias
-		// would fail for them.
+		// Pre-rename registrations keep the sticky legacy alias until moved.
 		UpdateRecoveryHint: func(w io.Writer) {
-			key := updateTargetKey()
+			key, _ := updateTarget()
 			alias := key[strings.IndexByte(key, '@')+1:]
 			fmt.Fprintf(w,
 				"          claude plugin marketplace update %s\n"+
@@ -117,6 +114,14 @@ func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.
 				fmt.Fprintf(w,
 					"          (if the update no longer finds %s, run: claude plugin install %s@%s)\n",
 					key, PluginName, alias)
+			}
+			if alias != marketplaceAlias {
+				fmt.Fprintf(w,
+					"          if the %s marketplace is missing or ignored, move to %s:\n"+
+						"           claude plugin marketplace add %s &&\n"+
+						"           claude plugin install %s@%s &&\n"+
+						"           claude plugin uninstall %s\n",
+					alias, marketplaceAlias, marketplaceRepo, PluginName, marketplaceAlias, key)
 			}
 		},
 		UpdateTTL:     updateCheckTTL,
@@ -155,7 +160,7 @@ func Install(ctx context.Context, stdout io.Writer) (bool, error) {
 // relies on this. A record with no build field reports an unknown version
 // rather than an error: the store belongs to Claude Code.
 func Status(_ context.Context) (installed bool, version string, err error) {
-	key, entry, err := installedPluginRecord()
+	key, entry, err := installedPluginRecord(false)
 	if err != nil || key == "" {
 		return false, "", err
 	}
@@ -179,24 +184,27 @@ func defaultRunInstall(ctx context.Context, bin string, w io.Writer) error {
 	return err
 }
 
-// updateTargetKey returns the `<plugin>@<marketplace>` key the update path
+// updateTarget returns the `<plugin>@<marketplace>` key and scope the update path
 // targets. The installed key wins because Claude Code never re-keys a
 // marketplace, so registrations that predate the rename answer only to the
 // sticky legacy alias. The probe reported the plugin installed just before
 // the update runs, so an empty or unreadable store here is exceptional —
 // fall back to the current names rather than failing the refresh.
-func updateTargetKey() string {
-	key, err := installedPluginKey()
+func updateTarget() (key, scope string) {
+	key, entry, err := installedPluginRecord(true)
 	if err != nil || key == "" {
-		return PluginName + "@" + marketplaceAlias
+		return PluginName + "@" + marketplaceAlias, "user"
 	}
-	return key
+	return key, entry.Scope
 }
 
 func defaultRunUpdate(ctx context.Context, bin string, w io.Writer) error {
-	key := updateTargetKey()
+	key, scope := updateTarget()
 	alias := key[strings.IndexByte(key, '@')+1:]
 	if err := runSteps(ctx, bin, w, [][]string{{"plugin", "marketplace", "update", alias}}); err != nil {
+		if alias != marketplaceAlias && scope == "user" {
+			return moveToCurrentMarketplace(ctx, bin, w, key, err)
+		}
 		return err
 	}
 	if !strings.HasPrefix(key, legacyPluginName+"@") {
@@ -213,6 +221,20 @@ func defaultRunUpdate(ctx context.Context, bin string, w io.Writer) error {
 		{"plugin", "install", PluginName + "@" + alias},
 	})
 	return err
+}
+
+// Claude Code ignores marketplaces whose registered source differs from settings; updates then report them as missing.
+func moveToCurrentMarketplace(ctx context.Context, bin string, w io.Writer, key string, updateErr error) error {
+	currentKey := PluginName + "@" + marketplaceAlias
+	if err := runSteps(ctx, bin, w, [][]string{
+		{"plugin", "marketplace", "add", marketplaceRepo},
+		{"plugin", "install", currentKey},
+	}); err != nil {
+		return errors.Join(updateErr, err)
+	}
+	_ = runSteps(ctx, bin, w, [][]string{{"plugin", "uninstall", key}})
+	fmt.Fprintf(w, "agento11y: moved %s to %s\n", key, currentKey)
+	return nil
 }
 
 // installedPluginsFile is the JSON shape Claude Code writes to
@@ -262,7 +284,7 @@ func pluginInstalled() (bool, error) {
 // installedPluginKey returns the `<plugin>@<marketplace>` key registering the
 // plugin for the current working directory; empty when not installed.
 func installedPluginKey() (string, error) {
-	key, _, err := installedPluginRecord()
+	key, _, err := installedPluginRecord(false)
 	return key, err
 }
 
@@ -280,7 +302,7 @@ func installedPluginKey() (string, error) {
 // unrelated project suppress bootstrap here, leaving agento11y hooks inactive.
 // Marketplace alias is intentionally ignored so a foreign alias is not
 // reinstalled on top of.
-func installedPluginRecord() (string, installedPluginEntry, error) {
+func installedPluginRecord(preferUserScope bool) (string, installedPluginEntry, error) {
 	path, err := installedPluginsPath()
 	if err != nil {
 		return "", installedPluginEntry{}, err
@@ -319,6 +341,11 @@ func installedPluginRecord() (string, installedPluginEntry, error) {
 			// Unexpected per-key shape: skip this key but keep scanning.
 			// A user-scope entry under a different alias may still match.
 			continue
+		}
+		if preferUserScope {
+			if i := slices.IndexFunc(entries, func(e installedPluginEntry) bool { return e.Scope == "user" }); i >= 0 {
+				entries = entries[i : i+1]
+			}
 		}
 		for _, e := range entries {
 			if e.Scope != "user" && (e.ProjectPath == "" || filepath.Clean(e.ProjectPath) != cwdClean) {

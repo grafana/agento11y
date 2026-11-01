@@ -262,6 +262,8 @@ export interface Agento11ySdkConfig {
    * own log-file plumbing on top of it.
    */
   debug?: boolean;
+  /** Maximum retained records per type across all conversations. Zero (default) disables history, independently of verbose debug logging. */
+  debugBufferSize?: number;
 }
 
 /** Partial SDK configuration passed by callers. */
@@ -285,6 +287,8 @@ export interface Agento11ySdkConfigInput {
   userId?: string;
   tags?: Record<string, string>;
   debug?: boolean;
+  /** See {@link Agento11ySdkConfig.debugBufferSize}. */
+  debugBufferSize?: number;
 }
 
 /** Provider/model identity. */
@@ -626,6 +630,8 @@ export interface GenerationRecorder {
 
 /** Recorder API for tool execution lifecycle. */
 export interface ToolExecutionRecorder {
+  /** Binds only parentage; other options resolve at the child call. The caller must end the child. */
+  startToolExecution(start: ToolExecutionStart): ToolExecutionRecorder;
   setResult(result: ToolExecutionResult): void;
   setCallError(error: unknown): void;
   end(): void;
@@ -672,6 +678,11 @@ export interface HooksConfig {
   failOpen: boolean;
   /** Invalid transforms must throw even when evaluator failures are allowed. Defaults to false. */
   strictTransforms?: boolean;
+}
+
+export interface HookEvaluateOptions extends Partial<HooksConfig> {
+  /** Aborts the HTTP request and rejects with the signal's reason, even when `failOpen` is true. */
+  signal?: AbortSignal;
 }
 
 /** Identifies the upstream LLM call for hook rule matching. */

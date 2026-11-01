@@ -1,0 +1,30 @@
+{
+  "preToolUse": {
+    "input": {
+      "sessionId": "fixture-session",
+      "timestamp": 1700000000000,
+      "cwd": "/fixture/repo",
+      "toolName": "skill",
+      "toolArgs": "{\"skill\":\"original-review\"}"
+    },
+    "output": {
+      "modifiedArgs": {
+        "skill": "effective-review"
+      }
+    }
+  },
+  "completion": {
+    "hookType": "postToolUse",
+    "input": {
+      "sessionId": "fixture-session",
+      "timestamp": 1700000000001,
+      "cwd": "/fixture/repo",
+      "toolName": "skill",
+      "toolArgs": "{\"skill\":\"effective-review\"}",
+      "toolResult": {
+        "textResultForLlm": "Skill \"effective-review\" loaded successfully. Follow the instructions in the skill context.",
+        "resultType": "success"
+      }
+    }
+  }
+}

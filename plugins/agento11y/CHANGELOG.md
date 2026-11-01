@@ -1,5 +1,59 @@
 # Changelog
 
+## [0.55.0] - 2026-10-30
+
+### Features
+
+- **plugins/agento11y**: export the coding agent guard packs for Cloud (#945)
+
+### Bug Fixes
+
+- **plugins/agento11y**: stop history imports recording live metrics (#997)
+
+## [0.54.0] - 2026-10-29
+
+### Features
+
+- **sdk**: add skill identity to tool execution metrics (#979)
+
+### Bug Fixes
+
+- **plugins/agento11y**: pin SDK to merged main commit (#986)
+
+## [0.53.0] - 2026-10-28
+
+### Features
+
+- **plugins/agento11y**: report skill loads from Copilot and Vibe (#973)
+- **plugins/agento11y**: add local skill analytics (#963)
+
+### Bug Fixes
+
+- **plugins/agento11y**: decode local OTLP JSON trace IDs (#974)
+- **plugins/agento11y**: move Claude Code installs off the legacy marketplace (#969)
+- **security/high/plugins/agento11y**: update dependency happy-dom to v21 [security] (#937)
+- **security/unknown/plugins/agento11y**: update module golang.org/x/net to v0.62.0 [security] (#960)
+- **plugins/agento11y**: mark Codex usage as input-inclusive (#949)
+
+## [0.52.0] - 2026-10-26
+
+### Features
+
+- trace tool context and skill loads across agents (#925)
+- **plugins/agento11y**: add experimental OTel generation export (#921)
+- **sdk**: trace skill loads, resource reads, and commands (#920)
+- **plugins/agento11y**: resolve coding agent identity locally (#916)
+- **plugins/agento11y**: support opencode v2 history (#890)
+- **plugins/opencode**: support opencode v2 (#876)
+
+### Bug Fixes
+
+- **plugins/agento11y**: preserve Codex metadata and deep Git roots (#917)
+- **plugins/agento11y**: export Claude Code subagent transcript usage (#918)
+- **plugins/agento11y**: Codex tenant-only export auth and live conversation titles (#893)
+- **agento11y**: omit usage stats from development builds (#889)
+- **lint**: check the errors golangci-lint v2.15.0 now flags (#885)
+
 ## [0.51.0] - 2026-10-16
 
 ### Features

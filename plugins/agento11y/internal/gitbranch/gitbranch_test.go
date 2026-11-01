@@ -150,6 +150,69 @@ func TestRepo(t *testing.T) {
 			want: "grafana/agento11y",
 		},
 		{
+			name: "https remote drops query token",
+			setup: func(t *testing.T) string {
+				root := t.TempDir()
+				writeFile(t, filepath.Join(root, ".git/config"), gitConfig("https://fixture-user:fixture-password@git.example.com/group/subgroup/repo.git?token=synthetic-query-token&next=/private/path"))
+				return root
+			},
+			want: "group/subgroup/repo",
+		},
+		{
+			name: "ssh url with port drops query token",
+			setup: func(t *testing.T) string {
+				root := t.TempDir()
+				writeFile(t, filepath.Join(root, ".git/config"), gitConfig("ssh://git@git.example.com:2222/group/subgroup/repo.git?token=synthetic-query-token"))
+				return root
+			},
+			want: "group/subgroup/repo",
+		},
+		{
+			name: "quoted url drops fragment token",
+			setup: func(t *testing.T) string {
+				root := t.TempDir()
+				writeFile(t, filepath.Join(root, ".git/config"), gitConfig(`"https://git.example.com/group/repo.git#synthetic-fragment-token?next=/private/path"`))
+				return root
+			},
+			want: "group/repo",
+		},
+		{
+			name: "file url drops query and fragment tokens",
+			setup: func(t *testing.T) string {
+				root := t.TempDir()
+				writeFile(t, filepath.Join(root, ".git/config"), gitConfig(`"file:///srv/git/repo.git?token=synthetic-query-token#synthetic-fragment-token"`))
+				return root
+			},
+			want: "repo",
+		},
+		{
+			name: "url keeps encoded path delimiters but drops query token",
+			setup: func(t *testing.T) string {
+				root := t.TempDir()
+				writeFile(t, filepath.Join(root, ".git/config"), gitConfig("https://git.example.com/group%2Fsubgroup/repo%3Fname%23pin.git?token=synthetic-query-token"))
+				return root
+			},
+			want: "group%2Fsubgroup/repo%3Fname%23pin",
+		},
+		{
+			name: "scp remote keeps question mark and hash in filename",
+			setup: func(t *testing.T) string {
+				root := t.TempDir()
+				writeFile(t, filepath.Join(root, ".git/config"), gitConfig(`"git@git.example.com:group/repo?name#pin.git"`))
+				return root
+			},
+			want: "group/repo?name#pin",
+		},
+		{
+			name: "filesystem remote keeps question mark and hash in filename",
+			setup: func(t *testing.T) string {
+				root := t.TempDir()
+				writeFile(t, filepath.Join(root, ".git/config"), gitConfig(`"/srv/git/repo?name#pin.git"`))
+				return root
+			},
+			want: "repo?name#pin",
+		},
+		{
 			name: "ssh url remote without .git suffix",
 			setup: func(t *testing.T) string {
 				root := t.TempDir()

@@ -2,7 +2,7 @@
   "cases": [
     {
       "id": "full-turn",
-      "description": "One prompt, one assistant answer with text only, complete usage and cost.",
+      "description": "One prompt, one answer, distinct request and response models, complete usage and cost.",
       "session_file": "2026-06-09T15-37-10-848Z_019ead07-cfbf-78d3-8b03-875769426583.jsonl",
       "files": {
         "2026-06-09T15-37-10-848Z_019ead07-cfbf-78d3-8b03-875769426583.jsonl": [
@@ -40,6 +40,7 @@
               "api": "anthropic-messages",
               "provider": "anthropic",
               "model": "claude-sonnet-4-pi",
+              "responseModel": "claude-sonnet-4-physical",
               "responseId": "resp-pi-1",
               "stopReason": "stop",
               "timestamp": 1781019441000,

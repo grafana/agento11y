@@ -57,7 +57,10 @@ They can override typed attributes. Callers must filter private attributes and s
 Do not use `no_tool_content` as a privacy boundary for skill descriptions, source URIs, or executable paths.
 The existing arguments/results behavior is unchanged, including the legacy content opt-in under `no_tool_content`.
 That opt-in does not bypass effective `metadata_only` or `full_with_metadata_spans`.
-Structural fields and exit codes add no metric labels.
+The five SDK clients retain `agento11y.tool.execution.kind` and nonblank `gen_ai.skill.name` on recognized tool-duration observations in every capture mode.
+No other skill or process fields become automatic metric dimensions. Standalone Go `otelgenai` automatic dimensions remain unchanged.
+Skill names remain under metric retention even in reduced modes; use stable, nonsensitive names.
+See [client metrics](./tool-call-vs-tool-execution.md#client-metrics) for applicability and cardinality.
 The local forwarder also strips the three private attributes from spans and span events in reduced modes.
 
 ### Experimental OTel generation export
@@ -81,8 +84,12 @@ Capture modes decide *which fields ship*, not what's inside them. To sanitize th
 
 `full_with_metadata_spans` only protects spans, subject to the Go/Python experimental OTel resolution caveat above. Generation content still flows through the SDK's generation export channel. Use `metadata_only` if you also want the ingest channel to receive no content.
 
-JS and Java completed-tool debug snapshots retain raw arguments, results, error text, and private skill and process fields even in reduced modes.
-Do not treat those snapshots as sanitized or safe to export.
+JS and Java completed debug history is disabled by default (`debugBufferSize: 0`).
+Opt in programmatically with `new Agento11yClient({ debugBufferSize: 64 })` in JS or `new Agento11yClientConfig().setDebugBufferSize(64)` in Java.
+The capacity limits each record type independently across all conversations. It does not change export queues, telemetry, or capture policy.
+When enabled, completed-tool snapshots retain raw arguments, results, error text, and private skill and process fields even in reduced modes.
+Do not treat those snapshots as sanitized or safe to export. Tool arguments and results still reference the original payload objects.
+The capacity counts records, not bytes; active recorders, pending exports, and caller-held snapshots can retain additional data.
 
 ## Defaults
 
@@ -131,6 +138,22 @@ For coding-agent plugins, the relevant env var is `AGENTO11Y_CONTENT_CAPTURE_MOD
 
 Unknown values fall back to `metadata_only`. The launchers, Pi, and OpenCode log a warning; Hermes falls back silently. A plugin can still export less than the SDK allows. For example, an adapter may drop a field if the host agent does not pass it through.
 
+### Pi observation limits
+
+The Pi plugin uses Pi 1.4.0 as its supported test baseline. Restart the process once after upgrading from the older dotenv loader.
+
+Capture modes do not restore fields that Pi cannot verify. In every mode, the plugin omits system prompts, offered-tool bodies, and uncorrelated request controls. `Generation.tools` contains name-only definitions from finalized assistant proposals, not the complete offered catalog.
+
+Incremental user input and prompt-derived titles come from observed request content with validated correspondence to finalized entries. Missing or ambiguous correspondence omits bodies; the plugin never falls back to raw restored history.
+
+Tool proposals, guard-stage input, and post-execution `tool_result.input` are separate observations. Transformed or uncertain proposal bodies are omitted rather than replaced with prepared arguments. Tool spans label permitted input as `tool_result.input`; tools can mutate arguments, so it is not an execution-entry snapshot. Only `full` includes permitted tool input and result bodies on Pi tool spans. The other modes follow the matrix above.
+
+Guards cover supported ordinary context and built-in summary preparation. Pi can substitute forced prompts after the ordinary hook, and later extensions can change requests. These hooks are not a final provider boundary. Postflight transforms do not guarantee protection of arbitrary historical replay after reload or resume.
+
+Numeric `pi.tool_usage.*` metadata remains separate from assistant token and cost totals. Pi already aggregates nested tool usage into finalized top-level results. One-hour cache-write fields are subsets of cache-write counts, not additional tokens. Reduced capture modes retain this numeric detail.
+
+Pi reports observed export failures through fixed warnings independently of debug logging. Diagnostics are filtered independently of capture mode. These signals do not detect every silent loss, establish recovery, or provide a durable spool. See [Pi capture and guard limits](../../plugins/pi/README.md#capture-and-attribution-limits) for attribution, lineage, and summary limits.
+
 ## Secret redaction in the plugins
 
 Capture modes choose which fields ship. Redaction scrubs the fields that do ship.
@@ -139,7 +162,7 @@ A plugin redacts known secret formats out of every content field it exports: use
 
 Set `AGENTO11Y_REDACT_INPUT_MESSAGES=false` in `~/.config/agento11y/config.env` or the environment to export prompt text without redaction. The flag covers the prompt only: every other field stays redacted, and message structure, roles, token counts, tags, and IDs do not change. An unrecognised value keeps redaction on, so a typo cannot disable it.
 
-For Hermes, set variables in Hermes's environment or its `.env`, which overrides shell exports. The plugin does not read the shared launcher's config file. Prompt redaction defaults to on; the same opt-out applies. Hermes also sanitizes tool-execution spans, which do not pass through the generation sanitizer. Payload limits and upstream request clipping can reduce content further. Hermes also redacts secret-pattern matches in hook-derived IDs and metadata. Custom `AGENTO11Y_TAGS` values are not sanitized.
+For Hermes, set variables in Hermes's environment or its `.env`, which overrides shell exports. The plugin does not read the shared launcher's config file. Prompt redaction defaults to on; the same opt-out applies. Hermes also sanitizes tool-execution spans itself. Payload limits and upstream request clipping can reduce content further. Hermes also redacts secret-pattern matches in hook-derived IDs and metadata. Custom `AGENTO11Y_TAGS` values are not sanitized.
 
 ### Strength per field
 
@@ -152,11 +175,14 @@ Every plugin applies the same tier per content field as the SDKs' generation san
 | User prompt | 1 + 2 | Where a human pastes a `.env` file, a config block or a command line. |
 | System prompt | 1 + 2 | Assembled content: tool definitions, environment dumps, pasted config. |
 | Tool arguments, tool results | 1 + 2 | Structured data, on the generation and on the span. |
+| Tool descriptions and encoded schemas (JS sanitizer only) | 1 + 2 | Copied definitions, including schema member names and key/value pairs. |
 | Assistant text, thinking | 1 | Model prose. |
 | Conversation title | 1 | The agent's own session title when it has one (Claude Code's, for example), else the first prompt, truncated. |
 | Error messages | 1 | Sentences. |
 
 Tier 2 on a prompt has a real cost: `sort key: name` is exported as `sort key: [REDACTED:env-secret-value]`, because the heuristic cannot tell that `key:` is part of a sentence. Turn prompt redaction off with `AGENTO11Y_REDACT_INPUT_MESSAGES=false` if the prompt text matters more than the coverage. Tier 2 is kept off prose for that reason, and a secret a model repeats in prose is still caught by tier 1 as long as it has a known format.
+
+The JS sanitizer validates tool schema JSON before and after redacting the complete encoded string. It omits invalid schema bodies instead of restoring raw content. It preserves executable host definitions and follows the configured email policy. Go, Python, and .NET sanitizers still lack equivalent tool-definition redaction. Pi omits offered-tool bodies regardless of this SDK capability.
 
 On a tool payload that decodes as JSON, the shared `agento11y` binary also redacts a value under a secret-looking key (`authorization`, `cookie`, `client_secret`), which the tier 2 key list does not cover. The SDK-based OpenCode, Pi, and Hermes sanitizers do not: they redact the encoded JSON as text, so they catch only the key names in the tier 2 patterns.
 

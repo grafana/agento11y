@@ -82,7 +82,12 @@ final class TestFixtures {
     }
 
     static Agento11yClient newClient(CapturingExporter exporter) {
+        return newClient(exporter, 0);
+    }
+
+    static Agento11yClient newClient(CapturingExporter exporter, int debugBufferSize) {
         Agento11yClientConfig config = new Agento11yClientConfig()
+                .setDebugBufferSize(debugBufferSize)
                 .setTracer(GlobalOpenTelemetry.getTracer("test"))
                 .setGenerationExporter(exporter)
                 .setGenerationExport(new GenerationExportConfig()

@@ -145,7 +145,7 @@ Launchers also set a few keys specific to one host, so this table is not the ful
 
 The [Hermes plugin](../../plugins/hermes/README.md) does not use the shared launcher. It emits no automatic `cwd` and no unconditional `git.branch`. The launcher built-ins above do not apply. Automatic `user`, `repo`, and `git.branch` client tags require the switches below. Explicit `AGENTO11Y_TAGS` values win over automatically resolved values.
 
-Hermes resolves the user from `AGENTO11Y_USER_ID`, then the operating-system account; it has no signed-in host-account lookup. Its process-wide client freezes automatic values at initialization, unlike a launcher invocation or a per-session client. Set the switches in Hermes's environment, not the shared launcher's config. `agento11y login` and `doctor` do not configure or diagnose Hermes.
+Hermes resolves the user from `AGENTO11Y_USER_ID` only; it has no signed-in host-account lookup. Its process-wide client freezes automatic values at initialization, unlike a launcher invocation or a per-session client. Set the switches in Hermes's environment, not the shared launcher's config. `agento11y login` and `doctor` do not configure or diagnose Hermes.
 
 ## Opt-in automatic tags (`AGENTO11Y_AUTO_CODING_AGENT_TAGS`)
 
@@ -166,7 +166,7 @@ AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=user,repo   # `all` is also accepted
 
 | Name | Tag key | Value |
 | --- | --- | --- |
-| `user` | `user` | `AGENTO11Y_USER_ID` if set, then the identity the host agent knows (the signed-in Claude Code, Codex, or Cursor account), then the operating-system account name. |
+| `user` | `user` | `AGENTO11Y_USER_ID` if set, then the identity the host agent knows (the signed-in Claude Code, Codex, or Cursor account). Without either, no `user` tag is attached, so an automatic `user` tag is the session's user ID cut to its first 128 characters. |
 | `repo` | `repo` | `owner/name` from the `origin` remote of the checkout. A nested namespace stays whole (`group/subgroup/name`). Without an origin remote, the name of the checkout directory. |
 | `branch` | `git.branch` | Branch checked out in the session's directory, or a short commit SHA on detached HEAD. |
 
@@ -192,11 +192,11 @@ Run `agento11y doctor` to see the enabled names, the variables that set them, an
 
 ### Local account identity sources
 
-Automatic user-tag precedence is: explicit `TAGS[user]`, explicit `USER_ID`, host account identity, operating-system username, then absent.
+Automatic user-tag precedence is: explicit `TAGS[user]`, explicit `USER_ID`, host account identity, then absent.
+Earlier versions fell back to the operating-system username. To keep a `user` label for agents without account identity, set `AGENTO11Y_USER_ID`, which sets both the tag and the conversation's user.
 Both `AGENTO11Y_*` variables and their legacy `SIGIL_*` aliases remain supported.
 `USER_ID` accepts arbitrary identifiers, including pseudonyms; it does not require an email address.
 An explicit `user` tag does not change conversation identity.
-The operating-system fallback supplies only the optional tag, never conversation identity.
 Disabling automatic tags does not disable account identity.
 
 | Plugin | Local source used | Limitation |

@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.10.0] - 2026-10-29
+
+### Features
+
+- **sdk**: add skill identity to tool execution metrics (#979)
+
+### Bug Fixes
+
+- **security/medium/java/gradle**: update dependency io.opentelemetry:opentelemetry-api to v1.67.0 [security] (#980)
+
+## [0.9.0] - 2026-10-28
+
+### Features
+
+- **sdk**: disable debug snapshots by default in JS and Java SDKs (#948)
+- **sdk**: trace skill loads, resource reads, and commands (#920)
+
 ## [0.8.0] - 2026-10-15
 
 ### Bug Fixes

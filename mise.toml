@@ -296,6 +296,11 @@ description = "Run Pi plugin tests"
 depends = ["deps", "build:ts:sdk-js"]
 run = "pnpm --filter @grafana/agento11y-pi run test"
 
+[tasks."test:ts:plugin-pi-native"]
+description = "Run isolated Pi file-loader integration tests"
+depends = ["deps", "build:ts:sdk-js"]
+run = "pnpm --filter @grafana/agento11y-pi run test:native"
+
 [tasks."test:ts:plugin-opencode"]
 description = "Run OpenCode plugin tests"
 depends = ["deps", "build:ts:sdk-js"]
@@ -731,6 +736,7 @@ mise run test:go:sdk-google-adk
 mise run test:go:plugin
 mise run test:ts:sdk-js
 mise run test:ts:plugin-pi
+mise run test:ts:plugin-pi-native
 mise run test:ts:plugin-opencode
 mise run test:ts:local-viewer
 mise run test:py:plugin-hermes

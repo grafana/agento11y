@@ -395,6 +395,203 @@ func TestReadWithTitles(t *testing.T) {
 	}
 }
 
+func TestReadCompleteRecords(t *testing.T) {
+	prev := maxLineBytes
+	maxLineBytes = 512
+	defer func() { maxLineBytes = prev }()
+
+	user := `{"type":"user","uuid":"u","message":{"content":"héllo"}}`
+	assistant := `{"type":"assistant","uuid":"a","message":{}}`
+	aiTitle := `{"type":"ai-title","aiTitle":"  first title  "}`
+	customTitle := `{"type":"custom-title","customTitle":" renamed "}`
+	oversized := `{"type":"user","uuid":"large","message":{"content":"` + strings.Repeat("x", 128*1024) + `"}}`
+	tests := []struct {
+		name         string
+		prefix       string
+		tail         string
+		offset       int64
+		wantUUIDs    string
+		historyUUIDs string
+		titles       Titles
+		historyTitle Titles
+	}{
+		{name: "empty"},
+		{name: "complete LF", prefix: user + "\n" + assistant + "\n", wantUUIDs: "ua", historyUUIDs: "ua"},
+		{name: "complete CRLF", prefix: user + "\r\n" + assistant + "\r\n", wantUUIDs: "ua", historyUUIDs: "ua"},
+		{name: "valid assistant tail", prefix: user + "\n", tail: assistant, wantUUIDs: "u", historyUUIDs: "ua"},
+		{name: "valid user tail", tail: user, historyUUIDs: "u"},
+		{name: "incomplete JSON tail", prefix: user + "\n", tail: `{"type":"assistant"`, wantUUIDs: "u", historyUUIDs: "u"},
+		{name: "invalid complete record and tail", prefix: "not json\n" + user + "\n", tail: "still not json", wantUUIDs: "u", historyUUIDs: "u"},
+		{name: "oversized tail", prefix: user + "\n", tail: oversized, wantUUIDs: "u", historyUUIDs: "u"},
+		{name: "oversized complete record", prefix: oversized + "\n" + assistant + "\n", wantUUIDs: "a", historyUUIDs: "a"},
+		{name: "only oversized tail", tail: oversized},
+		{name: "CR before missing LF", prefix: user + "\r\n", tail: assistant + "\r", wantUUIDs: "u", historyUUIDs: "ua"},
+		{
+			name: "title tail", prefix: aiTitle + "\n" + user + "\n", tail: customTitle,
+			wantUUIDs: "u", historyUUIDs: "u", titles: Titles{AI: "first title"},
+			historyTitle: Titles{AI: "first title", Custom: "renamed"},
+		},
+		{
+			name: "complete titles and metadata", prefix: aiTitle + "\r\n" + user + "\r\n" + customTitle + "\r\n" + `{"type":"system"}` + "\r\n",
+			wantUUIDs: "u", historyUUIDs: "u", titles: Titles{AI: "first title", Custom: "renamed"},
+			historyTitle: Titles{AI: "first title", Custom: "renamed"},
+		},
+		{
+			name: "nonzero cursor", prefix: aiTitle + "\r\n" + user + "\r\n", tail: assistant,
+			offset: int64(len(aiTitle) + 2), wantUUIDs: "u", historyUUIDs: "ua",
+		},
+		{name: "cursor at incomplete record", prefix: user + "\n", tail: assistant, offset: int64(len(user) + 1), historyUUIDs: "a"},
+		{name: "cursor past EOF", offset: 99},
+	}
+	readers := []struct {
+		name     string
+		complete bool
+		titles   bool
+		read     func(string, int64) ([]Line, int64, Titles, error)
+	}{
+		{name: "Read", read: func(path string, offset int64) ([]Line, int64, Titles, error) {
+			lines, pos, err := Read(path, offset)
+			return lines, pos, Titles{}, err
+		}},
+		{name: "ReadWithTitles", titles: true, read: ReadWithTitles},
+		{name: "ReadComplete", complete: true, read: func(path string, offset int64) ([]Line, int64, Titles, error) {
+			lines, pos, err := ReadComplete(path, offset)
+			return lines, pos, Titles{}, err
+		}},
+		{name: "ReadCompleteWithTitles", complete: true, titles: true, read: ReadCompleteWithTitles},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			content := tt.prefix + tt.tail
+			path := writeTempFile(t, content)
+			for _, reader := range readers {
+				t.Run(reader.name, func(t *testing.T) {
+					lines, pos, titles, err := reader.read(path, tt.offset)
+					if err != nil {
+						t.Fatal(err)
+					}
+					wantPos, wantUUIDs, wantTitles := int64(len(tt.prefix)), tt.wantUUIDs, tt.titles
+					if !reader.complete {
+						wantPos, wantUUIDs, wantTitles = int64(len(content)), tt.historyUUIDs, tt.historyTitle
+					}
+					if wantPos < tt.offset {
+						wantPos = tt.offset
+					}
+					if !reader.titles {
+						wantTitles = Titles{}
+					}
+					if pos != wantPos || titles != wantTitles {
+						t.Errorf("cursor/titles = %d/%+v, want %d/%+v", pos, titles, wantPos, wantTitles)
+					}
+					var uuids string
+					for _, line := range lines {
+						uuids += line.UUID
+						record := user
+						if line.UUID == "a" {
+							record = assistant
+						}
+						start := int64(strings.Index(content, record))
+						end := start + int64(len(record))
+						if strings.HasPrefix(content[end:], "\r") {
+							end++
+						}
+						if strings.HasPrefix(content[end:], "\n") {
+							end++
+						}
+						if line.StartOffset != start || line.EndOffset != end {
+							t.Errorf("%s range = [%d,%d), want [%d,%d)", line.UUID, line.StartOffset, line.EndOffset, start, end)
+						}
+					}
+					if uuids != wantUUIDs {
+						t.Errorf("UUIDs = %q, want %q", uuids, wantUUIDs)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestReadCompleteResumesTail(t *testing.T) {
+	prev := maxLineBytes
+	maxLineBytes = 512
+	defer func() { maxLineBytes = prev }()
+	prefix := `{"type":"user","uuid":"before"}` + "\n"
+	next := `{"type":"assistant","uuid":"after"}` + "\n"
+	tests := []struct {
+		name   string
+		tail   string
+		suffix string
+		uuids  string
+		titles Titles
+	}{
+		{name: "valid", tail: `{"type":"assistant","uuid":"tail"}`, suffix: "\n", uuids: "tailafter"},
+		{name: "partial JSON", tail: `{"type":"assistant","uuid":"tail"`, suffix: "}\n", uuids: "tailafter"},
+		{name: "CRLF split", tail: `{"type":"assistant","uuid":"tail"}` + "\r", suffix: "\n", uuids: "tailafter"},
+		{name: "oversized", tail: strings.Repeat("x", 128*1024), suffix: "\n", uuids: "after"},
+		{name: "invalid", tail: "not json", suffix: "\n", uuids: "after"},
+		{name: "title", tail: `{"type":"custom-title","customTitle":"tail title"}`, suffix: "\n", uuids: "after", titles: Titles{Custom: "tail title"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeTempFile(t, prefix+tt.tail)
+			lines, pos, titles, err := ReadCompleteWithTitles(path, 0)
+			if err != nil || pos != int64(len(prefix)) || len(lines) != 1 || titles != (Titles{}) {
+				t.Fatalf("initial read = %d lines, cursor %d, titles %+v, error %v", len(lines), pos, titles, err)
+			}
+			for range 2 {
+				lines, again, titles, err := ReadCompleteWithTitles(path, pos)
+				if err != nil || again != pos || len(lines) != 0 || titles != (Titles{}) {
+					t.Fatalf("repeated read = %d lines, cursor %d, titles %+v, error %v", len(lines), again, titles, err)
+				}
+			}
+			content := prefix + tt.tail + tt.suffix + next
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			lines, end, titles, err := ReadCompleteWithTitles(path, pos)
+			if err != nil || end != int64(len(content)) || titles != tt.titles {
+				t.Fatalf("resumed read cursor/titles/error = %d/%+v/%v", end, titles, err)
+			}
+			var uuids string
+			for _, line := range lines {
+				uuids += line.UUID
+			}
+			if uuids != tt.uuids {
+				t.Errorf("resumed UUIDs = %q, want %q", uuids, tt.uuids)
+			}
+		})
+	}
+}
+
+func TestLineOffsetsNotSerialized(t *testing.T) {
+	line := Line{StartOffset: 10, EndOffset: 20}
+	raw, err := json.Marshal(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.ToLower(string(raw)), "offset") {
+		t.Fatalf("offsets serialized: %s", raw)
+	}
+	if err := json.Unmarshal([]byte(`{"StartOffset":99,"EndOffset":100}`), &line); err != nil {
+		t.Fatal(err)
+	}
+	if line.StartOffset != 10 || line.EndOffset != 20 {
+		t.Fatalf("JSON changed offsets: %+v", line)
+	}
+}
+
+func TestReadCompleteMissingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing.jsonl")
+	lines, pos, titles, err := ReadCompleteWithTitles(path, 42)
+	if err == nil || len(lines) != 0 || pos != 42 || titles != (Titles{}) {
+		t.Fatalf("missing file = %v, %d, %+v, %v", lines, pos, titles, err)
+	}
+	_, pos, err = ReadComplete(path, 42)
+	if err == nil || pos != 42 {
+		t.Fatalf("missing file cursor/error = %d/%v", pos, err)
+	}
+}
+
 func writeTempFile(t *testing.T, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "transcript.jsonl")

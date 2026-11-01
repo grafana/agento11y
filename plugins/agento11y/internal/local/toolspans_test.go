@@ -59,14 +59,13 @@ func TestServerOTLPRejectsMarkedJSON(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s, dir := newTestServer(t)
 			span := ingestGenerationTraceSpan()
-			if tc.hexIDs {
-				// protojson encodes byte fields as base64. Substituting strings
-				// with hex digits mimics standard OTLP JSON on the wire.
-				span.TraceId, span.SpanId = nil, nil
-			}
 			body := marshalTraceRequest(t, toolTraceRequest(span), wire.ContentTypeJSON)
-			if tc.hexIDs {
-				body = bytes.Replace(body, []byte(`"name":"chat m1"`), []byte(`"traceId":"04040404040404040404040404040404","spanId":"0505050505050505","name":"chat m1"`), 1)
+			wantError := "require protobuf"
+			if !tc.hexIDs {
+				var err error
+				body, err = protojson.Marshal(toolTraceRequest(span))
+				require.NoError(t, err)
+				wantError = "decode OTLP traceId"
 			}
 			encoding := ""
 			if tc.gzip {
@@ -74,7 +73,7 @@ func TestServerOTLPRejectsMarkedJSON(t *testing.T) {
 			}
 			rr := postIngestTrace(s, body, wire.ContentTypeJSON, encoding)
 			require.Equal(t, http.StatusBadRequest, rr.Code, rr.Body.String())
-			assert.Contains(t, rr.Body.String(), "require protobuf")
+			assert.Contains(t, rr.Body.String(), wantError)
 			assertConversationDirEmpty(t, s.storage)
 			_, err := os.Stat(filepath.Join(dir, ToolSpansDir))
 			assert.ErrorIs(t, err, os.ErrNotExist)
@@ -306,11 +305,14 @@ func TestServerProjectsToolSpans(t *testing.T) {
 		name        string
 		contentType string
 		gzip        bool
+		fixture     bool
 	}{
 		{name: "protobuf", contentType: wire.ContentTypeProto},
 		{name: "protobuf gzip", contentType: wire.ContentTypeProto, gzip: true},
-		{name: "proto JSON", contentType: wire.ContentTypeJSON},
-		{name: "proto JSON gzip", contentType: wire.ContentTypeJSON, gzip: true},
+		{name: "OTLP JSON", contentType: wire.ContentTypeJSON},
+		{name: "OTLP JSON gzip", contentType: wire.ContentTypeJSON, gzip: true},
+		{name: "hex JSON fixture", contentType: wire.ContentTypeJSON, fixture: true},
+		{name: "hex JSON fixture gzip", contentType: wire.ContentTypeJSON, fixture: true, gzip: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, dir := newTestServer(t)
@@ -318,6 +320,11 @@ func TestServerProjectsToolSpans(t *testing.T) {
 			span.Attributes = append(span.Attributes, intKeyValue("process.exit.code", 0))
 			request := toolTraceRequest(span)
 			body := marshalTraceRequest(t, request, tc.contentType)
+			if tc.fixture {
+				var err error
+				body, err = os.ReadFile("testdata/otlp-tool-trace.json")
+				require.NoError(t, err)
+			}
 			encoding := ""
 			if tc.gzip {
 				body = gzipBytes(t, body)
@@ -355,6 +362,17 @@ func TestServerProjectsToolSpans(t *testing.T) {
 			assert.Equal(t, time.Unix(10, 0).UTC(), got.StartedAt)
 			assert.Equal(t, time.Unix(12, 0).UTC(), got.CompletedAt)
 
+			metrics := httptest.NewRecorder()
+			srv.ServeHTTP(metrics, newLocalRequest(http.MethodGet, "/api/v1/metrics/skills-tools", nil))
+			require.Equal(t, http.StatusOK, metrics.Code)
+			var analytics SkillsToolsMetricsResponse
+			require.NoError(t, json.Unmarshal(metrics.Body.Bytes(), &analytics))
+			assert.Equal(t, SkillAnalyticsTotals{Calls: 1, Failures: 1, Skills: 1, DurationSamples: 1}, analytics.Skills.Totals)
+			require.Len(t, analytics.Skills.Rows, 1)
+			assert.Equal(t, "workflow-toolkit:review", analytics.Skills.Rows[0].Name)
+			require.NotNil(t, analytics.Skills.Rows[0].P50DurationSeconds)
+			assert.Equal(t, 2.0, *analytics.Skills.Rows[0].P50DurationSeconds)
+
 			for _, secret := range []string{"secret arguments", "secret result", "secret description", "secret exception", "secret status", "/Users/private/source.go", "secret skill description", "https://private.example/skill", "/private/bin/python3"} {
 				assert.NotContains(t, lines[0], secret)
 			}
@@ -390,6 +408,29 @@ func TestProjectToolSpansSkillNamespaces(t *testing.T) {
 				require.NoError(t, err)
 				require.Len(t, records, 1)
 				assert.Equal(t, tc.want, records[0].SkillName)
+
+				srv, dir := newTestServer(t)
+				body := marshalTraceRequest(t, toolTraceRequest(span), contentType)
+				for range 2 {
+					rr := postIngestTrace(srv, body, contentType, "")
+					require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+				}
+				restarted, err := NewStorage(dir)
+				require.NoError(t, err)
+				for _, reader := range []*Storage{srv.storage, restarted} {
+					got, err := reader.SkillsToolsMetrics(ToolAnalyticsOptions{})
+					require.NoError(t, err)
+					assert.Equal(t, ToolAnalyticsTotals{Calls: 1, Failures: 1, Tools: 1, DurationSamples: 1}, got.Tools.Totals)
+					if tc.want == "" {
+						assert.Zero(t, got.Skills.Totals.Calls)
+						assert.Empty(t, got.Skills.Rows)
+						continue
+					}
+					assert.Equal(t, SkillAnalyticsTotals{Calls: 1, Failures: 1, Skills: 1, DurationSamples: 1}, got.Skills.Totals)
+					require.Len(t, got.Skills.Rows, 1)
+					assert.Equal(t, tc.want, got.Skills.Rows[0].Name)
+					assert.Equal(t, ToolAnalyticsCoverage{ProjectedSpans: 1}, got.Skills.Coverage)
+				}
 			})
 		}
 	}
@@ -510,11 +551,18 @@ func TestProjectToolSpansRejectsMalformedAndOversizedGzip(t *testing.T) {
 
 func TestServerRejectsUndecodableTracesBeforeForwarding(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		body   func(*testing.T) []byte
-		status int
+		name        string
+		body        func(*testing.T) []byte
+		contentType string
+		status      int
 	}{
 		{name: "malformed", body: func(*testing.T) []byte { return []byte("not protobuf") }, status: http.StatusBadRequest},
+		{name: "malformed JSON", contentType: wire.ContentTypeJSON, body: func(*testing.T) []byte { return []byte(`{"resourceSpans":`) }, status: http.StatusBadRequest},
+		{name: "invalid JSON ID", contentType: wire.ContentTypeJSON, body: func(t *testing.T) []byte {
+			body, err := os.ReadFile("testdata/otlp-tool-trace.json")
+			require.NoError(t, err)
+			return bytes.Replace(body, []byte("01010101010101010101010101010101"), []byte("invalid"), 1)
+		}, status: http.StatusBadRequest},
 		{name: "projection size limit", body: func(t *testing.T) []byte {
 			return gzipBytes(t, bytes.Repeat([]byte{0}, maxOTLPTraceBodyBytes+1))
 		}, status: http.StatusRequestEntityTooLarge},
@@ -536,7 +584,11 @@ func TestServerRejectsUndecodableTracesBeforeForwarding(t *testing.T) {
 			})
 			body := tc.body(t)
 			req := newLocalRequest(http.MethodPost, otlpTracesPath, bytes.NewReader(body))
-			req.Header.Set("Content-Type", wire.ContentTypeProto)
+			contentType := tc.contentType
+			if contentType == "" {
+				contentType = wire.ContentTypeProto
+			}
+			req.Header.Set("Content-Type", contentType)
 			if tc.name == "projection size limit" {
 				req.Header.Set("Content-Encoding", "gzip")
 			}
@@ -608,7 +660,7 @@ func TestToolSpanCacheUsesLastDeliveryAndPreservesReusedCallIDs(t *testing.T) {
 func TestToolSpansDedupeGloballyAcrossConversationChangesAndRestart(t *testing.T) {
 	storage := newStorage(t)
 	first := toolSpanRecord{
-		TraceID: "same-trace", SpanID: "same-span", ConversationID: "conv-old", ToolName: "Read",
+		TraceID: "same-trace", SpanID: "same-span", ConversationID: "conv-old", ToolName: "Read", SkillName: "old:Skill",
 		StartedAt: time.Unix(10, 0).UTC(),
 	}
 	changed, err := storage.appendToolSpans([]toolSpanRecord{first})
@@ -620,6 +672,7 @@ func TestToolSpansDedupeGloballyAcrossConversationChangesAndRestart(t *testing.T
 	last := first
 	last.ConversationID = "conv-new"
 	last.ToolName = "Bash"
+	last.SkillName = "new:Skill"
 	changed, err = storage.appendToolSpans([]toolSpanRecord{first, last})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"conv-new"}, changed, "the final batch occurrence determines its persisted conversation")
@@ -638,8 +691,10 @@ func TestToolSpansDedupeGloballyAcrossConversationChangesAndRestart(t *testing.T
 	require.Len(t, observations, 2)
 	assert.Equal(t, "conv-new", observations[0].ConversationID)
 	assert.Equal(t, "Bash", observations[0].Name)
+	assert.Equal(t, "new:Skill", observations[0].SkillName)
 	assert.Equal(t, "conv-old", observations[1].ConversationID)
 	assert.Equal(t, "Write", observations[1].Name)
+	assert.Empty(t, observations[1].SkillName)
 }
 
 func TestAppendToolSpansEmptyIsNoop(t *testing.T) {
@@ -777,7 +832,7 @@ func marshalTraceRequest(t *testing.T, request *coltracepb.ExportTraceServiceReq
 	var body []byte
 	var err error
 	if strings.Contains(contentType, "json") {
-		body, err = protojson.Marshal(request)
+		body, err = marshalTraceJSON(request)
 	} else {
 		body, err = proto.Marshal(request)
 	}

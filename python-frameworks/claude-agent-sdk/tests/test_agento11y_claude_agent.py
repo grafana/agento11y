@@ -7,7 +7,15 @@ from collections.abc import AsyncIterator
 from datetime import timedelta
 
 import pytest
-from agento11y import Client, ClientConfig, ContentCaptureMode, GenerationExportConfig, HookEvaluateResponse
+from agento11y import (
+    Client,
+    ClientConfig,
+    ContentCaptureMode,
+    GenerationExportConfig,
+    HookEvaluateResponse,
+    HookInput,
+    user_text_message,
+)
 from agento11y.models import ExportGenerationResult, ExportGenerationsResponse, PartKind
 from agento11y_claude_agent import (
     Agento11yClaudeAgentHandler,
@@ -1037,5 +1045,393 @@ async def test_open_tool_teardown_continues_after_recorder_failure(caplog) -> No
         client.flush()
         assert [len(request.generations) for request in exporter.requests] == [1]
         assert "first recorder end failed" in caplog.text
+    finally:
+        client.shutdown()
+
+
+_PROMPT_WITH_EMAIL = "Email my order confirmation to jane.doe@example.com"
+_REDACTED_PROMPT = "Email my order confirmation to [REDACTED]"
+
+
+def _redacting_hook(_request) -> HookEvaluateResponse:
+    return HookEvaluateResponse(
+        action="allow",
+        rule_id="redact_emails",
+        transformed_input=HookInput(messages=[user_text_message(_REDACTED_PROMPT)]),
+    )
+
+
+def _user_prompt_submit_input(prompt: str) -> dict[str, object]:
+    return {
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "session-42",
+        "transcript_path": "",
+        "cwd": "",
+        "prompt": prompt,
+    }
+
+
+def _recorded_input_text(generation) -> list[str]:
+    return [part.text for message in generation.input for part in message.parts]
+
+
+# A UserPromptSubmit hook can't rewrite the prompt, so the model still gets the
+# original. The recorded generation must not keep what the redact guard removed.
+@pytest.mark.asyncio
+async def test_agento11y_query_records_guard_redacted_prompt(monkeypatch) -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    monkeypatch.setattr(client, "evaluate_hook", _redacting_hook)
+
+    async def fake_query(*, options, **_kwargs) -> AsyncIterator[object]:
+        hook = options.hooks["UserPromptSubmit"][0].hooks[0]
+        await hook(_user_prompt_submit_input(_PROMPT_WITH_EMAIL), None, {"signal": None})
+        yield UserMessage(content=_PROMPT_WITH_EMAIL)
+        yield AssistantMessage(content=[TextBlock("Done.")], model="claude-sonnet-4-5", session_id="session-42")
+        yield _success_result()
+
+    try:
+        _ = [
+            message
+            async for message in agento11y_query(
+                prompt=_PROMPT_WITH_EMAIL,
+                client=client,
+                options=ClaudeAgentOptions(model="claude-sonnet-4-5"),
+                conversation_id="conv-42",
+                _query_fn=fake_query,
+            )
+        ]
+
+        client.flush()
+        generation = exporter.requests[0].generations[0]
+        assert _recorded_input_text(generation) == [_REDACTED_PROMPT]
+    finally:
+        client.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_claude_agent_handler_redacts_prompt_recorded_from_stream(monkeypatch) -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    monkeypatch.setattr(client, "evaluate_hook", _redacting_hook)
+
+    async def streamed_prompt() -> AsyncIterator[dict[str, object]]:
+        yield {"type": "user", "message": {"role": "user", "content": _PROMPT_WITH_EMAIL}}
+
+    try:
+        handler = Agento11yClaudeAgentHandler(client=client, conversation_id="conv-42")
+        options = handler.instrument_options(ClaudeAgentOptions(model="claude-sonnet-4-5"))
+        # A streamed prompt isn't a string, so start() records nothing and the
+        # prompt arrives as a UserMessage after the hook ran.
+        await handler.start(prompt=streamed_prompt(), options=options)
+        hook = options.hooks["UserPromptSubmit"][0].hooks[0]
+        await hook(_user_prompt_submit_input(_PROMPT_WITH_EMAIL), None, {"signal": None})
+        handler.record_message(UserMessage(content=_PROMPT_WITH_EMAIL))
+        handler.record_message(_success_result())
+
+        client.flush()
+        generation = exporter.requests[0].generations[0]
+        assert _recorded_input_text(generation) == [_REDACTED_PROMPT]
+    finally:
+        client.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_claude_agent_guard_denial_records_redacted_prompt(monkeypatch) -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+
+    def deny_and_redact(_request) -> HookEvaluateResponse:
+        return HookEvaluateResponse(
+            action="deny",
+            rule_id="redact_then_block",
+            reason="blocked",
+            transformed_input=HookInput(messages=[user_text_message(_REDACTED_PROMPT)]),
+        )
+
+    monkeypatch.setattr(client, "evaluate_hook", deny_and_redact)
+
+    try:
+        handler = Agento11yClaudeAgentHandler(client=client, conversation_id="conv-42")
+        options = handler.instrument_options(ClaudeAgentOptions(model="claude-sonnet-4-5"))
+        await handler.start(prompt=_PROMPT_WITH_EMAIL, options=options)
+        hook = options.hooks["UserPromptSubmit"][0].hooks[0]
+        output = await hook(_user_prompt_submit_input(_PROMPT_WITH_EMAIL), None, {"signal": None})
+        handler.finish()
+
+        assert output["continue_"] is False
+        client.flush()
+        generation = exporter.requests[0].generations[0]
+        assert _recorded_input_text(generation) == [_REDACTED_PROMPT]
+    finally:
+        client.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_claude_agent_handler_keeps_prompt_without_redaction(monkeypatch) -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    monkeypatch.setattr(client, "evaluate_hook", lambda _request: HookEvaluateResponse(action="allow"))
+
+    try:
+        handler = Agento11yClaudeAgentHandler(client=client, conversation_id="conv-42")
+        options = handler.instrument_options(ClaudeAgentOptions(model="claude-sonnet-4-5"))
+        await handler.start(prompt=_PROMPT_WITH_EMAIL, options=options)
+        hook = options.hooks["UserPromptSubmit"][0].hooks[0]
+        await hook(_user_prompt_submit_input(_PROMPT_WITH_EMAIL), None, {"signal": None})
+        handler.finish()
+
+        client.flush()
+        generation = exporter.requests[0].generations[0]
+        assert _recorded_input_text(generation) == [_PROMPT_WITH_EMAIL]
+    finally:
+        client.shutdown()
+
+
+# Claude can replay the prompt split into several text blocks. Each block is
+# redacted, and the message keeps every block.
+@pytest.mark.asyncio
+async def test_claude_agent_handler_redacts_multipart_replayed_prompt(monkeypatch) -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    monkeypatch.setattr(client, "evaluate_hook", _redacting_hook)
+
+    async def streamed_prompt() -> AsyncIterator[dict[str, object]]:
+        yield {"type": "user", "message": {"role": "user", "content": _PROMPT_WITH_EMAIL}}
+
+    try:
+        handler = Agento11yClaudeAgentHandler(client=client, conversation_id="conv-42")
+        options = handler.instrument_options(ClaudeAgentOptions(model="claude-sonnet-4-5"))
+        await handler.start(prompt=streamed_prompt(), options=options)
+        hook = options.hooks["UserPromptSubmit"][0].hooks[0]
+        await hook(_user_prompt_submit_input(_PROMPT_WITH_EMAIL), None, {"signal": None})
+        handler.record_message(
+            UserMessage(content=[TextBlock("Email my order confirmation"), TextBlock("to jane.doe@example.com")])
+        )
+        handler.record_message(_success_result())
+
+        client.flush()
+        generation = exporter.requests[0].generations[0]
+        assert _recorded_input_text(generation) == ["Email my order confirmation", "to [REDACTED]"]
+    finally:
+        client.shutdown()
+
+
+# A later run of the same session can replay an earlier prompt, and the
+# redaction has to follow it. A new session on the same handler starts clean.
+@pytest.mark.asyncio
+async def test_claude_agent_handler_redacts_prompt_replayed_into_a_later_run(monkeypatch) -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    monkeypatch.setattr(client, "evaluate_hook", _redacting_hook)
+
+    async def streamed_prompt() -> AsyncIterator[dict[str, object]]:
+        yield {"type": "user", "message": {"role": "user", "content": "Continue."}}
+
+    async def run(options: ClaudeAgentOptions, session_id: str, *, prompt: object) -> None:
+        options = handler.instrument_options(options)
+        await handler.start(prompt=prompt, options=options)
+        if prompt == _PROMPT_WITH_EMAIL:
+            hook = options.hooks["UserPromptSubmit"][0].hooks[0]
+            await hook(_user_prompt_submit_input(_PROMPT_WITH_EMAIL), None, {"signal": None})
+        else:
+            handler.record_message(UserMessage(content=_PROMPT_WITH_EMAIL))
+        handler.record_message(
+            AssistantMessage(content=[TextBlock("Done.")], model="claude-sonnet-4-5", session_id=session_id)
+        )
+        handler.finish()
+
+    try:
+        handler = Agento11yClaudeAgentHandler(client=client)
+        await run(ClaudeAgentOptions(model="claude-sonnet-4-5"), "session-42", prompt=_PROMPT_WITH_EMAIL)
+        await run(
+            ClaudeAgentOptions(model="claude-sonnet-4-5", resume="session-42"), "session-42", prompt=streamed_prompt()
+        )
+        await run(ClaudeAgentOptions(model="claude-sonnet-4-5"), "session-99", prompt=streamed_prompt())
+
+        client.flush()
+        generations = [generation for request in exporter.requests for generation in request.generations]
+        assert [_recorded_input_text(generation) for generation in generations] == [
+            [_REDACTED_PROMPT],
+            [_REDACTED_PROMPT],
+            [_PROMPT_WITH_EMAIL],
+        ]
+    finally:
+        client.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_claude_agent_handler_records_prompt_redacted_to_nothing(monkeypatch) -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    monkeypatch.setattr(
+        client,
+        "evaluate_hook",
+        lambda _request: HookEvaluateResponse(
+            action="allow",
+            rule_id="redact_everything",
+            transformed_input=HookInput(messages=[user_text_message("")]),
+        ),
+    )
+
+    try:
+        handler = Agento11yClaudeAgentHandler(client=client, conversation_id="conv-42")
+        options = handler.instrument_options(ClaudeAgentOptions(model="claude-sonnet-4-5"))
+        await handler.start(prompt=_PROMPT_WITH_EMAIL, options=options)
+        hook = options.hooks["UserPromptSubmit"][0].hooks[0]
+        await hook(_user_prompt_submit_input(_PROMPT_WITH_EMAIL), None, {"signal": None})
+        handler.finish()
+
+        client.flush()
+        generation = exporter.requests[0].generations[0]
+        assert _recorded_input_text(generation) == ["[REDACTED]"]
+    finally:
+        client.shutdown()
+
+
+# Agento11yClaudeSDKClient makes a new handler for every query, so the redaction
+# has to outlive the handler for a later query that replays the prompt.
+@pytest.mark.asyncio
+async def test_agento11y_claude_sdk_client_redacts_prompt_replayed_into_a_later_query(monkeypatch) -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    monkeypatch.setattr(client, "evaluate_hook", _redacting_hook)
+    claude = _FakeClaudeSDKClient()
+    claude.responses.extend(
+        [
+            [
+                AssistantMessage(content=[TextBlock("Sent.")], model="claude-sonnet-4-5", session_id="session-42"),
+                _success_result(),
+            ],
+            [
+                UserMessage(content=_PROMPT_WITH_EMAIL),
+                AssistantMessage(content=[TextBlock("Done.")], model="claude-sonnet-4-5", session_id="session-42"),
+                _success_result(),
+            ],
+        ]
+    )
+
+    try:
+        async with Agento11yClaudeSDKClient(
+            client=client,
+            _claude_client=claude,  # type: ignore[arg-type]
+            options=ClaudeAgentOptions(model="claude-sonnet-4-5"),
+            conversation_id="conv-client",
+        ) as agento11y_claude:
+            await agento11y_claude.query(_PROMPT_WITH_EMAIL)
+            hook = agento11y_claude._options.hooks["UserPromptSubmit"][-1].hooks[0]
+            await hook(_user_prompt_submit_input(_PROMPT_WITH_EMAIL), None, {"signal": None})
+            _ = [message async for message in agento11y_claude.receive_response()]
+            await agento11y_claude.query("Continue.")
+            _ = [message async for message in agento11y_claude.receive_response()]
+
+        client.flush()
+        generations = [generation for request in exporter.requests for generation in request.generations]
+        assert [_recorded_input_text(generation) for generation in generations] == [
+            [_REDACTED_PROMPT],
+            ["Continue.", _REDACTED_PROMPT],
+        ]
+    finally:
+        client.shutdown()
+
+
+# When the guard redacts the whole prompt, or Claude splits a value across text
+# blocks, no single block holds what was removed. Every block it spans is
+# redacted, and blocks it doesn't touch are kept.
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("transformed", "blocks", "want"),
+    [
+        pytest.param(
+            "",
+            ["Email my order confirmation", "to jane.doe@example.com"],
+            ["[REDACTED]", "[REDACTED]"],
+            id="whole-prompt-redaction-replayed-in-blocks",
+        ),
+        pytest.param(
+            _REDACTED_PROMPT,
+            ["Email my order confirmation to jane.doe@", "example.com", "Thanks."],
+            ["[REDACTED]", "[REDACTED]", "Thanks."],
+            id="value-split-across-blocks",
+        ),
+    ],
+)
+async def test_claude_agent_handler_redacts_text_split_across_blocks(monkeypatch, transformed, blocks, want) -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    monkeypatch.setattr(
+        client,
+        "evaluate_hook",
+        lambda _request: HookEvaluateResponse(
+            action="allow",
+            rule_id="redact_emails",
+            transformed_input=HookInput(messages=[user_text_message(transformed)]),
+        ),
+    )
+
+    async def streamed_prompt() -> AsyncIterator[dict[str, object]]:
+        yield {"type": "user", "message": {"role": "user", "content": _PROMPT_WITH_EMAIL}}
+
+    try:
+        handler = Agento11yClaudeAgentHandler(client=client, conversation_id="conv-42")
+        options = handler.instrument_options(ClaudeAgentOptions(model="claude-sonnet-4-5"))
+        await handler.start(prompt=streamed_prompt(), options=options)
+        hook = options.hooks["UserPromptSubmit"][0].hooks[0]
+        await hook(_user_prompt_submit_input(_PROMPT_WITH_EMAIL), None, {"signal": None})
+        handler.record_message(UserMessage(content=[TextBlock(block) for block in blocks]))
+        handler.record_message(_success_result())
+
+        client.flush()
+        generation = exporter.requests[0].generations[0]
+        assert _recorded_input_text(generation) == want
+    finally:
+        client.shutdown()
+
+
+# A shorter value the guard removed earlier can sit inside one piece of a longer
+# value Claude split across blocks. Redacting it first must not hide the rest.
+@pytest.mark.asyncio
+async def test_claude_agent_handler_redacts_split_value_containing_a_shorter_one(monkeypatch) -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    redacted = {
+        "Ask jane about the order": "Ask [REDACTED] about the order",
+        _PROMPT_WITH_EMAIL: _REDACTED_PROMPT,
+    }
+
+    def redact(request) -> HookEvaluateResponse:
+        prompt = request.input.messages[0].parts[0].text
+        return HookEvaluateResponse(
+            action="allow",
+            rule_id="redact_names_and_emails",
+            transformed_input=HookInput(messages=[user_text_message(redacted[prompt])]),
+        )
+
+    monkeypatch.setattr(client, "evaluate_hook", redact)
+
+    async def streamed_prompt() -> AsyncIterator[dict[str, object]]:
+        yield {"type": "user", "message": {"role": "user", "content": _PROMPT_WITH_EMAIL}}
+
+    try:
+        handler = Agento11yClaudeAgentHandler(client=client, conversation_id="conv-42")
+        options = handler.instrument_options(ClaudeAgentOptions(model="claude-sonnet-4-5"))
+        await handler.start(prompt=streamed_prompt(), options=options)
+        hook = options.hooks["UserPromptSubmit"][0].hooks[0]
+        for prompt in redacted:
+            await hook(_user_prompt_submit_input(prompt), None, {"signal": None})
+        handler.record_message(
+            UserMessage(
+                content=[
+                    TextBlock("Email my order confirmation to jane.doe@"),
+                    TextBlock("example.com"),
+                    TextBlock("Ask jane later."),
+                ]
+            )
+        )
+        handler.record_message(_success_result())
+
+        client.flush()
+        generation = exporter.requests[0].generations[0]
+        assert _recorded_input_text(generation) == ["[REDACTED]", "[REDACTED]", "Ask [REDACTED] later."]
     finally:
         client.shutdown()

@@ -191,12 +191,15 @@ func NewTargetExporter(ctx context.Context, target Target, logger *log.Logger) (
 	}
 	if providers != nil {
 		cfg.Tracer = providers.Tracer("agento11y.history")
-		cfg.Meter = providers.Meter("agento11y.history")
 	}
 	if err := emit.ConfigureGenerationTransport(&cfg, providers, t.Protocol); err != nil {
 		return nil, nil, errors.Join(err, shutdownProviders(ctx))
 	}
-	client := agento11y.NewClient(cfg)
+	// Spans and generations carry their own timestamps, but a metric point is
+	// stamped when it is exported, so recording an imported turn would count
+	// weeks of history as usage on the import day. An import records no
+	// metrics; dashboards read imported history from its generations.
+	client := agento11y.NewClient(emit.WithoutMetrics(cfg))
 	cleanup := func(ctx context.Context) error {
 		// A cancelled import must still drain the client before its providers.
 		// Each stage gets a fresh deadline, so one cannot exhaust the other.

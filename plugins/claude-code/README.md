@@ -91,11 +91,13 @@ tail -f ~/.local/state/agento11y/logs/agento11y.log
 
 Common culprits: `agento11y --version` doesn't work (binary not on `PATH`), a missing token, or a token without the `sigil:write` scope.
 
-Live capture recognizes only the native `Skill` tool's `skill` input field. It marks the existing tool-execution span with `gen_ai.skill.name`, including failed attempts. Only calls present in the settled live transcript can be recognized. Reading `SKILL.md` with `Read` never qualifies. A recognized attempt does not prove that instructions loaded successfully or guided later actions.
+Live capture recognizes only the native `Skill` tool's `skill` input field in the settled live transcript, including failed attempts. It marks existing tool-execution spans with `gen_ai.skill.name`. The requested identifier keeps its case and namespace; only surrounding whitespace is trimmed. It is not rewritten to a resolved directory basename. Reading `SKILL.md` with `Read` never qualifies.
 
-Validated skill names remain in reduced capture modes, including `metadata_only` and `full_with_metadata_spans`. Detection adds no descriptions, paths, or URIs, changes no payload policy, and adds no metric labels. Names that look like secrets are omitted.
+Recognition does not prove successful loading or explain later actions. It excludes imported history, direct `/skill` prompt insertion, resource reads, scripts, and attribution of later activity. Validated names remain in reduced capture modes; secret-like names are omitted. Recognition adds no descriptions, paths, or URIs and changes no payload policy. Recognized attempts, including failures, also add `gen_ai.skill.name` and `agento11y.tool.execution.kind="load_skill"` to the existing `gen_ai.client.operation.duration` histogram. Names remain under metric retention even in reduced modes; use stable, nonsensitive names.
 
-Skill visibility requires retained tool and generation spans in Tempo plus deployed Sigil consumer support. A conversation alone is insufficient. Detection excludes history import, direct `/skill` prompt insertion, resource reads, scripts, and attribution of later activity.
+Tool observations require a matching transcript result and original call/result timestamps. Call-only hooks emit no completed observation; late results emit without replaying generations. These intervals can include approval or wait time. Missing timestamps suppress completion; reversed timestamps clamp to zero.
+
+For local capture, open **Analytics > Skills**. See [Local skill analytics](../agento11y/README.md#local-skill-analytics) for counts, timing coverage, and session drilldowns. Local recording and analytics need no Tempo. Cloud skill trace visibility requires retained tool and generation spans in Tempo plus deployed Sigil consumer support; a Cloud conversation alone is insufficient.
 
 ## Export plugin evals to Experiments
 

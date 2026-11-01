@@ -329,6 +329,7 @@ test('HTTP transport roundtrip preserves full generation payload shape', async (
       initialBackoffMs: 1,
       maxBackoffMs: 1,
     },
+    debugBufferSize: 20,
   });
 
   const totalSeeds = 20;
@@ -377,6 +378,7 @@ test('gRPC transport roundtrip preserves full generation payload shape', async (
       initialBackoffMs: 1,
       maxBackoffMs: 1,
     },
+    debugBufferSize: 20,
   });
 
   try {

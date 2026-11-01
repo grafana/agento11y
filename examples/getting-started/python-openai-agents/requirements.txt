@@ -1,0 +1,10 @@
+python-dotenv>=1.2.2
+opentelemetry-api>=1.0.0
+opentelemetry-sdk>=1.0.0
+opentelemetry-exporter-otlp-proto-http>=1.0.0
+# Pin the beta instrumentation pair to the APIs used in main_otel.py.
+opentelemetry-instrumentation-genai-openai-agents==1.3b0
+opentelemetry-instrumentation-genai-openai==1.3b0
+openai-agents>=0.9.0
+-e ../../../python
+-e ../../../python-frameworks/openai-agents
