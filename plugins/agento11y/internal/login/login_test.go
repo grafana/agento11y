@@ -3025,6 +3025,42 @@ func TestRun_ExplicitValues(t *testing.T) {
 			},
 		},
 		{
+			// The header authenticates to the collector it was saved for, so
+			// a run that sends OTLP somewhere else drops it like a new token.
+			name: "a new OTLP endpoint drops the saved OTLP headers",
+			file: existing + `OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic b2xk"` + "\n",
+			opts: RunOpts{
+				Endpoint:     "https://old.example",
+				TenantID:     "111",
+				Token:        "old-token",
+				OTLPEndpoint: "https://collector.example/otlp",
+			},
+			want: map[string]string{"OTEL_EXPORTER_OTLP_HEADERS": ""},
+		},
+		{
+			name: "a new endpoint drops the saved OTLP headers",
+			file: existing + `OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic b2xk"` + "\n",
+			opts: RunOpts{
+				Endpoint: "https://new.example",
+				TenantID: "111",
+				Token:    "old-token",
+			},
+			want: map[string]string{"OTEL_EXPORTER_OTLP_HEADERS": ""},
+		},
+		{
+			// The file's header belongs to the file's token, whatever the
+			// shell exports.
+			name: "a new token already in the shell drops the saved OTLP headers",
+			file: existing + `OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic b2xk"` + "\n",
+			env:  map[string]string{"AGENTO11Y_AUTH_TOKEN": "new-token"},
+			opts: RunOpts{
+				Endpoint: "https://old.example",
+				TenantID: "111",
+				Token:    "new-token",
+			},
+			want: map[string]string{"OTEL_EXPORTER_OTLP_HEADERS": ""},
+		},
+		{
 			name:    "missing token still needs a terminal",
 			file:    "",
 			opts:    RunOpts{Endpoint: "https://new.example", TenantID: "222"},
@@ -3512,6 +3548,13 @@ func TestRun_Block(t *testing.T) {
 			name:    "block with only a token",
 			opts:    RunOpts{Block: "AGENTO11Y_AUTH_TOKEN=glc_block\n"},
 			wantErr: "does not set AGENTO11Y_ENDPOINT and AGENTO11Y_AUTH_TENANT_ID; add them to the block or pass --endpoint and --tenant",
+		},
+		{
+			// Every block value is saved as written, so an unresolved
+			// reference anywhere would be sent as the secret itself.
+			name:    "a 1Password reference in a saved setting is refused",
+			opts:    RunOpts{Block: blockCreds + "AGENTO11Y_OTEL_AUTH_TOKEN=op://Team/agento11y/otlp\n"},
+			wantErr: "AGENTO11Y_OTEL_AUTH_TOKEN is a 1Password reference",
 		},
 		{
 			name:    "a 1Password reference is refused",

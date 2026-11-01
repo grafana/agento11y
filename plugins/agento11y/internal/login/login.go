@@ -502,20 +502,22 @@ func Run(ctx context.Context, opts RunOpts) (Result, error) {
 	v.token = strings.TrimSpace(v.token)
 	v.otelEndpoint = strings.TrimSpace(v.otelEndpoint)
 
+	markCredentialCopies(&v, saved)
+
 	// A saved OTEL_EXPORTER_OTLP_HEADERS carries its own copy of the OTLP
 	// credential and no field asks for it, so a new token would leave OTLP
 	// authenticating with the old one and login would still report success:
 	// otel.ExporterHeaders prefers explicit headers that carry an Authorization
-	// entry, and the credential check only probes the export endpoint. Drop it,
-	// so the exporter builds Basic auth from the tenant ID and the new token.
-	if !v.otlpHeadersPasted && v.otlpHeaders != "" && v.token != existingToken {
+	// entry, and the credential check only probes the export endpoint. A new
+	// endpoint would send the old credential to another host. Drop it on the
+	// same moves as the other copies, so the exporter builds Basic auth from
+	// the tenant ID and the new token.
+	if !v.otlpHeadersPasted && v.otlpHeaders != "" && v.dropCredentialCopies {
 		v.otlpHeaders = ""
 		fmt.Fprintln(opts.Stderr, clihelp.New(opts.Stderr).Detail(
-			"Removed the saved OTEL_EXPORTER_OTLP_HEADERS: it carried the previous token. "+
+			"Removed the saved OTEL_EXPORTER_OTLP_HEADERS: it carried the credential for the previous token or endpoint. "+
 				"Paste the block from the setup page if OTLP needs a credential of its own."))
 	}
-
-	markCredentialCopies(&v, saved)
 
 	// Ask the endpoint whether it accepts these credentials before the file
 	// is written, so a wrong instance ID or a token without sigil:write is
@@ -1710,6 +1712,13 @@ func validatePastedBlock(fixed fixedValues, s string) error {
 			if err := c.validate(c.value); err != nil {
 				return fmt.Errorf("the block's %s is not usable: %w", c.name, err)
 			}
+		}
+	}
+	// Settings are saved as written, so an unresolved reference in one would
+	// be sent as the secret itself.
+	for _, key := range slices.Sorted(maps.Keys(env)) {
+		if strings.HasPrefix(strings.TrimSpace(env[key]), "op://") {
+			return fmt.Errorf("%s is a 1Password reference. Resolve it first, for example: op inject -i <file> | agento11y login --env-file -", blockKeyLabel(key))
 		}
 	}
 	return validateBlockPreferences(env)
