@@ -1352,10 +1352,12 @@ var blockReadSuffixes = []string{"ENDPOINT", "AUTH_TENANT_ID", "AUTH_TOKEN", "OT
 // (which carry the user's own service account token) go, including
 // GRAFANA_URL, which those requests fall back to, and the experiment links
 // the SDKs print; the agent name, which guard rules and dashboards filter on;
-// and the user ID, which would give everyone set up from the block the same
-// user. Whoever can edit a shared block could otherwise run code on, read the
-// sessions of, or collect requests from every machine set up from it. A block
-// chooses the stack it reports to, and nothing else that leaves the machine.
+// the agent version and the Copilot hook surface, which agento11y works out
+// for each agent; and the user ID, which would give everyone set up from the
+// block the same user. Whoever can edit a shared block could otherwise run
+// code on, read the sessions of, or collect requests from every machine set
+// up from it. A block chooses the stack it reports to, and nothing else that
+// leaves the machine.
 // LOCAL and LOCAL_FORWARD are written by login itself on every Cloud
 // setup, so a block's value would not survive the save.
 var blockRefusalReasons = map[string]string{
@@ -1367,15 +1369,18 @@ var blockRefusalReasons = map[string]string{
 	"GRAFANA_URL":                    "a block cannot send requests anywhere but its stack",
 	"EXPERIMENT_URL_TEMPLATE":        "a block cannot choose the links agento11y prints",
 	"AGENT_NAME":                     "a block cannot rename the agent that guard rules and dashboards match",
+	"AGENT_VERSION":                  "agento11y works these out for each agent",
+	"COPILOT_HOOK_SURFACE":           "agento11y works these out for each agent",
 	"USER_ID":                        "a block cannot give everyone who logs in with it the same user",
 	"LOCAL":                          "login sets these itself",
 	"LOCAL_FORWARD":                  "login sets these itself",
 }
 
 const (
-	blockReasonDowngrade  = "a block cannot turn off redaction or TLS"
+	blockReasonDowngrade  = "a block cannot turn off redaction, TLS, guards, or updates"
 	blockReasonUsageStats = "a block cannot turn on usage stats, which go to Grafana, not its stack"
 	blockReasonKeyName    = "a setting name must be upper case"
+	blockReasonUnknown    = "login does not save this setting from a block"
 )
 
 // blockRefusal is a key login did not take from a block, and why.
@@ -1388,15 +1393,19 @@ type blockRefusal struct{ key, reason string }
 var blockKeyName = regexp.MustCompile(`^[A-Z0-9_]+$`)
 
 // blockDowngrade reports whether a value would turn off a protection the
-// user's machine keeps by default: secret redaction of prompts, TLS to the
-// OTLP endpoint or, over gRPC, to the generation endpoint, or a usage stats
-// opt-out. The masked paste
-// field never shows a block's lines, so login refuses these instead of saving
-// them.
+// user's machine keeps by default or has chosen: secret redaction of prompts,
+// TLS to the OTLP endpoint or, over gRPC, to the generation endpoint, guards,
+// a fail-closed guard, automatic updates, or a usage stats opt-out. The masked
+// paste field never shows a block's lines, so login refuses these instead of
+// saving them.
 func blockDowngrade(key, suffix, value string) bool {
 	switch {
-	case suffix == "REDACT_INPUT_MESSAGES":
+	case suffix == "REDACT_INPUT_MESSAGES", suffix == "AUTO_UPDATE":
 		return !envconfig.ParseBoolDefault(value, true)
+	case suffix == "GUARDS_ENABLED":
+		return !envconfig.ParseBool(value)
+	case suffix == "GUARDS_FAIL_OPEN":
+		return envconfig.ParseBool(value)
 	case suffix == "INSECURE", suffix == "OTEL_EXPORTER_OTLP_INSECURE", key == "OTEL_EXPORTER_OTLP_INSECURE":
 		return envconfig.ParseBool(value)
 	case suffix == usagestats.EnvSuffix:
@@ -1405,6 +1414,22 @@ func blockDowngrade(key, suffix, value string) bool {
 		return usagestats.ResolveMode(usagestats.ShellEnv{Mode: value}, nil) == usagestats.ModeEnabled
 	}
 	return false
+}
+
+// blockSettingSuffixes are the settings a block may save, under the rules
+// blockDowngrade applies to some of their values. With blockReadSuffixes,
+// blockPreferenceSuffixes, and blockRefusalReasons, they place every family in
+// envconfig.AliasSuffixes (TestBlockKeysPlaceEveryAlias). Any other branded
+// key is refused, so a setting added later is not saved from a shared block
+// until someone decides it can be.
+var blockSettingSuffixes = []string{
+	"PROTOCOL", "INSECURE", "HEADERS", "EXPORT_TIMEOUT_MS", "AUTH_MODE", "TAGS",
+	"CONTENT_CAPTURE_MODE", "DEBUG", "REDACT_INPUT_MESSAGES", "OTEL_EXPORTER_OTLP_INSECURE",
+	"OTEL_AUTH_TOKEN", "GUARDS_ENABLED", "GUARDS_FAIL_OPEN", "GUARDS_TIMEOUT_MS",
+	"AUTO_UPDATE", "THEME", "USER_ID_SOURCE", usagestats.EnvSuffix,
+	// Not an alias family: the SDK reads only the AGENTO11Y_ spelling, which
+	// PROTOCOL=otel needs.
+	"ENABLE_EXPERIMENTAL_FEATURES",
 }
 
 // blockFormSuffixes are the settings form's preferences other than automatic
@@ -1433,8 +1458,10 @@ var blockDefaultValues = map[string]string{"PROTOCOL": "http", "AUTH_MODE": "bas
 // its AGENTO11Y_ spelling with the value envconfig.LookupMap resolves, so both
 // paths save the same thing when a block carries both spellings. Blank values
 // and the setup page's defaults are skipped. refused are the keys a block
-// cannot set (blockRefusalReasons). Keys the config file
-// does not accept are dropped, as the loader would drop them.
+// cannot set: blockRefusalReasons, downgrades, a branded key that is not in
+// blockSettingSuffixes, and a raw OTEL_ key other than the OTLP endpoint,
+// headers, and OTEL_EXPORTER_OTLP_INSECURE. Keys the config file does not
+// accept are dropped, as the loader would drop them.
 func blockKeys(env map[string]string, writeFormKeys, dropExportCredentials bool) (settings map[string]string, refused []blockRefusal) {
 	readIntoForm := map[string]bool{"OTEL_EXPORTER_OTLP_ENDPOINT": true, "OTEL_EXPORTER_OTLP_HEADERS": true}
 	for _, s := range slices.Concat(blockReadSuffixes, blockPreferenceSuffixes, []string{"STACK_URL"}) {
@@ -1466,6 +1493,8 @@ func blockKeys(env map[string]string, writeFormKeys, dropExportCredentials bool)
 			refused = append(refused, blockRefusal{key, blockReasonUsageStats})
 		case blockDowngrade(key, suffix, value):
 			refused = append(refused, blockRefusal{key, blockReasonDowngrade})
+		case suffix == "" && key != "OTEL_EXPORTER_OTLP_INSECURE", suffix != "" && !slices.Contains(blockSettingSuffixes, suffix):
+			refused = append(refused, blockRefusal{key, blockReasonUnknown})
 		case suffix == "":
 			// A raw OTEL_ key, which has no second spelling.
 			if value != "" {
@@ -1523,8 +1552,16 @@ func presetFormPreferences(v *formValues, env map[string]string) {
 	if tags, _, _ := envconfig.LookupMap(env, "TAGS"); tags != "" {
 		v.tags = tags
 	}
+	// A value blockKeys refuses is not preset either, so the form and the
+	// report agree; the user can still choose it in the form.
 	enabled, _, _ := envconfig.LookupMap(env, "GUARDS_ENABLED")
 	failOpen, _, _ := envconfig.LookupMap(env, "GUARDS_FAIL_OPEN")
+	if blockDowngrade("", "GUARDS_ENABLED", enabled) {
+		enabled = ""
+	}
+	if blockDowngrade("", "GUARDS_FAIL_OPEN", failOpen) {
+		failOpen = ""
+	}
 	if enabled != "" || failOpen != "" {
 		on, open := v.guards != guardsOff, v.guards != guardsClosed
 		if enabled != "" {
@@ -1548,7 +1585,8 @@ func presetFormPreferences(v *formValues, env map[string]string) {
 // reportBlockKeys names, on stderr, the settings a block set beyond the
 // credentials, and the keys it could not set with the reason for each, so a
 // team that shares a block can see what login took from it. Values stay out,
-// as they do in every block error.
+// as they do in every block error, and so does a refused name past its
+// leading [A-Z0-9_] run (blockKeyLabel).
 func reportBlockKeys(w io.Writer, v formValues) {
 	set := slices.Concat(slices.Collect(maps.Keys(v.blockSettings)), v.blockAutoTagKeys)
 	if len(set) > 0 {
@@ -1561,11 +1599,25 @@ func reportBlockKeys(w io.Writer, v formValues) {
 		if _, seen := byReason[r.reason]; !seen {
 			reasons = append(reasons, r.reason)
 		}
-		byReason[r.reason] = append(byReason[r.reason], r.key)
+		byReason[r.reason] = append(byReason[r.reason], blockKeyLabel(r.key))
 	}
 	for _, reason := range reasons {
 		_, _ = fmt.Fprintf(w, "agento11y login: did not set %s from the block: %s.\n", strings.Join(byReason[reason], ", "), reason)
 	}
+}
+
+// blockKeyLabel is how stderr names a refused key: its leading [A-Z0-9_] run,
+// marked when the name goes on past it. A line such as
+// `AGENTO11Y_AUTH_TOKEN: glc_…` parses as one long key holding the token, and
+// a name can carry terminal escape sequences, so the rest is never printed.
+// The loader keeps only names that start AGENTO11Y_, SIGIL_, or OTEL_, so the
+// run is never empty.
+func blockKeyLabel(key string) string {
+	run := key[:len(key)-len(strings.TrimLeft(key, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"))]
+	if run != key {
+		run += "…"
+	}
+	return run
 }
 
 // setPasted writes value into field unless a flag fixed that value or the
