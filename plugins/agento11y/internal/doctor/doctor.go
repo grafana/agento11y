@@ -18,11 +18,13 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/grafana/agento11y/go/proto/agento11y/wire"
 	codexconfig "github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/config"
@@ -127,13 +129,14 @@ type Params struct {
 // Report is the full diagnostic. Field names and the `status` strings are the
 // stable contract for `--json` / support tooling.
 type Report struct {
-	Binary        BinarySection        `json:"agento11y"`
-	Config        ConfigSection        `json:"config"`
-	Conversations ConversationsSection `json:"conversations"`
-	Analytics     AnalyticsSection     `json:"analytics"`
-	HTTPAPIs      *HTTPAPISection      `json:"http_apis,omitempty"`
-	UsageStats    UsageStatsSection    `json:"cli_usage_statistics"`
-	Agents        []AgentStatus        `json:"agents"`
+	Binary          BinarySection           `json:"agento11y"`
+	Config          ConfigSection           `json:"config"`
+	Conversations   ConversationsSection    `json:"conversations"`
+	Analytics       AnalyticsSection        `json:"analytics"`
+	HTTPAPIs        *HTTPAPISection         `json:"http_apis,omitempty"`
+	UsageStats      UsageStatsSection       `json:"cli_usage_statistics"`
+	Agents          []AgentStatus           `json:"agents"`
+	LocalForwarding *LocalForwardingSection `json:"local_forwarding,omitempty"`
 	// AutoUpdate is the resolved AUTO_UPDATE family. It carries provenance only:
 	// updatecheck.Disabled() owns the verdict below, so the rule that decides
 	// which values opt out stays in one place.
@@ -291,6 +294,38 @@ type HookForwardSection struct {
 	Reason  string `json:"reason,omitempty"`
 }
 
+// Neither forwarding-file validation nor daemon delivery history changes
+// the primary Cloud pipeline verdict.
+type LocalForwardingSection struct {
+	Path          string                         `json:"path"`
+	Destinations  []local.ForwardDestinationInfo `json:"destinations"`
+	Error         string                         `json:"error,omitempty"`
+	Health        Health                         `json:"status"`
+	Delivery      string                         `json:"delivery"`
+	DeliveryError string                         `json:"delivery_error,omitempty"`
+	ForwardStatus *ForwardStatus                 `json:"forwardStatus,omitempty"`
+}
+
+// ForwardStatus mirrors the daemon's public, credential-free delivery snapshot.
+// A nil snapshot means unknown, never disabled.
+type ForwardStatus struct {
+	Enabled         bool                       `json:"enabled"`
+	Mode            string                     `json:"mode"`
+	Generations     bool                       `json:"generations"`
+	OTLP            bool                       `json:"otlp"`
+	Hooks           bool                       `json:"hooks"`
+	Destinations    []ForwardDestinationStatus `json:"destinations"`
+	ForwardingPath  string                     `json:"forwardingPath,omitempty"`
+	ForwardingError string                     `json:"forwardingError,omitempty"`
+	Legs            map[string]ForwardLeg      `json:"legs,omitempty"`
+	Failures        []ForwardFailure           `json:"failures,omitempty"`
+	HookFailOpens   int                        `json:"hookFailOpens,omitempty"`
+}
+
+type ForwardDestinationStatus = local.ForwardDestinationPosture
+type ForwardLeg = local.ForwardDeliveryLeg
+type ForwardFailure = local.ForwardDeliveryFailure
+
 // ConversationsSection reports the generation-export pipeline.
 type ConversationsSection struct {
 	Protocol        string       `json:"protocol,omitempty"`
@@ -447,6 +482,7 @@ var (
 	probeConversationsFn = defaultProbeConversations
 	probeOTLPFn          = defaultProbeOTLP
 	receiverSupported    = local.ReceiverSupported
+	loadLocalStatus      = local.LoadStatus
 )
 
 // SnapshotEnv records the OS-env values of the tracked keys. Call it before
@@ -571,6 +607,7 @@ func Collect(ctx context.Context, opts Options, p Params) *Report {
 		r.UsageStats.Endpoint = endpoint
 	}
 	r.Config = collectConfig(osEnv, fileEnv)
+	r.LocalForwarding = collectLocalForwarding(ctx, r.Config.Path, osEnv, fileEnv)
 	if r.Conversations.Protocol == "otel" && managedLocalOnly(osEnv, fileEnv) {
 		r.Analytics = AnalyticsSection{Health: HealthOK, Messages: []string{"local capture is enabled; metrics and traces use the local daemon"}}
 	}
@@ -622,6 +659,144 @@ func Collect(ctx context.Context, opts Options, p Params) *Report {
 		}
 	}
 	return r
+}
+
+func collectLocalForwarding(ctx context.Context, configPath string, osEnv, fileEnv map[string]string) *LocalForwardingSection {
+	primary := primaryForwardDestination(osEnv, fileEnv)
+	routes := local.ForwardPrimaryRoutes{
+		TenantID:    daemonFamily("AUTH_TENANT_ID", osEnv, fileEnv).value,
+		Token:       daemonFamily("AUTH_TOKEN", osEnv, fileEnv).value,
+		OTLPToken:   daemonFamily("OTEL_AUTH_TOKEN", osEnv, fileEnv).value,
+		OTLPHeaders: daemonKey("OTEL_EXPORTER_OTLP_HEADERS", osEnv, fileEnv),
+	}
+	if primary.HTTPGenerations {
+		routes.GenerationURL = primary.Endpoint
+	}
+	if primary.OTLP {
+		routes.OTLPEndpoint = primary.OTLPEndpoint
+	}
+	inspection := local.InspectForwardingWithPrimary(configPath, routes)
+	primary.Endpoint = safeForwardEndpoint(primary.Endpoint)
+	primary.OTLPEndpoint = safeForwardEndpoint(primary.OTLPEndpoint)
+	sec := &LocalForwardingSection{
+		Path: inspection.Path, Destinations: []local.ForwardDestinationInfo{},
+		Error: inspection.Error, Health: HealthOK, Delivery: "not_checked",
+		DeliveryError: "local daemon unavailable",
+	}
+	if primary.Endpoint != "" || primary.OTLPEndpoint != "" {
+		sec.Destinations = append(sec.Destinations, primary)
+	}
+	sec.Destinations = append(sec.Destinations, inspection.Destinations...)
+	if sec.Error != "" {
+		sec.Health = HealthWarn
+	}
+
+	// LoadStatus only reads server.json. Do not use EnsureRunning: doctor must
+	// not start a daemon or create local state just to inspect delivery.
+	status, err := loadLocalStatus(local.StateDir())
+	if err != nil || status == nil {
+		return sec
+	}
+	u, err := url.Parse(status.Endpoint)
+	if err != nil || u.User != nil || u.RawQuery != "" || u.Fragment != "" ||
+		(u.Scheme != "http" && u.Scheme != "https") ||
+		(u.Hostname() != "localhost" && !net.ParseIP(u.Hostname()).IsLoopback()) {
+		sec.DeliveryError = "local daemon address is invalid"
+		return sec
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(u.String(), "/")+"/api/v1/config", nil)
+	if err != nil {
+		return sec
+	}
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := client.Do(req)
+	if err != nil {
+		return sec
+	}
+	defer func() { _ = resp.Body.Close() }()
+	sec.Delivery = "unavailable"
+	sec.DeliveryError = "daemon delivery status is unavailable; update the daemon or retry doctor"
+	sec.Health = HealthWarn
+	if resp.StatusCode != http.StatusOK {
+		return sec
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
+	if err != nil || len(data) > 1<<20 {
+		return sec
+	}
+	posture, err := local.DecodeForwardPosture(data)
+	if err != nil || posture.Destinations == nil {
+		return sec
+	}
+	snapshot := ForwardStatus{
+		Enabled: posture.Enabled, Mode: posture.Mode, Generations: posture.Generations,
+		OTLP: posture.OTLP, Hooks: posture.Hooks, Destinations: posture.Destinations,
+		ForwardingPath: posture.ForwardingPath, ForwardingError: posture.ForwardingError,
+		Legs: posture.Legs, Failures: posture.Failures, HookFailOpens: posture.HookFailOpens,
+	}
+	for i := range snapshot.Destinations {
+		destination := &snapshot.Destinations[i]
+		if destination.Revision == 0 {
+			return sec
+		}
+		destination.Endpoint = safeForwardEndpoint(destination.Endpoint)
+		destination.OTLPEndpoint = safeForwardEndpoint(destination.OTLPEndpoint)
+	}
+	sec.ForwardStatus = &snapshot
+	sec.Delivery, sec.DeliveryError = "available", ""
+	if sec.Error == "" && snapshot.ForwardingError == "" && len(snapshot.Failures) == 0 {
+		sec.Health = HealthOK
+		for _, destination := range snapshot.Destinations {
+			if len(destination.Failures) > 0 {
+				sec.Health = HealthWarn
+			}
+		}
+	}
+	return sec
+}
+
+func primaryForwardDestination(osEnv, fileEnv map[string]string) local.ForwardDestinationInfo {
+	endpoint := daemonFamily("ENDPOINT", osEnv, fileEnv).value
+	otlp := daemonFamily("OTEL_EXPORTER_OTLP_ENDPOINT", osEnv, fileEnv).value
+	if otlp == "" {
+		otlp = daemonKey("OTEL_EXPORTER_OTLP_ENDPOINT", osEnv, fileEnv)
+	}
+	tenant := daemonFamily("AUTH_TENANT_ID", osEnv, fileEnv).value
+	token := daemonFamily("AUTH_TOKEN", osEnv, fileEnv).value
+	primary := local.ForwardDestinationInfo{Name: "primary"}
+	if endpoint != "" {
+		if normalized, err := wire.NormalizeGenerationExportURL(endpoint, false); err == nil {
+			primary.Endpoint = normalized
+		}
+		primary.HTTPGenerations = safeForwardEndpoint(primary.Endpoint) != "" && (envconfig.IsLocalEndpoint(endpoint) || local.HookForwardReason(true, true, endpoint, tenant, token) == "")
+	}
+	if otlp != "" {
+		if !strings.Contains(otlp, "://") {
+			otlp = "https://" + otlp
+		}
+		insecure := daemonFamily("OTEL_EXPORTER_OTLP_INSECURE", osEnv, fileEnv).value
+		if insecure == "" {
+			insecure = daemonKey("OTEL_EXPORTER_OTLP_INSECURE", osEnv, fileEnv)
+		}
+		if envconfig.ParseBool(insecure) {
+			otlp = strings.Replace(otlp, "https://", "http://", 1)
+		}
+		primary.OTLPEndpoint = otlp
+		primary.OTLP = safeForwardEndpoint(otlp) != "" && !envconfig.IsLocalEndpoint(otlp)
+	}
+	return primary
+}
+
+func safeForwardEndpoint(endpoint string) string {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return ""
+	}
+	u.User, u.RawQuery, u.Fragment, u.RawFragment = nil, "", "", ""
+	u.ForceQuery = false
+	return u.String()
 }
 
 // exitCode is 1 when any pipeline or config section is broken, else 0. The
@@ -1556,6 +1731,14 @@ func daemonFamily(suffix string, osEnv, fileEnv map[string]string) resolved {
 		}
 	}
 	return resolved{}
+}
+
+// daemonKey mirrors the daemon's file-first, trimmed lookup for unbranded keys.
+func daemonKey(key string, osEnv, fileEnv map[string]string) string {
+	if value := strings.TrimSpace(fileEnv[key]); value != "" {
+		return value
+	}
+	return strings.TrimSpace(osEnv[key])
 }
 
 // tokenPrefix returns the non-sensitive scheme marker of a token (everything

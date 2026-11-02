@@ -174,6 +174,51 @@ The daemon always stores full session content locally. It forwards full generati
 
 Manage the app with `agento11y local start|open|status|stop|restart`. `agento11y local open` starts the receiver if needed, prints its address, and tries to open the app.
 
+### Forward to extra destinations
+
+The local daemon can forward each live payload to the existing connection from `config.env`, named `primary`, and up to three extra destinations (four total). `primary` is reserved, even when disabled. This applies only to daemon forwarding; direct export and `--no-local` are unchanged.
+
+Put `forwarding.toml` beside the **resolved** `config.env`: normally `~/.config/agento11y/forwarding.toml`, or `$XDG_CONFIG_HOME/agento11y/forwarding.toml` with a custom config root. If only the legacy `sigil/config.env` exists, put it in that directory instead. Extra destinations are configured only in this file, not through environment variables, login flags, or the viewer.
+
+For example, these are two extra records, not a replacement for `primary`. Replace the example URLs and credentials with values from each destination's setup page:
+
+```toml
+[[destinations]]
+name = "staging"
+endpoint = "https://agento11y.staging.example"
+tenant_id = "<staging-instance-id>"
+token = "<staging-token>"
+otlp_endpoint = "https://otlp.staging.example/otlp"
+# otlp_token = "<staging-otlp-token>"
+# otlp_headers = "Authorization=Basic <base64-value>,X-Team=observability"
+
+[[destinations]]
+name = "development"
+endpoint = "https://agento11y.development.example"
+tenant_id = "<development-instance-id>"
+token = "<development-token>"
+otlp_endpoint = "https://otlp.development.example/otlp"
+```
+
+Keep the file private like `config.env`: mode `0600`, with a `0700` parent directory (or equivalent user-only permissions). For the default path:
+
+```sh
+chmod 0700 ~/.config/agento11y
+chmod 0600 ~/.config/agento11y/forwarding.toml
+```
+
+Each record needs a unique nonempty `name` and at least one of `endpoint` or `otlp_endpoint`. HTTP generation export needs that record's `tenant_id` and `token`, except for recognized plain-HTTP loopback endpoints. `otlp_token` is optional. `otlp_headers` is an optional **string** of comma-separated `name=value` pairs, not a TOML table. An explicit `Authorization` header wins; otherwise OTLP uses Basic authorization from that destination's `tenant_id` and `otlp_token`, falling back to its `token`. Extras inherit no endpoints, credentials, or headers from `primary` or the ambient environment.
+
+Endpoints must be explicit HTTP(S) URLs without userinfo, query, or fragment. Recognized plain-HTTP loopback OTLP endpoints are still refused. More than three extras, unknown fields, duplicate names, or duplicate signal routes (the same effective URL and complete effective header set, including a primary route) invalidate the extras and produce diagnostics. Malformed or unreadable `forwarding.toml` disables **all extras only**, not the primary; no last-known-good extras remain active. An unreadable `config.env` disables all forwarding. File edits reload on the next ingest or status read, without a daemon restart.
+
+`AGENTO11Y_LOCAL_FORWARD=false` (legacy `SIGIL_LOCAL_FORWARD`) stops all new forwarding work, including guard relay. The switch and capture mode are global: only exact `AGENTO11Y_CONTENT_CAPTURE_MODE=full` forwards full content to every recipient; all other modes use the existing `metadata_only` reduction.
+
+Incoming HTTP generations go only to each recipient's Sigil HTTP `endpoint`; incoming OTLP traces and metrics go only to its `otlp_endpoint`. Configure both endpoints to receive both generation transports. The daemon does not re-record through an SDK or convert HTTP generations to OTLP, or OTLP generations to HTTP. Guards relay to `primary` only. Local history imports carry a no-forward marker that excludes **every** recipient.
+
+Forwarding is best effort: one attempt per payload per destination, with a 10-second timeout, no retry, replay, or backfill. Each destination admits at most 8 in-flight requests and 128 MiB of input plus prepared output. The daemon has 2 shared preparation slots and allows at most 32 requests and 512 MiB across all destinations. Requests still running after a destination changes or is removed count toward the request and byte limits. Saturation drops affected copies without waiting; destinations are admitted independently. Status tracks attempted, succeeded, failed, and dropped requests per destination and signal. In-memory work can be lost on shutdown. A local acknowledgement confirms local acceptance, **not remote delivery**. Additional recipients increase network traffic, ingest costs, and memory use.
+
+The viewer's **Settings > Cloud** controls forwarding and lists recipients before enabling full capture. Run `agento11y doctor` for destination status, counters, diagnostics, and the file path; edit extra destinations in `forwarding.toml`. Login does not list extra recipients. Full capture selected in login still applies to all recipients. Ask before enabling full capture or adding recipients. **Disconnect** turns global forwarding off and clears managed primary connection fields, but leaves extra destinations and their credentials saved. Unmanaged or inherited primary environment settings may remain too; re-enabling forwarding can reactivate saved extras and any remaining primary routes.
+
 ### Local skill analytics
 
 Open **Analytics > Skills** in the local app to inspect retained tool calls by time range and workspace. The view counts every call marked with a nonblank skill name, including loads, resource reads, commands, and failures. It does not infer unmarked activity or reconstruct missing skill metadata in older recordings or imported history.

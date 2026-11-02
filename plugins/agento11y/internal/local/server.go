@@ -452,9 +452,7 @@ func (s *Server) handleGenerations(w http.ResponseWriter, r *http.Request) {
 	// HTTP generation forwarding remains best effort and follows local storage.
 	// OTel ingest deliberately does not use this HTTP forwarding branch.
 	if len(accepted) > 0 && !isForwardedRequest(r) {
-		if cfg := s.forward.load(); cfg.enabled {
-			s.forward.enqueue(forwardLabelGenerations, func() { s.forward.forwardGenerations(cfg, accepted) })
-		}
+		s.forward.dispatchGenerations(s.forward.load(), accepted)
 	}
 	s.writeJSON(w, http.StatusOK, resp)
 }
@@ -661,16 +659,14 @@ func (s *Server) handleOTLP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Best-effort Cloud forwarding: metrics relay unchanged, trace content is
-	// stripped under a reduced content mode inside forwardOTLP.
+	// Best-effort forwarding: metrics relay unchanged; recipients share
+	// the trace copy, reduced only outside full capture mode.
 	if signal := otlpSignalFromPath(r.URL.Path); signal != "" && !isForwardedRequest(r) {
-		if cfg := s.forward.load(); cfg.enabled {
-			label := otlpForwardLabel(signal)
-			if hasGenerations {
-				label = forwardLabelOTLPGenerations
-			}
-			s.forward.enqueue(label, func() { s.forward.forwardOTLPWithLabel(cfg, signal, contentType, contentEncoding, body, label) })
+		label := otlpForwardLabel(signal)
+		if hasGenerations {
+			label = forwardLabelOTLPGenerations
 		}
+		s.forward.dispatchOTLP(s.forward.load(), signal, contentType, contentEncoding, body, label)
 	}
 
 	if strings.Contains(strings.ToLower(contentType), "json") {

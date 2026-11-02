@@ -3,6 +3,7 @@ import {
   cloudConfigured,
   type FormSettings,
   forwardChipMeta,
+  forwardingFailures,
   guardStatusMeta,
   pendingEdits,
   sameSettings,
@@ -319,6 +320,38 @@ describe('forwardChipMeta', () => {
     expect(forwardChipMeta(config({ tokenSet: true }, { enabled: false, reason: 'no credentials' })).value).toBe(
       'Paused',
     );
+  });
+});
+
+describe('destination delivery', () => {
+  it('deduplicates aggregate copies without dropping another recipient failure', () => {
+    const failure = { destination: 'extra', at: 'now', label: 'generations', detail: 'refused' };
+    const st: ForwardStatus = {
+      enabled: true,
+      mode: 'full',
+      generations: true,
+      otlp: false,
+      hooks: false,
+      failures: [failure, { ...failure, destination: 'primary' }],
+      destinations: [
+        {
+          name: 'extra',
+          endpoint: '',
+          otlpEndpoint: '',
+          httpGenerations: true,
+          otlp: false,
+          revision: 1,
+          failures: [failure],
+        },
+      ],
+    };
+    expect(forwardingFailures(st)).toHaveLength(2);
+  });
+
+  it('does not let active extra routes imply primary guard availability', () => {
+    expect(
+      guardStatusMeta({ enabled: true, mode: 'full', generations: true, otlp: true, hooks: false }, Date.now()).line,
+    ).toContain('Extra destinations do not evaluate guards');
   });
 });
 
