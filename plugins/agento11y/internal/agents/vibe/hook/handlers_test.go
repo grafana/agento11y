@@ -29,6 +29,7 @@ func TestPostAgent_EndToEnd(t *testing.T) {
 	// developer shell that exports AGENTO11Y_AGENT_NAME must not reach the
 	// handler.
 	envconfig.PinAliasEnvBlank(t)
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	type captured struct {
 		path string
 		body []byte
@@ -143,6 +144,7 @@ func TestPostAgent_UsesMetaParentSessionID(t *testing.T) {
 
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	envconfig.PinAliasEnvBlank(t)
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	t.Setenv("SIGIL_ENDPOINT", srv.URL)
 	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
 	t.Setenv("SIGIL_AUTH_TOKEN", "token")
@@ -204,6 +206,7 @@ func TestPostAgent_UsesMetaParentSessionID(t *testing.T) {
 }
 
 func TestPostAgent_SaveStateFailureSkipsExport(t *testing.T) {
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	// State is saved before the export. If the save fails, nothing is
 	// exported, so a successful export can never be stranded by a lost
 	// offset. Force a save failure by pointing XDG_STATE_HOME at a file.
@@ -287,6 +290,7 @@ func TestPostAgent_NoNewMessagesNoExport(t *testing.T) {
 }
 
 func TestPostAgent_MissingCredsSkipsExport(t *testing.T) {
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	// No SIGIL_* env: the handler must log and bail without touching
 	// state, so a re-run later with credentials still picks up from
 	// the same offset.
@@ -307,6 +311,7 @@ func TestPostAgent_MissingCredsSkipsExport(t *testing.T) {
 }
 
 func TestPostAgent_SessionCostSnapshot(t *testing.T) {
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	// The snapshot is the baseline the next turn subtracts from. A
 	// meta.json reporting no session_cost must leave the prior baseline
 	// standing, otherwise a later turn that does report a cost deltas
@@ -377,6 +382,7 @@ func TestPostAgent_SessionCostSnapshot(t *testing.T) {
 // from the environment through to the exported body. The mapper tests cover
 // the flag itself; this one covers the wire between them.
 func TestPostAgent_PromptRedactionWiring(t *testing.T) {
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	const secret = "glc_abcdefghijklmnopqrstuvwxyz"
 
 	tests := []struct {
@@ -563,6 +569,7 @@ func TestAgentNameOverrideGuardAndExport(t *testing.T) {
 
 			t.Setenv("XDG_STATE_HOME", t.TempDir())
 			envconfig.PinAliasEnvBlank(t)
+			t.Setenv("AGENTO11Y_PROTOCOL", "http")
 			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 			t.Setenv("SIGIL_ENDPOINT", srv.URL)
 			t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")

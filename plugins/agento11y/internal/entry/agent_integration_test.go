@@ -66,14 +66,18 @@ func TestAgentIntegration(t *testing.T) {
 			if !selected[name] {
 				t.Skipf("%s not in AGENT_CLI_TESTS", name)
 			}
-			for _, mode := range []string{"full", "metadata_only", "default"} {
-				t.Run(mode, func(t *testing.T) {
-					for _, scenarioName := range agentCaseNames {
-						if mode == "default" && scenarioName != "baseline" {
-							continue
-						}
-						t.Run(scenarioName, func(t *testing.T) {
-							runAgentCase(t, name, mode, scenarioName, repo)
+			for _, transport := range []string{"http", "implicit_otel"} {
+				t.Run(transport, func(t *testing.T) {
+					for _, mode := range []string{"full", "metadata_only", "default"} {
+						t.Run(mode, func(t *testing.T) {
+							for _, scenarioName := range agentCaseNames {
+								if mode == "default" && scenarioName != "baseline" {
+									continue
+								}
+								t.Run(scenarioName, func(t *testing.T) {
+									runAgentCase(t, name, transport, mode, scenarioName, repo)
+								})
+							}
 						})
 					}
 				})
@@ -147,7 +151,7 @@ func newAgentCLI(name, scenarioName, repo, modelURL string) agentCLI {
 // runAgentCase runs one case in a fresh HOME, plugin state, work directory,
 // model script, and receivers. A resumed case keeps all of them across its
 // invocations and checks the cumulative exports after each one.
-func runAgentCase(t *testing.T, cliName, mode, name, repo string) {
+func runAgentCase(t *testing.T, cliName, transport, mode, name, repo string) {
 	provider := agentProvider(cliAgent(cliName))
 	turns := agentCaseTurns(name, provider)
 	model := newScriptedModel(provider, turns)
@@ -160,6 +164,10 @@ func runAgentCase(t *testing.T, cliName, mode, name, repo string) {
 	telemetry := newAgentOTLPCapture(t)
 	t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", telemetry.server.URL)
 	t.Setenv("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf")
+	unsetTestEnv(t, "AGENTO11Y_PROTOCOL", "SIGIL_PROTOCOL", "AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "SIGIL_ENABLE_EXPERIMENTAL_FEATURES")
+	if transport == "http" {
+		t.Setenv("AGENTO11Y_PROTOCOL", "http")
+	}
 	workDir := setupAgentMetadataFixture(t)
 	checkAgentAccounts(t)
 	unsetTestEnv(t, "AGENTO11Y_CONTENT_CAPTURE_MODE", "SIGIL_CONTENT_CAPTURE_MODE")
@@ -225,11 +233,21 @@ func runAgentCase(t *testing.T, cliName, mode, name, repo string) {
 		if cli.agent == "claude-code" {
 			want.conversation = agentSessionID
 		}
-		generations, err := validateGenerationExports(capture.snapshot(), want)
-		if err != nil {
-			t.Fatalf("after invocation %d: %v", i+1, err)
+		var generations []*agento11yv1.Generation
+		var err error
+		captured := capture.snapshot()
+		if transport == "implicit_otel" {
+			if len(captured) != 0 {
+				t.Fatalf("implicit OTel sent %d duplicate native HTTP requests", len(captured))
+			}
+			generations, err = telemetry.validateGenerations(want)
+		} else {
+			generations, err = validateGenerationExports(captured, want)
+			if err == nil {
+				err = telemetry.validate(want, generations, false)
+			}
 		}
-		if err := telemetry.validate(want, generations); err != nil {
+		if err != nil {
 			t.Fatalf("after invocation %d: %v", i+1, err)
 		}
 		for j, g := range previous {
@@ -239,7 +257,9 @@ func runAgentCase(t *testing.T, cliName, mode, name, repo string) {
 		}
 		previous = generations
 	}
-	checkExports(t, name, sc, capture.snapshot())
+	if transport == "http" {
+		checkExports(t, name, sc, capture.snapshot())
+	}
 }
 
 // goToolchainEnv is the environment the test process started with. Package

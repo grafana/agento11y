@@ -51,6 +51,8 @@ function config(saved: Partial<Settings>, forwardStatus: Partial<ForwardStatus> 
     preview: '',
     path: '',
     stackUrl: '',
+    generationProtocol: 'otel',
+    generationProtocolError: '',
     forwardStatus: forwardStatus
       ? { enabled: false, mode: 'off', generations: false, otlp: false, hooks: false, ...forwardStatus }
       : null,
@@ -131,6 +133,58 @@ describe('parseConnectBlock', () => {
     expect(parsed.endpoint).toBe('');
     expect(parsed.otlpEndpoint).toBe('');
     expect(parsed.invalid).toEqual(['AGENTO11Y_ENDPOINT', 'OTEL_EXPORTER_OTLP_ENDPOINT']);
+  });
+});
+
+describe('OTLP base endpoint validation', () => {
+  it.each([
+    'http://collector.example:4318',
+    'https://collector.example/otlp',
+    'https://collector.example:65535/base%2Fpath',
+    'http://[2001:db8::1]:4318/otlp',
+    'https://[::ffff:192.0.2.1]:443/otlp',
+    "https://collect_or~!$&'()*+,;=.example/otlp",
+    'https://cöllector.example/otlp',
+    'https://collector.example/otlp{tenant}`',
+  ])('accepts a configured base endpoint: %s', (endpoint) => {
+    const parsed = parseConnectBlock(`OTEL_EXPORTER_OTLP_ENDPOINT=${endpoint}`);
+    expect(parsed.otlpEndpoint).toBe(endpoint);
+    expect(parsed.invalid).toEqual([]);
+  });
+
+  it.each([
+    'collector.example:4318',
+    'grpc://collector.example:4317',
+    'https:///collector.example',
+    'https://',
+    'https://:4318',
+    'https://%63ollector.example',
+    'https://[::1',
+    'https://user@collector.example',
+    'https://user:secret@collector.example',
+    'https://collector.example?token=secret',
+    'https://collector.example?',
+    'https://collector.example#traces',
+    'https://collector.example:0',
+    'https://collector.example:65536',
+    'https://collector.example:-1',
+    'https://collector.example:abc',
+    'https://collector.example/invalid%escape',
+    'https://collector.example\\\\other.example',
+    'https://collect\tor.example/otlp',
+    'https://collect{or.example/otlp',
+    'https://collect}or.example/otlp',
+    'https://collect`or.example/otlp',
+    'https://collect^or.example/otlp',
+    'https://collect|or.example/otlp',
+  ])('rejects endpoints a permissive URL check can miss: %s', (endpoint) => {
+    const parsed = parseConnectBlock(`OTEL_EXPORTER_OTLP_ENDPOINT=${endpoint}`);
+    expect(parsed.otlpEndpoint).toBe('');
+    expect(parsed.invalid).toEqual(['OTEL_EXPORTER_OTLP_ENDPOINT']);
+  });
+
+  it('does not read a pasted protocol as a credential', () => {
+    expect(parseConnectBlock('AGENTO11Y_PROTOCOL=http')).toEqual(parseConnectBlock(''));
   });
 });
 

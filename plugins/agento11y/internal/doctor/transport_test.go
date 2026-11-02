@@ -17,6 +17,80 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+func TestGenerationTransportDefaults(t *testing.T) {
+	for _, tc := range []struct {
+		name, protocol, experimental string
+		wantProtocol                 string
+		wantExplicit                 bool
+	}{
+		{name: "unset", wantProtocol: "otel"},
+		{name: "blank", protocol: " \t ", wantProtocol: "otel"},
+		{name: "experimental disabled", experimental: "false", wantProtocol: "otel"},
+		{name: "experimental invalid", experimental: "enabled", wantProtocol: "otel"},
+		{name: "explicit OTel", protocol: " OtEl ", wantProtocol: "otel", wantExplicit: true},
+		{name: "explicit HTTP", protocol: "http", wantProtocol: "http", wantExplicit: true},
+		{name: "SDK grpc keeps HTTP", protocol: "grpc", wantProtocol: "http", wantExplicit: true},
+		{name: "SDK none keeps HTTP", protocol: "none", wantProtocol: "http", wantExplicit: true},
+	} {
+		for _, source := range []string{sourceEnv, sourceConfig} {
+			t.Run(tc.name+"/"+source, func(t *testing.T) {
+				isolateEnv(t)
+				t.Setenv("AGENTO11Y_PROTOCOL", "http")
+				t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "true")
+				env := map[string]string{
+					"AGENTO11Y_PROTOCOL":                     tc.protocol,
+					"AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": tc.experimental,
+					"OTEL_EXPORTER_OTLP_ENDPOINT":            "https://collector.example.test/otlp",
+					"AGENTO11Y_ENDPOINT":                     "https://api.example.test",
+					"AGENTO11Y_AUTH_TENANT_ID":               "tenant",
+					"AGENTO11Y_AUTH_TOKEN":                   "test-secret",
+				}
+				if tc.protocol == "" {
+					delete(env, "AGENTO11Y_PROTOCOL")
+				}
+				if tc.experimental == "" {
+					delete(env, "AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES")
+				}
+				osEnv, fileEnv := env, map[string]string(nil)
+				if source == sourceConfig {
+					osEnv, fileEnv = nil, env
+				}
+				sec := collectConversations(osEnv, fileEnv)
+				cfg := collectConfig(osEnv, fileEnv)
+				if sec.Protocol != tc.wantProtocol || requestedProtocol(osEnv, fileEnv) != tc.wantProtocol || sec.Health != HealthOK || cfg.Health != HealthOK {
+					t.Fatalf("conversations=%+v config=%+v", sec, cfg)
+				}
+				if cfg.GenerationProtocol.Set != tc.wantExplicit {
+					t.Fatalf("protocol provenance = %+v", cfg.GenerationProtocol)
+				}
+				if tc.wantExplicit {
+					if cfg.GenerationProtocol.Key != "AGENTO11Y_PROTOCOL" || cfg.GenerationProtocol.Source != source {
+						t.Fatalf("explicit protocol provenance = %+v", cfg.GenerationProtocol)
+					}
+				} else if cfg.GenerationProtocol != (envValue{}) {
+					t.Fatalf("default has explicit provenance: %+v", cfg.GenerationProtocol)
+				}
+				var human, machine bytes.Buffer
+				r := &Report{Conversations: sec, Config: cfg}
+				renderHuman(&human, r, false)
+				if err := renderJSON(&machine, r); err != nil {
+					t.Fatal(err)
+				}
+				if !tc.wantExplicit && !strings.Contains(human.String(), "generation:       otel (default)") {
+					t.Fatalf("missing OTel default: %s", human.String())
+				}
+				var decoded Report
+				if err := json.Unmarshal(machine.Bytes(), &decoded); err != nil || decoded.Config.GenerationProtocol != cfg.GenerationProtocol || decoded.Conversations.Protocol != tc.wantProtocol {
+					t.Fatal("JSON lost transport or explicit configuration provenance")
+				}
+				if strings.Contains(strings.Join(sec.Messages, " "), "experimental") || strings.Contains(human.String()+machine.String(), "test-secret") {
+					t.Fatal("report claims experimental transport or exposes a token")
+				}
+			})
+		}
+	}
+}
+
 func TestGenerationTransportSnapshot(t *testing.T) {
 	isolateEnv(t)
 	t.Setenv("AGENTO11Y_PROTOCOL", "http")
@@ -57,7 +131,7 @@ func TestGenerationTransportSnapshotKeys(t *testing.T) {
 		}
 	}
 	if _, ok := snapshot["SIGIL_ENABLE_EXPERIMENTAL_FEATURES"]; ok {
-		t.Fatal("experimental gate must be preferred-only")
+		t.Fatal("experimental features setting must be preferred-only")
 	}
 }
 
@@ -67,10 +141,12 @@ func TestGenerationTransportInvalidNeverFallsBack(t *testing.T) {
 		env  map[string]string
 	}{
 		{"unknown protocol", map[string]string{"AGENTO11Y_PROTOCOL": "unsupported"}},
-		{"missing opt-in", map[string]string{"AGENTO11Y_PROTOCOL": "otel"}},
-		{"invalid opt-in", map[string]string{"AGENTO11Y_PROTOCOL": "otel", "AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "enabled"}},
-		{"missing endpoint", map[string]string{"AGENTO11Y_PROTOCOL": "otel", "AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "true"}},
-		{"invalid endpoint", map[string]string{"AGENTO11Y_PROTOCOL": "otel", "AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "true", "OTEL_EXPORTER_OTLP_ENDPOINT": "not-a-url"}},
+		{"default missing endpoint", map[string]string{}},
+		{"blank protocol missing endpoint", map[string]string{"AGENTO11Y_PROTOCOL": " \t "}},
+		{"missing endpoint", map[string]string{"AGENTO11Y_PROTOCOL": "otel"}},
+		{"default invalid endpoint", map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "not-a-url"}},
+		{"invalid endpoint", map[string]string{"AGENTO11Y_PROTOCOL": "otel", "OTEL_EXPORTER_OTLP_ENDPOINT": "not-a-url"}},
+		{"invalid preferred endpoint never falls back", map[string]string{"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": "not-a-url", "OTEL_EXPORTER_OTLP_ENDPOINT": "https://collector.example.test/otlp"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			isolateEnv(t)
@@ -85,6 +161,16 @@ func TestGenerationTransportInvalidNeverFallsBack(t *testing.T) {
 			r := Collect(context.Background(), Options{}, Params{OSEnv: tc.env})
 			if r.Conversations.Health != HealthError || r.Config.Health != HealthError || r.exitCode() != 1 || r.Conversations.Probe != nil {
 				t.Fatalf("health conversations=%s config=%s probe=%+v", r.Conversations.Health, r.Config.Health, r.Conversations.Probe)
+			}
+			wantProtocol := "otel"
+			if tc.name == "unknown protocol" {
+				wantProtocol = "unsupported"
+			}
+			if r.Conversations.Protocol != wantProtocol {
+				t.Fatalf("protocol = %q, want %q despite invalid configuration", r.Conversations.Protocol, wantProtocol)
+			}
+			if strings.Contains(strings.Join(r.Config.Messages, " "), "EXPERIMENTAL") {
+				t.Fatal("endpoint validation incorrectly requires experimental opt-in")
 			}
 		})
 	}
@@ -152,14 +238,13 @@ func TestGenerationOTelProbe(t *testing.T) {
 			}))
 			defer srv.Close()
 			env := map[string]string{
-				"AGENTO11Y_PROTOCOL":                     "otel",
-				"AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "true",
-				"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT":  srv.URL + "/otlp",
-				"AGENTO11Y_ENDPOINT":                     ":invalid unrelated API endpoint",
-				"AGENTO11Y_AUTH_MODE":                    "basic",
-				"AGENTO11Y_AUTH_TENANT_ID":               "tenant",
-				"AGENTO11Y_OTEL_AUTH_TOKEN":              "otel-secret",
-				"OTEL_EXPORTER_OTLP_HEADERS":             "X-Custom=test," + tc.headers,
+				"AGENTO11Y_PROTOCOL":                    "otel",
+				"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": srv.URL + "/otlp",
+				"AGENTO11Y_ENDPOINT":                    ":invalid unrelated API endpoint",
+				"AGENTO11Y_AUTH_MODE":                   "basic",
+				"AGENTO11Y_AUTH_TENANT_ID":              "tenant",
+				"AGENTO11Y_OTEL_AUTH_TOKEN":             "otel-secret",
+				"OTEL_EXPORTER_OTLP_HEADERS":            "X-Custom=test," + tc.headers,
 			}
 			if tc.name == "accepted with explicit auth" {
 				delete(env, "AGENTO11Y_AUTH_TENANT_ID")
@@ -207,13 +292,13 @@ func TestGenerationOTelProbe(t *testing.T) {
 					t.Fatal("report exposed a token")
 				}
 			}
-			for _, text := range []string{"transport:", "otel", "AGENTO11Y_PROTOCOL", "AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "HTTP APIs", "local ingest"} {
+			for _, text := range []string{"transport:", "otel", "AGENTO11Y_PROTOCOL", "HTTP APIs", "local ingest"} {
 				if !strings.Contains(human.String(), text) {
 					t.Errorf("human report missing %q", text)
 				}
 			}
 			var decoded Report
-			if err := json.Unmarshal(machine.Bytes(), &decoded); err != nil || !decoded.Config.ExperimentalEnabled || decoded.Config.GenerationProtocol.Value != "otel" {
+			if err := json.Unmarshal(machine.Bytes(), &decoded); err != nil || decoded.Config.ExperimentalEnabled || decoded.Config.GenerationProtocol.Value != "otel" {
 				t.Fatal("JSON lost transport configuration")
 			}
 		})
@@ -246,7 +331,7 @@ func TestGenerationOTelLocalCapability(t *testing.T) {
 				_, _ = io.WriteString(w, tc.body)
 			}))
 			defer srv.Close()
-			env := map[string]string{"AGENTO11Y_PROTOCOL": "otel", "AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "true", "OTEL_EXPORTER_OTLP_ENDPOINT": srv.URL + "/otlp", "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer cloud-secret"}
+			env := map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": srv.URL + "/otlp", "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer cloud-secret"}
 			r := Collect(context.Background(), Options{}, Params{OSEnv: env})
 			if traces != 0 || r.Conversations.LocalCapability == nil || r.Conversations.Health != HealthError || r.Conversations.Probe != nil || r.Conversations.LocalCapability.OK || !strings.Contains(strings.Join(r.Conversations.Messages, " "), tc.want) {
 				t.Fatalf("conversations = %+v", r.Conversations)

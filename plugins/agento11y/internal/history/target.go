@@ -16,13 +16,12 @@ import (
 // defaults before exporter construction and ledger selection. To change a
 // resolved destination, construct a new Target instead of editing its fields.
 type Target struct {
-	Endpoint                   string // generation API endpoint; also the Cloud ledger identity
-	OTLPEndpoint               string
-	Protocol                   agento11y.GenerationExportProtocol
-	ContentMode                string
-	TenantID                   string
-	AuthToken                  string
-	EnableExperimentalFeatures *bool
+	Endpoint     string // generation API endpoint; also the Cloud ledger identity
+	OTLPEndpoint string
+	Protocol     agento11y.GenerationExportProtocol
+	ContentMode  string
+	TenantID     string
+	AuthToken    string
 	// Headers replaces ambient headers on both transports when non-nil.
 	// OTLPHeaders overrides just the collector headers when non-nil.
 	Headers     map[string]string
@@ -43,9 +42,6 @@ func (t Target) effective() Target {
 func cloneTarget(t Target) Target {
 	t.Headers = maps.Clone(t.Headers)
 	t.OTLPHeaders = maps.Clone(t.OTLPHeaders)
-	if t.EnableExperimentalFeatures != nil {
-		t.EnableExperimentalFeatures = new(*t.EnableExperimentalFeatures)
-	}
 	return t
 }
 
@@ -61,33 +57,6 @@ func ResolveTarget(target Target, logger *log.Logger) (Target, error) {
 	}
 	t := cloneTarget(target)
 	t.OTLPEndpoint = strings.TrimSpace(t.OTLPEndpoint)
-	t.Endpoint = t.endpoint()
-	if t.Endpoint == "" {
-		return Target{}, errors.New("history: no endpoint configured for import (set AGENTO11Y_ENDPOINT or use --local)")
-	}
-	local := envconfig.IsLocalEndpoint(t.Endpoint)
-	requestedProtocol := string(t.Protocol)
-	if requestedProtocol == "" {
-		requestedProtocol = envconfig.Getenv("PROTOCOL")
-	}
-	if t.OTLPEndpoint == "" && (local || strings.EqualFold(strings.TrimSpace(requestedProtocol), "otel")) {
-		// HTTP backfills must not add old usage to ambient Cloud metrics.
-		// ProbeConfig freezes insecure settings and signal suffixes as provider setup does.
-		if _, traces, ok := otel.ProbeConfig(); ok {
-			t.OTLPEndpoint = strings.TrimSuffix(traces.URL, "/v1/traces")
-		}
-	}
-	if local && strings.TrimSpace(target.OTLPEndpoint) == "" &&
-		(t.OTLPEndpoint != "" || strings.EqualFold(strings.TrimSpace(requestedProtocol), "otel")) {
-		// An ambient Cloud collector must never receive a local backfill.
-		t.OTLPEndpoint = strings.TrimRight(t.Endpoint, "/") + "/otlp"
-	}
-	if local && t.OTLPEndpoint != "" && !envconfig.IsLocalEndpoint(t.OTLPEndpoint) {
-		return Target{}, errors.New("history: local imports require a loopback OTLP endpoint")
-	}
-	if t.EnableExperimentalFeatures == nil {
-		t.EnableExperimentalFeatures = new(envconfig.ParseBool(os.Getenv(agento11y.EnvEnableExperimentalFeatures)))
-	}
 	look := func(suffix string) (string, string, bool) {
 		switch suffix {
 		case "PROTOCOL":
@@ -99,17 +68,31 @@ func ResolveTarget(target Target, logger *log.Logger) (Target, error) {
 		}
 		return envconfig.LookupEnv(suffix)
 	}
-	exact := func(key string) string {
-		if key == agento11y.EnvEnableExperimentalFeatures {
-			if *t.EnableExperimentalFeatures {
-				return "true"
-			}
-			return "false"
-		}
-		return ""
-	}
 	var err error
-	t.Protocol, err = envconfig.ResolveGenerationTransportWith(look, exact)
+	t.Protocol, err = envconfig.SelectGenerationTransportWith(look)
+	if err != nil {
+		return Target{}, err
+	}
+	t.Endpoint = t.endpoint()
+	if t.Endpoint == "" {
+		return Target{}, errors.New("history: no endpoint configured for import (set AGENTO11Y_ENDPOINT or use --local)")
+	}
+	local := envconfig.IsLocalEndpoint(t.Endpoint)
+	if t.OTLPEndpoint == "" && t.Protocol == agento11y.GenerationExportProtocolOTel {
+		if local {
+			// Derive locally before consulting ambient Cloud settings: a local
+			// backfill must never inherit their collector or authorization.
+			t.OTLPEndpoint = strings.TrimRight(t.Endpoint, "/") + "/otlp"
+		} else if _, traces, ok := otel.ProbeConfig(); ok {
+			// Freeze insecure settings and signal suffixes as provider setup does.
+			t.OTLPEndpoint = strings.TrimSuffix(traces.URL, "/v1/traces")
+		}
+	}
+	// HTTP backfills ignore ambient OTLP, but retain a caller-supplied route.
+	if local && t.OTLPEndpoint != "" && !envconfig.IsLocalEndpoint(t.OTLPEndpoint) {
+		return Target{}, errors.New("history: local imports require a loopback OTLP endpoint")
+	}
+	t.Protocol, err = envconfig.ResolveGenerationTransportWith(look, func(string) string { return "" })
 	if err != nil {
 		return Target{}, err
 	}
