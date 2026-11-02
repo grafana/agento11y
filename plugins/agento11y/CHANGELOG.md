@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.56.0] - 2026-11-02
+
+### Breaking Changes
+
+- **plugins**: drop OS username fallback for user auto tag (#940)
+
+### Features
+
+- **plugins/agento11y**: forward local telemetry to multiple destinations (#1008)
+- **plugins/pi**: expand guards, fix telemetry, and report export failures (#1000)
+
+### Bug Fixes
+
+- **plugins/agento11y**: keep a reopened Cursor chat's session metadata (#1001)
+- **plugins/agento11y**: count a retried turn's metrics once (#1002)
+
 ## [0.55.0] - 2026-10-30
 
 ### Features
