@@ -1,9 +1,11 @@
 package local
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -11,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1054,10 +1057,10 @@ func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
 
 // TestAutoTagLookupPrefersTheConfigFile pins the fix for a viewer-driven import
 // reading a stale switch. The daemon's environment is merged once, when it
-// starts, so a switch written to config.env afterwards — by the local UI or by
-// `agento11y login` — has to be read from the file or it does not apply until a
-// restart. The process environment stays the fallback, so a variable only ever
-// exported in the shell still reaches an import.
+// starts, so a switch written to config.env afterwards by `agento11y login` has
+// to be read from the file or it does not apply until a restart. The process
+// environment stays the fallback, so a variable only ever exported in the shell
+// still reaches an import.
 func TestAutoTagLookupPrefersTheConfigFile(t *testing.T) {
 	envconfig.PinAliasEnvBlank(t)
 	// The daemon starts with the switch off and nothing in its environment.
@@ -1104,4 +1107,59 @@ func TestAutoTagLookupFallsBackToTheEnvironment(t *testing.T) {
 	if got := tagger("")["user"]; got != "from-file@example.com" {
 		t.Errorf("user tag = %q, want the config.env value to win", got)
 	}
+}
+
+// TestViewerImportAttachesAutoTags is the end-to-end check for the daemon
+// path. It goes through runImport rather than composing autoTagLookup and
+// AutoTagger by hand, so it fails if the exporter override in runImport is
+// dropped. The switch is written to config.env after NewServer, which is the
+// case that was broken: the daemon's own environment is a snapshot taken when
+// it started, so only a fresh read of the file can see the new value.
+//
+// The assertion is on the exported payload rather than on stored state,
+// because ConversationDetail does not surface tags.
+func TestViewerImportAttachesAutoTags(t *testing.T) {
+	envconfig.PinAliasEnvBlank(t)
+	isolateHistoryState(t)
+	// HTTP generations keep the assertion readable; the OTel leg would carry
+	// the same value as a span attribute.
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
+	configPath := writeConfigEnvFile(t, map[string]string{})
+	storage, err := NewStorage(filepath.Join(t.TempDir(), "local"))
+	require.NoError(t, err)
+	srv := NewServer(storage, nil, configPath)
+	t.Cleanup(srv.Close)
+
+	var mu sync.Mutex
+	var exported []string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+			mu.Lock()
+			exported = append(exported, string(body))
+			mu.Unlock()
+			r.Body = io.NopCloser(bytes.NewReader(body))
+		}
+		srv.ServeHTTP(w, r)
+	}))
+	defer ts.Close()
+	srv.SetLocalEndpoint(ts.URL)
+
+	// `agento11y login` writes the switch exactly this way while the daemon is
+	// already running.
+	require.NoError(t, os.WriteFile(configPath,
+		[]byte("AGENTO11Y_AUTO_CODING_AGENT_TAGS=true\nAGENTO11Y_USER_ID=bob@example.com\n"), 0o600))
+
+	writeHistoryTranscript(t, "sess-tagged", 1, time.Now().Add(-time.Hour))
+	run := waitForTerminalRun(t, srv, startImport(t, srv, `{"agent":"claude-code"}`))
+	require.Equal(t, importStatusCompleted, run.Status)
+	require.Equal(t, 1, run.Imported)
+
+	mu.Lock()
+	defer mu.Unlock()
+	joined := strings.Join(exported, "\n")
+	require.NotEmpty(t, joined, "the import exported nothing, so this test proves nothing")
+	assert.Contains(t, joined, "bob@example.com",
+		"the exported generation must carry the user tag read from config.env")
 }

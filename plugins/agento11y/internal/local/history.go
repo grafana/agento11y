@@ -461,10 +461,10 @@ func (s *Server) runImport(
 	}
 	// NewTargetExporter reads the automatic-tag switch from the process
 	// environment, which the CLI fills from config.env before it builds one. The
-	// daemon's environment was merged when it started, so a switch the viewer or
-	// `agento11y login` wrote since would not apply, and one turned off would
-	// keep applying. Re-read the file instead, as every other runtime setting in
-	// this package does.
+	// daemon's environment was merged when it started, so a switch
+	// `agento11y login` wrote since would not apply, and one it turned off would
+	// keep applying. Re-read the file instead, the way this package reads its
+	// own runtime settings.
 	exporter.AutoTags = history.AutoTagger(s.autoTagLookup())
 	defer func() {
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
