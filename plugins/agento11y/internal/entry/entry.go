@@ -513,14 +513,17 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 		if args[0] == "codex" {
 			hasCredentials = codexconfig.HasCredentials()
 		}
+		validateTarget := true
 		if needsLauncherLogin(localEnv, protocol, hasCredentials) {
 			result, err := loginRun(context.Background(), login.RunOpts{
-				Stderr:           stderr,
-				Logger:           logger,
-				OfferLocal:       !destinationSet,
-				OfferLocalDaemon: true,
-				KeepLocalSetting: keepLocalSetting,
+				Stderr:             stderr,
+				Logger:             logger,
+				OfferLocal:         !destinationSet,
+				OfferLocalDaemon:   true,
+				KeepLocalSetting:   keepLocalSetting,
+				GenerationProtocol: protocol,
 			})
+			validateTarget = err == nil
 			switch {
 			case err == nil, errors.Is(err, login.ErrNotInteractive):
 				// either succeeded or no TTY; continue.
@@ -534,13 +537,19 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 				_, _ = fmt.Fprintf(stderr, "agento11y: setup failed (%v); continuing without capture\n", err)
 			}
 			if err == nil && result.UsesLocalDaemon {
-				endpoint, otlp, localErr := setupLocalLaunch(stderr, "")
+				endpoint, otlp, localErr := setupLocalLaunch(stderr, "", protocol)
 				if localErr == nil {
 					localEnv = &local.LaunchEnv{Endpoint: endpoint, OTLPEndpoint: otlp}
 				} else {
+					validateTarget = false
 					logger.Printf("auto-login: start local receiver: %v", localErr)
 				}
 			}
+		}
+		if err := validateLauncherConnection(protocol, localEnv, validateTarget); err != nil {
+			_, _ = fmt.Fprintf(stderr, "agento11y: %v\n", err)
+			exit(1)
+			return
 		}
 		runLauncher(args[0], launcher, launcherArgs, localEnv, stdin, stdout, stderr, logger)
 		return
@@ -921,8 +930,8 @@ func readTokenStdin(fs *flag.FlagSet, endpoint, tenant string, hasBlock bool, st
 
 // runCursorInstall handles `agento11y cursor install` and `sigil cursor
 // uninstall`. install wires agento11y's hook into ~/.cursor/hooks.json and, when
-// neither Cloud credentials nor a local answer are configured yet, chains the
-// interactive login prompt the same way the launchers do; uninstall removes the
+// the selected transport's connection is missing, chains the interactive login
+// prompt the same way the launchers do; uninstall removes the
 // hook entries.
 func runCursorInstall(verb string, stdout, stderr io.Writer) {
 	// dotenv must run before InitLogger so SIGIL_DEBUG=true set only in
@@ -941,6 +950,22 @@ func runCursorInstall(verb string, stdout, stderr io.Writer) {
 		return
 	}
 
+	protocol, err := selectLaunchTransport("cursor")
+	localValue, _, _ := envconfig.LookupEnv("LOCAL")
+	localMode := envconfig.ParseBool(localValue)
+	localOTLP := ""
+	if localMode {
+		localOTLP = fmt.Sprintf("http://127.0.0.1:%d/otlp", local.DefaultPort)
+	}
+	if err == nil {
+		err = validateSuppliedLaunchTransport(protocol, localOTLP)
+	}
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "agento11y: %v\n", err)
+		exit(1)
+		return
+	}
+
 	if err := cursorInstall(stdout, stderr, logger); err != nil {
 		logger.Printf("cursor install: %v", err)
 		_, _ = fmt.Fprintf(stderr, "agento11y: %v\n", err)
@@ -948,18 +973,25 @@ func runCursorInstall(verb string, stdout, stderr io.Writer) {
 		return
 	}
 
-	// A wired hook needs Cloud credentials or local mode. If it has neither, chain
-	// the login prompt on first install. login.Run returns ErrNotInteractive when
+	// A wired hook needs the selected transport's connection or local mode.
+	// Chain setup when it is missing. login.Run returns ErrNotInteractive when
 	// stdin is not a TTY (CI, piped input); in that case we leave setup for later.
 	// A failed or aborted login never fails the install: the hook is already wired.
-	localValue, _, _ := envconfig.LookupEnv("LOCAL")
-	if !dotenv.HasCredentials() && !envconfig.ParseBool(localValue) {
+	if !localMode && needsLauncherLogin(nil, protocol, dotenv.HasCredentials()) {
 		result, err := loginRun(context.Background(), login.RunOpts{
-			Stderr:           stderr,
-			Logger:           logger,
-			OfferLocal:       !localDestinationSet(),
-			OfferLocalDaemon: true,
+			Stderr:             stderr,
+			Logger:             logger,
+			OfferLocal:         !localDestinationSet(),
+			OfferLocalDaemon:   true,
+			GenerationProtocol: protocol,
 		})
+		if err == nil && !result.LocalMode && !result.UsesLocalDaemon {
+			if err := validateLaunchTransport(protocol, ""); err != nil {
+				_, _ = fmt.Fprintf(stderr, "agento11y: %v; run `agento11y login` when ready\n", err)
+				exit(1)
+				return
+			}
+		}
 		switch {
 		case err == nil && result.LocalMode:
 			_, _ = fmt.Fprintln(stderr, "agento11y: Cursor hook now captures sessions locally")
@@ -1352,17 +1384,15 @@ func parseLauncherArgs(name string, rest []string, stderr io.Writer, envLocal lo
 	}
 	forwarded, localFlag, noLocalFlag, flagTags := opts.forwarded, opts.local, opts.noLocal, opts.tags
 	localMode := !noLocalFlag && (localFlag || envLocal.on)
-	if (name == "pi" || name == "opencode") && strings.EqualFold(envconfig.Getenv("PROTOCOL"), "otel") {
-		_, _ = fmt.Fprintf(stderr, "agento11y: %s live capture does not support OTel generation export. Set AGENTO11Y_PROTOCOL=http for this launch; Go history imports support OTel.\n", name)
-		exit(1)
-		return nil, nil, false, "", false
-	}
 	localOTLP := ""
 	if localMode {
 		// Managed local launches replace the collector before capture starts.
 		localOTLP = fmt.Sprintf("http://127.0.0.1:%d/otlp", local.DefaultPort)
 	}
-	protocol, err := resolveLaunchTransport(localOTLP)
+	protocol, err := selectLaunchTransport(name)
+	if err == nil {
+		err = validateSuppliedLaunchTransport(protocol, localOTLP)
+	}
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "agento11y: %v\n", err)
 		exit(1)
@@ -1391,7 +1421,7 @@ func parseLauncherArgs(name string, rest []string, stderr io.Writer, envLocal lo
 		if localFlag {
 			sourceKey = ""
 		}
-		endpoint, otlp, err := setupLocalLaunch(stderr, sourceKey)
+		endpoint, otlp, err := setupLocalLaunch(stderr, sourceKey, protocol)
 		if err != nil {
 			exit(1)
 			return nil, nil, false, "", false
@@ -1402,17 +1432,72 @@ func parseLauncherArgs(name string, rest []string, stderr io.Writer, envLocal lo
 }
 
 func needsLauncherLogin(localEnv *local.LaunchEnv, protocol agento11y.GenerationExportProtocol, hasCredentials bool) bool {
-	return localEnv == nil && protocol == agento11y.GenerationExportProtocolHTTP && !hasCredentials
+	if localEnv != nil {
+		return false
+	}
+	if protocol == agento11y.GenerationExportProtocolOTel {
+		return launchOTLPEndpoint() == ""
+	}
+	return !hasCredentials
 }
 
-func resolveLaunchTransport(localOTLP string) (agento11y.GenerationExportProtocol, error) {
+// Independent live plugins still use HTTP when no protocol was configured.
+// Keep this exception caller-scoped: Go hooks and imports retain their default.
+func selectLaunchTransport(name string) (agento11y.GenerationExportProtocol, error) {
+	protocol, err := envconfig.SelectGenerationTransportWith(envconfig.LookupEnv)
+	if err != nil {
+		return "", err
+	}
+	if name == "pi" || name == "opencode" {
+		if strings.TrimSpace(envconfig.Getenv("PROTOCOL")) == "" {
+			return agento11y.GenerationExportProtocolHTTP, nil
+		}
+		if protocol == agento11y.GenerationExportProtocolOTel {
+			return "", fmt.Errorf("%s live capture does not support OTel generation export. Set AGENTO11Y_PROTOCOL=http for this launch; Go history imports support OTel.", name)
+		}
+	}
+	return protocol, nil
+}
+
+func launchOTLPEndpoint() string {
+	endpoint := strings.TrimSpace(envconfig.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+	if endpoint == "" {
+		endpoint = strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+	}
+	return endpoint
+}
+
+// Missing settings are repairable by setup; malformed supplied settings are not.
+func validateSuppliedLaunchTransport(protocol agento11y.GenerationExportProtocol, localOTLP string) error {
+	if localOTLP == "" && launchOTLPEndpoint() == "" {
+		return nil
+	}
+	return validateLaunchTransport(protocol, localOTLP)
+}
+
+func validateLauncherConnection(protocol agento11y.GenerationExportProtocol, localEnv *local.LaunchEnv, validateTarget bool) error {
+	if !validateTarget {
+		return nil
+	}
+	localOTLP := ""
+	if localEnv != nil {
+		localOTLP = localEnv.OTLPEndpoint
+	}
+	return validateLaunchTransport(protocol, localOTLP)
+}
+
+func validateLaunchTransport(protocol agento11y.GenerationExportProtocol, localOTLP string) error {
 	look := func(suffix string) (string, string, bool) {
+		if suffix == "PROTOCOL" {
+			return string(protocol), "launcher", true
+		}
 		if suffix == "OTEL_EXPORTER_OTLP_ENDPOINT" && localOTLP != "" {
 			return localOTLP, "local receiver", true
 		}
 		return envconfig.LookupEnv(suffix)
 	}
-	return envconfig.ResolveGenerationTransportWith(look, os.Getenv)
+	_, err := envconfig.ResolveGenerationTransportWith(look, os.Getenv)
+	return err
 }
 
 // normalizeTag validates a `--tag` value and returns it as a trimmed
@@ -1475,7 +1560,7 @@ func mergeTags(existing string, flagTags []string) string {
 // setupLocalLaunch starts the local receiver if needed and returns the
 // endpoint URLs the launcher should pass to the agent. envKey names the
 // variable that turned local mode on, or is empty when a flag did.
-func setupLocalLaunch(stderr io.Writer, envKey string) (endpoint, otlp string, err error) {
+func setupLocalLaunch(stderr io.Writer, envKey string, protocol agento11y.GenerationExportProtocol) (endpoint, otlp string, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -1494,7 +1579,7 @@ func setupLocalLaunch(stderr io.Writer, envKey string) (endpoint, otlp string, e
 
 	endpoint = status.Endpoint
 	otlp = status.Endpoint + "/otlp"
-	protocol, err := resolveLaunchTransport(otlp)
+	err = validateLaunchTransport(protocol, otlp)
 	if err == nil && protocol == agento11y.GenerationExportProtocolOTel {
 		err = localhealth.RequireGenerationIngest(ctx, otlp)
 	}

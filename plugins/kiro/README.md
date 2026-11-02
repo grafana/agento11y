@@ -47,7 +47,7 @@ This adapter does not read undocumented Kiro session databases or transcripts.
 
 `AGENTO11Y_CONTENT_CAPTURE_MODE` supports `full`, `no_tool_content`,
 `metadata_only` (default), and `full_with_metadata_spans`. Content excluded by
-these modes is also excluded from the adapter's private temporary turn files.
+the effective mode is also excluded from the adapter's private temporary turn files.
 Successful exports delete those files; failed exports retain them under the
 agento11y state directory for retry at the next Stop/SessionEnd. Retries reuse
 generation IDs. Up to 128 pending turns are retained per session; a full queue

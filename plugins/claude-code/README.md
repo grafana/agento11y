@@ -89,7 +89,7 @@ AGENTO11Y_DEBUG=true agento11y claude  # one turn
 tail -f ~/.local/state/agento11y/logs/agento11y.log
 ```
 
-Common culprits: `agento11y --version` doesn't work (binary not on `PATH`), a missing token, or a token without the `sigil:write` scope.
+Common culprits: `agento11y --version` doesn't work (binary not on `PATH`), a missing endpoint, or invalid credentials. Run `agento11y doctor` to check the connection.
 
 Live capture recognizes only the native `Skill` tool's `skill` input field in the settled live transcript, including failed attempts. It marks existing tool-execution spans with `gen_ai.skill.name`. The requested identifier keeps its case and namespace; only surrounding whitespace is trimmed. It is not rewritten to a resolved directory basename. Reading `SKILL.md` with `Read` never qualifies.
 
@@ -145,7 +145,7 @@ When enabled, guards send every submitted message and tool argument to `AGENTO11
 | `AGENTO11Y_ENDPOINT` | — | Agent Observability API URL. Find it at `/plugins/grafana-agento11y-app`. |
 | `AGENTO11Y_AUTH_TENANT_ID` | — | Grafana Cloud instance ID. |
 | `AGENTO11Y_AUTH_TOKEN` | — | `glc_…` Cloud Access Policy Token. |
-| `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP endpoint. Without it, the Agent Observability latency and tool-call panels stay empty. |
+| `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` | — | Required for default OTel generations, traces, and metrics. Falls back to `OTEL_EXPORTER_OTLP_ENDPOINT`. |
 | `AGENTO11Y_OTEL_AUTH_TOKEN` | `AGENTO11Y_AUTH_TOKEN` | Override the OTel password. |
 | `AGENTO11Y_CONTENT_CAPTURE_MODE` | `metadata_only` | `metadata_only`, `no_tool_content`, `full`, or `full_with_metadata_spans`. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md). |
 | `AGENTO11Y_REDACT_INPUT_MESSAGES` | `true` | Redact known secret formats out of user prompt text. Set to `false` to export prompts without redaction; assistant and tool content stay redacted. |

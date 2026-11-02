@@ -18,12 +18,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/opencode/sessiondb/sessiondbtest"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/history"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/login"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/xdg"
+	collectortrace "go.opentelemetry.io/proto/otlp/collector/trace/v1"
+	"google.golang.org/protobuf/proto"
 )
 
 // historyFixedNow pins the clock so the 90-day default boundary is checkable.
@@ -335,25 +338,33 @@ func TestHistoryUnknownAgentListsTheRegisteredOnes(t *testing.T) {
 }
 
 func TestHistoryDryRunReportsThePlan(t *testing.T) {
-	withHistoryNow(t)
-	isolateDotenvHome(t)
-	writeClaudeHistory(t, "sess-recent", 24*time.Hour)
-	withStubLoginRun(t, func(context.Context, login.RunOpts) (login.Result, error) {
-		t.Fatal("dry run must not prompt for a destination")
-		return login.Result{}, nil
-	})
-
-	stdout, stderr, code := runHistory(t, "history", "import", "claude-code", "--dry-run")
-	if code != nil {
-		t.Fatalf("exit = %d, want no exit (stderr=%q)", *code, stderr)
-	}
-	for _, want := range []string{
-		"Claude Code history since",
-		"planned: 1 sessions, 1 turns",
-		"Dry run: nothing was decoded, exported, or stored.",
-	} {
-		if !strings.Contains(stdout, want) {
-			t.Errorf("stdout = %q, want it to contain %q", stdout, want)
+	for _, agent := range []string{"claude-code", "auto"} {
+		for _, protocol := range []string{"", "otel", "http", "unsupported"} {
+			t.Run(agent+"/"+protocol, func(t *testing.T) {
+				withHistoryNow(t)
+				isolateDotenvHome(t)
+				writeClaudeHistory(t, "sess-recent", 24*time.Hour)
+				t.Setenv("AGENTO11Y_PROTOCOL", protocol)
+				t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", "invalid-supplied-collector")
+				withStubLoginRun(t, func(context.Context, login.RunOpts) (login.Result, error) {
+					t.Fatal("dry run must not prompt for a destination")
+					return login.Result{}, nil
+				})
+				forbidHistoryConnections(t)
+				stdout, stderr, code := runHistory(t, "history", "import", agent, "--local", "--all", "--yes", "--dry-run")
+				if code != nil {
+					t.Fatalf("exit = %d, want no exit (stderr=%q)", *code, stderr)
+				}
+				for _, want := range []string{
+					"Claude Code history since",
+					"planned: 1 sessions, 1 turns",
+					"Dry run: nothing was decoded, exported, or stored.",
+				} {
+					if !strings.Contains(stdout, want) {
+						t.Errorf("stdout = %q, want it to contain %q", stdout, want)
+					}
+				}
+			})
 		}
 	}
 }
@@ -683,6 +694,7 @@ func TestHistoryResolveDestination(t *testing.T) {
 		endpoint        string
 		credentials     bool
 		protocol        string
+		protocolKey     string
 		optIn           string
 		collector       string
 		tenantOnly      bool
@@ -698,6 +710,7 @@ func TestHistoryResolveDestination(t *testing.T) {
 	}{
 		{
 			name:        "no-local beats local flag and environment",
+			protocol:    "http",
 			opts:        historyImportOptions{Local: true, NoLocal: true},
 			localEnv:    "true",
 			credentials: true,
@@ -718,39 +731,105 @@ func TestHistoryResolveDestination(t *testing.T) {
 			wantLocalEnvKey: envconfig.LegacyKey("LOCAL"),
 		},
 		{
-			name:        "saved credentials select Cloud",
+			name:        "saved HTTP credentials select Cloud",
+			protocol:    "http",
 			credentials: true,
 			interactive: true,
 		},
 		{
-			name:        "OTel Cloud identity needs no HTTP token",
+			name:        "implicit OTel Cloud identity needs no HTTP token or global opt-in",
 			endpoint:    "https://127.0.0.1:8765",
-			protocol:    "otel",
-			optIn:       "true",
 			collector:   "http://127.0.0.1:4318",
 			tenantOnly:  true,
 			interactive: true,
 		},
 		{
-			name:        "OTel missing ledger identity does not ask for an HTTP token",
+			name:           "OTel missing ledger identity starts setup",
+			protocol:       "otel",
+			collector:      "http://127.0.0.1:4318",
+			interactive:    true,
+			wantLoginCalls: 1,
+			wantOfferLocal: true,
+		},
+		{
+			name:        "explicit OTel without opt-in needs no setup when ready",
 			protocol:    "otel",
-			optIn:       "true",
+			endpoint:    "https://agento11y.example.com",
+			tenantOnly:  true,
 			collector:   "http://127.0.0.1:4318",
 			interactive: true,
 		},
 		{
-			name:        "OTel without opt-in does not prompt or fall back",
-			protocol:    "otel",
-			collector:   "http://127.0.0.1:4318",
-			interactive: true,
-			wantErr:     "AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true",
+			name:           "OTel without collector starts setup",
+			protocol:       "otel",
+			interactive:    true,
+			wantLoginCalls: 1,
+			wantOfferLocal: true,
 		},
 		{
-			name:        "OTel without collector does not prompt or fall back",
-			protocol:    "otel",
-			optIn:       "true",
+			name:           "existing API-only config starts implicit OTel setup",
+			credentials:    true,
+			interactive:    true,
+			wantLoginCalls: 1,
+			wantOfferLocal: true,
+		},
+		{
+			name:           "existing API-only config starts explicit OTel setup",
+			credentials:    true,
+			protocol:       "otel",
+			interactive:    true,
+			wantLoginCalls: 1,
+			wantOfferLocal: true,
+		},
+		{
+			name:        "malformed supplied collector rejected before setup",
+			collector:   "not-a-url",
 			interactive: true,
 			wantErr:     "OTLP base endpoint",
+		},
+		{
+			name:        "HTTP ignores malformed ambient collector",
+			protocol:    "http",
+			credentials: true,
+			collector:   "not-a-url",
+			interactive: true,
+		},
+		{
+			name:        "legacy alias selects HTTP compatibility",
+			protocol:    "http",
+			protocolKey: "SIGIL_PROTOCOL",
+			credentials: true,
+			interactive: true,
+		},
+		{
+			name:        "legacy alias selects tokenless OTel",
+			protocol:    "otel",
+			protocolKey: "SIGIL_PROTOCOL",
+			endpoint:    "https://agento11y.example.com",
+			tenantOnly:  true,
+			collector:   "http://127.0.0.1:4318",
+			interactive: true,
+		},
+		{
+			name:        "whitespace selects OTel despite global opt-out",
+			protocol:    "  ",
+			optIn:       "false",
+			endpoint:    "https://agento11y.example.com",
+			tenantOnly:  true,
+			collector:   "http://127.0.0.1:4318",
+			interactive: true,
+		},
+		{
+			name:        "grpc retains HTTP compatibility",
+			protocol:    "grpc",
+			credentials: true,
+			interactive: true,
+		},
+		{
+			name:        "none retains HTTP compatibility",
+			protocol:    "none",
+			credentials: true,
+			interactive: true,
 		},
 		{
 			name:        "invalid protocol does not prompt or fall back",
@@ -846,7 +925,11 @@ func TestHistoryResolveDestination(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			isolateDotenvHome(t)
-			t.Setenv("AGENTO11Y_PROTOCOL", tt.protocol)
+			protocolKey := tt.protocolKey
+			if protocolKey == "" {
+				protocolKey = "AGENTO11Y_PROTOCOL"
+			}
+			t.Setenv(protocolKey, tt.protocol)
 			t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", tt.optIn)
 			t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", tt.collector)
 			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
@@ -873,6 +956,13 @@ func TestHistoryResolveDestination(t *testing.T) {
 			loginCalls := 0
 			withStubLoginRun(t, func(_ context.Context, opts login.RunOpts) (login.Result, error) {
 				loginCalls++
+				wantProtocol := agento11y.GenerationExportProtocolOTel
+				if tt.protocol == "http" || tt.protocol == "grpc" || tt.protocol == "none" {
+					wantProtocol = agento11y.GenerationExportProtocolHTTP
+				}
+				if opts.GenerationProtocol != wantProtocol {
+					t.Errorf("GenerationProtocol = %q, want %q", opts.GenerationProtocol, wantProtocol)
+				}
 				if opts.OfferLocal != tt.wantOfferLocal {
 					t.Errorf("OfferLocal = %v, want %v", opts.OfferLocal, tt.wantOfferLocal)
 				}
@@ -1036,6 +1126,7 @@ func TestHistoryImportNoLocalOverridesLocalMode(t *testing.T) {
 			exported := 0
 			endpoint := newCountingIngest(t, &exported)
 			setHistoryCloudCredentials(t, endpoint)
+			t.Setenv("AGENTO11Y_PROTOCOL", "http")
 			withStubLoginRun(t, func(context.Context, login.RunOpts) (login.Result, error) {
 				t.Fatal("saved Cloud credentials must not prompt")
 				return login.Result{}, nil
@@ -1063,6 +1154,7 @@ func TestHistoryImportSavedCredentialsSkipSetup(t *testing.T) {
 	exported := 0
 	endpoint := newCountingIngest(t, &exported)
 	setHistoryCloudCredentials(t, endpoint)
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	withStubLoginRun(t, func(context.Context, login.RunOpts) (login.Result, error) {
 		t.Fatal("saved Cloud credentials must not prompt")
 		return login.Result{}, nil
@@ -1079,12 +1171,16 @@ func TestHistoryImportSavedCredentialsSkipSetup(t *testing.T) {
 
 func TestHistoryImportFirstRunUsesLoginDestination(t *testing.T) {
 	tests := []struct {
-		name   string
-		result login.Result
-		cloud  bool
+		name, protocol, config string
+		result                 login.Result
+		cloud                  bool
 	}{
 		{name: "local", result: login.Result{LocalMode: true}},
-		{name: "Cloud", cloud: true},
+		{name: "HTTP Cloud", protocol: "http", cloud: true},
+		{name: "implicit OTel Cloud", cloud: true},
+		{name: "explicit OTel Cloud", protocol: "otel", cloud: true},
+		{name: "API-only config repaired for implicit OTel", cloud: true, config: "AGENTO11Y_ENDPOINT=https://agento11y.example.com\nAGENTO11Y_AUTH_TENANT_ID=tenant\nAGENTO11Y_AUTH_TOKEN=token\n"},
+		{name: "API-only config chooses local", result: login.Result{LocalMode: true}, config: "AGENTO11Y_ENDPOINT=https://agento11y.example.com\nAGENTO11Y_AUTH_TENANT_ID=tenant\nAGENTO11Y_AUTH_TOKEN=token\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1093,9 +1189,16 @@ func TestHistoryImportFirstRunUsesLoginDestination(t *testing.T) {
 			writeClaudeHistory(t, "sess-recent", 24*time.Hour)
 
 			exported := 0
+			t.Setenv("AGENTO11Y_PROTOCOL", tt.protocol)
+			writeHistoryConfig(t, tt.config)
 			cloudEndpoint := ""
 			if tt.cloud {
-				cloudEndpoint = newCountingIngest(t, &exported)
+				if tt.protocol == "http" {
+					cloudEndpoint = newCountingIngest(t, &exported)
+				} else {
+					cloudEndpoint = "https://agento11y.example.com"
+					withStubCloudExporter(t, &exported)
+				}
 			} else {
 				withStubHistoryExporter(t, &exported)
 			}
@@ -1105,8 +1208,19 @@ func TestHistoryImportFirstRunUsesLoginDestination(t *testing.T) {
 				if !opts.OfferLocal {
 					t.Error("first-run setup did not offer the destination question")
 				}
+				wantProtocol := agento11y.GenerationExportProtocolOTel
+				if tt.protocol == "http" {
+					wantProtocol = agento11y.GenerationExportProtocolHTTP
+				}
+				if opts.GenerationProtocol != wantProtocol {
+					t.Errorf("setup protocol = %q, want %q", opts.GenerationProtocol, wantProtocol)
+				}
 				if cloudEndpoint != "" {
 					setHistoryCloudCredentials(t, cloudEndpoint)
+					if wantProtocol == agento11y.GenerationExportProtocolOTel {
+						t.Setenv("AGENTO11Y_AUTH_TOKEN", "")
+						t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:4318")
+					}
 				}
 				return tt.result, nil
 			})
@@ -1127,52 +1241,86 @@ func TestHistoryImportFirstRunUsesLoginDestination(t *testing.T) {
 			if exported != 1 {
 				t.Fatalf("exported %d turns, want 1", exported)
 			}
+			if os.Getenv("AGENTO11Y_PROTOCOL") != tt.protocol {
+				t.Fatal("history setup changed the generation protocol")
+			}
 		})
 	}
 }
 
 func TestHistoryImportAbortedSetupExportsNothing(t *testing.T) {
-	withHistoryNow(t)
-	isolateDotenvHome(t)
-	writeClaudeHistory(t, "sess-recent", 24*time.Hour)
-	withStubLoginRun(t, func(context.Context, login.RunOpts) (login.Result, error) {
-		return login.Result{}, login.ErrAborted
-	})
-
-	exported := 0
-	withStubHistoryExporter(t, &exported)
-	var stdout, stderr bytes.Buffer
-	err := historyImport(historyImportOptions{
-		Agent: history.AgentClaudeCode,
-		Since: historyFixedNow.Add(-history.DefaultSinceWindow),
-		All:   true,
-		Yes:   true,
-	}, true, &stdout, &stderr)
-	if err == nil || !strings.Contains(err.Error(), "nothing was imported") {
-		t.Fatalf("historyImport error = %v", err)
-	}
-	if exported != 0 {
-		t.Fatalf("exported %d turns, want none", exported)
+	for _, auto := range []bool{false, true} {
+		for _, setupErr := range []error{login.ErrAborted, login.ErrNotInteractive, login.ErrNotVerified} {
+			t.Run(fmt.Sprintf("auto=%t/%v", auto, setupErr), func(t *testing.T) {
+				withHistoryNow(t)
+				isolateDotenvHome(t)
+				writeClaudeHistory(t, "sess-recent", 24*time.Hour)
+				config := "AGENTO11Y_ENDPOINT=https://agento11y.example.com\nAGENTO11Y_AUTH_TENANT_ID=tenant\nAGENTO11Y_AUTH_TOKEN=token\n"
+				writeHistoryConfig(t, config)
+				calls := 0
+				withStubLoginRun(t, func(_ context.Context, opts login.RunOpts) (login.Result, error) {
+					calls++
+					if opts.GenerationProtocol != agento11y.GenerationExportProtocolOTel {
+						t.Errorf("setup protocol = %q", opts.GenerationProtocol)
+					}
+					return login.Result{}, setupErr
+				})
+				forbidHistoryConnections(t)
+				var stdout, stderr bytes.Buffer
+				opts := historyImportOptions{Agent: history.AgentClaudeCode, Since: historyFixedNow.Add(-history.DefaultSinceWindow), All: true, Yes: true}
+				importer := historyImport
+				if auto {
+					importer = historyImportAuto
+				}
+				err := importer(opts, true, &stdout, &stderr)
+				if err == nil || !strings.Contains(err.Error(), "nothing was imported") || calls != 1 {
+					t.Fatalf("import error=%v setup calls=%d", err, calls)
+				}
+				data, err := os.ReadFile(filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "agento11y", "config.env"))
+				if err != nil || string(data) != config {
+					t.Fatalf("cancelled setup modified config: %q, %v", data, err)
+				}
+			})
+		}
 	}
 }
 
 func TestHistoryImportNonInteractiveMissingCredentialsDoesNotPrompt(t *testing.T) {
-	withHistoryNow(t)
-	isolateDotenvHome(t)
-	writeClaudeHistory(t, "sess-recent", 24*time.Hour)
-	t.Setenv(envconfig.PreferredKey("ENDPOINT"), "https://agento11y.example.com")
-	withStubLoginRun(t, func(context.Context, login.RunOpts) (login.Result, error) {
-		t.Fatal("non-interactive import must not prompt")
-		return login.Result{}, nil
-	})
-
-	_, stderr, code := runHistory(t, "history", "import", "claude-code", "--all", "--yes")
-	if code == nil || *code != 1 {
-		t.Fatalf("exit = %v, want 1 (stderr=%q)", code, stderr)
-	}
-	want := "history: no credentials configured for import (Cloud requires tenant identity; HTTP also requires an API token; run `agento11y login` or use --local)"
-	if !strings.Contains(stderr, want) {
-		t.Fatalf("stderr = %q, want it to contain %q", stderr, want)
+	for _, agent := range []string{"claude-code", "auto"} {
+		for _, tc := range []struct {
+			name, protocol, collector, want string
+			apiOnly                         bool
+		}{
+			{name: "HTTP missing credentials", protocol: "http", want: "no credentials configured for import"},
+			{name: "implicit OTel missing collector", apiOnly: true, want: "OTLP base endpoint"},
+			{name: "explicit OTel missing collector", protocol: "otel", apiOnly: true, want: "OTLP base endpoint"},
+			{name: "OTel missing ledger identity", collector: "http://127.0.0.1:4318", want: "no credentials configured for import"},
+			{name: "malformed collector", collector: "not-a-url", want: "OTLP base endpoint"},
+			{name: "invalid protocol", protocol: "bogus", want: "unsupported"},
+		} {
+			t.Run(agent+"/"+tc.name, func(t *testing.T) {
+				withHistoryNow(t)
+				isolateDotenvHome(t)
+				writeClaudeHistory(t, "sess-recent", 24*time.Hour)
+				t.Setenv("AGENTO11Y_PROTOCOL", tc.protocol)
+				t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", tc.collector)
+				t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+				t.Setenv("AGENTO11Y_ENDPOINT", "https://agento11y.example.com")
+				if tc.apiOnly {
+					t.Setenv("AGENTO11Y_AUTH_TENANT_ID", "tenant")
+					t.Setenv("AGENTO11Y_AUTH_TOKEN", "token")
+				}
+				withStubLoginRun(t, func(context.Context, login.RunOpts) (login.Result, error) {
+					t.Fatal("non-interactive import must not prompt")
+					return login.Result{}, nil
+				})
+				forbidHistoryConnections(t)
+				_, stderr, code := runHistory(t, "history", "import", agent, "--all", "--yes")
+				if code == nil || *code != 1 || !strings.Contains(stderr, tc.want) {
+					t.Fatalf("exit=%v stderr=%q, want failure containing %q", code, stderr, tc.want)
+				}
+			})
+		}
 	}
 }
 
@@ -1182,7 +1330,7 @@ func TestHistoryImportLoopbackEndpointSkipsSetup(t *testing.T) {
 	writeClaudeHistory(t, "sess-recent", 24*time.Hour)
 
 	exported := 0
-	writeHistoryConfig(t, envconfig.PreferredKey("ENDPOINT")+"="+newCountingIngest(t, &exported)+"\n")
+	writeHistoryConfig(t, "AGENTO11Y_PROTOCOL=http\n"+envconfig.PreferredKey("ENDPOINT")+"="+newCountingIngest(t, &exported)+"\n")
 	withStubLoginRun(t, func(context.Context, login.RunOpts) (login.Result, error) {
 		t.Fatal("a configured loopback endpoint must not prompt")
 		return login.Result{}, nil
@@ -1371,6 +1519,7 @@ func TestHistoryMaxTurnsCapsEachSession(t *testing.T) {
 func TestHistoryImportFailureExitsNonZero(t *testing.T) {
 	withHistoryNow(t)
 	isolateDotenvHome(t)
+	t.Setenv("AGENTO11Y_PROTOCOL", "http") // Fail export, not the OTel capability check.
 	writeClaudeHistory(t, "sess-recent", 24*time.Hour)
 
 	broken := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -1397,6 +1546,7 @@ func TestHistoryImportFailureExitsNonZero(t *testing.T) {
 func TestHistoryAutoFailureLeavesImportOffer(t *testing.T) {
 	withHistoryNow(t)
 	isolateDotenvHome(t)
+	t.Setenv("AGENTO11Y_PROTOCOL", "http") // Fail export, not the OTel capability check.
 	writeClaudeHistory(t, "sess-recent", 24*time.Hour)
 
 	broken := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -1498,19 +1648,60 @@ func withStubHistoryExporter(t *testing.T, exported *int) {
 	historyEnsureLocal = func(context.Context) (string, error) { return srv, nil }
 }
 
-// newCountingIngest starts a fake generation-export endpoint and returns its
-// base URL. It counts accepted generations and asserts that every request
-// carries the local daemon's forward marker. That marker is what keeps an
-// import off the Cloud forwarding path.
+// newCountingIngest accepts native HTTP and OTLP generations like a local
+// receiver. Export requests must carry the suppression marker, and historical
+// imports must never record live usage metrics (empty metric flushes are OK).
 func newCountingIngest(t *testing.T, exported *int) string {
 	t.Helper()
 	var mu sync.Mutex
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" {
+			_, _ = io.WriteString(w, `{"capabilities":["otel_generation_ingest_v1"]}`)
+			return
+		}
 		if r.Header.Get(local.ForwardMarkerHeader) == "" {
 			t.Errorf("%s %s arrived without the forward marker; the daemon would relay it to Cloud", r.Method, r.URL.Path)
 		}
+		if r.URL.Path == "/otlp/v1/traces" {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Error(err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			var req collectortrace.ExportTraceServiceRequest
+			if err := proto.Unmarshal(body, &req); err != nil {
+				t.Error(err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			count := 0
+			for _, resource := range req.ResourceSpans {
+				for _, scope := range resource.ScopeSpans {
+					for _, span := range scope.Spans {
+						for _, attr := range span.Attributes {
+							if attr.Key == "agento11y.generation.id" && attr.Value.GetStringValue() != "" {
+								count++
+								break
+							}
+						}
+					}
+				}
+			}
+			mu.Lock()
+			*exported += count
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/x-protobuf")
+			return // An empty protobuf ExportTraceServiceResponse means accepted.
+		}
+		if r.URL.Path == "/otlp/v1/metrics" {
+			assertHistoryNoLiveMetrics(t, r)
+			w.Header().Set("Content-Type", "application/x-protobuf")
+			return
+		}
 		if r.URL.Path != "/api/v1/generations:export" {
-			w.WriteHeader(http.StatusOK)
+			t.Errorf("unexpected history request: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 		var req struct {
@@ -1532,6 +1723,35 @@ func newCountingIngest(t *testing.T, exported *int) string {
 	}))
 	t.Cleanup(srv.Close)
 	return srv.URL
+}
+
+func assertHistoryNoLiveMetrics(t *testing.T, r *http.Request) {
+	t.Helper()
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(data))
+	for _, name := range []string{"gen_ai.client.token.usage", "gen_ai.client.operation.duration", "gen_ai.client.tool_calls_per_operation"} {
+		if bytes.Contains(data, []byte(name)) {
+			t.Errorf("history recorded live metric %s", name)
+		}
+	}
+}
+
+func forbidHistoryConnections(t *testing.T) {
+	t.Helper()
+	prevLocal, prevExporter := historyEnsureLocal, historyNewExporter
+	t.Cleanup(func() { historyEnsureLocal, historyNewExporter = prevLocal, prevExporter })
+	historyEnsureLocal = func(context.Context) (string, error) {
+		t.Error("import unexpectedly started a local receiver")
+		return "", errors.New("unexpected receiver")
+	}
+	historyNewExporter = func(context.Context, history.Target, *log.Logger) (history.TurnExporter, func(context.Context) error, error) {
+		t.Error("import unexpectedly constructed an exporter")
+		return nil, nil, errors.New("unexpected exporter")
+	}
 }
 
 // acceptingExporter takes every turn, so a test can run an import into Grafana
@@ -1568,6 +1788,7 @@ func TestHistoryCloudImportLeavesTheViewerOffer(t *testing.T) {
 			isolateDotenvHome(t)
 			writeClaudeHistory(t, "sess-recent", 24*time.Hour)
 			setHistoryCloudCredentials(t, "https://agento11y.example.com")
+			t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:4318")
 			exported := 0
 			withStubCloudExporter(t, &exported)
 

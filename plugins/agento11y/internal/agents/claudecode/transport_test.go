@@ -34,6 +34,8 @@ func TestHookRecordFailureTransport(t *testing.T) {
 	}{
 		{name: "HTTP from zero", protocol: "http"},
 		{name: "HTTP saved offset", protocol: "http", savedPrefix: true},
+		{name: "implicit OTel from zero"},
+		{name: "blank OTel saved offset", protocol: " \t ", savedPrefix: true},
 		{name: "OTel from zero", protocol: "otel"},
 		{name: "OTel saved offset", protocol: "otel", savedPrefix: true},
 		{name: "OTel completed tool before failure", protocol: "otel", completedTool: true},
@@ -178,10 +180,10 @@ func TestHookRecordFailureTransport(t *testing.T) {
 			}))
 			defer server.Close()
 			setHookExportEnv(t, server.URL)
+			t.Setenv("SIGIL_PROTOCOL", "")
 			t.Setenv("AGENTO11Y_PROTOCOL", tc.protocol)
 			t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "false")
-			if tc.protocol == "otel" {
-				t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "true")
+			if tc.protocol != "http" {
 				t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", server.URL)
 			}
 			event := "Stop"
@@ -192,7 +194,7 @@ func TestHookRecordFailureTransport(t *testing.T) {
 				logs := runHookForTest(t, hookInput{HookEventName: event, SessionID: sessionID, TranscriptPath: path})
 				wantState := prior
 				var wantHTTP, wantOTel []string
-				if tc.protocol == "otel" {
+				if tc.protocol != "http" {
 					wantOTel = []string{gens[0].ID}
 					if stop == 2 {
 						wantOTel = append(wantOTel, gens[0].ID)
@@ -205,7 +207,7 @@ func TestHookRecordFailureTransport(t *testing.T) {
 				if got := withoutRecordedMetrics(state.Load(sessionID)); !reflect.DeepEqual(got, wantState) {
 					t.Fatalf("Stop%d state=%+v, want %+v; logs: %s", stop, got, wantState, logs)
 				}
-				if stop == 1 || tc.protocol == "otel" {
+				if stop == 1 || tc.protocol != "http" {
 					if !strings.Contains(logs, "enqueue: recorder:") || !strings.Contains(logs, "generation.model.name is required") {
 						t.Fatalf("Stop%d missing recorder failure: %s", stop, logs)
 					}
@@ -241,18 +243,25 @@ func TestHookRecordFailureTransport(t *testing.T) {
 
 func TestHookGenerationTransport(t *testing.T) {
 	for _, tc := range []struct {
-		name, protocol, gate                                                       string
-		httpConfig, missingEndpoint, canceled, oldDaemon, reject, telemetryFailure bool
-		wantFailure, recordFailure                                                 bool
+		name, protocol, gate                                                                              string
+		httpConfig, missingEndpoint, canceled, oldDaemon, reject, partial, cancelExport, telemetryFailure bool
+		wantFailure, recordFailure                                                                        bool
 	}{
-		{name: "HTTP default", httpConfig: true},
+		{name: "implicit OTel", httpConfig: true},
+		{name: "blank OTel", protocol: " \t ", httpConfig: true},
+		{name: "implicit OTel rejected delivery", httpConfig: true, reject: true, wantFailure: true},
+		{name: "implicit OTel missing exporter", httpConfig: true, missingEndpoint: true, wantFailure: true},
+		{name: "implicit OTel canceled setup", httpConfig: true, canceled: true, wantFailure: true},
+		{name: "implicit OTel old daemon", httpConfig: true, oldDaemon: true, wantFailure: true},
+		{name: "implicit OTel partial rejection", httpConfig: true, partial: true, wantFailure: true},
+		{name: "implicit OTel canceled delivery", httpConfig: true, cancelExport: true, wantFailure: true},
 		{name: "explicit HTTP", protocol: "http", httpConfig: true},
 		{name: "SDK grpc falls back to HTTP", protocol: "grpc", httpConfig: true},
 		{name: "SDK none falls back to HTTP", protocol: "none", httpConfig: true},
 		{name: "OTel without HTTP credentials", protocol: "otel", gate: "true"},
 		{name: "OTel with HTTP configured", protocol: "otel", gate: "true", httpConfig: true},
 		{name: "OTel telemetry failure is independent", protocol: "otel", gate: "true", telemetryFailure: true},
-		{name: "missing opt-in", protocol: "otel", httpConfig: true, wantFailure: true},
+		{name: "explicit OTel without opt-in", protocol: "otel", httpConfig: true},
 		{name: "missing exporter", protocol: "otel", gate: "true", httpConfig: true, missingEndpoint: true, wantFailure: true},
 		{name: "invalid protocol", protocol: "unsupported", gate: "true", httpConfig: true, wantFailure: true},
 		{name: "setup canceled", protocol: "otel", gate: "true", httpConfig: true, canceled: true, wantFailure: true},
@@ -272,7 +281,9 @@ func TestHookGenerationTransport(t *testing.T) {
 			var httpRequests int
 			var ids []string
 			var output, mode, operation string
-			reject := tc.reject
+			reject := tc.reject || tc.partial || tc.cancelExport
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				mu.Lock()
 				defer mu.Unlock()
@@ -321,6 +332,15 @@ func TestHookGenerationTransport(t *testing.T) {
 							}
 						}
 					}
+					if marked && reject && tc.cancelExport {
+						cancel()
+					}
+					if marked && reject && tc.partial {
+						body, _ := proto.Marshal(&coltracepb.ExportTraceServiceResponse{PartialSuccess: &coltracepb.ExportTracePartialSuccess{RejectedSpans: 1, ErrorMessage: "rejected"}})
+						w.Header().Set("Content-Type", "application/x-protobuf")
+						_, _ = w.Write(body)
+						return
+					}
 					if (marked && reject) || (!marked && tc.telemetryFailure) {
 						http.Error(w, "rejected", http.StatusBadRequest)
 						return
@@ -342,7 +362,7 @@ func TestHookGenerationTransport(t *testing.T) {
 				t.Setenv("AGENTO11Y_AUTH_TENANT_ID", "tenant")
 				t.Setenv("AGENTO11Y_AUTH_TOKEN", "token")
 			}
-			if !tc.missingEndpoint && tc.protocol != "" && tc.protocol != "http" {
+			if !tc.missingEndpoint && tc.protocol != "http" {
 				endpoint := server.URL
 				if tc.oldDaemon {
 					endpoint += "/otlp"
@@ -366,10 +386,7 @@ func TestHookGenerationTransport(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			ctx := context.Background()
 			if tc.canceled {
-				var cancel context.CancelFunc
-				ctx, cancel = context.WithCancel(ctx)
 				cancel()
 			}
 			var logs bytes.Buffer
@@ -387,7 +404,7 @@ func TestHookGenerationTransport(t *testing.T) {
 				if tc.oldDaemon && !strings.Contains(logs.String(), "restart") {
 					t.Fatalf("missing restart instruction: %s", logs.String())
 				}
-				if tc.reject {
+				if tc.reject || tc.partial || tc.cancelExport {
 					mu.Lock()
 					reject = false
 					mu.Unlock()
@@ -408,20 +425,20 @@ func TestHookGenerationTransport(t *testing.T) {
 			}
 			mu.Lock()
 			defer mu.Unlock()
-			if tc.protocol != "otel" {
+			if tc.protocol == "http" || tc.protocol == "grpc" || tc.protocol == "none" {
 				if httpRequests != 1 || len(ids) != 0 {
 					t.Fatalf("HTTP=%d spans=%v", httpRequests, ids)
 				}
 				return
 			}
 			wantSpans := 1
-			if tc.reject {
+			if tc.reject || tc.partial || tc.cancelExport {
 				wantSpans = 2
 			}
 			if httpRequests != 0 || len(ids) != wantSpans || ids[0] == "" {
 				t.Fatalf("HTTP=%d spans=%v", httpRequests, ids)
 			}
-			if tc.reject && ids[0] != ids[1] {
+			if (tc.reject || tc.partial || tc.cancelExport) && ids[0] != ids[1] {
 				t.Fatalf("retry changed generation ID: %v", ids)
 			}
 			if !strings.Contains(output, "retained reply") || mode != "full" || operation != "chat" {

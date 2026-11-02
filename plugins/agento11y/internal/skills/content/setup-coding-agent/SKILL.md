@@ -158,7 +158,6 @@ The copied block has concrete values in this shape:
 
 ```dotenv
 AGENTO11Y_ENDPOINT=https://agento11y-prod-<region>.grafana.net
-AGENTO11Y_PROTOCOL=http
 AGENTO11Y_AUTH_MODE=basic
 AGENTO11Y_AUTH_TENANT_ID=<instance-id>
 AGENTO11Y_AUTH_TOKEN=glc_...
@@ -166,9 +165,9 @@ OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana.net/otlp
 OTEL_EXPORTER_OTLP_HEADERS='Authorization=Basic <base64-value>'
 ```
 
-Without OTLP, default HTTP conversations work but Cloud analytics does not. Local recording and analytics need no Tempo or Cloud credentials. Login rejects placeholders; flags can replace pasted values. A pasted block fills in the form's preferences, such as content capture, guards and automatic tags, which the user can still change, and login saves the block's other settings. Login ignores a pasted auth mode other than `basic`, `AGENTO11Y_HEADERS`, and the guard timeout: guard checks use them and fail open, so any of them could let every tool call through. It also skips a key that chooses what agento11y runs or loads, where it sends anything but the stack's data, the agent name or version, or the user ID, a value that turns off secret redaction, TLS, guards, a fail-closed guard, or updates, or turns usage stats on, a name that is not upper case, and any name it does not know; it saves the rest, names the skipped keys on stderr, and exits 0. A block's endpoint, OTLP endpoint and stack URL must use https unless they are on this machine (see the README). `--env-file <file>` (`-` for a pipe) never prompts: the block and the flags must supply the endpoint, instance ID, and token, and a setting the block leaves out keeps its saved value. Flags beat the block's values, and `--token-stdin` can supply a token the file leaves out. Configure experimental OTel through the environment or `config.env`, as described in the Reference. Existing config keys stay.
+Default Go generations require OTLP. Local recording and analytics need no Tempo or Cloud credentials. Login rejects placeholders; flags can replace pasted values. A pasted block fills in the form's preferences, such as content capture, guards and automatic tags, which the user can still change, and login saves the block's other settings. Login ignores a pasted auth mode other than `basic`, `AGENTO11Y_HEADERS`, and the guard timeout: guard checks use them and fail open, so any of them could let every tool call through. It also skips a key that chooses what agento11y runs or loads, where it sends anything but the stack's data, the agent name or version, or the user ID, a value that turns off secret redaction, TLS, guards, a fail-closed guard, or updates, or turns usage stats on, a name that is not upper case, and any name it does not know; it saves the rest, names the skipped keys on stderr, and exits 0. A block's endpoint, OTLP endpoint and stack URL must use https unless they are on this machine (see the README). `--env-file <file>` (`-` for a pipe) never prompts: the block and the flags must supply the endpoint, instance ID, and token, and a setting the block leaves out keeps its saved value. Flags beat the block's values, and `--token-stdin` can supply a token the file leaves out. Default OTel setup also requires a valid OTLP endpoint, saved or supplied by the block or `--otlp-endpoint`. Existing config keys stay.
 
-For default HTTP capture and analytics, one token needs `sigil:write`, `metrics:write`, and `traces:write`. Generated policies can include extra scopes; the HTTP integrations use only these three.
+Cloud OTLP needs `metrics:write` and `traces:write`. HTTP generations, guards, scores, and experiments still need API credentials with `sigil:write`.
 
 ### The flags
 
@@ -182,7 +181,7 @@ printf %s "$TOKEN" | agento11y login \
   --otlp-endpoint https://otlp-gateway-prod-<region>.grafana.net/otlp
 ```
 
-Before writing, login sends one credential-check request and reports the result. On failure it asks whether to save interactively; with nonterminal stdin it writes nothing and exits 1. Pass `--yes` to save regardless or `--no-verify` to skip the check. Preferences have no flags.
+Default OTel setup requires a valid OTLP endpoint. Login checks API credentials and the prospective OTel destination separately before saving. On failure it asks whether to save interactively; with nonterminal stdin it writes nothing and exits 1. `--yes` permits saving after failure; `--no-verify` skips checks. Neither bypasses required fields. Preferences have no flags.
 
 Login writes the resolved config path, retaining `sigil/config.env` under the same config root if only that legacy file exists. You can write it by hand instead:
 
@@ -251,26 +250,18 @@ only if they ask; silently shadowing their agent command is surprising.
    user trusted the hooks from `/hooks`. Read launcher stderr for lines starting
    with `agento11y:`.
 
-For local capture, run `agento11y local open`. Check **Sessions** and **Analytics > Overview**. Optionally check **Analytics > Skills** after a recognized skill-load attempt in Claude Code, Pi, or OpenCode. For Cloud, confirm conversations and analytics separately. With default HTTP capture, conversations can arrive while Cloud **Analytics** stays empty. Check OTLP when that happens.
+For local capture, run `agento11y local open`. Check **Sessions** and **Analytics > Overview**. Optionally check **Analytics > Skills** after a recognized skill-load attempt in Claude Code, Pi, or OpenCode. For Cloud, confirm conversations and analytics separately. With HTTP capture, conversations can arrive while Cloud **Analytics** stays empty. Check OTLP when that happens.
 
 ## Troubleshooting
 
-Run `agento11y doctor` first. It is read-only. It validates the required generation settings before probing the selected generation transport and reporting the HTTP status. With an OTLP endpoint configured, it sends separate metrics and traces probes and reports their HTTP statuses. With OTel selected, it checks opt-in and the trace route. A successful OTLP probe verifies transport and authentication, not generation ingestion. Read each probe message; some non-success responses are warnings.
+Run `agento11y doctor` first. It is read-only. It validates generation settings and probes the selected destination. A successful OTLP probe verifies transport and authentication, not generation ingestion. Read each probe message; some non-success responses are warnings.
 
-### The two pipelines
+### Generation and analytics routes
 
-Default HTTP capture uses separate pipelines. Experimental OTel generations share the trace route.
+- Go conversations use the OTLP trace route by default. Explicit HTTP and Pi/OpenCode live capture use `AGENTO11Y_ENDPOINT` and API credentials (`sigil:write`).
+- Analytics uses `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT`. Cloud OTLP needs `metrics:write` and `traces:write`.
 
-- **Conversations** use `AGENTO11Y_ENDPOINT`, `AGENTO11Y_AUTH_TENANT_ID`, and `AGENTO11Y_AUTH_TOKEN` by default (`sigil:write`). With experimental OTel selected, Go producers use the configured OTLP trace route.
-- **Analytics** (the metrics and traces) export over
-  `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT`, or the vendor-neutral
-  `OTEL_EXPORTER_OTLP_ENDPOINT`. The token needs `metrics:write` and
-  `traces:write`.
-
-If conversations work while analytics stays empty, the OTLP endpoint may be
-unset, the token may lack the metrics or traces scope, or the OTLP export may be
-failing for another reason. Doctor names the missing-endpoint case and probes
-both signals when an endpoint is set.
+With HTTP capture, conversations can work while analytics stays empty. Check the OTLP endpoint and metrics/traces scopes.
 
 ### Reading the report row by row
 
@@ -326,9 +317,8 @@ All hosts read the resolved config path. The default is `~/.config/agento11y/con
 | `AGENTO11Y_ENDPOINT` | Conversations API URL; Cloud history destination identity even with OTel |
 | `AGENTO11Y_AUTH_TENANT_ID` | Instance ID |
 | `AGENTO11Y_AUTH_TOKEN` | Access-policy token |
-| `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP endpoint for metrics, traces, and opt-in OTel generations |
-| `AGENTO11Y_PROTOCOL` | Generation transport: `http` (default) or experimental `otel` |
-| `AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES` | `true` enables the OTel experiment; no legacy alias |
+| `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP endpoint for default Go generations, traces, and metrics |
+| `AGENTO11Y_PROTOCOL` | Go generation transport: unset/blank or `otel` selects OTel; `http`, `grpc`, `none` select HTTP |
 | `AGENTO11Y_STACK_URL` | The stack login asks about; builds links only, never ingest |
 | `AGENTO11Y_CONTENT_CAPTURE_MODE` | Which content fields ship (see below) |
 | `AGENTO11Y_TAGS` | `key=value,key=value` attached to every generation |
@@ -347,18 +337,17 @@ Branded keys have older `SIGIL_*` spellings except `AGENTO11Y_STACK_URL` and `AG
 **Local only** writes `AGENTO11Y_LOCAL` and `SIGIL_LOCAL` as true, and both `LOCAL_FORWARD` spellings as false. **Local web UI = Yes** writes all four as true; **No** writes all four as false.
 An explicit `agento11y login` still runs Cloud setup. Doctor reports provenance only for settings in its report.
 
-### Experimental OTel generation export
+### Generation transport
 
-HTTP remains the default. To export generations as OpenTelemetry (OTel) spans, set these values in the environment or `~/.config/agento11y/config.env`:
+The shared Go CLI exports generations as OpenTelemetry (OTel) spans by default. Configure `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_ENDPOINT`) and authentication for an endpoint that supports Agent Observability generation ingestion. For HTTP export, set `AGENTO11Y_PROTOCOL=http` in the environment or `config.env` before setup.
 
-```dotenv
-AGENTO11Y_PROTOCOL=otel
-AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true
-```
+Configurations without `AGENTO11Y_PROTOCOL` switch to OTel too. Compared with HTTP:
 
-Configure `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_ENDPOINT`) and OTLP authentication. Use an endpoint that supports Agent Observability generation ingestion.
+- With the default `metadata_only`, generations omit message and tool-definition documents, including roles. HTTP keeps a reduced structure.
+- `full_with_metadata_spans` becomes `full`, so generation spans include prompts and responses.
+- Without `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT`, generations go to `OTEL_EXPORTER_OTLP_ENDPOINT`, even if it was set for another collector.
 
-OTel export supports Claude Code, Codex, Copilot, Cursor, Vibe, and Kiro. Local mode, history imports, and Claude plugin eval imports also support OTel. Pi and OpenCode live plugins still use HTTP.
+OTel export supports Claude Code, Codex, Copilot, Cursor, Vibe, Kiro, local mode, history imports, and Claude plugin eval imports. Pi and OpenCode live plugins still use HTTP and reject explicit `otel`.
 
 Guards, scores, and experiment APIs still need HTTP credentials.
 
@@ -478,7 +467,7 @@ agento11y history import claude-code --local     # import into the local store
 agento11y history import claude-code --no-local  # import into Grafana Cloud
 ```
 
-The import resolves the destination in this order: `--no-local`, `--local`, a true `AGENTO11Y_LOCAL` from shell or `config.env`, then saved Cloud credentials. With none set, an interactive run asks where sessions go; `--no-local` or any valid LOCAL value skips that question. Missing Cloud credentials still starts Cloud setup, without **Local web UI**, because local imports never forward to any recipient.
+The import resolves the destination in this order: `--no-local`, `--local`, a true `AGENTO11Y_LOCAL` from shell or `config.env`, then saved Cloud credentials. With none set, an interactive run asks where sessions go; `--no-local` or any valid LOCAL value skips that question. Missing settings for the selected Cloud transport still start setup, without **Local web UI**, because local imports never forward.
 A noninteractive run never asks: only `--all --yes` imports; otherwise it prints a dry-run plan and exits 0.
 
 Without `--since`, an import selects sessions active during the last 90 days. Each imported turn is recorded in a ledger per agent and destination, so an import into another destination sends the same turns without `--force`. If saved local mode would keep that import local, add `--no-local`.

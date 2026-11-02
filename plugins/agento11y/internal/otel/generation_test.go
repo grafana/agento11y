@@ -235,23 +235,26 @@ func TestSetupGenerationConfiguration(t *testing.T) {
 		optIn          string
 		endpoint       string
 		override       agento11y.GenerationExportProtocol
-		experimental   *bool
 		wantErr        bool
 		wantProvider   bool
 		wantGeneration bool
 	}{
-		{name: "HTTP missing endpoint remains disabled"},
-		{name: "OTel missing endpoint", protocol: "otel", optIn: "true", wantErr: true},
-		{name: "OTel missing opt-in", protocol: "otel", endpoint: "http://localhost:4318", wantErr: true},
-		{name: "OTel invalid endpoint", protocol: "otel", optIn: "true", endpoint: "not-a-url", wantErr: true},
-		{name: "OTel configured", protocol: "otel", optIn: "true", endpoint: "http://localhost:4318", wantProvider: true, wantGeneration: true},
-		{name: "HTTP configured", endpoint: "http://localhost:4318", wantProvider: true},
+		{name: "implicit OTel missing endpoint", wantErr: true},
+		{name: "HTTP missing endpoint remains disabled", protocol: "http"},
+		{name: "OTel missing endpoint", protocol: "otel", wantErr: true},
+		{name: "implicit OTel invalid endpoint", endpoint: "not-a-url", wantErr: true},
+		{name: "OTel invalid endpoint", protocol: "otel", endpoint: "not-a-url", wantErr: true},
+		{name: "implicit OTel without opt-in", endpoint: "http://localhost:4318", wantProvider: true, wantGeneration: true},
+		{name: "implicit OTel with opt-out", optIn: "false", endpoint: "http://localhost:4318", wantProvider: true, wantGeneration: true},
+		{name: "OTel without opt-in", protocol: "otel", endpoint: "http://localhost:4318", wantProvider: true, wantGeneration: true},
+		{name: "OTel with opt-out", protocol: "otel", optIn: "false", endpoint: "http://localhost:4318", wantProvider: true, wantGeneration: true},
+		{name: "OTel with opt-in", protocol: "otel", optIn: "true", endpoint: "http://localhost:4318", wantProvider: true, wantGeneration: true},
+		{name: "HTTP configured", protocol: "http", endpoint: "http://localhost:4318", wantProvider: true},
 		{name: "explicit HTTP bypasses ambient OTel", protocol: "otel", override: agento11y.GenerationExportProtocolHTTP},
-		{name: "explicit OTel still needs opt-in", override: agento11y.GenerationExportProtocolOTel, endpoint: "http://localhost:4318", wantErr: true},
-		{name: "explicit OTel", override: agento11y.GenerationExportProtocolOTel, optIn: "true", endpoint: "http://localhost:4318", wantProvider: true, wantGeneration: true},
+		{name: "explicit HTTP bypasses implicit OTel", override: agento11y.GenerationExportProtocolHTTP},
+		{name: "explicit HTTP with endpoint", override: agento11y.GenerationExportProtocolHTTP, endpoint: "http://localhost:4318", wantProvider: true},
+		{name: "explicit OTel without opt-in", protocol: "http", override: agento11y.GenerationExportProtocolOTel, endpoint: "http://localhost:4318", wantProvider: true, wantGeneration: true},
 		{name: "unknown protocol errors even without endpoint", protocol: "typo", wantErr: true},
-		{name: "resolved opt-in survives ambient removal", override: agento11y.GenerationExportProtocolOTel, experimental: new(true), endpoint: "http://localhost:4318", wantProvider: true, wantGeneration: true},
-		{name: "resolved opt-out overrides ambient opt-in", protocol: "otel", optIn: "true", experimental: new(false), endpoint: "http://localhost:4318", wantErr: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -259,7 +262,7 @@ func TestSetupGenerationConfiguration(t *testing.T) {
 			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 			t.Setenv("AGENTO11Y_PROTOCOL", tc.protocol)
 			t.Setenv(agento11y.EnvEnableExperimentalFeatures, tc.optIn)
-			p, err := SetupWithOptions(context.Background(), "test", Options{Endpoint: tc.endpoint, GenerationProtocol: tc.override, EnableExperimentalFeatures: tc.experimental})
+			p, err := SetupWithOptions(context.Background(), "test", Options{Endpoint: tc.endpoint, GenerationProtocol: tc.override})
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("setup error = %v", err)
 			}
@@ -274,6 +277,12 @@ func TestSetupGenerationConfiguration(t *testing.T) {
 			}
 			if (p.MeterProvider() != nil) != tc.wantProvider {
 				t.Fatal("missing meter provider")
+			}
+			if p != nil && p.generation != nil && p.generation.tp == p.tp {
+				t.Fatal("generation provider must be separate from tool tracing")
+			}
+			if tc.wantGeneration && p.GenerationEndpoint() != tc.endpoint {
+				t.Fatalf("generation endpoint = %q, want %q", p.GenerationEndpoint(), tc.endpoint)
 			}
 		})
 	}
@@ -307,8 +316,7 @@ func TestSetupGenerationExplicitEndpointReplacesInvalidAmbient(t *testing.T) {
 
 func TestSetupGenerationExportsFullWithMetadataSpans(t *testing.T) {
 	envconfig.PinAliasEnvBlank(t)
-	t.Setenv("AGENTO11Y_PROTOCOL", "otel")
-	t.Setenv(agento11y.EnvEnableExperimentalFeatures, "true")
+	t.Setenv(agento11y.EnvEnableExperimentalFeatures, "false")
 	t.Setenv("AGENTO11Y_CONTENT_CAPTURE_MODE", "full_with_metadata_spans")
 	t.Setenv("OTEL_TRACES_SAMPLER", "always_off")
 	capture := newOTLPCapture(t)
@@ -320,16 +328,20 @@ func TestSetupGenerationExportsFullWithMetadataSpans(t *testing.T) {
 	}
 	defer func() { _ = p.Shutdown(context.Background()) }()
 	client := agento11y.NewClient(agento11y.Config{
-		GenerationExport: agento11y.GenerationExportConfig{Protocol: agento11y.GenerationExportProtocolOTel},
-		ContentCapture:   envconfig.ResolveContentMode(nil),
-		TracerProvider:   p.GenerationTracerProvider(),
-		MeterProvider:    p.MeterProvider(),
-		Flusher:          p.GenerationFlusher(),
+		EnableExperimentalFeatures: new(true), // CLI opt-in is client-scoped.
+		GenerationExport:           agento11y.GenerationExportConfig{Protocol: agento11y.GenerationExportProtocolOTel},
+		ContentCapture:             envconfig.ResolveContentMode(nil),
+		TracerProvider:             p.GenerationTracerProvider(),
+		MeterProvider:              p.MeterProvider(),
+		Flusher:                    p.GenerationFlusher(),
 	})
 	defer func() { _ = client.Shutdown(context.Background()) }()
 	_, rec := client.StartGeneration(context.Background(), agento11y.GenerationStart{Model: agento11y.ModelRef{Provider: "openai", Name: "test"}})
 	rec.SetResult(agento11y.Generation{Input: []agento11y.Message{agento11y.UserTextMessage("FULL-CONTENT")}}, nil)
 	rec.End()
+	if err := rec.Err(); err != nil {
+		t.Fatal(err)
+	}
 	if err := client.Flush(context.Background()); err != nil {
 		t.Fatal(err)
 	}

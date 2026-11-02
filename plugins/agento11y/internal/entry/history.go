@@ -306,22 +306,29 @@ func historyResolveDestination(ctx context.Context, opts *historyImportOptions, 
 		opts.LocalEnvKey = envLocal.key
 		return nil
 	}
-	protocol, err := envconfig.ResolveGenerationTransport()
+	protocol, err := envconfig.SelectGenerationTransportWith(envconfig.LookupEnv)
 	if err != nil {
 		return err
 	}
-	// The HTTP setup flow asks for an API token that OTel does not need.
-	if protocol == agento11y.GenerationExportProtocolOTel || historyDestinationConfigured() || !interactive {
+	// Missing settings can be repaired by setup, but a supplied malformed
+	// collector must fail before prompting or constructing an exporter.
+	if !(history.Target{}).Local() {
+		if err := validateSuppliedLaunchTransport(protocol, ""); err != nil {
+			return err
+		}
+	}
+	if historyDestinationConfigured() || !interactive {
 		return nil
 	}
 
 	// History imports marked as locally forwarded never relay to Cloud, so this
 	// setup cannot offer the local daemon's Local + Cloud behavior.
 	result, err := loginRun(ctx, login.RunOpts{
-		Stderr:           stderr,
-		Logger:           logger,
-		OfferLocal:       !opts.NoLocal && !localDestinationSet(),
-		KeepLocalSetting: opts.NoLocal,
+		Stderr:             stderr,
+		Logger:             logger,
+		GenerationProtocol: protocol,
+		OfferLocal:         !opts.NoLocal && !localDestinationSet(),
+		KeepLocalSetting:   opts.NoLocal,
 	})
 	switch {
 	case err == nil:
@@ -340,10 +347,19 @@ func historyResolveDestination(ctx context.Context, opts *historyImportOptions, 
 // historyDestinationConfigured reports whether first-run setup has anything to
 // ask. OTel needs Cloud ledger identity but not an HTTP API token.
 func historyDestinationConfigured() bool {
-	if protocol, err := envconfig.ResolveGenerationTransport(); err == nil && protocol == agento11y.GenerationExportProtocolOTel {
-		return history.Target{}.Local() || (envconfig.Getenv("ENDPOINT") != "" && envconfig.Getenv("AUTH_TENANT_ID") != "")
+	protocol, err := envconfig.SelectGenerationTransportWith(envconfig.LookupEnv)
+	if err != nil {
+		return false
 	}
-	return dotenv.HasCredentials() || history.Target{}.Local()
+	if (history.Target{}).Local() {
+		return true // The daemon supplies its own collector and needs no Cloud auth.
+	}
+	if protocol == agento11y.GenerationExportProtocolOTel {
+		return validateLaunchTransport(protocol, "") == nil &&
+			strings.TrimSpace(envconfig.Getenv("ENDPOINT")) != "" &&
+			strings.TrimSpace(envconfig.Getenv("AUTH_TENANT_ID")) != ""
+	}
+	return dotenv.HasCredentials()
 }
 
 func historyImport(opts historyImportOptions, interactive bool, stdout, stderr io.Writer) error {
@@ -640,8 +656,12 @@ func historyProgress(stderr io.Writer) (func(history.Progress), func()) {
 // Freeze the destination before exporter construction so the ledger uses
 // the same identity even if the environment changes during setup.
 func historyTarget(ctx context.Context, opts historyImportOptions) (history.Target, error) {
+	protocol, err := envconfig.SelectGenerationTransportWith(envconfig.LookupEnv)
+	if err != nil {
+		return history.Target{}, err
+	}
 	if !opts.Local {
-		return history.ResolveTarget(history.Target{}, nil)
+		return history.ResolveTarget(history.Target{Protocol: protocol}, nil)
 	}
 	startCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -655,6 +675,7 @@ func historyTarget(ctx context.Context, opts historyImportOptions) (history.Targ
 	target, err := history.ResolveTarget(history.Target{
 		Endpoint:     endpoint,
 		OTLPEndpoint: endpoint + "/otlp",
+		Protocol:     protocol,
 	}, nil)
 	if err != nil {
 		return history.Target{}, err

@@ -1,6 +1,7 @@
 // Package login owns the interactive agento11y credentials flow used by both
 // the explicit `agento11y login` subcommand and the auto-prompt that runs
-// before `agento11y claude` / `agento11y pi` when no credentials are configured.
+// before `agento11y claude` / `agento11y pi` when the selected transport's
+// connection is missing.
 //
 // On first setup the flow asks where sessions go, when RunOpts.OfferLocal is set
 // and the platform has a local receiver. Local only writes the LOCAL setting and
@@ -18,8 +19,8 @@
 // which fills SIGIL_ENDPOINT, SIGIL_AUTH_TENANT_ID,
 // SIGIL_AUTH_TOKEN, the OTLP endpoint, and OTEL_EXPORTER_OTLP_HEADERS.
 // Pasting is optional: whatever the block does not carry is asked for field by
-// field. The three credentials are required, the OTLP endpoint is not. A
-// preferences group follows: content capture mode, session tags, guards, and
+// field. The three credentials are required; OTel also requires an OTLP
+// endpoint. A preferences group follows: content capture mode, session tags, guards, and
 // automatic tags. The stack answer only builds the printed links and is never
 // saved.
 //
@@ -67,6 +68,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/otel"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/skills"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/usagestats"
 	"golang.org/x/term"
@@ -264,10 +266,16 @@ type RunOpts struct {
 	// to doctor.ProbeConversations.
 	Probe ProbeFunc
 
+	// GenerationProtocol is a caller-scoped transport override, for HTTP-only
+	// setup callers. Empty selects from existing shell/file configuration.
+	// It is never persisted or exported into the process environment.
+	GenerationProtocol agento11y.GenerationExportProtocol
+
 	// Endpoint, TenantID, Token, and OTLPEndpoint are values the command
 	// line supplied. They are not prompted for, and they outrank the process
 	// environment and the existing dotenv file. Supplying Endpoint, TenantID,
-	// and Token together runs login without a terminal.
+	// and Token together avoids the form; OTel still needs an OTLP endpoint
+	// from flags or existing configuration.
 	Endpoint     string
 	TenantID     string
 	Token        string
@@ -385,9 +393,9 @@ func Run(ctx context.Context, opts RunOpts) (Result, error) {
 		}
 	}
 
-	// The form runs only while a required credential is still missing after
-	// the flags, so `--endpoint --tenant --token` configures a devcontainer,
-	// an SSH session, or a script with no terminal at all.
+	// The form runs only while an API credential is still missing after the
+	// flags, so scripts can configure a connection without a terminal. OTel's
+	// required destination is validated after resolving the existing config.
 	askUser := !fixed.completeCredentials()
 	isTTY := term.IsTerminal(int(opts.Stdin.Fd()))
 	if askUser && !isTTY {
@@ -425,18 +433,22 @@ func Run(ctx context.Context, opts RunOpts) (Result, error) {
 			existing[envconfig.LegacyKey("LOCAL")],
 			existing[envconfig.LegacyKey("LOCAL_FORWARD")],
 		),
-		endpoint:     cmp.Or(fixed.endpoint, existing["SIGIL_ENDPOINT"]),
-		tenantID:     cmp.Or(fixed.tenantID, existing["SIGIL_AUTH_TENANT_ID"]),
-		token:        fixed.token,
-		otelEndpoint: cmp.Or(fixed.otelEndpoint, existing["SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT"]),
-		contentMode:  normalizeContentMode(existing["SIGIL_CONTENT_CAPTURE_MODE"]),
-		tags:         existing["SIGIL_TAGS"],
-		autoTags:     seedAutoTags(existing[envconfig.LegacyKey(envconfig.AutoTagsSuffix)]),
-		autoTagNames: seedAutoTagNames(existing[envconfig.LegacyKey(envconfig.AutoTagNamesSuffix)]),
-		guards:       seedGuards(existing["SIGIL_GUARDS_ENABLED"], existing["SIGIL_GUARDS_FAIL_OPEN"]),
-		guardTimeout: strings.TrimSpace(existing["SIGIL_GUARDS_TIMEOUT_MS"]),
-		otlpHeaders:  existing["OTEL_EXPORTER_OTLP_HEADERS"],
-		stackURL:     existing[stackURLKey],
+		generationProtocol:         cmp.Or(opts.GenerationProtocol, agento11y.GenerationExportProtocol(existing["SIGIL_PROTOCOL"])),
+		generationProtocolOverride: opts.GenerationProtocol,
+		otelToken:                  existing["SIGIL_OTEL_AUTH_TOKEN"],
+		otelInsecure:               envconfig.ParseBool(existing["SIGIL_OTEL_EXPORTER_OTLP_INSECURE"]),
+		endpoint:                   cmp.Or(fixed.endpoint, existing["SIGIL_ENDPOINT"]),
+		tenantID:                   cmp.Or(fixed.tenantID, existing["SIGIL_AUTH_TENANT_ID"]),
+		token:                      fixed.token,
+		otelEndpoint:               cmp.Or(fixed.otelEndpoint, existing["SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT"]),
+		contentMode:                normalizeContentMode(existing["SIGIL_CONTENT_CAPTURE_MODE"]),
+		tags:                       existing["SIGIL_TAGS"],
+		autoTags:                   seedAutoTags(existing[envconfig.LegacyKey(envconfig.AutoTagsSuffix)]),
+		autoTagNames:               seedAutoTagNames(existing[envconfig.LegacyKey(envconfig.AutoTagNamesSuffix)]),
+		guards:                     seedGuards(existing["SIGIL_GUARDS_ENABLED"], existing["SIGIL_GUARDS_FAIL_OPEN"]),
+		guardTimeout:               strings.TrimSpace(existing["SIGIL_GUARDS_TIMEOUT_MS"]),
+		otlpHeaders:                existing["OTEL_EXPORTER_OTLP_HEADERS"],
+		stackURL:                   existing[stackURLKey],
 	}
 	if block.otlpHeadersPasted {
 		v.otlpHeaders, v.otlpHeadersPasted = block.otlpHeaders, true
@@ -490,6 +502,13 @@ func Run(ctx context.Context, opts RunOpts) (Result, error) {
 		}
 	}
 
+	if err := v.selectGenerationProtocol(); err != nil {
+		return Result{}, err
+	}
+	if err := v.validateGenerationEndpoint(); err != nil {
+		return Result{}, err
+	}
+
 	if strings.TrimSpace(v.token) == "" {
 		v.token = existingToken
 	}
@@ -508,10 +527,9 @@ func Run(ctx context.Context, opts RunOpts) (Result, error) {
 	// credential and no field asks for it, so a new token would leave OTLP
 	// authenticating with the old one and login would still report success:
 	// otel.ExporterHeaders prefers explicit headers that carry an Authorization
-	// entry, and the credential check only probes the export endpoint. A new
-	// endpoint would send the old credential to another host. Drop it on the
-	// same moves as the other copies, so the exporter builds Basic auth from
-	// the tenant ID and the new token.
+	// entry. A new endpoint would send the old credential to another host.
+	// Drop it before verification and persistence, so the exporter builds
+	// Basic auth from the tenant ID and the new token.
 	if !v.otlpHeadersPasted && v.otlpHeaders != "" && v.dropCredentialCopies {
 		v.otlpHeaders = ""
 		fmt.Fprintln(opts.Stderr, clihelp.New(opts.Stderr).Detail(
@@ -522,12 +540,16 @@ func Run(ctx context.Context, opts RunOpts) (Result, error) {
 	// Ask the endpoint whether it accepts these credentials before the file
 	// is written, so a wrong instance ID or a token without sigil:write is
 	// reported here instead of showing up as an empty Conversations page.
-	verdict, err := verifyCredentials(ctx, opts, v, envconfig.ParseBool(existing["SIGIL_INSECURE"]), isTTY)
+	updates := buildUpdates(v, opts.KeepLocalSetting)
+	prospective := maps.Clone(existing)
+	maps.Copy(prospective, updates)
+	v.otelToken = prospective["SIGIL_OTEL_AUTH_TOKEN"]
+	v.otelInsecure = envconfig.ParseBool(cmp.Or(prospective["SIGIL_OTEL_EXPORTER_OTLP_INSECURE"], prospective["OTEL_EXPORTER_OTLP_INSECURE"]))
+	verdict, err := verifyCredentials(ctx, opts, v, envconfig.ParseBool(prospective["SIGIL_INSECURE"]), isTTY)
 	if err != nil {
 		return Result{}, err
 	}
 
-	updates := buildUpdates(v, opts.KeepLocalSetting)
 	if err := dotenv.WriteDotenv(configPath, updates, opts.Logger); err != nil {
 		return Result{}, err
 	}
@@ -659,7 +681,8 @@ func canKeepCloudConnection(v formValues, fixed fixedValues, existingToken strin
 	if _, err := stackOrigin(v.stackURL); err != nil {
 		return false
 	}
-	return requireURL(v.endpoint) == nil &&
+	return v.selectGenerationProtocol() == nil && v.validateGenerationEndpoint() == nil &&
+		requireURL(v.endpoint) == nil &&
 		strings.TrimSpace(v.tenantID) != "" &&
 		strings.TrimSpace(existingToken) != ""
 }
@@ -697,6 +720,10 @@ func promptValues(ctx context.Context, v *formValues, fixed fixedValues, existin
 			v.localMode = true
 			return nil
 		}
+	}
+
+	if err := v.selectGenerationProtocol(); err != nil {
+		return err
 	}
 
 	// The guard timeout field shows the runtime default when no value is
@@ -738,6 +765,9 @@ func promptValues(ctx context.Context, v *formValues, fixed fixedValues, existin
 		return err
 	}
 	filled := applyPaste(v, fixed, pasted)
+	if err := v.selectGenerationProtocol(); err != nil {
+		return err
+	}
 
 	tokenDesc := "API token → Create a token in Cloud Access Policies on the page above"
 	tokenValidate := requireNonEmpty("auth token")
@@ -770,10 +800,20 @@ func promptValues(ctx context.Context, v *formValues, fixed fixedValues, existin
 			Value(&v.token))
 	}
 	if fixed.otelEndpoint == "" && !filled.otelEndpoint {
+		description := "For SDK traces and metrics. Press Enter to skip."
+		validate := allowEmptyURL
+		if v.generationProtocol == agento11y.GenerationExportProtocolOTel {
+			description = "Required for OTel generation export. Copy the OTLP URL from the page above."
+			validate = func(endpoint string) error {
+				candidate := *v
+				candidate.otelEndpoint = endpoint
+				return candidate.validateGenerationEndpoint()
+			}
+		}
 		required = append(required, huh.NewInput().
 			Title("OTLP endpoint").
-			Description("For SDK traces and metrics. Press Enter to skip.").
-			Validate(allowEmptyURL).
+			Description(description).
+			Validate(validate).
 			Value(&v.otelEndpoint))
 	}
 
@@ -1441,8 +1481,7 @@ var blockSettingSuffixes = []string{
 	"CONTENT_CAPTURE_MODE", "DEBUG", "REDACT_INPUT_MESSAGES", "OTEL_EXPORTER_OTLP_INSECURE",
 	"OTEL_AUTH_TOKEN", "GUARDS_ENABLED", "GUARDS_FAIL_OPEN",
 	"AUTO_UPDATE", "THEME", "USER_ID_SOURCE", usagestats.EnvSuffix,
-	// Not an alias family: the SDK reads only the AGENTO11Y_ spelling, which
-	// PROTOCOL=otel needs.
+	// Not an alias family: the SDK reads only the AGENTO11Y_ spelling.
 	"ENABLE_EXPERIMENTAL_FEATURES",
 }
 
@@ -1462,10 +1501,11 @@ var blockFormSuffixes = []string{"CONTENT_CAPTURE_MODE", "TAGS", "GUARDS_ENABLED
 // endpoint.
 var blockExportCredentialSuffixes = []string{"OTEL_AUTH_TOKEN", "HEADERS"}
 
-// blockDefaultValues are the PROTOCOL and AUTH_MODE values the setup page's
-// block always carries. They are the defaults, so login does not write them
-// over a saved choice such as PROTOCOL=otel, and does not name them as
-// refused; any other PROTOCOL is written, and any other AUTH_MODE refused.
+// blockDefaultValues are the PROTOCOL and AUTH_MODE values the setup page
+// has always put in its block, so they do not record a user choice. Login does
+// not write them over a saved choice or the OTel default, and does not name
+// them as refused; any other PROTOCOL is written, and any other AUTH_MODE
+// refused.
 var blockDefaultValues = map[string]string{"PROTOCOL": "http", "AUTH_MODE": "basic"}
 
 // blockKeys sorts a block's keys by what login does with them. settings are
@@ -1896,7 +1936,7 @@ func contentCaptureOptions(current string) []huh.Option[string] {
 	case contentModeNoToolContent:
 		options = append(options, huh.NewOption("No tool content — capture generations, drop tool args and results", contentModeNoToolContent))
 	case contentModeFullWithMetadataSpans:
-		options = append(options, huh.NewOption("Full to ingest, metadata-only spans — keep content off OTel traces", contentModeFullWithMetadataSpans))
+		options = append(options, huh.NewOption("Full content; metadata-only spans with HTTP, full-content spans with direct OTel", contentModeFullWithMetadataSpans))
 	}
 	return options
 }
@@ -1930,8 +1970,8 @@ const (
 	verifyOverridden
 )
 
-// verifyCredentials asks the generation-export endpoint whether it accepts
-// the collected credentials, using the same request the exporter sends. It
+// verifyCredentials checks the HTTP API and, when selected, the prospective
+// OTel destination independently using explicit connection values. It
 // returns verifyPassed, verifySkipped, or verifyOverridden when the caller
 // may write the file, and verifyFailed with ErrNotVerified when it may not.
 // A failure is reported and then offered as a choice: an interactive user can
@@ -1950,12 +1990,31 @@ func verifyCredentials(ctx context.Context, opts RunOpts, v formValues, insecure
 
 	res := opts.Probe(ctx, v.endpoint, v.tenantID, v.token, insecure)
 	logVerdict(opts.Logger, v.endpoint, v.tenantID, res)
-	if res != nil && res.OK {
+	accepted := res != nil && res.OK
+	if accepted {
 		fmt.Fprintln(opts.Stderr, clihelp.New(opts.Stderr).Success("The endpoint accepted these credentials."))
-		return verifyPassed, nil
+	} else {
+		fmt.Fprintln(opts.Stderr, describeProbeFailure(opts.Stderr, res, v.endpoint, v.tenantID))
 	}
 
-	fmt.Fprintln(opts.Stderr, describeProbeFailure(opts.Stderr, res, v.endpoint, v.tenantID))
+	if v.generationProtocol == agento11y.GenerationExportProtocolOTel {
+		target := otel.SignalEndpointURL(otel.EffectiveEndpointURL(v.otelEndpoint, v.otelInsecure), "traces")
+		headers := otel.ExporterHeaders(v.otlpHeaders, v.tenantID, v.otelToken, v.token)
+		otlp := doctor.ProbeGenerationOTLP(ctx, target, headers)
+		logVerdict(opts.Logger, target, "", otlp)
+		if otlp != nil && otlp.OK {
+			fmt.Fprintln(opts.Stderr, clihelp.New(opts.Stderr).Success("The OTLP endpoint accepted the connection probe; this does not confirm generation storage."))
+		} else {
+			accepted = false
+			fmt.Fprintln(opts.Stderr, clihelp.New(opts.Stderr).Warning("The OTLP endpoint did not accept the connection probe: "+target))
+			if otlp != nil {
+				fmt.Fprintf(opts.Stderr, "HTTP %d: %s\n", otlp.StatusCode, otlp.Message)
+			}
+		}
+	}
+	if accepted {
+		return verifyPassed, nil
+	}
 	if opts.AssumeYes {
 		return verifyOverridden, nil
 	}
@@ -2086,6 +2145,9 @@ func printNextStep(w io.Writer, outcome verifyOutcome, origin string) {
 // file and overlays from the process env. Package-level so tests can iterate
 // it to clear both spellings hermetically per case.
 var seededSuffixes = []string{
+	"PROTOCOL",
+	"OTEL_AUTH_TOKEN",
+	"OTEL_EXPORTER_OTLP_INSECURE",
 	"ENDPOINT",
 	"AUTH_TENANT_ID",
 	"AUTH_TOKEN",
@@ -2129,14 +2191,18 @@ const (
 // formValues holds the resolved field values the form produced. It exists so
 // buildUpdates can be unit-tested without driving the huh TUI.
 type formValues struct {
-	localMode           bool
-	offerLocalDaemon    bool
-	localDaemon         bool
-	localDaemonPrompted bool
-	endpoint            string
-	tenantID            string
-	token               string
-	otelEndpoint        string
+	generationProtocol         agento11y.GenerationExportProtocol
+	generationProtocolOverride agento11y.GenerationExportProtocol
+	otelToken                  string
+	otelInsecure               bool
+	localMode                  bool
+	offerLocalDaemon           bool
+	localDaemon                bool
+	localDaemonPrompted        bool
+	endpoint                   string
+	tenantID                   string
+	token                      string
+	otelEndpoint               string
 	// otlpHeaders is the OTEL_EXPORTER_OTLP_HEADERS value to persist: the one on
 	// file, or the one a pasted block replaced it with. otlpHeadersPasted marks
 	// the second case, the only one where the header is known to carry the token
@@ -2414,12 +2480,40 @@ func loadSeeds(configPath string, logger *log.Logger) (map[string]string, error)
 			}
 		}
 	}
+	if seeds["SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT"] == "" {
+		seeds["SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT"] = cmp.Or(strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")), strings.TrimSpace(fileEnv["OTEL_EXPORTER_OTLP_ENDPOINT"]))
+	}
+	seeds["OTEL_EXPORTER_OTLP_INSECURE"] = cmp.Or(strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_INSECURE")), strings.TrimSpace(fileEnv["OTEL_EXPORTER_OTLP_INSECURE"]))
 	// Neither of these has an alias family, and both are read from the file
 	// alone. login writes back every key it resolves here, so overlaying the
 	// process env would turn a one-off shell export into a saved value.
 	seeds["OTEL_EXPORTER_OTLP_HEADERS"] = strings.TrimSpace(fileEnv["OTEL_EXPORTER_OTLP_HEADERS"])
 	seeds[stackURLKey] = strings.TrimSpace(fileEnv[stackURLKey])
 	return seeds, nil
+}
+
+// selectGenerationProtocol is policy-only, so local-only setup can return
+// before validating any Cloud connection fields.
+func (v *formValues) selectGenerationProtocol() error {
+	v.generationProtocol = cmp.Or(v.generationProtocolOverride,
+		agento11y.GenerationExportProtocol(v.blockSettings[envconfig.PreferredKey("PROTOCOL")]), v.generationProtocol)
+	protocol, err := envconfig.SelectGenerationTransportWith(func(string) (string, string, bool) {
+		return string(v.generationProtocol), envconfig.PreferredKey("PROTOCOL"), v.generationProtocol != ""
+	})
+	if err == nil {
+		v.generationProtocol = protocol
+	}
+	return err
+}
+
+func (v formValues) validateGenerationEndpoint() error {
+	_, err := envconfig.ResolveGenerationTransportWith(func(suffix string) (string, string, bool) {
+		if suffix == "PROTOCOL" {
+			return string(v.generationProtocol), envconfig.PreferredKey(suffix), true
+		}
+		return v.otelEndpoint, envconfig.PreferredKey(suffix), v.otelEndpoint != ""
+	}, func(string) string { return "" })
+	return err
 }
 
 func requireURL(s string) error {

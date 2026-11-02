@@ -247,6 +247,7 @@ func TestPostToolUseRedactsErrorMessageInFullMode(t *testing.T) {
 }
 
 func TestStopSuccessfulExportDeletesFragmentAndUsesAuth(t *testing.T) {
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	logger := log.New(io.Discard, "", 0)
@@ -309,6 +310,7 @@ func TestStopExportsRepositoryFromSessionCWD(t *testing.T) {
 			envconfig.PinAliasEnvBlank(t)
 			t.Setenv("XDG_STATE_HOME", t.TempDir())
 			t.Setenv("CODEX_HOME", t.TempDir())
+			t.Setenv("AGENTO11Y_PROTOCOL", "http")
 			t.Setenv("AGENTO11Y_AUTO_CODING_AGENT_TAGS", tc.autoTags)
 			t.Setenv("AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES", "repo,branch")
 			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
@@ -380,6 +382,7 @@ func TestStopPromptRedactionWiring(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv("XDG_STATE_HOME", t.TempDir())
 			t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
+			t.Setenv("AGENTO11Y_PROTOCOL", "http")
 			logger := log.New(io.Discard, "", 0)
 			var gotBody atomic.Value
 			gotBody.Store("")
@@ -432,6 +435,7 @@ func TestStopLocalEndpointAllowsMissingCredentials(t *testing.T) {
 			envconfig.PinAliasEnvBlank(t)
 			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 			logger := log.New(io.Discard, "", 0)
+			t.Setenv("AGENTO11Y_PROTOCOL", "http")
 			var gotAuth string
 			var requestCount atomic.Int64
 			server := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -461,6 +465,7 @@ func TestStopLocalEndpointAllowsMissingCredentials(t *testing.T) {
 }
 
 func TestStopExportsRolloutTokenUsage(t *testing.T) {
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	logger := log.New(io.Discard, "", 0)
@@ -535,6 +540,7 @@ func TestStopExportsRolloutTokenUsage(t *testing.T) {
 }
 
 func TestStopResolvesSubagentParentGeneration(t *testing.T) {
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	logger := log.New(io.Discard, "", 0)
@@ -580,6 +586,7 @@ func TestStopResolvesSubagentParentGeneration(t *testing.T) {
 
 func TestTenantOnlyAuthExports(t *testing.T) {
 	envconfig.PinAliasEnvBlank(t)
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	logger := log.New(io.Discard, "", 0)
 	var gotAuth, gotTenant string
 	var requestCount atomic.Int64
@@ -630,6 +637,7 @@ func TestExplicitAuthModeExports(t *testing.T) {
 			t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant-1")
 			t.Setenv("SIGIL_AUTH_TOKEN", "test-token")
 			t.Setenv("SIGIL_AUTH_MODE", tc.mode)
+			t.Setenv("AGENTO11Y_PROTOCOL", "http")
 			logger := log.New(io.Discard, "", 0)
 			cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeFull}
 			frag := &fragment.Fragment{SessionID: "sess", TurnID: "turn", Model: "gpt-5.5", Prompt: "hello"}
@@ -648,6 +656,7 @@ func TestExplicitAuthModeExports(t *testing.T) {
 func TestStopExportsConversationTitleFromFirstPrompt(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	envconfig.PinAliasEnvBlank(t)
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	logger := log.New(io.Discard, "", 0)
 	var titles []string
@@ -719,6 +728,7 @@ func TestStopMissingCredentialsDiscardsFragment(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("XDG_STATE_HOME", t.TempDir())
 			envconfig.PinAliasEnvBlank(t)
+			t.Setenv("AGENTO11Y_PROTOCOL", "http")
 			t.Setenv("SIGIL_ENDPOINT", tc.endpoint)
 			t.Setenv("SIGIL_AUTH_TENANT_ID", tc.tenant)
 			t.Setenv("SIGIL_AUTH_MODE", tc.mode)
@@ -738,6 +748,7 @@ func TestStopMissingCredentialsDiscardsFragment(t *testing.T) {
 }
 
 func TestStopExportFailureRetainsFragmentAndUsesSDKRetryDefaults(t *testing.T) {
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	logger := log.New(io.Discard, "", 0)
@@ -783,6 +794,7 @@ func TestStopExportFailureRetainsFragmentAndUsesSDKRetryDefaults(t *testing.T) {
 // model. A transient ingest hiccup at Stop time would otherwise lose that
 // turn's telemetry 24h later via CleanupStale.
 func TestStopRetriesPendingFragmentsFromPriorTurns(t *testing.T) {
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	logger := log.New(io.Discard, "", 0)
@@ -847,6 +859,7 @@ func TestStopFlushFailurePreservesSweptRetries(t *testing.T) {
 			t.Setenv("XDG_STATE_HOME", t.TempDir())
 			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 			logger := log.New(io.Discard, "", 0)
+			t.Setenv("AGENTO11Y_PROTOCOL", "http")
 			var failing atomic.Bool
 			failing.Store(true)
 			var mu sync.Mutex
@@ -934,6 +947,7 @@ func TestStopFlushFailurePreservesSweptRetries(t *testing.T) {
 // from disk (subagent link file) and the fragment's TranscriptPath.
 func TestStopRetrySweepPreservesSubagentLinkAndTokenUsage(t *testing.T) {
 	envconfig.PinAliasEnvBlank(t)
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("AGENTO11Y_AUTO_CODING_AGENT_TAGS", "true")
 	t.Setenv("AGENTO11Y_USER_ID", "retry@example.test")
@@ -1728,6 +1742,7 @@ func TestAgentNameOverrideGuardAndExport(t *testing.T) {
 			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 			logger := log.New(io.Discard, "", 0)
 
+			t.Setenv("AGENTO11Y_PROTOCOL", "http")
 			var guardAgents, guardConversationIDs, exportAgents, exportConversationIDs []string
 			server := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if strings.Contains(r.URL.Path, "hooks:evaluate") {

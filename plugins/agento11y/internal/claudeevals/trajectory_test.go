@@ -153,6 +153,7 @@ func TestTrajectoryRootAndMetadataOnly(t *testing.T) {
 
 func TestTrajectoryExportsLinkedGenerationsAndOTLP(t *testing.T) {
 	envconfig.PinAliasEnvBlank(t)
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	for _, key := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "OTEL_RESOURCE_ATTRIBUTES", "OTEL_SERVICE_NAME"} {
 		t.Setenv(key, "")
 	}

@@ -902,11 +902,12 @@ func TestRun_CursorInstallDispatch(t *testing.T) {
 	}
 }
 
-// On first install (no credentials yet) the login prompt is chained, mirroring
-// the launcher auto-prompt; when credentials are present it is skipped.
+// Installation readiness follows the effective transport, not API credentials.
 func TestRun_CursorInstallLoginChain(t *testing.T) {
 	cases := []struct {
 		name                 string
+		protocol             string
+		collector            string
 		creds                bool
 		local                bool
 		invalidLocal         bool
@@ -924,7 +925,13 @@ func TestRun_CursorInstallLoginChain(t *testing.T) {
 			wantOfferLocal:       true,
 			wantOfferLocalDaemon: true,
 		},
-		{name: "skips login when credentials present", creds: true},
+		{name: "API-only config offers default OTel setup", creds: true, loginErr: login.ErrNotInteractive, wantLoginCalls: 1, wantOfferLocal: true, wantOfferLocalDaemon: true},
+		{name: "explicit HTTP credentials ready", protocol: "http", creds: true},
+		{name: "legacy grpc compatibility ready", protocol: "grpc", creds: true},
+		{name: "none compatibility ready", protocol: "none", creds: true},
+		{name: "OTLP-only default ready", collector: "http://127.0.0.1:4318"},
+		{name: "explicit OTel ready", protocol: "otel", collector: "http://127.0.0.1:4318"},
+		{name: "cancelled OTel setup preserves install", creds: true, loginErr: login.ErrAborted, wantLoginCalls: 1, wantOfferLocal: true, wantOfferLocalDaemon: true, wantStderr: "setup aborted"},
 		{name: "skips login when local mode is persisted", local: true},
 		{
 			name:                 "invalid local value still offers destination",
@@ -955,6 +962,9 @@ func TestRun_CursorInstallLoginChain(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			isolateDotenvHome(t)
+			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+			t.Setenv("AGENTO11Y_PROTOCOL", tc.protocol)
+			t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", tc.collector)
 			if tc.local {
 				t.Setenv("AGENTO11Y_LOCAL", "true")
 			}
@@ -1615,6 +1625,7 @@ func TestRun_CodexTenantOnlyCredentialsSkipAutoPrompt(t *testing.T) {
 			t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
 			t.Setenv("SIGIL_AUTH_TOKEN", "")
 			t.Setenv("SIGIL_AUTH_MODE", tc.authMode)
+			t.Setenv("AGENTO11Y_PROTOCOL", "http")
 
 			loginCalls := 0
 			withStubLoginRun(t, func(context.Context, login.RunOpts) (login.Result, error) {
@@ -1864,9 +1875,10 @@ func TestRun_DoctorSubcommand(t *testing.T) {
 		wantExit      *int // nil = no exit
 		wantStdoutHas string
 	}{
-		{name: "unconfigured is healthy and exits 0", argv: []string{"doctor"}, wantStdoutHas: "agento11y doctor"},
+		{name: "default OTel requires OTLP", argv: []string{"doctor"}, wantExit: new(1), wantStdoutHas: "OTLP base endpoint"},
+		{name: "explicit HTTP unconfigured exits 0", argv: []string{"doctor"}, env: map[string]string{"AGENTO11Y_PROTOCOL": "http"}, wantStdoutHas: "agento11y doctor"},
 		{name: "require Cloud fails when unconfigured", argv: []string{"doctor", "--require-cloud"}, wantExit: new(1), wantStdoutHas: "Cloud requirement failed"},
-		{name: "json mode emits sections", argv: []string{"doctor", "--json"}, wantStdoutHas: `"conversations"`},
+		{name: "json mode emits sections", argv: []string{"doctor", "--json"}, wantExit: new(1), wantStdoutHas: `"conversations"`},
 		{
 			name:     "conversations set but no OTLP exits 1",
 			argv:     []string{"doctor"},

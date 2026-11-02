@@ -7,7 +7,7 @@ agento11y doctor v0.22.0
   auth token:         set (glc_…, AGENTO11Y_OTEL_AUTH_TOKEN, env)
   probe:              HTTP 200 (http://127.0.0.1:9000/otlp/v1/traces)
   local ingest:       supported
-  ! experimental OTel generation export; no HTTP fallback
+  ! OTel generation export; no HTTP fallback
   ! OTLP transport/authentication verified; generation storage is not verified
   ! Pi and OpenCode live plugins keep HTTP generation export; their Go history imports support OTel
 
@@ -25,8 +25,8 @@ agento11y doctor v0.22.0
 
 ✓ Config
   file:               /home/u/.config/agento11y/config.env (missing)
-  generation:         otel (AGENTO11Y_PROTOCOL, env)
-  experimental:       true (AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES, env)
+  generation:         otel (default)
+  experimental:       false (default)
   content capture:    metadata_only (default)
   prompt redaction:   enabled
   guards:             disabled (default)

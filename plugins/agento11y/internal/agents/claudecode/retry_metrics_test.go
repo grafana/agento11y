@@ -16,6 +16,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/state"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	colmetricpb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
+	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -33,141 +34,190 @@ func withoutRecordedMetrics(s state.Session) state.Session {
 // hook's metrics arrived, even if only an earlier periodic export delivered
 // them, and still once when they did not.
 func TestHookRetryAfterFailedExportCountsTokensOnce(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		// metrics is what happens to the failed hook's metric exports: all delivered,
-		// the first delivered and the rest rejected, or all rejected.
-		metrics string
-	}{
-		{name: "metrics delivered", metrics: "delivered"},
-		{name: "metrics delivered before the final flush failed", metrics: "first"},
-		{name: "metrics also failed", metrics: "rejected"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			envconfig.PinAliasEnvBlank(t)
-			t.Setenv("XDG_STATE_HOME", t.TempDir())
+	for name, protocol := range map[string]string{"HTTP": "http", "explicit OTel": "otel", "implicit OTel": "", "blank OTel": " \t "} {
+		for _, tc := range []struct {
+			name string
+			// metrics is what happens to the failed hook's metric exports: all delivered,
+			// the first delivered and the rest rejected, or all rejected.
+			metrics string
+		}{
+			{name: "metrics delivered", metrics: "delivered"},
+			{name: "metrics delivered before the final flush failed", metrics: "first"},
+			{name: "metrics also failed", metrics: "rejected"},
+		} {
+			t.Run(name+"/"+tc.name, func(t *testing.T) {
+				envconfig.PinAliasEnvBlank(t)
+				t.Setenv("XDG_STATE_HOME", t.TempDir())
 
-			var (
-				mu      sync.Mutex
-				failing = true
-				// failedHookMetricExports counts metric exports while the export fails.
-				failedHookMetricExports int
-				stored                  = map[string]int{}
-				// Cumulative histograms repeat their running total on every
-				// export, so keep the latest sum per series. Each hook process
-				// starts new series.
-				tokenSeries = map[string]float64{}
-			)
-			tokenSum := func() float64 {
-				var total float64
-				for _, sum := range tokenSeries {
-					total += sum
+				var (
+					mu      sync.Mutex
+					failing = true
+					// failedHookMetricExports counts metric exports while the export fails.
+					failedHookMetricExports int
+					stored                  = map[string]int{}
+					// Cumulative histograms repeat their running total on every
+					// export, so keep the latest sum per series. Each hook process
+					// starts new series.
+					tokenSeries = map[string]float64{}
+				)
+				tokenSum := func() float64 {
+					var total float64
+					for _, sum := range tokenSeries {
+						total += sum
+					}
+					return total
 				}
-				return total
-			}
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				body, err := io.ReadAll(r.Body)
-				if err != nil {
-					t.Error(err)
-					w.WriteHeader(http.StatusBadRequest)
-					return
-				}
-				mu.Lock()
-				defer mu.Unlock()
-				switch r.URL.Path {
-				case "/api/v1/generations:export":
-					if failing {
-						w.WriteHeader(http.StatusServiceUnavailable)
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					body, err := io.ReadAll(r.Body)
+					if err != nil {
+						t.Error(err)
+						w.WriteHeader(http.StatusBadRequest)
 						return
 					}
-					var request struct {
-						Generations []struct {
-							ID string `json:"id"`
-						} `json:"generations"`
-					}
-					if err := json.Unmarshal(body, &request); err != nil {
-						t.Error(err)
-					}
-					for _, generation := range request.Generations {
-						stored[generation.ID]++
-					}
-					r.Body = io.NopCloser(bytes.NewReader(body))
-					acceptGenerationExport(w, r)
-				case "/v1/metrics":
-					if failing {
-						failedHookMetricExports++
-						if tc.metrics == "rejected" || (tc.metrics == "first" && failedHookMetricExports > 1) {
-							// A permanent rejection, so the exporter doesn't back off.
-							w.WriteHeader(http.StatusBadRequest)
+					mu.Lock()
+					defer mu.Unlock()
+					switch r.URL.Path {
+					case "/api/v1/generations:export":
+						if protocol != "http" {
+							t.Error("OTel sent a native HTTP generation copy")
+						}
+						if failing {
+							w.WriteHeader(http.StatusServiceUnavailable)
 							return
 						}
-					}
-					var request colmetricpb.ExportMetricsServiceRequest
-					if err := proto.Unmarshal(body, &request); err != nil {
-						t.Error(err)
-					}
-					for _, resource := range request.ResourceMetrics {
-						for _, scope := range resource.ScopeMetrics {
-							for _, metric := range scope.Metrics {
-								if metric.Name != "gen_ai.client.token.usage" {
-									continue
-								}
-								for _, point := range metric.GetHistogram().GetDataPoints() {
-									key := fmt.Sprint(point.GetStartTimeUnixNano())
-									for _, attribute := range point.Attributes {
-										key += "," + attribute.Key + "=" + attribute.Value.GetStringValue()
+						var request struct {
+							Generations []struct {
+								ID string `json:"id"`
+							} `json:"generations"`
+						}
+						if err := json.Unmarshal(body, &request); err != nil {
+							t.Error(err)
+						}
+						for _, generation := range request.Generations {
+							stored[generation.ID]++
+						}
+						r.Body = io.NopCloser(bytes.NewReader(body))
+						acceptGenerationExport(w, r)
+					case "/v1/metrics":
+						if failing {
+							failedHookMetricExports++
+							if tc.metrics == "rejected" || (tc.metrics == "first" && failedHookMetricExports > 1) {
+								// A permanent rejection, so the exporter doesn't back off.
+								w.WriteHeader(http.StatusBadRequest)
+								return
+							}
+						}
+						var request colmetricpb.ExportMetricsServiceRequest
+						if err := proto.Unmarshal(body, &request); err != nil {
+							t.Error(err)
+						}
+						for _, resource := range request.ResourceMetrics {
+							for _, scope := range resource.ScopeMetrics {
+								for _, metric := range scope.Metrics {
+									if metric.Name != "gen_ai.client.token.usage" {
+										continue
 									}
-									tokenSeries[key] = point.GetSum()
+									for _, point := range metric.GetHistogram().GetDataPoints() {
+										key := fmt.Sprint(point.GetStartTimeUnixNano())
+										for _, attribute := range point.Attributes {
+											key += "," + attribute.Key + "=" + attribute.Value.GetStringValue()
+										}
+										tokenSeries[key] = point.GetSum()
+									}
 								}
 							}
 						}
+						w.Header().Set("Content-Type", "application/x-protobuf")
+					case "/v1/traces":
+						var request coltracepb.ExportTraceServiceRequest
+						if err := proto.Unmarshal(body, &request); err != nil {
+							t.Error(err)
+						}
+						for _, resource := range request.ResourceSpans {
+							for _, scope := range resource.ScopeSpans {
+								for _, span := range scope.Spans {
+									var marked bool
+									var id string
+									for _, attr := range span.Attributes {
+										if attr.Key == "agento11y.record" {
+											marked = attr.Value.GetStringValue() == "true"
+										}
+										if attr.Key == "agento11y.generation.id" {
+											id = attr.Value.GetStringValue()
+										}
+									}
+									if marked {
+										if failing {
+											w.WriteHeader(http.StatusBadRequest)
+											return
+										}
+										stored[id]++
+									}
+								}
+							}
+						}
+						w.Header().Set("Content-Type", "application/x-protobuf")
+					default:
+						w.WriteHeader(http.StatusNotFound)
 					}
-					w.Header().Set("Content-Type", "application/x-protobuf")
-				case "/v1/traces":
-					w.Header().Set("Content-Type", "application/x-protobuf")
-				default:
-					w.WriteHeader(http.StatusNotFound)
+				}))
+				defer server.Close()
+				setHookExportEnv(t, server.URL)
+				t.Setenv("SIGIL_PROTOCOL", "")
+				t.Setenv("AGENTO11Y_PROTOCOL", protocol)
+				t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "false")
+				t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", server.URL)
+
+				const sessionID = "retry-metric-session"
+				path := filepath.Join(t.TempDir(), "session.jsonl")
+				text := strings.Join([]string{
+					buildHookUserJSONLAt(sessionID, "list the files", "2025-06-01T12:00:00Z"),
+					buildHookAssistantLineAt(sessionID, "request-1", "end_turn", "2025-06-01T12:00:01Z", []any{
+						map[string]any{"type": "text", "text": "done"},
+					}, 50),
+				}, "\n") + "\n"
+				if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+					t.Fatal(err)
 				}
-			}))
-			defer server.Close()
-			setHookExportEnv(t, server.URL)
-			t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", server.URL)
+				input := hookInput{HookEventName: "Stop", SessionID: sessionID, TranscriptPath: path}
 
-			const sessionID = "retry-metric-session"
-			path := filepath.Join(t.TempDir(), "session.jsonl")
-			text := strings.Join([]string{
-				buildHookUserJSONLAt(sessionID, "list the files", "2025-06-01T12:00:00Z"),
-				buildHookAssistantLineAt(sessionID, "request-1", "end_turn", "2025-06-01T12:00:01Z", []any{
-					map[string]any{"type": "text", "text": "done"},
-				}, 50),
-			}, "\n") + "\n"
-			if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			input := hookInput{HookEventName: "Stop", SessionID: sessionID, TranscriptPath: path}
+				firstLogs := runHookForTest(t, input)
+				if !strings.Contains(firstLogs, "flush:") {
+					t.Fatalf("the first hook's export did not fail:\n%s", firstLogs)
+				}
+				if got := state.Load(sessionID); got.Offset != 0 || (len(got.MetricsRecorded) > 0) != (tc.metrics != "rejected") {
+					t.Fatalf("failed hook state: %+v", got)
+				}
+				mu.Lock()
+				if failedHookMetricExports == 0 {
+					t.Error("failed hook did not attempt metric export")
+				}
+				if tc.metrics == "first" && failedHookMetricExports < 2 {
+					t.Error("metric export did not fail after its first successful delivery")
+				}
+				failing = false
+				mu.Unlock()
+				runHookForTest(t, input)
 
-			firstLogs := runHookForTest(t, input)
-			if !strings.Contains(firstLogs, "flush:") {
-				t.Fatalf("the first hook's export did not fail:\n%s", firstLogs)
-			}
-			mu.Lock()
-			failing = false
-			mu.Unlock()
-			runHookForTest(t, input)
-
-			mu.Lock()
-			defer mu.Unlock()
-			if len(stored) != 1 {
-				t.Fatalf("stored generations = %v, want exactly one", stored)
-			}
-			// The turn has 3 input and 50 output tokens.
-			const turnTokens = 53
-			if got := tokenSum(); got != turnTokens {
-				t.Fatalf("gen_ai.client.token.usage counted %v tokens for one stored turn of %d", got, turnTokens)
-			}
-			if remembered := state.Load(sessionID).MetricsRecorded; len(remembered) != 0 {
-				t.Fatalf("metrics_recorded = %v after a successful export, want it cleared", remembered)
-			}
-		})
+				mu.Lock()
+				defer mu.Unlock()
+				if len(stored) != 1 {
+					t.Fatalf("stored generations = %v, want exactly one", stored)
+				}
+				for id, count := range stored {
+					if id == "" || count != 1 {
+						t.Fatalf("stored generations = %v", stored)
+					}
+				}
+				// The turn has 3 input and 50 output tokens.
+				const turnTokens = 53
+				if got := tokenSum(); got != turnTokens {
+					t.Fatalf("gen_ai.client.token.usage counted %v tokens for one stored turn of %d", got, turnTokens)
+				}
+				if remembered := state.Load(sessionID).MetricsRecorded; len(remembered) != 0 {
+					t.Fatalf("metrics_recorded = %v after a successful export, want it cleared", remembered)
+				}
+			})
+		}
 	}
 }
