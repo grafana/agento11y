@@ -1,6 +1,7 @@
 package local
 
 import (
+	"encoding/json"
 	"slices"
 	"testing"
 
@@ -8,6 +9,31 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func assertGuardModelsEqual(t *testing.T, want, got any) {
+	t.Helper()
+	expected, err := json.Marshal(want)
+	require.NoError(t, err)
+	actual, err := json.Marshal(got)
+	require.NoError(t, err)
+	assert.JSONEq(t, string(expected), string(actual))
+}
+
+func assertStoredGuardRulesEqual(t *testing.T, want, got []guardeval.Rule) {
+	t.Helper()
+	encode := func(rules []guardeval.Rule) []json.RawMessage {
+		data, err := guardeval.EncodeRules(rules)
+		require.NoError(t, err)
+		raw, err := guardeval.ParseRules(data)
+		require.NoError(t, err)
+		return raw
+	}
+	expected, actual := encode(want), encode(got)
+	require.Len(t, actual, len(expected))
+	for i := range expected {
+		assert.JSONEq(t, string(expected[i]), string(actual[i]))
+	}
+}
 
 func TestApplyPackUpdates_PreservesCustomRules(t *testing.T) {
 	custom := guardeval.Rule{RuleID: "block.rm", Phase: "postflight", Match: map[string]any{"tags.service": "api", "tags.service.name": "backend"}}
@@ -31,7 +57,7 @@ func TestApplyPackUpdates_PreservesCustomRules(t *testing.T) {
 	require.NoError(t, err)
 	roundTrip, errs := guardeval.DecodeRules(raw)
 	require.Empty(t, errs)
-	assert.Equal(t, custom, roundTrip[0])
+	assertStoredGuardRulesEqual(t, []guardeval.Rule{custom}, roundTrip[:1])
 }
 
 func TestApplyPackUpdates_PreservesUnknownPackPrefix(t *testing.T) {
@@ -93,6 +119,41 @@ func TestPacksFromRules(t *testing.T) {
 			for _, p := range packs[1:] {
 				assert.False(t, p.Enabled, p.ID)
 			}
+		})
+	}
+}
+
+func TestApplyPackUpdatesSelectsFirstEnabled(t *testing.T) {
+	on, off := true, false
+	for _, tc := range []struct {
+		name   string
+		states []*bool
+		want   int
+	}{
+		{"enabled_twice", []*bool{nil, &on}, 0},
+		{"enabled_three_times", []*bool{&on, nil, &on}, 0},
+		{"disabled_then_enabled_twice", []*bool{&off, nil, &on}, 1},
+		{"disabled_twice", []*bool{&off, &off}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var rules []guardeval.Rule
+			for i, enabled := range tc.states {
+				id := " pack.git "
+				if i > 0 {
+					id = "pack.git"
+				}
+				rules = append(rules, guardeval.Rule{RuleID: id, Enabled: enabled, Priority: 100 + i, ActionOnFail: " WARN ", ToolFilter: &guardeval.ToolFilterConfig{BlockedNames: []string{"Bash"}}})
+			}
+			out, err := applyPackUpdates(rules, map[string]bool{packSecrets: false})
+			require.NoError(t, err)
+			require.Len(t, out, 1)
+			assert.Equal(t, rules[tc.want], out[0])
+			before, err := guardeval.EncodeRules(rules)
+			require.NoError(t, err)
+			after, err := guardeval.EncodeRules(out)
+			require.NoError(t, err)
+			request := packRequest("Bash", `{}`)
+			assert.Equal(t, NewGuardsEngineFromContents("guards.toml", before, nil).Evaluate(request), NewGuardsEngineFromContents("guards.toml", after, nil).Evaluate(request))
 		})
 	}
 }

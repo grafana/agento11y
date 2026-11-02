@@ -21,16 +21,16 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
 )
 
-const guardsUsage = "usage: agento11y guards test [--json] [--rules path] [--tool name] [--agent name] [--stdin] [--] <command>"
+const guardsUsage = "usage: agento11y guards test [--json] [--rules path] [--tool name] [--shell bash] [--agent name] [--stdin] [--] <command>"
 
 const guardsHelp = `Test a shell command against saved local guard rules, without executing it.
 
 Usage:
-  agento11y guards test [--json] [--rules path] [--tool name] [--agent name] [--stdin] [--] <command>
+  agento11y guards test [--json] [--rules path] [--tool name] [--shell bash] [--agent name] [--stdin] [--] <command>
 
 Examples:
   agento11y guards test 'rm -rf ~/.ssh'
-  agento11y guards test --json --rules ./guards.toml 'git reset --hard'
+  agento11y guards test --json --shell bash --rules ./guards.toml 'git reset --hard'
   printf '%s\n' 'echo first' 'echo second' | agento11y guards test --stdin --tool shell --agent pi
 
 Flags must precede one quoted command argument. Use -- before a command starting
@@ -38,6 +38,10 @@ with a dash. --stdin reads one command through EOF, preserving embedded newlines
 --rules selects a file instead of guards.toml beside the resolved config.env.
 A missing default file allows with a notice; a missing explicit file is an error.
 --tool defaults to Bash and changes only the name, not the {"command": ...} arguments.
+--shell bash tests Bash parsing for unmodified shell packs; only bash is supported.
+Without it, tests use regex matching. The flag does not change --tool or verify the host shell.
+Tools other than Bash or bash still use regex matching, even with --shell bash.
+Incomplete analysis falls back to regex matching and keeps any parser-detected denial.
 --agent defaults to empty. Conditional rules see only this supplied agent name.
 The synthetic postflight request contains one assistant tool call (ID guards-test).
 It has no model, tags, agent version, preflight messages, or system prompt.
@@ -54,7 +58,8 @@ Compilation errors take precedence, but valid rules still return a partial respo
 
 --json emits one deterministic JSON document on stdout: schema_version: 1,
 scope: "local", rules: {path, exists, compiled, enforcing}, request: {command,
-tool_name, agent_name}, response, errors, and notices. Errors and notices are arrays.
+tool_name, agent_name, optional shell}, response, errors, and notices.
+Errors and notices are arrays.
 Response is null if no evaluation completed; otherwise it is the engine response
 with action, optional rule_id/reason/transformed_input, and an evaluations array.
 Transformed input uses SDK JSON, including raw JSON tool arguments.
@@ -65,17 +70,19 @@ Do not use real secrets in shared test output.
 `
 
 type guardsTestOptions struct {
-	jsonOutput bool
-	rulesPath  string
-	explicit   bool
-	stdin      bool
-	request    guardsTestRequest
+	jsonOutput    bool
+	rulesPath     string
+	explicit      bool
+	shellExplicit bool
+	stdin         bool
+	request       guardsTestRequest
 }
 
 type guardsTestRequest struct {
 	Command   string `json:"command"`
 	ToolName  string `json:"tool_name"`
 	AgentName string `json:"agent_name"`
+	Shell     string `json:"shell,omitempty"`
 }
 
 type guardsTestRules struct {
@@ -103,6 +110,7 @@ func newGuardsTestFlags(opts *guardsTestOptions) *flag.FlagSet {
 	fs.BoolVar(&opts.jsonOutput, "json", false, "emit JSON")
 	fs.StringVar(&opts.rulesPath, "rules", "", "rules file")
 	fs.StringVar(&opts.request.ToolName, "tool", "Bash", "tool name")
+	fs.StringVar(&opts.request.Shell, "shell", "", "declared shell dialect (bash only)")
 	fs.StringVar(&opts.request.AgentName, "agent", "", "agent name")
 	fs.BoolVar(&opts.stdin, "stdin", false, "read command through EOF")
 	return fs
@@ -113,8 +121,11 @@ func parseGuardsTest(args []string) (guardsTestOptions, []string, error) {
 	fs := newGuardsTestFlags(&opts)
 	err := fs.Parse(args)
 	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "rules" {
+		switch f.Name {
+		case "rules":
 			opts.explicit = true
+		case "shell":
+			opts.shellExplicit = true
 		}
 	})
 	return opts, fs.Args(), err
@@ -179,6 +190,13 @@ func prepareGuardsTest(opts guardsTestOptions, positional []string, stdin io.Rea
 	if strings.TrimSpace(report.Request.ToolName) == "" {
 		report.Errors = append(report.Errors, "tool name must not be blank")
 	}
+	if opts.shellExplicit {
+		if strings.TrimSpace(report.Request.Shell) == "" {
+			report.Errors = append(report.Errors, "shell must not be blank")
+		} else if report.Request.Shell != "bash" {
+			report.Errors = append(report.Errors, "unsupported shell: "+report.Request.Shell+"; only bash is supported")
+		}
+	}
 	if opts.explicit && strings.TrimSpace(opts.rulesPath) == "" {
 		report.Errors = append(report.Errors, "rules path must not be blank")
 	}
@@ -230,7 +248,11 @@ func evaluateGuardsTest(ctx context.Context, report guardsTestReport, explicit b
 		report.Errors = append(report.Errors, "build request: "+err.Error())
 		return report
 	}
-	resp, _, err := engine.EvaluateWithTransform(ctx, req)
+	var metadata []guardeval.ShellMetadata
+	if report.Request.Shell != "" {
+		metadata = []guardeval.ShellMetadata{{MessageIndex: 0, PartIndex: 0, Dialect: report.Request.Shell}}
+	}
+	resp, _, err := engine.EvaluateWithShellMetadata(ctx, req, metadata)
 	if err != nil {
 		report.Errors = append(report.Errors, "evaluate rules: "+err.Error())
 		return report

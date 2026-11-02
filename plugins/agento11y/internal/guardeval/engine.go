@@ -86,6 +86,15 @@ func NewRulesEngine(raw []json.RawMessage, logger *log.Logger) *Engine {
 	return e
 }
 
+// Classification uses original fields so normalization cannot turn edited rules into stock packs.
+type ShellPolicyClassifier func(map[string]any) ShellPolicyProfile
+
+func NewRulesEngineWithShellPolicies(raw []json.RawMessage, logger *log.Logger, classify ShellPolicyClassifier) *Engine {
+	e := newEngine(logger)
+	e.compileWithShellPolicies(raw, classify)
+	return e
+}
+
 // NewEngine reads and compiles the configured rules file. It never fails: a
 // malformed rule contributes nothing and is reported through Status, so a typo
 // in one rule cannot disarm the rest. A file that does not read or parse
@@ -130,6 +139,10 @@ func (e *Engine) problem(msg string) {
 // the rest, drop disabled rules, drop blank and duplicate ids so a naming
 // fault cannot compile twice, then compile.
 func (e *Engine) compile(raw []json.RawMessage) {
+	e.compileWithShellPolicies(raw, nil)
+}
+
+func (e *Engine) compileWithShellPolicies(raw []json.RawMessage, classify ShellPolicyClassifier) {
 	rules, decodeErrs := DecodeRules(raw)
 	for _, err := range decodeErrs {
 		e.problem(err.Error())
@@ -146,7 +159,7 @@ func (e *Engine) compile(raw []json.RawMessage) {
 		e.problem(err.Error())
 	}
 
-	compiled, errs := compileGuardRules(enabled)
+	compiled, errs := compileGuardRulesWithShellPolicies(enabled, classify)
 	for _, err := range errs {
 		e.problem(err.Error())
 	}
@@ -223,6 +236,13 @@ func (e *Engine) EvaluateWithTransform(ctx context.Context, req agento11y.HookEv
 		return evaluateWithTransform(ctx, nil, nil, req)
 	}
 	return evaluateWithTransform(ctx, e.rules, e.logger, req)
+}
+
+func (e *Engine) EvaluateWithShellMetadata(ctx context.Context, req agento11y.HookEvaluateRequest, metadata []ShellMetadata) (Response, *Transform, error) {
+	if e == nil {
+		return evaluateWithShellMetadata(ctx, nil, nil, req, metadata)
+	}
+	return evaluateWithShellMetadata(ctx, e.rules, e.logger, req, metadata)
 }
 
 // Status reports what the engine compiled. The value is a copy: a caller

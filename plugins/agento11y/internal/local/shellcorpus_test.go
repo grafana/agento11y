@@ -32,13 +32,16 @@ type shellCorpusCase struct {
 func TestShellPackCorpus(t *testing.T) {
 	ids := []string{packGit, packDestructive, packPermissions, packDisk, packFiles}
 	engines := make([]*guardeval.Engine, len(ids))
+	stockEngines := make([]*guardeval.Engine, len(ids))
 	for i, id := range ids {
 		rule, err := packRule(id)
 		require.NoError(t, err)
 		data, err := guardeval.EncodeRules([]guardeval.Rule{rule})
 		require.NoError(t, err)
 		engines[i] = guardeval.NewEngineFromContents("guards.toml", data, nil)
+		stockEngines[i] = NewGuardsEngineFromContents("guards.toml", data, nil)
 		require.Empty(t, engines[i].Status().Errors)
+		require.Empty(t, stockEngines[i].Status().Errors)
 	}
 	data, err := os.ReadFile(shellCorpus)
 	require.NoError(t, err)
@@ -54,7 +57,11 @@ func TestShellPackCorpus(t *testing.T) {
 		require.NoError(t, err)
 		var got []string
 		for i, id := range ids {
-			if engines[i].Evaluate(packRequest("Bash", string(input))).Action == agento11y.HookActionDeny {
+			req := packRequest("Bash", string(input))
+			legacy := engines[i].Evaluate(req)
+			stock := stockEngines[i].Evaluate(req)
+			require.Equal(t, legacy.Action, stock.Action, "%s without shell metadata: %q", id, c.Command)
+			if legacy.Action == agento11y.HookActionDeny {
 				got = append(got, id)
 			}
 		}

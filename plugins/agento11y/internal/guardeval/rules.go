@@ -6,8 +6,11 @@
 package guardeval
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -16,7 +19,7 @@ import (
 // Rule is the guard-rule write body. JSON tags match the hook-rules API so an
 // exported rule loads unchanged. Fields the local engine does not read
 // (selector, short_circuit, evaluator_ids, server-managed metadata) are absent
-// here and round-trip through the raw JSON the guards API stores.
+// here and round-trip through the original fields retained at decode time.
 type Rule struct {
 	RuleID       string            `json:"rule_id" toml:"rule_id"`
 	Enabled      *bool             `json:"enabled,omitempty" toml:"enabled,omitempty"`               // default true
@@ -27,10 +30,9 @@ type Rule struct {
 	ToolFilter   *ToolFilterConfig `json:"tool_filter,omitempty" toml:"tool_filter,omitempty"`
 	Transform    *TransformConfig  `json:"transform,omitempty" toml:"transform,omitempty"`
 	Evaluators   []EvaluatorSpec   `json:"evaluators,omitempty" toml:"evaluators,omitempty"` // inline deterministic evaluators run locally (see below)
-	// extra holds JSON keys this struct does not model (evaluator_ids,
-	// short_circuit, selector, …). DecodeRules keeps them so a Settings save
-	// can write them back instead of stripping them from custom rules.
-	extra map[string]any `json:"-"`
+	// Keep a detached snapshot so in-place edits do not change the baseline.
+	raw     map[string]any
+	modeled map[string]any
 }
 
 // EvaluatorSpec is an inline evaluator definition on a local rule. The cloud
@@ -64,14 +66,14 @@ type TransformPattern struct {
 
 // CompiledRule is a compiled, normalized rule ready for evaluation.
 type CompiledRule struct {
-	// id is the rule_id as written.
+	// id is the trimmed rule_id used for identity.
 	id         string
 	phase      string
 	priority   int
 	match      []compiledMatch
 	filter     *toolFilter
 	transform  *Transform
-	evaluators []*compiledEvaluator
+	evaluators []compiledEvaluator
 	effect     Effect
 }
 
@@ -151,46 +153,83 @@ func DecodeRules(raw []json.RawMessage) ([]Rule, []error) {
 	return out, errs
 }
 
-var knownRuleJSONKeys = map[string]struct{}{
-	"rule_id":        {},
-	"enabled":        {},
-	"phase":          {},
-	"priority":       {},
-	"match":          {},
-	"action_on_fail": {},
-	"tool_filter":    {},
-	"transform":      {},
-	"evaluators":     {},
-}
+type ruleModel Rule
 
-// UnmarshalJSON fills the modelled fields and stashes every other key in extra
-// so a later EncodeRules can round-trip Cloud-only attributes.
+// UnmarshalJSON retains source fields separately from the engine's model.
 func (r *Rule) UnmarshalJSON(data []byte) error {
-	type alias Rule
-	var parsed alias
+	var parsed ruleModel
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		return err
 	}
-	*r = Rule(parsed)
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	raw, err := decodeRuleFields(data)
+	if err != nil {
 		return err
 	}
-	for key := range knownRuleJSONKeys {
-		delete(raw, key)
+	modeled, err := modeledRuleFields(Rule(parsed))
+	if err != nil {
+		return err
 	}
-	if len(raw) == 0 {
-		return nil
-	}
-	r.extra = make(map[string]any, len(raw))
-	for key, val := range raw {
-		var decoded any
-		if err := json.Unmarshal(val, &decoded); err != nil {
-			return fmt.Errorf("%s: %w", key, err)
-		}
-		r.extra[key] = decoded
-	}
+	*r = Rule(parsed)
+	r.raw, r.modeled = raw, modeled
 	return nil
+}
+
+func decodeRuleFields(data []byte) (map[string]any, error) {
+	var fields map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	err := decoder.Decode(&fields)
+	return fields, err
+}
+
+func modeledRuleFields(rule Rule) (map[string]any, error) {
+	data, err := json.Marshal(ruleModel(rule))
+	if err != nil {
+		return nil, err
+	}
+	return decodeRuleFields(data)
+}
+
+func overlayRuleValue(raw, before, after any) any {
+	if reflect.DeepEqual(before, after) {
+		return raw
+	}
+	oldMap, oldOK := before.(map[string]any)
+	newMap, newOK := after.(map[string]any)
+	if oldOK && newOK {
+		out := map[string]any{}
+		if source, ok := raw.(map[string]any); ok {
+			maps.Copy(out, source)
+		}
+		for key := range oldMap {
+			if _, exists := newMap[key]; !exists {
+				delete(out, key)
+			}
+		}
+		for key, value := range newMap {
+			previous, existed := oldMap[key]
+			if !existed || !reflect.DeepEqual(previous, value) {
+				out[key] = overlayRuleValue(out[key], previous, value)
+			}
+		}
+		return out
+	}
+	oldList, oldOK := before.([]any)
+	newList, newOK := after.([]any)
+	if oldOK && newOK {
+		source, _ := raw.([]any)
+		out := make([]any, len(newList))
+		// Inline evaluators and patterns have no stable identity; match by position.
+		for i, value := range newList {
+			if i < len(oldList) && i < len(source) {
+				out[i] = overlayRuleValue(source[i], oldList[i], value)
+			} else {
+				out[i] = value
+			}
+		}
+		return out
+	}
+	return after
 }
 
 // compileGuardRules drops disabled rules, applies the write-body defaults
@@ -199,6 +238,10 @@ func (r *Rule) UnmarshalJSON(data []byte) error {
 // rule_id. A rule that fails to compile is skipped and reported; the remaining
 // rules still enforce.
 func compileGuardRules(raw []Rule) ([]CompiledRule, []error) {
+	return compileGuardRulesWithShellPolicies(raw, nil)
+}
+
+func compileGuardRulesWithShellPolicies(raw []Rule, classify ShellPolicyClassifier) ([]CompiledRule, []error) {
 	out := make([]CompiledRule, 0, len(raw))
 	var errs []error
 	for _, r := range raw {
@@ -233,8 +276,12 @@ func compileGuardRules(raw []Rule) ([]CompiledRule, []error) {
 			continue
 		}
 
+		var profile ShellPolicyProfile
+		if classify != nil {
+			profile = classify(r.raw)
+		}
 		var (
-			evaluators []*compiledEvaluator
+			evaluators []compiledEvaluator
 			evalErr    error
 		)
 		for i, spec := range r.Evaluators {
@@ -244,6 +291,9 @@ func compileGuardRules(raw []Rule) ([]CompiledRule, []error) {
 				break
 			}
 			if ce != nil {
+				if fallback, ok := ce.(*regexEvaluator); profile != "" && ok && fallback.target == evalTargetShellCommand && fallback.reject {
+					ce = &shellPolicyEvaluator{profile: profile, fallback: fallback}
+				}
 				evaluators = append(evaluators, ce)
 			}
 		}
@@ -258,7 +308,7 @@ func compileGuardRules(raw []Rule) ([]CompiledRule, []error) {
 		}
 
 		out = append(out, CompiledRule{
-			id:         r.RuleID,
+			id:         strings.TrimSpace(r.RuleID),
 			phase:      phase,
 			priority:   r.Priority,
 			match:      match,
@@ -292,10 +342,11 @@ func sortCompiledRules(rules []CompiledRule) {
 // than compiled twice under the same name.
 //
 // Every problem is reported so a file with two faults names both. The first
-// occurrence of a duplicated id is kept; later copies are skipped. A ruleset
-// already on disk should not stop guarding over a naming fault on a sibling.
+// enabled occurrence is kept, or the first disabled one if none is enabled.
+// A ruleset on disk should not stop guarding over a naming fault on a sibling.
 func filterRuleIDs(rules []Rule) ([]Rule, []error) {
 	seen := map[string]int{}
+	positions := map[string]int{}
 	out := make([]Rule, 0, len(rules))
 	var errs []error
 	for i, r := range rules {
@@ -306,10 +357,14 @@ func filterRuleIDs(rules []Rule) ([]Rule, []error) {
 		}
 		if prev, ok := seen[id]; ok {
 			errs = append(errs, fmt.Errorf("rule[%d]: rule_id %q duplicates rule[%d]", i, id, prev))
+			selected := out[positions[id]]
+			if selected.Enabled != nil && !*selected.Enabled && (r.Enabled == nil || *r.Enabled) {
+				out[positions[id]] = r
+			}
 			continue
 		}
 		seen[id] = i
-		r.RuleID = id
+		positions[id] = len(out)
 		out = append(out, r)
 	}
 	return out, errs

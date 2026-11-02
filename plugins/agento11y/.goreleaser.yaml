@@ -28,6 +28,11 @@ archives:
     ids: [agento11y]
     formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - src: LICENSE
+      - src: README.md
+      - src: plugins/agento11y/THIRD_PARTY_NOTICES.txt
+        strip_parent: true
     format_overrides:
       - goos: windows
         formats: [zip]

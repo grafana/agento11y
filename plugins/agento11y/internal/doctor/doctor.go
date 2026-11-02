@@ -1204,7 +1204,12 @@ func collectGuardsFile(sec *ConfigSection, configPath string) {
 	if _, err := os.Stat(path); err == nil {
 		sec.GuardsFileExists = true
 	}
-	st := guardeval.NewEngine(guardeval.Config{RulesPath: path}).Status()
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		sec.GuardsFileError = fmt.Sprintf("read %s: %v (no rules)", path, err)
+		return
+	}
+	st := local.NewGuardsEngineFromContents(path, data, nil).Status()
 	sec.GuardsFileRules = st.Enforcing
 	sec.GuardsFileError = strings.Join(st.Errors, "; ")
 }

@@ -46,6 +46,18 @@ func TestShellCommandTarget_RegexDeniesAcrossToolsAndKeys(t *testing.T) {
 		wantAction agento11y.HookAction
 	}{
 		{
+			name:       "at command size limit",
+			tool:       "Bash",
+			input:      `{"command":"echo ` + strings.Repeat("a", maxShellCommandBytes-len("echo ")) + `"}`,
+			wantAction: agento11y.HookActionAllow,
+		},
+		{
+			name:       "over command size limit",
+			tool:       "Bash",
+			input:      `{"command":"echo ` + strings.Repeat("a", maxShellCommandBytes) + `; r\\m -rf /var/tmp"}`,
+			wantAction: agento11y.HookActionDeny,
+		},
+		{
 			name:       "Bash with command",
 			tool:       "Bash",
 			input:      `{"command":"rm -rf /var/tmp"}`,
@@ -198,6 +210,13 @@ func TestShellCommandTarget_EmptyProjectionSkipsTheEvaluator(t *testing.T) {
 			rules:      requiredPattern,
 			req:        toolCall("Bash", `{"command":"echo hi"}`),
 			wantAction: agento11y.HookActionAllow,
+			wantEvals:  1,
+		},
+		{
+			name:       "required pattern does not clear an oversized command",
+			rules:      requiredPattern,
+			req:        toolCall("Bash", `{"command":"echo `+strings.Repeat("a", maxShellCommandBytes)+`"}`),
+			wantAction: agento11y.HookActionDeny,
 			wantEvals:  1,
 		},
 		{
