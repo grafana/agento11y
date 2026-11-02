@@ -31,10 +31,10 @@ at all.
 2. **Never invent an endpoint URL.** The API URL and the OTLP endpoint come from
    the setup page of the user's own stack (Step 3). Do not assemble one from the
    stack name; regions differ.
-3. **Never print or echo a token, and never ask for the connection block in
-   chat.** The block the setup page hands out carries a live token, and this
-   conversation can be exported. The user pastes it into login's own prompt. A
-   token you have to pass yourself goes in over stdin with `--token-stdin`.
+3. **Never print or echo a token, and never ask for the environment block in
+   chat.** The block carries a live token, and this conversation can be
+   exported. The user pastes it into login's prompt or passes `--env-file <file>`
+   (`-` for a pipe). A token you pass yourself goes in with `--token-stdin`.
 4. **Do not edit application code.** Adding SDK calls to the user's app is a
    different job ("Path B"). If the user wants their own app or agent
    instrumented, stop and hand off to the `agento11y-instrument` skill, which
@@ -148,9 +148,9 @@ saved Cloud connection starts at step 2.
    creates the token when the user has permission and the stack supports it.
    Otherwise it links to Cloud Access Policies and accepts an existing token.
 5. **Paste from Grafana**: the whole block goes into this one masked field, which
-   fills the endpoint, instance ID, token, and OTLP settings. Login then asks
-   only for what the block did not carry. Pasting is optional: Enter on the empty
-   box types the values field by field instead.
+   fills the endpoint, instance ID, token, and OTLP settings, and presets the
+   automatic tag answers when it sets them. Login asks only for what is missing.
+   Pasting is optional: Enter on the empty box types the values one by one.
 6. **Preferences**: local web UI, content capture mode, session tags, guards and their timeout, and automatic tags. Enter keeps each answer. The web UI always stores full content locally; forwarding sends full content in Full mode and metadata otherwise.
    Read Rule 5 before enabling full capture or guards, and **Automatic tags** before enabling automatic tags.
 
@@ -166,7 +166,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana.net/otlp
 OTEL_EXPORTER_OTLP_HEADERS='Authorization=Basic <base64-value>'
 ```
 
-Without OTLP, default HTTP conversations work but Cloud analytics does not. Local recording and analytics need no Tempo or Cloud credentials. Login rejects placeholders; flags can replace pasted values. Login ignores pasted protocol and auth-mode values. Configure experimental OTel through the environment or `config.env`, as described in the Reference. Existing config keys stay.
+Without OTLP, default HTTP conversations work but Cloud analytics does not. Local recording and analytics need no Tempo or Cloud credentials. Login rejects placeholders; flags can replace pasted values. A pasted block fills in the form's preferences, such as content capture, guards and automatic tags, which the user can still change, and login saves the block's other settings. Login ignores a pasted auth mode other than `basic`, `AGENTO11Y_HEADERS`, and the guard timeout: guard checks use them and fail open, so any of them could let every tool call through. It also skips a key that chooses what agento11y runs or loads, where it sends anything but the stack's data, the agent name or version, or the user ID, a value that turns off secret redaction, TLS, guards, a fail-closed guard, or updates, or turns usage stats on, a name that is not upper case, and any name it does not know; it saves the rest, names the skipped keys on stderr, and exits 0. A block's endpoint, OTLP endpoint and stack URL must use https unless they are on this machine (see the README). `--env-file <file>` (`-` for a pipe) never prompts: the block and the flags must supply the endpoint, instance ID, and token, and a setting the block leaves out keeps its saved value. Flags beat the block's values, and `--token-stdin` can supply a token the file leaves out. Configure experimental OTel through the environment or `config.env`, as described in the Reference. Existing config keys stay.
 
 For default HTTP capture and analytics, one token needs `sigil:write`, `metrics:write`, and `traces:write`. Generated policies can include extra scopes; the HTTP integrations use only these three.
 
@@ -398,7 +398,7 @@ Warn the user before enabling this. For Claude Code, Codex, and Cursor, `user` c
 Each value combination creates a time series, and branch names are unbounded. Start with `user,repo`.
 Doctor shows repo and branch but cannot read a host's signed-in identity; set `AGENTO11Y_USER_ID` when the user value must be known before launch.
 
-Other hosts have no account-email lookup. Discovery makes no provider requests, refreshes no credentials, and runs no host account commands. See [local account identity sources](https://github.com/grafana/agento11y/blob/main/docs/concepts/tags-and-metadata.md#local-account-identity-sources). Those hosts get a `user` tag only from `AGENTO11Y_USER_ID`, so an automatic `user` tag is the session's user ID cut to its first 128 characters. Explicit tags never set identity. Account identity stays active when automatic tags are off. Use the same `AGENTO11Y_USER_ID` across plugins for consistent identity; arbitrary IDs, pseudonyms, and legacy `SIGIL_*` aliases remain supported.
+Other hosts have no account-email lookup. Discovery makes no provider requests, refreshes no credentials, and runs no host account commands. See [local account identity sources](https://github.com/grafana/agento11y/blob/main/docs/concepts/tags-and-metadata.md#local-account-identity-sources). Those hosts get a `user` tag only from `AGENTO11Y_USER_ID`, so an automatic `user` tag is the session's user ID cut to its first 128 characters. Explicit tags never set identity. Account identity stays active when automatic tags are off. Use the same `AGENTO11Y_USER_ID` across plugins for consistent identity; arbitrary IDs and pseudonyms remain supported.
 
 ### Content capture
 
@@ -478,7 +478,7 @@ agento11y history import claude-code --local     # import into the local store
 agento11y history import claude-code --no-local  # import into Grafana Cloud
 ```
 
-The import resolves the destination in this order: `--no-local`, `--local`, a true `AGENTO11Y_LOCAL`/`SIGIL_LOCAL` from shell or `config.env`, then saved Cloud credentials. With none set, an interactive run asks where sessions go; `--no-local` or any valid LOCAL value skips that question. Missing Cloud credentials still starts Cloud setup, without **Local web UI**, because local imports never forward to any recipient.
+The import resolves the destination in this order: `--no-local`, `--local`, a true `AGENTO11Y_LOCAL` from shell or `config.env`, then saved Cloud credentials. With none set, an interactive run asks where sessions go; `--no-local` or any valid LOCAL value skips that question. Missing Cloud credentials still starts Cloud setup, without **Local web UI**, because local imports never forward to any recipient.
 A noninteractive run never asks: only `--all --yes` imports; otherwise it prints a dry-run plan and exits 0.
 
 Without `--since`, an import selects sessions active during the last 90 days. Each imported turn is recorded in a ledger per agent and destination, so an import into another destination sends the same turns without `--force`. If saved local mode would keep that import local, add `--no-local`.

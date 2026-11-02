@@ -49,6 +49,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net"
 	"net/url"
 	"os"
@@ -59,6 +60,7 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/browser"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/clihelp"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/doctor"
@@ -66,6 +68,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/skills"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/usagestats"
 	"golang.org/x/term"
 )
 
@@ -270,6 +273,13 @@ type RunOpts struct {
 	Token        string
 	OTLPEndpoint string
 
+	// Block is an environment block from `login --env-file`. Its credential
+	// lines count as command-line values, a flag still beats the block, and
+	// together they must supply every required credential because nothing
+	// can be prompted for. Its other settings are saved as it sets them, apart
+	// from the keys blockKeys refuses.
+	Block string
+
 	// ShowNextStep prints a `Try sigil claude or sigil pi.` hint after a
 	// successful save so users know what to run next. Set by the explicit
 	// `agento11y login` command; left false when login auto-fires from a
@@ -347,6 +357,33 @@ func Run(ctx context.Context, opts RunOpts) (Result, error) {
 	if err := fixed.validate(); err != nil {
 		return Result{}, err
 	}
+	var block formValues
+	if opts.Block != "" {
+		// An --env-file run never prompts for a value: the block and the
+		// flags must hold every required value between them.
+		if err := validatePastedBlock(fixed, opts.Block); err != nil {
+			return Result{}, err
+		}
+		applyPaste(&block, fixed, opts.Block)
+		fixed.endpoint = cmp.Or(fixed.endpoint, block.endpoint)
+		fixed.tenantID = cmp.Or(fixed.tenantID, block.tenantID)
+		fixed.token = cmp.Or(fixed.token, block.token)
+		fixed.otelEndpoint = cmp.Or(fixed.otelEndpoint, block.otelEndpoint)
+		if keys, flags := fixed.missingCredentials(); len(keys) > 0 {
+			pronoun := "them"
+			if len(keys) == 1 {
+				pronoun = "it"
+			}
+			return Result{}, fmt.Errorf("the block does not set %s; add %s to the block or pass %s", strings.Join(keys, " and "), pronoun, strings.Join(flags, " and "))
+		}
+		// The block's OTLP headers embed its own tenant and token, so a flag
+		// that replaces either one leaves them stale. Headers without the
+		// block's own OTLP endpoint would go to whichever endpoint was saved
+		// before, so they are dropped too.
+		if opts.TenantID != "" || opts.Token != "" || block.otelEndpoint == "" {
+			block.otlpHeadersPasted = false
+		}
+	}
 
 	// The form runs only while a required credential is still missing after
 	// the flags, so `--endpoint --tenant --token` configures a devcontainer,
@@ -369,6 +406,12 @@ func Run(ctx context.Context, opts RunOpts) (Result, error) {
 	// to keep existing" semantics via the validator and a post-form restore
 	// instead.
 	existing, err := loadSeeds(configPath, opts.Logger)
+	if err != nil {
+		return Result{}, fmt.Errorf("login: read config %q: %w", configPath, err)
+	}
+	// saved is the file alone, without the shell's env: what a block's
+	// missing keys and the credential copies are judged against.
+	saved, err := dotenv.ReadDotenv(configPath, opts.Logger)
 	if err != nil {
 		return Result{}, fmt.Errorf("login: read config %q: %w", configPath, err)
 	}
@@ -395,6 +438,48 @@ func Run(ctx context.Context, opts RunOpts) (Result, error) {
 		otlpHeaders:  existing["OTEL_EXPORTER_OTLP_HEADERS"],
 		stackURL:     existing[stackURLKey],
 	}
+	if block.otlpHeadersPasted {
+		v.otlpHeaders, v.otlpHeadersPasted = block.otlpHeaders, true
+	}
+	if opts.Block != "" {
+		// --env-file shows no form, so the block's form preferences are
+		// written as it spells them, and the ones it leaves out keep their
+		// saved values.
+		env := parseBlock(opts.Block)
+		dropExport := opts.TenantID != "" || opts.Token != "" || block.otelEndpoint == ""
+		v.blockSettings, v.blockRefused = blockKeys(env, true, dropExport)
+		if stack, _, _ := envconfig.LookupMap(env, "STACK_URL"); stack != "" {
+			v.stackURL, _ = stackOrigin(stack)
+		}
+
+		// Both automatic-tag keys are written back below, so the one the
+		// block leaves out must be the saved one. Seeding it from the shell
+		// would make a one-off export permanent.
+		savedOn, _, _ := envconfig.LookupMap(saved, envconfig.AutoTagsSuffix)
+		savedNames, savedNamesKey, _ := envconfig.LookupMap(saved, envconfig.AutoTagNamesSuffix)
+		v.autoTags, v.autoTagNames = seedAutoTags(savedOn), seedAutoTagNames(savedNames)
+
+		// The block's keys then go over those, as applyPaste puts them over
+		// the form's seeds, so both runs save the same answer.
+		v.autoTagsFromBlock = presetAutoTags(&v, env)
+		on, _, _ := envconfig.LookupMap(env, envconfig.AutoTagsSuffix)
+		names, namesKey, _ := envconfig.LookupMap(env, envconfig.AutoTagNamesSuffix)
+		// The names are saved only while the switch is on (see buildUpdates).
+		if on != "" {
+			v.blockAutoTagKeys = append(v.blockAutoTagKeys, envconfig.PreferredKey(envconfig.AutoTagsSuffix))
+		}
+		if names != "" && v.autoTags {
+			v.blockAutoTagKeys = append(v.blockAutoTagKeys, envconfig.PreferredKey(envconfig.AutoTagNamesSuffix))
+		}
+		if names != "" && on == "" && !v.autoTags {
+			_, _ = fmt.Fprintf(opts.Stderr, "agento11y login: did not set %s from the block: automatic tags are off; add AGENTO11Y_AUTO_CODING_AGENT_TAGS=true to the block to turn them on.\n", namesKey)
+		}
+		// A saved list with no supported name seeds no names, and writing
+		// that back would save every name in its place.
+		if v.autoTagsFromBlock && v.autoTags && len(v.autoTagNames) == 0 {
+			return Result{}, fmt.Errorf("login: the saved %s in %q has no supported name; add AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES to the block", savedNamesKey, configPath)
+		}
+	}
 
 	if askUser {
 		if err := promptValues(ctx, &v, fixed, existingToken, opts.Stderr, offerLocal); err != nil {
@@ -417,16 +502,20 @@ func Run(ctx context.Context, opts RunOpts) (Result, error) {
 	v.token = strings.TrimSpace(v.token)
 	v.otelEndpoint = strings.TrimSpace(v.otelEndpoint)
 
+	markCredentialCopies(&v, saved)
+
 	// A saved OTEL_EXPORTER_OTLP_HEADERS carries its own copy of the OTLP
 	// credential and no field asks for it, so a new token would leave OTLP
 	// authenticating with the old one and login would still report success:
 	// otel.ExporterHeaders prefers explicit headers that carry an Authorization
-	// entry, and the credential check only probes the export endpoint. Drop it,
-	// so the exporter builds Basic auth from the tenant ID and the new token.
-	if !v.otlpHeadersPasted && v.otlpHeaders != "" && v.token != existingToken {
+	// entry, and the credential check only probes the export endpoint. A new
+	// endpoint would send the old credential to another host. Drop it on the
+	// same moves as the other copies, so the exporter builds Basic auth from
+	// the tenant ID and the new token.
+	if !v.otlpHeadersPasted && v.otlpHeaders != "" && v.dropCredentialCopies {
 		v.otlpHeaders = ""
 		fmt.Fprintln(opts.Stderr, clihelp.New(opts.Stderr).Detail(
-			"Removed the saved OTEL_EXPORTER_OTLP_HEADERS: it carried the previous token. "+
+			"Removed the saved OTEL_EXPORTER_OTLP_HEADERS: it carried the credential for the previous token or endpoint. "+
 				"Paste the block from the setup page if OTLP needs a credential of its own."))
 	}
 
@@ -441,6 +530,11 @@ func Run(ctx context.Context, opts RunOpts) (Result, error) {
 	updates := buildUpdates(v, opts.KeepLocalSetting)
 	if err := dotenv.WriteDotenv(configPath, updates, opts.Logger); err != nil {
 		return Result{}, err
+	}
+	reportBlockKeys(opts.Stderr, v)
+	if len(v.droppedCredentialCopies) > 0 {
+		fmt.Fprintln(opts.Stderr, clihelp.New(opts.Stderr).Detail(
+			"Removed the saved "+strings.Join(v.droppedCredentialCopies, " and ")+": they carried the previous credential."))
 	}
 
 	// Mirror into process env so a following in-process launcher dispatch
@@ -498,6 +592,22 @@ func (f fixedValues) completeCredentials() bool {
 	return f.endpoint != "" && f.tenantID != "" && f.token != ""
 }
 
+// missingCredentials names the required credentials the flags left empty, as
+// block keys and as the flags that set them.
+func (f fixedValues) missingCredentials() (keys, flags []string) {
+	for _, c := range []struct{ key, flag, value string }{
+		{"AGENTO11Y_ENDPOINT", "--endpoint", f.endpoint},
+		{"AGENTO11Y_AUTH_TENANT_ID", "--tenant", f.tenantID},
+		{"AGENTO11Y_AUTH_TOKEN", "--token-stdin", f.token},
+	} {
+		if c.value == "" {
+			keys = append(keys, c.key)
+			flags = append(flags, c.flag)
+		}
+	}
+	return keys, flags
+}
+
 func (f fixedValues) validate() error {
 	if f.endpoint != "" {
 		if err := requireURL(f.endpoint); err != nil {
@@ -510,6 +620,36 @@ func (f fixedValues) validate() error {
 		}
 	}
 	return nil
+}
+
+// markCredentialCopies decides whether the saved HEADERS and OTEL_AUTH_TOKEN
+// are deleted. They carry their own copies of the export credential and no
+// field asks for them, so moving to another endpoint or token would keep
+// sending the old credential there. buildUpdates deletes them unless this run
+// supplies its own, and stderr names the ones the file held.
+func markCredentialCopies(v *formValues, saved map[string]string) {
+	// The file, not the shell: an exported endpoint must not hide a move
+	// away from the stack the saved copies belong to.
+	savedValue := func(suffix string) string {
+		value, _, _ := envconfig.LookupMap(saved, suffix)
+		return value
+	}
+	// The setup page's raw key holds the OTLP endpoint when the file has no
+	// branded one. A run that sets no OTLP endpoint keeps that raw key, so
+	// it is unchanged then too.
+	rawOTLP := strings.TrimSpace(saved["OTEL_EXPORTER_OTLP_ENDPOINT"])
+	v.dropCredentialCopies = v.token != savedValue("AUTH_TOKEN") ||
+		v.endpoint != savedValue("ENDPOINT") ||
+		cmp.Or(v.otelEndpoint, rawOTLP) != cmp.Or(savedValue("OTEL_EXPORTER_OTLP_ENDPOINT"), rawOTLP)
+	if !v.dropCredentialCopies {
+		return
+	}
+	for _, suffix := range blockExportCredentialSuffixes {
+		_, fromBlock := v.blockSettings[envconfig.PreferredKey(suffix)]
+		if !fromBlock && (saved[envconfig.PreferredKey(suffix)] != "" || saved[envconfig.LegacyKey(suffix)] != "") {
+			v.droppedCredentialCopies = append(v.droppedCredentialCopies, envconfig.PreferredKey(suffix))
+		}
+	}
 }
 
 func canKeepCloudConnection(v formValues, fixed fixedValues, existingToken string) bool {
@@ -1111,10 +1251,11 @@ type pasteFilled struct {
 // their own, because a user who points login at their own collector must not
 // get a Grafana Cloud token written next to it.
 //
-// Pasting credentials must not change transport, experimental opt-in, or auth
-// mode. Those settings stay outside the login form.
+// applyPaste fills the form from a pasted block: its credentials, and its
+// preferences as answers the user can still change. The block's other
+// settings are recorded to be written (see blockKeys).
 func applyPaste(v *formValues, fixed fixedValues, block string) pasteFilled {
-	env, _ := dotenv.ParseDotenv(strings.NewReader(normalizePastedBlock(block)))
+	env := parseBlock(block)
 	var filled pasteFilled
 	filled.endpoint = setPasted(&v.endpoint, fixed.endpoint, brandedPaste(env, "ENDPOINT"))
 	filled.tenantID = setPasted(&v.tenantID, fixed.tenantID, brandedPaste(env, "AUTH_TENANT_ID"))
@@ -1125,7 +1266,377 @@ func applyPaste(v *formValues, fixed fixedValues, block string) pasteFilled {
 	// OpenTelemetry variable, and the block ships it as such.
 	filled.otlpHeaders = setPasted(&v.otlpHeaders, fixed.otelEndpoint, env["OTEL_EXPORTER_OTLP_HEADERS"])
 	v.otlpHeadersPasted = filled.otlpHeaders
+	v.autoTagsFromBlock = presetAutoTags(v, env)
+	presetFormPreferences(v, env)
+	dropExport := fixed.tenantID != "" || fixed.token != "" || fixed.otelEndpoint != "" ||
+		strings.TrimSpace(cmp.Or(brandedPaste(env, "OTEL_EXPORTER_OTLP_ENDPOINT"), env["OTEL_EXPORTER_OTLP_ENDPOINT"])) == ""
+	v.blockSettings, v.blockRefused = blockKeys(env, false, dropExport)
 	return filled
+}
+
+// parseBlock reads a pasted or piped block. An unreadable one is reported by
+// validatePastedBlock, which runs first.
+func parseBlock(block string) map[string]string {
+	env, _ := dotenv.ParseDotenv(strings.NewReader(normalizePastedBlock(block)))
+	return env
+}
+
+// blockPreferenceSuffixes are the automatic tag switch and names, which decide
+// the user, repository, and branch labels on the Coding agents page. They have
+// rules of their own (presetAutoTags), so blockKeys leaves them out.
+var blockPreferenceSuffixes = []string{envconfig.AutoTagsSuffix, envconfig.AutoTagNamesSuffix}
+
+// presetAutoTags puts the block's automatic-tag answers over the ones v
+// holds, and reports whether the block set either key. A key the block leaves
+// out keeps the seeded answer.
+func presetAutoTags(v *formValues, env map[string]string) bool {
+	on, _, _ := envconfig.LookupMap(env, envconfig.AutoTagsSuffix)
+	names, _, _ := envconfig.LookupMap(env, envconfig.AutoTagNamesSuffix)
+	if on != "" {
+		v.autoTags = envconfig.ParseBool(on)
+	}
+	if names != "" {
+		v.autoTagNames = seedAutoTagNames(names)
+	}
+	return on != "" || names != ""
+}
+
+// validateBlockPreferences applies the form's rules to the automatic-tag keys
+// a block set: a boolean switch, and at least one supported name. The error
+// names the key and leaves the value out, as for a credential.
+func validateBlockPreferences(env map[string]string) error {
+	if raw, key, _ := envconfig.LookupMap(env, envconfig.AutoTagsSuffix); raw != "" {
+		if _, ok := envconfig.ParseBoolValue(raw); !ok {
+			return fmt.Errorf("the block's %s is not usable: use true or false", key)
+		}
+	}
+	if raw, key, _ := envconfig.LookupMap(env, envconfig.AutoTagNamesSuffix); raw != "" {
+		if enabled, unknown := envconfig.ParseAutoTags(raw); len(unknown) > 0 || len(enabled) == 0 {
+			return fmt.Errorf("the block's %s is not usable: use a comma-separated list of user, repo, and branch, or all", key)
+		}
+	}
+	// The form's own rules, checked on every spelling the block carries,
+	// since both are written.
+	checks := []struct {
+		suffix, usage string
+		ok            func(string) bool
+	}{
+		{"CONTENT_CAPTURE_MODE", "use full, metadata_only, no_tool_content, or full_with_metadata_spans", func(raw string) bool {
+			// The parser envconfig.ResolveContentModeValue applies at runtime,
+			// which also takes "default".
+			var mode agento11y.ContentCaptureMode
+			return mode.UnmarshalText([]byte(raw)) == nil
+		}},
+		{"TAGS", "use comma-separated key=value pairs", func(raw string) bool { return validateTags(raw) == nil }},
+		{"GUARDS_ENABLED", "use true or false", func(raw string) bool { _, ok := envconfig.ParseBoolValue(raw); return ok }},
+		{"GUARDS_FAIL_OPEN", "use true or false", func(raw string) bool { _, ok := envconfig.ParseBoolValue(raw); return ok }},
+		{"STACK_URL", "use the https stack URL, such as https://example.grafana.net", func(raw string) bool {
+			origin, err := stackOrigin(raw)
+			return err == nil && requireBlockURL(origin) == nil
+		}},
+	}
+	for _, check := range checks {
+		for _, key := range []string{envconfig.PreferredKey(check.suffix), envconfig.LegacyKey(check.suffix)} {
+			if raw := strings.TrimSpace(env[key]); raw != "" && !check.ok(raw) {
+				return fmt.Errorf("the block's %s is not usable: %s", key, check.usage)
+			}
+		}
+	}
+	return nil
+}
+
+// blockReadSuffixes are the branded keys login reads from a block (see
+// applyPaste).
+var blockReadSuffixes = []string{"ENDPOINT", "AUTH_TENANT_ID", "AUTH_TOKEN", "OTEL_EXPORTER_OTLP_ENDPOINT"}
+
+// blockRefusalReasons are the keys a block never sets, in either spelling,
+// and why, which stderr names one line per reason:
+// the binary the agent plugins launch, the directory the local app loads its
+// web UI from, and the hosts the local app answers, which guard its session
+// list and config API; where usage stats and the SDKs' test-suite requests
+// (which carry the user's own service account token) go, including
+// GRAFANA_URL, which those requests fall back to, and the experiment links
+// the SDKs print; the agent name, which guard rules and dashboards filter on;
+// the agent version and the Copilot hook surface, which agento11y works out
+// for each agent; and the user ID, which would give everyone set up from the
+// block the same user. Whoever can edit a shared block could otherwise run
+// code on, read the sessions of, or collect requests from every machine set
+// up from it. A block chooses the stack it reports to, and nothing else that
+// leaves the machine.
+// The auth mode other than the setup page's basic, the export headers, and
+// the guard timeout are refused because guard checks go out with the export
+// auth and headers and fail open by default: any of the three could make
+// every check fail, and so let every tool call through, while export kept
+// working.
+// LOCAL and LOCAL_FORWARD are written by login itself on every Cloud
+// setup, so a block's value would not survive the save.
+var blockRefusalReasons = map[string]string{
+	"BIN":                            "a block cannot choose what agento11y runs, loads, or answers",
+	"LOCAL_WEB_DIR":                  "a block cannot choose what agento11y runs, loads, or answers",
+	"LOCAL_ALLOWED_HOSTS":            "a block cannot choose what agento11y runs, loads, or answers",
+	"ANONYMOUS_USAGE_STATS_ENDPOINT": "a block cannot send requests anywhere but its stack",
+	"CONTROL_ENDPOINT":               "a block cannot send requests anywhere but its stack",
+	"GRAFANA_URL":                    "a block cannot send requests anywhere but its stack",
+	"EXPERIMENT_URL_TEMPLATE":        "a block cannot choose the links agento11y prints",
+	"AGENT_NAME":                     "a block cannot rename the agent that guard rules and dashboards match",
+	"AGENT_VERSION":                  "agento11y works these out for each agent",
+	"COPILOT_HOOK_SURFACE":           "agento11y works these out for each agent",
+	"USER_ID":                        "a block cannot give everyone who logs in with it the same user",
+	"AUTH_MODE":                      blockReasonGuardChecks,
+	"HEADERS":                        blockReasonGuardChecks,
+	"GUARDS_TIMEOUT_MS":              blockReasonGuardChecks,
+	"LOCAL":                          "login sets these itself",
+	"LOCAL_FORWARD":                  "login sets these itself",
+}
+
+const (
+	blockReasonGuardChecks = "guard checks fail open, so a block cannot change their auth mode, headers, or timeout"
+	blockReasonDowngrade   = "a block cannot turn off redaction, TLS, guards, or updates"
+	blockReasonUsageStats  = "a block cannot turn on usage stats, which go to Grafana, not its stack"
+	blockReasonKeyName     = "a setting name must be upper case"
+	blockReasonUnknown     = "login does not save this setting from a block"
+)
+
+// blockRefusal is a key login did not take from a block, and why.
+type blockRefusal struct{ key, reason string }
+
+// blockKeyName is what a setting's name may hold. Windows reads environment
+// names without case, and Unicode case folding does not map every letter onto
+// ASCII (a dotless ı uppercases to I), so a name in any other form could reach
+// a denied setting there while every check here read it as another key.
+var blockKeyName = regexp.MustCompile(`^[A-Z0-9_]+$`)
+
+// blockDowngrade reports whether a value would turn off a protection the
+// user's machine keeps by default or has chosen: secret redaction of prompts,
+// TLS to the OTLP endpoint or, over gRPC, to the generation endpoint, guards,
+// a fail-closed guard, automatic updates, or a usage stats opt-out. The masked
+// paste field never shows a block's lines, so login refuses these instead of
+// saving them.
+func blockDowngrade(key, suffix, value string) bool {
+	switch {
+	case suffix == "REDACT_INPUT_MESSAGES", suffix == "AUTO_UPDATE":
+		return !envconfig.ParseBoolDefault(value, true)
+	case suffix == "GUARDS_ENABLED":
+		return !envconfig.ParseBool(value)
+	case suffix == "GUARDS_FAIL_OPEN":
+		return envconfig.ParseBool(value)
+	case suffix == "INSECURE", suffix == "OTEL_EXPORTER_OTLP_INSECURE", key == "OTEL_EXPORTER_OTLP_INSECURE":
+		return envconfig.ParseBool(value)
+	case suffix == usagestats.EnvSuffix:
+		// Usage stats go to Grafana, not the block's stack. Turning them off,
+		// or to log, which sends nothing, is still saved.
+		return usagestats.ResolveMode(usagestats.ShellEnv{Mode: value}, nil) == usagestats.ModeEnabled
+	}
+	return false
+}
+
+// blockSettingSuffixes are the settings a block may save, under the rules
+// blockDowngrade applies to some of their values. With blockReadSuffixes,
+// blockPreferenceSuffixes, and blockRefusalReasons, they place every family in
+// envconfig.AliasSuffixes (TestBlockKeysPlaceEveryAlias). Any other branded
+// key is refused, so a setting added later is not saved from a shared block
+// until someone decides it can be.
+var blockSettingSuffixes = []string{
+	"PROTOCOL", "INSECURE", "EXPORT_TIMEOUT_MS", "TAGS",
+	"CONTENT_CAPTURE_MODE", "DEBUG", "REDACT_INPUT_MESSAGES", "OTEL_EXPORTER_OTLP_INSECURE",
+	"OTEL_AUTH_TOKEN", "GUARDS_ENABLED", "GUARDS_FAIL_OPEN",
+	"AUTO_UPDATE", "THEME", "USER_ID_SOURCE", usagestats.EnvSuffix,
+	// Not an alias family: the SDK reads only the AGENTO11Y_ spelling, which
+	// PROTOCOL=otel needs.
+	"ENABLE_EXPERIMENTAL_FEATURES",
+}
+
+// blockFormSuffixes are the settings form's preferences other than automatic
+// tags and the stack URL, which have their own handling, and the guard
+// timeout, which a block never sets. A pasted block fills them in as answers
+// the user can still change (presetFormPreferences); --env-file, which shows
+// no form, writes the ones the block sets.
+var blockFormSuffixes = []string{"CONTENT_CAPTURE_MODE", "TAGS", "GUARDS_ENABLED", "GUARDS_FAIL_OPEN"}
+
+// blockExportCredentialSuffixes carry a copy of the export credential, like
+// the block's OTLP headers: OTEL_AUTH_TOKEN wins over the token for OTLP, and
+// HEADERS can carry an Authorization value. A saved copy is deleted when the
+// credential changes (markCredentialCopies). A block never sets HEADERS, and
+// its OTEL_AUTH_TOKEN follows the headers' rule, so a flag that replaces the
+// tenant or the token drops it, and so does a block without its own OTLP
+// endpoint.
+var blockExportCredentialSuffixes = []string{"OTEL_AUTH_TOKEN", "HEADERS"}
+
+// blockDefaultValues are the PROTOCOL and AUTH_MODE values the setup page's
+// block always carries. They are the defaults, so login does not write them
+// over a saved choice such as PROTOCOL=otel, and does not name them as
+// refused; any other PROTOCOL is written, and any other AUTH_MODE refused.
+var blockDefaultValues = map[string]string{"PROTOCOL": "http", "AUTH_MODE": "basic"}
+
+// blockKeys sorts a block's keys by what login does with them. settings are
+// the keys login writes: every key the config file accepts, apart from the
+// credential, OTLP, automatic tag, and stack lines, which login reads into
+// the form, and, unless writeFormKeys is set, the form preferences, which a
+// paste fills into the form instead. A branded key is written once, under
+// its AGENTO11Y_ spelling with the value envconfig.LookupMap resolves, so both
+// paths save the same thing when a block carries both spellings. Blank values
+// and the setup page's defaults are skipped. refused are the keys a block
+// cannot set: blockRefusalReasons, downgrades, a branded key that is not in
+// blockSettingSuffixes, and a raw OTEL_ key other than the OTLP endpoint,
+// headers, and OTEL_EXPORTER_OTLP_INSECURE. Keys the config file does not
+// accept are dropped, as the loader would drop them.
+func blockKeys(env map[string]string, writeFormKeys, dropExportCredentials bool) (settings map[string]string, refused []blockRefusal) {
+	readIntoForm := map[string]bool{"OTEL_EXPORTER_OTLP_ENDPOINT": true, "OTEL_EXPORTER_OTLP_HEADERS": true}
+	for _, s := range slices.Concat(blockReadSuffixes, blockPreferenceSuffixes, []string{"STACK_URL"}) {
+		readIntoForm[envconfig.PreferredKey(s)], readIntoForm[envconfig.LegacyKey(s)] = true, true
+	}
+	settings = map[string]string{}
+	for _, key := range slices.Sorted(maps.Keys(env)) {
+		suffix := brandSuffix(key)
+		// A branded key writes its family's resolved value, so the downgrade
+		// check reads that one; checking each spelling's own value would let
+		// a safe second spelling carry a refused first one through.
+		value := strings.TrimSpace(env[key])
+		if suffix != "" {
+			value, _, _ = envconfig.LookupMap(env, suffix)
+		}
+		switch {
+		case !blockKeyName.MatchString(key):
+			// Name it when it reads as one of ours once upper-cased, the way
+			// Windows reads it; any other line is dropped, as before.
+			if upper := strings.ToUpper(key); brandSuffix(upper) != "" || strings.HasPrefix(upper, "OTEL_") {
+				refused = append(refused, blockRefusal{key, blockReasonKeyName})
+			}
+		case !dotenv.AllowedDotenvKey(key) || readIntoForm[key]:
+		case suffix == "" && !strings.HasPrefix(key, "OTEL_"):
+			// A bare AGENTO11Y_ or SIGIL_ names no setting.
+		case value != "" && strings.EqualFold(value, blockDefaultValues[suffix]):
+			// Before the refusals, so the setup page's AUTH_MODE=basic is
+			// skipped without a notice.
+		case blockRefusalReasons[suffix] != "":
+			refused = append(refused, blockRefusal{key, blockRefusalReasons[suffix]})
+		case suffix == usagestats.EnvSuffix && blockDowngrade(key, suffix, value):
+			refused = append(refused, blockRefusal{key, blockReasonUsageStats})
+		case blockDowngrade(key, suffix, value):
+			refused = append(refused, blockRefusal{key, blockReasonDowngrade})
+		case suffix == "" && key != "OTEL_EXPORTER_OTLP_INSECURE", suffix != "" && !slices.Contains(blockSettingSuffixes, suffix):
+			refused = append(refused, blockRefusal{key, blockReasonUnknown})
+		case suffix == "":
+			// A raw OTEL_ key, which has no second spelling.
+			if value != "" {
+				settings[key] = value
+			}
+		case dropExportCredentials && slices.Contains(blockExportCredentialSuffixes, suffix):
+		case slices.Contains(blockFormSuffixes, suffix) && !writeFormKeys:
+		default:
+			if value == "" {
+				continue
+			}
+			if slices.Contains(blockFormSuffixes, suffix) {
+				value = formPreferenceValue(suffix, value)
+			}
+			settings[envconfig.PreferredKey(suffix)] = value
+		}
+	}
+	if len(settings) == 0 {
+		settings = nil
+	}
+	return settings, refused
+}
+
+// brandSuffix is key without its AGENTO11Y_ or SIGIL_ prefix, or "" for a key
+// with neither.
+func brandSuffix(key string) string {
+	for _, prefix := range []string{"AGENTO11Y_", "SIGIL_"} {
+		if suffix, ok := strings.CutPrefix(key, prefix); ok {
+			return suffix
+		}
+	}
+	return ""
+}
+
+// formPreferenceValue normalizes a form preference the way the form saves its
+// answer. validateBlockPreferences has already accepted raw.
+func formPreferenceValue(suffix, raw string) string {
+	raw = strings.TrimSpace(raw)
+	switch suffix {
+	case "CONTENT_CAPTURE_MODE":
+		return normalizeContentMode(raw)
+	case "GUARDS_ENABLED", "GUARDS_FAIL_OPEN":
+		return strconv.FormatBool(envconfig.ParseBool(raw))
+	}
+	return raw
+}
+
+// presetFormPreferences puts the block's form preferences over the answers v
+// holds, so a pasted block's values are the form's defaults, which the user
+// can still change. A key the block leaves out keeps the seeded answer.
+func presetFormPreferences(v *formValues, env map[string]string) {
+	if mode, _, _ := envconfig.LookupMap(env, "CONTENT_CAPTURE_MODE"); mode != "" {
+		v.contentMode = normalizeContentMode(mode)
+	}
+	if tags, _, _ := envconfig.LookupMap(env, "TAGS"); tags != "" {
+		v.tags = tags
+	}
+	// A value blockKeys refuses is not preset either, so the form and the
+	// report agree; the user can still choose it in the form. The same goes
+	// for the guard timeout, which a block never sets.
+	enabled, _, _ := envconfig.LookupMap(env, "GUARDS_ENABLED")
+	failOpen, _, _ := envconfig.LookupMap(env, "GUARDS_FAIL_OPEN")
+	if blockDowngrade("", "GUARDS_ENABLED", enabled) {
+		enabled = ""
+	}
+	if blockDowngrade("", "GUARDS_FAIL_OPEN", failOpen) {
+		failOpen = ""
+	}
+	if enabled != "" || failOpen != "" {
+		on, open := v.guards != guardsOff, v.guards != guardsClosed
+		if enabled != "" {
+			on = envconfig.ParseBool(enabled)
+		}
+		if failOpen != "" {
+			open = envconfig.ParseBool(failOpen)
+		}
+		v.guards = seedGuards(strconv.FormatBool(on), strconv.FormatBool(open))
+	}
+	// A stack the user already chose in this run stays: the block came from
+	// that stack's setup page, and the form has no field to show a swap.
+	if stack, _, _ := envconfig.LookupMap(env, "STACK_URL"); stack != "" && v.stackURL == "" {
+		v.stackURL, _ = stackOrigin(stack)
+	}
+}
+
+// reportBlockKeys names, on stderr, the settings a block set beyond the
+// credentials, and the keys it could not set with the reason for each, so a
+// team that shares a block can see what login took from it. Values stay out,
+// as they do in every block error, and so does a refused name past its
+// leading [A-Z0-9_] run (blockKeyLabel).
+func reportBlockKeys(w io.Writer, v formValues) {
+	set := slices.Concat(slices.Collect(maps.Keys(v.blockSettings)), v.blockAutoTagKeys)
+	if len(set) > 0 {
+		slices.Sort(set)
+		_, _ = fmt.Fprintf(w, "agento11y login: set %s from the block.\n", strings.Join(set, ", "))
+	}
+	var reasons []string
+	byReason := map[string][]string{}
+	for _, r := range v.blockRefused {
+		if _, seen := byReason[r.reason]; !seen {
+			reasons = append(reasons, r.reason)
+		}
+		byReason[r.reason] = append(byReason[r.reason], blockKeyLabel(r.key))
+	}
+	for _, reason := range reasons {
+		_, _ = fmt.Fprintf(w, "agento11y login: did not set %s from the block: %s.\n", strings.Join(byReason[reason], ", "), reason)
+	}
+}
+
+// blockKeyLabel is how stderr names a refused key: its leading [A-Z0-9_] run,
+// marked when the name goes on past it. A line such as
+// `AGENTO11Y_AUTH_TOKEN: glc_…` parses as one long key holding the token, and
+// a name can carry terminal escape sequences, so the rest is never printed.
+// The loader keeps only names that start AGENTO11Y_, SIGIL_, or OTEL_, so the
+// run is never empty.
+func blockKeyLabel(key string) string {
+	run := key[:len(key)-len(strings.TrimLeft(key, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"))]
+	if run != key {
+		run += "…"
+	}
+	return run
 }
 
 // setPasted writes value into field unless a flag fixed that value or the
@@ -1163,39 +1674,54 @@ func validatePastedBlock(fixed fixedValues, s string) error {
 	if strings.TrimSpace(s) == "" {
 		return nil
 	}
-	if _, err := dotenv.ParseDotenv(strings.NewReader(normalizePastedBlock(s))); err != nil {
+	env, err := dotenv.ParseDotenv(strings.NewReader(normalizePastedBlock(s)))
+	if err != nil {
 		return fmt.Errorf("could not read the block: %w", err)
+	}
+	// A block whose every line a flag overrode still carries credentials,
+	// so this check ignores the flags.
+	if applyPaste(&formValues{}, fixedValues{}, s) == (pasteFilled{}) {
+		return errors.New("no credentials in this block. Expected lines like AGENTO11Y_ENDPOINT=…, AGENTO11Y_AUTH_TENANT_ID=…, AGENTO11Y_AUTH_TOKEN=…")
 	}
 	var probe formValues
 	filled := applyPaste(&probe, fixed, s)
-	if filled == (pasteFilled{}) {
-		return errors.New("no credentials in this block. Expected lines like AGENTO11Y_ENDPOINT=…, AGENTO11Y_AUTH_TENANT_ID=…, AGENTO11Y_AUTH_TOKEN=…")
-	}
 	for _, c := range []struct {
 		supplied bool
 		name     string
 		value    string
 		validate func(string) error
 	}{
-		{filled.endpoint, "endpoint", probe.endpoint, requireURL},
+		{filled.endpoint, "endpoint", probe.endpoint, requireBlockURL},
 		{filled.tenantID, "tenant ID", probe.tenantID, requireNonEmpty("tenant id")},
 		{filled.token, "token", probe.token, requireNonEmpty("auth token")},
-		{filled.otelEndpoint, "OTLP endpoint", probe.otelEndpoint, requireURL},
+		{filled.otelEndpoint, "OTLP endpoint", probe.otelEndpoint, requireBlockURL},
 		{filled.otlpHeaders, "OTLP headers", probe.otlpHeaders, nil},
 	} {
 		if !c.supplied {
 			continue
 		}
+		if strings.HasPrefix(c.value, "op://") {
+			return fmt.Errorf("the %s is a 1Password reference. Resolve it first, for example: op inject -i <file> | agento11y login --env-file -", c.name)
+		}
 		if looksLikePlaceholder(c.value) {
-			return fmt.Errorf("the %s is still a placeholder (%s). Fill it in on the page, then copy the block again", c.name, c.value)
+			// The value is left out: it can sit next to a real secret, and
+			// a block from stdin prints this error to a log.
+			return fmt.Errorf("the %s is still a placeholder. Fill it in on the page, then copy the block again", c.name)
 		}
 		if c.validate != nil {
 			if err := c.validate(c.value); err != nil {
-				return fmt.Errorf("the pasted %s is not usable: %w", c.name, err)
+				return fmt.Errorf("the block's %s is not usable: %w", c.name, err)
 			}
 		}
 	}
-	return nil
+	// Settings are saved as written, so an unresolved reference in one would
+	// be sent as the secret itself.
+	for _, key := range slices.Sorted(maps.Keys(env)) {
+		if strings.HasPrefix(strings.TrimSpace(env[key]), "op://") {
+			return fmt.Errorf("%s is a 1Password reference. Resolve it first, for example: op inject -i <file> | agento11y login --env-file -", blockKeyLabel(key))
+		}
+	}
+	return validateBlockPreferences(env)
 }
 
 // looksLikePlaceholder reports whether a pasted value still carries a <…>
@@ -1214,14 +1740,28 @@ var pastedAssignmentRe = regexp.MustCompile(`(?:^|\s)(?:export\s+)?([A-Za-z_][A-
 // field is a single-line input, and a terminal paste into one of those arrives
 // with each newline replaced by a space, which the loader would read as one
 // unusable key. Cutting before every key the loader accepts restores the
-// lines. A block that kept its newlines passes through unchanged.
+// lines. A block that kept its newlines loses only its comments.
 //
 // Only accepted keys cut, so a value keeps its spaces:
 // OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic …" holds no such key and
-// stays whole. Text before the first assignment becomes its own line, which is
+// stays whole. A key right after `#` is commented out and does not cut
+// either, so a block that is only `# KEY=…` stays dead. Text before the first assignment becomes its own line, which is
 // what keeps a leading `# copied from Grafana` from commenting out the block
 // once the newline after it is gone.
 func normalizePastedBlock(block string) string {
+	// In a block that kept its newlines, a comment must stay dead: drop
+	// comment lines and ` #` tails before the regex below, which would
+	// otherwise start a live assignment at a `KEY=` inside them. A flattened
+	// paste is one line, so a leading comment there is handled below instead.
+	if strings.Contains(strings.TrimSpace(block), "\n") {
+		var lines []string
+		for line := range strings.SplitSeq(block, "\n") {
+			if !strings.HasPrefix(strings.TrimSpace(line), "#") {
+				lines = append(lines, cutInlineComment(line))
+			}
+		}
+		block = strings.Join(lines, "\n")
+	}
 	var cuts []int
 	for _, m := range pastedAssignmentRe.FindAllStringSubmatchIndex(block, -1) {
 		if !dotenv.AllowedDotenvKey(block[m[2]:m[3]]) {
@@ -1231,6 +1771,9 @@ func normalizePastedBlock(block string) string {
 		// The regex opens with (?:^|\s); drop the whitespace byte it consumed.
 		if strings.IndexByte(" \t\n\f\r", block[start]) >= 0 {
 			start++
+		}
+		if strings.HasSuffix(strings.TrimRight(block[:start], " \t"), "#") {
+			continue
 		}
 		cuts = append(cuts, start)
 	}
@@ -1249,6 +1792,28 @@ func normalizePastedBlock(block string) string {
 		lines = append(lines, strings.TrimSpace(block[start:end]))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// cutInlineComment drops a ` #` comment from the end of a line where the
+// loader would drop it: after the closing quote of a quoted value, or anywhere
+// in an unquoted one (see dotenv.ParseDotenv).
+func cutInlineComment(line string) string {
+	_, rest, ok := strings.Cut(line, "=")
+	if !ok {
+		return line
+	}
+	value := strings.TrimLeft(rest, " \t")
+	from := len(line) - len(value)
+	if len(value) >= 2 && (value[0] == '"' || value[0] == '\'') {
+		if end := strings.IndexByte(value[1:], value[0]); end >= 0 {
+			from += end + 2
+		}
+	}
+	// A tab before the comment counts as a space, as ParseDotenv reads it.
+	if i := strings.Index(strings.ReplaceAll(line[from:], "\t", " "), " #"); i >= 0 {
+		return line[:from+i]
+	}
+	return line
 }
 
 // autoTagOptions lists the values the automatic-tag switch can attach, with
@@ -1597,6 +2162,26 @@ type formValues struct {
 	// only when it is set, so a promptless run driven by flags leaves
 	// whatever is on disk alone.
 	capturePrompted bool
+
+	// autoTagsFromBlock records that a block set an automatic-tag key (see
+	// presetAutoTags). The automatic-tag answers are then written even when
+	// the form did not run, because the block chose them.
+	autoTagsFromBlock bool
+
+	// blockSettings are the keys a block set that login writes as the block
+	// spells them, and blockRefused the ones it could not set (see blockKeys).
+	blockSettings map[string]string
+	blockRefused  []blockRefusal
+	// blockAutoTagKeys are the automatic tag keys a block set that login
+	// saves; presetAutoTags writes them through the form's own rules.
+	blockAutoTagKeys []string
+	// dropCredentialCopies deletes the saved HEADERS and OTEL_AUTH_TOKEN,
+	// which carry a copy of the export credential, because the endpoint, the
+	// OTLP endpoint or the token changed in this run.
+	dropCredentialCopies bool
+	// droppedCredentialCopies names the saved copies that go, reported once
+	// the file is written.
+	droppedCredentialCopies []string
 }
 
 // buildUpdates maps the form values onto the dotenv keys WriteDotenv expects.
@@ -1608,7 +2193,9 @@ type formValues struct {
 // ran. A promptless run leaves them out: their values then come from seeds, and
 // a seed can be an AGENTO11Y_* variable exported in the current shell, so
 // writing them would turn a one-off `agento11y claude --tag session=demo` into
-// a permanent config entry the user never saw.
+// a permanent config entry the user never saw. The automatic-tag keys are
+// also written when autoTagsFromBlock is set, through the same lines, so an
+// environment block saves exactly what the form would for the same answers.
 //
 // Unless KeepLocalSetting is set, every Cloud setup writes LOCAL=false. A
 // submitted local-daemon answer writes LOCAL and LOCAL_FORWARD together.
@@ -1653,9 +2240,7 @@ func buildUpdates(v formValues, keepLocalSetting bool) map[string]string {
 		}
 		updates[envconfig.LegacyKey("LOCAL")] = strconv.FormatBool(localMode)
 	}
-	if v.capturePrompted {
-		updates["SIGIL_CONTENT_CAPTURE_MODE"] = normalizeContentMode(v.contentMode)
-		updates["SIGIL_TAGS"] = strings.TrimSpace(v.tags) // "" deletes
+	if v.capturePrompted || v.autoTagsFromBlock {
 		updates[envconfig.LegacyKey(envconfig.AutoTagsSuffix)] = strconv.FormatBool(v.autoTags)
 		// Writing no allowlist means every name, so a user who kept all of them
 		// also picks up a name a later version adds. A narrowed selection is
@@ -1666,6 +2251,10 @@ func buildUpdates(v formValues, keepLocalSetting bool) map[string]string {
 			names = autoTagNamesValue(v.autoTagNames)
 		}
 		updates[envconfig.LegacyKey(envconfig.AutoTagNamesSuffix)] = names
+	}
+	if v.capturePrompted {
+		updates["SIGIL_CONTENT_CAPTURE_MODE"] = normalizeContentMode(v.contentMode)
+		updates["SIGIL_TAGS"] = strings.TrimSpace(v.tags) // "" deletes
 		switch v.guards {
 		case guardsOpen, guardsClosed:
 			updates["SIGIL_GUARDS_ENABLED"] = "true"
@@ -1682,6 +2271,12 @@ func buildUpdates(v formValues, keepLocalSetting bool) map[string]string {
 			updates["SIGIL_GUARDS_ENABLED"] = "false"
 		}
 	}
+	if v.dropCredentialCopies {
+		for _, suffix := range blockExportCredentialSuffixes {
+			updates[envconfig.PreferredKey(suffix)] = "" // deletes; a block's own copy below replaces it
+		}
+	}
+	maps.Copy(updates, v.blockSettings)
 	out := envconfig.ExpandAliases(updates)
 	if v.stackURL != "" {
 		out[stackURLKey] = v.stackURL
@@ -1834,13 +2429,29 @@ func requireURL(s string) error {
 	}
 	u, err := url.Parse(s)
 	if err != nil {
-		return fmt.Errorf("invalid URL: %w", err)
+		// The parse error quotes the input, or part of it such as the port,
+		// and the input can carry a secret from a block; say nothing of it.
+		return errors.New("invalid URL")
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return errors.New("endpoint URL must start with http:// or https://")
 	}
 	if u.Host == "" {
 		return errors.New("endpoint URL must include a host")
+	}
+	return nil
+}
+
+// requireBlockURL is requireURL for an endpoint a block supplies, which must
+// use https unless it is on this machine. A plain http endpoint would send the
+// block's credentials and every session in cleartext, as the INSECURE setting
+// a block cannot set would; a user who wants one passes it as a flag.
+func requireBlockURL(s string) error {
+	if err := requireURL(s); err != nil {
+		return err
+	}
+	if u, _ := url.Parse(strings.TrimSpace(s)); strings.EqualFold(u.Scheme, "http") && !envconfig.IsLocalEndpoint(s) {
+		return errors.New("a block's endpoint must use https unless it is on this machine; pass it as a flag to use http")
 	}
 	return nil
 }

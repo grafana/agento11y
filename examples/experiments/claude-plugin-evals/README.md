@@ -28,7 +28,7 @@ For other installation options, see the [CLI installation guide](../../../plugin
 
 On your first launch, choose **Grafana Cloud**. Follow the prompts to open
 **Agent Observability → Set up a coding agent** in your stack, generate a token,
-and paste the connection block back into the setup prompt. The launcher saves
+and paste the environment block back into the setup prompt. The launcher saves
 your connection, installs the Claude Code plugin, and starts Claude.
 
 Already using Agent O11y with Claude Code? Reuse that connection—there is no

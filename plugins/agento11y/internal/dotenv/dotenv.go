@@ -12,6 +12,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"unicode"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/xdg"
@@ -149,19 +150,27 @@ func ReadDotenv(path string, logger *log.Logger) (map[string]string, error) {
 //
 // Format:
 //   - `KEY=value` one pair per line
-//   - `# comment` lines and trailing ` # comment` on unquoted values
+//   - `# comment` lines and a trailing ` # comment` (after a space or tab) on
+//     unquoted values
 //   - optional single- or double-quoted values
-//   - optional leading `export ` prefix
+//   - optional leading `export ` prefix (any blank after export)
+//   - an optional UTF-8 byte order mark at the start
 func ParseDotenv(r io.Reader) (map[string]string, error) {
 	out := map[string]string{}
 	scanner := bufio.NewScanner(r)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+	for n := 0; scanner.Scan(); n++ {
+		text := scanner.Text()
+		if n == 0 {
+			// Windows Notepad starts a UTF-8 file with a byte order mark.
+			text = strings.TrimPrefix(text, "\ufeff")
+		}
+		line := strings.TrimSpace(text)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		if strings.HasPrefix(line, "export ") {
-			line = strings.TrimSpace(line[len("export "):])
+		// The shell takes any blank after export, a tab included.
+		if rest, ok := strings.CutPrefix(line, "export"); ok && strings.TrimLeftFunc(rest, unicode.IsSpace) != rest {
+			line = strings.TrimSpace(rest)
 		}
 		key, rest, ok := strings.Cut(line, "=")
 		key = strings.TrimSpace(key)
@@ -199,9 +208,10 @@ func AllowedDotenvKey(key string) bool {
 }
 
 // parseDotenvValue strips surrounding quotes (if both ends match) and a
-// trailing ` # comment` from an unquoted value. Quoted values keep their
-// inner whitespace and any `#` characters verbatim — including on a quoted
-// value followed by an inline comment like `KEY="x" # comment`.
+// trailing ` # comment` (after a space or tab) from an unquoted value. Quoted
+// values keep their inner whitespace and any `#` characters verbatim —
+// including on a quoted value followed by an inline comment like
+// `KEY="x" # comment`.
 func parseDotenvValue(v string) string {
 	if len(v) >= 2 {
 		first := v[0]
@@ -211,7 +221,9 @@ func parseDotenvValue(v string) string {
 			}
 		}
 	}
-	if hashIdx := strings.Index(v, " #"); hashIdx >= 0 {
+	// A tab before the comment counts as a space; both are one byte, so the
+	// index holds for v.
+	if hashIdx := strings.Index(strings.ReplaceAll(v, "\t", " "), " #"); hashIdx >= 0 {
 		v = strings.TrimRight(v[:hashIdx], " \t")
 	}
 	return v

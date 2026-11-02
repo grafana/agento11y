@@ -55,7 +55,7 @@ Verify with `agento11y --version`.
 
 ## Configure
 
-Run `agento11y login` to configure capture. On first run it asks where sessions go: **Local only**, or **Grafana Cloud**. **Local only** needs no Cloud credentials and does not forward sessions. **Grafana Cloud** prints your stack's coding-agent setup page and asks you to paste the connection block from that page.
+Run `agento11y login` to configure capture. On first run it asks where sessions go: **Local only**, or **Grafana Cloud**. **Local only** needs no Cloud credentials and does not forward sessions. **Grafana Cloud** prints your stack's coding-agent setup page and asks you to paste the environment block from that page.
 
 Interactive Cloud setup also asks for **Local web UI** in the preferences. The question starts on **Yes** by default and remembers an earlier answer. **Yes** keeps a full local copy and forwards a copy to Grafana Cloud. **No** sends directly to Grafana Cloud without a local copy. Complete credential flags also skip the preferences and keep direct Cloud behavior.
 
@@ -168,7 +168,7 @@ See [Local skill analytics](#local-skill-analytics) for retained calls on this m
 
 `agento11y <agent> --local` records the session to a JSONL store and starts the local Agent Observability app. The command prints the app URL (tries `http://127.0.0.1:8765`, then a higher port if needed).
 
-`AGENTO11Y_LOCAL=true` in the shell or `config.env` enables local mode for every launch and installed hook. **Local only** writes `AGENTO11Y_LOCAL` and `SIGIL_LOCAL` as true, and writes `AGENTO11Y_LOCAL_FORWARD` and `SIGIL_LOCAL_FORWARD` as false. Sessions then stay on the machine. **Local web UI = Yes** writes all four keys as true, so the daemon keeps a full local copy and also forwards to Grafana Cloud. **Local web UI = No** writes all four keys as false and sends directly to Cloud. Use `--no-local` to override a saved local destination for one launcher session without changing those keys.
+`AGENTO11Y_LOCAL=true` in the shell or `config.env` enables local mode for every launch and installed hook. **Local only** writes `AGENTO11Y_LOCAL` as true and `AGENTO11Y_LOCAL_FORWARD` as false. Sessions then stay on the machine. **Local web UI = Yes** writes both as true, so the daemon keeps a full local copy and also forwards to Grafana Cloud. **Local web UI = No** writes both as false and sends directly to Cloud. Use `--no-local` to override a saved local destination for one launcher session without changing those keys.
 
 The daemon always stores full session content locally. It forwards full generation content only when `AGENTO11Y_CONTENT_CAPTURE_MODE=full`. Every other selected capture mode is reduced to `metadata_only` for the forwarded copy. Local mode is available on every supported platform.
 
@@ -389,8 +389,9 @@ agento11y login --endpoint https://agento11y-prod-<region>.grafana.net --tenant 
 | `--endpoint url` | conversations API URL |
 | `--tenant id` | instance ID |
 | `--token value` | access-policy token with the `sigil:write` scope |
-| `--token-stdin` | read the token from stdin; requires `--endpoint` and `--tenant` |
+| `--token-stdin` | read the token from stdin; requires `--endpoint` and `--tenant`, or an `--env-file` that sets them |
 | `--otlp-endpoint url` | OTLP endpoint for SDK traces and metrics |
+| `--env-file path` | read an environment block from a file, or from stdin when the path is `-`, and save its settings; login names on stderr any key it does not take (see below) |
 | `--no-verify` | write the file without checking the credentials |
 | `--yes` | save even when the check fails |
 
@@ -401,6 +402,36 @@ Keep the token out of your shell history with `--token-stdin`:
 ```sh
 printf %s "$TOKEN" | agento11y login --endpoint https://agento11y-prod-<region>.grafana.net --tenant <instance-id> --token-stdin
 ```
+
+A team can share one environment block instead, as a file or through a password manager. Save the block from the setup page, then pass the file, or pipe it in with `-`:
+
+```sh
+agento11y login --env-file team.env
+op document get agento11y-cloud-env | agento11y login --env-file -
+```
+
+Login takes the settings it knows from the block. The credentials and OTLP lines connect to the stack. The preferences the login form asks about (content capture, session tags, guards, and automatic tags) become the form's answers, so after a paste you see them and can change them before saving. A block cannot preset guards off, fail-open, or the guard timeout, but you can still choose any of them in the form. A block's stack URL is used unless you already chose a stack in that run. Login also saves `AGENTO11Y_PROTOCOL`, `AGENTO11Y_OTEL_AUTH_TOKEN`, `AGENTO11Y_EXPORT_TIMEOUT_MS`, `AGENTO11Y_INSECURE`, `AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE`, `OTEL_EXPORTER_OTLP_INSECURE`, `AGENTO11Y_REDACT_INPUT_MESSAGES`, `AGENTO11Y_AUTO_UPDATE`, `AGENTO11Y_ANONYMOUS_USAGE_STATS`, `AGENTO11Y_DEBUG`, `AGENTO11Y_THEME`, `AGENTO11Y_USER_ID_SOURCE`, and `AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES`, within the limits in the table below, and once the file is written it names each saved key on stderr. The setup page's `AGENTO11Y_PROTOCOL=http` and `AGENTO11Y_AUTH_MODE=basic` lines are the defaults, so they do not replace a saved choice. `AGENTO11Y_OTEL_AUTH_TOKEN` carries the export credential, so like the OTLP headers it is dropped when `--tenant`, `--token`, or `--otlp-endpoint` replaces the block's value, or when the block has no OTLP endpoint of its own. A block chooses the stack its users report to and nothing else that leaves their machines. Login skips these keys, names each one on stderr with its reason, and exits 0:
+
+| Key | Why login skips it |
+|---|---|
+| `AGENTO11Y_BIN` | It is the binary the agent plugins launch. |
+| `AGENTO11Y_LOCAL_WEB_DIR` | It is the directory the local app loads its web UI from. |
+| `AGENTO11Y_LOCAL_ALLOWED_HOSTS` | It is the hosts the local app answers. |
+| `AGENTO11Y_ANONYMOUS_USAGE_STATS_ENDPOINT`, `AGENTO11Y_CONTROL_ENDPOINT`, `AGENTO11Y_GRAFANA_URL` | They choose where usage stats and the SDKs' test-suite requests go. Those requests carry the user's service account token, and `GRAFANA_URL` is where they go when no control endpoint is set. |
+| `AGENTO11Y_EXPERIMENT_URL_TEMPLATE` | It chooses the experiment links the SDKs print. |
+| `AGENTO11Y_AGENT_NAME` | Guard rules and dashboards filter on it. |
+| `AGENTO11Y_AGENT_VERSION`, `AGENTO11Y_COPILOT_HOOK_SURFACE` | agento11y works them out for each agent. |
+| `AGENTO11Y_USER_ID` | It would give everyone who logs in with the block the same user. |
+| `AGENTO11Y_AUTH_MODE` other than `basic`, `AGENTO11Y_HEADERS`, `AGENTO11Y_GUARDS_TIMEOUT_MS` | Guard checks use them, and guards fail open by default. A wrong auth mode, a header over `Authorization`, or a timeout shorter than the stack takes would make every check fail and let every tool call through while export kept working. Set them in `config.env` yourself. |
+| `AGENTO11Y_REDACT_INPUT_MESSAGES=false`, `AGENTO11Y_INSECURE=true`, `AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE=true`, `OTEL_EXPORTER_OTLP_INSECURE=true`, `AGENTO11Y_GUARDS_ENABLED=false`, `AGENTO11Y_GUARDS_FAIL_OPEN=true`, `AGENTO11Y_AUTO_UPDATE=false` | They turn off secret redaction, TLS, guards, a fail-closed guard, or updates. The opposite values are saved. |
+| `AGENTO11Y_ANONYMOUS_USAGE_STATS=enabled`, or another value that turns usage stats on | Usage stats go to Grafana, not the block's stack. Turning them off, or to `log`, which sends nothing, is saved. |
+| `AGENTO11Y_LOCAL`, `AGENTO11Y_LOCAL_FORWARD` | Login sets them itself. |
+| A name that is not upper case | Windows reads names without case. stderr names it only up to its first character outside `A-Z`, `0-9` and `_`, so a malformed line such as `AGENTO11Y_AUTH_TOKEN: glc_...` never prints the token. |
+| `OTEL_SERVICE_NAME`, and any other `AGENTO11Y_` name, such as one a later release adds | Login does not save it from a block, so a shared block cannot set a setting nobody has decided on. |
+
+A block's endpoint, OTLP endpoint and stack URL must use `https://` unless they are on this machine (`localhost`, `127.0.0.1` or `::1`). A plain `http://` endpoint elsewhere would send the block's credentials and every session in cleartext, so login stops before it saves anything; pass `--endpoint` or `--otlp-endpoint` to use one. When login changes the endpoint, the OTLP endpoint or the token, it deletes a saved `AGENTO11Y_HEADERS` and `AGENTO11Y_OTEL_AUTH_TOKEN`, which carry a copy of the old credential, unless the same run sets its own.
+
+A block that turns guards on sends evaluated messages and tool arguments to the stack for every guard check, whatever the content capture mode. `--env-file` never prompts for a value: the block and the flags must supply the endpoint, instance ID, and token, and a setting the block does not set keeps its saved value, except that turning automatic tags off also deletes the saved names list, as answering No in the form does. A block that sets only the names list turns automatic tags on when no switch is saved, so set both automatic tag keys in a team block. A value the form would not accept stops login before anything is saved, and so does a saved names list with no supported name when the block turns automatic tags on without a list of its own. `export` prefixes and `#` comment lines are accepted, so the same file also works with `source`. A file of `op://` references must be resolved first, for example `op inject -i <file> | agento11y login --env-file -`. Flags still win over the block's values, and a file that holds only the endpoint and instance ID can be combined with `--token-stdin`. A block larger than 64 KiB is refused.
 
 ## Settings
 
