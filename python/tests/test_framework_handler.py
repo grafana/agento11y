@@ -11,8 +11,22 @@ from agento11y.framework_handler import (
     _extract_tool_output,
     _map_chat_input_message,
     _map_framework_usage,
+    _resolve_provider,
 )
 from agento11y.models import MessageRole, PartKind
+
+
+@pytest.mark.parametrize("provider", ["bedrock", "amazon_bedrock", "aws.bedrock"])
+@pytest.mark.parametrize("source", ["explicit", "resolver", "provider", "ls_provider"])
+def test_resolve_bedrock_provider(provider: str, source: str) -> None:
+    resolved = _resolve_provider(
+        explicit_provider=provider if source == "explicit" else "",
+        provider_resolver=(lambda *_: provider) if source == "resolver" else "auto",
+        model_name="us.anthropic.claude-sonnet-4-6-v1:0",
+        serialized=None,
+        invocation_params={source: provider},
+    )
+    assert resolved == "bedrock"
 
 
 class _FakeToolMessage:

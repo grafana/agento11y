@@ -1092,12 +1092,7 @@ def _resolve_provider(
         resolved = _normalize_provider_name(provider_resolver(model_name, serialized, invocation_params))
         return resolved if resolved != "" else "custom"
 
-    # A framework hint (`provider`/`ls_provider`) wins only when it is a canonical
-    # provider. LangChain often reports a non-canonical hint for Bedrock (e.g.
-    # `ls_provider="amazon_bedrock"`), which `_normalize_provider_name` collapses to
-    # "custom"; treating that as authoritative would short-circuit the model-name
-    # inference that can recover the real vendor from a Bedrock id. So a "custom" hint
-    # is only kept as a last resort — model-name inference is tried first.
+    # Unknown framework hints must not block model-name inference.
     hint_provider = ""
     for payload in (invocation_params, serialized):
         for key in ("provider", "ls_provider"):
@@ -1209,6 +1204,8 @@ def _infer_provider_from_bedrock_id(model_name: str) -> str:
 
 def _normalize_provider_name(value: str) -> str:
     normalized = value.strip().lower()
+    if normalized in {"bedrock", "amazon_bedrock", "aws.bedrock"}:
+        return "bedrock"
     if normalized in {"openai", "anthropic", "gemini"}:
         return normalized
     return "" if normalized == "" else "custom"

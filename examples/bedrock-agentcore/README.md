@@ -6,6 +6,8 @@ metrics to Grafana Cloud Agent Observability.
 
 The agent defaults to Claude through Amazon Bedrock and uses synthetic,
 company-neutral inventory, order, support-case, and return data.
+`AGENT_MODEL_PROVIDER` also sets the recorded generation provider: `bedrock`
+for Amazon Bedrock or `anthropic` for direct Anthropic calls.
 
 ## Project layout
 

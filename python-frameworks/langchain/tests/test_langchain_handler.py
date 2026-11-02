@@ -385,23 +385,22 @@ def test_langchain_does_not_override_explicit_request_model() -> None:
         client.shutdown()
 
 
-def test_langchain_infers_bedrock_provider_at_request_start() -> None:
-    """When a Bedrock-style model id IS surfaced at request start (no explicit
-    provider), the provider fallback must classify it from the vendor segment
-    instead of falling back to "custom", so the start span is resolvable too.
-    Uses positional vendor parsing that mirrors the backend: a dotted custom
-    name whose vendor word is not in the vendor position stays "custom"."""
+@pytest.mark.parametrize("provider", ["", "bedrock"])
+def test_langchain_infers_bedrock_provider_at_request_start(provider: str) -> None:
+    """Explicit Bedrock labels survive completion; absent a provider hint,
+    model IDs still fall back to the vendor and custom names stay custom."""
     exporter = _CapturingExporter()
     client = _new_client(exporter)
 
     try:
-        # Bedrock inference-profile id surfaced at start -> provider inferred.
+        # An explicit serving provider takes precedence over model-vendor inference.
         run_id = uuid4()
         handler = Agento11yLangChainHandler(
             client=client,
             agent_name="agent-langchain",
             agent_version="v1",
             provider_resolver="auto",
+            provider=provider,
         )
         handler.on_chat_model_start(
             {"name": "ChatBedrock"},
@@ -420,7 +419,7 @@ def test_langchain_infers_bedrock_provider_at_request_start() -> None:
             run_id=run_id,
         )
 
-        # A dotted custom name with a vendor word out of position stays "custom".
+        # A custom model only uses Bedrock when it was explicitly configured.
         custom_run_id = uuid4()
         handler.on_chat_model_start(
             {"name": "ChatCustom"},
@@ -442,25 +441,22 @@ def test_langchain_infers_bedrock_provider_at_request_start() -> None:
         client.flush()
         generations = exporter.requests[0].generations
         bedrock_gen = next(g for g in generations if g.model.name == "us.anthropic.claude-sonnet-4-6")
-        assert bedrock_gen.model.provider == "anthropic"
+        assert bedrock_gen.model.provider == (provider or "anthropic")
         custom_gen = next(g for g in generations if g.model.name == "my-team.anthropic.internal-model")
-        assert custom_gen.model.provider == "custom"
+        assert custom_gen.model.provider == (provider or "custom")
     finally:
         client.shutdown()
 
 
-def test_langchain_non_canonical_provider_hint_does_not_block_bedrock_inference() -> None:
-    """LangChain reports Bedrock as ls_provider="amazon_bedrock" (and sometimes
-    "provider"). That hint normalizes to "custom" and must NOT short-circuit the
-    model-name inference that recovers the real vendor from the Bedrock id. A canonical
-    hint still wins, and a genuinely custom model keeps "custom"."""
+def test_langchain_bedrock_provider_hint_takes_precedence_over_model_vendor() -> None:
+    """Bedrock hints identify the serving provider, not the model vendor."""
     exporter = _CapturingExporter()
     client = _new_client(exporter)
 
     cases = [
         # (run label, invocation_params, expected provider)
-        ("ls", {"model": "us.anthropic.claude-sonnet-4-6-v1:0", "ls_provider": "amazon_bedrock"}, "anthropic"),
-        ("prov", {"model": "us.anthropic.claude-sonnet-4-6-v1:0", "provider": "amazon_bedrock"}, "anthropic"),
+        ("ls", {"model": "us.anthropic.claude-sonnet-4-6-v1:0", "ls_provider": "amazon_bedrock"}, "bedrock"),
+        ("prov", {"model": "us.anthropic.claude-haiku-4-5-v1:0", "provider": "amazon_bedrock"}, "bedrock"),
         ("canonical", {"model": "claude-sonnet-4-5", "ls_provider": "openai"}, "openai"),
         ("genuine_custom", {"model": "my-inhouse-model", "ls_provider": "my_platform"}, "custom"),
     ]

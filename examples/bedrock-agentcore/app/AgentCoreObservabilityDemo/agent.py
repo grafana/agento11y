@@ -172,7 +172,7 @@ def run_agent(
                     }
                 },
                 client=agento11y,
-                provider_resolver="auto",
+                provider=provider,
                 agent_name=os.getenv(
                     "AGENTO11Y_AGENT_NAME",
                     "agentcore-operations-demo",
