@@ -661,7 +661,8 @@ function ForwardModeChip({ config, onOpenSettings }: ForwardModeChipProps) {
               color: 'var(--fg3)',
             }}
           >
-            Click to change the forwarding mode in Settings, Cloud tab.
+            The forwarding switch and capture mode apply to the primary connection and all extra destinations. Click to
+            view recipients and delivery counters in Settings, Cloud tab.
           </div>
         </div>
       )}

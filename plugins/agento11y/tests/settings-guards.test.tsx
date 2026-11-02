@@ -76,6 +76,73 @@ describe('SettingsGuardsCard', () => {
     expect(screen.queryByText(/Non-local sessions still use/)).toBeNull();
   });
 
+  it('does not enable Cloud guards from extra destination routes', () => {
+    render(
+      <SettingsGuardsCard
+        form={settings({ localForward: true })}
+        savedGuards="failclosed"
+        set={vi.fn()}
+        localOnly={false}
+        status={{
+          enabled: true,
+          mode: 'metadata_only',
+          generations: true,
+          otlp: true,
+          hooks: false,
+          hookReason: 'primary credentials missing',
+          destinations: [
+            {
+              name: 'extra',
+              endpoint: 'https://extra.example',
+              otlpEndpoint: '',
+              httpGenerations: true,
+              otlp: false,
+              revision: 1,
+            },
+          ],
+        }}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Off' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: 'Fail open' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByText('primary credentials missing')).toBeTruthy();
+    expect(screen.getByText(/Extra destinations do not evaluate guards/)).toBeTruthy();
+  });
+
+  it('can enable guards on a primary connection when the saved guard mode is off', () => {
+    const set = vi.fn();
+    render(
+      <SettingsGuardsCard
+        form={settings({ guards: 'off', localForward: true })}
+        savedGuards="off"
+        set={set}
+        localOnly={false}
+        status={{
+          enabled: true,
+          mode: 'metadata_only',
+          generations: true,
+          otlp: true,
+          hooks: false,
+          hookReason: 'AGENTO11Y_GUARDS_ENABLED is off, so no guard check is made at all',
+          destinations: [
+            {
+              name: 'primary',
+              endpoint: 'https://primary.example',
+              otlpEndpoint: '',
+              httpGenerations: true,
+              otlp: false,
+              revision: 1,
+            },
+          ],
+        }}
+      />,
+    );
+    const failOpen = screen.getByRole('button', { name: 'Fail open' });
+    expect(failOpen.hasAttribute('disabled')).toBe(false);
+    fireEvent.click(failOpen);
+    expect(set).toHaveBeenCalledWith({ guards: 'failopen' });
+  });
+
   it('shows the saved guard mode when Cloud forwarding is on', () => {
     render(
       <SettingsGuardsCard form={settings()} savedGuards="failclosed" set={vi.fn()} status={null} localOnly={false} />,

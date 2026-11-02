@@ -22,6 +22,7 @@ function renderFlow(props: Partial<React.ComponentProps<typeof SettingsConnectFl
       savedStackURL=""
       configPath="/home/x/.agento11y/config.env"
       capture=""
+      destinations={[]}
       onConnect={onConnect}
       onManual={onManual}
       {...props}
@@ -99,10 +100,40 @@ describe('SettingsConnectFlow', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Full' }));
     fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
     expect(onConnect).not.toHaveBeenCalled();
+    expect(screen.getByRole('list', { name: 'Full-content recipients' }).textContent).toContain(
+      'agento11y-prod-eu.grafana.net',
+    );
 
     fireEvent.click(screen.getByRole('button', { name: /Forward full content/ }));
     expect(onConnect).toHaveBeenCalledTimes(1);
     expect(onConnect.mock.calls[0]?.[1]).toBe('full');
+  });
+
+  it('names the new primary and saved extras before full-content connect', () => {
+    const { onConnect } = renderFlow({
+      destinations: [
+        {
+          name: 'backup',
+          endpoint: 'https://backup.example/ingest',
+          otlpEndpoint: 'https://backup.example/otlp',
+          httpGenerations: true,
+          otlp: true,
+          revision: 1,
+        },
+      ],
+    });
+    paste(GOOD_BLOCK);
+    fireEvent.click(screen.getByRole('button', { name: 'Full' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+    const list = screen.getByRole('list', { name: 'Full-content recipients' });
+    expect(list.textContent).toContain('primary');
+    expect(list.textContent).toContain('https://agento11y-prod-eu.grafana.net');
+    expect(list.textContent).toContain('backup');
+    expect(list.textContent).toContain('https://backup.example/ingest');
+    expect(list.textContent).toContain('https://backup.example/otlp');
+    expect(onConnect).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onConnect).not.toHaveBeenCalled();
   });
 
   // An endpoint on its own is a valid configuration (a local collector needs

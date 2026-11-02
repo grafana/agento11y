@@ -122,14 +122,30 @@ func localPrivacyLines(posture local.ForwardPosture, known, guardsEnabled bool) 
 	switch {
 	case !posture.Enabled:
 		lines = []string{"Captured agent data stays on this machine."}
-	case posture.Hooks && guardsEnabled:
-		lines = []string{
-			"Captured agent data is also forwarded to Grafana Cloud (" + posture.Mode + ").",
-			"Guard checks send tool calls, and any conversation checked before it is sent",
-			"to the model, to Cloud regardless of that mode.",
-		}
 	default:
-		lines = []string{"Captured agent data is also forwarded to Grafana Cloud (" + posture.Mode + ")."}
+		count := posture.DestinationCount
+		if count == 0 {
+			count = 1
+		} // Older daemons have only the primary destination.
+		noun := "destinations"
+		if count == 1 {
+			noun = "destination"
+		}
+		lines = []string{
+			fmt.Sprintf("Captured agent data is configured for forwarding to %d %s (%s).", count, noun, posture.Mode),
+			"Delivery is best-effort, not guaranteed.",
+		}
+		if posture.Hooks && guardsEnabled {
+			lines = append(lines,
+				"Guard checks send tool calls and any conversation checked before model submission",
+				"only to the primary destination, regardless of capture mode.")
+		}
+	}
+	if posture.ForwardingError != "" {
+		lines = append(lines, "Extra forwarding configuration could not be loaded. Check forwarding.toml.")
+	}
+	if len(posture.Failures) > 0 {
+		lines = append(lines, "The daemon reports recent forwarding failures. Check delivery details in the local web UI.")
 	}
 
 	// The local ruleset is separate from forwarding and sends nothing. Report

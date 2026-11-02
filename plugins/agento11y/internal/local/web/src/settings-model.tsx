@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { formatAgo } from './formatters';
-import type { ConfigResponse, ForwardStatus, Settings, ThemePreference } from './types';
+import type { ConfigResponse, ForwardFailure, ForwardStatus, Settings, ThemePreference } from './types';
 
 // ============================================================
 // Settings — edits config.env via the daemon's /api/v1/config endpoints
@@ -210,6 +210,13 @@ function copyField<K extends keyof Settings>(out: Partial<Settings>, src: Settin
 export const GUARD_CONTENT_NOTE =
   'Guards are on: tool calls, and the conversation an agent runs a preflight check on, are sent to Cloud for evaluation regardless of the capture mode.';
 
+// The daemon includes destination failures in the aggregate too. Keep each
+// failure once, without merging failures from different recipients.
+export function forwardingFailures(st: ForwardStatus | null | undefined): ForwardFailure[] {
+  const failures = [...(st?.failures || []), ...(st?.destinations || []).flatMap((d) => d.failures || [])];
+  return [...new Map(failures.map((f) => [JSON.stringify([f.destination, f.at, f.label, f.detail]), f])).values()];
+}
+
 // forwardBannerMeta turns the daemon's reported forwarding status into the
 // pill, accent, and sentence forwardChipMeta builds the header chip and the
 // settings hero from. The saved toggle is deliberately not an input:
@@ -224,6 +231,12 @@ function forwardBannerMeta(st: ForwardStatus | null | undefined): ForwardBannerM
     };
   }
   if (!st.enabled) {
+    if (st.forwardingError)
+      return {
+        accent: 'error',
+        pill: 'Configuration error',
+        line: `Extra destinations are not loaded: ${st.forwardingError}.`,
+      };
     if (st.reason)
       return {
         accent: 'warning',
@@ -250,18 +263,24 @@ function forwardBannerMeta(st: ForwardStatus | null | undefined): ForwardBannerM
         ? '1 guard check ran without a Cloud verdict and was allowed.'
         : `${st.hookFailOpens} guard checks ran without a Cloud verdict and were allowed.`,
     );
-  const failures = st.failures || [];
+  const failures = forwardingFailures(st);
   const failure = failures[0];
-  if (failure) {
-    // Name the other failing legs instead of letting the most recent one
-    // stand for all of them.
-    const others = [...new Set(failures.map((f) => f.label))].filter((l) => l !== failure.label);
-    const also = others.length > 0 ? ` (also failing: ${others.join(', ')})` : '';
+  const legs = [
+    ...Object.values(st.legs || {}),
+    ...(st.destinations || []).flatMap((d) => Object.values(d.legs || {})),
+  ];
+  const partial = legs.some((leg) => (leg.succeeded ?? 0) > 0 || !!leg.lastSuccessAt);
+  if (st.forwardingError) disclosures.push(`Extra destinations are not loaded: ${st.forwardingError}.`);
+  if (failure || legs.some((leg) => (leg.failed ?? 0) > 0 || (leg.dropped ?? 0) > 0)) {
+    const details = failures.map((f) => `${f.destination ? `${f.destination} / ` : ''}${f.label}: ${f.detail}`);
     return {
       accent: 'error',
-      pill: 'Failing',
+      pill: partial ? 'Partial failure' : 'Failing',
       line: [
-        `Forwarding is on but the last attempts failed. ${failure.label}: ${failure.detail}${also}`,
+        partial
+          ? 'Forwarding is on. Some deliveries succeeded, but other deliveries failed or were dropped.'
+          : 'Forwarding is on but deliveries failed or were dropped.',
+        ...details,
         ...disclosures,
       ].join(' '),
     };
@@ -282,7 +301,7 @@ function forwardBannerMeta(st: ForwardStatus | null | undefined): ForwardBannerM
     ? 'Session capture forwards usage and session metadata only. Reasoning text and attached media stay local.'
     : 'Only usage and session metadata is forwarded. Prompts, responses, reasoning text, tool inputs and results, and attached media stay local.';
   const parts = [
-    st.mode === 'full' ? "Full session content is forwarded to your organization's Grafana Cloud." : metadataLine,
+    st.mode === 'full' ? 'Full session content is forwarded to all configured destinations.' : metadataLine,
   ];
   if (!st.generations && st.reason) parts.push(`Generations are paused: ${st.reason}`);
   if (!st.otlp) parts.push('Traces and metrics are not forwarded.');
@@ -290,8 +309,14 @@ function forwardBannerMeta(st: ForwardStatus | null | undefined): ForwardBannerM
   return {
     // A metadata_only forward with guards chained still ships content, so
     // it does not get the calm accent or the reassuring pill.
-    accent: st.mode === 'full' || st.hooks ? 'warning' : 'info',
-    pill: st.mode === 'full' ? 'Full content' : st.hooks ? 'Metadata + guard content' : 'Metadata only',
+    accent: st.forwardingError ? 'error' : st.mode === 'full' || st.hooks ? 'warning' : 'info',
+    pill: st.forwardingError
+      ? 'Partial failure'
+      : st.mode === 'full'
+        ? 'Full content'
+        : st.hooks
+          ? 'Metadata + guard content'
+          : 'Metadata only',
     line: parts.join(' '),
   };
 }
@@ -324,6 +349,13 @@ export function guardStatusMeta(st: ForwardStatus | null | undefined, now: numbe
     return {
       accent: 'info',
       line: 'Cloud forwarding is off, so this daemon does not relay guard checks.',
+    };
+  }
+
+  if (!st.hooks) {
+    return {
+      accent: 'info',
+      line: 'Cloud guards need a usable primary connection. Extra destinations do not evaluate guards.',
     };
   }
 
@@ -383,8 +415,8 @@ export function forwardChipMeta(config: ConfigResponse | null | undefined): Forw
       line: meta.line,
       ...tone('warning'),
     };
-  if (!st.enabled && !st.reason) {
-    if (!cloudConfigured(config?.settings)) {
+  if (!st.enabled && !st.reason && !st.forwardingError) {
+    if (!cloudConfigured(config?.settings) && !st.destinations?.length) {
       return {
         kicker: 'Mode',
         value: 'Local',

@@ -121,6 +121,13 @@ func TestCloudConsentDialogsNameTheSavedStack(t *testing.T) {
 
 	assert.Equal(t, 2, strings.Count(region, "savedEndpoint"),
 		"both consent dialogs must name savedEndpoint")
+	assert.Contains(t, region, "destinations={forwardStatus?.destinations}",
+		"full-content consent must include every configured recipient, even while global forwarding is off")
+	copyText := strings.Join(strings.Fields(region), " ")
+	assert.Contains(t, copyText, "Extra destinations and their credentials remain",
+		"disconnect must not promise to remove forwarding.toml credentials")
+	assert.Contains(t, copyText, "Unmanaged or inherited primary settings",
+		"disconnect cannot remove settings outside the managed config.env fields")
 	assert.NotContains(t, region, "form.",
 		"the consent dialogs must not read the form: an unsaved edit is not what the write applies")
 }

@@ -234,6 +234,10 @@ func renderHuman(w io.Writer, r *Report, color bool) {
 	writeMessages(&b, p, r.Config.Messages)
 	b.textf("\n")
 
+	if r.LocalForwarding != nil {
+		writeLocalForwarding(&b, p, r.LocalForwarding)
+	}
+
 	// Agents.
 	b.textf("%s\n", p.sectionTitle("Coding agents", HealthOK))
 	for _, a := range r.Agents {
@@ -251,6 +255,112 @@ func renderHuman(w io.Writer, r *Report, color bool) {
 	_, _ = io.WriteString(w, b.flush(p))
 }
 
+func writeLocalForwarding(b *reportBody, p palette, sec *LocalForwardingSection) {
+	writeSection(b, p, "Local forwarding", sec.Health)
+	b.kv("extra destinations", sec.Path)
+	if sec.Error != "" {
+		writeMessages(b, p, []string{sec.Error + "; fix forwarding.toml and rerun doctor"})
+	}
+	if len(sec.Destinations) == 0 {
+		b.kv("configured targets", "none")
+	}
+	for _, destination := range sec.Destinations {
+		name := destination.Name
+		if name == "primary" {
+			name = withTrailer(name, p.faint("(reserved; config.env and environment)"))
+		}
+		b.kv("configured target", name)
+		b.kv("capabilities", fmt.Sprintf("HTTP generations %t, OTLP %t", destination.HTTPGenerations, destination.OTLP))
+		if destination.Endpoint != "" {
+			b.kv("http endpoint", destination.Endpoint)
+		}
+		if destination.OTLPEndpoint != "" {
+			b.kv("otlp endpoint", destination.OTLPEndpoint)
+		}
+	}
+	st := sec.ForwardStatus
+	if st == nil {
+		state := "not checked"
+		if sec.Delivery == "unavailable" {
+			state = "unavailable; forwarding state unknown"
+		}
+		b.kv("delivery", withTrailer(state, describeSource(p, sec.DeliveryError)))
+		b.textf("\n")
+		return
+	}
+	b.kv("delivery", "daemon history; extra endpoints are not probed")
+	b.kv("runtime forwarding", fmt.Sprintf("enabled %t, mode %s", st.Enabled, st.Mode))
+	b.kv("runtime signals", fmt.Sprintf("generations %t, OTLP %t", st.Generations, st.OTLP))
+	b.kv("runtime guard checks", fmt.Sprintf("primary forwarding enabled %t", st.Hooks))
+	if st.Hooks {
+		writeMessages(b, p, []string{"guard evaluation sends tool calls and preflight conversation content to primary regardless of capture mode"})
+	}
+	if st.ForwardingPath != "" {
+		b.kv("runtime file", st.ForwardingPath)
+	}
+	if st.ForwardingError != "" {
+		writeMessages(b, p, []string{st.ForwardingError})
+	}
+	for _, destination := range st.Destinations {
+		b.kv("runtime target", fmt.Sprintf("%s, revision %d", destination.Name, destination.Revision))
+		b.kv("capabilities", fmt.Sprintf("HTTP generations %t, OTLP %t", destination.HTTPGenerations, destination.OTLP))
+		if destination.Endpoint != "" {
+			b.kv("http endpoint", destination.Endpoint)
+		}
+		if destination.OTLPEndpoint != "" {
+			b.kv("otlp endpoint", destination.OTLPEndpoint)
+		}
+		writeForwardLegs(b, destination.Legs)
+		writeForwardFailures(b, destination.Failures)
+		if len(destination.Legs) == 0 && len(destination.Failures) == 0 {
+			b.kv("delivery history", "no attempts recorded for this revision; delivery is not verified")
+		}
+	}
+	// Aggregate history also contains the primary-only guard leg.
+	if len(st.Legs) > 0 || len(st.Failures) > 0 {
+		b.kv("aggregate history", "daemon forwarding legs")
+		writeForwardLegs(b, st.Legs)
+		writeForwardFailures(b, st.Failures)
+	}
+	if st.HookFailOpens > 0 {
+		b.kv("guard fail-opens", fmt.Sprintf("%d", st.HookFailOpens))
+	}
+	b.textf("\n")
+}
+
+func writeForwardLegs(b *reportBody, legs map[string]ForwardLeg) {
+	labels := make([]string, 0, len(legs))
+	for label := range legs {
+		labels = append(labels, label)
+	}
+	sort.Strings(labels)
+	for _, label := range labels {
+		leg := legs[label]
+		if label == "hooks" {
+			// Hook recording tracks outcomes by timestamp, not telemetry counters.
+			b.kv("leg", "hooks")
+		} else {
+			b.kv("leg", fmt.Sprintf("%s: attempted %d, succeeded %d, failed %d, dropped %d", label, leg.Attempted, leg.Succeeded, leg.Failed, leg.Dropped))
+		}
+		if leg.LastSuccessAt != "" {
+			b.kv("last success", leg.LastSuccessAt)
+		}
+		if leg.LastFailureAt != "" || leg.LastFailureDetail != "" {
+			b.kv("last failure", strings.TrimSpace(leg.LastFailureAt+" "+leg.LastFailureDetail))
+		}
+	}
+}
+
+func writeForwardFailures(b *reportBody, failures []ForwardFailure) {
+	for _, failure := range failures {
+		label := failure.Label
+		if failure.Destination != "" {
+			label = failure.Destination + "/" + label
+		}
+		b.kv("failure", strings.TrimSpace(failure.At+" "+label+": "+failure.Detail))
+	}
+}
+
 func writeSection(b *reportBody, p palette, title string, h Health) {
 	b.textf("%s %s\n", p.glyph(h), p.sectionTitle(title, h))
 }
@@ -263,11 +373,14 @@ func writeMessages(b *reportBody, p palette, messages []string) {
 
 func writeSummary(b *reportBody, p palette, r *Report) {
 	broken := brokenSections(r)
-	if len(broken) == 0 {
-		b.textf("%s %s\n", p.glyph(HealthOK), "no problems detected")
-		return
+	if len(broken) > 0 {
+		b.textf("%s %d problem(s): %s misconfigured\n", p.glyph(HealthError), len(broken), strings.Join(broken, ", "))
 	}
-	b.textf("%s %d problem(s): %s misconfigured\n", p.glyph(HealthError), len(broken), strings.Join(broken, ", "))
+	if r.LocalForwarding != nil && r.LocalForwarding.Health == HealthWarn {
+		b.textf("%s local forwarding has warnings; see Local forwarding above\n", p.glyph(HealthWarn))
+	} else if len(broken) == 0 {
+		b.textf("%s %s\n", p.glyph(HealthOK), "no problems detected")
+	}
 }
 
 // brokenSections names the sections in error. The agent list is advisory and

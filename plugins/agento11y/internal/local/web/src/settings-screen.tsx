@@ -22,6 +22,7 @@ import {
   cloneSettings,
   cloudConfigured,
   forwardChipMeta,
+  forwardingFailures,
   guardStatusMeta,
   isThemePreference,
   Mono,
@@ -31,6 +32,7 @@ import {
 import { Icon } from './shell';
 import type {
   ConfigResponse,
+  ForwardDestination,
   ForwardStatus,
   GuardsFile,
   HistoryAgent,
@@ -1383,6 +1385,8 @@ interface SettingsConnectFlowProps {
   savedStackURL: string;
   configPath: string;
   capture: string;
+  managedPrimary?: PrimaryConnection;
+  destinations?: ForwardDestination[];
   onConnect: (parsed: ConnectBlock, mode: string) => void;
   onManual: () => void;
 }
@@ -1398,6 +1402,8 @@ export function SettingsConnectFlow({
   savedStackURL,
   configPath,
   capture,
+  managedPrimary,
+  destinations,
   onConnect,
   onManual,
 }: SettingsConnectFlowProps) {
@@ -1616,7 +1622,7 @@ export function SettingsConnectFlow({
             The local viewer always keeps full content.{' '}
             <b style={{ fontWeight: 500, color: 'var(--fg2)' }}>Metadata only</b> forwards usage and session metadata,
             and <b style={{ fontWeight: 500, color: 'var(--fg2)' }}>Full</b> forwards prompts, responses, and tool I/O
-            too.
+            too. This switch and capture mode apply to the primary connection and every extra destination.
             {advanced && (
               <div
                 style={{
@@ -1717,6 +1723,9 @@ export function SettingsConnectFlow({
       {confirmFull && (
         <ConfirmFullContentModal
           endpoint={parsed.endpoint}
+          otlpEndpoint={parsed.otlpEndpoint}
+          managedPrimary={managedPrimary}
+          destinations={destinations}
           onCancel={() => setConfirmFull(false)}
           onConfirm={() => {
             setConfirmFull(false);
@@ -1728,8 +1737,43 @@ export function SettingsConnectFlow({
   );
 }
 
-interface ConfirmFullContentModalProps {
-  endpoint: string;
+type PrimaryEndpoints = { endpoint: string; otlpEndpoint?: string };
+type PrimaryConnection = PrimaryEndpoints & Partial<Pick<Settings, 'tenantId' | 'token' | 'tokenCleared'>>;
+
+function fullContentRecipientError(
+  next: PrimaryConnection,
+  managed: PrimaryConnection | undefined,
+  destinations: ForwardDestination[] | undefined,
+): string | null {
+  if (!Array.isArray(destinations)) {
+    return 'Recipient status is unavailable. Wait for settings to refresh successfully before enabling Full or saving settings that keep Full forwarding on. Metadata only and Local only remain available.';
+  }
+  // Runtime status exposes only the winning routes, not any routes shadowed
+  // by config.env. Removing a managed key can activate a different recipient;
+  // even an identical current runtime route does not prove safe retention.
+  if (
+    (managed?.endpoint.trim() && !next.endpoint.trim()) ||
+    (managed?.otlpEndpoint?.trim() && !next.otlpEndpoint?.trim())
+  ) {
+    return 'Clearing a managed primary endpoint may activate an undisclosed fallback. Full-content recipients cannot be identified. Set explicit replacement endpoints. To use fallback endpoints instead, cancel any open full-content confirmation. Select Metadata only or Local only. Click Save to config.env to save the endpoint changes. Wait for settings to refresh before selecting Full.';
+  }
+  // Unusable HTTP routes are absent from status. Credential edits can make an
+  // inherited endpoint usable even though no endpoint field changes.
+  if (
+    !next.endpoint.trim() &&
+    !destinations.some((destination) => destination.name === 'primary' && destination.endpoint) &&
+    (next.token?.trim() ||
+      next.tokenCleared ||
+      (next.tenantId !== undefined && next.tenantId.trim() !== (managed?.tenantId?.trim() || '')))
+  ) {
+    return 'Changing primary credentials may activate an inherited HTTP endpoint not shown here. Set a primary endpoint explicitly. Otherwise, cancel any open full-content confirmation. Select Metadata only or Local only. Click Save to config.env to save the credential changes. Wait for settings to refresh before selecting Full.';
+  }
+  return null;
+}
+
+interface ConfirmFullContentModalProps extends PrimaryConnection {
+  managedPrimary?: PrimaryConnection;
+  destinations?: ForwardDestination[];
   onCancel: () => void;
   onConfirm: () => void;
 }
@@ -1738,7 +1782,37 @@ interface ConfirmFullContentModalProps {
 // from either the connect flow or the configured panel. It names both scopes
 // CONTENT_CAPTURE_MODE covers, because the modal is the last thing the user
 // reads before the write.
-function ConfirmFullContentModal({ endpoint, onCancel, onConfirm }: ConfirmFullContentModalProps) {
+function ConfirmFullContentModal({
+  endpoint,
+  otlpEndpoint,
+  tenantId,
+  token,
+  tokenCleared,
+  managedPrimary,
+  destinations,
+  onCancel,
+  onConfirm,
+}: ConfirmFullContentModalProps) {
+  const recipientError = fullContentRecipientError(
+    { endpoint, otlpEndpoint, tenantId, token, tokenCleared },
+    managedPrimary,
+    destinations,
+  );
+  const available = !recipientError;
+  const effectivePrimary = destinations?.find((d) => d.name === 'primary');
+  endpoint = endpoint.trim() || effectivePrimary?.endpoint || '';
+  otlpEndpoint = otlpEndpoint?.trim() || effectivePrimary?.otlpEndpoint || '';
+  const recipients = destinations?.filter((d) => d.name !== 'primary') || [];
+  if (endpoint || otlpEndpoint) {
+    recipients.unshift({
+      name: 'primary',
+      endpoint,
+      otlpEndpoint: otlpEndpoint || '',
+      httpGenerations: !!endpoint,
+      otlp: !!otlpEndpoint,
+      revision: 0,
+    });
+  }
   return (
     <ModalFrame
       width="min(560px, 100%)"
@@ -1754,8 +1828,37 @@ function ConfirmFullContentModal({ endpoint, onCancel, onConfirm }: ConfirmFullC
           color: 'var(--fg2)',
         }}
       >
-        The daemon will send prompts, responses, reasoning text, tool inputs and results, and attached media to{' '}
-        <HostTarget url={endpoint} />. Metadata only forwards usage and session metadata instead.
+        {!available ? (
+          <Notice kind="warning">{recipientError}</Notice>
+        ) : (
+          <>
+            The daemon will send prompts, responses, reasoning text, tool inputs and results, and attached media to all
+            configured recipients below. The forwarding switch and capture mode are shared by the primary connection and
+            every extra destination. Metadata only forwards usage and session metadata instead.
+            <ul aria-label="Full-content recipients" style={{ overflowWrap: 'anywhere' }}>
+              {recipients.map((destination) => (
+                <li key={destination.name}>
+                  <b>{destination.name}</b>
+                  {destination.endpoint && (
+                    <div>
+                      Generations: <Mono>{destination.endpoint}</Mono>
+                    </div>
+                  )}
+                  {destination.otlpEndpoint && (
+                    <div>
+                      OTLP: <Mono>{destination.otlpEndpoint}</Mono>
+                    </div>
+                  )}
+                </li>
+              ))}
+              {recipients.length === 0 && (
+                <li>
+                  Primary connection: <HostTarget url={endpoint} />
+                </li>
+              )}
+            </ul>
+          </>
+        )}
       </div>
       <div
         style={{
@@ -1769,7 +1872,10 @@ function ConfirmFullContentModal({ endpoint, onCancel, onConfirm }: ConfirmFullC
         <GhostButton onClick={onCancel}>Cancel</GhostButton>
         <button
           type="button"
-          onClick={onConfirm}
+          disabled={!available}
+          onClick={() => {
+            if (available) onConfirm();
+          }}
           style={{
             height: 32,
             padding: '0 14px',
@@ -1780,7 +1886,8 @@ function ConfirmFullContentModal({ endpoint, onCancel, onConfirm }: ConfirmFullC
             fontSize: 13,
             fontWeight: 500,
             fontFamily: 'var(--fontFamily)',
-            cursor: 'pointer',
+            cursor: available ? 'pointer' : 'not-allowed',
+            opacity: available ? 1 : 0.5,
           }}
         >
           Forward full content
@@ -1794,6 +1901,8 @@ interface SettingsCloudTabProps {
   form: Settings;
   set: (patch: Partial<Settings>) => void;
   savedEndpoint: string;
+  savedOtlpEndpoint: string;
+  savedTenantId: string;
   savedGuards: string;
   config: ConfigResponse | null;
   stackUrl: string;
@@ -1815,8 +1924,14 @@ interface SettingsGuardsCardProps {
 export function SettingsGuardsCard({ form, savedGuards, set, status, localOnly }: SettingsGuardsCardProps) {
   const guardsConfigured = form.guards === 'failopen' || form.guards === 'failclosed';
   const savedGuardsConfigured = savedGuards === 'failopen' || savedGuards === 'failclosed';
-  const guardsOn = guardsConfigured && !localOnly;
-  const timeout = form.guardTimeout.trim();
+  const primaryUnavailable =
+    !!status &&
+    !status.hooks &&
+    (savedGuardsConfigured ||
+      (status.destinations !== undefined && !status.destinations.some((d) => d.name === 'primary' && d.endpoint)));
+  const guardsUnavailable = localOnly || primaryUnavailable;
+  const guardsOn = guardsConfigured && !guardsUnavailable;
+  const timeout = (form.guardTimeout || '').trim();
   const invalidTimeout = timeout !== '' && !/^[1-9]\d*$/.test(timeout);
   const meta = guardStatusMeta(status, Date.now());
 
@@ -1843,7 +1958,7 @@ export function SettingsGuardsCard({ form, savedGuards, set, status, localOnly }
           value={guardsOn ? form.guards : 'off'}
           onChange={(guards) => set({ guards })}
           options={GUARD_OPTIONS}
-          disabled={localOnly}
+          disabled={guardsUnavailable}
         />
       </SettingRow>
       {guardsOn && (
@@ -1867,10 +1982,13 @@ export function SettingsGuardsCard({ form, savedGuards, set, status, localOnly }
           </div>
         </SettingRow>
       )}
-      {localOnly ? (
+      {guardsUnavailable ? (
         <div style={{ padding: '14px 0 0' }}>
           <Notice kind="info" title="Cloud guards are off for local sessions">
-            Select Metadata only or Full above to use Cloud guards.
+            {primaryUnavailable && !localOnly
+              ? 'Cloud guards need a usable primary connection. Extra destinations do not evaluate guards.'
+              : 'Select Metadata only or Full above to use Cloud guards.'}
+            {status?.hookReason && <div>{status.hookReason}</div>}
             {savedGuardsConfigured && (
               <>
                 {' '}
@@ -1920,6 +2038,8 @@ function SettingsCloudTab({
   form,
   set,
   savedEndpoint,
+  savedOtlpEndpoint,
+  savedTenantId,
   savedGuards,
   config,
   stackUrl,
@@ -1935,20 +2055,23 @@ function SettingsCloudTab({
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const forwardStatus = config ? config.forwardStatus : null;
 
-  if (!configured && !manual) {
-    return (
-      <SettingsConnectFlow
-        savedStackURL={stackUrl}
-        configPath={configPath}
-        capture={form.capture}
-        onConnect={onConnect}
-        onManual={() => {
-          setManual(true);
-          setEditOpen(true);
-        }}
-      />
-    );
-  }
+  const showConnect = !configured && !manual;
+  const connectFlow = showConnect ? (
+    <SettingsConnectFlow
+      savedStackURL={stackUrl}
+      configPath={configPath}
+      capture={form.capture}
+      managedPrimary={config?.settings}
+      destinations={forwardStatus?.destinations}
+      onConnect={onConnect}
+      onManual={() => {
+        setManual(true);
+        setEditOpen(true);
+      }}
+    />
+  ) : null;
+  const showForwarding =
+    !showConnect || form.localForward || !!forwardStatus?.destinations?.length || !!forwardStatus?.forwardingError;
 
   const forwardMode = forwardLocalMode(form);
   const meta = forwardChipMeta(config);
@@ -1958,10 +2081,12 @@ function SettingsCloudTab({
   // an explicit false is saved.
   const daemonStillOn = !!forwardStatus?.enabled && !form.localForward;
   const localOnly = forwardMode === 'off' && !daemonStillOn;
-  const failures = forwardStatus?.failures || [];
+  const failures = forwardingFailures(forwardStatus);
   // recentFailures outlives being turned off, so a failure list alone would
   // put an error notice under the calm "forwarding is off" line.
-  const failing = !!forwardStatus?.enabled && failures.length > 0;
+  const failing =
+    !!forwardStatus?.forwardingError ||
+    (!!forwardStatus?.enabled && (failures.length > 0 || meta.value === 'Partial failure' || meta.value === 'Failing'));
   // Widening is the only direction that asks. Narrowing takes effect at once,
   // because less content leaving the machine needs no consent.
   //
@@ -1989,7 +2114,8 @@ function SettingsCloudTab({
           maxWidth: 620,
         }}
       >
-        What the daemon sends to your stack for every <Mono>--local</Mono> session on this machine.
+        What the daemon sends for every <Mono>--local</Mono> session on this machine. The forwarding switch and capture
+        mode apply globally to the primary connection and all extra destinations.
       </div>
 
       <div
@@ -2076,128 +2202,145 @@ function SettingsCloudTab({
         )}
       </div>
 
-      <SettingRow label={configured ? 'Connected stack' : 'Connection'} help={null}>
-        <button
-          type="button"
-          onClick={() => setEditOpen((v) => !v)}
-          style={{
-            background: 'transparent',
-            border: '1px solid var(--border-medium)',
-            borderRadius: 2,
-            color: 'var(--fg2)',
-            fontSize: 11.5,
-            fontFamily: 'var(--fontFamily)',
-            padding: '4px 10px',
-            cursor: 'pointer',
-          }}
-        >
-          {editOpen ? 'Hide connection' : 'Edit connection'}
-        </button>
-      </SettingRow>
-      <div
-        style={{
-          fontFamily: 'var(--fontFamilyMonospace)',
-          fontSize: 11.5,
-          color: 'var(--fg3)',
-          marginTop: -8,
-          lineHeight: 1.8,
-          wordBreak: 'break-all',
-        }}
-      >
-        <div>{form.endpoint || 'no endpoint'}</div>
-        <div>
-          {form.tenantId ? `tenant ${form.tenantId}` : 'no tenant'}
-          {form.tokenSet && !form.tokenCleared ? ' · token configured (0600)' : ' · no token'}
-          {form.otlpEndpoint ? ` · otlp ${urlHost(form.otlpEndpoint)}` : ''}
-        </div>
-      </div>
-
-      {editOpen && (
+      {!showConnect && (
         <>
-          <SettingRow label="Endpoint" help={<>Grafana AI Observability ingest URL.</>}>
-            <MonoInput
-              value={form.endpoint}
-              onChange={(v) => set({ endpoint: v })}
-              placeholder="https://agento11y-prod-….grafana.net"
-              width={320}
-            />
+          <SettingRow label={configured ? 'Connected stack' : 'Connection'} help={null}>
+            <button
+              type="button"
+              onClick={() => setEditOpen((v) => !v)}
+              style={{
+                background: 'transparent',
+                border: '1px solid var(--border-medium)',
+                borderRadius: 2,
+                color: 'var(--fg2)',
+                fontSize: 11.5,
+                fontFamily: 'var(--fontFamily)',
+                padding: '4px 10px',
+                cursor: 'pointer',
+              }}
+            >
+              {editOpen ? 'Hide connection' : 'Edit connection'}
+            </button>
           </SettingRow>
-          <SettingRow label="Tenant ID" help={null}>
-            <MonoInput value={form.tenantId} onChange={(v) => set({ tenantId: v })} placeholder="123456" width={200} />
-          </SettingRow>
-          <SettingRow label="Auth token" help={null}>
-            {form.tokenSet && !form.tokenCleared && form.token === '' ? (
-              <div
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 8,
-                }}
-              >
-                <input
-                  value=""
-                  disabled
-                  placeholder="configured"
-                  style={{
-                    height: 32,
-                    width: 200,
-                    background: 'var(--bg-canvas)',
-                    border: '1px solid var(--border-medium)',
-                    borderRadius: 2,
-                    color: 'var(--fg3)',
-                    padding: '0 10px',
-                    fontFamily: 'var(--fontFamilyMonospace)',
-                    fontSize: 12,
-                    cursor: 'not-allowed',
-                  }}
+          <div
+            style={{
+              fontFamily: 'var(--fontFamilyMonospace)',
+              fontSize: 11.5,
+              color: 'var(--fg3)',
+              marginTop: -8,
+              lineHeight: 1.8,
+              wordBreak: 'break-all',
+            }}
+          >
+            <div>{form.endpoint || 'no endpoint'}</div>
+            <div>
+              {form.tenantId ? `tenant ${form.tenantId}` : 'no tenant'}
+              {form.tokenSet && !form.tokenCleared ? ' · token configured (0600)' : ' · no token'}
+              {form.otlpEndpoint ? ` · otlp ${urlHost(form.otlpEndpoint)}` : ''}
+            </div>
+          </div>
+
+          {editOpen && (
+            <>
+              <SettingRow label="Endpoint" help={<>Grafana AI Observability ingest URL.</>}>
+                <MonoInput
+                  value={form.endpoint}
+                  onChange={(v) => set({ endpoint: v })}
+                  placeholder="https://agento11y-prod-….grafana.net"
+                  width={320}
                 />
-                <GhostButton onClick={() => set({ tokenCleared: true, token: '' })}>Reset</GhostButton>
-              </div>
-            ) : (
-              <MonoInput
-                type="password"
-                value={form.token}
-                onChange={(v) =>
-                  set({
-                    token: v,
-                    tokenCleared: form.tokenSet && v === '',
-                  })
-                }
-                placeholder={form.tokenSet ? 'new token, or blank to remove' : 'glc_…'}
-                width={260}
-              />
-            )}
-          </SettingRow>
-          <SettingRow label="OTLP endpoint" help={<>For SDK traces and metrics.</>}>
-            <MonoInput
-              value={form.otlpEndpoint}
-              onChange={(v) => set({ otlpEndpoint: v })}
-              placeholder="https://otlp-gateway-….grafana.net/otlp"
-              width={320}
-            />
-          </SettingRow>
-          {/* Nothing to disconnect from in the by-hand branch, which is
+              </SettingRow>
+              <SettingRow label="Tenant ID" help={null}>
+                <MonoInput
+                  value={form.tenantId}
+                  onChange={(v) => set({ tenantId: v })}
+                  placeholder="123456"
+                  width={200}
+                />
+              </SettingRow>
+              <SettingRow label="Auth token" help={null}>
+                {form.tokenSet && !form.tokenCleared && form.token === '' ? (
+                  <div
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 8,
+                    }}
+                  >
+                    <input
+                      value=""
+                      disabled
+                      placeholder="configured"
+                      style={{
+                        height: 32,
+                        width: 200,
+                        background: 'var(--bg-canvas)',
+                        border: '1px solid var(--border-medium)',
+                        borderRadius: 2,
+                        color: 'var(--fg3)',
+                        padding: '0 10px',
+                        fontFamily: 'var(--fontFamilyMonospace)',
+                        fontSize: 12,
+                        cursor: 'not-allowed',
+                      }}
+                    />
+                    <GhostButton onClick={() => set({ tokenCleared: true, token: '' })}>Reset</GhostButton>
+                  </div>
+                ) : (
+                  <MonoInput
+                    type="password"
+                    value={form.token}
+                    onChange={(v) =>
+                      set({
+                        token: v,
+                        tokenCleared: form.tokenSet && v === '',
+                      })
+                    }
+                    placeholder={form.tokenSet ? 'new token, or blank to remove' : 'glc_…'}
+                    width={260}
+                  />
+                )}
+              </SettingRow>
+              <SettingRow label="OTLP endpoint" help={<>For SDK traces and metrics.</>}>
+                <MonoInput
+                  value={form.otlpEndpoint}
+                  onChange={(v) => set({ otlpEndpoint: v })}
+                  placeholder="https://otlp-gateway-….grafana.net/otlp"
+                  width={320}
+                />
+              </SettingRow>
+              {/* Nothing to disconnect from in the by-hand branch, which is
                   reached with no connection saved. */}
-          {configured && (
-            <SettingRow label="Disconnect" help={<>Clears the saved credentials and stops all forwarding.</>}>
-              <button
-                type="button"
-                onClick={() => setConfirmDisconnect(true)}
-                style={{
-                  height: 32,
-                  padding: '0 14px',
-                  background: 'transparent',
-                  border: '1px solid var(--error-border)',
-                  color: 'var(--error-text)',
-                  borderRadius: 2,
-                  fontSize: 13,
-                  fontFamily: 'var(--fontFamily)',
-                  cursor: 'pointer',
-                }}
-              >
-                Disconnect
-              </button>
-            </SettingRow>
+              {configured && (
+                <SettingRow
+                  label="Disconnect"
+                  help={
+                    <>
+                      Turns global forwarding off and clears the managed primary connection fields in config.env. Extra
+                      destinations and their credentials remain in forwarding.toml.
+                    </>
+                  }
+                >
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDisconnect(true)}
+                    style={{
+                      height: 32,
+                      padding: '0 14px',
+                      background: 'transparent',
+                      border: '1px solid var(--error-border)',
+                      color: 'var(--error-text)',
+                      borderRadius: 2,
+                      fontSize: 13,
+                      fontFamily: 'var(--fontFamily)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Disconnect
+                  </button>
+                </SettingRow>
+              )}
+            </>
           )}
         </>
       )}
@@ -2206,18 +2349,25 @@ function SettingsCloudTab({
 
   return (
     <>
-      {forwardingCard}
-      <SettingsGuardsCard
-        form={form}
-        savedGuards={savedGuards}
-        set={set}
-        status={forwardStatus}
-        localOnly={localOnly}
-      />
+      {connectFlow}
+      {showForwarding && forwardingCard}
+      {showForwarding && (
+        <SettingsGuardsCard
+          form={form}
+          savedGuards={savedGuards}
+          set={set}
+          status={forwardStatus}
+          localOnly={localOnly}
+        />
+      )}
 
       {confirmFull && (
         <ConfirmFullContentModal
           endpoint={savedEndpoint}
+          otlpEndpoint={savedOtlpEndpoint}
+          tenantId={savedTenantId}
+          managedPrimary={config?.settings}
+          destinations={forwardStatus?.destinations}
           onCancel={() => setConfirmFull(false)}
           onConfirm={() => {
             setConfirmFull(false);
@@ -2231,7 +2381,7 @@ function SettingsCloudTab({
           width="min(560px, 100%)"
           onClose={() => setConfirmDisconnect(false)}
           title="Disconnect from Grafana Cloud?"
-          desc="Forwarding stops and the saved credentials are removed from config.env."
+          desc="Global forwarding is turned off. Managed primary connection fields are cleared from config.env."
         >
           <div
             style={{
@@ -2241,10 +2391,12 @@ function SettingsCloudTab({
               color: 'var(--fg2)',
             }}
           >
-            The endpoint, tenant ID, auth token and OTLP settings for <HostTarget url={savedEndpoint} /> are deleted, so
-            your non-local Cloud sessions stop reaching the stack too, until you connect again or run{' '}
-            <Mono>agento11y login</Mono>. Sessions already captured stay in the local store, and{' '}
-            <Mono>CONTENT_CAPTURE_MODE</Mono> is left as it is.
+            This clears the managed endpoint, tenant ID, auth token and OTLP settings for{' '}
+            <HostTarget url={savedEndpoint} /> from config.env. Extra destinations and their credentials remain in
+            forwarding.toml. Turning forwarding on again can reactivate those destinations. Unmanaged or inherited
+            primary settings can also reactivate the primary connection. Non-local sessions can still use inherited
+            settings. Sessions already captured stay in the local store, and <Mono>CONTENT_CAPTURE_MODE</Mono> is
+            unchanged.
           </div>
           <div
             style={{
@@ -2739,6 +2891,8 @@ interface SettingsTabPanelsProps {
   form: Settings;
   set: (patch: Partial<Settings>) => void;
   savedEndpoint: string;
+  savedOtlpEndpoint: string;
+  savedTenantId: string;
   savedGuards: string;
   setTag: (index: number, patch: Partial<Tag>) => void;
   addTag: () => void;
@@ -2759,6 +2913,8 @@ function SettingsTabPanels({
   form,
   set,
   savedEndpoint,
+  savedOtlpEndpoint,
+  savedTenantId,
   savedGuards,
   setTag,
   addTag,
@@ -2780,6 +2936,8 @@ function SettingsTabPanels({
           form={form}
           set={set}
           savedEndpoint={savedEndpoint}
+          savedOtlpEndpoint={savedOtlpEndpoint}
+          savedTenantId={savedTenantId}
           savedGuards={savedGuards}
           config={config}
           stackUrl={stackUrl}
@@ -2843,6 +3001,7 @@ export function SettingsSecurityView({
   const [guardsData, setGuardsData] = useState<GuardsFile | null>(null);
   const [guardsError, setGuardsError] = useState<string | null>(null);
   const [writing, setWriting] = useState(false);
+  const [confirmSaveFull, setConfirmSaveFull] = useState(false);
   const writingRef = useRef(false);
   const [guardsEnabledPending, setGuardsEnabledPending] = useState<boolean | null>(null);
   const seenConfig = useRef<ConfigResponse | null>(null);
@@ -3098,6 +3257,21 @@ export function SettingsSecurityView({
   // instead of raising that bar for a choice the user already made.
   const persist = (next: Settings, msg: string) => {
     if (writingRef.current || guardsEnabledPending !== null) return Promise.resolve();
+    // Every write path shares this check, including Save without a modal.
+    // Compare with the latest managed keys, not the dirty form's saved snapshot:
+    // a poll may reveal a key another client added while the form was dirty.
+    // Keeping full capture while turning local forwarding off is narrowing.
+    if (next.capture === 'full' && (next.localForward || saved?.capture !== 'full')) {
+      const recipientError = fullContentRecipientError(
+        next,
+        liveConfig?.settings,
+        liveConfig?.forwardStatus?.destinations,
+      );
+      if (recipientError) {
+        setError(recipientError);
+        return Promise.resolve();
+      }
+    }
     writingRef.current = true;
     setWriting(true);
     setError(null);
@@ -3129,7 +3303,28 @@ export function SettingsSecurityView({
       })
       .finally(() => finishWrite(controller));
   };
-  const save = () => persist(form, 'Settings saved to config.env.');
+  const save = () => {
+    // A dirty form can restore a connection another client replaced. Consent
+    // must compare against the latest poll, not just the form's original base.
+    const previous = liveConfig?.settings || saved;
+    if (
+      form.capture === 'full' &&
+      (form.localForward || previous?.capture !== 'full') &&
+      (previous?.capture !== 'full' ||
+        (form.localForward && !previous?.localForward) ||
+        form.endpoint !== previous?.endpoint ||
+        form.otlpEndpoint !== previous?.otlpEndpoint ||
+        form.tenantId !== previous?.tenantId ||
+        form.token !== previous?.token ||
+        form.tokenCleared !== previous?.tokenCleared ||
+        form.otlpHeaders !== previous?.otlpHeaders ||
+        form.otlpHeadersCleared !== previous?.otlpHeadersCleared)
+    ) {
+      setConfirmSaveFull(true);
+      return;
+    }
+    persist(form, 'Settings saved to config.env.');
+  };
 
   // oneClickWrite is how the Cloud controls write: the patch goes on top of
   // the saved state, not the form, so a click that names the forwarding mode
@@ -3187,7 +3382,7 @@ export function SettingsSecurityView({
         otlpHeadersCleared: true,
         localForward: false,
       },
-      'Disconnected. Credentials cleared from config.env.',
+      'Global forwarding is off. Managed primary fields cleared from config.env; extra destinations and their credentials remain in forwarding.toml.',
     );
 
   // forceLocalOff is the Local-only click the Cloud tab sends when the daemon
@@ -3261,6 +3456,8 @@ export function SettingsSecurityView({
             form={form}
             set={set}
             savedEndpoint={(saved as Settings).endpoint}
+            savedOtlpEndpoint={(saved as Settings).otlpEndpoint}
+            savedTenantId={(saved as Settings).tenantId}
             savedGuards={(saved as Settings).guards}
             setTag={setTag}
             addTag={addTag}
@@ -3280,6 +3477,22 @@ export function SettingsSecurityView({
         <SettingsPreviewPanel path={path} preview={preview} onCopy={copy} />
       </div>
 
+      {confirmSaveFull && (
+        <ConfirmFullContentModal
+          endpoint={form.endpoint}
+          otlpEndpoint={form.otlpEndpoint}
+          tenantId={form.tenantId}
+          token={form.token}
+          tokenCleared={form.tokenCleared}
+          managedPrimary={liveConfig?.settings}
+          destinations={liveConfig?.forwardStatus?.destinations}
+          onCancel={() => setConfirmSaveFull(false)}
+          onConfirm={() => {
+            setConfirmSaveFull(false);
+            persist(form, 'Settings saved to config.env.');
+          }}
+        />
+      )}
       {dirty && <UnsavedBar onReset={reset} onSave={save} disabled={writesBlocked} />}
       {toast && <Toast message={toast} />}
     </PageShell>

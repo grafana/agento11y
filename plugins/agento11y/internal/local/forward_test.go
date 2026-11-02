@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -98,15 +99,16 @@ var traceContentKeys = []string{
 func TestForwardLoader_Resolve(t *testing.T) {
 	const cloud = "https://cloud.example.test/"
 	cases := []struct {
-		name             string
-		lines            map[string]string
-		wantEnabled      bool
-		wantStrip        bool
-		wantStatusMode   string
-		wantStatusReason bool
-		wantOTLP         bool
-		wantHookURL      string
-		wantHookReason   string // substring; "" means the reason must be empty
+		name               string
+		lines              map[string]string
+		wantEnabled        bool
+		wantStrip          bool
+		wantStatusMode     string
+		wantStatusReason   bool
+		wantOTLP           bool
+		wantHookURL        string
+		wantHookReason     string // substring; "" means the reason must be empty
+		wantConfigWarnings []string
 	}{
 		{
 			// Credentials the generation export cannot use, but a usable OTLP
@@ -129,6 +131,30 @@ func TestForwardLoader_Resolve(t *testing.T) {
 			lines:          map[string]string{"AGENTO11Y_ENDPOINT": cloud, "AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k"},
 			wantEnabled:    false,
 			wantStatusMode: forwardModeOff,
+		},
+		{
+			name: "disabled_ignores_inactive_policy",
+			lines: map[string]string{
+				"AGENTO11Y_LOCAL_FORWARD": "false", "AGENTO11Y_ENDPOINT": cloud,
+				"AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k",
+				"AGENTO11Y_CONTENT_CAPTURE_MODE": "typo", "AGENTO11Y_GUARDS_ENABLED": "typo",
+				"AGENTO11Y_GUARDS_FAIL_OPEN": "typo", "AGENTO11Y_GUARDS_TIMEOUT_MS": "typo",
+			},
+			wantStatusMode: forwardModeOff,
+		},
+		{
+			name: "enabled_warns_on_invalid_policy",
+			lines: map[string]string{
+				"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": cloud,
+				"AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k",
+				"AGENTO11Y_CONTENT_CAPTURE_MODE": "typo", "AGENTO11Y_GUARDS_ENABLED": "typo",
+				"AGENTO11Y_GUARDS_FAIL_OPEN": "typo", "AGENTO11Y_GUARDS_TIMEOUT_MS": "typo",
+			},
+			wantEnabled:        true,
+			wantStrip:          true,
+			wantStatusMode:     forwardModeMetadataOnly,
+			wantHookReason:     guardsOffHookReason,
+			wantConfigWarnings: []string{"CONTENT_CAPTURE_MODE", "GUARDS_ENABLED", "GUARDS_FAIL_OPEN", "GUARDS_TIMEOUT_MS"},
 		},
 		{
 			name:           "enabled_defaults_to_metadata_only",
@@ -304,8 +330,15 @@ func TestForwardLoader_Resolve(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			clearForwardEnv(t)
-			l := newForwardLoader(writeConfigEnvFile(t, tc.lines), nil)
+			var logs bytes.Buffer
+			l := newForwardLoader(writeConfigEnvFile(t, tc.lines), log.New(&logs, "", 0))
 			cfg := l.load()
+			if len(tc.wantConfigWarnings) == 0 {
+				assert.NotContains(t, logs.String(), "config:")
+			}
+			for _, warning := range tc.wantConfigWarnings {
+				assert.Contains(t, logs.String(), warning)
+			}
 			assert.Equal(t, tc.wantEnabled, cfg.enabled)
 			if tc.wantEnabled {
 				assert.Equal(t, tc.wantStrip, cfg.strip)
@@ -729,7 +762,8 @@ func TestForwardLoader_ForwardGenerations(t *testing.T) {
 				gotTenant = r.Header.Get(wire.TenantHeaderName)
 				b, _ := io.ReadAll(r.Body)
 				received <- b
-				w.WriteHeader(http.StatusOK)
+				w.Header().Set("Content-Type", wire.ContentTypeJSON)
+				_, _ = io.WriteString(w, `{"results":[{"generation_id":"gen-1","accepted":true}]}`)
 			}))
 			defer srv.Close()
 
@@ -738,9 +772,13 @@ func TestForwardLoader_ForwardGenerations(t *testing.T) {
 			cfg := fakeForwardConfig(t, srv.URL, tc.strip)
 
 			raw := generationRawJSON(t, contentRichGeneration(t))
-			l.enqueue(forwardLabelGenerations, func() { l.forwardGenerations(cfg, []json.RawMessage{raw}) })
+			l.dispatchGenerations(cfg, []json.RawMessage{raw})
 			l.wait()
+			status := l.destinationStatuses(cfg)[0]
+			require.Empty(t, status.Failures)
+			assert.EqualValues(t, 1, status.Legs[forwardLabelGenerations].Succeeded)
 
+			require.Len(t, received, 1)
 			body := <-received
 			assert.Equal(t, wire.GenerationExportHTTPPath, gotPath)
 			assert.Equal(t, cfg.genHeaders["Authorization"], gotAuth)
@@ -783,11 +821,11 @@ func TestForwardLoader_ForwardGenerationsSkipsWhenDisabled(t *testing.T) {
 	l := newForwardLoader(filepath.Join(t.TempDir(), "config.env"), nil)
 	l.client = srv.Client()
 	cfg := fakeForwardConfig(t, srv.URL, true)
-	cfg.enabled = false
+	cfg.forwarding = false
 
 	raw := generationRawJSON(t, contentRichGeneration(t))
-	l.forwardGenerations(cfg, []json.RawMessage{raw})
-	l.forwardOTLP(cfg, "traces", "application/x-protobuf", "", []byte("body"))
+	l.dispatchGenerations(cfg, []json.RawMessage{raw})
+	l.dispatchOTLP(cfg, "traces", wire.ContentTypeProto, "", []byte("body"), otlpForwardLabel("traces"))
 	l.wait()
 	assert.Empty(t, hits)
 }
@@ -860,6 +898,11 @@ func TestForwardLoader_ForwardOTLP(t *testing.T) {
 			wantPath: "/v1/traces", wantVerbatim: true,
 		},
 		{
+			name:   "missing_content_type_defaults_to_protobuf",
+			signal: "traces", strip: false, body: tracesBody,
+			wantPath: "/v1/traces", wantVerbatim: true, wantContentType: wire.ContentTypeProto,
+		},
+		{
 			name:   "gzip_full_traces_keeps_encoding",
 			signal: "traces", strip: false, contentType: "application/x-protobuf", gzip: true, body: tracesBody,
 			wantPath: "/v1/traces", wantVerbatim: true,
@@ -904,15 +947,23 @@ func TestForwardLoader_ForwardOTLP(t *testing.T) {
 			if tc.gzip {
 				body, encoding = gzipBytes(t, tc.body), "gzip"
 			}
-			l.enqueue(otlpForwardLabel(tc.signal), func() { l.forwardOTLP(cfg, tc.signal, tc.contentType, encoding, body) })
+			l.dispatchOTLP(cfg, tc.signal, tc.contentType, encoding, body, otlpForwardLabel(tc.signal))
 			l.wait()
+			status := l.destinationStatuses(cfg)[0]
+			require.Empty(t, status.Failures)
+			assert.NotZero(t, status.Legs[otlpForwardLabel(tc.signal)].Succeeded)
 
+			require.Len(t, received, 1)
 			c := <-received
 			assert.Equal(t, tc.wantPath, c.path)
 			if tc.wantVerbatim {
 				assert.Equal(t, body, c.body)
 				assert.Equal(t, encoding, c.contentEncoding)
-				assert.Equal(t, tc.contentType, c.contentType)
+				wantContentType := tc.wantContentType
+				if wantContentType == "" {
+					wantContentType = tc.contentType
+				}
+				assert.Equal(t, wantContentType, c.contentType)
 				return
 			}
 			// The stripped payload is re-marshaled uncompressed, so the gzip
@@ -965,7 +1016,7 @@ func TestForwardLoader_SkillAndProcessPrivacy(t *testing.T) {
 					cfg := loader.load()
 					require.True(t, cfg.enabled)
 					assert.Equal(t, mode != "full", cfg.strip)
-					cfg.otlpEndpoint = cloud.URL
+					cfg.destinations[0].config.otlpEndpoint = cloud.URL
 
 					attributes := []*commonpb.KeyValue{
 						stringKV("gen_ai.tool.name", "run_skill_script"),
@@ -990,8 +1041,11 @@ func TestForwardLoader_SkillAndProcessPrivacy(t *testing.T) {
 					if compressed {
 						body, encoding = gzipBytes(t, body), "gzip"
 					}
-					loader.forwardOTLP(cfg, "traces", contentType, encoding, body)
-					assert.Empty(t, loader.status().Failures)
+					loader.dispatchOTLP(cfg, "traces", contentType, encoding, body, otlpForwardLabel("traces"))
+					loader.wait()
+					status := loader.destinationStatuses(cfg)[0]
+					assert.Empty(t, status.Failures)
+					assert.EqualValues(t, 1, status.Legs[otlpForwardLabel("traces")].Succeeded)
 					require.Len(t, received, 1)
 					got := <-received
 					if mode == "full" {
@@ -1103,10 +1157,13 @@ func TestForwardLoader_InsecureOTLPEndpointStaysLocalGuarded(t *testing.T) {
 // last success.
 func TestForwardLoader_StatusReportsFailures(t *testing.T) {
 	var status int
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", wire.ContentTypeJSON)
 		w.WriteHeader(status)
 		if status != http.StatusOK {
-			_, _ = w.Write([]byte(`{"error":"unknown field parts.media.url"}`))
+			_, _ = io.WriteString(w, `{"error":"unknown field parts.media.url"}`)
+		} else if r.URL.Path == wire.GenerationExportHTTPPath {
+			_, _ = io.WriteString(w, `{"results":[{"generation_id":"gen-1","accepted":true}]}`)
 		}
 	}))
 	defer srv.Close()
@@ -1125,13 +1182,14 @@ func TestForwardLoader_StatusReportsFailures(t *testing.T) {
 
 	status = http.StatusBadRequest
 	raw := generationRawJSON(t, contentRichGeneration(t))
-	l.forwardGenerations(cfg, []json.RawMessage{raw})
+	l.dispatchGenerations(cfg, []json.RawMessage{raw})
+	l.wait()
 	failures := l.status().Failures
 	require.Len(t, failures, 1)
 	assert.Equal(t, forwardLabelGenerations, failures[0].Label)
-	// The response body is the only place the rejected field name appears.
-	assert.Contains(t, failures[0].Detail, "status 400")
-	assert.Contains(t, failures[0].Detail, "parts.media.url")
+	assert.Equal(t, "primary", failures[0].Destination)
+	assert.Equal(t, "telemetry HTTP status 400", failures[0].Detail)
+	assert.NotContains(t, failures[0].Detail, "parts.media.url")
 	assert.NotEmpty(t, failures[0].At)
 	failedLeg := l.status().Legs[forwardLabelGenerations]
 	assert.Equal(t, failures[0].At, failedLeg.LastFailureAt)
@@ -1143,7 +1201,8 @@ func TestForwardLoader_StatusReportsFailures(t *testing.T) {
 
 	// A success clears the ring but keeps the earlier failure in the leg record.
 	status = http.StatusOK
-	l.forwardGenerations(cfg, []json.RawMessage{raw})
+	l.dispatchGenerations(cfg, []json.RawMessage{raw})
+	l.wait()
 	recovered := l.status()
 	assert.Empty(t, recovered.Failures)
 	generationLeg := recovered.Legs[forwardLabelGenerations]
@@ -1157,50 +1216,66 @@ func TestForwardLoader_StatusReportsFailures(t *testing.T) {
 	// Only the leg that delivered is cleared. config.env cannot configure the
 	// OTLP leg at a 127.0.0.1 test server (otlpForwardTarget refuses a loopback
 	// endpoint as a relay loop), so point it at the same server by hand.
-	cfg.otlpEndpoint = srv.URL
+	cfg.destinations[0].config.otlpEndpoint = srv.URL
 	status = http.StatusBadRequest
-	l.forwardGenerations(cfg, []json.RawMessage{raw})
-	require.Len(t, l.status().Failures, 1)
-	generationBeforeMetrics := l.status().Legs[forwardLabelGenerations]
+	l.dispatchGenerations(cfg, []json.RawMessage{raw})
+	l.wait()
+	beforeMetrics := l.destinationStatuses(cfg)[0]
+	require.Len(t, beforeMetrics.Failures, 1)
+	generationBeforeMetrics := beforeMetrics.Legs[forwardLabelGenerations]
 
 	status = http.StatusOK
-	l.forwardOTLP(cfg, "metrics", wire.ContentTypeProto, "", []byte("metrics-payload"))
-	metricsDelivered := l.status()
+	l.dispatchOTLP(cfg, "metrics", wire.ContentTypeProto, "", []byte("metrics-payload"), otlpForwardLabel("metrics"))
+	l.wait()
+	metricsDelivered := l.destinationStatuses(cfg)[0]
 	failures = metricsDelivered.Failures
 	require.Len(t, failures, 1, "a metrics success must not clear a generations failure")
 	assert.Equal(t, forwardLabelGenerations, failures[0].Label)
 	assert.Equal(t, generationBeforeMetrics, metricsDelivered.Legs[forwardLabelGenerations])
 	assert.NotEmpty(t, metricsDelivered.Legs[otlpForwardLabel("metrics")].LastSuccessAt)
 
-	l.forwardGenerations(cfg, []json.RawMessage{raw})
-	assert.Empty(t, l.status().Failures)
+	l.dispatchGenerations(cfg, []json.RawMessage{raw})
+	l.wait()
+	assert.Empty(t, l.destinationStatuses(cfg)[0].Failures)
 }
 
-// TestForwardLoader_FailureRingIsPerLeg covers the ring's capacity: the hook
-// leg records once per tool call, so a global cap would let a chatty leg evict
-// the one entry another leg had, which is the only report that leg gets.
+// A chatty leg must not evict the only failure reported by another leg.
 func TestForwardLoader_FailureRingIsPerLeg(t *testing.T) {
+	var status = http.StatusBadRequest
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(status)
+	}))
+	defer srv.Close()
 	clearForwardEnv(t)
 	l := newForwardLoader(writeConfigEnvFile(t, nil), nil)
+	l.client = srv.Client()
+	cfg := fakeForwardConfig(t, srv.URL, false)
 
-	l.recordFailuref(forwardLabelGenerations, "generation export rejected")
-	l.recordFailuref(otlpForwardLabel("traces"), "traces rejected")
+	l.dispatchGenerations(cfg, []json.RawMessage{generationRawJSON(t, contentRichGeneration(t))})
+	l.wait()
+	l.dispatchOTLP(cfg, "traces", wire.ContentTypeProto, "", []byte("traces"), otlpForwardLabel("traces"))
+	l.wait()
 	for i := range maxRecordedForwardFailures * 2 {
+		status = http.StatusBadRequest + i
+		l.dispatchOTLP(cfg, "metrics", wire.ContentTypeProto, "", []byte("metrics"), otlpForwardLabel("metrics"))
+		l.wait()
 		l.recordFailuref(forwardLabelHooks, "hook call %d failed", i)
 	}
 
+	failures := l.destinationStatuses(cfg)[0].Failures
 	byLabel := map[string]int{}
-	for _, f := range l.status().Failures {
+	for _, f := range append(failures, l.recentFailures()...) {
 		byLabel[f.Label]++
 	}
 	assert.Equal(t, map[string]int{
-		forwardLabelGenerations:    1,
-		otlpForwardLabel("traces"): 1,
-		forwardLabelHooks:          maxRecordedForwardFailures,
+		forwardLabelGenerations:     1,
+		otlpForwardLabel("traces"):  1,
+		otlpForwardLabel("metrics"): maxRecordedForwardFailures,
+		forwardLabelHooks:           maxRecordedForwardFailures,
 	}, byLabel)
 
-	// Within a leg the cap keeps the most recent attempts.
-	assert.Contains(t, l.status().Failures[0].Detail, "hook call 9 failed")
+	assert.Equal(t, "telemetry HTTP status 409", failures[0].Detail)
+	assert.Contains(t, l.recentFailures()[0].Detail, "hook call 9 failed")
 }
 
 // TestForwardLoader_StatusReportsUnreadableConfig covers the fail-closed
@@ -1460,7 +1535,9 @@ func fakeForwardConfig(t *testing.T, cloudURL string, strip bool) forwardConfig 
 	require.NoError(t, err)
 	auth, ok := otel.BasicAuthHeaderValue("tenant-x", "token-y")
 	require.True(t, ok)
-	return forwardConfig{
+	cfg := forwardConfig{
+		forwarding:   true,
+		snapshot:     1,
 		enabled:      true,
 		strip:        strip,
 		genURL:       genURL,
@@ -1468,6 +1545,8 @@ func fakeForwardConfig(t *testing.T, cloudURL string, strip bool) forwardConfig 
 		otlpEndpoint: cloudURL,
 		otlpHeaders:  map[string]string{"Authorization": auth},
 	}
+	cfg.destinations = []forwardDestination{{name: "primary", config: cfg}}
+	return cfg
 }
 
 // contentRichGeneration builds a generation with every content-bearing field

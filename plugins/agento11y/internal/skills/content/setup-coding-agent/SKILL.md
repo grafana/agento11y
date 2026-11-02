@@ -39,11 +39,8 @@ at all.
    different job ("Path B"). If the user wants their own app or agent
    instrumented, stop and hand off to the `agento11y-instrument` skill, which
    ships with the `gcx` CLI (`gcx agent skills install agento11y-instrument`).
-5. **Do not enable full content capture or guards without asking.** The default,
-   `metadata_only`, excludes prompts, responses, and tool I/O from generation
-   exports. `full` sends that content to Grafana Cloud. Guards send the content
-   they evaluate to `AGENTO11Y_ENDPOINT` regardless of capture mode. Local
-   mode is separate: it always captures full content in the local store.
+5. **Ask before enabling full capture or guards, or adding recipients.** Default `metadata_only` generation exports exclude prompts, responses, and tool I/O; `full` sends them to every enabled recipient, not just `primary`.
+   Guards send evaluated content only to `AGENTO11Y_ENDPOINT` regardless of capture mode. Local mode always stores full content locally.
 
 ## Step 1: Read the current state
 
@@ -126,13 +123,7 @@ against `sigil`.
 
 ## Step 3: Choose a destination
 
-A first `agento11y login` asks where sessions go: **Local only**, or **Grafana
-Cloud**. **Local only** needs no Cloud credentials and never forwards sessions.
-**Grafana Cloud** continues to the credential flow. Its interactive preferences
-include **Local web UI**. It starts on **Yes** by default and
-remembers an earlier answer. **Yes** keeps a full local copy and forwards a Cloud
-copy. **No** sends directly
-to Cloud.
+A first `agento11y login` asks where sessions go: **Local only** needs no Cloud credentials and never forwards; **Grafana Cloud** continues to credentials. Its **Local web UI** preference defaults to **Yes** and remembers an earlier answer: **Yes** keeps a full local copy and forwards a Cloud copy; **No** sends directly to Cloud.
 
 ### The paste flow
 
@@ -160,11 +151,8 @@ saved Cloud connection starts at step 2.
    fills the endpoint, instance ID, token, and OTLP settings. Login then asks
    only for what the block did not carry. Pasting is optional: Enter on the empty
    box types the values field by field instead.
-6. **Preferences**: local web UI, content capture mode, session tags, guards and
-   their timeout, and automatic tags. **Local web UI** starts on Yes by default
-   and remembers an earlier answer. The web UI always stores full content locally.
-   Cloud receives full content in Full mode and metadata in other modes. Enter keeps
-   each answer. Read Rule 5 before enabling full capture or guards. Read **Automatic tags** before enabling automatic tags.
+6. **Preferences**: local web UI, content capture mode, session tags, guards and their timeout, and automatic tags. Enter keeps each answer. The web UI always stores full content locally; forwarding sends full content in Full mode and metadata otherwise.
+   Read Rule 5 before enabling full capture or guards, and **Automatic tags** before enabling automatic tags.
 
 The copied block has concrete values in this shape:
 
@@ -184,10 +172,7 @@ For default HTTP capture and analytics, one token needs `sigil:write`, `metrics:
 
 ### The flags
 
-`--endpoint`, `--tenant`, and a token together skip the destination and value
-prompts, so this form works over SSH, in a devcontainer, and from a script. A
-failed credential check can still prompt on an interactive terminal. Use this
-form for values the user has already given you.
+`--endpoint`, `--tenant`, and a token together skip destination and value prompts, including over SSH, in a devcontainer, or a script. A failed credential check can still prompt on an interactive terminal. Use only values the user has already given you.
 
 ```sh
 printf %s "$TOKEN" | agento11y login \
@@ -197,16 +182,9 @@ printf %s "$TOKEN" | agento11y login \
   --otlp-endpoint https://otlp-gateway-prod-<region>.grafana.net/otlp
 ```
 
-Before writing the file, login sends one request to the endpoint with the
-credentials and reports what came back. If that check fails, what happens next
-depends on the terminal. Interactively, login asks whether to save anyway. In a
-script the question is never asked, because a piped stdin is not a terminal:
-login writes nothing and exits 1. Pass `--yes` to save the values regardless, or
-`--no-verify` to skip the check. The preferences have no flags.
+Before writing, login sends one credential-check request and reports the result. On failure it asks whether to save interactively; with nonterminal stdin it writes nothing and exits 1. Pass `--yes` to save regardless or `--no-verify` to skip the check. Preferences have no flags.
 
-Login writes to the resolved config path described above. An install that still
-has only the old `sigil/config.env` under the same config root keeps using that
-file. You can write it by hand instead:
+Login writes the resolved config path, retaining `sigil/config.env` under the same config root if only that legacy file exists. You can write it by hand instead:
 
 ```dotenv
 AGENTO11Y_ENDPOINT=https://agento11y-prod-<region>.grafana.net
@@ -215,10 +193,7 @@ AGENTO11Y_AUTH_TOKEN=glc_...
 AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana.net/otlp
 ```
 
-A hand-written file needs no OTLP auth header. When
-`OTEL_EXPORTER_OTLP_HEADERS` has no `Authorization` entry, the launcher builds
-Basic authorization from the tenant ID and the first available OTLP or ingest
-token.
+A hand-written file needs no OTLP auth header: absent `Authorization` in `OTEL_EXPORTER_OTLP_HEADERS`, the launcher builds Basic authorization from the tenant ID and the first available OTLP or ingest token.
 
 ## Step 4: Wire the coding agent
 
@@ -369,10 +344,8 @@ All hosts read the resolved config path. The default is `~/.config/agento11y/con
 | `AGENTO11Y_ANONYMOUS_USAGE_STATS` | `disabled` stops reporting usage statistics about the CLI itself; `log` prints them instead of sending |
 
 Branded keys have older `SIGIL_*` spellings except `AGENTO11Y_STACK_URL` and `AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES`. `SIGIL_PROTOCOL` remains supported.
-**Local only** writes `AGENTO11Y_LOCAL` and `SIGIL_LOCAL` as true, and both
-`LOCAL_FORWARD` spellings as false. **Local web UI = Yes** writes all four local
-keys as true. **Local web UI = No** writes all four as false. An explicit
-`agento11y login` still runs Cloud setup. Doctor reports provenance only for settings in its report.
+**Local only** writes `AGENTO11Y_LOCAL` and `SIGIL_LOCAL` as true, and both `LOCAL_FORWARD` spellings as false. **Local web UI = Yes** writes all four as true; **No** writes all four as false.
+An explicit `agento11y login` still runs Cloud setup. Doctor reports provenance only for settings in its report.
 
 ### Experimental OTel generation export
 
@@ -455,6 +428,37 @@ With `AGENTO11Y_GUARDS_ENABLED=true`, evaluate `guards.toml` next to `config.env
 Local **Analytics > Skills** counts all retained calls marked with a skill name, including loads, resource reads, commands, and failures. Case and namespace remain distinct. **Tools** and **Skills** overlap; never add their counts together.
 Duration coverage and p50/p95 describe tool calls, not skill effectiveness or cost. Skill row and chart links open **Sessions** filtered by the exact identifier, workspace, and time bounds. Summary tiles show matching sessions' in-period generation usage; session rows show lifetime totals. The token chart covers all generation usage in that range and workspace, not skill-attributed usage. Imports do not reconstruct missing skill metadata. See [Local skill analytics](https://github.com/grafana/agento11y/tree/main/plugins/agento11y#local-skill-analytics) for timing and retention limits.
 
+#### Forward to extra destinations
+
+The local daemon can forward each live payload to the existing connection from `config.env`, named `primary`, and up to three extra destinations (four total). `primary` is reserved, even when disabled. This applies only to daemon forwarding; direct export and `--no-local` are unchanged.
+
+Put `forwarding.toml` beside the **resolved** `config.env`: normally `~/.config/agento11y/forwarding.toml`, or `$XDG_CONFIG_HOME/agento11y/forwarding.toml` with a custom config root. If only the legacy `sigil/config.env` exists, put it in that directory instead. Extra destinations are configured only in this file, not through environment variables, login flags, or the viewer.
+
+These are two extra records, not a replacement for `primary`. Replace example URLs and credentials with values from each destination's setup page:
+
+```toml
+destinations = [
+  { name = "staging", endpoint = "https://agento11y.staging.example", tenant_id = "<staging-instance-id>", token = "<staging-token>", otlp_endpoint = "https://otlp.staging.example/otlp" },
+  { name = "development", endpoint = "https://agento11y.development.example", tenant_id = "<development-instance-id>", token = "<development-token>", otlp_endpoint = "https://otlp.development.example/otlp" },
+]
+```
+
+Keep the file private like `config.env`: mode `0600`, with a `0700` parent directory (or equivalent user-only permissions). At the default path, run `chmod 0700 ~/.config/agento11y` and `chmod 0600 ~/.config/agento11y/forwarding.toml`.
+
+Each record needs a unique nonempty `name` and at least one of `endpoint` or `otlp_endpoint`. HTTP generation export needs that record's `tenant_id` and `token`, except for recognized plain-HTTP loopback endpoints. `otlp_token` is optional. `otlp_headers` is an optional **string** of comma-separated `name=value` pairs, not a TOML table (for example, `otlp_headers = "Authorization=Basic <base64-value>,X-Team=observability"`). An explicit `Authorization` header wins; otherwise OTLP uses Basic authorization from that destination's `tenant_id` and `otlp_token`, falling back to its `token`. Extras inherit no endpoints, credentials, or headers from `primary` or the ambient environment.
+
+Endpoints must be explicit HTTP(S) URLs without userinfo, query, or fragment. Recognized plain-HTTP loopback OTLP endpoints are still refused. More than three extras, unknown fields, duplicate names, or duplicate signal routes (the same effective URL and complete effective header set, including a primary route) invalidate the extras and produce diagnostics. Malformed or unreadable `forwarding.toml` disables **all extras only**, not the primary; no last-known-good extras remain active. An unreadable `config.env` disables all forwarding. File edits reload on the next ingest or status read, without a daemon restart.
+
+`AGENTO11Y_LOCAL_FORWARD=false` (legacy `SIGIL_LOCAL_FORWARD`) stops all new forwarding work, including guard relay. The switch and capture mode are global: only exact `AGENTO11Y_CONTENT_CAPTURE_MODE=full` forwards full content to every recipient; all other modes use the existing `metadata_only` reduction.
+
+Incoming HTTP generations go only to each recipient's Sigil HTTP `endpoint`; incoming OTLP traces and metrics go only to its `otlp_endpoint`. Configure both endpoints to receive both generation transports. The daemon does not re-record through an SDK or convert HTTP generations to OTLP, or OTLP generations to HTTP. Guards relay to `primary` only. Local history imports carry a no-forward marker that excludes **every** recipient.
+
+Forwarding is best effort: one attempt per payload per destination, with a 10-second timeout, no retry, replay, or backfill. Each destination admits at most 8 in-flight requests and 128 MiB of input plus prepared output. The daemon has 2 shared preparation slots and allows at most 32 requests and 512 MiB across all destinations. Requests still running after a destination changes or is removed count toward the request and byte limits. Saturation drops affected copies without waiting; destinations are admitted independently. Status tracks attempted, succeeded, failed, and dropped requests per destination and signal. In-memory work can be lost on shutdown. A local acknowledgement confirms local acceptance, **not remote delivery**. Additional recipients increase network traffic, ingest costs, and memory use.
+
+The viewer's **Settings > Cloud** controls forwarding and lists recipients before enabling full capture. Run `agento11y doctor` for destination status, counters, diagnostics, and the file path; edit extra destinations in `forwarding.toml`. Login does not list extra recipients. Full capture selected in login still applies to all recipients. Ask before enabling full capture or adding recipients. **Disconnect** turns global forwarding off and clears managed primary connection fields, but leaves extra destinations and their credentials saved. Unmanaged or inherited primary environment settings may remain too; re-enabling forwarding can reactivate saved extras and any remaining primary routes.
+
+#### Test local guards offline
+
 For an offline dry run, use `agento11y guards test 'rm -rf ~/.ssh'`. It does not execute input, check Cloud rules, contact endpoints, start a daemon, or write files. It tests saved policy even when host guard requests are disabled, without predicting host enforcement. Disabled rules and absent packs stay unchanged.
 - Flags precede one quoted command: `agento11y guards test [--json] [--rules path] [--tool name] [--agent name] [--stdin] [--] <command>`. Use `--` before a command starting with a dash. Alternatively, `printf '%s\n' 'echo first' 'echo second' | agento11y guards test --stdin` reads one command through EOF, preserving newlines. Blank commands and empty tool names are errors.
 - `--rules` bypasses configuration discovery; otherwise use `guards.toml` beside the resolved `config.env`, including the legacy `sigil` fallback. A missing default file or no enforceable rules returns allow with a notice. A missing explicit file is an error. Unchanged legacy packs receive the daemon's in-memory upgrade without changing the file.
@@ -474,12 +478,8 @@ agento11y history import claude-code --local     # import into the local store
 agento11y history import claude-code --no-local  # import into Grafana Cloud
 ```
 
-The import resolves the destination in this order: `--no-local`, `--local`, a true
-`AGENTO11Y_LOCAL`/`SIGIL_LOCAL` value from the shell or `config.env`, then saved Cloud credentials.
-With none set, an interactive run asks where sessions go. `--no-local` or any valid LOCAL value
-skips that question; missing Cloud credentials still starts Cloud setup. That setup does not offer
-**Local web UI** because locally forwarded imports never relay to Cloud. A noninteractive run never
-asks. It imports only with both `--all` and `--yes`; otherwise it prints a dry-run plan and exits 0.
+The import resolves the destination in this order: `--no-local`, `--local`, a true `AGENTO11Y_LOCAL`/`SIGIL_LOCAL` from shell or `config.env`, then saved Cloud credentials. With none set, an interactive run asks where sessions go; `--no-local` or any valid LOCAL value skips that question. Missing Cloud credentials still starts Cloud setup, without **Local web UI**, because local imports never forward to any recipient.
+A noninteractive run never asks: only `--all --yes` imports; otherwise it prints a dry-run plan and exits 0.
 
 Without `--since`, an import selects sessions active during the last 90 days. Each imported turn is recorded in a ledger per agent and destination, so an import into another destination sends the same turns without `--force`. If saved local mode would keep that import local, add `--no-local`.
 Turns imported before that ledger count as already sent to every destination. Pass `--force` for them only after the user confirms they never reached that destination, with a `--since` that reaches back to the first import (a timestamp is safest); into Grafana Cloud, run it once, right after upgrading and before any other Cloud import, because `--force` re-sends every selected turn and Cloud stores and counts a repeat of a turn it received more than about a day earlier.
