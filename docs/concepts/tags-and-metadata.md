@@ -222,7 +222,7 @@ Claude's `AGENTO11Y_USER_ID_SOURCE=accountUuid` selects the account UUID instead
 Discovery makes no provider requests, refreshes no credentials, and runs no host account commands.
 Plugins do not infer email from usernames, account IDs, Git authors, or another tool's login.
 Different account emails remain different users. Set the same explicit `AGENTO11Y_USER_ID` across plugins to unify attribution.
-History imports do not add automatic tags.
+History imports add `user` and `repo` when the switch is on, as per-generation tags rather than client tags, so they never become metric labels: an import records no metrics at all. `repo` is read from the `origin` remote at the workspace the session recorded, so a checkout that has since moved, been deleted, or been re-cloned reports whatever is at that path now, and a session that recorded no workspace gets no `repo`. `branch` is never resolved at import — the import runs later and possibly in another checkout — so `AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=branch` adds nothing to an import. The agents whose logs record a branch (claude-code) or whose importer resolves one from the session workspace (codex, cursor) still carry `git.branch` as a built-in per-generation tag. An explicit `AGENTO11Y_TAGS` entry wins over an automatic tag on imports, the same way it does for live sessions.
 
 ### Cardinality and personal data
 
@@ -231,6 +231,7 @@ Enabling these names is a deliberate trade. Read this first:
 - The `user` value is commonly a work email address. It becomes a Prometheus label and is kept for the metric retention period, which is longer than most log retention. Enable it only where storing that address in metrics is acceptable.
 - Every distinct combination of values is one more time series. Users multiply by repositories multiply by branches, and branch names are the fastest-growing of the three: a team that creates a branch per ticket adds a series per ticket, forever.
 - `repo` and `user` are usually bounded per organization. `branch` is not. Set `AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=user,repo` first and add `branch` only if you need per-branch cost.
+- Imported history adds no time series. Its automatic tags are per-generation, and an import emits no metric points, so the cardinality above is a live-session cost only.
 - In the pi and opencode plugins the client is built once per session, so their metric labels freeze at session start. A checkout that changes mid-session keeps the label it started with. The hook-based agents (claude-code, codex, copilot, cursor, vibe) build a client per invocation and follow the checkout.
 
 For Hermes, automatic tags use the same opt-in and allowlist contract, but unsupported names and an inactive allowlist are currently ignored without logging. No per-generation branch override is added. Removing content with `metadata_only` does not remove tags; enabling user or repository labels still exposes those values.

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/opencode/sessiondb/sessiondbtest"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/history"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1049,4 +1050,58 @@ func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("condition not met within %s", timeout)
+}
+
+// TestAutoTagLookupPrefersTheConfigFile pins the fix for a viewer-driven import
+// reading a stale switch. The daemon's environment is merged once, when it
+// starts, so a switch written to config.env afterwards — by the local UI or by
+// `agento11y login` — has to be read from the file or it does not apply until a
+// restart. The process environment stays the fallback, so a variable only ever
+// exported in the shell still reaches an import.
+func TestAutoTagLookupPrefersTheConfigFile(t *testing.T) {
+	envconfig.PinAliasEnvBlank(t)
+	// The daemon starts with the switch off and nothing in its environment.
+	configPath := writeConfigEnvFile(t, map[string]string{})
+	storage, err := NewStorage(filepath.Join(t.TempDir(), "local"))
+	require.NoError(t, err)
+	srv := NewServer(storage, nil, configPath)
+	t.Cleanup(srv.Close)
+
+	if tagger := history.AutoTagger(srv.autoTagLookup()); tagger != nil {
+		t.Fatalf("switch off resolved a tagger: %v", tagger(""))
+	}
+
+	// The viewer writes the switch after the daemon is already running.
+	require.NoError(t, os.WriteFile(configPath,
+		[]byte("AGENTO11Y_AUTO_CODING_AGENT_TAGS=true\nAGENTO11Y_USER_ID=bob@example.com\n"), 0o600))
+
+	tagger := history.AutoTagger(srv.autoTagLookup())
+	if tagger == nil {
+		t.Fatal("a switch written after start did not apply; the daemon read a stale environment")
+	}
+	if got := tagger("")["user"]; got != "bob@example.com" {
+		t.Errorf("user tag = %q, want bob@example.com from config.env", got)
+	}
+}
+
+// TestAutoTagLookupFallsBackToTheEnvironment pins the second half of the
+// precedence: config.env wins, but a value set only in the environment is still
+// found.
+func TestAutoTagLookupFallsBackToTheEnvironment(t *testing.T) {
+	envconfig.PinAliasEnvBlank(t)
+	t.Setenv("AGENTO11Y_AUTO_CODING_AGENT_TAGS", "true")
+	t.Setenv("AGENTO11Y_USER_ID", "from-env@example.com")
+	configPath := writeConfigEnvFile(t, map[string]string{"AGENTO11Y_USER_ID": "from-file@example.com"})
+	storage, err := NewStorage(filepath.Join(t.TempDir(), "local"))
+	require.NoError(t, err)
+	srv := NewServer(storage, nil, configPath)
+	t.Cleanup(srv.Close)
+
+	tagger := history.AutoTagger(srv.autoTagLookup())
+	if tagger == nil {
+		t.Fatal("the switch in the environment did not enable the tagger")
+	}
+	if got := tagger("")["user"]; got != "from-file@example.com" {
+		t.Errorf("user tag = %q, want the config.env value to win", got)
+	}
 }
