@@ -58,7 +58,7 @@ import {
   settingsTabFromLocation,
   useHistoryImport,
 } from './settings-screen';
-import { TopBar } from './shell';
+import { agentHosts, TopBar } from './shell';
 import { activeExecutionAnalytics, SkillsToolsContent, skillsToolsHeroStats } from './skills-tools';
 import type {
   BranchMergeResponse,
@@ -295,6 +295,7 @@ export function App() {
     () => true,
   );
   const analyticsWorkspace = decodeAnalyticsWorkspace(analyticsWorkspaceValue);
+  const [analyticsAgent, setAnalyticsAgent] = usePersistedState('sigil.local.analyticsAgent', 'all', () => true);
   const [analyticsHiddenValue, setAnalyticsHiddenValue] = usePersistedState(
     'sigil.local.analyticsHiddenSeries',
     '',
@@ -327,6 +328,7 @@ export function App() {
   );
   const [analyticsFacetConversations, setAnalyticsFacetConversations] = useState<ConversationSummary[]>([]);
   const [analyticsFacetAggregate, setAnalyticsFacetAggregate] = useState<ConversationMetricsAggregate | null>(null);
+  const [analyticsAgentOptions, setAnalyticsAgentOptions] = useState<string[] | null>(null);
   const [analyticsTotalConversations, setAnalyticsTotalConversations] = useState<number | null>(null);
   const [analyticsPreviousTotalConversations, setAnalyticsPreviousTotalConversations] = useState<number | null>(null);
   const [analyticsFacetTotalConversations, setAnalyticsFacetTotalConversations] = useState<number | null>(null);
@@ -351,6 +353,7 @@ export function App() {
   const [errAnalytics, setErrAnalytics] = useState<string | null>(null);
   const [errAnalyticsPrevious, setErrAnalyticsPrevious] = useState<string | null>(null);
   const [errAnalyticsFacets, setErrAnalyticsFacets] = useState<string | null>(null);
+  const [errAnalyticsAgents, setErrAnalyticsAgents] = useState<string | null>(null);
   const [errAnalyticsTokens, setErrAnalyticsTokens] = useState<string | null>(null);
   const [errAnalyticsHeatmap, setErrAnalyticsHeatmap] = useState<string | null>(null);
   const [errAnalyticsMerge, setErrAnalyticsMerge] = useState<string | null>(null);
@@ -724,6 +727,7 @@ export function App() {
   );
 
   const analyticsSeqRef = useRef(0);
+  const analyticsAgentOptionsScopeRef = useRef('');
   const readJSON = useCallback(
     <T,>(response: Response): Promise<T> =>
       response.ok
@@ -740,7 +744,7 @@ export function App() {
       setErrAnalyticsHeaviest(null);
       setAnalyticsHeaviestTotalConversations(null);
       setAnalyticsHeaviestRankingExact(false);
-      const scope = JSON.stringify([analyticsRange, analyticsWorkspace]);
+      const scope = JSON.stringify([analyticsRange, analyticsWorkspace, analyticsAgent]);
       if (reset && analyticsHeaviestScopeRef.current !== scope) {
         setAnalyticsHeaviestConversations([]);
       }
@@ -753,6 +757,7 @@ export function App() {
       });
       if (range.ms != null) params.set('since', new Date(now - range.ms).toISOString());
       if (analyticsWorkspace != null) params.set('workspace', analyticsWorkspace);
+      if (analyticsAgent !== 'all') params.set('agent', analyticsAgent);
 
       let limit = HEAVIEST_INITIAL_LIMIT;
       try {
@@ -789,7 +794,7 @@ export function App() {
         if (analyticsHeaviestSeqRef.current === seq) setLoadingAnalyticsHeaviest(false);
       }
     },
-    [analyticsModelPrices, analyticsRange, analyticsWorkspace, readJSON],
+    [analyticsModelPrices, analyticsRange, analyticsWorkspace, analyticsAgent, readJSON],
   );
 
   const analyticsMergeSeqRef = useRef(0);
@@ -833,8 +838,12 @@ export function App() {
       setErrAnalytics(null);
       setErrAnalyticsPrevious(null);
       setErrAnalyticsFacets(null);
+      setErrAnalyticsAgents(null);
       setErrAnalyticsTokens(null);
       setErrAnalyticsMerge(null);
+      const agentOptionsScope = JSON.stringify([analyticsRange, analyticsWorkspace]);
+      if (analyticsAgentOptionsScopeRef.current !== agentOptionsScope) setAnalyticsAgentOptions(null);
+      analyticsAgentOptionsScopeRef.current = agentOptionsScope;
       if (reset) {
         setAnalyticsConversations([]);
         setAnalyticsPreviousConversations([]);
@@ -865,28 +874,46 @@ export function App() {
         tokenParams.set('since', new Date(currentStart).toISOString());
         tokenParams.set('interval', String(Math.round(chartBucketMs(range.ms) / 1000)));
       }
-      const facetParams = new URLSearchParams(currentParams);
       if (analyticsWorkspace != null) {
         currentParams.set('workspace', analyticsWorkspace);
         previousParams.set('workspace', analyticsWorkspace);
         tokenParams.set('workspace', analyticsWorkspace);
       }
+      if (analyticsAgent !== 'all') {
+        currentParams.set('agent', analyticsAgent);
+        previousParams.set('agent', analyticsAgent);
+        tokenParams.set('agent', analyticsAgent);
+      }
+      // The workspace facet lists every workspace under the current agent, so
+      // it carries the agent filter and drops only the workspace one, as the
+      // Sessions page does. Copying the params before the agent was set left
+      // the dropdown counting all agents while the KPIs beside it did not.
+      const facetParams = new URLSearchParams(currentParams);
+      facetParams.delete('workspace');
+      const facetActive = analyticsWorkspace != null || analyticsAgent !== 'all';
+      const agentParams = new URLSearchParams(currentParams);
+      agentParams.delete('agent');
 
       const currentRequest = fetch(`/api/v1/metrics/conversations?${currentParams}`).then((response) =>
         readJSON<ConversationMetricsResponse>(response),
       );
+      const agentRequest =
+        analyticsAgent === 'all'
+          ? currentRequest
+          : fetch(`/api/v1/metrics/conversations?${agentParams}`).then((response) =>
+              readJSON<ConversationMetricsResponse>(response),
+            );
       const previousRequest =
         range.ms == null
           ? Promise.resolve<ConversationMetricsResponse | null>(null)
           : fetch(`/api/v1/metrics/conversations?${previousParams}`).then((response) =>
               readJSON<ConversationMetricsResponse>(response),
             );
-      const facetRequest =
-        analyticsWorkspace == null
-          ? Promise.resolve<ConversationMetricsResponse | null>(null)
-          : fetch(`/api/v1/metrics/conversations?${facetParams}`).then((response) =>
-              readJSON<ConversationMetricsResponse>(response),
-            );
+      const facetRequest = !facetActive
+        ? Promise.resolve<ConversationMetricsResponse | null>(null)
+        : fetch(`/api/v1/metrics/conversations?${facetParams}`).then((response) =>
+            readJSON<ConversationMetricsResponse>(response),
+          );
       const tokenRequest = fetch(`/api/v1/metrics/tokens?${tokenParams}`).then((response) =>
         readJSON<TokenUsageResponse>(response),
       );
@@ -910,7 +937,7 @@ export function App() {
               Number.isFinite(value.matched_conversations) ? value.matched_conversations : null,
             );
             fetchAnalyticsMerge(value.aggregate?.branch_rows, mergeSeq);
-            if (analyticsWorkspace == null) {
+            if (!facetActive) {
               setAnalyticsFacetConversations(value.conversations || []);
               setAnalyticsFacetAggregate(value.aggregate || null);
               setAnalyticsFacetTotalConversations(
@@ -921,6 +948,18 @@ export function App() {
           (reason) => {
             setErrAnalytics(errorMessage(reason));
             if (analyticsMergeSeqRef.current === mergeSeq) setLoadingAnalyticsMerge(false);
+          },
+        ),
+        settle(
+          agentRequest,
+          (value) => {
+            setAnalyticsAgentOptions(
+              value.aggregate?.agent_hosts ??
+                [...new Set((value.conversations || []).flatMap((row) => agentHosts(row.agents)))].sort(),
+            );
+          },
+          (reason) => {
+            if (analyticsAgent !== 'all') setErrAnalyticsAgents(errorMessage(reason));
           },
         ),
         settle(
@@ -965,7 +1004,7 @@ export function App() {
         setLoadingAnalytics(false);
       });
     },
-    [analyticsRange, analyticsWorkspace, fetchAnalyticsMerge, readJSON],
+    [analyticsRange, analyticsWorkspace, analyticsAgent, fetchAnalyticsMerge, readJSON],
   );
 
   const skillsToolsSeqRef = useRef(0);
@@ -1022,6 +1061,7 @@ export function App() {
         interval: '900',
       });
       if (analyticsWorkspace != null) params.set('workspace', analyticsWorkspace);
+      if (analyticsAgent !== 'all') params.set('agent', analyticsAgent);
       return fetch(`/api/v1/metrics/tokens?${params}`)
         .then((response) => readJSON<TokenUsageResponse>(response))
         .then((body) => {
@@ -1037,7 +1077,7 @@ export function App() {
           setLoadingAnalyticsHeatmap(false);
         });
     },
-    [analyticsWorkspace, readJSON],
+    [analyticsWorkspace, analyticsAgent, readJSON],
   );
 
   const analyticsRefreshInFlightRef = useRef(false);
@@ -1401,6 +1441,7 @@ export function App() {
     setShowSecurity(false);
     window.history.pushState({}, '', conversationsPath(analyticsWorkspace));
     resetSessionFacets();
+    setAgentFilter(analyticsAgent);
     setTimeRange(analyticsRange);
     setWorkspace(analyticsWorkspace);
     setBucketSel(span);
@@ -1413,6 +1454,7 @@ export function App() {
     setShowSecurity(false);
     window.history.pushState({}, '', conversationsPath(path));
     resetSessionFacets();
+    setAgentFilter(analyticsAgent);
     setTimeRange(analyticsRange);
     setWorkspace(path);
     setBucketSel(null);
@@ -1602,6 +1644,7 @@ export function App() {
                 error={errAnalytics}
                 previousError={errAnalyticsPrevious}
                 facetError={errAnalyticsFacets}
+                agentOptionsError={errAnalyticsAgents}
                 tokenError={errAnalyticsTokens}
                 heatmapError={errAnalyticsHeatmap}
                 mergeLoading={loadingAnalyticsMerge}
@@ -1613,6 +1656,9 @@ export function App() {
                 onTimeRangeChange={setAnalyticsRange}
                 workspace={analyticsWorkspace}
                 onWorkspaceChange={(path) => setAnalyticsWorkspaceValue(encodeAnalyticsWorkspace(path))}
+                agent={analyticsAgent}
+                agentOptions={analyticsAgentOptions}
+                onAgentChange={setAnalyticsAgent}
                 hiddenSeries={analyticsHiddenSeries}
                 onToggleSeries={toggleAnalyticsSeries}
                 onRefresh={refreshAnalytics}

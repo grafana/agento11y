@@ -127,6 +127,8 @@ function viewProps(overrides: Partial<AnalyticsViewProps> = {}): AnalyticsViewPr
     onTimeRangeChange: vi.fn(),
     workspace: null,
     onWorkspaceChange: vi.fn(),
+    agent: 'all',
+    onAgentChange: vi.fn(),
     hiddenSeries: new Set(),
     onToggleSeries: vi.fn(),
     onRefresh: vi.fn(),
@@ -180,6 +182,116 @@ describe('analytics workspace routing', () => {
 });
 
 describe('App analytics loading', () => {
+  it.each([
+    { workspace: null, aggregate: true, failOptions: false },
+    { workspace: '/worktrees/costly', aggregate: true, failOptions: false },
+    { workspace: '', aggregate: true, failOptions: false },
+    { workspace: '/worktrees/costly', aggregate: false, failOptions: false },
+    { workspace: '/worktrees/costly', aggregate: true, failOptions: true },
+  ])('keeps other agents available after selecting an agent: %j', async ({ workspace, aggregate, failOptions }) => {
+    window.history.replaceState({}, '', '/analytics');
+    const stored = new Map([
+      ['sigil.local.analyticsRange', '24h'],
+      ['sigil.local.analyticsWorkspace', workspace == null ? 'all' : `workspace:${workspace}`],
+    ]);
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => stored.get(key) ?? null,
+      setItem: (key: string, value: string) => stored.set(key, value),
+      removeItem: (key: string) => stored.delete(key),
+    });
+    const now = Date.now();
+    const lastActivity = new Date(now - 60 * 60 * 1000).toISOString();
+    const rows = [
+      conversation({ last_activity: lastActivity, workspace: workspace ?? '/worktrees/costly' }),
+      efficientConversation({
+        agents: ['claude-code'],
+        last_activity: lastActivity,
+        workspace: workspace ?? '/worktrees/costly',
+      }),
+      conversation({ id: 'outside-workspace', agents: ['codex'], workspace: '/outside', last_activity: lastActivity }),
+      conversation({
+        id: 'outside-range',
+        agents: ['cursor'],
+        workspace: workspace ?? '/worktrees/costly',
+        last_activity: new Date(now - 48 * 60 * 60 * 1000).toISOString(),
+      }),
+    ];
+    const expectedOptions = ['All agents', 'claude-code', ...(workspace == null ? ['codex'] : []), 'pi'];
+    let rejectOptions = false;
+    const response = (body: unknown) => ({ ok: true, status: 200, json: () => Promise.resolve(body) }) as Response;
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://local');
+      if (url.pathname === '/api/v1/metrics/conversations') {
+        const agent = url.searchParams.get('agent');
+        if (rejectOptions && agent == null) return Promise.reject(new Error('agent lookup failed'));
+        const selectedWorkspace = url.searchParams.get('workspace');
+        const since = Date.parse(url.searchParams.get('since') || '');
+        const before = Date.parse(url.searchParams.get('before') || '');
+        const conversations = rows.filter(
+          (row) =>
+            (agent == null || row.agents.includes(agent)) &&
+            (selectedWorkspace == null || row.workspace === selectedWorkspace) &&
+            Date.parse(row.last_activity) >= since &&
+            Date.parse(row.last_activity) < before,
+        );
+        return Promise.resolve(
+          response({
+            conversations,
+            matched_conversations: conversations.length,
+            aggregate: aggregate
+              ? {
+                  calls: conversations.reduce((sum, row) => sum + row.calls, 0),
+                  errored: 0,
+                  agents: conversations.length,
+                  agent_hosts: conversations.flatMap((row) => row.agents),
+                  workspaces: conversations.length,
+                  token_buckets: { ...EMPTY },
+                  token_buckets_by_model: {},
+                  models: [],
+                }
+              : undefined,
+          }),
+        );
+      }
+      return Promise.resolve(response({}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    await waitFor(() =>
+      expect((screen.getByRole('button', { name: 'Refresh analytics' }) as HTMLButtonElement).disabled).toBe(false),
+    );
+    fireEvent.click(screen.getByTitle('Filter by agent'));
+    expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual(expectedOptions);
+    const beforeSelection = fetchMock.mock.calls.length;
+    rejectOptions = failOptions;
+    fireEvent.click(screen.getByRole('option', { name: 'pi' }));
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) => String(input).includes('agent=pi'))).toBe(true);
+      expect((screen.getByRole('button', { name: 'Refresh analytics' }) as HTMLButtonElement).disabled).toBe(false);
+    });
+    fireEvent.click(screen.getByTitle('Filter by agent'));
+    expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual(expectedOptions);
+    expect(kpiCard('Model calls').textContent).toContain('8');
+    expect(screen.queryByText('Agent options did not refresh') != null).toBe(failOptions);
+    const metricRequests = fetchMock.mock.calls
+      .slice(beforeSelection)
+      .map(([input]) => new URL(String(input), 'http://local'))
+      .filter((url) => url.pathname === '/api/v1/metrics/conversations' && !url.searchParams.has('order'));
+    const currentRequest = metricRequests.find((url) => url.searchParams.get('agent') === 'pi');
+    const optionsRequest = metricRequests.find((url) => !url.searchParams.has('agent'));
+    expect(optionsRequest?.searchParams.get('workspace')).toBe(workspace);
+    expect(optionsRequest?.searchParams.get('since')).toBe(currentRequest?.searchParams.get('since'));
+    expect(optionsRequest?.searchParams.get('before')).toBe(currentRequest?.searchParams.get('before'));
+    fireEvent.click(screen.getByRole('option', { name: 'claude-code' }));
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) => String(input).includes('agent=claude-code'))).toBe(true);
+      expect((screen.getByRole('button', { name: 'Refresh analytics' }) as HTMLButtonElement).disabled).toBe(false);
+    });
+    expect(kpiCard('Model calls').textContent).toContain('3');
+  });
+
   it.each([
     ['/analytics?tab=skills', 'Tools'],
     ['/analytics?tab=skills&mode=tools', 'Tools'],
@@ -273,6 +385,62 @@ describe('App analytics loading', () => {
     fireEvent.click(back);
     expect(window.location.pathname).toBe('/analytics');
     expect(screen.getByRole('heading', { name: 'Analytics' })).toBeTruthy();
+  });
+
+  it.each([
+    ['workspace row', () => document.querySelector<HTMLElement>('a[href="/?workspace=%2Fworktrees%2Fcostly"]')],
+    ['chart bucket', () => screen.queryAllByRole('button', { name: /Open this time bucket/ })[0] ?? null],
+  ])('carries the Analytics agent into the Sessions drill-down from a %s', async (_name, findTarget) => {
+    window.history.replaceState({}, '', '/analytics');
+    const stored = new Map([['sigil.local.analyticsAgent', 'pi']]);
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => stored.get(key) ?? null,
+      setItem: (key: string, value: string) => stored.set(key, value),
+      removeItem: (key: string) => stored.delete(key),
+    });
+    const response = (body: unknown): Response =>
+      ({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(body),
+        text: () => Promise.resolve(''),
+      }) as Response;
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://local');
+      if (url.pathname === '/api/v1/metrics/conversations') {
+        return Promise.resolve(response({ conversations: [conversation()], matched_conversations: 1 }));
+      }
+      if (url.pathname === '/api/v1/metrics/tokens') {
+        const t = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+        return Promise.resolve(response({ points: [point({ t })], interval_seconds: 3600 }));
+      }
+      if (url.pathname === '/api/v1/conversations') {
+        return Promise.resolve(response({ conversations: [], total_conversations: 0 }));
+      }
+      return Promise.resolve(response({}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    const before = fetchMock.mock.calls.length;
+    // The overview remounts once model prices load, so a target found earlier
+    // can be detached by the time it is clicked.
+    await waitFor(() => {
+      const target = findTarget();
+      if (!target) throw new Error('missing drill-down target');
+      fireEvent.click(target, { button: 0 });
+      expect(screen.queryByRole('heading', { name: 'Analytics' })).toBeNull();
+    });
+
+    await waitFor(() => {
+      const listRequests = fetchMock.mock.calls
+        .slice(before)
+        .map(([input]) => new URL(String(input), 'http://local'))
+        .filter((url) => url.pathname === '/api/v1/conversations');
+      expect(listRequests.length).toBeGreaterThan(0);
+      expect(listRequests.map((url) => url.searchParams.get('agent'))).toEqual(listRequests.map(() => 'pi'));
+    });
   });
 
   it('renders overview before git merge status returns', async () => {
@@ -1264,6 +1432,39 @@ describe('AnalyticsView', () => {
     expect(workspaceFilter.textContent).toContain('1/3');
     fireEvent.click(workspaceFilter);
     expect(screen.queryByText(/listed sessions/)).toBeNull();
+  });
+
+  it.each([
+    { agentOptions: undefined, agent: 'all', expected: ['All agents', 'pi'] },
+    { agentOptions: ['pi', 'claude-code'], agent: 'pi', expected: ['All agents', 'claude-code', 'pi'] },
+    { agentOptions: [], agent: 'all', expected: ['All agents'] },
+    { agentOptions: [], agent: 'codex', expected: ['All agents', 'codex'] },
+  ])('lists workspace-scoped agent options: %j', ({ agentOptions, agent, expected }) => {
+    const selected = conversation();
+    const aggregate = (hosts: string[]): ConversationMetricsAggregate => ({
+      calls: 1,
+      errored: 0,
+      agents: hosts.length,
+      agent_hosts: hosts,
+      workspaces: 1,
+      token_buckets: selected.token_buckets,
+      token_buckets_by_model: selected.token_buckets_by_model || {},
+      models: selected.models,
+    });
+    render(
+      <AnalyticsView
+        {...viewProps({
+          conversations: [selected],
+          aggregate: aggregate(['pi']),
+          facetAggregate: aggregate(['codex', 'pi']),
+          workspace: '/worktrees/costly',
+          agentOptions,
+          agent,
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByTitle('Filter by agent'));
+    expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual(expected);
   });
 
   it('labels capped workspace fallback options as incomplete', () => {
