@@ -769,6 +769,7 @@ describe("loadConfig in local mode", () => {
     clearAgento11yEnv();
     vi.clearAllMocks();
     resolveLocalReceiverMock.mockResolvedValue(receiver);
+    vi.stubEnv("DO_NOT_TRACK", "");
     dir = mkdtempSync(join(tmpdir(), "sigil-opencode-localconfig-"));
     process.env.XDG_CONFIG_HOME = dir;
     homeBackup = process.env.HOME;
@@ -780,6 +781,7 @@ describe("loadConfig in local mode", () => {
     if (homeBackup === undefined) delete process.env.HOME;
     else process.env.HOME = homeBackup;
     clearAgento11yEnv();
+    vi.unstubAllEnvs();
   });
 
   function writeConfigEnv(...lines: string[]): void {
@@ -794,16 +796,32 @@ describe("loadConfig in local mode", () => {
     "AGENTO11Y_AUTH_TOKEN=glc_token",
   ];
 
-  it("routes conversations and OTLP at the receiver over saved Cloud settings", async () => {
+  it.each([
+    ["AGENTO11Y", undefined, "disabled"],
+    ["SIGIL", undefined, "disabled"],
+    ["AGENTO11Y", "AGENTO11Y", "enabled"],
+    ["AGENTO11Y", "SIGIL", "enabled"],
+  ])("routes locally with file %s usage and shell %s override", async (filePrefix, shellPrefix, usage) => {
+    vi.stubEnv("DO_NOT_TRACK", " TrUe ");
+    if (shellPrefix !== undefined) {
+      process.env[`${shellPrefix}_ANONYMOUS_USAGE_STATS`] = "enabled";
+    }
+    resolveLocalReceiverMock.mockImplementationOnce(async () => {
+      expect(process.env.AGENTO11Y_ANONYMOUS_USAGE_STATS).toBe(usage);
+      expect(process.env.SIGIL_ANONYMOUS_USAGE_STATS).toBe(usage);
+      return receiver;
+    });
     writeConfigEnv(
       ...cloudLines,
       "AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.example.com/otlp",
+      `${filePrefix}_ANONYMOUS_USAGE_STATS=enabled`,
       "AGENTO11Y_CONTENT_CAPTURE_MODE=metadata_only",
       "AGENTO11Y_LOCAL=true",
     );
 
     const cfg = await loadConfig();
 
+    expect(resolveLocalReceiverMock).toHaveBeenCalledOnce();
     expect(cfg?.endpoint).toBe("http://127.0.0.1:8768");
     expect(cfg?.otlp?.endpoint).toBe("http://127.0.0.1:8768/otlp");
     expect(cfg?.contentCapture).toBe("full");

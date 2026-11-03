@@ -61,6 +61,7 @@ const ALIAS_SUFFIXES = [
   // shell-before-file, preferred-before-legacy precedence as the launcher.
   "LOCAL",
   "BIN",
+  "ANONYMOUS_USAGE_STATS",
 ] as const;
 
 function preferredKey(suffix: string): string {
@@ -242,6 +243,8 @@ const { ownedValues, ownedFamilies } = processState[dotenvRegistryKey];
  * plugin and the in-process SDK, which itself dual-reads) observe one
  * consistent value.
  *
+ * Usage settings also honor shell DO_NOT_TRACK before the file layer.
+ *
  * Ownership is family-level: values this function materialized are refreshed
  * (edits propagate) or cleared under both spellings (removals propagate) on
  * every call, but only while process.env still holds what we wrote; the
@@ -253,18 +256,25 @@ const { ownedValues, ownedFamilies } = processState[dotenvRegistryKey];
  */
 export function applyAgento11yDotenv(): void {
   const loaded = readAgento11yDotenv(agento11yConfigEnvPath());
-  if (!loaded.reliable) return;
   const fileEnv = loaded.env;
 
   // Immutable snapshot of the pre-existing process env, taken before any
   // write below, so resolution never reads back our own materializations.
   const envSnapshot: Record<string, string | undefined> = { ...process.env };
+  applyFamily(
+    "ANONYMOUS_USAGE_STATS",
+    envSnapshot,
+    loaded.reliable ? fileEnv : { AGENTO11Y_ANONYMOUS_USAGE_STATS: "disabled" },
+  );
+  if (!loaded.reliable) return;
 
   const familyKeys = new Set<string>();
   for (const suffix of ALIAS_SUFFIXES) {
     familyKeys.add(preferredKey(suffix));
     familyKeys.add(legacyKey(suffix));
-    applyFamily(suffix, envSnapshot, fileEnv);
+    if (suffix !== "ANONYMOUS_USAGE_STATS") {
+      applyFamily(suffix, envSnapshot, fileEnv);
+    }
   }
 
   // Release ownership for any key whose value in process.env no longer
@@ -326,6 +336,12 @@ function applyFamily(
   for (const candidate of [
     shellPreferred,
     shellLegacy,
+    suffix === "ANONYMOUS_USAGE_STATS" &&
+    ["1", "true"].includes(
+      (envSnapshot.DO_NOT_TRACK ?? "").trim().toLowerCase(),
+    )
+      ? "disabled"
+      : undefined,
     fileEnv[pKey],
     fileEnv[lKey],
   ]) {

@@ -259,6 +259,7 @@ describe("applyAgento11yDotenv", () => {
 
   beforeEach(() => {
     clearAgento11yEnv();
+    vi.stubEnv("DO_NOT_TRACK", "");
     dir = mkdtempSync(join(tmpdir(), "sigil-pi-dotenv-apply-"));
     process.env.XDG_CONFIG_HOME = dir;
   });
@@ -266,6 +267,7 @@ describe("applyAgento11yDotenv", () => {
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
     clearAgento11yEnv();
+    vi.unstubAllEnvs();
   });
 
   function configPath(): string {
@@ -277,6 +279,267 @@ describe("applyAgento11yDotenv", () => {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, body);
   }
+
+  describe("ANONYMOUS_USAGE_STATS aliases", () => {
+    const preferred = "AGENTO11Y_ANONYMOUS_USAGE_STATS";
+    const legacy = "SIGIL_ANONYMOUS_USAGE_STATS";
+
+    function expectBoth(value: string | undefined): void {
+      expect(process.env[preferred]).toBe(value);
+      expect(process.env[legacy]).toBe(value);
+    }
+
+    it.each([
+      ["legacy file", undefined, undefined, undefined, "log", "log"],
+      [
+        "preferred file",
+        undefined,
+        undefined,
+        "enabled",
+        "disabled",
+        "enabled",
+      ],
+      [
+        "legacy shell over preferred file",
+        undefined,
+        "log",
+        "disabled",
+        "enabled",
+        "log",
+      ],
+      [
+        "preferred shell over legacy shell",
+        "enabled",
+        "disabled",
+        "log",
+        "disabled",
+        "enabled",
+      ],
+      [
+        "empty preferred shell",
+        "",
+        "disabled",
+        "enabled",
+        undefined,
+        "disabled",
+      ],
+      [
+        "blank preferred shell",
+        "  ",
+        "disabled",
+        "enabled",
+        undefined,
+        "disabled",
+      ],
+      [
+        "blank preferred file",
+        undefined,
+        undefined,
+        "  ",
+        "disabled",
+        "disabled",
+      ],
+    ])("%s", (_name, shellPreferred, shellLegacy, filePreferred, fileLegacy, winner) => {
+      if (shellPreferred !== undefined) process.env[preferred] = shellPreferred;
+      if (shellLegacy !== undefined) process.env[legacy] = shellLegacy;
+      writeConfig(
+        `${preferred}="${filePreferred ?? ""}"\n${legacy}="${fileLegacy ?? ""}"\n`,
+      );
+      for (let call = 0; call < 2; call++) {
+        applyAgento11yDotenv();
+        expectBoth(winner);
+      }
+    });
+
+    describe.each([preferred, legacy])("%s", (key) => {
+      it.each([
+        "1",
+        " TrUe ",
+      ])("shell enabled outranks DO_NOT_TRACK=%s and file disabled", (dnt) => {
+        process.env[key] = "enabled";
+        vi.stubEnv("DO_NOT_TRACK", dnt);
+        writeConfig(`${preferred}=disabled\n${legacy}=disabled\n`);
+        for (let call = 0; call < 2; call++) {
+          applyAgento11yDotenv();
+          expectBoth("enabled");
+        }
+      });
+
+      it.each([
+        " LoG ",
+        " DiSaBlEd ",
+        " invalid-mode ",
+      ])("trims shell value %j without parsing its mode", (value) => {
+        process.env[key] = value;
+        vi.stubEnv("DO_NOT_TRACK", "1");
+        writeConfig(`${preferred}=enabled\n${legacy}=enabled\n`);
+        applyAgento11yDotenv();
+        expectBoth(value.trim());
+      });
+
+      it.each([
+        " DiSaBlEd ",
+        " LoG ",
+        " invalid-mode ",
+      ])("trims file value %j without parsing its mode", (value) => {
+        writeConfig(`${key}="${value}"\n`);
+        for (let call = 0; call < 2; call++) {
+          applyAgento11yDotenv();
+          expectBoth(value.trim());
+        }
+      });
+
+      it.each([
+        ["1", "disabled"],
+        [" TrUe ", "disabled"],
+        ["0", "enabled"],
+        ["false", "enabled"],
+        ["yes", "enabled"],
+        ["on", "enabled"],
+        ["", "enabled"],
+      ])("DO_NOT_TRACK=%j resolves file enabled to %s", (dnt, winner) => {
+        vi.stubEnv("DO_NOT_TRACK", dnt);
+        writeConfig(`${key}=enabled\n`);
+        for (let call = 0; call < 2; call++) {
+          applyAgento11yDotenv();
+          expectBoth(winner);
+        }
+      });
+
+      it("refreshes file edits across aliases and removes owned values", () => {
+        writeConfig(`${key}=enabled\n`);
+        applyAgento11yDotenv();
+        expectBoth("enabled");
+
+        writeConfig(`${key === preferred ? legacy : preferred}=disabled\n`);
+        applyAgento11yDotenv();
+        expectBoth("disabled");
+
+        writeConfig("");
+        applyAgento11yDotenv();
+        expectBoth(undefined);
+      });
+
+      it("removes owned values when the file disappears", () => {
+        writeConfig(`${key}=enabled\n`);
+        applyAgento11yDotenv();
+        expectBoth("enabled");
+
+        rmSync(configPath());
+        applyAgento11yDotenv();
+        expectBoth(undefined);
+      });
+
+      it("re-resolves DO_NOT_TRACK activation and removal", () => {
+        writeConfig(`${key}=enabled\n`);
+        applyAgento11yDotenv();
+        expectBoth("enabled");
+
+        vi.stubEnv("DO_NOT_TRACK", "1");
+        for (let call = 0; call < 2; call++) {
+          applyAgento11yDotenv();
+          expectBoth("disabled");
+        }
+
+        delete process.env.DO_NOT_TRACK;
+        applyAgento11yDotenv();
+        expectBoth("enabled");
+
+        writeConfig("");
+        applyAgento11yDotenv();
+        expectBoth(undefined);
+      });
+    });
+
+    it("synthesizes nothing without a preference or config file", () => {
+      for (let call = 0; call < 2; call++) {
+        applyAgento11yDotenv();
+        expectBoth(undefined);
+      }
+    });
+
+    it.each([
+      ["changed-value runtime legacy override", undefined, "disabled"],
+      ["original shell provenance", "enabled", "enabled"],
+    ])("preserves %s after module replacement", async (_name, shell, winner) => {
+      if (shell !== undefined) process.env[legacy] = shell;
+      writeConfig(`${preferred}=enabled\n`);
+      applyAgento11yDotenv();
+      if (shell === undefined) process.env[legacy] = winner;
+
+      vi.resetModules();
+      const replacement = await import("./agento11yDotenv.js");
+      expect(replacement.applyAgento11yDotenv).not.toBe(applyAgento11yDotenv);
+      vi.stubEnv("DO_NOT_TRACK", "1");
+      writeConfig(`${preferred}=disabled\n`);
+      replacement.applyAgento11yDotenv();
+      expectBoth(winner);
+
+      vi.resetModules();
+      const nextReplacement = await import("./agento11yDotenv.js");
+      writeConfig("");
+      nextReplacement.applyAgento11yDotenv();
+      expectBoth(winner);
+    });
+
+    it.each([
+      [undefined, undefined, "", "disabled"],
+      [undefined, undefined, "1", "disabled"],
+      [preferred, "enabled", "1", "enabled"],
+      [legacy, "enabled", "1", "enabled"],
+      [preferred, "log", "", "log"],
+      [legacy, "invalid-mode", "", "invalid-mode"],
+    ])("resolves failed reads with shell %s=%s and DNT=%j", (key, shell, dnt, winner) => {
+      if (key !== undefined) process.env[key] = shell;
+      writeConfig(
+        `${preferred}=enabled\nSIGIL_AUTH_TOKEN=file-token\nOTEL_SERVICE_NAME=file-service\n`,
+      );
+      applyAgento11yDotenv();
+      vi.stubEnv("DO_NOT_TRACK", dnt);
+      process.env.SIGIL_ENDPOINT = "runtime-endpoint";
+
+      rmSync(configPath());
+      mkdirSync(configPath());
+      vi.resetModules();
+      return import("./agento11yDotenv.js").then((replacement) => {
+        for (let call = 0; call < 2; call++) {
+          replacement.applyAgento11yDotenv();
+          expectBoth(winner);
+          expect(process.env.SIGIL_AUTH_TOKEN).toBe("file-token");
+          expect(process.env.OTEL_SERVICE_NAME).toBe("file-service");
+          expect(process.env.SIGIL_ENDPOINT).toBe("runtime-endpoint");
+        }
+
+        rmSync(configPath(), { recursive: true });
+        writeConfig(`${preferred}=enabled\n`);
+        replacement.applyAgento11yDotenv();
+        expectBoth(shell ?? (dnt === "1" ? "disabled" : "enabled"));
+      });
+    });
+
+    it.each([
+      [undefined, "disabled"],
+      [preferred, "enabled"],
+      [legacy, "enabled"],
+    ])("resolves an initially unreadable file with shell %s", (key, winner) => {
+      if (key !== undefined) process.env[key] = "enabled";
+      mkdirSync(configPath(), { recursive: true });
+      applyAgento11yDotenv();
+      expectBoth(winner);
+    });
+
+    it("clears usage ownership through clearAgento11yEnv", () => {
+      writeConfig(`${preferred}=enabled\n`);
+      applyAgento11yDotenv();
+
+      clearAgento11yEnv();
+      process.env.XDG_CONFIG_HOME = dir;
+      process.env[legacy] = "enabled";
+      writeConfig(`${preferred}=disabled\n`);
+      applyAgento11yDotenv();
+      expectBoth("enabled");
+    });
+  });
 
   it("fills empty OS env values from config.env", () => {
     writeConfig(

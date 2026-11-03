@@ -113,6 +113,16 @@ func newUsageStatsConfigValue() func() string {
 // value pass for a shell one and override DO_NOT_TRACK.
 var usageStatsShell = usagestats.CaptureShellEnv()
 
+func propagateUsageStatsPreference() {
+	mode := usagestats.ResolveMode(usageStatsShell, usageStatsConfigValue)
+	switch mode {
+	case usagestats.ModeEnabled:
+		return
+	case usagestats.ModeDisabled, usagestats.ModeLog:
+		envconfig.SetBothEnv(usagestats.EnvSuffix, string(mode))
+	}
+}
+
 // usageStatsMode reports remotely only for versioned builds. Unstamped local
 // builds resolve to dev or dev-<revision> and may still use log mode.
 func usageStatsMode() usagestats.Mode {
