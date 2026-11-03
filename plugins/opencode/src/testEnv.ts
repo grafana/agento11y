@@ -1,3 +1,5 @@
+import { resetAgento11yDotenvStateForTests } from "./agento11yDotenv.js";
+
 /**
  * Reset every AGENTO11Y_*, SIGIL_*, and OTEL_* env var and XDG_CONFIG_HOME
  * between test cases so on-disk fixtures (config.env) and shell exports
@@ -15,4 +17,5 @@ export function clearAgento11yEnv(): void {
     }
   }
   delete process.env.XDG_CONFIG_HOME;
+  resetAgento11yDotenvStateForTests();
 }

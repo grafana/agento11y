@@ -355,6 +355,7 @@ func Main(buildVersion string) {
 	version = buildversion.Resolve(buildVersion)
 	// Usage reporting is resolved once per CLI process, including help and errors.
 	startUsage(os.Args[1:])
+	propagateUsageStatsPreference()
 	showUsageNotice(os.Stderr)
 	launcherpkg.BeforeExec = func() {
 		capture.SetLaunched()

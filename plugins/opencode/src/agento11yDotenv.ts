@@ -57,6 +57,7 @@ const ALIAS_SUFFIXES = [
   // shell-before-file, preferred-before-legacy precedence as the launcher.
   "LOCAL",
   "BIN",
+  "ANONYMOUS_USAGE_STATS",
 ];
 
 // Preferred config directory name and the pre-rename fallback. The legacy
@@ -183,6 +184,67 @@ export function loadAgento11yDotenv(path: string): Record<string, string> {
   return readAgento11yDotenv(path).env;
 }
 
+interface OwnedUsageFamily {
+  value: string;
+  shell: { preferred: string | undefined; legacy: string | undefined };
+}
+
+// Module replacement must preserve the original shell layer for usage settings.
+const usageRegistryKey = Symbol.for(
+  "grafana.agento11y.opencode.dotenv.usage.v1",
+);
+const processState = globalThis as typeof globalThis & {
+  [usageRegistryKey]?: { family?: OwnedUsageFamily };
+};
+processState[usageRegistryKey] ??= {};
+const usageOwnership = processState[usageRegistryKey];
+
+function applyUsageFamily(
+  shellEnv: Record<string, string | undefined>,
+  fileEnv: Record<string, string>,
+): void {
+  const preferred = "AGENTO11Y_ANONYMOUS_USAGE_STATS";
+  const legacy = "SIGIL_ANONYMOUS_USAGE_STATS";
+  const rec = usageOwnership.family;
+  const shellPreferred =
+    rec && shellEnv[preferred] === rec.value
+      ? rec.shell.preferred
+      : shellEnv[preferred];
+  const shellLegacy =
+    rec && shellEnv[legacy] === rec.value ? rec.shell.legacy : shellEnv[legacy];
+  const winner = [
+    shellPreferred,
+    shellLegacy,
+    ["1", "true"].includes((shellEnv.DO_NOT_TRACK ?? "").trim().toLowerCase())
+      ? "disabled"
+      : undefined,
+    fileEnv[preferred],
+    fileEnv[legacy],
+  ]
+    .map((value) => (value ?? "").trim())
+    .find((value) => value !== "");
+
+  if (winner === undefined) {
+    if (rec) {
+      if (shellEnv[preferred] === rec.value) delete process.env[preferred];
+      if (shellEnv[legacy] === rec.value) delete process.env[legacy];
+      delete usageOwnership.family;
+    }
+    return;
+  }
+
+  process.env[preferred] = winner;
+  process.env[legacy] = winner;
+  usageOwnership.family = {
+    value: winner,
+    shell: { preferred: shellPreferred, legacy: shellLegacy },
+  };
+}
+
+export function resetAgento11yDotenvStateForTests(): void {
+  delete usageOwnership.family;
+}
+
 /**
  * Read the sigil dotenv file and merge it into `process.env`. Mirrors the Go
  * launcher's `dotenv.ApplyEnv`. Alias families resolve source-first,
@@ -196,12 +258,18 @@ export function loadAgento11yDotenv(path: string): Record<string, string> {
  * whitespace-only values count as unset at every step. Keys outside the alias
  * registry keep exact-key semantics: the file value is only written when the
  * OS value is empty or whitespace.
+ *
+ * Usage settings also honor shell DO_NOT_TRACK before the file layer.
  */
 export function applyAgento11yDotenv(): void {
   const loaded = readAgento11yDotenv(agento11yConfigEnvPath());
-  if (!loaded.reliable) return;
   const fileEnv = loaded.env;
   const shellEnv: Record<string, string | undefined> = { ...process.env };
+  applyUsageFamily(
+    shellEnv,
+    loaded.reliable ? fileEnv : { AGENTO11Y_ANONYMOUS_USAGE_STATS: "disabled" },
+  );
+  if (!loaded.reliable) return;
 
   const aliasKeys = new Set<string>();
   for (const suffix of ALIAS_SUFFIXES) {
@@ -209,6 +277,7 @@ export function applyAgento11yDotenv(): void {
     const legacy = `SIGIL_${suffix}`;
     aliasKeys.add(preferred);
     aliasKeys.add(legacy);
+    if (suffix === "ANONYMOUS_USAGE_STATS") continue;
 
     const winner = [
       shellEnv[preferred],

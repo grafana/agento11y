@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -491,6 +492,15 @@ func TestEmitUsageEventRespectsMode(t *testing.T) {
 }
 
 func TestUsageStatsOnlySendFromVersionedBuilds(t *testing.T) {
+	isolateDotenvHome(t)
+	t.Setenv(usagestats.EnvDoNotTrack, "")
+	freshUsageStatsConfigValue(t)
+	for _, key := range []string{envconfig.PreferredKey(usagestats.EnvSuffix), envconfig.LegacyKey(usagestats.EnvSuffix)} {
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	var requests int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requests++
@@ -501,6 +511,22 @@ func TestUsageStatsOnlySendFromVersionedBuilds(t *testing.T) {
 
 	oldVersion, oldShell := version, usageStatsShell
 	t.Cleanup(func() { version, usageStatsShell = oldVersion, oldShell })
+	usageStatsShell = usagestats.CaptureShellEnv()
+	version = "dev"
+	if got := usageStatsMode(); got != usagestats.ModeDisabled {
+		t.Fatalf("development parent mode = %q, want disabled", got)
+	}
+	for range 2 {
+		propagateUsageStatsPreference()
+		dotenv.ApplyEnv(nil)
+		for _, key := range []string{envconfig.PreferredKey(usagestats.EnvSuffix), envconfig.LegacyKey(usagestats.EnvSuffix)} {
+			if value, exists := os.LookupEnv(key); exists {
+				t.Fatalf("development parent synthesized %s=%q without a preference", key, value)
+			}
+		}
+	}
+	assertUsageStatsSubprocess(t, usagestats.ModeEnabled)
+
 	usageStatsShell = usagestats.ShellEnv{Mode: "enabled"}
 	inv := sampleInvocation(time.Now())
 	for _, candidate := range []string{"dev", "dev-60b2ab8", "dev-60b2ab8-dirty", ""} {
@@ -579,23 +605,119 @@ func TestResolveModeIsStableAcrossApplyEnv(t *testing.T) {
 // silently re-enabled reporting. Capturing the shell before the merge is what
 // keeps the opt-out intact.
 func TestDoNotTrackIsNotDefeatedByConfigEnv(t *testing.T) {
-	writeUsageStatsConfig(t, "AGENTO11Y_ANONYMOUS_USAGE_STATS=enabled\n")
-	t.Setenv(usagestats.EnvDoNotTrack, "1")
-
-	shell := usagestats.CaptureShellEnv()
-	if got := usagestats.ResolveMode(shell, freshUsageStatsConfigValue(t)); got != usagestats.ModeDisabled {
-		t.Fatalf("mode before ApplyEnv = %q, want %q", got, usagestats.ModeDisabled)
+	for _, fileKey := range []string{envconfig.PreferredKey(usagestats.EnvSuffix), envconfig.LegacyKey(usagestats.EnvSuffix)} {
+		t.Run(fileKey, func(t *testing.T) {
+			for _, tc := range []struct {
+				name, dnt, preferred, legacy, file string
+				want                               usagestats.Mode
+				subprocess                         bool
+			}{
+				{name: "DNT 1", dnt: "1", file: "enabled", want: usagestats.ModeDisabled, subprocess: true},
+				{name: "DNT trimmed true", dnt: " \tTrUe \t", file: "enabled", want: usagestats.ModeDisabled},
+				{name: "preferred enabled wins", dnt: "1", preferred: "enabled", file: "disabled", want: usagestats.ModeEnabled},
+				{name: "legacy enabled wins", dnt: "1", legacy: "enabled", file: "disabled", want: usagestats.ModeEnabled, subprocess: true},
+				{name: "blank preferred", preferred: " \t", legacy: "disabled", file: "enabled", want: usagestats.ModeDisabled},
+				{name: "shell log", preferred: "log", file: "enabled", want: usagestats.ModeLog},
+				{name: "shell disabled", preferred: "disabled", file: "enabled", want: usagestats.ModeDisabled},
+				{name: "shell invalid", preferred: "invalid", file: "enabled", want: usagestats.ModeDisabled},
+				{name: "legacy log", legacy: "log", file: "enabled", want: usagestats.ModeLog},
+				{name: "legacy invalid", legacy: "invalid", file: "enabled", want: usagestats.ModeDisabled},
+				{name: "DNT 0 inactive", dnt: "0", file: "enabled", want: usagestats.ModeEnabled},
+				{name: "DNT false inactive", dnt: "false", file: "enabled", want: usagestats.ModeEnabled},
+				{name: "DNT yes inactive", dnt: "yes", file: "enabled", want: usagestats.ModeEnabled},
+				{name: "DNT on inactive", dnt: "on", file: "enabled", want: usagestats.ModeEnabled},
+				{name: "DNT empty inactive", file: "enabled", want: usagestats.ModeEnabled},
+				{name: "file disabled", file: "disabled", want: usagestats.ModeDisabled},
+				{name: "file log", file: "log", want: usagestats.ModeLog, subprocess: true},
+				{name: "file invalid", file: "invalid", want: usagestats.ModeDisabled},
+				{name: "missing file", want: usagestats.ModeEnabled},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					if tc.file == "" {
+						isolateDotenvHome(t)
+					} else {
+						writeUsageStatsConfig(t, fileKey+"="+tc.file+"\n")
+					}
+					t.Setenv(usagestats.EnvDoNotTrack, tc.dnt)
+					t.Setenv(envconfig.PreferredKey(usagestats.EnvSuffix), tc.preferred)
+					t.Setenv(envconfig.LegacyKey(usagestats.EnvSuffix), tc.legacy)
+					oldShell := usageStatsShell
+					usageStatsShell = usagestats.CaptureShellEnv()
+					t.Cleanup(func() { usageStatsShell = oldShell })
+					configValue := freshUsageStatsConfigValue(t)
+					if got := usagestats.ResolveMode(usageStatsShell, configValue); got != tc.want {
+						t.Fatalf("parent mode before merge = %q, want %q", got, tc.want)
+					}
+					for range 2 {
+						propagateUsageStatsPreference()
+						dotenv.ApplyEnv(nil)
+						if got := usagestats.ResolveMode(usageStatsShell, configValue); got != tc.want {
+							t.Fatalf("parent mode after merge = %q, want %q", got, tc.want)
+						}
+						inherited := string(tc.want)
+						if tc.file == "" {
+							inherited = ""
+						}
+						assertInheritedUsageStats(t, inherited)
+						if got := usagestats.ResolveMode(usagestats.CaptureShellEnv(), configValue); got != tc.want {
+							t.Fatalf("fresh child mode = %q, want %q", got, tc.want)
+						}
+					}
+					if tc.subprocess {
+						assertUsageStatsSubprocess(t, tc.want)
+					}
+				})
+			}
+		})
 	}
+}
 
-	dotenv.ApplyEnv(nil)
-
-	if got := usagestats.ResolveMode(shell, freshUsageStatsConfigValue(t)); got != usagestats.ModeDisabled {
-		t.Errorf("mode after ApplyEnv = %q, want %q; config.env must not override DO_NOT_TRACK", got, usagestats.ModeDisabled)
+func assertInheritedUsageStats(t *testing.T, want string) {
+	t.Helper()
+	for _, key := range []string{envconfig.PreferredKey(usagestats.EnvSuffix), envconfig.LegacyKey(usagestats.EnvSuffix)} {
+		if got := os.Getenv(key); got != want {
+			t.Errorf("inherited %s = %q, want %q", key, got, want)
+		}
 	}
-	// The live environment now carries the merged value, which is exactly what
-	// made resolving late unsafe.
-	if live := envconfig.Getenv(usagestats.EnvSuffix); live != "enabled" {
-		t.Fatalf("precondition failed: ApplyEnv did not merge the file value (got %q)", live)
+}
+
+func assertUsageStatsSubprocess(t *testing.T, want usagestats.Mode) {
+	t.Helper()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		env  *local.LaunchEnv
+	}{
+		{name: "normal"},
+		{name: "local", env: &local.LaunchEnv{Endpoint: "http://127.0.0.1:0", OTLPEndpoint: "http://127.0.0.1:0"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.Command(executable, "-test.run=^TestUsageStatsInheritedPreference$")
+			cmd.Env = append(local.Environ(tc.env), "AGENTO11Y_USAGE_STATS_CHILD_MODE="+string(want))
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("usage preference subprocess: %v\n%s", err, out)
+			}
+		})
+	}
+}
+
+func TestUsageStatsInheritedPreference(t *testing.T) {
+	want := os.Getenv("AGENTO11Y_USAGE_STATS_CHILD_MODE")
+	if want == "" {
+		return
+	}
+	// TestMain clears the live aliases and changes HOME. Only the startup snapshot describes the inherited preference.
+	if got := usagestats.ResolveMode(usageStatsShell, nil); got != usagestats.Mode(want) {
+		t.Fatalf("startup mode = %q, want %q (snapshot: %+v)", got, want, usageStatsShell)
+	}
+	oldVersion := version
+	version = "v0.1.0"
+	t.Cleanup(func() { version = oldVersion })
+	if got := usageStatsMode(); got != usagestats.Mode(want) {
+		t.Fatalf("versioned child mode = %q, want %q", got, want)
 	}
 }
 
@@ -603,16 +725,41 @@ func TestDoNotTrackIsNotDefeatedByConfigEnv(t *testing.T) {
 // plus an error, so discarding the error used to discard a saved opt-out and
 // fall through to the enabled default.
 func TestUnreadableConfigDoesNotEnableReporting(t *testing.T) {
-	// A line past bufio.Scanner's token limit makes the parse fail after the
-	// opt-out has already been read.
-	writeUsageStatsConfig(t, "AGENTO11Y_ANONYMOUS_USAGE_STATS=disabled\n# "+strings.Repeat("x", 70<<10)+"\n")
-
-	if _, err := dotenv.ReadDotenv(dotenv.FilePath(), nil); err == nil {
-		t.Fatal("precondition failed: the config parsed cleanly, so this does not exercise the error path")
-	}
-
-	if got := usagestats.ResolveMode(usagestats.ShellEnv{}, freshUsageStatsConfigValue(t)); got != usagestats.ModeDisabled {
-		t.Errorf("mode = %q for an unreadable config, want %q", got, usagestats.ModeDisabled)
+	for _, tc := range []struct {
+		name, file, shell string
+		want              usagestats.Mode
+	}{
+		{name: "disabled before scanner error", file: "disabled", want: usagestats.ModeDisabled},
+		{name: "enabled before scanner error", file: "enabled", want: usagestats.ModeDisabled},
+		{name: "shell enabled over partial enabled", file: "enabled", shell: "enabled", want: usagestats.ModeEnabled},
+		{name: "shell enabled over partial disabled", file: "disabled", shell: "enabled", want: usagestats.ModeEnabled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// A line past bufio.Scanner's token limit makes the parse fail after the
+			// setting has already been read.
+			writeUsageStatsConfig(t, "AGENTO11Y_ANONYMOUS_USAGE_STATS="+tc.file+"\n# "+strings.Repeat("x", 70<<10)+"\n")
+			t.Setenv(usagestats.EnvDoNotTrack, "")
+			t.Setenv(envconfig.PreferredKey(usagestats.EnvSuffix), tc.shell)
+			fileEnv, err := dotenv.ReadDotenv(dotenv.FilePath(), nil)
+			if err == nil || fileEnv[envconfig.PreferredKey(usagestats.EnvSuffix)] != tc.file {
+				t.Fatalf("expected a partial config and scanner error, got value %q, error %v", fileEnv[envconfig.PreferredKey(usagestats.EnvSuffix)], err)
+			}
+			oldShell := usageStatsShell
+			usageStatsShell = usagestats.CaptureShellEnv()
+			t.Cleanup(func() { usageStatsShell = oldShell })
+			configValue := freshUsageStatsConfigValue(t)
+			if got := usagestats.ResolveMode(usageStatsShell, configValue); got != tc.want {
+				t.Fatalf("unreadable config mode = %q, want %q", got, tc.want)
+			}
+			for range 2 {
+				propagateUsageStatsPreference()
+				dotenv.ApplyEnv(nil)
+				assertInheritedUsageStats(t, string(tc.want))
+				if got := usagestats.ResolveMode(usagestats.CaptureShellEnv(), configValue); got != tc.want {
+					t.Fatalf("child mode = %q, want %q", got, tc.want)
+				}
+			}
+		})
 	}
 }
 
@@ -660,20 +807,14 @@ func TestEmitUsageOnce(t *testing.T) {
 }
 
 func TestMainReportsHelpAndLauncherOnceAndSuppressesVersion(t *testing.T) {
-	oldArgs, oldShell, oldEmit := os.Args, usageStatsShell, emitUsage
+	oldArgs, oldShell, oldEmit, oldVersion := os.Args, usageStatsShell, emitUsage, version
 	oldLauncher, oldBeforeExec := launchers["codex"], launcher.BeforeExec
 	t.Cleanup(func() {
-		os.Args, usageStatsShell, emitUsage = oldArgs, oldShell, oldEmit
+		os.Args, usageStatsShell, emitUsage, version = oldArgs, oldShell, oldEmit, oldVersion
 		launchers["codex"], launcher.BeforeExec = oldLauncher, oldBeforeExec
 		capture.Reset()
 		resetUsageOnceForTest()
 	})
-	usageStatsShell = usagestats.ShellEnv{Mode: "disabled"}
-	launchers["codex"] = func(context.Context, []string, *local.LaunchEnv, io.Reader, io.Writer, io.Writer, *log.Logger, string) error {
-		launcher.BeforeExec()
-		return nil
-	}
-
 	for _, tc := range []struct {
 		args    []string
 		want    string
@@ -685,12 +826,34 @@ func TestMainReportsHelpAndLauncherOnceAndSuppressesVersion(t *testing.T) {
 		{args: []string{"--version"}, blocked: true},
 	} {
 		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
+			writeUsageStatsConfig(t, "AGENTO11Y_ANONYMOUS_USAGE_STATS=enabled\n")
+			t.Setenv(usagestats.EnvDoNotTrack, "1")
+			t.Setenv(usagestats.EnvEndpoint, "http://127.0.0.1:0/must-not-be-reached")
+			freshUsageStatsConfigValue(t)
+			usageStatsShell = usagestats.CaptureShellEnv()
 			capture.Reset()
 			resetUsageOnceForTest()
 			os.Args = append([]string{"agento11y"}, tc.args...)
+			launchCalls := 0
+			launchers["codex"] = func(context.Context, []string, *local.LaunchEnv, io.Reader, io.Writer, io.Writer, *log.Logger, string) error {
+				launchCalls++
+				assertInheritedUsageStats(t, "disabled")
+				launcher.BeforeExec()
+				return nil
+			}
 			var events []capture.Invocation
-			emitUsage = func(inv capture.Invocation, _ time.Time) { events = append(events, inv) }
+			emitUsage = func(inv capture.Invocation, _ time.Time) {
+				assertInheritedUsageStats(t, "disabled")
+				events = append(events, inv)
+			}
 			Main("dev")
+			wantLaunchCalls := 0
+			if tc.want == "codex" {
+				wantLaunchCalls = 1
+			}
+			if launchCalls != wantLaunchCalls {
+				t.Errorf("launcher calls = %d, want %d", launchCalls, wantLaunchCalls)
+			}
 			if len(events) != 1 {
 				t.Fatalf("emission calls = %d, want one lifecycle call", len(events))
 			}
