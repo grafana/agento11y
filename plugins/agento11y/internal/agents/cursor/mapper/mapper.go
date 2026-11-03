@@ -12,6 +12,7 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/grafana/agento11y/go/agento11y"
 
@@ -85,6 +86,10 @@ type Mapped struct {
 	Generation agento11y.Generation
 	StopStatus StopStatus
 	CallError  error
+	// FirstTokenAt is a real first-token timestamp. Zero means none was
+	// observed, so no TTFT sample is recorded. Cursor hook timestamps are
+	// block-completion times and do not populate this.
+	FirstTokenAt time.Time
 }
 
 // MapFragment builds the agento11y Generation for a finished turn.
@@ -135,16 +140,28 @@ func MapFragment(in Inputs) Mapped {
 		GitBranch:         gitbranch.Resolve(workspaceRoot),
 		IsBackgroundAgent: isBackgroundAgent,
 	})
+	tagMap = addModelParamTags(tagMap, frag.ModelParams, red)
 
 	uid := resolveUserID(in.UserIDOverride, userEmail)
 
 	toolDefs := buildToolDefinitions(frag.Tools)
 
 	var thinkingEnabled *bool
-	if frag.ThinkingPresent {
+	if frag.ThinkingPresent || len(frag.Thinking) > 0 {
 		v := true
 		thinkingEnabled = &v
 	}
+
+	mode := agento11y.GenerationModeSync
+	operation := "generateText"
+	firstToken := timeutil.ParseTimestamp(frag.FirstTokenAt, time.Time{})
+	if !firstToken.IsZero() {
+		// The SDK records time-to-first-token only for a streamText
+		// operation. Live Cursor hooks do not supply a first-token time.
+		mode = agento11y.GenerationModeStream
+		operation = "streamText"
+	}
+	metadata := generationMetadata(frag)
 
 	start := agento11y.GenerationStart{
 		ID:                frag.GenerationID,
@@ -154,12 +171,13 @@ func MapFragment(in Inputs) Mapped {
 		AgentName:         in.agent(),
 		AgentVersion:      cursorVersion,
 		EffectiveVersion:  cursorVersion,
-		Mode:              agento11y.GenerationModeSync,
-		OperationName:     "generateText",
+		Mode:              mode,
+		OperationName:     operation,
 		Model:             model,
 		Tools:             toolDefs,
 		ThinkingEnabled:   thinkingEnabled,
 		Tags:              tagMap,
+		Metadata:          metadata,
 		StartedAt:         startedAt,
 		ContentCapture:    in.ContentCapture,
 	}
@@ -174,8 +192,8 @@ func MapFragment(in Inputs) Mapped {
 		AgentName:         in.agent(),
 		AgentVersion:      cursorVersion,
 		EffectiveVersion:  cursorVersion,
-		Mode:              agento11y.GenerationModeSync,
-		OperationName:     "generateText",
+		Mode:              mode,
+		OperationName:     operation,
 		Model:             model,
 		ResponseModel:     responseModel,
 		Input:             input,
@@ -187,12 +205,14 @@ func MapFragment(in Inputs) Mapped {
 		StartedAt:         startedAt,
 		CompletedAt:       completedAt,
 		Tags:              tagMap,
+		Metadata:          metadata,
 	}
 
 	mapped := Mapped{
-		Start:      start,
-		Generation: gen,
-		StopStatus: stopStatus,
+		Start:        start,
+		Generation:   gen,
+		StopStatus:   stopStatus,
+		FirstTokenAt: firstToken,
 	}
 	if stopStatus == StopStatusError {
 		mapped.CallError = extractCallError(in.Stop, red)
@@ -392,6 +412,13 @@ func buildMessages(frag *fragment.Fragment, mode agento11y.ContentCaptureMode, r
 		})
 	}
 
+	if thinking := thinkingParts(frag, mode, red); len(thinking) > 0 {
+		output = append(output, agento11y.Message{
+			Role:  agento11y.RoleAssistant,
+			Parts: thinking,
+		})
+	}
+
 	// Tool calls + results, interleaved per agento11y's convention:
 	// assistant → tool_call, then a tool message → tool_result.
 	for i := range frag.Tools {
@@ -476,6 +503,123 @@ func buildMessages(frag *fragment.Fragment, mode agento11y.ContentCaptureMode, r
 	}
 
 	return input, output
+}
+
+func thinkingParts(frag *fragment.Fragment, mode agento11y.ContentCaptureMode, red *redact.Redactor) []agento11y.Part {
+	if frag == nil || mode == agento11y.ContentCaptureModeMetadataOnly {
+		return nil
+	}
+	var parts []agento11y.Part
+	for _, seg := range frag.Thinking {
+		if strings.TrimSpace(seg.Text) == "" {
+			continue
+		}
+		parts = append(parts, agento11y.ThinkingPart(red.Thinking(seg.Text)))
+	}
+	return parts
+}
+
+func thinkingDuration(frag *fragment.Fragment) (float64, bool) {
+	if frag == nil {
+		return 0, false
+	}
+	var sum float64
+	var ok bool
+	for _, seg := range frag.Thinking {
+		if seg.DurationMs == nil {
+			continue
+		}
+		sum += *seg.DurationMs
+		ok = true
+	}
+	if ok {
+		return sum, true
+	}
+	if frag.ThinkingDurationMs != nil {
+		return *frag.ThinkingDurationMs, true
+	}
+	return 0, false
+}
+
+func generationMetadata(frag *fragment.Fragment) map[string]any {
+	if frag == nil {
+		return nil
+	}
+	var md map[string]any
+	put := func(key string, value any) {
+		if md == nil {
+			md = map[string]any{}
+		}
+		md[key] = value
+	}
+	if sum, ok := thinkingDuration(frag); ok {
+		put("cursor.thinking.duration_ms", sum)
+	}
+	var failures []any
+	for i := range frag.Tools {
+		t := &frag.Tools[i]
+		kind := strings.TrimSpace(t.FailureType)
+		if kind == "" {
+			continue
+		}
+		item := map[string]any{
+			"failure_type": kind,
+			"tool_name":    t.ToolName,
+		}
+		if t.ToolUseID != "" {
+			item["tool_use_id"] = t.ToolUseID
+		}
+		failures = append(failures, item)
+	}
+	if len(failures) > 0 {
+		put("cursor.tool_failures", failures)
+	}
+	return md
+}
+
+func addModelParamTags(dst map[string]string, params map[string]string, red *redact.Redactor) map[string]string {
+	if len(params) == 0 {
+		return dst
+	}
+	if dst == nil {
+		dst = map[string]string{}
+	}
+	for id, value := range params {
+		key := modelParamTagKey(id)
+		value = strings.TrimSpace(red.RedactLightweight(value))
+		if key == "" || value == "" {
+			continue
+		}
+		dst[key] = value
+	}
+	return dst
+}
+
+// modelParamTagKey is the generation tag for one model_params id. Characters
+// outside the tag alphabet are dropped. The model_param. prefix keeps these
+// off built-in keys such as cwd and entrypoint.
+func modelParamTagKey(id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("model_param.")
+	wrote := false
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-' || r == '.':
+			b.WriteRune(r)
+			wrote = true
+		case r == ' ' || r == '/':
+			b.WriteByte('_')
+			wrote = true
+		}
+	}
+	if !wrote || !utf8.ValidString(b.String()) {
+		return ""
+	}
+	return b.String()
 }
 
 func mapTokenUsage(t *fragment.TokenCounts) agento11y.TokenUsage {
