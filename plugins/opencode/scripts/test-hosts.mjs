@@ -12,7 +12,7 @@
  * v1.2.16 needs a root-entry file URL; later v1 hosts use their package loader.
  * v2 uses a local tarball, /server detection and --standalone;
  * import success cannot establish runtime compatibility. Runtime failures stay
- * fatal. Guards cover allow only, not deny/transform/tool/permission scenarios.
+ * fatal. Guards cover allow and v2 system-text rewrites, not deny/tool/permission scenarios.
  */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -647,8 +647,20 @@ async function loopback(scenario = "basic") {
           })),
         });
       } else if (req.method === "POST" && path === "/api/v1/hooks:evaluate") {
-        state.guards.push(JSON.parse(body.toString()));
-        reply({ action: "allow", evaluations: [] });
+        const payload = JSON.parse(body.toString());
+        state.guards.push(payload);
+        const messages = JSON.stringify(payload.input?.messages ?? []);
+        reply({
+          action: "allow",
+          evaluations: [],
+          ...(messages.includes("packed-guard-private") && {
+            transformed_input: {
+              messages: JSON.parse(
+                messages.replaceAll("packed-guard-private", "[REDACTED]"),
+              ),
+            },
+          }),
+        });
       } else if (
         req.method === "POST" &&
         ["/v1/traces", "/v1/metrics", "/v1/logs"].includes(path)
@@ -793,6 +805,11 @@ function hostConfig(version, packageDir, tarball, url, rootEntry) {
       model: { providerID: "packed", model: MODEL },
       // Exercise package /server resolution, not a direct-entry wrapper.
       plugins: [`file:${tarball}`],
+      agents: {
+        build: {
+          system: "Packed host system prompt sentinel. packed-guard-private",
+        },
+      },
       providers: {
         packed: {
           name: "Loopback only",
@@ -961,6 +978,33 @@ async function realHost(
       scenario === "compaction" ? 3 : 1,
       `Host ${version}: unexpected loopback model request count for ${scenario}`,
     );
+    if (version.startsWith("2.")) {
+      const turns = capture.state.generations.filter(
+        (item) => item.tags?.["opencode.call_kind"] !== "compaction",
+      );
+      assert(turns.length > 0);
+      for (const turn of turns) {
+        assert(
+          turn.system_prompt.includes(
+            "Packed host system prompt sentinel. [REDACTED]",
+          ),
+        );
+        assert(!turn.system_prompt.includes("packed-guard-private"));
+      }
+      const primaryRequests = capture.state.models.filter((request) =>
+        JSON.stringify(request.messages).includes(
+          "Packed host system prompt sentinel.",
+        ),
+      );
+      assert(primaryRequests.length > 0);
+      for (const request of primaryRequests) {
+        const messages = JSON.stringify(request.messages);
+        assert(
+          messages.includes("Packed host system prompt sentinel. [REDACTED]"),
+        );
+        assert(!messages.includes("packed-guard-private"));
+      }
+    }
     assert(
       output.includes(REPLY),
       `Host ${version}: CLI did not complete the loopback assistant reply\n${output}`,
@@ -1068,7 +1112,7 @@ async function main() {
   const opts = options(process.argv.slice(2));
   if (opts.help) {
     console.log(
-      `Usage: node plugins/opencode/scripts/test-hosts.mjs [--imports | --versions ${VERSIONS.join(",")}] [--scenario basic|compaction] [--keep-temp] [--timeout-ms 120000]\nRequires a built dist and pnpm/npm/Node; hosts require macOS sandbox-exec, imports require Node >=26 or macOS sandbox-exec.\n--imports checks actual packed JS imports + tsc declarations only, NEVER runtime capture.\nDefault: test every listed official host. Compaction tests v2 only with overflow, summary, then retry. v2 always uses --standalone. All failures are fatal.\nGuards cover allow only, not deny/transform/tool/permission scenarios. The checkout and personal config are unchanged. Temporary configs are written under TEMP.`,
+      `Usage: node plugins/opencode/scripts/test-hosts.mjs [--imports | --versions ${VERSIONS.join(",")}] [--scenario basic|compaction] [--keep-temp] [--timeout-ms 120000]\nRequires a built dist and pnpm/npm/Node; hosts require macOS sandbox-exec, imports require Node >=26 or macOS sandbox-exec.\n--imports checks actual packed JS imports + tsc declarations only, NEVER runtime capture.\nDefault: test every listed official host. Compaction tests v2 only with overflow, summary, then retry. v2 always uses --standalone. All failures are fatal.\nGuards cover allow and v2 system-text rewrites, not deny/tool/permission scenarios. The checkout and personal config are unchanged. Temporary configs are written under TEMP.`,
     );
     return;
   }

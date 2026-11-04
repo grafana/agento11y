@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   captureShutdown: vi.fn(async () => {}),
   handleEvent: vi.fn(),
   observeToolExecution: vi.fn(),
+  observeSystemPrompt: vi.fn(),
   stopObservingTools: vi.fn(),
   registerGuards: vi.fn(),
   registerFinalChecks: vi.fn(),
@@ -68,6 +69,7 @@ function host() {
   }));
   const context = {
     tool: { hook },
+    session: { hook: vi.fn(async () => ({ dispose: vi.fn(async () => {}) })) },
     app: { name: "opencode", version: "2.0.29", channel: "latest" },
     location: { directory: "/repo", workspaceID: "workspace-1" },
     event: { subscribe },
@@ -90,6 +92,7 @@ describe("native setup ownership", () => {
     mocks.createCapture.mockReturnValue({
       handleEvent: mocks.handleEvent,
       observeToolExecution: mocks.observeToolExecution,
+      observeSystemPrompt: mocks.observeSystemPrompt,
       stopObservingTools: mocks.stopObservingTools,
       shutdown: mocks.captureShutdown,
     });
@@ -99,6 +102,84 @@ describe("native setup ownership", () => {
       dispose: mocks.copilotDispose,
       refresh: mocks.copilotRefresh,
     });
+  });
+
+  it.each([
+    true,
+    false,
+  ])("captures composed context after guards=%s and stops on cleanup", async (enabled) => {
+    mocks.loadConfig.mockResolvedValue(
+      baseConfig({ guards: { enabled, timeoutMs: 1, failOpen: false } }),
+    );
+    const { context } = host();
+    const cleanup = await setupV2(context);
+    const hook = vi.mocked(context.session.hook);
+    const registration = hook.mock.calls
+      .filter(([name]) => name === "context")
+      .at(-1);
+    expect(registration).toBeDefined();
+    expect(mocks.registerGuards.mock.invocationCallOrder[0]).toBeLessThan(
+      hook.mock.invocationCallOrder[0]!,
+    );
+    const observe = registration![1];
+    const event = {
+      sessionID: "s",
+      system: [{ text: "agent prompt" }, { text: "instructions" }],
+    };
+    await observe(event as never);
+    expect(mocks.observeSystemPrompt).toHaveBeenCalledWith(
+      "s",
+      "agent prompt\n\ninstructions",
+    );
+    await cleanup?.();
+    await observe(event as never);
+    expect(mocks.observeSystemPrompt).toHaveBeenCalledOnce();
+  });
+
+  it.each(
+    [
+      undefined,
+      null,
+      [],
+      [null, {}, { text: 42 }, { text: "" }, { text: "valid" }],
+      { unexpected: true },
+    ].map((system) => ({ system })),
+  )("never fails a request for malformed system parts: $system", async ({
+    system,
+  }) => {
+    const { context } = host();
+    const cleanup = await setupV2(context);
+    const observe = vi
+      .mocked(context.session.hook)
+      .mock.calls.filter(([name]) => name === "context")
+      .at(-1)![1];
+    await expect(
+      Promise.resolve().then(() =>
+        observe({ sessionID: "s", system } as never),
+      ),
+    ).resolves.toBeUndefined();
+    if (Array.isArray(system) && system.length) {
+      expect(mocks.observeSystemPrompt).toHaveBeenCalledWith("s", "valid");
+    }
+    await cleanup?.();
+  });
+
+  it("never propagates capture errors into the model request", async () => {
+    const { context } = host();
+    const cleanup = await setupV2(context);
+    mocks.observeSystemPrompt.mockImplementation(() => {
+      throw new Error("capture failed");
+    });
+    const observe = vi
+      .mocked(context.session.hook)
+      .mock.calls.filter(([name]) => name === "context")
+      .at(-1)![1];
+    await expect(
+      Promise.resolve().then(() =>
+        observe({ sessionID: "s", system: [{ text: "prompt" }] } as never),
+      ),
+    ).resolves.toBeUndefined();
+    await cleanup?.();
   });
 
   it("starts intake without waiting for host initialization and cleans up once", async () => {
@@ -328,7 +409,7 @@ describe("native setup ownership", () => {
       baseConfig({ guards: { enabled, timeoutMs: 1, failOpen: false } }),
     );
     const { context, hook, observerDispose } = host();
-    Object.defineProperty(context, "session", {
+    Object.defineProperty(context.session, "get", {
       get: () => {
         throw new Error("no session lookup");
       },

@@ -50,7 +50,7 @@ interface Assistant {
 }
 interface SessionState {
   history: Message[];
-  instructions: string[];
+  systemPrompt?: string;
   inbox: Map<string, InboxItem>;
   assistant?: Assistant;
   compaction?: NativeCompactionStart & { seq: number };
@@ -113,6 +113,7 @@ export function createNativeCapture({
   redactions,
 }: NativeCaptureOptions): {
   handleEvent(event: NativeEvent): void;
+  observeSystemPrompt(sessionID: string, systemPrompt: string): void;
   observeToolExecution(observation: NativeToolObservation): void;
   stopObservingTools(): void;
   shutdown(): Promise<void>;
@@ -177,7 +178,6 @@ export function createNativeCapture({
     if (!session) {
       session = {
         history: [],
-        instructions: [],
         inbox: new Map(),
         conversationId: id,
       };
@@ -523,8 +523,7 @@ export function createNativeCapture({
         session.history.push(textMessage(event.data.text));
         return;
       case "session.instructions.updated":
-        // These are chronological updates, not a complete effective system snapshot.
-        if (event.data.text?.trim()) session.instructions.push(event.data.text);
+        // Instruction notices are not the model's composed system prompt.
         return;
       case "session.compaction.started": {
         const seq = event.durable.seq;
@@ -557,7 +556,6 @@ export function createNativeCapture({
           session.history = [textMessage(event.data.text)];
           if (event.data.recent !== undefined)
             session.history.push(textMessage(event.data.recent));
-          session.instructions = [];
         }
         if (draining && !session.assistant && !session.compaction)
           dropSession(sessionID);
@@ -569,7 +567,7 @@ export function createNativeCapture({
         );
         if (settled.has(id)) return;
         if (session.assistant?.id === event.data.assistantMessageID) {
-          // Transparent retries refresh instructions upstream. Keep FIRST observed prefix/time.
+          // Keep the first observed request/time for a logical step's retries.
           session.assistant.streamedAt = undefined;
           return;
         }
@@ -581,9 +579,7 @@ export function createNativeCapture({
           model: { ...event.data.model },
           startedAt: event.data.started,
           input: structuredClone(session.history),
-          systemPrompt: session.instructions.length
-            ? session.instructions.join("\n\n")
-            : undefined,
+          systemPrompt: session.systemPrompt,
           blocks: [],
           toolObservations: new Map(),
           parent: session.lastGeneration ?? session.spawningGeneration,
@@ -600,6 +596,8 @@ export function createNativeCapture({
               }
             : undefined,
         };
+        // Only consume here: older async terminal/retry events can follow the next context hook.
+        session.systemPrompt = undefined;
         return;
       }
       case "session.execution.succeeded":
@@ -713,6 +711,11 @@ export function createNativeCapture({
       }
     }
   }
+  function observeSystemPrompt(sessionID: string, systemPrompt: string): void {
+    if (closed || draining || config.contentCapture === "metadata_only") return;
+    // Pinned hosts call context before step.started; test-hosts.mjs guards this ordering.
+    getSession(sessionID).systemPrompt = systemPrompt;
+  }
   function observeToolExecution(observation: NativeToolObservation): void {
     if (closed || !observingTools) return;
     const { sessionID, messageID, id, tool, agent, skillName } = observation;
@@ -750,6 +753,7 @@ export function createNativeCapture({
   }
   return {
     handleEvent,
+    observeSystemPrompt,
     observeToolExecution,
     stopObservingTools,
     shutdown,

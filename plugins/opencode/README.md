@@ -124,6 +124,10 @@ Sessions started with plain `opencode` use the background service. The plugin st
 
 `agento11y history import opencode` reads v1 and released v2 databases. See [History import](../agento11y/README.md#history-import) for limitations.
 
+### System prompts
+
+On OpenCode 2, ordinary generations capture the composed system prompt exposed by the session `context` hook, including the agent's `system` text and rendered instruction sources, from the first turn. Capture works with guards on or off; guard rewrites and local secret redaction still apply. `metadata_only` omits the prompt. Instruction-change events alone are not treated as a system prompt. Changes made by later plugins or provider-specific serialization are outside this hook's view.
+
 ### Compaction records
 
 On OpenCode 2, each observed compaction success or failure exports a separate `SYNC` generation with operation `generateText` and tag `opencode.call_kind=compaction`. Its parent is the active, previous, or spawning turn observed at compaction start. Ordinary turns keep their IDs and parent chain.

@@ -913,7 +913,7 @@ describe("native lifecycle fold", () => {
       /mutated|never delivered|cancelled|retry-time/,
     );
     expect(generations[0]?.seed.systemPrompt).toBeUndefined();
-    expect(generations[1]?.seed.systemPrompt).toBe("retry-time instructions");
+    expect(generations[1]?.seed.systemPrompt).toBeUndefined();
     const nextInput = JSON.stringify(generations[1]?.result?.input);
     expect(nextInput).not.toContain("retry-time instructions");
     expect(nextInput).toContain("never delivered");
@@ -1243,6 +1243,65 @@ describe("native lifecycle fold", () => {
   });
 });
 
+describe("native system prompt snapshots", () => {
+  it.each([
+    event("session.execution.succeeded", { sessionID: "s" }),
+    event("session.execution.failed", {
+      sessionID: "s",
+      error: { type: "unknown", message: "later context hook failed" },
+    }),
+    event("session.execution.interrupted", { sessionID: "s", reason: "user" }),
+    compactionEnd(),
+    start(),
+  ])("preserves the next context snapshot across a delayed $type", async (lateEvent) => {
+    const { capture, generations } = harness();
+    capture.observeSystemPrompt("s", "first request");
+    capture.handleEvent(start());
+    capture.observeSystemPrompt("s", "next request");
+    capture.handleEvent(lateEvent);
+    capture.handleEvent(end());
+    capture.handleEvent(start("s", "b"));
+    capture.handleEvent(end("s", "b"));
+    await capture.shutdown();
+    expect(
+      generations.find(
+        (generation) =>
+          generation.seed.id === stableOpencodeGenerationId("s", "b"),
+      )?.seed.systemPrompt,
+    ).toBe("next request");
+  });
+
+  it("isolates sessions, freezes retries, and never reuses a previous step's prompt", async () => {
+    const { capture, generations } = harness();
+    capture.observeSystemPrompt("s", "first agent prompt");
+    capture.observeSystemPrompt("child", "child agent prompt");
+    capture.handleEvent(start());
+    capture.observeSystemPrompt("s", "retry prompt");
+    capture.handleEvent(start());
+    capture.handleEvent(end());
+    capture.handleEvent(start("child", "child-a"));
+    capture.handleEvent(end("child", "child-a"));
+    capture.observeSystemPrompt("s", "next request");
+    capture.handleEvent(start("s", "b"));
+    capture.handleEvent(end("s", "b"));
+    capture.handleEvent(start("s", "c"));
+    capture.handleEvent(end("s", "c"));
+    capture.observeSystemPrompt("s", "new agent prompt");
+    capture.handleEvent(start("s", "d"));
+    capture.handleEvent(end("s", "d"));
+    await capture.shutdown();
+    expect(
+      generations.map((generation) => generation.seed.systemPrompt),
+    ).toEqual([
+      "first agent prompt",
+      "child agent prompt",
+      "next request",
+      undefined,
+      "new agent prompt",
+    ]);
+  });
+});
+
 describe("native capture with guard redactions", () => {
   // A guard-only pattern: the plugin's own secret redaction doesn't know it.
   const PROMPT = "Status update on Project Falcon for the board";
@@ -1297,6 +1356,7 @@ describe("native capture with guard redactions", () => {
       ],
     );
 
+    capture.observeSystemPrompt("s", REDACTED_INSTRUCTIONS);
     await replay(capture, turn(PROMPT));
 
     const generation = generations[0];
@@ -1372,6 +1432,7 @@ describe("native capture with guard redactions", () => {
       createGuardRedactions(),
     );
 
+    capture.observeSystemPrompt("s", INSTRUCTIONS);
     await replay(capture, turn(PROMPT));
 
     expect(JSON.stringify(generations[0]?.result?.input)).toContain(PROMPT);
@@ -2208,6 +2269,10 @@ describe("native history through the real SDK exporter", () => {
     events: NativeEvent[],
     contentCapture: ContentCaptureMode,
     redactInputMessages = true,
+    observe?: (
+      capture: ReturnType<typeof createNativeCapture>,
+      event: NativeEvent,
+    ) => void,
   ) {
     const exported: Generation[] = [];
     const diagnostics: string[] = [];
@@ -2236,7 +2301,11 @@ describe("native history through the real SDK exporter", () => {
       debugLog: (message) => diagnostics.push(message),
     });
     try {
-      await replay(capture, events);
+      for (const event of events) {
+        observe?.(capture, event);
+        capture.handleEvent(event);
+      }
+      await capture.drain();
       await capture.shutdown();
       await client.flush();
       return { exported, diagnostics };
@@ -2278,7 +2347,7 @@ describe("native history through the real SDK exporter", () => {
 
   it.each(
     policies,
-  )("exports frozen chronological instruction updates under $contentCapture, redactInputMessages=$redactInputMessages", async ({
+  )("exports composed context snapshots, not instruction notices, under $contentCapture, redactInputMessages=$redactInputMessages", async ({
     contentCapture,
     redactInputMessages,
   }) => {
@@ -2307,18 +2376,26 @@ describe("native history through the real SDK exporter", () => {
       ],
       contentCapture,
       redactInputMessages,
+      (capture, event) => {
+        if (event.type !== "session.step.started") return;
+        const prompts: Record<string, string> = {
+          a: initial,
+          b: retry,
+          c: "",
+          d: later,
+        };
+        capture.observeSystemPrompt(
+          "s",
+          prompts[event.data.assistantMessageID]!,
+        );
+      },
     );
     expect(exported).toHaveLength(4);
     expect(diagnostics).toEqual([]);
     expect(exported.map((generation) => generation.systemPrompt)).toEqual(
       contentCapture === "metadata_only"
         ? ["", "", "", ""]
-        : [
-            initial,
-            `${initial}\n\n${retry}`,
-            `${initial}\n\n${retry}`,
-            `${initial}\n\n${retry}\n\n${later}`,
-          ].map((text) => redactor.redact(text)),
+        : [initial, retry, "", later].map((text) => redactor.redact(text)),
     );
     for (const generation of exported) {
       expect(texts(generation.input)).toEqual(
@@ -2514,7 +2591,7 @@ describe("native history through the real SDK exporter", () => {
 
   it.each(
     modes,
-  )("freezes instructions across compaction and captures only new updates afterward under %s", async (contentCapture) => {
+  )("does not treat instruction notices around compaction as system prompts under %s", async (contentCapture) => {
     const checkpoint = compaction("checkpoint", "recent");
     const { exported, diagnostics } = await exportEvents(
       [
@@ -2543,11 +2620,11 @@ describe("native history through the real SDK exporter", () => {
         (generation) => generation.id === stableOpencodeGenerationId("s", id),
       ),
     );
-    expect(turns.map((generation) => generation?.systemPrompt ?? "")).toEqual(
-      contentCapture === "metadata_only"
-        ? ["", "", ""]
-        : ["before checkpoint", "", "after checkpoint"],
-    );
+    expect(turns.map((generation) => generation?.systemPrompt ?? "")).toEqual([
+      "",
+      "",
+      "",
+    ]);
     const next = exported.find(
       (generation) => generation.id === stableOpencodeGenerationId("s", "b"),
     );
@@ -2719,13 +2796,7 @@ describe("native history through the real SDK exporter", () => {
             "original reply",
           ],
     );
-    expect(following?.systemPrompt ?? "").toBe(
-      contentCapture === "metadata_only"
-        ? ""
-        : redactor.redact(
-            `original instruction ${secret}; ${envSecret}\n\ninstruction after first turn`,
-          ),
-    );
+    expect(following?.systemPrompt ?? "").toBe("");
   });
 
   it.each(
