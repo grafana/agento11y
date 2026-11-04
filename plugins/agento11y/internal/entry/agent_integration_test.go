@@ -3,25 +3,25 @@ package entry
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
+
+	agento11yv1 "github.com/grafana/agento11y/go/proto/agento11y/v1"
 )
 
 // TestAgentIntegration drives the real Claude Code and Codex CLIs, headless,
-// against a fake model server, then checks what the plugin exported with
-// TestGoldenIntegration's capture server, secret guard, and invariants. That
-// test replays hook payloads written by hand; here the agent writes them, so
-// an agent release that changes a payload, a transcript, or when a hook fires
-// fails a run.
+// against a scripted fake model, then checks what the plugin exported with
+// TestGoldenIntegration's capture server, secret guard, and invariants, plus
+// the companion OTLP spans and token metrics. That test replays hook payloads
+// written by hand; here the agent writes them, so an agent release that
+// changes a payload, a transcript, or when a hook fires fails a run.
 //
 // Opt-in, since it needs the CLIs. CI installs the versions pinned in
 // testdata/agent-clis:
@@ -30,12 +30,16 @@ import (
 //	PATH=$PWD/testdata/agent-clis/node_modules/.bin:$PATH AGENT_CLI_TESTS=claude,codex \
 //	    go test . -run TestAgentIntegration -count=1 -v
 //
-// Each run is one prompt, one shell tool call, its result, and a final reply.
-// The CLIs get a dummy key, the fake model's URL, and a throwaway HOME, so no
-// real model or account is involved.
+// Each case in agentCaseNames runs in full and metadata-only capture; the
+// baseline also runs with the capture mode unset. The CLIs get a dummy key,
+// the fake model's URL, and a throwaway HOME, so no real model or account is
+// involved.
 func TestAgentIntegration(t *testing.T) {
-	selected := os.Getenv("AGENT_CLI_TESTS")
-	if selected == "" {
+	selected, err := parseAgentSelection(os.Getenv("AGENT_CLI_TESTS"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(selected) == 0 {
 		t.Skip("set AGENT_CLI_TESTS=claude,codex to drive the real agent CLIs")
 	}
 	// A CLI started from inside another agent session inherits that session's
@@ -57,131 +61,20 @@ func TestAgentIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	model := &fakeModel{}
-	modelURL := newLoopbackServer(t, model).URL
-
-	// The prompt carries a secret so the guard checks redaction end to end.
-	const secret = "glc_abcdefghijklmnopqrstuvwxyz"
-	prompt := "Run echo " + fakeToolOutput + " with token " + secret
-
-	const sessionID = "7f0c9a4e-3b1d-4c2e-9f6a-2d8b5e1c7a90"
-	for _, cli := range []struct {
-		name     string
-		sc       scenario
-		commands [][]string
-	}{
-		{
-			name: "claude",
-			sc: scenario{
-				Agent: "claude-code",
-				Env: map[string]string{
-					"ANTHROPIC_BASE_URL":                       modelURL,
-					"ANTHROPIC_API_KEY":                        "test",
-					"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-				},
-				RawSecrets: []string{secret},
-				// One generation for the tool call, one for its result and the reply.
-				Invariants: scenarioInvariants{
-					ExportCount: 1,
-					Generations: 2,
-					EveryGeneration: []string{
-						`"agent_name":"claude-code"`,
-						`"conversation_id":"` + sessionID + `"`,
-						`"name":"` + fakeModelName + `"`,
-					},
-					AnyGeneration: []string{
-						"with token [REDACTED:grafana-cloud-token]",
-						`"tool_call":{"id":"` + fakeToolCallID + `"`,
-						`"content":"` + fakeToolOutput + `"`,
-						`"text":"Done."`,
-					},
-				},
-			},
-			commands: [][]string{
-				{"claude", "-p", prompt, "--plugin-dir", filepath.Join(repo, "plugins", "claude-code"), "--session-id", sessionID, "--allowedTools", "Bash"},
-			},
-		},
-		{
-			name: "codex",
-			sc: scenario{
-				Agent:      "codex",
-				Env:        map[string]string{"FAKE_MODEL_KEY": "test"},
-				RawSecrets: []string{secret},
-				// One generation for the whole turn. Codex picks the session ID.
-				// Tool-result JSON is base64-encoded and checked after decoding.
-				Invariants: scenarioInvariants{
-					ExportCount: 1,
-					Generations: 1,
-					EveryGeneration: []string{
-						`"agent_name":"codex"`,
-						`"name":"` + fakeModelName + `"`,
-					},
-					AnyGeneration: []string{
-						"with token [REDACTED:grafana-cloud-token]",
-						`"tool_call":{"id":"` + fakeToolCallID + `"`,
-						`"tool_call_id":"` + fakeToolCallID + `"`,
-						`"text":"Done."`,
-					},
-				},
-			},
-			commands: [][]string{
-				{"codex", "plugin", "marketplace", "add", repo},
-				{"codex", "plugin", "add", "agento11y-codex@agento11y"},
-				// Codex's own sandbox is not under test, and it cannot nest inside a
-				// sandboxed CI container; the only command the fake model issues is echo.
-				{"codex", "exec", "--dangerously-bypass-hook-trust", "--skip-git-repo-check", "-s", "danger-full-access",
-					"-c", "model_provider=fake",
-					"-c", `model_providers.fake={name="fake",base_url="` + modelURL + `/v1",wire_api="responses",env_key="FAKE_MODEL_KEY"}`,
-					"-m", fakeModelName, prompt},
-			},
-		},
-	} {
-		t.Run(cli.name, func(t *testing.T) {
-			if !strings.Contains(","+selected+",", ","+cli.name+",") {
-				t.Skipf("%s not in AGENT_CLI_TESTS", cli.name)
+	for _, name := range agentCLINames {
+		t.Run(name, func(t *testing.T) {
+			if !selected[name] {
+				t.Skipf("%s not in AGENT_CLI_TESTS", name)
 			}
 			for _, mode := range []string{"full", "metadata_only", "default"} {
 				t.Run(mode, func(t *testing.T) {
-					sc := cli.sc
-					if mode != "full" {
-						sc.Invariants.AnyGeneration = nil
-					}
-					stateDir, capture := startHookExport(t, sc)
-					workDir := t.TempDir()
-					var telemetry *agentOTLPCapture
-					if mode != "full" {
-						telemetry = newAgentOTLPCapture(t)
-						t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", telemetry.server.URL)
-						t.Setenv("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf")
-						workDir = setupAgentMetadataFixture(t)
-						unsetTestEnv(t, "AGENTO11Y_CONTENT_CAPTURE_MODE", "SIGIL_CONTENT_CAPTURE_MODE")
-						if mode != "default" {
-							t.Setenv("AGENTO11Y_CONTENT_CAPTURE_MODE", mode)
+					for _, scenarioName := range agentCaseNames {
+						if mode == "default" && scenarioName != "baseline" {
+							continue
 						}
-					}
-					model.reset()
-
-					var output []string
-					for _, argv := range cli.commands {
-						output = append(output, runAgentCommand(t, workDir, argv))
-					}
-					output = append(output, model.requestLog()...)
-					registerExportDiagnostics(t, stateDir, output)
-					captured := capture.snapshot()
-					if mode != "full" {
-						checkAgentAccounts(t)
-						if err := validateMetadataExports(captured, sc.Agent); err != nil {
-							t.Fatal(err)
-						}
-						if err := telemetry.validate(sc.Agent); err != nil {
-							t.Fatal(err)
-						}
-					}
-					bodies := checkExports(t, cli.name, sc, captured)
-					if cli.name == "codex" && mode == "full" {
-						if err := validateCodexToolResult(bodies); err != nil {
-							t.Fatal(err)
-						}
+						t.Run(scenarioName, func(t *testing.T) {
+							runAgentCase(t, name, mode, scenarioName, repo)
+						})
 					}
 				})
 			}
@@ -189,44 +82,164 @@ func TestAgentIntegration(t *testing.T) {
 	}
 }
 
-func validateCodexToolResult(exports []goldenExport) error {
-	for _, export := range exports {
-		for _, raw := range export.Generations {
-			var generation struct {
-				Input []struct {
-					Parts []struct {
-						ToolResult *struct {
-							ToolCallID  string `json:"tool_call_id"`
-							ContentJSON []byte `json:"content_json"`
-							IsError     bool   `json:"is_error"`
-						} `json:"tool_result"`
-					} `json:"parts"`
-				} `json:"input"`
-			}
-			if err := json.Unmarshal(raw, &generation); err != nil {
-				return fmt.Errorf("decode Codex generation: %w", err)
-			}
-			for _, message := range generation.Input {
-				for _, part := range message.Parts {
-					result := part.ToolResult
-					if result == nil || result.ToolCallID != fakeToolCallID {
-						continue
-					}
-					if result.IsError {
-						return fmt.Errorf("Codex tool result %q reports an error", fakeToolCallID)
-					}
-					if !json.Valid(result.ContentJSON) {
-						return fmt.Errorf("Codex tool result %q has missing or invalid content_json", fakeToolCallID)
-					}
-					if !bytes.Contains(result.ContentJSON, []byte(fakeToolOutput)) {
-						return fmt.Errorf("Codex tool result %q content = %s, want %q", fakeToolCallID, result.ContentJSON, fakeToolOutput)
-					}
-					return nil
-				}
-			}
+const agentSessionID = "7f0c9a4e-3b1d-4c2e-9f6a-2d8b5e1c7a90"
+
+// agentCLI is how one CLI is installed and invoked for one case.
+type agentCLI struct {
+	agent string
+	env   map[string]string
+	setup [][]string
+	start func(prompt string) []string
+	// conversation is Claude's session ID or the Codex thread.started ID.
+	resume func(conversation, prompt string) []string
+}
+
+func newAgentCLI(name, scenarioName, repo, modelURL string) agentCLI {
+	if name == "claude" {
+		pluginArgs := []string{"--plugin-dir", filepath.Join(repo, "plugins", "claude-code"), "--allowedTools", "Bash"}
+		env := map[string]string{
+			"ANTHROPIC_BASE_URL":                       modelURL,
+			"ANTHROPIC_API_KEY":                        "test",
+			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+		}
+		switch scenarioName {
+		case "model_error_503":
+			env["CLAUDE_CODE_MAX_RETRIES"] = "1"
+		case "model_error_400":
+			env["CLAUDE_CODE_MAX_RETRIES"] = "0"
+		}
+		return agentCLI{
+			agent: cliAgent(name), env: env,
+			start: func(prompt string) []string {
+				return slices.Concat([]string{"claude", "-p", prompt, "--session-id", agentSessionID}, pluginArgs)
+			},
+			// Resume restores the conversation but not the launch options.
+			resume: func(conversation, prompt string) []string {
+				return slices.Concat([]string{"claude", "-p", prompt, "--resume", conversation}, pluginArgs)
+			},
 		}
 	}
-	return fmt.Errorf("Codex tool result %q not found", fakeToolCallID)
+	provider := `name="fake",base_url="` + modelURL + `/v1",wire_api="responses",env_key="FAKE_MODEL_KEY"`
+	switch scenarioName {
+	case "model_error_503":
+		provider += ",request_max_retries=1,stream_max_retries=0,supports_websockets=false"
+	case "model_error_400":
+		provider += ",request_max_retries=0,stream_max_retries=0,supports_websockets=false"
+	}
+	// Codex's own sandbox is not under test, and it cannot nest inside a
+	// sandboxed CI container; the fake model only issues echo commands. The
+	// sandbox flag is not global, so it precedes the resume subcommand.
+	common := []string{"codex", "exec", "--json", "--dangerously-bypass-hook-trust", "--skip-git-repo-check", "-s", "danger-full-access",
+		"-c", "model_provider=fake", "-c", "model_providers.fake={" + provider + "}", "-m", fakeModelName}
+	return agentCLI{
+		agent: cliAgent(name), env: map[string]string{"FAKE_MODEL_KEY": "test"},
+		setup: [][]string{
+			{"codex", "plugin", "marketplace", "add", repo},
+			{"codex", "plugin", "add", "agento11y-codex@agento11y"},
+		},
+		start: func(prompt string) []string { return slices.Concat(common, []string{prompt}) },
+		resume: func(conversation, prompt string) []string {
+			return slices.Concat(common, []string{"resume", conversation, prompt})
+		},
+	}
+}
+
+// runAgentCase runs one case in a fresh HOME, plugin state, work directory,
+// model script, and receivers. A resumed case keeps all of them across its
+// invocations and checks the cumulative exports after each one.
+func runAgentCase(t *testing.T, cliName, mode, name, repo string) {
+	provider := agentProvider(cliAgent(cliName))
+	turns := agentCaseTurns(name, provider)
+	model := newScriptedModel(provider, turns)
+	cli := newAgentCLI(cliName, name, repo, newLoopbackServer(t, model).URL)
+	sc := scenario{Agent: cli.agent, Env: cli.env}
+	if name == "baseline" {
+		sc.Invariants.ExportCount = 1
+	}
+	stateDir, capture := startHookExport(t, sc)
+	telemetry := newAgentOTLPCapture(t)
+	t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", telemetry.server.URL)
+	t.Setenv("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf")
+	workDir := setupAgentMetadataFixture(t)
+	checkAgentAccounts(t)
+	unsetTestEnv(t, "AGENTO11Y_CONTENT_CAPTURE_MODE", "SIGIL_CONTENT_CAPTURE_MODE")
+	if mode != "default" {
+		t.Setenv("AGENTO11Y_CONTENT_CAPTURE_MODE", mode)
+	}
+	var trail []string
+	registerAgentDiagnostics(t, stateDir, func() []string { return append(slices.Clone(trail), model.requestLog()...) })
+	run := func(argv []string, failure string) agentOutcome {
+		t.Helper()
+		outcome := runAgentProcess(t.Context(), workDir, argv)
+		trail = append(trail, outcome.trail())
+		if err := outcome.check(failure); err != nil {
+			t.Fatal(err)
+		}
+		return outcome
+	}
+	for _, argv := range cli.setup {
+		run(argv, "")
+	}
+
+	wantMode := "metadata_only"
+	if mode == "full" {
+		wantMode = "full"
+	}
+	conversation := agentSessionID
+	var previous []*agento11yv1.Generation
+	requests := 0
+	for i, turn := range turns {
+		argv := cli.start(turn.prompt)
+		if i > 0 {
+			argv = cli.resume(conversation, turn.prompt)
+		}
+		var failure string
+		if last := turn.responses[len(turn.responses)-1]; last.status != 0 {
+			failure = last.message
+		}
+		outcome := run(argv, failure)
+		if cli.agent == "codex" {
+			events, err := parseCodexEvents(outcome.stdout)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var calls []shellCall
+			for _, response := range turn.responses {
+				calls = append(calls, response.calls...)
+			}
+			if err := events.checkCommands(calls); err != nil {
+				t.Fatal(err)
+			}
+			conversation = events.thread
+		}
+
+		requests += len(turn.responses)
+		if err := model.verify(i + 1); err != nil {
+			t.Fatal(err)
+		}
+		if got := model.requestCount(); got != requests {
+			t.Fatalf("after invocation %d: %d model requests, want %d", i+1, got, requests)
+		}
+		want := expectAgent(cli.agent, wantMode, turns[:i+1])
+		want.secrets = agentCaseSecrets
+		if cli.agent == "claude-code" {
+			want.conversation = agentSessionID
+		}
+		generations, err := validateGenerationExports(capture.snapshot(), want)
+		if err != nil {
+			t.Fatalf("after invocation %d: %v", i+1, err)
+		}
+		if err := telemetry.validate(want, generations); err != nil {
+			t.Fatalf("after invocation %d: %v", i+1, err)
+		}
+		for j, g := range previous {
+			if generations[j].Id != g.Id {
+				t.Fatalf("invocation %d changed generation %d from %s to %s", i+1, j, g.Id, generations[j].Id)
+			}
+		}
+		previous = generations
+	}
+	checkExports(t, name, sc, capture.snapshot())
 }
 
 // goToolchainEnv is the environment the test process started with. Package
@@ -235,18 +248,57 @@ func validateCodexToolResult(exports []goldenExport) error {
 // every module into the throwaway HOME.
 var goToolchainEnv = os.Environ()
 
-// runAgentCommand runs one CLI command to completion and fails the test on a
-// non-zero exit. Its combined output is returned for the failure trail.
-func runAgentCommand(t *testing.T, dir string, argv []string) string {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+// agentOutcome is how one CLI command ended. exitCode is -1 when no exit
+// status was collected: the process never started, timed out, was killed, or
+// left its output pipes open past WaitDelay.
+type agentOutcome struct {
+	argv           []string
+	stdout, stderr string
+	exitCode       int
+	err            error
+}
+
+func runAgentProcess(ctx context.Context, dir string, argv []string) agentOutcome {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	out, err := newAgentCommand(ctx, dir, argv).CombinedOutput()
-	trail := fmt.Sprintf("$ %s\n%s", strings.Join(argv, " "), out)
-	if err != nil {
-		t.Fatalf("%v\n%s", err, trail)
+	var stdout, stderr bytes.Buffer
+	cmd := newAgentCommand(ctx, dir, argv)
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
+	outcome := agentOutcome{argv: argv, stdout: stdout.String(), stderr: stderr.String(), exitCode: -1, err: err}
+	var exitErr *exec.ExitError
+	switch {
+	case ctx.Err() != nil:
+		outcome.err = fmt.Errorf("%w: %v", ctx.Err(), err)
+	case err == nil:
+		outcome.exitCode = 0
+	case errors.As(err, &exitErr):
+		outcome.exitCode = exitErr.ExitCode()
 	}
-	return trail
+	return outcome
+}
+
+func (o agentOutcome) trail() string {
+	return fmt.Sprintf("$ %s\n[exit %d, err %v]\nstdout:\n%s\nstderr:\n%s", strings.Join(o.argv, " "), o.exitCode, o.err, o.stdout, o.stderr)
+}
+
+// check requires a clean exit when failure is empty. Otherwise the process
+// must exit nonzero on its own and print failure, so a timeout, a kill, or a
+// missing executable never passes as an expected failure.
+func (o agentOutcome) check(failure string) error {
+	if failure == "" {
+		if o.exitCode != 0 || o.err != nil {
+			return fmt.Errorf("command failed: %v\n%s", o.err, o.trail())
+		}
+		return nil
+	}
+	if o.exitCode <= 0 {
+		return fmt.Errorf("command exit %d (%v), want a nonzero exit\n%s", o.exitCode, o.err, o.trail())
+	}
+	if !strings.Contains(o.stdout+o.stderr, failure) {
+		return fmt.Errorf("command output lacks %q\n%s", failure, o.trail())
+	}
+	return nil
 }
 
 func newAgentCommand(ctx context.Context, dir string, argv []string) *exec.Cmd {
@@ -259,92 +311,6 @@ func newAgentCommand(ctx context.Context, dir string, argv []string) *exec.Cmd {
 }
 
 const (
-	fakeModelName  = "gpt-fake-model"
 	fakeToolOutput = "hello-from-fake"
 	fakeToolCallID = "call_fake"
 )
-
-// fakeModel serves the Anthropic Messages and OpenAI Responses streaming
-// endpoints. The first request is answered with a shell tool call; a request
-// that already carries that call (it echoes the call ID back with the result)
-// gets a final reply.
-type fakeModel struct {
-	mu       sync.Mutex
-	requests []string
-}
-
-func (m *fakeModel) reset() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.requests = nil
-}
-
-func (m *fakeModel) requestLog() []string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return append([]string(nil), m.requests...)
-}
-
-func (m *fakeModel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	body, _ := io.ReadAll(r.Body)
-	called := bytes.Contains(body, []byte(fakeToolCallID))
-	m.mu.Lock()
-	m.requests = append(m.requests, fmt.Sprintf("model %s %s called=%t body=%.300s", r.Method, r.URL.Path, called, body))
-	m.mu.Unlock()
-
-	w.Header().Set("Content-Type", "text/event-stream")
-	switch r.URL.Path {
-	case "/v1/messages":
-		writeSSE(w, anthropicReply(called)...)
-	case "/v1/responses":
-		writeSSE(w, responsesReply(called)...)
-	default:
-		http.NotFound(w, r)
-	}
-}
-
-func anthropicReply(called bool) []map[string]any {
-	id, stop := "msg_tool", "tool_use"
-	block := map[string]any{"type": "tool_use", "id": fakeToolCallID, "name": "Bash", "input": map[string]any{}}
-	delta := map[string]any{"type": "input_json_delta", "partial_json": `{"command":"echo ` + fakeToolOutput + `"}`}
-	if called {
-		id, stop = "msg_reply", "end_turn"
-		block = map[string]any{"type": "text", "text": ""}
-		delta = map[string]any{"type": "text_delta", "text": "Done."}
-	}
-	return []map[string]any{
-		{"type": "message_start", "message": map[string]any{
-			"id": id, "type": "message", "role": "assistant", "model": fakeModelName, "content": []any{},
-			"usage": map[string]any{"input_tokens": 10, "output_tokens": 1},
-		}},
-		{"type": "content_block_start", "index": 0, "content_block": block},
-		{"type": "content_block_delta", "index": 0, "delta": delta},
-		{"type": "content_block_stop", "index": 0},
-		{"type": "message_delta", "delta": map[string]any{"stop_reason": stop}, "usage": map[string]any{"output_tokens": 5}},
-		{"type": "message_stop"},
-	}
-}
-
-func responsesReply(called bool) []map[string]any {
-	item := map[string]any{"type": "function_call", "id": "fc_fake", "call_id": fakeToolCallID, "name": "exec_command",
-		"arguments": `{"cmd":"echo ` + fakeToolOutput + `"}`}
-	if called {
-		item = map[string]any{"type": "message", "id": "msg_reply", "role": "assistant",
-			"content": []any{map[string]any{"type": "output_text", "text": "Done."}}}
-	}
-	return []map[string]any{
-		{"type": "response.created", "response": map[string]any{"id": "resp_fake"}},
-		{"type": "response.output_item.done", "output_index": 0, "item": item},
-		{"type": "response.completed", "response": map[string]any{"id": "resp_fake", "usage": map[string]any{
-			"input_tokens": 10, "input_tokens_details": map[string]any{"cached_tokens": 0},
-			"output_tokens": 5, "output_tokens_details": map[string]any{"reasoning_tokens": 0}, "total_tokens": 15,
-		}}},
-	}
-}
-
-func writeSSE(w http.ResponseWriter, events ...map[string]any) {
-	for _, event := range events {
-		data, _ := json.Marshal(event)
-		_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event["type"], data)
-	}
-}
