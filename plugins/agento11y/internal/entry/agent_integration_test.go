@@ -187,6 +187,40 @@ func TestAgentIntegration(t *testing.T) {
 			}
 		})
 	}
+
+	// A fork (--fork-session) copies the original session's turns into a new
+	// transcript under a new session ID. The original exported them; the fork
+	// must export only its own turn.
+	t.Run("claude/fork", func(t *testing.T) {
+		if !strings.Contains(","+selected+",", ",claude,") {
+			t.Skip("claude not in AGENT_CLI_TESTS")
+		}
+		sc := scenario{
+			Agent: "claude-code",
+			Env: map[string]string{
+				"ANTHROPIC_BASE_URL":                       modelURL,
+				"ANTHROPIC_API_KEY":                        "test",
+				"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+			},
+			RawSecrets: []string{secret},
+			// The original's tool call and reply, then the fork's reply, which
+			// carries the fork's own prompt.
+			Invariants: scenarioInvariants{ExportCount: 2, Generations: 3, AnyGeneration: []string{`"text":"Say done"`}},
+		}
+		stateDir, capture := startHookExport(t, sc)
+		model.reset()
+		plugin := filepath.Join(repo, "plugins", "claude-code")
+		workDir := t.TempDir()
+		var output []string
+		for _, argv := range [][]string{
+			{"claude", "-p", prompt, "--plugin-dir", plugin, "--session-id", sessionID, "--allowedTools", "Bash"},
+			{"claude", "-p", "Say done", "--plugin-dir", plugin, "--resume", sessionID, "--fork-session", "--allowedTools", "Bash"},
+		} {
+			output = append(output, runAgentCommand(t, workDir, argv))
+		}
+		registerExportDiagnostics(t, stateDir, append(output, model.requestLog()...))
+		checkExports(t, "claude-fork", sc, capture.snapshot())
+	})
 }
 
 func validateCodexToolResult(exports []goldenExport) error {
