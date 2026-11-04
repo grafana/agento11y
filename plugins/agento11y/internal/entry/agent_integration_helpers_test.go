@@ -56,15 +56,23 @@ func clearAgentEnvironment(t *testing.T) {
 	}
 }
 
-func setupAgentMetadataFixture(t *testing.T) string {
+// setupAgentMetadataFixture turns on automatic tags and returns a Git checkout
+// to run in. With identity, both agents' account files carry fixtureEmail;
+// without, Codex has the API-key login that codex login --with-api-key writes
+// and Claude Code has no account file.
+func setupAgentMetadataFixture(t *testing.T, identity bool) string {
 	t.Helper()
 	unsetTestEnv(t, "AGENTO11Y_USER_ID", "SIGIL_USER_ID", "AGENTO11Y_USER_ID_SOURCE", "SIGIL_USER_ID_SOURCE")
 	t.Setenv("AGENTO11Y_AUTO_CODING_AGENT_TAGS", "true")
 	// Codex requires every AgentIdentityAuthRecord field, even in API-key mode.
-	for path, body := range map[string]string{
+	accounts := map[string]string{
 		filepath.Join(os.Getenv("CLAUDE_CONFIG_DIR"), ".claude.json"): `{"oauthAccount":{"emailAddress":"` + fixtureEmail + `"}}`,
 		filepath.Join(os.Getenv("CODEX_HOME"), "auth.json"):           `{"auth_mode":"apikey","OPENAI_API_KEY":"test","agent_identity":{"agent_runtime_id":"","agent_private_key":"","account_id":"fixture-account","chatgpt_user_id":"fixture-user","email":"` + fixtureEmail + `","plan_type":"free","chatgpt_account_is_fedramp":false}}`,
-	} {
+	}
+	if !identity {
+		accounts = map[string]string{filepath.Join(os.Getenv("CODEX_HOME"), "auth.json"): `{"auth_mode":"apikey","OPENAI_API_KEY":"test"}`}
+	}
+	for path, body := range accounts {
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 		require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
 	}
@@ -79,8 +87,8 @@ func setupAgentMetadataFixture(t *testing.T) string {
 }
 
 func TestAgentScenarioIsolation(t *testing.T) {
-	for _, name := range []string{"first", "second"} {
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range []struct{ name, user string }{{"first", fixtureEmail}, {"second", fixtureEmail}, {"no identity", ""}} {
+		t.Run(tc.name, func(t *testing.T) {
 			for _, key := range []string{"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS", "OTEL_RESOURCE_ATTRIBUTES", "OTEL_TRACES_SAMPLER", "AGENTO11Y_OTEL_AUTH_TOKEN", "SIGIL_OTEL_AUTH_TOKEN", "GIT_DIR"} {
 				t.Setenv(key, "inherited")
 			}
@@ -98,21 +106,25 @@ func TestAgentScenarioIsolation(t *testing.T) {
 			unsetTestEnv(t, "AGENTO11Y_USER_ID", "SIGIL_USER_ID")
 			require.Empty(t, claudeuserid.Resolve())
 			require.Empty(t, codexuserid.Resolve())
-			dir := setupAgentMetadataFixture(t)
-			checkAgentAccounts(t)
+			dir := setupAgentMetadataFixture(t, tc.user != "")
+			checkAgentAccounts(t, tc.user)
 			require.Equal(t, fixtureRepo, gitbranch.Repo(dir))
 			require.Equal(t, fixtureBranch, gitbranch.Resolve(dir))
 		})
 	}
 }
 
-func checkAgentAccounts(t *testing.T) {
+func checkAgentAccounts(t *testing.T, user string) {
 	t.Helper()
-	require.Equal(t, fixtureEmail, claudeuserid.Resolve())
-	require.Equal(t, fixtureEmail, codexuserid.Resolve())
+	require.Equal(t, user, claudeuserid.Resolve())
+	require.Equal(t, user, codexuserid.Resolve())
 }
 
-func validateMetadataExports(captured []capturedRequest, agent string) error {
+// validateMetadataExports checks the generation exports of a metadata-only
+// run and returns their conversation ID and generation IDs. An empty user
+// means no identity resolved, so neither the user ID nor the user tag may be
+// set in any form.
+func validateMetadataExports(captured []capturedRequest, agent, user string) (string, map[string]bool, error) {
 	// Codex reports exec_command as Bash in hook payloads.
 	wantCount, provider, tool := 1, "openai", "Bash"
 	if agent == "claude-code" {
@@ -123,52 +135,52 @@ func validateMetadataExports(captured []capturedRequest, agent string) error {
 	calls, results := 0, 0
 	for _, request := range captured {
 		if request.path != "/api/v1/generations:export" {
-			return fmt.Errorf("unexpected export path %q", request.path)
+			return "", nil, fmt.Errorf("unexpected export path %q", request.path)
 		}
 		var body agento11yv1.ExportGenerationsRequest
 		if err := protojson.Unmarshal(request.body, &body); err != nil {
-			return fmt.Errorf("decode generation export: %w", err)
+			return "", nil, fmt.Errorf("decode generation export: %w", err)
 		}
 		for _, g := range body.Generations {
 			if g.Id == "" || seen[g.Id] || g.ConversationId == "" {
-				return fmt.Errorf("missing or duplicate generation/conversation ID")
+				return "", nil, fmt.Errorf("missing or duplicate generation/conversation ID")
 			}
 			seen[g.Id] = true
 			if conversation != "" && conversation != g.ConversationId {
-				return fmt.Errorf("inconsistent conversation ID")
+				return "", nil, fmt.Errorf("inconsistent conversation ID")
 			}
 			conversation = g.ConversationId
 			if g.AgentName != agent || g.GetModel().GetName() != fakeModelName || g.GetModel().GetProvider() != provider {
-				return fmt.Errorf("incorrect agent/model/provider")
+				return "", nil, fmt.Errorf("incorrect agent/model/provider")
 			}
 			if g.StartedAt == nil || g.CompletedAt == nil || g.StartedAt.CheckValid() != nil || g.CompletedAt.CheckValid() != nil || g.CompletedAt.AsTime().Before(g.StartedAt.AsTime()) {
-				return fmt.Errorf("invalid timestamps")
+				return "", nil, fmt.Errorf("invalid timestamps")
 			}
 			input, output := int64(10), int64(5)
 			if agent == "codex" {
 				input, output = 20, 10 // Two fake Responses requests form one Codex turn.
 			}
 			if g.Usage == nil || g.Usage.InputTokens != input || g.Usage.OutputTokens != output || g.Usage.TotalTokens != input+output || g.Usage.CacheReadInputTokens != 0 || g.Usage.CacheWriteInputTokens != 0 || g.Usage.ReasoningTokens != 0 {
-				return fmt.Errorf("incorrect or missing usage: %v", g.Usage)
+				return "", nil, fmt.Errorf("incorrect or missing usage: %v", g.Usage)
 			}
 			metadata := g.GetMetadata().GetFields()
-			if metadata["agento11y.user.id"].GetStringValue() != fixtureEmail {
-				return fmt.Errorf("incorrect or missing identity")
+			if id, ok := metadata["agento11y.user.id"]; ok != (user != "") || id.GetStringValue() != user {
+				return "", nil, fmt.Errorf("incorrect or missing identity")
 			}
 			if metadata["agento11y.sdk.content_capture_mode"].GetStringValue() != "metadata_only" {
-				return fmt.Errorf("incorrect capture mode")
+				return "", nil, fmt.Errorf("incorrect capture mode")
 			}
-			for key, want := range map[string]string{"user": fixtureEmail, "repo": fixtureRepo, "git.branch": fixtureBranch} {
-				if g.Tags[key] != want {
-					return fmt.Errorf("incorrect tag %s: got %q, want %q", key, g.Tags[key], want)
+			for key, want := range map[string]string{"user": user, "repo": fixtureRepo, "git.branch": fixtureBranch} {
+				if got, ok := g.Tags[key]; ok != (want != "") || got != want {
+					return "", nil, fmt.Errorf("incorrect tag %s: got %q, want %q", key, g.Tags[key], want)
 				}
 			}
 			if g.SystemPrompt != "" || len(g.RawArtifacts) != 0 || metadata["agento11y.conversation.title"].GetStringValue() != "" {
-				return fmt.Errorf("leaked prompt/artifact/title content")
+				return "", nil, fmt.Errorf("leaked prompt/artifact/title content")
 			}
 			for _, definition := range g.Tools {
 				if definition.Name != tool || definition.Description != "" || len(definition.InputSchemaJson) != 0 {
-					return fmt.Errorf("incorrect tool definition or leaked schema")
+					return "", nil, fmt.Errorf("incorrect tool definition or leaked schema")
 				}
 			}
 			for _, message := range slices.Concat(g.Input, g.Output) {
@@ -177,18 +189,18 @@ func validateMetadataExports(captured []capturedRequest, agent string) error {
 					case *agento11yv1.Part_ToolCall:
 						call := payload.ToolCall
 						if call.Id != fakeToolCallID || call.Name != tool || len(call.InputJson) != 0 {
-							return fmt.Errorf("incorrect tool call or leaked tool input")
+							return "", nil, fmt.Errorf("incorrect tool call or leaked tool input")
 						}
 						calls++
 					case *agento11yv1.Part_ToolResult:
 						result := payload.ToolResult
 						if agent != "claude-code" || result.ToolCallId != fakeToolCallID || result.IsError || result.Content != "" || len(result.ContentJson) != 0 {
-							return fmt.Errorf("incorrect tool result or leaked tool output")
+							return "", nil, fmt.Errorf("incorrect tool result or leaked tool output")
 						}
 						results++
 					default:
 						if part.GetText() != "" || part.GetThinking() != "" || part.GetMedia() != nil {
-							return fmt.Errorf("leaked message content")
+							return "", nil, fmt.Errorf("leaked message content")
 						}
 					}
 				}
@@ -196,24 +208,42 @@ func validateMetadataExports(captured []capturedRequest, agent string) error {
 		}
 		for _, forbidden := range []string{"Run echo", fakeToolOutput, "Done.", "glc_abcdefghijklmnopqrstuvwxyz"} {
 			if secretLeaked(request.body, forbidden) {
-				return fmt.Errorf("leaked ordinary content %q", forbidden)
+				return "", nil, fmt.Errorf("leaked ordinary content %q", forbidden)
 			}
 		}
 	}
 	if len(seen) != wantCount || calls != 1 || (agent == "claude-code" && results != 1) {
-		return fmt.Errorf("incorrect generation/tool structure: generations=%d calls=%d results=%d", len(seen), calls, results)
+		return "", nil, fmt.Errorf("incorrect generation/tool structure: generations=%d calls=%d results=%d", len(seen), calls, results)
 	}
-	return nil
+	return conversation, seen, nil
 }
 
 func TestValidateMetadataExports(t *testing.T) {
 	for _, agent := range []string{"claude-code", "codex"} {
 		for _, tc := range []struct {
-			name    string
-			mutate  func(*agento11yv1.ExportGenerationsRequest)
-			wantErr string
+			name       string
+			noIdentity bool
+			mutate     func(*agento11yv1.ExportGenerationsRequest)
+			wantErr    string
 		}{
 			{name: "valid"},
+			{name: "no identity", noIdentity: true, mutate: func(r *agento11yv1.ExportGenerationsRequest) {
+				for _, g := range r.Generations {
+					delete(g.Metadata.Fields, "agento11y.user.id")
+					delete(g.Tags, "user")
+				}
+			}},
+			{name: "user tag without identity", noIdentity: true, mutate: func(r *agento11yv1.ExportGenerationsRequest) {
+				for _, g := range r.Generations {
+					delete(g.Metadata.Fields, "agento11y.user.id")
+					g.Tags["user"] = "os-login"
+				}
+			}, wantErr: "tag user"},
+			{name: "user ID without identity", noIdentity: true, mutate: func(r *agento11yv1.ExportGenerationsRequest) {
+				for _, g := range r.Generations {
+					delete(g.Tags, "user")
+				}
+			}, wantErr: "identity"},
 			{name: "missing identity", mutate: func(r *agento11yv1.ExportGenerationsRequest) {
 				delete(r.Generations[0].Metadata.Fields, "agento11y.user.id")
 			}, wantErr: "identity"},
@@ -273,9 +303,14 @@ func TestValidateMetadataExports(t *testing.T) {
 				}
 				body, err := protojson.Marshal(r)
 				require.NoError(t, err)
-				err = validateMetadataExports([]capturedRequest{{path: "/api/v1/generations:export", body: body}}, agent)
+				user := fixtureEmail
+				if tc.noIdentity {
+					user = ""
+				}
+				conversation, _, err := validateMetadataExports([]capturedRequest{{path: "/api/v1/generations:export", body: body}}, agent, user)
 				if tc.wantErr == "" {
 					require.NoError(t, err)
+					require.Equal(t, "fixture-session", conversation)
 				} else {
 					require.ErrorContains(t, err, tc.wantErr)
 				}
@@ -455,7 +490,8 @@ func TestExportDiagnostics(t *testing.T) {
 		}
 		registerExportDiagnostics(t, stateDir, []string{"synthetic CLI output", "synthetic model request"})
 		if mode == "raw validation" || mode == "missing debug log" {
-			require.NoError(t, validateMetadataExports(nil, "claude-code"))
+			_, _, err := validateMetadataExports(nil, "claude-code", fixtureEmail)
+			require.NoError(t, err)
 		}
 		sc := scenario{}
 		if mode == "invariant validation" {

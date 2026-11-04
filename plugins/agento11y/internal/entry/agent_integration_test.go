@@ -140,11 +140,17 @@ func TestAgentIntegration(t *testing.T) {
 			if !strings.Contains(","+selected+",", ","+cli.name+",") {
 				t.Skipf("%s not in AGENT_CLI_TESTS", cli.name)
 			}
-			for _, mode := range []string{"full", "metadata_only", "default"} {
+			// no_identity signs in with an API key and no account email, as API-key,
+			// Bedrock and Vertex users do, under the default capture mode.
+			for _, mode := range []string{"full", "metadata_only", "default", "no_identity"} {
 				t.Run(mode, func(t *testing.T) {
 					sc := cli.sc
 					if mode != "full" {
 						sc.Invariants.AnyGeneration = nil
+					}
+					user := fixtureEmail
+					if mode == "no_identity" {
+						user = ""
 					}
 					stateDir, capture := startHookExport(t, sc)
 					workDir := t.TempDir()
@@ -153,9 +159,9 @@ func TestAgentIntegration(t *testing.T) {
 						telemetry = newAgentOTLPCapture(t)
 						t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", telemetry.server.URL)
 						t.Setenv("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf")
-						workDir = setupAgentMetadataFixture(t)
+						workDir = setupAgentMetadataFixture(t, user != "")
 						unsetTestEnv(t, "AGENTO11Y_CONTENT_CAPTURE_MODE", "SIGIL_CONTENT_CAPTURE_MODE")
-						if mode != "default" {
+						if mode == "metadata_only" {
 							t.Setenv("AGENTO11Y_CONTENT_CAPTURE_MODE", mode)
 						}
 					}
@@ -169,11 +175,12 @@ func TestAgentIntegration(t *testing.T) {
 					registerExportDiagnostics(t, stateDir, output)
 					captured := capture.snapshot()
 					if mode != "full" {
-						checkAgentAccounts(t)
-						if err := validateMetadataExports(captured, sc.Agent); err != nil {
+						checkAgentAccounts(t, user)
+						conversation, generations, err := validateMetadataExports(captured, sc.Agent, user)
+						if err != nil {
 							t.Fatal(err)
 						}
-						if err := telemetry.validate(sc.Agent); err != nil {
+						if err := telemetry.validate(sc.Agent, user, conversation, generations); err != nil {
 							t.Fatal(err)
 						}
 					}
