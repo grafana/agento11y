@@ -66,10 +66,10 @@ const otelInstrumentationName = "agento11y.claude-code"
 // Code to finish flushing a turn to the transcript (see readTranscriptSettled).
 const transcriptSettleInterval = 100 * time.Millisecond
 
-// transcriptSettleWindow bounds how long a hook re-reads the transcript waiting
-// for the final assistant turn to land on disk. SessionEnd reads once instead.
-// It is a var so tests can zero it out and skip the wait. See
-// readTranscriptSettled for why the wait exists.
+// transcriptSettleWindow bounds how long readTranscriptSettled re-reads the
+// transcript waiting for the final assistant turn to land on disk. It is a var
+// so tests can zero it out and skip the wait. See readTranscriptSettled for why
+// the wait exists.
 var transcriptSettleWindow = 2 * time.Second
 
 type hookInput struct {
@@ -310,9 +310,16 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 		if otelProviders == nil {
 			return // no OTLP endpoint, so no metrics were recorded
 		}
-		// Send what is still pending. If that fails, an earlier periodic
-		// export may still have delivered some records.
-		_ = otelProviders.FlushMetrics()
+		// Until the shutdown below says which metrics arrived, count every
+		// record as delivered, in case the hook is killed during it.
+		rememberRecordedMetrics(input.SessionID, clients.keys(time.Now()), logger)
+		// Shut down rather than flush, so nothing is exported after the keys
+		// are saved: metrics a later export delivered would be counted again
+		// by the retry. If the shutdown fails, an earlier periodic export may
+		// still have delivered some records.
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		_ = otelProviders.Shutdown(shutdownCtx)
+		cancel()
 		rememberRecordedMetrics(input.SessionID, clients.keys(otelProviders.MetricsDeliveredAt()), logger)
 	}
 	t0 := time.Now()
@@ -339,6 +346,17 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 		captureToolParent(parents[i], parentContext)
 	}
 	emitPendingTools(hookCtx, clients, &st, contentMode, r)
+
+	// Remember these records before anything is exported. Claude Code kills a
+	// SessionEnd hook 1.5s into its exit, which can land after their metrics
+	// arrived but before the offset below is saved; the session's next hook
+	// then sends them again and must not count them twice. A record whose
+	// metrics never arrived is then not counted at all.
+	// ponytail: a periodic metric export between a record and this save is not
+	// covered; saving before each record closes that if it ever matters.
+	if otelProviders != nil {
+		rememberRecordedMetrics(input.SessionID, clients.keys(time.Now()), logger)
+	}
 
 	if err := clients.flush(hookCtx); err != nil {
 		logger.Printf("flush: %v", err)

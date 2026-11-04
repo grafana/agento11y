@@ -33,8 +33,15 @@ func TestMain(m *testing.M) {
 	// fully-written transcripts these tests use; zero it so incomplete
 	// fixtures return immediately instead of blocking the settle window.
 	transcriptSettleWindow = 0
+	// A test that has to kill a hook mid-run starts this binary as the hook.
+	if os.Getenv(hookChildEnv) == "1" {
+		_ = Hook(context.Background(), os.Stdin, io.Discard, log.New(io.Discard, "", 0))
+		os.Exit(0)
+	}
 	os.Exit(m.Run())
 }
+
+const hookChildEnv = "CLAUDECODE_TEST_HOOK_CHILD"
 
 func TestParseHookInput_PreToolUse(t *testing.T) {
 	in := `{"hook_event_name":"PreToolUse","session_id":"s1","transcript_path":"/tmp/t.jsonl","tool_name":"Bash","tool_input":{"command":"echo hi"},"tool_use_id":"tu_1"}`
