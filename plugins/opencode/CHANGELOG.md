@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.27.0] - 2026-11-04
+
+### Breaking Changes
+
+- **plugins**: drop OS username fallback for user auto tag (#940)
+
+### Features
+
+- **plugins/pi**: expand guards, fix telemetry, and report export failures (#1000)
+
+### Bug Fixes
+
+- **opencode**: capture system prompt correctly in new versions (#1021)
+- **plugins**: preserve usage opt-outs in child processes (#1016)
+
 ## [0.26.0] - 2026-10-30
 
 ### Features
