@@ -696,6 +696,61 @@ func TestHook_OnlyStopWaitsForMissingTranscript(t *testing.T) {
 	}
 }
 
+// TestHook_SessionEndExportsWithoutWaiting pins that SessionEnd reads the
+// transcript once. A session that exits mid-turn, for example on SIGTERM, ends
+// on a tail the settle window waits for, but nothing more will land. Claude
+// Code 2.1.310 cancels SessionEnd hooks 1.5s into its exit, so a wait loses the
+// turns that did complete.
+func TestHook_SessionEndExportsWithoutWaiting(t *testing.T) {
+	prev := transcriptSettleWindow
+	transcriptSettleWindow = 2 * time.Second
+	t.Cleanup(func() { transcriptSettleWindow = prev })
+
+	const sessionID = "interrupted-session"
+	for _, tc := range []struct {
+		name  string
+		lines []string
+		want  string
+	}{
+		{
+			name: "after a tool result",
+			lines: []string{
+				buildHookUserJSONL(sessionID, "list the files"),
+				buildHookAssistantToolUseJSONLAt(sessionID, "req_a", "tu_1", "Bash", hookFixtureTimestamp),
+				buildHookToolResultJSONL(sessionID, "tu_1", "a.go"),
+			},
+			want: "done: 1 generations",
+		},
+		{
+			name:  "before the first reply",
+			lines: []string{buildHookUserJSONL(sessionID, "list the files")},
+			want:  "done: 0 generations",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "transcript.jsonl")
+			if err := os.WriteFile(path, []byte(strings.Join(tc.lines, "\n")+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+			envconfig.PinAliasEnvBlank(t)
+			server := httptest.NewServer(http.HandlerFunc(acceptGenerationExport))
+			defer server.Close()
+			setHookExportEnv(t, server.URL)
+
+			start := time.Now()
+			logs := runHookForTest(t, hookInput{HookEventName: "SessionEnd", SessionID: sessionID, TranscriptPath: path})
+			if elapsed := time.Since(start); elapsed > time.Second {
+				t.Errorf("SessionEnd took %s, want well under Claude Code's 1.5s SessionEnd budget", elapsed)
+			}
+			if !strings.Contains(logs, tc.want) {
+				t.Errorf("logs missing %q:\n%s", tc.want, logs)
+			}
+		})
+	}
+}
+
 // TestReadTranscriptSettled_ReturnsImmediatelyWhenTerminal confirms the common
 // case adds no latency: when the tail is already a complete assistant turn the
 // function returns on the first read without waiting out the settle window.
