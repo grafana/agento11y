@@ -556,7 +556,6 @@ export function createNativeCapture({
           session.history = [textMessage(event.data.text)];
           if (event.data.recent !== undefined)
             session.history.push(textMessage(event.data.recent));
-          session.systemPrompt = undefined;
         }
         if (draining && !session.assistant && !session.compaction)
           dropSession(sessionID);
@@ -569,7 +568,6 @@ export function createNativeCapture({
         if (settled.has(id)) return;
         if (session.assistant?.id === event.data.assistantMessageID) {
           // Keep the first observed request/time for a logical step's retries.
-          session.systemPrompt = undefined;
           session.assistant.streamedAt = undefined;
           return;
         }
@@ -598,13 +596,13 @@ export function createNativeCapture({
               }
             : undefined,
         };
+        // Only consume here: older async terminal/retry events can follow the next context hook.
         session.systemPrompt = undefined;
         return;
       }
       case "session.execution.succeeded":
       case "session.execution.failed":
       case "session.execution.interrupted":
-        session.systemPrompt = undefined;
         settle(
           sessionID,
           session,

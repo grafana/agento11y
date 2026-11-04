@@ -137,11 +137,21 @@ export const setupV2: Plugin.Plugin["setup"] = async (context) => {
     registrations.push(await guards.register());
     const systemObserver = await context.session.hook("context", (event) => {
       if (stopped) return;
-      // Register after guards to capture their rewritten request, even with guards off.
-      capture?.observeSystemPrompt(
-        event.sessionID,
-        event.system.map((part) => part.text).join("\n\n"),
-      );
+      try {
+        // Register after guards to capture their rewritten request, even with guards off.
+        capture?.observeSystemPrompt(
+          event.sessionID,
+          (event.system ?? [])
+            .map((part) => part?.text)
+            .filter(
+              (text): text is string =>
+                typeof text === "string" && text.length > 0,
+            )
+            .join("\n\n"),
+        );
+      } catch {
+        // Observation must never fail the host request.
+      }
     });
     registrations.push(() => systemObserver.dispose());
     registrations.push(

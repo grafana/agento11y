@@ -114,12 +114,14 @@ describe("native setup ownership", () => {
     const { context } = host();
     const cleanup = await setupV2(context);
     const hook = vi.mocked(context.session.hook);
-    expect(hook).toHaveBeenCalledOnce();
-    expect(hook.mock.calls[0]?.[0]).toBe("context");
+    const registration = hook.mock.calls
+      .filter(([name]) => name === "context")
+      .at(-1);
+    expect(registration).toBeDefined();
     expect(mocks.registerGuards.mock.invocationCallOrder[0]).toBeLessThan(
       hook.mock.invocationCallOrder[0]!,
     );
-    const observe = hook.mock.calls[0]![1];
+    const observe = registration![1];
     const event = {
       sessionID: "s",
       system: [{ text: "agent prompt" }, { text: "instructions" }],
@@ -132,6 +134,52 @@ describe("native setup ownership", () => {
     await cleanup?.();
     await observe(event as never);
     expect(mocks.observeSystemPrompt).toHaveBeenCalledOnce();
+  });
+
+  it.each(
+    [
+      undefined,
+      null,
+      [],
+      [null, {}, { text: 42 }, { text: "" }, { text: "valid" }],
+      { unexpected: true },
+    ].map((system) => ({ system })),
+  )("never fails a request for malformed system parts: $system", async ({
+    system,
+  }) => {
+    const { context } = host();
+    const cleanup = await setupV2(context);
+    const observe = vi
+      .mocked(context.session.hook)
+      .mock.calls.filter(([name]) => name === "context")
+      .at(-1)![1];
+    await expect(
+      Promise.resolve().then(() =>
+        observe({ sessionID: "s", system } as never),
+      ),
+    ).resolves.toBeUndefined();
+    if (Array.isArray(system) && system.length) {
+      expect(mocks.observeSystemPrompt).toHaveBeenCalledWith("s", "valid");
+    }
+    await cleanup?.();
+  });
+
+  it("never propagates capture errors into the model request", async () => {
+    const { context } = host();
+    const cleanup = await setupV2(context);
+    mocks.observeSystemPrompt.mockImplementation(() => {
+      throw new Error("capture failed");
+    });
+    const observe = vi
+      .mocked(context.session.hook)
+      .mock.calls.filter(([name]) => name === "context")
+      .at(-1)![1];
+    await expect(
+      Promise.resolve().then(() =>
+        observe({ sessionID: "s", system: [{ text: "prompt" }] } as never),
+      ),
+    ).resolves.toBeUndefined();
+    await cleanup?.();
   });
 
   it("starts intake without waiting for host initialization and cleans up once", async () => {

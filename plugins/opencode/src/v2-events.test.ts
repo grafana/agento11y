@@ -1251,15 +1251,24 @@ describe("native system prompt snapshots", () => {
       error: { type: "unknown", message: "later context hook failed" },
     }),
     event("session.execution.interrupted", { sessionID: "s", reason: "user" }),
-  ])("clears an unconsumed prompt on $type", async (terminal) => {
+    compactionEnd(),
+    start(),
+  ])("preserves the next context snapshot across a delayed $type", async (lateEvent) => {
     const { capture, generations } = harness();
-    capture.observeSystemPrompt("s", "abandoned request");
-    capture.handleEvent(terminal);
+    capture.observeSystemPrompt("s", "first request");
     capture.handleEvent(start());
+    capture.observeSystemPrompt("s", "next request");
+    capture.handleEvent(lateEvent);
     capture.handleEvent(end());
+    capture.handleEvent(start("s", "b"));
+    capture.handleEvent(end("s", "b"));
     await capture.shutdown();
-    expect(generations).toHaveLength(1);
-    expect(generations[0]?.seed.systemPrompt).toBeUndefined();
+    expect(
+      generations.find(
+        (generation) =>
+          generation.seed.id === stableOpencodeGenerationId("s", "b"),
+      )?.seed.systemPrompt,
+    ).toBe("next request");
   });
 
   it("isolates sessions, freezes retries, and never reuses a previous step's prompt", async () => {
@@ -1272,17 +1281,21 @@ describe("native system prompt snapshots", () => {
     capture.handleEvent(end());
     capture.handleEvent(start("child", "child-a"));
     capture.handleEvent(end("child", "child-a"));
+    capture.observeSystemPrompt("s", "next request");
     capture.handleEvent(start("s", "b"));
     capture.handleEvent(end("s", "b"));
-    capture.observeSystemPrompt("s", "new agent prompt");
     capture.handleEvent(start("s", "c"));
     capture.handleEvent(end("s", "c"));
+    capture.observeSystemPrompt("s", "new agent prompt");
+    capture.handleEvent(start("s", "d"));
+    capture.handleEvent(end("s", "d"));
     await capture.shutdown();
     expect(
       generations.map((generation) => generation.seed.systemPrompt),
     ).toEqual([
       "first agent prompt",
       "child agent prompt",
+      "next request",
       undefined,
       "new agent prompt",
     ]);
