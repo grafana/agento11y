@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/history"
 )
 
@@ -457,6 +459,13 @@ func (s *Server) runImport(
 		s.terminateImport(ctx, runID, finish, err)
 		return
 	}
+	// NewTargetExporter reads the automatic-tag switch from the process
+	// environment, which the CLI fills from config.env before it builds one. The
+	// daemon's environment was merged when it started, so a switch
+	// `agento11y login` wrote since would not apply, and one it turned off would
+	// keep applying. Re-read the file instead, the way this package reads its
+	// own runtime settings.
+	exporter.AutoTags = history.AutoTagger(s.autoTagLookup())
 	defer func() {
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer shutdownCancel()
@@ -670,4 +679,18 @@ func decodeHistoryBody(r *http.Request, target any) error {
 		return fmt.Errorf("decode body: %w", err)
 	}
 	return nil
+}
+
+// autoTagLookup reads branded variables from config.env first and the process
+// environment second, the precedence envReader.family uses for the forwarder.
+// The file is read once per import, so a switch written mid-import does not
+// change the tags partway through a run.
+func (s *Server) autoTagLookup() envconfig.Lookup {
+	file := dotenv.LoadDotenv(s.configPath, s.logger)
+	return func(suffix string) (value, key string, ok bool) {
+		if v, k, found := envconfig.LookupMap(file, suffix); found {
+			return v, k, true
+		}
+		return envconfig.LookupEnv(suffix)
+	}
 }

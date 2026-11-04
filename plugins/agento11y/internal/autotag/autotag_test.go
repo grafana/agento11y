@@ -414,6 +414,139 @@ func TestFromEnvFallsBackToWorkingDirectory(t *testing.T) {
 	}
 }
 
+// TestImportTags covers the import path, which resolves only the names a
+// recorded session can vouch for: the configured user, and the repository at
+// the workspace the session recorded. The branch on disk belongs to whoever
+// runs the import, so no allowlist can reach it here.
+func TestImportTags(t *testing.T) {
+	const remote = "git@github.com:grafana/agento11y.git"
+
+	cases := []struct {
+		name string
+		// names is the allowlist; empty leaves the switch un-narrowed.
+		names string
+		// workspace selects the session's recorded workspace: "session" is a
+		// checkout fixture, "" is a session that recorded none.
+		workspace string
+		userID    string
+		want      map[string]string
+	}{
+		{
+			name:      "every name resolves the two the session vouches for",
+			workspace: "session",
+			userID:    "bob@example.com",
+			want:      map[string]string{"user": "bob@example.com", "repo": "grafana/agento11y"},
+		},
+		{
+			name:      "the allowlist narrows to user",
+			names:     "user",
+			workspace: "session",
+			userID:    "bob@example.com",
+			want:      map[string]string{"user": "bob@example.com"},
+		},
+		{
+			name:      "the allowlist narrows to repo",
+			names:     "repo",
+			workspace: "session",
+			userID:    "bob@example.com",
+			want:      map[string]string{"repo": "grafana/agento11y"},
+		},
+		{
+			// The import runs later and possibly elsewhere, so there is no
+			// branch to take. An allowlist of branch alone resolves nothing.
+			name:      "branch never resolves",
+			names:     "branch",
+			workspace: "session",
+			userID:    "bob@example.com",
+		},
+		{
+			name:      "branch is dropped from a wider allowlist",
+			names:     "repo,branch",
+			workspace: "session",
+			userID:    "bob@example.com",
+			want:      map[string]string{"repo": "grafana/agento11y"},
+		},
+		{
+			// The guard that matters: without it Describe would fall back to
+			// the process working directory, labelling the session with the
+			// importing machine's own checkout.
+			name:   "a session with no workspace gets no repo",
+			userID: "bob@example.com",
+			want:   map[string]string{"user": "bob@example.com"},
+		},
+		{
+			name:  "no workspace and no user resolves nothing",
+			names: "repo",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			envconfig.PinAliasEnvBlank(t)
+			// The process sits in an unrelated checkout for every case, so a
+			// value that leaked from here rather than from the session is
+			// visible as the wrong remote.
+			t.Chdir(checkout(t, "importer", "git@github.com:grafana/importer.git", "release"))
+			if tc.userID != "" {
+				t.Setenv(envconfig.PreferredKey("USER_ID"), tc.userID)
+			}
+
+			workspace := ""
+			if tc.workspace != "" {
+				workspace = checkout(t, tc.workspace, remote, "feature")
+			}
+			enabled := envconfig.AllAutoTags()
+			if tc.names != "" {
+				enabled, _ = envconfig.ParseAutoTags(tc.names)
+			}
+
+			got := ImportTags(enabled, workspace, nil)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("ImportTags() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestImportTagsRejectsANonAbsoluteWorkspace is the sharp edge of the guard.
+// gitbranch walks upward from the root it is given, so a blank or relative
+// workspace silently resolves against the process working directory — the
+// importing machine's checkout — instead of failing. The mappers pass a log's
+// cwd through untrimmed (claudecode mapper.go:857, codex mapper.go:86,
+// opencode_map.go:313), so a transcript alone can reach this.
+func TestImportTagsRejectsANonAbsoluteWorkspace(t *testing.T) {
+	for _, workspace := range []string{"   ", ".", "./sub", "relative/path", ""} {
+		t.Run("workspace="+strings.ReplaceAll(workspace, " ", "_"), func(t *testing.T) {
+			envconfig.PinAliasEnvBlank(t)
+			// Chdir into a checkout: a leaked value shows up as this remote.
+			t.Chdir(checkout(t, "importer", "git@github.com:grafana/importer.git", "release"))
+			enabled, _ := envconfig.ParseAutoTags("repo")
+
+			if got := ImportTags(enabled, workspace, nil); got != nil {
+				t.Errorf("ImportTags(%q) = %v, want nil; it resolved against the importing machine", workspace, got)
+			}
+		})
+	}
+}
+
+// TestImportTagsYieldsToExplicitTags pins that AGENTO11Y_TAGS wins. On the live
+// path these are client tags, which the SDK merges beneath the environment
+// tags; an imported turn carries them as generation tags, which the SDK merges
+// above. Describe dropping a shadowed key is what keeps the documented
+// precedence the same on both paths.
+func TestImportTagsYieldsToExplicitTags(t *testing.T) {
+	envconfig.PinAliasEnvBlank(t)
+	t.Setenv(envconfig.PreferredKey("USER_ID"), "bob@example.com")
+	t.Setenv(envconfig.PreferredKey("TAGS"), "repo=monorepo")
+	workspace := checkout(t, "agento11y", "git@github.com:grafana/agento11y.git", "main")
+
+	got := ImportTags(envconfig.AllAutoTags(), workspace, nil)
+	want := map[string]string{"user": "bob@example.com"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("ImportTags() = %v, want %v (repo belongs to the explicit tag)", got, want)
+	}
+}
+
 // TestTagKey pins the key each name is written under; git.branch in
 // particular is shared with the per-generation built-in.
 func TestTagKey(t *testing.T) {

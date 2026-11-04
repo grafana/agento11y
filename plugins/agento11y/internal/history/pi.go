@@ -590,7 +590,9 @@ func piGeneration(
 
 // piTags returns the built-in tags for an imported pi turn. There is no branch
 // tag: the log records no branch, and resolving one at import time would record
-// the branch checked out now rather than the one the session ran on.
+// the branch checked out now rather than the one the session ran on. The
+// exporter may add `repo` on top of this from the same cwd, which is a value the
+// recorded workspace can vouch for; it never adds a branch, for this reason.
 func piTags(cwd string) map[string]string {
 	cwd = strings.TrimSpace(cwd)
 	if cwd == "" {
