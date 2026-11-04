@@ -20,8 +20,6 @@ import (
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/chatstore"
 	"google.golang.org/protobuf/encoding/protowire"
-
-	_ "modernc.org/sqlite"
 )
 
 // Root record field numbers, repeated here rather than shared with the reader:
