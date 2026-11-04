@@ -24,3 +24,10 @@ func configureAgentProcess(cmd *exec.Cmd) {
 		return nil
 	}
 }
+
+// stopAgentProcessGroup is a no-op on Windows: an exited process's orphans
+// are no longer in its tree, and CI drives the agent CLIs on Linux only.
+func stopAgentProcessGroup(*exec.Cmd) error { return nil }
+
+// groupRunning is only used by tests that skip on Windows.
+func groupRunning(int) bool { return false }

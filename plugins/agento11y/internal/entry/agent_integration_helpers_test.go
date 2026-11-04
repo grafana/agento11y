@@ -1,6 +1,7 @@
 package entry
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -12,7 +13,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -419,6 +422,44 @@ func TestNewAgentCommand(t *testing.T) {
 	}
 }
 
+func TestRunAgentCommandStopsLeftoverProcesses(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("stopAgentProcessGroup is a no-op on Windows")
+	}
+	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = listener.Close() })
+	require.NoError(t, listener.SetDeadline(time.Now().Add(10*time.Second)))
+	trail := runAgentCommand(t, t.TempDir(), []string{os.Args[0], "-test.run=^TestAgentCommandProcess$", "--", "detach", listener.Addr().String()})
+	_, after, found := strings.Cut(trail, "group ")
+	require.True(t, found, trail)
+	group, err := strconv.Atoi(strings.TrimSpace(after))
+	require.NoError(t, err, trail)
+	// No grace period: the TempDir cleanup runs as soon as runAgentCommand returns.
+	require.False(t, groupRunning(group), "the launcher's child in group %d was still running when runAgentCommand returned", group)
+	connection, err := listener.Accept()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = connection.Close() })
+	require.NoError(t, connection.SetReadDeadline(time.Now().Add(2*time.Second)))
+	_, err = connection.Read(make([]byte, 1))
+	require.Error(t, err)
+	require.False(t, os.IsTimeout(err), "the launcher's child was still running after runAgentCommand returned")
+}
+
+func TestStopAgentProcessGroupOfZombies(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("stopAgentProcessGroup is a no-op on Windows")
+	}
+	cmd := newAgentCommand(context.Background(), t.TempDir(), []string{os.Args[0], "-test.run=^TestAgentCommandProcess$", "--", "success"})
+	require.NoError(t, cmd.Start())
+	t.Cleanup(func() { _ = cmd.Wait() })
+	// Left unreaped, the exited leader keeps its group alive as a zombie.
+	for deadline := time.Now().Add(5 * time.Second); groupRunning(cmd.Process.Pid); time.Sleep(10 * time.Millisecond) {
+		require.False(t, time.Now().After(deadline), "the helper did not exit")
+	}
+	require.NoError(t, stopAgentProcessGroup(cmd))
+}
+
 func TestAgentCommandProcess(t *testing.T) {
 	index := slices.Index(os.Args, "--")
 	if index < 0 {
@@ -434,9 +475,21 @@ func TestAgentCommandProcess(t *testing.T) {
 		cmd := exec.Command(os.Args[0], "-test.run=^TestAgentCommandProcess$", "--", "child", args[1])
 		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 		require.NoError(t, cmd.Run())
+	case "detach":
+		// Exit once the child is connected and leave it running, the way Codex
+		// leaves its curated plugin sync's git behind.
+		cmd := exec.Command(os.Args[0], "-test.run=^TestAgentCommandProcess$", "--", "child", args[1])
+		stdout, err := cmd.StdoutPipe()
+		require.NoError(t, err)
+		require.NoError(t, cmd.Start())
+		_, err = bufio.NewReader(stdout).ReadString('\n')
+		require.NoError(t, err)
+		_, _ = fmt.Fprintf(os.Stdout, "group %d\n", os.Getpid())
+		os.Exit(0)
 	case "child":
 		connection, err := net.DialTimeout("tcp4", args[1], 5*time.Second)
 		require.NoError(t, err)
+		_, _ = io.WriteString(os.Stdout, "connected\n")
 		_, _ = io.Copy(io.Discard, connection)
 		_ = connection.Close()
 	default:

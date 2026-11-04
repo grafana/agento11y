@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -235,14 +236,19 @@ func validateCodexToolResult(exports []goldenExport) error {
 // every module into the throwaway HOME.
 var goToolchainEnv = os.Environ()
 
-// runAgentCommand runs one CLI command to completion and fails the test on a
-// non-zero exit. Its combined output is returned for the failure trail.
+// runAgentCommand runs one CLI command to completion, stops anything it left
+// running, and fails the test on a non-zero exit. Its combined output is
+// returned for the failure trail.
 func runAgentCommand(t *testing.T, dir string, argv []string) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	out, err := newAgentCommand(ctx, dir, argv).CombinedOutput()
+	cmd := newAgentCommand(ctx, dir, argv)
+	out, err := cmd.CombinedOutput()
 	trail := fmt.Sprintf("$ %s\n%s", strings.Join(argv, " "), out)
+	if cmd.Process != nil {
+		err = errors.Join(err, stopAgentProcessGroup(cmd))
+	}
 	if err != nil {
 		t.Fatalf("%v\n%s", err, trail)
 	}
