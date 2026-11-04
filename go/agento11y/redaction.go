@@ -309,9 +309,10 @@ func sanitizeMessage(m *Message, mode textMode, includeEmail bool) {
 				}
 			}
 		case PartKindMedia:
-			// Media URLs and data URLs are generation content, but this sanitizer
-			// only redacts textual and JSON payloads. Metadata-only capture strips
-			// media URLs before export when content capture is disabled.
+			// A media URL is generation content, but this sanitizer only redacts text
+			// and JSON payloads. ContentCaptureModeMetadataOnly is the only mode that
+			// clears a media URL, and it runs instead of the sanitizer, so under every
+			// other mode the URL is exported as the caller set it.
 			continue
 		}
 	}
