@@ -209,18 +209,7 @@ func registerExportDiagnostics(t *testing.T, stateDir string, output []string) {
 	// On failure, surface the SIGIL_DEBUG log file and per-event hook output
 	// so the developer can see which dispatch path each event took without
 	// having to re-run by hand.
-	t.Cleanup(func() {
-		if !t.Failed() {
-			return
-		}
-		logPath := filepath.Join(stateDir, "agento11y", "logs", "agento11y.log")
-		if data, err := os.ReadFile(logPath); err == nil {
-			t.Logf("agento11y debug log (%s):\n%s", logPath, data)
-		}
-		for _, line := range output {
-			t.Log(line)
-		}
-	})
+	registerAgentDiagnostics(t, stateDir, func() []string { return output })
 }
 
 // checkExports runs every check that does not need a golden file: the

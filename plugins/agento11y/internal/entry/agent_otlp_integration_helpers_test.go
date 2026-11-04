@@ -2,14 +2,19 @@ package entry
 
 import (
 	"bytes"
+	"cmp"
 	"compress/gzip"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -24,6 +29,8 @@ import (
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+
+	agento11yv1 "github.com/grafana/agento11y/go/proto/agento11y/v1"
 )
 
 type agentOTLPCapture struct {
@@ -112,27 +119,42 @@ func (c *agentOTLPCapture) snapshot() ([]*coltracepb.ExportTraceServiceRequest, 
 	return traces, metrics, append([]error(nil), c.errors...)
 }
 
-func (c *agentOTLPCapture) validate(agent string) error {
-	wantGenerations, provider, tool := 1, "openai", "Bash"
-	switch agent {
-	case "claude-code":
-		wantGenerations, provider, tool = 2, "anthropic", "Bash"
-	case "codex":
-	default:
-		return fmt.Errorf("unsupported agent %q", agent)
-	}
+// validate checks the companion OTLP export against want and the HTTP
+// generations, given in the order of want.generations. It joins generation
+// spans by generation, trace, span, and conversation ID, and tool spans by
+// call ID to the generation span that issued the call.
+func (c *agentOTLPCapture) validate(want agentExpectation, generations []*agento11yv1.Generation) error {
 	traces, metrics, errs := c.snapshot()
 	if err := errors.Join(errs...); err != nil {
 		return fmt.Errorf("OTLP receiver: %w", err)
 	}
+	if len(generations) != len(want.generations) {
+		return fmt.Errorf("got %d HTTP generations, want %d", len(generations), len(want.generations))
+	}
 	identity := map[string]string{
-		"gen_ai.agent.name": agent, "gen_ai.provider.name": provider, "gen_ai.request.model": fakeModelName,
+		"gen_ai.agent.name": want.agent, "gen_ai.provider.name": want.provider(), "gen_ai.request.model": fakeModelName,
 		"agento11y.tag.user": fixtureEmail, "agento11y.tag.repo": fixtureRepo, "agento11y.tag.git.branch": fixtureBranch,
 	}
-	generations, tools := 0, 0
-	seen := map[string]bool{}
+	generationIndex := map[string]int{}
+	type owner struct {
+		generation int
+		call       shellCall
+	}
+	owners := map[string]owner{}
+	for i, w := range want.generations {
+		generationIndex[generations[i].Id] = i
+		for _, call := range w.calls {
+			owners[call.id] = owner{i, call}
+		}
+	}
+	forbidden := want.secrets
+	if !want.full() {
+		forbidden = slices.Concat(want.forbidden, want.secrets)
+	}
+	seenGenerations := map[int]bool{}
+	seenCalls := map[string]bool{}
 	for _, request := range traces {
-		if err := agentOTLPNoContent(request); err != nil {
+		if err := agentOTLPCheckPrivacy(request, forbidden, !want.full()); err != nil {
 			return fmt.Errorf("trace export: %w", err)
 		}
 		for _, resource := range request.GetResourceSpans() {
@@ -150,22 +172,48 @@ func (c *agentOTLPCapture) validate(agent string) error {
 					attrs := agentOTLPAttrs(span.Attributes)
 					switch attrs["gen_ai.operation.name"] {
 					case "execute_tool":
-						if err := agentOTLPWantAttrs(span.Attributes, map[string]string{
-							"gen_ai.tool.name": tool, "gen_ai.tool.call.id": fakeToolCallID, "gen_ai.tool.type": "function",
-						}); err != nil {
-							return fmt.Errorf("tool span: %w", err)
+						id := attrs["gen_ai.tool.call.id"]
+						o, ok := owners[id]
+						if !ok || seenCalls[id] {
+							return fmt.Errorf("unexpected or duplicate tool span %q", id)
 						}
-						tools++
+						seenCalls[id] = true
+						parent := generations[o.generation]
+						if err := agentOTLPWantAttrs(span.Attributes, map[string]string{
+							"gen_ai.tool.name": "Bash", "gen_ai.tool.type": "function", "gen_ai.conversation.id": parent.ConversationId,
+						}); err != nil {
+							return fmt.Errorf("tool span %q: %w", id, err)
+						}
+						if hex.EncodeToString(span.TraceId) != parent.TraceId || hex.EncodeToString(span.ParentSpanId) != parent.SpanId {
+							return fmt.Errorf("tool span %q parent %x/%x, want generation %s span %s/%s", id, span.TraceId, span.ParentSpanId, parent.Id, parent.TraceId, parent.SpanId)
+						}
+						if failed := span.GetStatus().GetCode() == tracepb.Status_STATUS_CODE_ERROR; (!o.call.failed || want.reportsFailure()) && failed != o.call.failed {
+							return fmt.Errorf("tool span %q error status = %t, want %t", id, failed, o.call.failed)
+						}
+						if want.full() {
+							for key, marker := range map[string]string{"gen_ai.tool.call.arguments": o.call.wantInput(), "gen_ai.tool.call.result": o.call.wantResult()} {
+								if !strings.Contains(attrs[key], marker) {
+									return fmt.Errorf("tool span %q %s = %q lacks %q", id, key, attrs[key], marker)
+								}
+							}
+						}
 					case "generateText", "streamText", "chat":
 						id := attrs["agento11y.generation.id"]
-						if id == "" || seen[id] {
-							return fmt.Errorf("missing or duplicate generation ID %q", id)
+						i, ok := generationIndex[id]
+						if !ok || seenGenerations[i] {
+							return fmt.Errorf("unexpected or duplicate generation ID %q", id)
 						}
-						seen[id] = true
-						if attrs["user.id"] != fixtureEmail {
-							return fmt.Errorf("generation %q identity user.id = %q, want %q", id, attrs["user.id"], fixtureEmail)
+						seenGenerations[i] = true
+						g := generations[i]
+						if hex.EncodeToString(span.TraceId) != g.TraceId || hex.EncodeToString(span.SpanId) != g.SpanId {
+							return fmt.Errorf("generation %q span %x/%x, want HTTP export %s/%s", id, span.TraceId, span.SpanId, g.TraceId, g.SpanId)
 						}
-						generations++
+						if err := agentOTLPWantAttrs(span.Attributes, map[string]string{"gen_ai.conversation.id": g.ConversationId, "user.id": fixtureEmail}); err != nil {
+							return fmt.Errorf("generation %q identity: %w", id, err)
+						}
+						if err := agentOTLPWantUsage(span.Attributes, want.generations[i].usage); err != nil {
+							return fmt.Errorf("generation %q: %w", id, err)
+						}
 					default:
 						return fmt.Errorf("unexpected span operation %q", attrs["gen_ai.operation.name"])
 					}
@@ -173,14 +221,82 @@ func (c *agentOTLPCapture) validate(agent string) error {
 			}
 		}
 	}
-	if generations != wantGenerations || tools != 1 {
-		return fmt.Errorf("span counts: generations=%d tools=%d, want %d and 1", generations, tools, wantGenerations)
+	if len(seenGenerations) != len(want.generations) || len(seenCalls) != len(owners) {
+		return fmt.Errorf("span counts: generations=%d tools=%d, want %d and %d", len(seenGenerations), len(seenCalls), len(want.generations), len(owners))
 	}
-	peakTokenCounts := map[string]uint64{}
 	for _, request := range metrics {
-		if err := agentOTLPNoContent(request); err != nil {
+		if err := agentOTLPCheckPrivacy(request, forbidden, !want.full()); err != nil {
 			return fmt.Errorf("metric export: %w", err)
 		}
+	}
+	return agentOTLPWantTokenMetrics(metrics, want, identity)
+}
+
+// agentOTLPWantUsage requires exactly the nonzero usage attributes, as
+// integers, and the inclusive marker whenever usage was reported.
+func agentOTLPWantUsage(attrs []*commonpb.KeyValue, want wantUsage) error {
+	for key, value := range map[string]int64{
+		"gen_ai.usage.input_tokens": want.input, "gen_ai.usage.output_tokens": want.output,
+		"gen_ai.usage.cache_read_input_tokens": want.cacheRead, "gen_ai.usage.cache_write_input_tokens": want.cacheWrite,
+		"gen_ai.usage.reasoning_tokens": want.reasoning,
+	} {
+		got, ok, err := agentOTLPIntAttr(attrs, key)
+		if err != nil {
+			return err
+		}
+		if ok != (value != 0) || got != value {
+			return fmt.Errorf("usage attribute %s = %d (present %t), want %d", key, got, ok, value)
+		}
+	}
+	semantics := ""
+	if want != (wantUsage{}) {
+		semantics = "inclusive"
+	}
+	if got := agentOTLPAttrs(attrs)["gen_ai.token.semantics"]; got != semantics {
+		return fmt.Errorf("gen_ai.token.semantics = %q, want %q", got, semantics)
+	}
+	return nil
+}
+
+func agentOTLPIntAttr(attrs []*commonpb.KeyValue, key string) (int64, bool, error) {
+	for _, attr := range attrs {
+		if attr.GetKey() != key {
+			continue
+		}
+		value, ok := attr.GetValue().GetValue().(*commonpb.AnyValue_IntValue)
+		if !ok {
+			return 0, true, fmt.Errorf("attribute %s is %T, want an integer", key, attr.GetValue().GetValue())
+		}
+		return value.IntValue, true, nil
+	}
+	return 0, false, nil
+}
+
+// agentOTLPWantTokenMetrics compares token-usage histograms with the
+// nonzero usage buckets of every expected generation. Each hook process
+// exports cumulative series, possibly more than once (ForceFlush, then
+// Shutdown), so only the latest snapshot of each series lifetime counts. A
+// lifetime is the full series identity plus its StartTimeUnixNano.
+func agentOTLPWantTokenMetrics(metrics []*colmetricpb.ExportMetricsServiceRequest, want agentExpectation, identity map[string]string) error {
+	type observation struct {
+		count uint64
+		sum   float64
+	}
+	wantTotals := map[string]observation{}
+	for _, g := range want.generations {
+		for tokenType, value := range g.usage.buckets() {
+			total := wantTotals[tokenType]
+			total.count++
+			total.sum += float64(value)
+			wantTotals[tokenType] = total
+		}
+	}
+	type snapshot struct {
+		tokenType string
+		point     *metricpb.HistogramDataPoint
+	}
+	series := map[string][]snapshot{}
+	for _, request := range metrics {
 		for _, resource := range request.GetResourceMetrics() {
 			for _, scope := range resource.GetScopeMetrics() {
 				for _, metric := range scope.GetMetrics() {
@@ -191,38 +307,81 @@ func (c *agentOTLPCapture) validate(agent string) error {
 					if histogram == nil || len(histogram.DataPoints) == 0 {
 						return errors.New("token usage requires histogram datapoints")
 					}
+					if histogram.AggregationTemporality != metricpb.AggregationTemporality_AGGREGATION_TEMPORALITY_CUMULATIVE {
+						return fmt.Errorf("token usage temporality %s, want cumulative", histogram.AggregationTemporality)
+					}
 					for _, point := range histogram.DataPoints {
 						// user.id identifies spans, not metric series. The user tag is a metric dimension.
 						if err := agentOTLPWantAttrs(point.GetAttributes(), identity); err != nil {
 							return fmt.Errorf("token usage datapoint: %w", err)
 						}
-						tokenType := agentOTLPAttrs(point.Attributes)["gen_ai.token.type"]
-						value := float64(0)
-						switch tokenType {
-						case "input":
-							value = 10
-						case "output":
-							value = 5
-						default:
+						attrs := agentOTLPAttrs(point.Attributes)
+						tokenType := attrs["gen_ai.token.type"]
+						if _, ok := wantTotals[tokenType]; !ok {
 							return fmt.Errorf("unexpected token type %q", tokenType)
 						}
-						if agent == "codex" {
-							value *= 2
+						if attrs["gen_ai.token.semantics"] != "inclusive" {
+							return fmt.Errorf("%s token usage semantics %q, want inclusive", tokenType, attrs["gen_ai.token.semantics"])
 						}
-						if point.Count == 0 || point.Count > uint64(wantGenerations) || point.Sum == nil || point.GetSum() != value*float64(point.Count) || point.Flags != 0 {
+						if point.Count == 0 || point.Sum == nil || point.Flags != 0 {
 							return fmt.Errorf("incorrect %s token usage count/sum: count=%d sum=%v", tokenType, point.Count, point.Sum)
 						}
-						peakTokenCounts[tokenType] = max(peakTokenCounts[tokenType], point.Count)
+						if point.StartTimeUnixNano == 0 || point.TimeUnixNano < point.StartTimeUnixNano {
+							return fmt.Errorf("invalid %s token usage timestamps: start=%d time=%d", tokenType, point.StartTimeUnixNano, point.TimeUnixNano)
+						}
+						if len(point.BucketCounts) > 0 {
+							var buckets uint64
+							for _, n := range point.BucketCounts {
+								buckets += n
+							}
+							if buckets != point.Count {
+								return fmt.Errorf("%s token usage buckets hold %d observations, count %d", tokenType, buckets, point.Count)
+							}
+						}
+						key := strings.Join([]string{
+							agentOTLPKey(resource.GetResource().GetAttributes()), scope.GetScope().GetName(), scope.GetScope().GetVersion(),
+							metric.GetName(), metric.GetUnit(), agentOTLPKey(point.Attributes), strconv.FormatUint(point.StartTimeUnixNano, 10),
+						}, "\x00")
+						series[key] = append(series[key], snapshot{tokenType, point})
 					}
 				}
 			}
 		}
 	}
-	// ForceFlush and Shutdown can both export the same cumulative series, so summing exports would double-count observations.
-	if peakTokenCounts["input"] != uint64(wantGenerations) || peakTokenCounts["output"] != uint64(wantGenerations) {
-		return fmt.Errorf("missing input/output token usage observations: counts=%v, want %d each", peakTokenCounts, wantGenerations)
+	got := map[string]observation{}
+	for _, snapshots := range series {
+		slices.SortStableFunc(snapshots, func(a, b snapshot) int { return cmp.Compare(a.point.TimeUnixNano, b.point.TimeUnixNano) })
+		for i := 1; i < len(snapshots); i++ {
+			previous, current := snapshots[i-1].point, snapshots[i].point
+			if current.Count < previous.Count || current.GetSum() < previous.GetSum() ||
+				(current.TimeUnixNano == previous.TimeUnixNano && (current.Count != previous.Count || current.GetSum() != previous.GetSum())) {
+				return fmt.Errorf("%s token usage series is not cumulative: count %d sum %v after count %d sum %v",
+					snapshots[i].tokenType, current.Count, current.GetSum(), previous.Count, previous.GetSum())
+			}
+		}
+		latest := snapshots[len(snapshots)-1]
+		total := got[latest.tokenType]
+		total.count += latest.point.Count
+		total.sum += latest.point.GetSum()
+		got[latest.tokenType] = total
+	}
+	for _, tokenType := range slices.Sorted(maps.Keys(wantTotals)) {
+		if got[tokenType] != wantTotals[tokenType] {
+			return fmt.Errorf("%s token usage count/sum %+v, want %+v", tokenType, got[tokenType], wantTotals[tokenType])
+		}
 	}
 	return nil
+}
+
+// agentOTLPKey renders attributes independent of their order.
+func agentOTLPKey(attrs []*commonpb.KeyValue) string {
+	parts := make([]string, len(attrs))
+	for i, attr := range attrs {
+		value, _ := proto.MarshalOptions{Deterministic: true}.Marshal(attr.GetValue())
+		parts[i] = attr.GetKey() + "=" + hex.EncodeToString(value)
+	}
+	slices.Sort(parts)
+	return strings.Join(parts, ",")
 }
 
 func agentOTLPAttrs(attrs []*commonpb.KeyValue) map[string]string {
@@ -262,12 +421,15 @@ func agentOTLPContentKey(key string) bool {
 	return false
 }
 
-func agentOTLPNoContent(message proto.Message) error {
+// agentOTLPCheckPrivacy walks every string and bytes field, including
+// base64 and nested JSON, for forbidden text. With noContent, content
+// attribute keys are also rejected, empty or not.
+func agentOTLPCheckPrivacy(message proto.Message, forbidden []string, noContent bool) error {
 	var walk func(protoreflect.Message) error
 	walk = func(m protoreflect.Message) error {
 		if m.Descriptor().FullName() == "opentelemetry.proto.common.v1.KeyValue" {
 			key := m.Get(m.Descriptor().Fields().ByName("key")).String()
-			if agentOTLPContentKey(key) {
+			if noContent && agentOTLPContentKey(key) {
 				return fmt.Errorf("content attribute %q", key)
 			}
 		}
@@ -278,9 +440,9 @@ func agentOTLPNoContent(message proto.Message) error {
 				case protoreflect.MessageKind:
 					return walk(v.Message())
 				case protoreflect.StringKind:
-					return agentOTLPCheckText(v.String(), 0)
+					return agentOTLPCheckText(v.String(), forbidden, noContent, 0)
 				case protoreflect.BytesKind:
-					return agentOTLPCheckText(string(v.Bytes()), 0)
+					return agentOTLPCheckText(string(v.Bytes()), forbidden, noContent, 0)
 				default:
 					return nil
 				}
@@ -300,17 +462,17 @@ func agentOTLPNoContent(message proto.Message) error {
 	return walk(message.ProtoReflect())
 }
 
-func agentOTLPCheckText(text string, depth int) error {
-	for _, forbidden := range []string{"Run echo", fakeToolOutput, "Done.", "glc_abcdefghijklmnopqrstuvwxyz"} {
-		if strings.Contains(text, forbidden) {
-			return fmt.Errorf("leaked ordinary content %q", forbidden)
+func agentOTLPCheckText(text string, forbidden []string, noContent bool, depth int) error {
+	for _, f := range forbidden {
+		if strings.Contains(text, f) {
+			return fmt.Errorf("leaked ordinary content %q", f)
 		}
 	}
 	if depth >= 8 {
 		return errors.New("cannot inspect deeply encoded content")
 	}
 	if raw, err := base64.StdEncoding.DecodeString(text); err == nil && len(raw) > 0 {
-		if err := agentOTLPCheckText(string(raw), depth+1); err != nil {
+		if err := agentOTLPCheckText(string(raw), forbidden, noContent, depth+1); err != nil {
 			return err
 		}
 	}
@@ -322,7 +484,7 @@ func agentOTLPCheckText(text string, depth int) error {
 	walk = func(value any) error {
 		switch v := value.(type) {
 		case string:
-			return agentOTLPCheckText(v, depth+1)
+			return agentOTLPCheckText(v, forbidden, noContent, depth+1)
 		case []any:
 			for _, item := range v {
 				if err := walk(item); err != nil {
@@ -331,10 +493,10 @@ func agentOTLPCheckText(text string, depth int) error {
 			}
 		case map[string]any:
 			for key, item := range v {
-				if agentOTLPContentKey(key) {
+				if noContent && agentOTLPContentKey(key) {
 					return fmt.Errorf("content payload key %q", key)
 				}
-				if err := agentOTLPCheckText(key, depth+1); err != nil {
+				if err := agentOTLPCheckText(key, forbidden, noContent, depth+1); err != nil {
 					return err
 				}
 				if err := walk(item); err != nil {
@@ -351,7 +513,8 @@ func TestAgentOTLPCaptureReceiver(t *testing.T) {
 	for _, signal := range []string{"traces", "metrics"} {
 		for _, compressed := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/gzip=%t", signal, compressed), func(t *testing.T) {
-				traces, metrics := agentOTLPFixture("claude-code")
+				f := agentOTLPFixture(fixtureExpectations()["claude-code/metadata_only/baseline"])
+				traces, metrics := f.traces, f.metrics[0]
 				var message proto.Message = traces
 				if signal == "metrics" {
 					message = metrics
@@ -408,7 +571,7 @@ func TestAgentOTLPCaptureRejectsRequests(t *testing.T) {
 				require.Empty(t, traces)
 				require.Empty(t, metrics)
 				require.Len(t, errs, 1)
-				require.ErrorContains(t, capture.validate("claude-code"), "OTLP receiver")
+				require.ErrorContains(t, capture.validate(agentExpectation{}, nil), "OTLP receiver")
 			})
 		}
 	}
@@ -452,7 +615,8 @@ func agentOTLPPost(t *testing.T, capture *agentOTLPCapture, path, encoding strin
 
 func TestAgentOTLPCaptureConcurrentSnapshots(t *testing.T) {
 	capture := newAgentOTLPCapture(t)
-	traces, metrics := agentOTLPFixture("codex")
+	f := agentOTLPFixture(fixtureExpectations()["codex/metadata_only/baseline"])
+	traces, metrics := f.traces, f.metrics[0]
 	traceBody, err := proto.Marshal(traces)
 	require.NoError(t, err)
 	metricBody, err := proto.Marshal(metrics)
@@ -499,13 +663,15 @@ func TestAgentOTLPCaptureConcurrentSnapshots(t *testing.T) {
 	}
 }
 
-func TestAgentOTLPNoContent(t *testing.T) {
+func TestAgentOTLPCheckPrivacy(t *testing.T) {
 	value := func(text string) *commonpb.AnyValue {
 		return &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: text}}
 	}
+	metadataForbidden := []string{"Run echo", fakeToolOutput, "Done.", baselineSecret}
 	for _, tc := range []struct {
 		name    string
 		message proto.Message
+		full    bool
 		wantErr string
 	}{
 		{name: "safe metadata", message: &commonpb.KeyValue{Key: "agento11y.generation.metadata", Value: value(`{"agento11y.sdk.content_capture_mode":"metadata_only"}`)}},
@@ -517,11 +683,20 @@ func TestAgentOTLPNoContent(t *testing.T) {
 		{name: "nested JSON", message: &commonpb.KeyValue{Key: "custom", Value: value(`{"nested":{"agento11y.conversation.title":"ordinary title"}}`)}, wantErr: "content payload key"},
 		{name: "base64", message: &commonpb.KeyValue{Key: "custom", Value: value(base64.StdEncoding.EncodeToString([]byte(fakeToolOutput)))}, wantErr: "ordinary content"},
 		{name: "JSON base64", message: &commonpb.KeyValue{Key: "custom", Value: value(`{"payload":"` + base64.StdEncoding.EncodeToString([]byte("Done.")) + `"}`)}, wantErr: "ordinary content"},
-		{name: "bytes", message: &commonpb.AnyValue{Value: &commonpb.AnyValue_BytesValue{BytesValue: []byte("glc_abcdefghijklmnopqrstuvwxyz")}}, wantErr: "ordinary content"},
+		{name: "bytes", message: &commonpb.AnyValue{Value: &commonpb.AnyValue_BytesValue{BytesValue: []byte(baselineSecret)}}, wantErr: "ordinary content"},
 		{name: "nested attributes", message: &commonpb.AnyValue{Value: &commonpb.AnyValue_KvlistValue{KvlistValue: &commonpb.KeyValueList{Values: []*commonpb.KeyValue{{Key: "gen_ai.tool.call.result", Value: value("ordinary result")}}}}}, wantErr: "content attribute"},
+		{name: "full content attribute", full: true, message: &commonpb.KeyValue{Key: "gen_ai.tool.call.result", Value: value("hello-from-fake [REDACTED:grafana-cloud-token]")}},
+		{name: "full content payload key", full: true, message: &commonpb.KeyValue{Key: "custom", Value: value(`{"gen_ai.input.messages":"Run echo"}`)}},
+		{name: "full raw secret", full: true, message: &commonpb.KeyValue{Key: "gen_ai.tool.call.arguments", Value: value(`{"command":"` + secretArgumentToken + `"}`)}, wantErr: "ordinary content"},
+		{name: "full escaped JSON secret", full: true, message: &commonpb.KeyValue{Key: "custom", Value: value(`{"payload":"` + strings.ReplaceAll(secretOutputToken, "_", `\u005f`) + `"}`)}, wantErr: "ordinary content"},
+		{name: "full base64 bytes secret", full: true, message: &commonpb.AnyValue{Value: &commonpb.AnyValue_BytesValue{BytesValue: []byte(base64.StdEncoding.EncodeToString([]byte(secretReplyToken)))}}, wantErr: "ordinary content"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := agentOTLPNoContent(tc.message)
+			forbidden := metadataForbidden
+			if tc.full {
+				forbidden = agentCaseSecrets
+			}
+			err := agentOTLPCheckPrivacy(tc.message, forbidden, !tc.full)
 			if tc.wantErr == "" {
 				require.NoError(t, err)
 			} else {
@@ -531,130 +706,396 @@ func TestAgentOTLPNoContent(t *testing.T) {
 	}
 }
 
-func agentOTLPFixture(agent string) (*coltracepb.ExportTraceServiceRequest, *colmetricpb.ExportMetricsServiceRequest) {
-	count, provider, tool, input, output := 1, "openai", "Bash", float64(20), float64(10)
-	if agent == "claude-code" {
-		count, provider, tool, input, output = 2, "anthropic", "Bash", 10, 5
-	}
-	attr := func(key, value string) *commonpb.KeyValue {
-		return &commonpb.KeyValue{Key: key, Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: value}}}
-	}
+type agentOTLPFixtureData struct {
+	traces      *coltracepb.ExportTraceServiceRequest
+	metrics     []*colmetricpb.ExportMetricsServiceRequest
+	generations []*agento11yv1.Generation
+}
+
+func agentOTLPString(key, value string) *commonpb.KeyValue {
+	return &commonpb.KeyValue{Key: key, Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: value}}}
+}
+
+func agentOTLPInt(key string, value int64) *commonpb.KeyValue {
+	return &commonpb.KeyValue{Key: key, Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: value}}}
+}
+
+// agentOTLPFixture builds the companion OTLP export for want. Every
+// generation has its own metric lifetime, flushed twice.
+func agentOTLPFixture(want agentExpectation) agentOTLPFixtureData {
+	generations := generationExportFixture(want).Generations
 	identity := func() []*commonpb.KeyValue {
 		return []*commonpb.KeyValue{
-			attr("gen_ai.agent.name", agent), attr("gen_ai.provider.name", provider), attr("gen_ai.request.model", fakeModelName),
-			attr("agento11y.tag.user", fixtureEmail), attr("agento11y.tag.repo", fixtureRepo), attr("agento11y.tag.git.branch", fixtureBranch),
+			agentOTLPString("gen_ai.agent.name", want.agent), agentOTLPString("gen_ai.provider.name", want.provider()), agentOTLPString("gen_ai.request.model", fakeModelName),
+			agentOTLPString("agento11y.tag.user", fixtureEmail), agentOTLPString("agento11y.tag.repo", fixtureRepo), agentOTLPString("agento11y.tag.git.branch", fixtureBranch),
 		}
 	}
 	var spans []*tracepb.Span
-	for i := range count + 1 {
-		span := &tracepb.Span{
-			Name: "fixture", TraceId: bytes.Repeat([]byte{1}, 16), SpanId: bytes.Repeat([]byte{byte(i + 1)}, 8),
-			StartTimeUnixNano: 100, EndTimeUnixNano: 200, Attributes: identity(),
+	var metrics []*colmetricpb.ExportMetricsServiceRequest
+	for i, w := range want.generations {
+		g := generations[i]
+		traceID, _ := hex.DecodeString(g.TraceId)
+		spanID, _ := hex.DecodeString(g.SpanId)
+		attrs := append(identity(), agentOTLPString("gen_ai.operation.name", "generateText"), agentOTLPString("agento11y.generation.id", g.Id),
+			agentOTLPString("gen_ai.conversation.id", g.ConversationId), agentOTLPString("user.id", fixtureEmail))
+		for _, usage := range []struct {
+			key   string
+			value int64
+		}{
+			{"gen_ai.usage.input_tokens", w.usage.input}, {"gen_ai.usage.output_tokens", w.usage.output},
+			{"gen_ai.usage.cache_read_input_tokens", w.usage.cacheRead}, {"gen_ai.usage.cache_write_input_tokens", w.usage.cacheWrite},
+			{"gen_ai.usage.reasoning_tokens", w.usage.reasoning},
+		} {
+			if usage.value != 0 {
+				attrs = append(attrs, agentOTLPInt(usage.key, usage.value))
+			}
 		}
-		if i < count {
-			span.Attributes = append(span.Attributes, attr("gen_ai.operation.name", "generateText"), attr("agento11y.generation.id", fmt.Sprintf("gen-%d", i)), attr("user.id", fixtureEmail))
-		} else {
-			span.Attributes = append(span.Attributes, attr("gen_ai.operation.name", "execute_tool"), attr("gen_ai.tool.name", tool), attr("gen_ai.tool.call.id", fakeToolCallID), attr("gen_ai.tool.type", "function"))
+		if w.usage != (wantUsage{}) {
+			attrs = append(attrs, agentOTLPString("gen_ai.token.semantics", "inclusive"))
 		}
-		spans = append(spans, span)
+		spans = append(spans, &tracepb.Span{Name: "generateText " + fakeModelName, TraceId: traceID, SpanId: spanID, StartTimeUnixNano: 100, EndTimeUnixNano: 200, Attributes: attrs})
+		for j, call := range w.calls {
+			attrs := append(identity(), agentOTLPString("gen_ai.operation.name", "execute_tool"), agentOTLPString("gen_ai.tool.name", "Bash"),
+				agentOTLPString("gen_ai.tool.call.id", call.id), agentOTLPString("gen_ai.tool.type", "function"), agentOTLPString("gen_ai.conversation.id", g.ConversationId))
+			if want.full() {
+				attrs = append(attrs, agentOTLPString("gen_ai.tool.call.arguments", `{"command":"`+call.wantInput()+`"}`), agentOTLPString("gen_ai.tool.call.result", call.wantResult()))
+			}
+			status := &tracepb.Status{Code: tracepb.Status_STATUS_CODE_OK}
+			if call.failed && want.reportsFailure() {
+				status = &tracepb.Status{Code: tracepb.Status_STATUS_CODE_ERROR}
+			}
+			spans = append(spans, &tracepb.Span{
+				Name: "execute_tool Bash", TraceId: traceID, SpanId: []byte{0x80, 0, 0, 0, 0, 0, byte(i + 1), byte(j + 1)}, ParentSpanId: spanID,
+				StartTimeUnixNano: 120, EndTimeUnixNano: 180, Attributes: attrs, Status: status,
+			})
+		}
+		var points []*metricpb.HistogramDataPoint
+		buckets := w.usage.buckets()
+		for _, tokenType := range slices.Sorted(maps.Keys(buckets)) {
+			sum := float64(buckets[tokenType])
+			points = append(points, &metricpb.HistogramDataPoint{
+				Attributes:        append(identity(), agentOTLPString("gen_ai.operation.name", "generateText"), agentOTLPString("gen_ai.token.type", tokenType), agentOTLPString("gen_ai.token.semantics", "inclusive")),
+				StartTimeUnixNano: uint64(1000 * (i + 1)), Count: 1, Sum: &sum, BucketCounts: []uint64{0, 1}, ExplicitBounds: []float64{1},
+			})
+		}
+		for flush := range 2 {
+			flushed := make([]*metricpb.HistogramDataPoint, len(points))
+			for k, point := range points {
+				flushed[k] = proto.Clone(point).(*metricpb.HistogramDataPoint)
+				flushed[k].TimeUnixNano = flushed[k].StartTimeUnixNano + uint64(flush+1)
+			}
+			metrics = append(metrics, &colmetricpb.ExportMetricsServiceRequest{ResourceMetrics: []*metricpb.ResourceMetrics{{
+				Resource: &resourcepb.Resource{Attributes: []*commonpb.KeyValue{agentOTLPString("service.name", "agento11y")}},
+				ScopeMetrics: []*metricpb.ScopeMetrics{{Scope: &commonpb.InstrumentationScope{Name: "github.com/grafana/agento11y/go/agento11y"}, Metrics: []*metricpb.Metric{
+					{Name: "gen_ai.client.operation.duration", Data: &metricpb.Metric_Histogram{Histogram: &metricpb.Histogram{AggregationTemporality: metricpb.AggregationTemporality_AGGREGATION_TEMPORALITY_CUMULATIVE}}},
+					{Name: "gen_ai.client.token.usage", Unit: "{token}", Data: &metricpb.Metric_Histogram{Histogram: &metricpb.Histogram{
+						AggregationTemporality: metricpb.AggregationTemporality_AGGREGATION_TEMPORALITY_CUMULATIVE, DataPoints: flushed,
+					}}},
+				}}},
+			}}})
+		}
 	}
 	traces := &coltracepb.ExportTraceServiceRequest{ResourceSpans: []*tracepb.ResourceSpans{{ScopeSpans: []*tracepb.ScopeSpans{{Spans: spans}}}}}
-	var points []*metricpb.HistogramDataPoint
-	for _, token := range []struct {
-		name  string
-		value float64
-	}{{"input", input}, {"output", output}} {
-		sum := token.value * float64(count)
-		points = append(points, &metricpb.HistogramDataPoint{
-			Attributes: append(identity(), attr("gen_ai.token.type", token.name)), Count: uint64(count), Sum: &sum,
-		})
+	return agentOTLPFixtureData{traces: traces, metrics: metrics, generations: generations}
+}
+
+func (f agentOTLPFixtureData) spans() []*tracepb.Span {
+	return f.traces.ResourceSpans[0].ScopeSpans[0].Spans
+}
+
+func (f agentOTLPFixtureData) span(key, value string) *tracepb.Span {
+	for _, span := range f.spans() {
+		if agentOTLPAttrs(span.Attributes)[key] == value {
+			return span
+		}
 	}
-	metrics := &colmetricpb.ExportMetricsServiceRequest{ResourceMetrics: []*metricpb.ResourceMetrics{{ScopeMetrics: []*metricpb.ScopeMetrics{{Metrics: []*metricpb.Metric{{
-		Name: "gen_ai.client.token.usage", Data: &metricpb.Metric_Histogram{Histogram: &metricpb.Histogram{DataPoints: points}},
-	}}}}}}}
-	return traces, metrics
+	panic("fixture has no span with " + key + "=" + value)
+}
+
+func (f agentOTLPFixtureData) points() []*metricpb.HistogramDataPoint {
+	var points []*metricpb.HistogramDataPoint
+	for _, request := range f.metrics {
+		points = append(points, f.tokenHistogram(request).DataPoints...)
+	}
+	return points
+}
+
+func (agentOTLPFixtureData) tokenHistogram(request *colmetricpb.ExportMetricsServiceRequest) *metricpb.Histogram {
+	return request.ResourceMetrics[0].ScopeMetrics[0].Metrics[1].GetHistogram()
+}
+
+// setAgentOTLPAttr replaces key, appending it when absent. A nil value removes it.
+func setAgentOTLPAttr(attrs *[]*commonpb.KeyValue, key string, value *commonpb.AnyValue) {
+	*attrs = slices.DeleteFunc(*attrs, func(attr *commonpb.KeyValue) bool { return attr.Key == key })
+	if value != nil {
+		*attrs = append(*attrs, &commonpb.KeyValue{Key: key, Value: value})
+	}
+}
+
+func agentOTLPStringValue(s string) *commonpb.AnyValue {
+	return &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: s}}
 }
 
 func TestAgentOTLPValidate(t *testing.T) {
-	for _, agent := range []string{"claude-code", "codex"} {
-		for _, tc := range []struct {
-			name    string
-			mutate  func(*coltracepb.ExportTraceServiceRequest, *colmetricpb.ExportMetricsServiceRequest)
-			wantErr string
-		}{
-			{name: "valid without metric or tool user.id"},
-			{name: "missing generation", mutate: func(r *coltracepb.ExportTraceServiceRequest, _ *colmetricpb.ExportMetricsServiceRequest) {
-				r.ResourceSpans[0].ScopeSpans[0].Spans = r.ResourceSpans[0].ScopeSpans[0].Spans[1:]
-			}, wantErr: "span counts"},
-			{name: "wrong last span tag", mutate: func(r *coltracepb.ExportTraceServiceRequest, _ *colmetricpb.ExportMetricsServiceRequest) {
-				spans := r.ResourceSpans[0].ScopeSpans[0].Spans
-				spans[len(spans)-1].Attributes[4].Value.Value = &commonpb.AnyValue_StringValue{StringValue: "wrong"}
-			}, wantErr: "agento11y.tag.repo"},
-			{name: "wrong identity", mutate: func(r *coltracepb.ExportTraceServiceRequest, _ *colmetricpb.ExportMetricsServiceRequest) {
-				attrs := r.ResourceSpans[0].ScopeSpans[0].Spans[0].Attributes
-				attrs[len(attrs)-1].Value.Value = &commonpb.AnyValue_StringValue{StringValue: "wrong"}
-			}, wantErr: "identity"},
-			{name: "model tool name", mutate: func(r *coltracepb.ExportTraceServiceRequest, _ *colmetricpb.ExportMetricsServiceRequest) {
-				spans := r.ResourceSpans[0].ScopeSpans[0].Spans
-				attrs := spans[len(spans)-1].Attributes
-				attrs[len(attrs)-3].Value.Value = &commonpb.AnyValue_StringValue{StringValue: "exec_command"}
-			}, wantErr: "gen_ai.tool.name"},
-			{name: "wrong tool call ID", mutate: func(r *coltracepb.ExportTraceServiceRequest, _ *colmetricpb.ExportMetricsServiceRequest) {
-				spans := r.ResourceSpans[0].ScopeSpans[0].Spans
-				attrs := spans[len(spans)-1].Attributes
-				attrs[len(attrs)-2].Value.Value = &commonpb.AnyValue_StringValue{StringValue: "wrong"}
-			}, wantErr: "gen_ai.tool.call.id"},
-			{name: "missing tool", mutate: func(r *coltracepb.ExportTraceServiceRequest, _ *colmetricpb.ExportMetricsServiceRequest) {
-				scope := r.ResourceSpans[0].ScopeSpans[0]
-				scope.Spans = scope.Spans[:len(scope.Spans)-1]
-			}, wantErr: "span counts"},
-			{name: "missing generation ID", mutate: func(r *coltracepb.ExportTraceServiceRequest, _ *colmetricpb.ExportMetricsServiceRequest) {
-				span := r.ResourceSpans[0].ScopeSpans[0].Spans[0]
-				span.Attributes = append(span.Attributes[:7], span.Attributes[8:]...)
-			}, wantErr: "generation ID"},
-			{name: "tool content", mutate: func(r *coltracepb.ExportTraceServiceRequest, _ *colmetricpb.ExportMetricsServiceRequest) {
-				spans := r.ResourceSpans[0].ScopeSpans[0].Spans
-				spans[len(spans)-1].Attributes = append(spans[len(spans)-1].Attributes, &commonpb.KeyValue{Key: "gen_ai.tool.call.arguments"})
-			}, wantErr: "content attribute"},
-			{name: "resource leak", mutate: func(r *coltracepb.ExportTraceServiceRequest, _ *colmetricpb.ExportMetricsServiceRequest) {
-				r.ResourceSpans[0].Resource = &resourcepb.Resource{Attributes: []*commonpb.KeyValue{{Key: "custom", Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: fakeToolOutput}}}}}
-			}, wantErr: "ordinary content"},
-			{name: "missing metrics", mutate: func(_ *coltracepb.ExportTraceServiceRequest, r *colmetricpb.ExportMetricsServiceRequest) {
-				r.ResourceMetrics = nil
-			}, wantErr: "missing input/output"},
-			{name: "wrong last datapoint tag", mutate: func(_ *coltracepb.ExportTraceServiceRequest, r *colmetricpb.ExportMetricsServiceRequest) {
-				r.ResourceMetrics[0].ScopeMetrics[0].Metrics[0].GetHistogram().DataPoints[1].Attributes[5].Value.Value = &commonpb.AnyValue_StringValue{StringValue: "wrong"}
-			}, wantErr: "agento11y.tag.git.branch"},
-			{name: "wrong last datapoint agent", mutate: func(_ *coltracepb.ExportTraceServiceRequest, r *colmetricpb.ExportMetricsServiceRequest) {
-				r.ResourceMetrics[0].ScopeMetrics[0].Metrics[0].GetHistogram().DataPoints[1].Attributes[0].Value.Value = &commonpb.AnyValue_StringValue{StringValue: "wrong"}
-			}, wantErr: "gen_ai.agent.name"},
-			{name: "wrong last datapoint model", mutate: func(_ *coltracepb.ExportTraceServiceRequest, r *colmetricpb.ExportMetricsServiceRequest) {
-				r.ResourceMetrics[0].ScopeMetrics[0].Metrics[0].GetHistogram().DataPoints[1].Attributes[2].Value.Value = &commonpb.AnyValue_StringValue{StringValue: "wrong"}
-			}, wantErr: "gen_ai.request.model"},
-			{name: "zero datapoint count", mutate: func(_ *coltracepb.ExportTraceServiceRequest, r *colmetricpb.ExportMetricsServiceRequest) {
-				r.ResourceMetrics[0].ScopeMetrics[0].Metrics[0].GetHistogram().DataPoints[1].Count = 0
-			}, wantErr: "count/sum"},
-			{name: "wrong token type", mutate: func(_ *coltracepb.ExportTraceServiceRequest, r *colmetricpb.ExportMetricsServiceRequest) {
-				r.ResourceMetrics[0].ScopeMetrics[0].Metrics[0].GetHistogram().DataPoints[1].Attributes[6].Value.Value = &commonpb.AnyValue_StringValue{StringValue: "wrong"}
-			}, wantErr: "token type"},
-			{name: "missing output observations", mutate: func(_ *coltracepb.ExportTraceServiceRequest, r *colmetricpb.ExportMetricsServiceRequest) {
-				histogram := r.ResourceMetrics[0].ScopeMetrics[0].Metrics[0].GetHistogram()
-				histogram.DataPoints = histogram.DataPoints[:1]
-			}, wantErr: "missing input/output"},
-			{name: "wrong token sum", mutate: func(_ *coltracepb.ExportTraceServiceRequest, r *colmetricpb.ExportMetricsServiceRequest) {
-				*r.ResourceMetrics[0].ScopeMetrics[0].Metrics[0].GetHistogram().DataPoints[1].Sum++
-			}, wantErr: "count/sum"},
-			{name: "not a histogram", mutate: func(_ *coltracepb.ExportTraceServiceRequest, r *colmetricpb.ExportMetricsServiceRequest) {
-				r.ResourceMetrics[0].ScopeMetrics[0].Metrics[0].Data = &metricpb.Metric_Sum{Sum: &metricpb.Sum{}}
-			}, wantErr: "histogram datapoints"},
-		} {
-			t.Run(agent+"/"+tc.name, func(t *testing.T) {
-				traces, metrics := agentOTLPFixture(agent)
-				if tc.mutate != nil {
-					tc.mutate(traces, metrics)
+	expectations := fixtureExpectations()
+	for _, name := range slices.Sorted(maps.Keys(expectations)) {
+		t.Run("valid/"+name, func(t *testing.T) {
+			want := expectations[name]
+			f := agentOTLPFixture(want)
+			capture := &agentOTLPCapture{traceReqs: []*coltracepb.ExportTraceServiceRequest{f.traces}, metricReqs: f.metrics}
+			require.NoError(t, capture.validate(want, f.generations))
+		})
+	}
+
+	type fixture = agentOTLPFixtureData
+	generationSpan := func(f fixture, i int) *tracepb.Span { return f.span("agento11y.generation.id", f.generations[i].Id) }
+	toolSpan := func(f fixture, id string) *tracepb.Span { return f.span("gen_ai.tool.call.id", id) }
+	pointOf := func(f fixture, tokenType string) *metricpb.HistogramDataPoint {
+		for _, point := range f.points() {
+			if agentOTLPAttrs(point.Attributes)["gen_ai.token.type"] == tokenType {
+				return point
+			}
+		}
+		panic("fixture has no " + tokenType + " point")
+	}
+	dropPoints := func(f *fixture, tokenType string) {
+		for _, request := range f.metrics {
+			histogram := f.tokenHistogram(request)
+			histogram.DataPoints = slices.DeleteFunc(histogram.DataPoints, func(point *metricpb.HistogramDataPoint) bool {
+				return agentOTLPAttrs(point.Attributes)["gen_ai.token.type"] == tokenType
+			})
+		}
+	}
+	for _, tc := range []struct {
+		name    string
+		cases   []string
+		mutate  func(*fixture, agentExpectation)
+		wantErr string // empty: the mutation is valid
+	}{
+		{name: "single flush", cases: []string{"claude-code/metadata_only/multi_tool", "codex/full/resume"}, mutate: func(f *fixture, want agentExpectation) {
+			f.metrics = slices.DeleteFunc(f.metrics, func(r *colmetricpb.ExportMetricsServiceRequest) bool {
+				return f.tokenHistogram(r).DataPoints[0].TimeUnixNano%2 == 0
+			})
+		}},
+		{name: "reordered attributes in later flush", cases: []string{"claude-code/metadata_only/nonzero_usage", "codex/metadata_only/nonzero_usage"}, mutate: func(f *fixture, want agentExpectation) {
+			for _, point := range f.tokenHistogram(f.metrics[1]).DataPoints {
+				slices.Reverse(point.Attributes)
+			}
+		}},
+		{name: "one lifetime for every generation", cases: []string{"claude-code/metadata_only/resume"}, mutate: func(f *fixture, want agentExpectation) {
+			merged := map[string]*metricpb.HistogramDataPoint{}
+			for _, point := range f.points() {
+				if point.TimeUnixNano != point.StartTimeUnixNano+2 {
+					continue
 				}
-				capture := &agentOTLPCapture{traceReqs: []*coltracepb.ExportTraceServiceRequest{traces}, metricReqs: []*colmetricpb.ExportMetricsServiceRequest{metrics}}
-				err := capture.validate(agent)
+				tokenType := agentOTLPAttrs(point.Attributes)["gen_ai.token.type"]
+				if m, ok := merged[tokenType]; ok {
+					m.Count += point.Count
+					*m.Sum += point.GetSum()
+					m.BucketCounts[1] += point.BucketCounts[1]
+					continue
+				}
+				m := proto.Clone(point).(*metricpb.HistogramDataPoint)
+				m.StartTimeUnixNano, m.TimeUnixNano = 1, 9
+				merged[tokenType] = m
+			}
+			request := f.metrics[0]
+			f.tokenHistogram(request).DataPoints = slices.Collect(maps.Values(merged))
+			f.metrics = []*colmetricpb.ExportMetricsServiceRequest{request}
+		}},
+		{name: "Codex failed command status", cases: []string{"codex/full/failed_command"}, mutate: func(f *fixture, want agentExpectation) {
+			toolSpan(*f, "call_fail").Status = &tracepb.Status{Code: tracepb.Status_STATUS_CODE_ERROR}
+		}},
+		{name: "missing generation", mutate: func(f *fixture, want agentExpectation) {
+			scope, drop := f.traces.ResourceSpans[0].ScopeSpans[0], generationSpan(*f, 0)
+			scope.Spans = slices.DeleteFunc(scope.Spans, func(span *tracepb.Span) bool { return span == drop })
+		}, wantErr: "span counts"},
+		{name: "extra generation for terminal failure", cases: []string{"claude-code/metadata_only/model_error_400", "codex/full/model_error_400"}, mutate: func(f *fixture, want agentExpectation) {
+			other := agentOTLPFixture(expectations[want.agent+"/full/text_only"])
+			f.traces.ResourceSpans[0].ScopeSpans[0].Spans = other.spans()
+		}, wantErr: "generation ID"},
+		{name: "token usage for terminal failure", cases: []string{"claude-code/metadata_only/model_error_400", "codex/metadata_only/model_error_400"}, mutate: func(f *fixture, want agentExpectation) {
+			f.metrics = agentOTLPFixture(expectations[want.agent+"/metadata_only/text_only"]).metrics
+		}, wantErr: "unexpected token type"},
+		{name: "wrong last span tag", mutate: func(f *fixture, want agentExpectation) {
+			spans := f.spans()
+			setAgentOTLPAttr(&spans[len(spans)-1].Attributes, "agento11y.tag.repo", agentOTLPStringValue("wrong"))
+		}, wantErr: "agento11y.tag.repo"},
+		{name: "duplicate attribute", mutate: func(f *fixture, want agentExpectation) {
+			span := generationSpan(*f, 0)
+			span.Attributes = append(span.Attributes, span.Attributes[0])
+		}, wantErr: "duplicate attribute"},
+		{name: "wrong identity", mutate: func(f *fixture, want agentExpectation) {
+			setAgentOTLPAttr(&generationSpan(*f, 0).Attributes, "user.id", agentOTLPStringValue("wrong"))
+		}, wantErr: "identity"},
+		{name: "model tool name", mutate: func(f *fixture, want agentExpectation) {
+			setAgentOTLPAttr(&toolSpan(*f, fakeToolCallID).Attributes, "gen_ai.tool.name", agentOTLPStringValue("exec_command"))
+		}, wantErr: "gen_ai.tool.name"},
+		{name: "wrong tool call ID", mutate: func(f *fixture, want agentExpectation) {
+			setAgentOTLPAttr(&toolSpan(*f, fakeToolCallID).Attributes, "gen_ai.tool.call.id", agentOTLPStringValue("wrong"))
+		}, wantErr: "tool span \"wrong\""},
+		{name: "duplicate tool span", cases: []string{"claude-code/full/multi_tool", "codex/metadata_only/multi_tool"}, mutate: func(f *fixture, want agentExpectation) {
+			setAgentOTLPAttr(&toolSpan(*f, "call_multi_b").Attributes, "gen_ai.tool.call.id", agentOTLPStringValue("call_multi_a"))
+		}, wantErr: "duplicate tool span"},
+		{name: "missing tool", cases: []string{"claude-code/metadata_only/multi_tool", "codex/full/multi_tool"}, mutate: func(f *fixture, want agentExpectation) {
+			scope, drop := f.traces.ResourceSpans[0].ScopeSpans[0], toolSpan(*f, "call_multi_c")
+			scope.Spans = slices.DeleteFunc(scope.Spans, func(span *tracepb.Span) bool { return span == drop })
+		}, wantErr: "span counts"},
+		{name: "missing generation ID", mutate: func(f *fixture, want agentExpectation) {
+			setAgentOTLPAttr(&generationSpan(*f, 0).Attributes, "agento11y.generation.id", nil)
+		}, wantErr: "generation ID"},
+		{name: "generation span not exported over HTTP", mutate: func(f *fixture, want agentExpectation) {
+			generationSpan(*f, 0).SpanId = bytes.Repeat([]byte{9}, 8)
+		}, wantErr: "want HTTP export"},
+		{name: "generation trace not exported over HTTP", mutate: func(f *fixture, want agentExpectation) {
+			span := generationSpan(*f, 0)
+			span.TraceId = bytes.Repeat([]byte{9}, 16)
+		}, wantErr: "want HTTP export"},
+		{name: "tool parent from another generation", cases: []string{"claude-code/metadata_only/multi_tool", "claude-code/full/resume", "codex/metadata_only/resume"}, mutate: func(f *fixture, want agentExpectation) {
+			last := want.generations[len(want.generations)-1]
+			if len(last.calls) == 0 {
+				last = want.generations[len(want.generations)-2]
+			}
+			toolSpan(*f, last.calls[len(last.calls)-1].id).ParentSpanId = generationSpan(*f, 0).SpanId
+		}, wantErr: "parent"},
+		{name: "unparented tool", mutate: func(f *fixture, want agentExpectation) { toolSpan(*f, fakeToolCallID).ParentSpanId = nil }, wantErr: "parent"},
+		{name: "tool in another trace", mutate: func(f *fixture, want agentExpectation) {
+			toolSpan(*f, fakeToolCallID).TraceId = bytes.Repeat([]byte{9}, 16)
+		}, wantErr: "parent"},
+		{name: "tool conversation", mutate: func(f *fixture, want agentExpectation) {
+			setAgentOTLPAttr(&toolSpan(*f, fakeToolCallID).Attributes, "gen_ai.conversation.id", agentOTLPStringValue("another-session"))
+		}, wantErr: "gen_ai.conversation.id"},
+		{name: "generation conversation", mutate: func(f *fixture, want agentExpectation) {
+			setAgentOTLPAttr(&generationSpan(*f, 0).Attributes, "gen_ai.conversation.id", nil)
+		}, wantErr: "gen_ai.conversation.id"},
+		{name: "string usage", mutate: func(f *fixture, want agentExpectation) {
+			setAgentOTLPAttr(&generationSpan(*f, 0).Attributes, "gen_ai.usage.input_tokens", agentOTLPStringValue("10"))
+		}, wantErr: "want an integer"},
+		{name: "wrong usage", cases: []string{"claude-code/metadata_only/nonzero_usage", "codex/full/nonzero_usage"}, mutate: func(f *fixture, want agentExpectation) {
+			setAgentOTLPAttr(&generationSpan(*f, 0).Attributes, "gen_ai.usage.output_tokens", agentOTLPInt("gen_ai.usage.output_tokens", 1).Value)
+		}, wantErr: "usage attribute gen_ai.usage.output_tokens"},
+		{name: "missing cache read", cases: []string{"claude-code/metadata_only/nonzero_usage", "codex/metadata_only/nonzero_usage"}, mutate: func(f *fixture, want agentExpectation) {
+			setAgentOTLPAttr(&generationSpan(*f, 0).Attributes, "gen_ai.usage.cache_read_input_tokens", nil)
+		}, wantErr: "cache_read_input_tokens"},
+		{name: "zero usage attribute", cases: []string{"claude-code/metadata_only/nonzero_usage"}, mutate: func(f *fixture, want agentExpectation) {
+			setAgentOTLPAttr(&generationSpan(*f, 0).Attributes, "gen_ai.usage.reasoning_tokens", agentOTLPInt("", 0).Value)
+		}, wantErr: "reasoning_tokens"},
+		{name: "missing semantics", mutate: func(f *fixture, want agentExpectation) {
+			setAgentOTLPAttr(&generationSpan(*f, 0).Attributes, "gen_ai.token.semantics", nil)
+		}, wantErr: "gen_ai.token.semantics"},
+		{name: "failed tool span OK", cases: []string{"claude-code/full/failed_command", "claude-code/metadata_only/failed_command"}, mutate: func(f *fixture, want agentExpectation) {
+			toolSpan(*f, "call_fail").Status = &tracepb.Status{Code: tracepb.Status_STATUS_CODE_OK}
+		}, wantErr: "error status = false, want true"},
+		{name: "successful tool span error", cases: []string{"claude-code/full/failed_command", "codex/full/failed_command"}, mutate: func(f *fixture, want agentExpectation) {
+			toolSpan(*f, "call_recover").Status = &tracepb.Status{Code: tracepb.Status_STATUS_CODE_ERROR}
+		}, wantErr: "error status = true, want false"},
+		{name: "missing argument redaction marker", cases: []string{"claude-code/full/secrets", "codex/full/secrets"}, mutate: func(f *fixture, want agentExpectation) {
+			setAgentOTLPAttr(&toolSpan(*f, "call_secret").Attributes, "gen_ai.tool.call.arguments", agentOTLPStringValue(`{"command":"secret-argument-marker"}`))
+		}, wantErr: "lacks"},
+		{name: "missing result", cases: []string{"claude-code/full/baseline", "codex/full/multi_tool"}, mutate: func(f *fixture, want agentExpectation) {
+			setAgentOTLPAttr(&f.spans()[1].Attributes, "gen_ai.tool.call.result", nil)
+		}, wantErr: "gen_ai.tool.call.result"},
+		{name: "raw argument secret", cases: []string{"claude-code/full/secrets", "codex/full/secrets"}, mutate: func(f *fixture, want agentExpectation) {
+			setAgentOTLPAttr(&toolSpan(*f, "call_secret").Attributes, "gen_ai.tool.call.arguments", agentOTLPStringValue(`{"command":"secret-argument-marker [REDACTED:grafana-cloud-token] `+secretArgumentToken+`"}`))
+		}, wantErr: "ordinary content"},
+		{name: "nested JSON output secret", cases: []string{"claude-code/full/secrets", "codex/full/secrets"}, mutate: func(f *fixture, want agentExpectation) {
+			setAgentOTLPAttr(&toolSpan(*f, "call_secret").Attributes, "gen_ai.tool.call.result", agentOTLPStringValue(`secret-output-marker [REDACTED:grafana-service-account-token]`))
+			span := toolSpan(*f, "call_secret")
+			span.Events = []*tracepb.Span_Event{{Name: "custom", Attributes: []*commonpb.KeyValue{agentOTLPString("payload", `{"nested":["`+strings.ReplaceAll(secretOutputToken, "_", `\u005f`)+`"]}`)}}}
+		}, wantErr: "ordinary content"},
+		{name: "base64 reply secret", cases: []string{"claude-code/full/secrets", "codex/full/secrets"}, mutate: func(f *fixture, want agentExpectation) {
+			generationSpan(*f, 0).Attributes = append(generationSpan(*f, 0).Attributes, &commonpb.KeyValue{Key: "custom", Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_BytesValue{BytesValue: []byte(base64.StdEncoding.EncodeToString([]byte(secretReplyToken)))}}})
+		}, wantErr: "ordinary content"},
+		{name: "metric secret", cases: []string{"claude-code/full/secrets"}, mutate: func(f *fixture, want agentExpectation) {
+			f.metrics[0].ResourceMetrics[0].Resource.Attributes = append(f.metrics[0].ResourceMetrics[0].Resource.Attributes, agentOTLPString("custom", secretReplyToken))
+		}, wantErr: "metric export"},
+		{name: "metadata tool content", mutate: func(f *fixture, want agentExpectation) {
+			toolSpan(*f, fakeToolCallID).Attributes = append(toolSpan(*f, fakeToolCallID).Attributes, &commonpb.KeyValue{Key: "gen_ai.tool.call.arguments"})
+		}, wantErr: "content attribute"},
+		{name: "metadata marker", cases: []string{"claude-code/metadata_only/secrets", "codex/metadata_only/multi_tool"}, mutate: func(f *fixture, want agentExpectation) {
+			generationSpan(*f, 0).Events = []*tracepb.Span_Event{{Name: "secret-reply-marker multi-output-b"}}
+		}, wantErr: "ordinary content"},
+		{name: "resource leak", mutate: func(f *fixture, want agentExpectation) {
+			f.traces.ResourceSpans[0].Resource = &resourcepb.Resource{Attributes: []*commonpb.KeyValue{agentOTLPString("custom", fakeToolOutput)}}
+		}, wantErr: "ordinary content"},
+		{name: "missing metrics", mutate: func(f *fixture, want agentExpectation) { f.metrics = nil }, wantErr: "token usage count/sum"},
+		{name: "wrong last datapoint tag", mutate: func(f *fixture, want agentExpectation) {
+			points := f.points()
+			setAgentOTLPAttr(&points[len(points)-1].Attributes, "agento11y.tag.git.branch", agentOTLPStringValue("wrong"))
+		}, wantErr: "agento11y.tag.git.branch"},
+		{name: "wrong datapoint agent", mutate: func(f *fixture, want agentExpectation) {
+			setAgentOTLPAttr(&pointOf(*f, "output").Attributes, "gen_ai.agent.name", agentOTLPStringValue("wrong"))
+		}, wantErr: "gen_ai.agent.name"},
+		{name: "wrong datapoint model", mutate: func(f *fixture, want agentExpectation) {
+			setAgentOTLPAttr(&pointOf(*f, "output").Attributes, "gen_ai.request.model", agentOTLPStringValue("wrong"))
+		}, wantErr: "gen_ai.request.model"},
+		{name: "missing datapoint semantics", mutate: func(f *fixture, want agentExpectation) {
+			setAgentOTLPAttr(&pointOf(*f, "input").Attributes, "gen_ai.token.semantics", nil)
+		}, wantErr: "semantics"},
+		{name: "zero datapoint count", mutate: func(f *fixture, want agentExpectation) { pointOf(*f, "output").Count = 0 }, wantErr: "count/sum"},
+		{name: "missing datapoint start", mutate: func(f *fixture, want agentExpectation) { pointOf(*f, "output").StartTimeUnixNano = 0 }, wantErr: "output token usage timestamps"},
+		{name: "datapoint before its start", mutate: func(f *fixture, want agentExpectation) {
+			point := pointOf(*f, "input")
+			point.TimeUnixNano = point.StartTimeUnixNano - 1
+		}, wantErr: "input token usage timestamps"},
+		{name: "unexpected token type", mutate: func(f *fixture, want agentExpectation) {
+			setAgentOTLPAttr(&pointOf(*f, "output").Attributes, "gen_ai.token.type", agentOTLPStringValue("wrong"))
+		}, wantErr: "token type"},
+		{name: "reasoning bucket for Claude", cases: []string{"claude-code/metadata_only/nonzero_usage"}, mutate: func(f *fixture, want agentExpectation) {
+			setAgentOTLPAttr(&pointOf(*f, "cache_write").Attributes, "gen_ai.token.type", agentOTLPStringValue("reasoning"))
+		}, wantErr: "unexpected token type \"reasoning\""},
+		{name: "missing output observations", mutate: func(f *fixture, want agentExpectation) { dropPoints(f, "output") }, wantErr: "output token usage"},
+		{name: "missing cache read bucket", cases: []string{"claude-code/metadata_only/nonzero_usage", "codex/full/resume"}, mutate: func(f *fixture, want agentExpectation) { dropPoints(f, "cache_read") }, wantErr: "cache_read token usage"},
+		{name: "missing reasoning bucket", cases: []string{"codex/metadata_only/nonzero_usage"}, mutate: func(f *fixture, want agentExpectation) { dropPoints(f, "reasoning") }, wantErr: "reasoning token usage"},
+		{name: "wrong token sum", mutate: func(f *fixture, want agentExpectation) {
+			for _, point := range f.points() {
+				if agentOTLPAttrs(point.Attributes)["gen_ai.token.type"] == "output" {
+					*point.Sum++
+				}
+			}
+		}, wantErr: "count/sum"},
+		{name: "swapped generation values", cases: []string{"claude-code/metadata_only/nonzero_usage"}, mutate: func(f *fixture, want agentExpectation) {
+			// Both lifetimes claim the first generation's output, so the sum is 10, not 14.
+			for _, point := range f.points() {
+				if agentOTLPAttrs(point.Attributes)["gen_ai.token.type"] == "output" {
+					*point.Sum = 5
+				}
+			}
+		}, wantErr: "output token usage count/sum"},
+		{name: "bucket counts disagree", mutate: func(f *fixture, want agentExpectation) { pointOf(*f, "input").BucketCounts = []uint64{0, 2} }, wantErr: "buckets hold"},
+		{name: "not a histogram", mutate: func(f *fixture, want agentExpectation) {
+			f.metrics[0].ResourceMetrics[0].ScopeMetrics[0].Metrics[1].Data = &metricpb.Metric_Sum{Sum: &metricpb.Sum{}}
+		}, wantErr: "histogram datapoints"},
+		{name: "delta temporality", mutate: func(f *fixture, want agentExpectation) {
+			f.tokenHistogram(f.metrics[1]).AggregationTemporality = metricpb.AggregationTemporality_AGGREGATION_TEMPORALITY_DELTA
+		}, wantErr: "temporality"},
+		{name: "unspecified temporality", mutate: func(f *fixture, want agentExpectation) {
+			f.tokenHistogram(f.metrics[0]).AggregationTemporality = metricpb.AggregationTemporality_AGGREGATION_TEMPORALITY_UNSPECIFIED
+		}, wantErr: "temporality"},
+		{name: "decreasing cumulative snapshot", mutate: func(f *fixture, want agentExpectation) {
+			for _, point := range f.tokenHistogram(f.metrics[0]).DataPoints {
+				point.Count, point.BucketCounts = 2, []uint64{0, 2}
+			}
+		}, wantErr: "not cumulative"},
+		{name: "conflicting snapshots at one time", mutate: func(f *fixture, want agentExpectation) {
+			for _, point := range f.tokenHistogram(f.metrics[1]).DataPoints {
+				point.TimeUnixNano--
+				*point.Sum++
+			}
+		}, wantErr: "not cumulative"},
+	} {
+		cases := tc.cases
+		if cases == nil {
+			cases = []string{"claude-code/metadata_only/baseline", "codex/metadata_only/baseline"}
+		}
+		for _, key := range cases {
+			t.Run(tc.name+"/"+key, func(t *testing.T) {
+				want, ok := expectations[key]
+				require.True(t, ok, key)
+				f := agentOTLPFixture(want)
+				tc.mutate(&f, want)
+				capture := &agentOTLPCapture{traceReqs: []*coltracepb.ExportTraceServiceRequest{f.traces}, metricReqs: f.metrics}
+				err := capture.validate(want, f.generations)
 				if tc.wantErr == "" {
 					require.NoError(t, err)
 				} else {

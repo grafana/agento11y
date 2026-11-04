@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -76,9 +77,19 @@ func (o Options) logf(format string, args ...any) {
 	}
 }
 
+type resultChain struct {
+	sidechain bool
+	agentID   string
+}
+
 type userContext struct {
 	prompt      string
 	toolResults []agento11y.Message
+	// resultsChain is the chain whose result lines toolResults collects, nil
+	// once an assistant line follows. Claude Code writes each result of a
+	// parallel tool batch on its own line, and all of them answer the same
+	// assistant turn.
+	resultsChain *resultChain
 	// commandTitle is a slash command seen before the conversation has a
 	// title. It becomes the title when the model answers it; a local command
 	// such as /model answers itself instead and is dropped.
@@ -468,11 +479,12 @@ func Process(lines []transcript.Line, st *state.Session, opts Options, r *redact
 	for _, line := range lines {
 		switch line.Type {
 		case "user":
-			processUserLine(line, &uctx, st, r, opts, toolResultAt)
+			results := processUserLine(line, &uctx, st, r, opts, toolResultAt)
 			// Synthesise subagent generations from Agent tool results.
-			gens = append(gens, synthesiseSubagentGens(line, &uctx, agentCalls, opts)...)
+			gens = append(gens, synthesiseSubagentGens(line, results, agentCalls, opts)...)
 
 		case "assistant":
+			uctx.resultsChain = nil
 			if st.Title == "" && uctx.commandTitle != "" {
 				st.Title = uctx.commandTitle
 			}
@@ -632,9 +644,9 @@ func tagText(s, tag string) string {
 // synthesiseSubagentGens creates a generation for each Agent tool result in
 // the user line, using the Agent tool_use input for metadata (model,
 // description) and the tool_result content as output.
-func synthesiseSubagentGens(line transcript.Line, uctx *userContext, calls map[string]agentCall, opts Options) []agento11y.Generation {
+func synthesiseSubagentGens(line transcript.Line, results []agento11y.Message, calls map[string]agentCall, opts Options) []agento11y.Generation {
 	var gens []agento11y.Generation
-	for _, msg := range uctx.toolResults {
+	for _, msg := range results {
 		for _, part := range msg.Parts {
 			if part.ToolResult == nil {
 				continue
@@ -699,25 +711,26 @@ func subagentGenID(sessionID, toolCallID string) string {
 // processUserLine folds one user line into uctx: a plain prompt, or the tool
 // results that answer the previous assistant turn. Every tool result with a
 // parseable line timestamp also records it in toolResultAt, so the caller can
-// give the execute_tool span a real end time.
-func processUserLine(line transcript.Line, uctx *userContext, st *state.Session, r *redact.Redactor, opts Options, toolResultAt map[string]time.Time) {
+// give the execute_tool span a real end time. It returns the line's own tool
+// results.
+func processUserLine(line transcript.Line, uctx *userContext, st *state.Session, r *redact.Redactor, opts Options, toolResultAt map[string]time.Time) []agento11y.Message {
 	var msg transcript.UserMessage
 	if err := json.Unmarshal(line.Message, &msg); err != nil {
 		opts.logf("unmarshal user message: %v", err)
-		return
+		return nil
 	}
 
 	text, blocks, err := transcript.ParseUserContent(msg.Content)
 	if err != nil {
 		opts.logf("parse user content: %v", err)
-		return
+		return nil
 	}
 
 	if text != "" {
 		uctx.prompt = text
 		uctx.toolResults = nil
 		noteTitle(line, text, uctx, st)
-		return
+		return nil
 	}
 
 	// Every tool_result block on this line shares the line's timestamp.
@@ -748,12 +761,20 @@ func processUserLine(line transcript.Line, uctx *userContext, st *state.Session,
 			})
 		}
 	}
-	if len(toolParts) > 0 {
-		uctx.toolResults = []agento11y.Message{{
-			Role:  agento11y.RoleTool,
-			Parts: toolParts,
-		}}
+	if len(toolParts) == 0 {
+		return nil
 	}
+	chain := resultChain{sidechain: line.IsSidechain, agentID: line.AgentID}
+	parts := toolParts
+	if uctx.resultsChain != nil && *uctx.resultsChain == chain && len(uctx.toolResults) > 0 {
+		parts = slices.Concat(uctx.toolResults[0].Parts, toolParts)
+	}
+	uctx.toolResults = []agento11y.Message{{
+		Role:  agento11y.RoleTool,
+		Parts: parts,
+	}}
+	uctx.resultsChain = &chain
+	return []agento11y.Message{{Role: agento11y.RoleTool, Parts: toolParts}}
 }
 
 // processAssistantLine maps one coalesced assistant line to a generation.

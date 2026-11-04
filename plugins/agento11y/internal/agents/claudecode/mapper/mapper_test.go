@@ -3,6 +3,7 @@ package mapper
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -907,35 +908,97 @@ func TestProcess_ToolResultTimestamps(t *testing.T) {
 }
 
 func TestProcess_ToolResultsInInput(t *testing.T) {
-	lines := []transcript.Line{
-		makeUserLine("read file.go"),
-		makeAssistantLine("claude-sonnet-4-20250514", 30, []transcript.ContentBlock{
-			{Type: "tool_use", ID: "tu_1", Name: "Read", Input: json.RawMessage(`{"path":"file.go"}`)},
-		}, "tool_use"),
-		makeToolResultLine("tu_1", "package main"),
-		makeAssistantLine("claude-sonnet-4-20250514", 40, []transcript.ContentBlock{
-			{Type: "text", Text: "The file has a main package."},
-		}, "end_turn"),
+	model := "claude-sonnet-4-20250514"
+	toolUse := func(ids ...string) transcript.Line {
+		var blocks []transcript.ContentBlock
+		for _, id := range ids {
+			blocks = append(blocks, transcript.ContentBlock{Type: "tool_use", ID: id, Name: "Read", Input: json.RawMessage(`{"path":"file.go"}`)})
+		}
+		return makeAssistantLine(model, 30, blocks, "tool_use")
 	}
-
-	st := &state.Session{}
-	gens, _ := Process(lines, st, Options{SessionID: "sess-1"}, redact.New())
-
-	if len(gens) != 2 {
-		t.Fatalf("got %d gens, want 2", len(gens))
+	reply := makeAssistantLine(model, 40, []transcript.ContentBlock{{Type: "text", Text: "The file has a main package."}}, "end_turn")
+	sidechain := func(agentID string, line transcript.Line) transcript.Line {
+		line.IsSidechain = true
+		line.AgentID = agentID
+		return line
 	}
-
-	// First gen: input is user prompt (redacted)
-	if gens[0].Input[0].Parts[0].Kind != agento11y.PartKindText {
-		t.Errorf("gen[0] input kind = %q, want text", gens[0].Input[0].Parts[0].Kind)
+	tests := []struct {
+		name  string
+		lines []transcript.Line
+		// wantResults lists the tool result IDs in each generation's input.
+		// A nil entry after the first skips that generation.
+		wantResults [][]string
+	}{
+		{
+			name:        "one result",
+			lines:       []transcript.Line{makeUserLine("read file.go"), toolUse("tu_1"), makeToolResultLine("tu_1", "package main"), reply},
+			wantResults: [][]string{nil, {"tu_1"}},
+		},
+		{
+			name: "parallel results on separate lines",
+			lines: []transcript.Line{
+				makeUserLine("read both"), toolUse("tu_a", "tu_b"),
+				makeToolResultLine("tu_b", "package b"), makeToolResultLine("tu_a", "package a"), reply,
+			},
+			wantResults: [][]string{nil, {"tu_b", "tu_a"}},
+		},
+		{
+			name: "results after a later turn start a new batch",
+			lines: []transcript.Line{
+				makeUserLine("read twice"), toolUse("tu_1"), makeToolResultLine("tu_1", "package one"),
+				toolUse("tu_2"), makeToolResultLine("tu_2", "package two"), reply,
+			},
+			wantResults: [][]string{nil, {"tu_1"}, {"tu_2"}},
+		},
+		{
+			name: "a main result does not join a sidechain batch",
+			lines: []transcript.Line{
+				makeUserLine("read with agent"), toolUse("tu_main"), sidechain("agent-1", toolUse("tu_side")),
+				makeToolResultLine("tu_main", "package main"), sidechain("agent-1", makeToolResultLine("tu_side", "package side")),
+				sidechain("agent-1", reply),
+			},
+			wantResults: [][]string{nil, nil, {"tu_side"}},
+		},
+		{
+			name: "results of another subagent do not join a batch",
+			lines: []transcript.Line{
+				makeUserLine("run agents"), toolUse("tu_main"),
+				sidechain("agent-a", toolUse("tu_a")), sidechain("agent-b", toolUse("tu_b")),
+				sidechain("agent-a", makeToolResultLine("tu_a", "package a")), sidechain("agent-b", makeToolResultLine("tu_b", "package b")),
+				sidechain("agent-b", reply),
+			},
+			wantResults: [][]string{nil, nil, nil, {"tu_b"}},
+		},
 	}
-
-	// Second gen: input should be tool results
-	if len(gens[1].Input) == 0 {
-		t.Fatal("gen[1] has no input")
-	}
-	if gens[1].Input[0].Parts[0].Kind != agento11y.PartKindToolResult {
-		t.Errorf("input kind = %q, want tool_result", gens[1].Input[0].Parts[0].Kind)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gens, _ := Process(tt.lines, &state.Session{}, Options{SessionID: "sess-1"}, redact.New())
+			if len(gens) != len(tt.wantResults) {
+				t.Fatalf("got %d gens, want %d", len(gens), len(tt.wantResults))
+			}
+			if gens[0].Input[0].Parts[0].Kind != agento11y.PartKindText {
+				t.Errorf("gen[0] input kind = %q, want text", gens[0].Input[0].Parts[0].Kind)
+			}
+			for i, want := range tt.wantResults[1:] {
+				if want == nil {
+					continue
+				}
+				gen := gens[i+1]
+				if len(gen.Input) != 1 || gen.Input[0].Role != agento11y.RoleTool {
+					t.Fatalf("gen[%d] input = %+v, want one tool message", i+1, gen.Input)
+				}
+				var got []string
+				for _, part := range gen.Input[0].Parts {
+					if part.Kind != agento11y.PartKindToolResult {
+						t.Fatalf("gen[%d] input kind = %q, want tool_result", i+1, part.Kind)
+					}
+					got = append(got, part.ToolResult.ToolCallID)
+				}
+				if !slices.Equal(got, want) {
+					t.Errorf("gen[%d] tool results = %v, want %v", i+1, got, want)
+				}
+			}
+		})
 	}
 }
 
@@ -1608,6 +1671,23 @@ func TestProcess_ParentGenerationIDs(t *testing.T) {
 				}, "end_turn"),
 			},
 			// gen[0] = parent, gen[1..2] = synthetic subagents, gen[3] = continuation
+			wantGenCount: 4,
+			wantParents:  map[int][]int{1: {0}, 2: {0}},
+		},
+		{
+			name: "parallel agent results on separate lines synthesise each subagent once",
+			lines: []transcript.Line{
+				makeUserLine("run two agents"),
+				makeAssistantLine("claude-sonnet-4-20250514", 30, []transcript.ContentBlock{
+					{Type: "tool_use", ID: "agent_a", Name: "Agent", Input: json.RawMessage(`{"description":"A"}`)},
+					{Type: "tool_use", ID: "agent_b", Name: "Agent", Input: json.RawMessage(`{"description":"B"}`)},
+				}, "tool_use"),
+				makeToolResultLine("agent_a", "result A"),
+				makeToolResultLine("agent_b", "result B"),
+				makeAssistantLine("claude-sonnet-4-20250514", 50, []transcript.ContentBlock{
+					{Type: "text", Text: "Both agents done."},
+				}, "end_turn"),
+			},
 			wantGenCount: 4,
 			wantParents:  map[int][]int{1: {0}, 2: {0}},
 		},
