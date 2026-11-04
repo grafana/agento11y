@@ -10,8 +10,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -65,6 +68,12 @@ func TestAgentIntegration(t *testing.T) {
 	prompt := "Run echo " + fakeToolOutput + " with token " + secret
 
 	const sessionID = "7f0c9a4e-3b1d-4c2e-9f6a-2d8b5e1c7a90"
+	claudeEnv := map[string]string{
+		"ANTHROPIC_BASE_URL":                       modelURL,
+		"ANTHROPIC_API_KEY":                        "test",
+		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+	}
+	claudeArgv := []string{"claude", "-p", prompt, "--plugin-dir", filepath.Join(repo, "plugins", "claude-code"), "--session-id", sessionID, "--allowedTools", "Bash"}
 	for _, cli := range []struct {
 		name     string
 		sc       scenario
@@ -73,12 +82,8 @@ func TestAgentIntegration(t *testing.T) {
 		{
 			name: "claude",
 			sc: scenario{
-				Agent: "claude-code",
-				Env: map[string]string{
-					"ANTHROPIC_BASE_URL":                       modelURL,
-					"ANTHROPIC_API_KEY":                        "test",
-					"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-				},
+				Agent:      "claude-code",
+				Env:        claudeEnv,
 				RawSecrets: []string{secret},
 				// One generation for the tool call, one for its result and the reply.
 				Invariants: scenarioInvariants{
@@ -97,9 +102,7 @@ func TestAgentIntegration(t *testing.T) {
 					},
 				},
 			},
-			commands: [][]string{
-				{"claude", "-p", prompt, "--plugin-dir", filepath.Join(repo, "plugins", "claude-code"), "--session-id", sessionID, "--allowedTools", "Bash"},
-			},
+			commands: [][]string{claudeArgv},
 		},
 		{
 			name: "codex",
@@ -187,6 +190,72 @@ func TestAgentIntegration(t *testing.T) {
 			}
 		})
 	}
+
+	// Claude Desktop can end a session with SIGTERM mid-turn (sigil#2046).
+	// Claude Code then gives SessionEnd hooks 1.5s before it exits, so the hook
+	// has to export the turn that called the tool within that time.
+	t.Run("claude/sigterm", func(t *testing.T) {
+		if !strings.Contains(","+selected+",", ",claude,") {
+			t.Skip("claude not in AGENT_CLI_TESTS")
+		}
+		if runtime.GOOS == "windows" {
+			t.Skip("SIGTERM is Unix only")
+		}
+		sc := scenario{
+			Agent:      "claude-code",
+			Env:        claudeEnv,
+			RawSecrets: []string{secret},
+			Invariants: scenarioInvariants{
+				ExportCount:     1,
+				Generations:     1,
+				EveryGeneration: []string{`"conversation_id":"` + sessionID + `"`},
+				AnyGeneration:   []string{`"tool_call":{"id":"` + fakeToolCallID + `"`},
+			},
+		}
+		stateDir, capture := startHookExport(t, sc)
+		model.reset()
+		model.setHoldReply(true)
+		t.Cleanup(func() { model.setHoldReply(false) })
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		var out bytes.Buffer
+		cmd := newAgentCommand(ctx, t.TempDir(), claudeArgv)
+		cmd.Stdout, cmd.Stderr = &out, &out
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		exited := make(chan error, 1)
+		go func() { exited <- cmd.Wait() }()
+		// The tool ran once the model is asked for the reply that follows it.
+		for !slices.ContainsFunc(model.requestLog(), func(r string) bool { return strings.Contains(r, "called=true") }) {
+			select {
+			case err := <-exited:
+				t.Fatalf("claude exited before the tool result reached the model: %v\n%s", err, out.String())
+			case <-ctx.Done():
+				t.Fatal("model never received the tool result")
+			case <-time.After(50 * time.Millisecond):
+			}
+		}
+		if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+			t.Fatal(err)
+		}
+		// Claude Code 2.1.310 exits 143 about 1.5s after SIGTERM, once its
+		// SessionEnd hooks finish or time out.
+		select {
+		case err := <-exited:
+			if code := cmd.ProcessState.ExitCode(); code != 143 {
+				t.Errorf("claude exit = %v (code %d), want 143 from SIGTERM", err, code)
+			}
+		case <-time.After(30 * time.Second):
+			t.Fatal("claude still running 30s after SIGTERM")
+		}
+		registerExportDiagnostics(t, stateDir, append([]string{out.String()}, model.requestLog()...))
+		if strings.Contains(out.String(), "Hook cancelled") {
+			t.Errorf("Claude Code cancelled a hook:\n%s", out.String())
+		}
+		checkExports(t, "claude-sigterm", sc, capture.snapshot())
+	})
 }
 
 func validateCodexToolResult(exports []goldenExport) error {
@@ -271,6 +340,15 @@ const (
 type fakeModel struct {
 	mu       sync.Mutex
 	requests []string
+	// holdReply keeps the request after the tool call open until the client
+	// goes away, so a test can signal the agent mid-turn.
+	holdReply bool
+}
+
+func (m *fakeModel) setHoldReply(hold bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.holdReply = hold
 }
 
 func (m *fakeModel) reset() {
@@ -290,7 +368,12 @@ func (m *fakeModel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	called := bytes.Contains(body, []byte(fakeToolCallID))
 	m.mu.Lock()
 	m.requests = append(m.requests, fmt.Sprintf("model %s %s called=%t body=%.300s", r.Method, r.URL.Path, called, body))
+	hold := called && m.holdReply
 	m.mu.Unlock()
+	if hold {
+		<-r.Context().Done()
+		return
+	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	switch r.URL.Path {
