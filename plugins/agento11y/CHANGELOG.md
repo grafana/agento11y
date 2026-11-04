@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.57.0] - 2026-11-04
+
+### Features
+
+- **plugins/agento11y**: add agent filter to the local viewer's Analytics page (#713)
+
+### Bug Fixes
+
+- **plugins**: preserve usage opt-outs in child processes (#1016)
+
 ## [0.56.0] - 2026-11-02
 
 ### Breaking Changes
