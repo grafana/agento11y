@@ -242,7 +242,15 @@ describe("native v2 capture: real SDK golden and OTLP", () => {
     async function* subscription() {
       yield* transcript;
     }
-    for await (const event of subscription()) capture.handleEvent(event);
+    for await (const event of subscription()) {
+      if (event.type === "session.step.started") {
+        capture.observeSystemPrompt(
+          event.data.sessionID,
+          `Agent system prompt\n\nPrefer concise answers; token: ${nativeFixture.secret}\n\nUse the observed repository context; DATABASE_PASSWORD=${nativeFixture.envSecret}`,
+        );
+      }
+      capture.handleEvent(event);
+    }
     await capture.drain();
     // A replay and the execution-level terminal must not produce another turn
     // or duplicate an execute_tool span after the step-level terminal.
@@ -351,11 +359,11 @@ describe("native v2 capture: real SDK golden and OTLP", () => {
       cost_usd: 0.005,
     });
     expect(turn.tools.map((tool: any) => tool.name)).toEqual(["bash"]);
-    // Native capture does not observe the final provider prompt; do not manufacture one.
+    // The context hook supplies the composed agent prompt and instruction sources.
     expect(turn.system_prompt).toBe(
       contentCapture === "metadata_only"
         ? ""
-        : `Prefer concise answers; token: ${REDACTED}\n\nUse the observed repository context; DATABASE_PASSWORD=[REDACTED:env-secret-value]`,
+        : `Agent system prompt\n\nPrefer concise answers; token: ${REDACTED}\n\nUse the observed repository context; DATABASE_PASSWORD=[REDACTED:env-secret-value]`,
     );
     if (contentCapture !== "metadata_only") {
       expect(turn.input.map((message: any) => message.parts[0].text)).toEqual([

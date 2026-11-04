@@ -135,6 +135,15 @@ export const setupV2: Plugin.Plugin["setup"] = async (context) => {
     if (titles) registrations.push(() => titles.dispose());
     const guards = createNativeGuards({ client, config, context, redactions });
     registrations.push(await guards.register());
+    const systemObserver = await context.session.hook("context", (event) => {
+      if (stopped) return;
+      // Register after guards to capture their rewritten request, even with guards off.
+      capture?.observeSystemPrompt(
+        event.sessionID,
+        event.system.map((part) => part.text).join("\n\n"),
+      );
+    });
+    registrations.push(() => systemObserver.dispose());
     registrations.push(
       await createFinalCompactionGuards({
         client,

@@ -77,7 +77,7 @@
         },
         "response_id": "",
         "response_model": "claude-sonnet-4-opencode",
-        "system_prompt": "Prefer concise answers; token: [REDACTED:grafana-cloud-token]\n\nUse the observed repository context; DATABASE_PASSWORD=[REDACTED:env-secret-value]",
+        "system_prompt": "Agent system prompt\n\nPrefer concise answers; token: [REDACTED:grafana-cloud-token]\n\nUse the observed repository context; DATABASE_PASSWORD=[REDACTED:env-secret-value]",
         "input": [
           {
             "role": "MESSAGE_ROLE_USER",

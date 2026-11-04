@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   captureShutdown: vi.fn(async () => {}),
   handleEvent: vi.fn(),
   observeToolExecution: vi.fn(),
+  observeSystemPrompt: vi.fn(),
   stopObservingTools: vi.fn(),
   registerGuards: vi.fn(),
   registerFinalChecks: vi.fn(),
@@ -68,6 +69,7 @@ function host() {
   }));
   const context = {
     tool: { hook },
+    session: { hook: vi.fn(async () => ({ dispose: vi.fn(async () => {}) })) },
     app: { name: "opencode", version: "2.0.29", channel: "latest" },
     location: { directory: "/repo", workspaceID: "workspace-1" },
     event: { subscribe },
@@ -90,6 +92,7 @@ describe("native setup ownership", () => {
     mocks.createCapture.mockReturnValue({
       handleEvent: mocks.handleEvent,
       observeToolExecution: mocks.observeToolExecution,
+      observeSystemPrompt: mocks.observeSystemPrompt,
       stopObservingTools: mocks.stopObservingTools,
       shutdown: mocks.captureShutdown,
     });
@@ -99,6 +102,36 @@ describe("native setup ownership", () => {
       dispose: mocks.copilotDispose,
       refresh: mocks.copilotRefresh,
     });
+  });
+
+  it.each([
+    true,
+    false,
+  ])("captures composed context after guards=%s and stops on cleanup", async (enabled) => {
+    mocks.loadConfig.mockResolvedValue(
+      baseConfig({ guards: { enabled, timeoutMs: 1, failOpen: false } }),
+    );
+    const { context } = host();
+    const cleanup = await setupV2(context);
+    const hook = vi.mocked(context.session.hook);
+    expect(hook).toHaveBeenCalledOnce();
+    expect(hook.mock.calls[0]?.[0]).toBe("context");
+    expect(mocks.registerGuards.mock.invocationCallOrder[0]).toBeLessThan(
+      hook.mock.invocationCallOrder[0]!,
+    );
+    const observe = hook.mock.calls[0]![1];
+    const event = {
+      sessionID: "s",
+      system: [{ text: "agent prompt" }, { text: "instructions" }],
+    };
+    await observe(event as never);
+    expect(mocks.observeSystemPrompt).toHaveBeenCalledWith(
+      "s",
+      "agent prompt\n\ninstructions",
+    );
+    await cleanup?.();
+    await observe(event as never);
+    expect(mocks.observeSystemPrompt).toHaveBeenCalledOnce();
   });
 
   it("starts intake without waiting for host initialization and cleans up once", async () => {
@@ -328,7 +361,7 @@ describe("native setup ownership", () => {
       baseConfig({ guards: { enabled, timeoutMs: 1, failOpen: false } }),
     );
     const { context, hook, observerDispose } = host();
-    Object.defineProperty(context, "session", {
+    Object.defineProperty(context.session, "get", {
       get: () => {
         throw new Error("no session lookup");
       },
