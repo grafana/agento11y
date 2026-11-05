@@ -63,9 +63,9 @@ Skill names remain under metric retention even in reduced modes; use stable, non
 See [client metrics](./tool-call-vs-tool-execution.md#client-metrics) for applicability and cardinality.
 The local forwarder also strips the three private attributes from spans and span events in reduced modes.
 
-### Experimental OTel generation export
+### OTel generation export
 
-OTel generation export sends generations as spans. See the [CLI guide](../../plugins/agento11y/README.md#experimental-otel-generation-export) for setup and supported agents.
+OTel generation export sends generations as spans. See the [CLI guide](../../plugins/agento11y/README.md#generation-transport) for setup and supported agents.
 
 | Selected mode | OTel generation export |
 | --- | --- |

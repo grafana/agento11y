@@ -927,8 +927,12 @@ type configResponse struct {
 	// StackURL is the stack `agento11y login` was pointed at, read back so the
 	// connect flow can prefill its setup-page link. It is read-only: it is not
 	// part of Settings, so a save never writes or deletes it.
-	StackURL      string        `json:"stackUrl"`
-	ForwardStatus forwardStatus `json:"forwardStatus"`
+	StackURL string `json:"stackUrl"`
+	// Generation transport is read-only status, resolved even with forwarding
+	// off. Read or selection failures leave the protocol empty, not defaulted.
+	GenerationProtocol      string        `json:"generationProtocol"`
+	GenerationProtocolError string        `json:"generationProtocolError"`
+	ForwardStatus           forwardStatus `json:"forwardStatus"`
 	// LocalGuards reports local-rule posture separately from Cloud forwarding;
 	// either can be active without the other.
 	LocalGuards localGuardsStatus `json:"localGuards"`
@@ -955,7 +959,7 @@ type configPatchRequest struct {
 // handleGetConfig hydrates Settings from the current config.env and returns
 // them with a rendered preview. Only the page-managed keys are exposed.
 func (s *Server) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
-	s.writeConfigResponse(w, dotenv.LoadDotenv(s.configPath, s.logger))
+	s.writeConfigResponse(w)
 }
 
 // stackURLFrom reads the saved stack URL. STACK_URL has no alias family:
@@ -1003,7 +1007,7 @@ func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	// Re-read so the response reflects the normalised on-disk state (dropped
 	// defaults, deleted keys), which the client adopts as its saved snapshot.
-	s.writeConfigResponse(w, dotenv.LoadDotenv(s.configPath, s.logger))
+	s.writeConfigResponse(w)
 }
 
 func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
@@ -1039,13 +1043,29 @@ func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "patch config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.writeConfigResponse(w, dotenv.LoadDotenv(s.configPath, s.logger))
+	s.writeConfigResponse(w)
 }
 
-// writeConfigResponse renders the whole response from one config.env snapshot,
-// so the settings, the preview and the stack URL cannot come from separate
-// reads of a file another writer is changing.
-func (s *Server) writeConfigResponse(w http.ResponseWriter, env map[string]string) {
+// writeConfigResponse renders settings, preview, stack URL and protocol from
+// one config.env snapshot. Read and protocol errors are status data: they must
+// not turn an already-persisted settings save into an HTTP failure.
+func (s *Server) writeConfigResponse(w http.ResponseWriter) {
+	env, readErr := dotenv.ReadDotenv(s.configPath, s.logger)
+	var protocol, protocolError string
+	if readErr != nil {
+		protocolError = "read config: " + readErr.Error()
+	} else {
+		reader := envReader{file: env}
+		selected, err := envconfig.SelectGenerationTransportWith(func(suffix string) (string, string, bool) {
+			value, key := reader.family(suffix)
+			return value, key, key != ""
+		})
+		if err != nil {
+			protocolError = err.Error()
+		} else {
+			protocol = string(selected)
+		}
+	}
 	settings := ParseSettings(env)
 	preview, err := dotenv.RenderManaged(settings.previewUpdates())
 	if err != nil {
@@ -1053,12 +1073,14 @@ func (s *Server) writeConfigResponse(w http.ResponseWriter, env map[string]strin
 		return
 	}
 	s.writeJSON(w, http.StatusOK, configResponse{
-		Settings:      settings,
-		Preview:       string(preview),
-		Path:          displayConfigPath(s.configPath),
-		StackURL:      stackURLFrom(env),
-		ForwardStatus: s.forward.status(),
-		LocalGuards:   s.localGuardsStatus(),
+		Settings:                settings,
+		Preview:                 string(preview),
+		Path:                    displayConfigPath(s.configPath),
+		StackURL:                stackURLFrom(env),
+		GenerationProtocol:      protocol,
+		GenerationProtocolError: protocolError,
+		ForwardStatus:           s.forward.status(),
+		LocalGuards:             s.localGuardsStatus(),
 	})
 }
 

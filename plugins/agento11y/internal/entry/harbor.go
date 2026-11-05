@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/harbor"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/cli"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
@@ -22,9 +23,10 @@ func runHarborCommand(args []string, stderr io.Writer) {
 	if !dotenv.HasCredentials() {
 		logger, closeLog := cli.InitLogger("harbor")
 		_, err := loginRun(context.Background(), login.RunOpts{
-			Stderr:     stderr,
-			Logger:     logger,
-			OfferLocal: false,
+			Stderr:             stderr,
+			Logger:             logger,
+			OfferLocal:         false,
+			GenerationProtocol: agento11y.GenerationExportProtocolHTTP,
 		})
 		closeLog()
 		if err != nil && !errors.Is(err, login.ErrNotInteractive) {

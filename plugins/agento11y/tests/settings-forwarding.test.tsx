@@ -70,6 +70,8 @@ function config(saved: Partial<Settings> = {}, forwarding = status()): ConfigRes
     path: '/tmp/agento11y/config.env',
     preview: 'AGENTO11Y_LOCAL_FORWARD=false\n',
     stackUrl: '',
+    generationProtocol: 'otel',
+    generationProtocolError: '',
   };
 }
 const history: HistoryImport = {
@@ -378,7 +380,7 @@ describe('forwarding destinations', () => {
   });
 
   it.each(['before opening', 'while open'])('blocks full-content Connect after polling fails %s', async (timing) => {
-    const { failPoll, recover, writes } = setup();
+    const { failPoll, recover, writes } = setup({ ...config(), generationProtocol: 'http' });
     fireEvent.change(screen.getByPlaceholderText(/^AGENTO11Y_ENDPOINT=/), {
       target: {
         value: [
@@ -393,12 +395,18 @@ describe('forwarding destinations', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
     if (timing === 'while open') failPoll();
     expect(screen.queryByRole('list', { name: 'Full-content recipients' })).toBeNull();
-    const confirm = screen.getByRole('button', { name: 'Forward full content' });
-    expect(confirm.hasAttribute('disabled')).toBe(true);
-    fireEvent.click(confirm);
+    expect(screen.getByRole('button', { name: 'Connect' }).hasAttribute('disabled')).toBe(true);
+    const confirm = screen.queryByRole('button', { name: 'Forward full content' });
+    if (timing === 'while open') {
+      expect(confirm?.hasAttribute('disabled')).toBe(true);
+      fireEvent.click(confirm as HTMLElement);
+    } else {
+      expect(confirm).toBeNull();
+    }
     expect(writes).toHaveLength(0);
     const replacement = { ...extra, name: 'replacement', endpoint: 'https://replacement.example/ingest' };
-    recover(config({}, status({ destinations: [replacement] })));
+    recover({ ...config({}, status({ destinations: [replacement] })), generationProtocol: 'http' });
+    if (timing === 'before opening') fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
     const list = screen.getByRole('list', { name: 'Full-content recipients' });
     expect(within(list).getByText(primary.endpoint)).toBeTruthy();
     expect(within(list).getByText(replacement.endpoint)).toBeTruthy();
@@ -630,10 +638,13 @@ describe('forwarding destinations', () => {
   });
 
   it.each(['before opening', 'while open'])('blocks Connect Full clearing saved OTLP %s', async (timing) => {
-    const initial = config(
-      timing === 'before opening' ? { otlpEndpoint: primary.otlpEndpoint } : {},
-      status({ destinations: [primary, extra] }),
-    );
+    const initial = {
+      ...config(
+        timing === 'before opening' ? { otlpEndpoint: primary.otlpEndpoint } : {},
+        status({ destinations: [primary, extra] }),
+      ),
+      generationProtocol: 'http',
+    };
     const { writes, poll } = setup(initial);
     const block = [
       'AGENTO11Y_ENDPOINT=https://new.example/ingest',
@@ -714,7 +725,10 @@ describe('forwarding destinations', () => {
   });
 
   it('retains an effective primary OTLP route when connecting without a managed OTLP endpoint', async () => {
-    const { writes } = setup(config({}, status({ destinations: [{ ...primary, endpoint: '' }, extra] })));
+    const { writes } = setup({
+      ...config({}, status({ destinations: [{ ...primary, endpoint: '' }, extra] })),
+      generationProtocol: 'http',
+    });
     fireEvent.change(screen.getByPlaceholderText(/^AGENTO11Y_ENDPOINT=/), {
       target: {
         value: [

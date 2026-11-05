@@ -29,8 +29,10 @@ import (
 
 	agento11yv1 "github.com/grafana/agento11y/go/proto/agento11y/v1"
 
+	"github.com/grafana/agento11y/go/agento11y"
 	claudeuserid "github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/userid"
 	codexuserid "github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/userid"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/gitbranch"
 )
 
@@ -98,6 +100,9 @@ func TestAgentScenarioIsolation(t *testing.T) {
 			t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 			t.Setenv("CODEX_HOME", t.TempDir())
 			home, _ := startHookExport(t, scenario{})
+			transport, err := envconfig.SelectGenerationTransportWith(envconfig.LookupEnv)
+			require.NoError(t, err)
+			require.Equal(t, agento11y.GenerationExportProtocolOTel, transport, "shared helper must not hide the default with forced HTTP")
 			require.Equal(t, home, os.Getenv("USERPROFILE"))
 			require.DirExists(t, os.Getenv("CODEX_HOME"))
 			unsetTestEnv(t, "AGENTO11Y_USER_ID", "SIGIL_USER_ID")
