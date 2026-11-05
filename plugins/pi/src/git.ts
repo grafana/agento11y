@@ -49,8 +49,13 @@ export function resolveGitRepo(cwd: string): string | undefined {
  * must give the `want` column of conformance/git-remotes/remotes.tsv.
  */
 export function repoFromRemoteUrl(raw: string | undefined): string | undefined {
-  const url = (raw ?? "").trim();
+  let url = (raw ?? "").trim();
   if (!url) return undefined;
+  const scheme = SCHEME.exec(url);
+  // A URL's query and fragment are not part of the repository path and can
+  // carry a token, so they never reach the tag. An scp-style or filesystem
+  // remote has neither, so `?` and `#` stay part of its name.
+  if (scheme) url = url.replace(/[?#].*$/s, "");
   if (url.startsWith("file://")) {
     return trimRepoName(
       basename(stripTrailingSlashes(url.slice("file://".length))),
@@ -59,7 +64,6 @@ export function repoFromRemoteUrl(raw: string | undefined): string | undefined {
   let authority: string;
   let path: string;
   let overHttp = false;
-  const scheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.exec(url);
   if (scheme) {
     const rest = url.slice(scheme[0].length);
     const slash = rest.indexOf("/");
@@ -79,6 +83,8 @@ export function repoFromRemoteUrl(raw: string | undefined): string | undefined {
   if (!path) return undefined;
   return canonicalRepo(remoteHost(authority), overHttp, path);
 }
+
+const SCHEME = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//;
 
 /**
  * Hosts that resolve a repository path regardless of case, so
