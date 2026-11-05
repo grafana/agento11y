@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 - Take the automatic `user` tag only from `AGENTO11Y_USER_ID`. Earlier versions fell back to the operating-system account name; set `AGENTO11Y_USER_ID` to keep a `user` label.
+- Give every remote of one repository the same automatic `repo` tag, matching the other agento11y plugins. GitHub and Bitbucket Cloud remotes are lowercased, every Azure DevOps remote becomes `org/project/repo`, and Bitbucket Server HTTPS remotes drop `scm/`. Other hosts keep the remote's spelling. Series recorded earlier keep their old `repo` value.
 
 ## [0.11.0] - 2026-10-03
 

@@ -26,6 +26,9 @@ _MAX_PARENTS = 6
 _GITDIR_LINE = re.compile(r"^gitdir:\s*(.+)$", re.MULTILINE)
 _HEAD_REF = re.compile(r"^ref:\s*refs/heads/(.+)$")
 _SHA = re.compile(r"^[0-9a-fA-F]{7,}$")
+# Hosts that resolve a repository path regardless of case. gitlab.com is not
+# listed: GitLab does not document case-insensitive path lookup.
+_CASE_INSENSITIVE_HOSTS = frozenset({"github.com", "ssh.github.com", "bitbucket.org"})
 
 _CACHED: dict[str, str] | None = None
 
@@ -122,9 +125,13 @@ def _git_repo(start: str) -> str:
 
 
 def _repo_from_remote(raw: str) -> str:
+    """The repo tag for a remote URL, as ``repoFromRemoteURL`` in the Go plugin
+    gives it. Both must give the ``want`` column of
+    ``conformance/git-remotes/remotes.tsv``."""
     url = raw.strip()
     if not url:
         return ""
+    host, over_http = "", False
     if "://" in url:
         try:
             parsed = urlsplit(url)
@@ -133,11 +140,63 @@ def _repo_from_remote(raw: str) -> str:
         path = parsed.path.rstrip("/")
         if parsed.scheme == "file":
             path = os.path.basename(path)
+        host = parsed.hostname or ""
+        over_http = parsed.scheme in ("http", "https")
     elif re.match(r"^[^/:]+:", url):
-        path = url.split(":", 1)[1].rstrip("/")
+        authority, path = url.split(":", 1)
+        path = path.rstrip("/")
+        host = authority.rpartition("@")[2].lower()
     else:
         path = os.path.basename(url.rstrip("/"))
-    return path.lstrip("/").removesuffix(".git")
+    return _canonical_repo(host, over_http, path.lstrip("/"))
+
+
+def _canonical_repo(host: str, over_http: bool, path: str) -> str:
+    """Give each remote form of one repository the same tag on known hosts,
+    and drop a ``.git`` suffix.
+
+    Known hosts ignore case, so there the suffix is matched in any case too.
+    An unknown host keeps the path as the remote spells it, apart from
+    Bitbucket Server's ``scm/``: it may be case-sensitive, and lowercasing
+    there could merge two repositories.
+    """
+    if host in _CASE_INSENSITIVE_HOSTS:
+        return path.lower().removesuffix(".git")
+    if host in ("dev.azure.com", "ssh.dev.azure.com") or host.endswith(".visualstudio.com"):
+        return _azure_repo(host, path)
+    path = path.removesuffix(".git")
+    # Bitbucket Server serves ssh://host:7999/proj/repo over HTTPS as
+    # https://host/scm/proj/repo. Exactly three segments leaves out a context
+    # path (/bitbucket/scm/proj/repo), which stays as it is. gitlab.com is a
+    # known host where scm is only a group name, so its HTTPS and SSH remotes
+    # keep the same tag.
+    rest = path.removeprefix("scm/")
+    if over_http and host != "gitlab.com" and rest != path and rest.count("/") == 1:
+        return rest
+    return path
+
+
+def _azure_repo(host: str, path: str) -> str:
+    """Every Azure DevOps remote form as lowercase ``org/project/repo``.
+
+    SSH spells it ``v3/org/project/repo``, HTTPS ``org/project/_git/repo``, and
+    legacy visualstudio.com remotes carry the org in the host name and may add
+    ``DefaultCollection/`` or use ``_ssh`` for ``_git``. Azure ignores case, so
+    the markers and a ``.git`` suffix match in any case. Any other shape keeps
+    the release tag.
+    """
+    segments = path.lower().removesuffix(".git").split("/")
+    if host in ("ssh.dev.azure.com", "vs-ssh.visualstudio.com"):
+        if len(segments) != 4 or segments[0] != "v3":
+            return path.removesuffix(".git")
+        return "/".join(segments[1:])
+    if host.endswith(".visualstudio.com"):
+        segments.insert(0, host.removesuffix(".visualstudio.com"))
+    if len(segments) > 1 and segments[1] == "defaultcollection":
+        del segments[1]
+    if len(segments) != 4 or segments[2] not in ("_git", "_ssh"):
+        return path.removesuffix(".git")
+    return f"{segments[0]}/{segments[1]}/{segments[3]}"
 
 
 def _read_git_file(path: str) -> str:

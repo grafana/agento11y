@@ -167,7 +167,7 @@ AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=user,repo   # `all` is also accepted
 | Name | Tag key | Value |
 | --- | --- | --- |
 | `user` | `user` | `AGENTO11Y_USER_ID` if set, then the identity the host agent knows (the signed-in Claude Code, Codex, or Cursor account). Without either, no `user` tag is attached, so an automatic `user` tag is the session's user ID cut to its first 128 characters. |
-| `repo` | `repo` | `owner/name` from the `origin` remote of the checkout. A nested namespace stays whole (`group/subgroup/name`). Without an origin remote, the name of the checkout directory. |
+| `repo` | `repo` | `owner/name` from the `origin` remote of the checkout. A nested namespace stays whole (`group/subgroup/name`). Without an origin remote, the name of the checkout directory. See [Repository names](#repository-names) for how SSH and HTTPS remotes of one repository get the same value. |
 | `branch` | `git.branch` | Branch checked out in the session's directory, or a short commit SHA on detached HEAD. |
 
 Rules that apply to every name:
@@ -189,6 +189,20 @@ In Prometheus the tags arrive as `agento11y_tag_user`, `agento11y_tag_repo`, and
 - Choosing Off sets the switch to false and deletes the allowlist. No unusable key stays behind.
 
 Run `agento11y doctor` to see the enabled names, the variables that set them, and the value each one resolves to in the current directory before it leaves the machine. `doctor` runs outside a session, so it cannot read the account a host agent signs in to: with `AGENTO11Y_USER_ID` unset it reports `user` as `<depends on the agent>` rather than guessing. Set `AGENTO11Y_USER_ID` to see the exact value.
+
+### Repository names
+
+One repository can be cloned through several remote URLs. On hosts known to treat them as the same repository, `repo` gets one value for all of them:
+
+| Host | Remote | `repo` |
+| --- | --- | --- |
+| `github.com`, `ssh.github.com`, `bitbucket.org` | `git@github.com:Grafana/Agento11y.git`, `https://github.com/grafana/agento11y.GIT` | `grafana/agento11y` (lowercased, since these hosts ignore case) |
+| Azure DevOps (`dev.azure.com`, `ssh.dev.azure.com`, `*.visualstudio.com`) | `git@ssh.dev.azure.com:v3/org/proj/repo`, `https://dev.azure.com/org/proj/_git/repo`, `https://org.visualstudio.com/DefaultCollection/proj/_git/repo` | `org/proj/repo`, lowercased |
+| Any host except `gitlab.com`, over HTTP or HTTPS, when the path is `scm/<project>/<repo>` | `https://bitbucket.example.com/scm/proj/repo.git` | `proj/repo`, the value its Bitbucket Server SSH remote gets |
+
+Every other host keeps the path as the remote spells it, case included. A self-hosted server can be case-sensitive, so lowercasing there could merge two repositories. `gitlab.com` is in this group because GitLab does not document case-insensitive path lookup. An SSH host alias such as `git@github-work:Grafana/Agento11y.git` is a different host name, so it keeps its case and can differ from the `github.com` value.
+
+Earlier releases kept every remote's spelling, so a series recorded earlier keeps its old `repo` value. A saved filter on that value does not match new data.
 
 ### Local account identity sources
 

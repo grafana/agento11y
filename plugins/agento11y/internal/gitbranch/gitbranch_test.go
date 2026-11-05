@@ -2,6 +2,7 @@ package gitbranch
 
 import (
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strings"
@@ -529,4 +530,144 @@ func TestResolve(t *testing.T) {
 			}
 		})
 	}
+}
+
+// remotesCorpus is shared with the pi, opencode and Hermes plugins, which
+// derive the repo tag with their own copies of repoFromRemoteURL.
+const remotesCorpus = "../../../../conformance/git-remotes/remotes.tsv"
+
+// The corpus lists remote URLs with the label the last release (v0.57.0)
+// gave each one and the label wanted now. Rows where the two differ are the
+// label changes this package ships, and each one is logged so the change can
+// be read off a test run.
+func TestRepoFromRemoteURLCorpus(t *testing.T) {
+	setGOOS(t, "linux")
+	raw, err := os.ReadFile(remotesCorpus)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+	if lines[0] != "url\trelease\twant" {
+		t.Fatalf("header = %q", lines[0])
+	}
+	for _, line := range lines[1:] {
+		cols := strings.Split(line, "\t")
+		if len(cols) != 3 {
+			t.Fatalf("row %q has %d columns", line, len(cols))
+		}
+		url, release, want := cols[0], cols[1], cols[2]
+		if got := repoFromRemoteURL(url); got != want {
+			t.Errorf("repoFromRemoteURL(%q) = %q want %q", url, got, want)
+		}
+		if want != release {
+			t.Logf("changed from release: %s: %q -> %q", url, release, want)
+		}
+	}
+}
+
+// Remotes that name the same repository must give one repo label, or the
+// Repository picker lists the repository once per spelling.
+func TestRepoFromRemoteURLSameRepositorySameLabel(t *testing.T) {
+	pairs := [][2]string{
+		{"git@github.com:grafana/agento11y.git", "https://github.com/grafana/agento11y"},
+		{"git@github.com:Grafana/Agento11y.git", "https://github.com/grafana/agento11y"},
+		{"git@ssh.dev.azure.com:v3/org/proj/repo", "https://dev.azure.com/org/proj/_git/repo"},
+		{"https://org.visualstudio.com/DefaultCollection/proj/_git/repo", "https://dev.azure.com/org/proj/_git/repo"},
+		{"ssh://git@bitbucket.example.com:7999/proj/repo.git", "https://bitbucket.example.com/scm/proj/repo.git"},
+		{"https://github.com/grafana/agento11y.git/", "https://github.com/grafana/agento11y"},
+		{"org-123@github.com:grafana/agento11y.git", "https://github.com/grafana/agento11y"},
+	}
+	for _, p := range pairs {
+		a, b := repoFromRemoteURL(p[0]), repoFromRemoteURL(p[1])
+		if a != b {
+			t.Errorf("%q -> %q, %q -> %q", p[0], a, p[1], b)
+		}
+	}
+}
+
+// A host outside the known case-insensitive list can be case-sensitive or
+// can hold paths that only look like Azure DevOps ones, so it must keep the
+// label the last release gave it. The one exception is a three-segment
+// http(s) path under `scm/` on a host other than gitlab.com, which loses that
+// prefix.
+func TestRepoFromRemoteURLUnknownHostsMatchRelease(t *testing.T) {
+	setGOOS(t, "linux")
+	hosts := []string{
+		"gitlab.com", "GitLab.com", "github.example.com", "github.com.example.net",
+		"notgithub.com", "bitbucket.org.example", "dev.azure.com.example", "notdev.azure.com",
+		"visualstudio.com", "ssh.dev.azure.com.example", "git.example.com", "gh", "[::1]",
+	}
+	segments := []string{"v3", "_git", "_ssh", "DefaultCollection", "scm", "Org", "proj", "Repo", "a.git", "My%20Project", ""}
+	users := []string{"", "git@", "org@", "user:pass@"}
+	ports := []string{"", ":22", ":7999"}
+	rng := rand.New(rand.NewPCG(1, 2))
+	pick := func(list []string) string { return list[rng.IntN(len(list))] }
+	for range 5000 {
+		host := pick(hosts)
+		parts := make([]string, 1+rng.IntN(5))
+		for i := range parts {
+			parts[i] = pick(segments)
+		}
+		path := strings.Join(parts, "/")
+		if rng.IntN(4) == 0 {
+			path += ".git/"
+		}
+		var url string
+		switch rng.IntN(5) {
+		case 0:
+			url = pick(users) + host + ":" + path
+		case 1:
+			url = "ssh://" + pick(users) + host + pick(ports) + "/" + path
+		case 2:
+			url = "git://" + host + pick(ports) + "/" + path
+		case 3:
+			url = "http://" + pick(users) + host + pick(ports) + "/" + path
+		default:
+			url = "https://" + pick(users) + host + pick(ports) + "/" + path
+		}
+		want := releaseRepoFromRemoteURL(url)
+		if strings.HasPrefix(url, "http") && !strings.EqualFold(host, "gitlab.com") {
+			if rest, ok := strings.CutPrefix(want, "scm/"); ok && strings.Count(rest, "/") == 1 {
+				want = rest
+			}
+		}
+		if got := repoFromRemoteURL(url); got != want {
+			t.Fatalf("repoFromRemoteURL(%q) = %q want %q", url, got, want)
+		}
+	}
+}
+
+// releaseRepoFromRemoteURL is repoFromRemoteURL as released in v0.57.0, kept
+// as the oracle for the unknown-host property. The helpers it calls are
+// unchanged since that release.
+func releaseRepoFromRemoteURL(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	if schemeRe.MatchString(s) {
+		s, _, _ = strings.Cut(s, "?")
+		s, _, _ = strings.Cut(s, "#")
+	}
+	var path string
+	switch {
+	case strings.HasPrefix(s, "file://"):
+		return trimRepoName(filepath.Base(strings.TrimRight(strings.TrimPrefix(s, "file://"), "/")))
+	case schemeRe.MatchString(s):
+		rest := s[strings.Index(s, "://")+3:]
+		_, after, ok := strings.Cut(rest, "/")
+		if !ok {
+			return ""
+		}
+		path = after
+	case isSCPLike(s):
+		_, path, _ = strings.Cut(s, ":")
+	default:
+		return trimRepoName(filepath.Base(strings.TrimRight(s, "/")))
+	}
+	path = strings.Trim(path, "/")
+	if path == "" {
+		return ""
+	}
+	return trimRepoName(path)
 }
