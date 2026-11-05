@@ -72,10 +72,10 @@ DISABLE_ADOT_OBSERVABILITY=true
 
 The `.env.local` file is ignored by Git and is only used for local development.
 
-## 2. Validate the project
+## 2. Build the project
 
 ```bash
-agentcore validate
+agentcore build
 ```
 
 Before deployment, replace the placeholder AWS account in
@@ -85,25 +85,34 @@ Before deployment, replace the placeholder AWS account in
 ## 3. Start the local AgentCore runtime
 
 ```bash
-agentcore dev --logs
+agentcore dev
 ```
 
 AgentCore creates a virtual environment, installs the dependencies from the
 application's `pyproject.toml`, and starts the runtime on port 8080. If that
-port is occupied, it prints the replacement port. Leave this terminal running.
+port is occupied, it prints the replacement port. The v1 CLI streams runtime
+output to the terminal by default. Leave this terminal running.
 
 ## 4. Invoke the local agent
 
 In a second terminal, from this example directory:
 
 ```bash
-agentcore dev "Check inventory for ENV-100 and order DEMO-1007."
+agentcore invoke --runtime AgentCoreObsDemo --local \
+  --payload '{"prompt":"Check inventory for ENV-100 and order DEMO-1007."}'
 ```
 
-If the server selected another port, pass it explicitly:
+If port 8080 is occupied, start the server with another port:
 
 ```bash
-agentcore dev -p 8081 "Check inventory for ENV-100 and order DEMO-1007."
+agentcore dev --port 8081
+```
+
+Then invoke it with the same port:
+
+```bash
+agentcore invoke --runtime AgentCoreObsDemo --local --port 8081 \
+  --payload '{"prompt":"Check inventory for ENV-100 and order DEMO-1007."}'
 ```
 
 Other useful prompts:

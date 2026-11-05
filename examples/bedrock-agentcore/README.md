@@ -32,8 +32,12 @@ run the agent locally, invoke it, verify telemetry, and optionally deploy it.
 The local AgentCore workflow is:
 
 ```bash
-agentcore dev --logs
-agentcore dev "Check inventory for ENV-100 and order DEMO-1007."
+# Terminal 1
+agentcore dev
+
+# Terminal 2
+agentcore invoke --runtime AgentCoreObsDemo --local \
+  --payload '{"prompt":"Check inventory for ENV-100 and order DEMO-1007."}'
 ```
 
 AgentCore loads local credentials from `agentcore/.env.local`, which is ignored
