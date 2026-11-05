@@ -20,8 +20,7 @@ import (
 const (
 	// DefaultMaxLineBytes bounds one rollout line. A tool result can be large,
 	// so this is generous. A line past it is skipped when SkipOversizedLines
-	// is set and is an error otherwise; either way the rest of the rollout is
-	// never lost to one oversized line.
+	// is set, as both budgets do, and fails the scan otherwise.
 	DefaultMaxLineBytes = 16 * 1024 * 1024
 	// liveMaxLineBytes and liveMaxTranscriptBytes bound the live hook, which
 	// runs inside an agent's stop handler and must not spend unbounded time on
@@ -29,6 +28,9 @@ const (
 	// whole sessions, and rollouts of several hundred megabytes exist.
 	liveMaxLineBytes       = 1024 * 1024
 	liveMaxTranscriptBytes = 32 * 1024 * 1024
+	// oversizedPrefixBytes is how much of a skipped line is kept, enough for
+	// the envelope type and payload type that come before any large field.
+	oversizedPrefixBytes = 4096
 )
 
 type SessionMeta struct {
@@ -96,22 +98,27 @@ type ScanOptions struct {
 	// line, not the session.
 	SkipMalformedLines bool
 	// SkipOversizedLines drops a line longer than MaxLineBytes and keeps
-	// reading, instead of failing the scan. The importer sets it: a rollout
-	// with one 20MB tool result should still yield every other turn. The live
-	// hook leaves it off, because a line past its cap is budget it must not
-	// spend inside a stop handler.
+	// reading, instead of failing the scan. Both budgets set it: a rollout
+	// with one large tool result or pasted screenshot should still yield every
+	// other turn. Skipping does not spend budget that failing would save, since
+	// the scanner drains the whole line before it knows the line is too long
+	// and MaxBytes counts those bytes either way.
 	SkipOversizedLines bool
 }
 
 // LiveScanOptions is the budget for the live hook, which runs inside an agent's
 // stop handler. Malformed lines are skipped: the hook reads a rollout the
 // running Codex process is still appending to, so a half-written final line is
-// ordinary and must cost that line rather than the whole scan.
+// ordinary and must cost that line rather than the whole scan. Oversized lines
+// are skipped too: every Stop rereads the rollout from the start, so failing on
+// one line would cost that turn and every later turn in the session their
+// usage. MaxBytes bounds the time either way.
 func LiveScanOptions() ScanOptions {
 	return ScanOptions{
 		MaxLineBytes:       liveMaxLineBytes,
 		MaxBytes:           liveMaxTranscriptBytes,
 		SkipMalformedLines: true,
+		SkipOversizedLines: true,
 	}
 }
 
@@ -126,6 +133,13 @@ func ImportScanOptions() ScanOptions {
 // visit returning true stops the scan. Nothing is buffered beyond the current
 // line, so a caller can stream a rollout of any size.
 func ScanRecords(path string, opts ScanOptions, visit func(Record) (bool, error)) error {
+	return scanRecords(path, opts, visit, nil)
+}
+
+// scanRecords is ScanRecords with a hook for skipped lines: when
+// SkipOversizedLines drops a line, skipped gets its first
+// oversizedPrefixBytes and can stop the scan like visit.
+func scanRecords(path string, opts ScanOptions, visit func(Record) (bool, error), skipped func(prefix []byte) (bool, error)) error {
 	maxLine := opts.MaxLineBytes
 	if maxLine <= 0 {
 		maxLine = DefaultMaxLineBytes
@@ -154,6 +168,11 @@ func ScanRecords(path string, opts ScanOptions, visit func(Record) (bool, error)
 		}
 		if tooLong {
 			if opts.SkipOversizedLines {
+				if skipped != nil {
+					if done, err := skipped(line); err != nil || done {
+						return err
+					}
+				}
 				continue
 			}
 			return fmt.Errorf("codexlog: line %d: exceeds %d bytes", lineNo, maxLine)
@@ -181,8 +200,9 @@ func ScanRecords(path string, opts ScanOptions, visit func(Record) (bool, error)
 
 // readLine returns the next line without its trailing newline, and the bytes
 // consumed including the newline. A line longer than max is discarded as it
-// streams past, never buffered, and reported through tooLong, so one oversized
-// line costs itself and nothing after it. This is the behavior bufio.Scanner
+// streams past, never buffered past its first oversizedPrefixBytes, and
+// reported through tooLong with that prefix as line, so one oversized line
+// costs itself and nothing after it. This is the behavior bufio.Scanner
 // cannot give: its ErrTooLong is terminal and abandons the rest of the file.
 // io.EOF is returned only when nothing remains.
 func readLine(r *bufio.Reader, max int) (line []byte, consumed int64, tooLong bool, err error) {
@@ -193,7 +213,10 @@ func readLine(r *bufio.Reader, max int) (line []byte, consumed int64, tooLong bo
 		if !tooLong {
 			if len(buf)+len(chunk) > max {
 				tooLong = true
-				buf = nil
+				if room := oversizedPrefixBytes - len(buf); room > 0 {
+					buf = append(buf, chunk[:min(len(chunk), room)]...)
+				}
+				buf = buf[:min(len(buf), oversizedPrefixBytes)]
 			} else {
 				buf = append(buf, chunk...)
 			}
@@ -316,9 +339,10 @@ func ReadTokenUsageForTurn(path, turnID string, opts ScanOptions) (TokenSnapshot
 		lastTotal         TokenUsage
 		haveFinal         bool
 		finalInfo         TokenUsageInfo
+		unattributable    bool
 	)
 
-	err := ScanRecords(path, opts, func(rec Record) (bool, error) {
+	visit := func(rec Record) (bool, error) {
 		switch rec.Type {
 		case "turn_context":
 			nextTurnID := ParseTurnContext(rec.Payload).TurnID
@@ -369,11 +393,30 @@ func ReadTokenUsageForTurn(path, turnID string, opts ScanOptions) (TokenSnapshot
 			haveLastTotal = true
 		}
 		return false, nil
-	})
-	if err != nil {
+	}
+	// A skipped line still moves the turn state, as far as its prefix shows:
+	// a turn_context ends the target turn, and anything else inside it is
+	// model activity. A skipped token_count, or a line of unknown type, may
+	// have been a baseline or a final count, so the turn gets no usage rather
+	// than a wrong one.
+	skipped := func(prefix []byte) (bool, error) {
+		recordType, payloadType := oversizedLineTypes(prefix)
+		switch {
+		case recordType == "", recordType == "event_msg" && (payloadType == "" || payloadType == "token_count"):
+			unattributable = true
+			return true, nil
+		case recordType == "turn_context":
+			seenAnyTurn = true
+			activeTurnID = ""
+		case targetStarted && activeTurnID == turnID:
+			targetModelActive = true
+		}
+		return false, nil
+	}
+	if err := scanRecords(path, opts, visit, skipped); err != nil {
 		return TokenSnapshot{}, false, err
 	}
-	if !targetStarted || !haveFinal {
+	if unattributable || !targetStarted || !haveFinal {
 		return TokenSnapshot{}, false, nil
 	}
 	if !haveBaseline {
@@ -395,6 +438,51 @@ func ReadTokenUsageForTurn(path, turnID string, opts ScanOptions) (TokenSnapshot
 		ModelContextWindow: finalInfo.ModelContextWindow,
 		Source:             "turn_context_delta",
 	}, true, nil
+}
+
+// oversizedLineTypes reads the envelope type and payload type from the start
+// of a line too long to decode, walking keys until the prefix runs out. Either
+// is empty when the prefix does not reach it.
+func oversizedLineTypes(prefix []byte) (recordType, payloadType string) {
+	dec := json.NewDecoder(bytes.NewReader(prefix))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return "", ""
+	}
+	for dec.More() {
+		key, err := dec.Token()
+		if err != nil {
+			return recordType, ""
+		}
+		switch key {
+		case "type":
+			if err := dec.Decode(&recordType); err != nil {
+				return "", ""
+			}
+		case "payload":
+			if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+				return recordType, ""
+			}
+			for dec.More() {
+				key, err := dec.Token()
+				if err != nil {
+					break
+				}
+				if key == "type" {
+					_ = dec.Decode(&payloadType)
+					break
+				}
+				if err := dec.Decode(new(json.RawMessage)); err != nil {
+					break
+				}
+			}
+			return recordType, payloadType
+		default:
+			if err := dec.Decode(new(json.RawMessage)); err != nil {
+				return recordType, ""
+			}
+		}
+	}
+	return recordType, payloadType
 }
 
 // ParseSessionMeta decodes a session_meta payload. Codex has moved these

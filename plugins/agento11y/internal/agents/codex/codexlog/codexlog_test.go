@@ -1,6 +1,7 @@
 package codexlog
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -240,12 +241,239 @@ func TestReadTokenUsageForTurnRejectsNegativeDelta(t *testing.T) {
 	}
 }
 
-func TestReadSessionMetaRejectsOversizedLine(t *testing.T) {
-	path := writeTranscript(t, strings.Repeat("x", liveMaxLineBytes+1))
+// TestReadSessionMetaSkipsOversizedLine covers both sides of the live skip: a
+// line past the cap before session_meta costs only that line, and a
+// session_meta past the cap (a huge AGENTS.md, say) reads as absent, not as an
+// error.
+func TestReadSessionMetaSkipsOversizedLine(t *testing.T) {
+	oversized := strings.Repeat("x", liveMaxLineBytes+1)
 
-	_, _, err := ReadSessionMeta(path, LiveScanOptions())
-	if err == nil {
-		t.Fatal("expected oversized line error")
+	path := writeTranscript(t, oversized, `{"type":"session_meta","payload":{"id":"sess"}}`)
+	meta, ok, err := ReadSessionMeta(path, LiveScanOptions())
+	if err != nil || !ok || meta.SessionID != "sess" {
+		t.Fatalf("ReadSessionMeta = %+v ok=%v err=%v; want sess after the oversized line", meta, ok, err)
+	}
+
+	path = writeTranscript(t, `{"type":"session_meta","payload":{"id":"sess","base_instructions":{"text":"`+oversized+`"}}}`)
+	_, ok, err = ReadSessionMeta(path, LiveScanOptions())
+	if err != nil || ok {
+		t.Fatalf("ReadSessionMeta of an oversized session_meta: ok=%v err=%v; want not found and no error", ok, err)
+	}
+}
+
+func TestResolveSpawnLinkAfterOversizedLine(t *testing.T) {
+	path := writeTranscript(t,
+		`{"type":"session_meta","payload":{"id":"parent"}}`,
+		`{"type":"turn_context","payload":{"turn_id":"turn-1"}}`,
+		`{"type":"response_item","payload":{"type":"function_call","name":"spawn_agent","call_id":"call_1"}}`,
+		`{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_0","output":"`+strings.Repeat("x", liveMaxLineBytes)+`"}}`,
+		`{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"{\"agent_id\":\"child\",\"nickname\":\"Dalton\"}"}}`,
+	)
+
+	got, ok, err := ResolveSpawnLink(path, "child", LiveScanOptions(), nil)
+	if err != nil || !ok || got.ParentSessionID != "parent" || got.ParentTurnID != "turn-1" || got.SpawnCallID != "call_1" {
+		t.Fatalf("ResolveSpawnLink = %+v ok=%v err=%v; want the spawn after the oversized line", got, ok, err)
+	}
+}
+
+// TestReadTokenUsageForTurnAfterOversizedLine is the reported bug: a
+// screenshot pasted in turn 1 is stored inline as a base64 data URL, which
+// makes one rollout line larger than the live cap. Every Stop rereads the
+// rollout from the start, so a failure on that line cost every later turn its
+// usage.
+func TestReadTokenUsageForTurnAfterOversizedLine(t *testing.T) {
+	image := `{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,` +
+		strings.Repeat("A", 1100*1024) + `"}]}}`
+	path := writeTranscript(t,
+		`{"type":"turn_context","payload":{"turn_id":"turn-1"}}`,
+		image,
+		`{"type":"response_item","payload":{"type":"message","role":"assistant","content":"ok"}}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"output_tokens":10,"total_tokens":110}}}}`,
+		`{"type":"turn_context","payload":{"turn_id":"turn-2"}}`,
+		`{"type":"response_item","payload":{"type":"message","role":"assistant","content":"done"}}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":300,"output_tokens":30,"total_tokens":330}}}}`,
+	)
+	got, ok, err := ReadTokenUsageForTurn(path, "turn-2", LiveScanOptions())
+	if err != nil || !ok || got.TurnUsage.TotalTokens != 220 {
+		t.Fatalf("turn-2 usage = %+v ok=%v err=%v; want total 220", got.TurnUsage, ok, err)
+	}
+}
+
+// TestReadTokenUsageForTurnClassifiesOversizedLines pins what a skipped line
+// means for the turn it sits in, read from the start of the line. Wrong usage
+// is worse than none, so a line whose type cannot be read, or a skipped
+// token_count, gives no usage.
+func TestReadTokenUsageForTurnClassifiesOversizedLines(t *testing.T) {
+	big := strings.Repeat("A", liveMaxLineBytes)
+	tokens := func(total int) string {
+		return fmt.Sprintf(`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":%d,"total_tokens":%d}}}}`, total, total)
+	}
+	turn1 := []string{
+		`{"type":"turn_context","payload":{"turn_id":"turn-1"}}`,
+		`{"type":"response_item","payload":{"type":"reasoning"}}`,
+		tokens(100),
+	}
+	tests := []struct {
+		name   string
+		lines  []string
+		turnID string
+		want   int64 // 0 means no usage
+	}{
+		{
+			name: "model activity before any parsed activity",
+			lines: append(append([]string{}, turn1...),
+				`{"type":"turn_context","payload":{"turn_id":"turn-2"}}`,
+				`{"timestamp":"2026-11-05T10:00:00Z","type":"response_item","payload":{"type":"custom_tool_call","name":"apply_patch","call_id":"c1","input":"`+big+`"}}`,
+				tokens(300),
+				`{"type":"response_item","payload":{"type":"message","role":"assistant","content":"done"}}`,
+				tokens(350),
+			),
+			turnID: "turn-2",
+			want:   250,
+		},
+		{
+			name: "next turn_context ends the target turn",
+			lines: append(append([]string{}, turn1...),
+				`{"type":"turn_context","payload":{"cwd":"/work","user_instructions":"`+big+`","turn_id":"turn-2"}}`,
+				`{"type":"response_item","payload":{"type":"reasoning"}}`,
+				tokens(900),
+			),
+			turnID: "turn-1",
+			want:   100,
+		},
+		{
+			name: "own turn_context skipped",
+			lines: append(append([]string{}, turn1...),
+				`{"type":"turn_context","payload":{"cwd":"/work","user_instructions":"`+big+`","turn_id":"turn-2"}}`,
+				`{"type":"response_item","payload":{"type":"reasoning"}}`,
+				tokens(900),
+			),
+			turnID: "turn-2",
+		},
+		{
+			name: "type unreadable",
+			lines: append(append([]string{}, turn1...),
+				`{"type":"turn_context","payload":{"turn_id":"turn-2"}}`,
+				`{"payload":{"input":"`+big+`"},"type":"response_item"}`,
+				`{"type":"response_item","payload":{"type":"reasoning"}}`,
+				tokens(300),
+			),
+			turnID: "turn-2",
+		},
+		{
+			name: "token_count skipped",
+			lines: append(append([]string{}, turn1...),
+				`{"type":"turn_context","payload":{"turn_id":"turn-2"}}`,
+				`{"type":"response_item","payload":{"type":"reasoning"}}`,
+				`{"type":"event_msg","payload":{"type":"token_count","info":{"rate_limits":"`+big+`"}}}`,
+				tokens(300),
+			),
+			turnID: "turn-2",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok, err := ReadTokenUsageForTurn(writeTranscript(t, tt.lines...), tt.turnID, LiveScanOptions())
+			if err != nil {
+				t.Fatalf("ReadTokenUsageForTurn: %v", err)
+			}
+			if tt.want == 0 {
+				if ok {
+					t.Fatalf("usage = %+v baseline=%+v; want none", got.TurnUsage, got.BaselineUsage)
+				}
+				return
+			}
+			if !ok || got.TurnUsage.TotalTokens != tt.want {
+				t.Fatalf("total = %d ok=%v baseline=%d; want %d", got.TurnUsage.TotalTokens, ok, got.BaselineUsage.TotalTokens, tt.want)
+			}
+		})
+	}
+}
+
+// oversizedMarker in a testdata/live rollout is expanded into a run of bytes
+// past the live line cap, so the corpus stays a few KiB on disk.
+const oversizedMarker = "@@OVERSIZED@@"
+
+// liveRollout returns the expanded copy of testdata/live/name.
+func liveRollout(t testing.TB, name string) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", "live", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), name)
+	expanded := strings.ReplaceAll(string(raw), oversizedMarker, strings.Repeat("A", liveMaxLineBytes))
+	if err := os.WriteFile(path, []byte(expanded), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// TestLiveCorpusTurnUsage reads every turn of every testdata/live rollout with
+// the live budget. Each rollout but plain.jsonl has a line past the live cap.
+// Every turn gets its own usage, except a turn whose own turn_context was
+// skipped, which gets none.
+func TestLiveCorpusTurnUsage(t *testing.T) {
+	want := map[string][]string{
+		"plain.jsonl":              {"in=100 out=10 total=110", "in=200 out=20 total=220", "in=240 out=30 total=270"},
+		"screenshot.jsonl":         {"in=100 out=10 total=110", "in=200 out=20 total=220", "in=240 out=30 total=270"},
+		"large-tool-output.jsonl":  {"in=100 out=10 total=110", "in=300 out=30 total=330", "in=100 out=10 total=110"},
+		"large-session-meta.jsonl": {"in=100 out=10 total=110", "in=150 out=15 total=165"},
+		"two-screenshots.jsonl":    {"in=100 out=10 total=110", "in=200 out=20 total=220", "in=300 out=30 total=330", "in=400 out=40 total=440"},
+		"large-tool-call.jsonl":    {"in=90 out=10 total=100", "in=225 out=25 total=250", "in=90 out=10 total=100"},
+		"large-turn-context.jsonl": {"in=90 out=10 total=100", "none", "in=90 out=10 total=100"},
+	}
+	files, _ := filepath.Glob(filepath.Join("testdata", "live", "*.jsonl"))
+	if len(files) != len(want) {
+		t.Fatalf("testdata/live has %d rollouts, the table has %d", len(files), len(want))
+	}
+	for name, turns := range want {
+		path := liveRollout(t, name)
+		for i, wantRow := range turns {
+			turnID := fmt.Sprintf("turn-%d", i+1)
+			got, ok, err := ReadTokenUsageForTurn(path, turnID, LiveScanOptions())
+			row := fmt.Sprintf("in=%d out=%d total=%d", got.TurnUsage.InputTokens, got.TurnUsage.OutputTokens, got.TurnUsage.TotalTokens)
+			if !ok {
+				row = "none"
+			}
+			if err != nil || row != wantRow {
+				t.Errorf("%s %s: %s err=%v; want %s", name, turnID, row, err, wantRow)
+			}
+		}
+	}
+}
+
+// BenchmarkReadTokenUsageForTurnLive reads the last turn of a 30 MiB rollout,
+// with and without one oversized line. A skipped line is drained without a
+// decode, so it should cost no more than a normal line of the same size.
+func BenchmarkReadTokenUsageForTurnLive(b *testing.B) {
+	const turns = 1900
+	text := strings.Repeat("y", 16*1024)
+	build := func(withOversized bool) string {
+		var sb strings.Builder
+		for i := 1; i <= turns; i++ {
+			fmt.Fprintf(&sb, `{"type":"turn_context","payload":{"turn_id":"turn-%d"}}`+"\n", i)
+			if withOversized && i == 1 {
+				sb.WriteString(`{"type":"response_item","payload":{"type":"message","role":"user","content":"` + strings.Repeat("A", 1100*1024) + `"}}` + "\n")
+			}
+			fmt.Fprintf(&sb, `{"type":"response_item","payload":{"type":"message","role":"assistant","content":%q}}`+"\n", text)
+			fmt.Fprintf(&sb, `{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":%d,"total_tokens":%d}}}}`+"\n", i*10, i*10)
+		}
+		path := filepath.Join(b.TempDir(), "rollout.jsonl")
+		if err := os.WriteFile(path, []byte(sb.String()), 0o600); err != nil {
+			b.Fatal(err)
+		}
+		return path
+	}
+	for _, withOversized := range []bool{false, true} {
+		path := build(withOversized)
+		b.Run(fmt.Sprintf("oversized=%v", withOversized), func(b *testing.B) {
+			for b.Loop() {
+				if _, ok, err := ReadTokenUsageForTurn(path, fmt.Sprintf("turn-%d", turns), LiveScanOptions()); err != nil || !ok {
+					b.Fatalf("ok=%v err=%v", ok, err)
+				}
+			}
+		})
 	}
 }
 
