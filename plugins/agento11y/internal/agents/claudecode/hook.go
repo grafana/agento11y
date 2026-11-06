@@ -26,6 +26,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/autotag"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/emit"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/gitbranch"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/otel"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/redact"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/useragent"
@@ -248,6 +249,8 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 		SkipPromptRedaction: skipPromptRedaction,
 		TitleDropped:        contentMode == agento11y.ContentCaptureModeMetadataOnly,
 		GenerationSources:   map[int]transcript.Line{},
+		ResolvedBranch:      gitbranch.Resolve(input.Cwd),
+		ResolvedCwd:         input.Cwd,
 	}
 
 	var parentGens []agento11y.Generation

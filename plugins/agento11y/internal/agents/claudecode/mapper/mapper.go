@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"maps"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -60,6 +61,18 @@ type Options struct {
 	// output position. Synthetic generations have no entry. Positions, unlike
 	// generation IDs, distinguish separate turns that reuse a request ID.
 	GenerationSources map[int]transcript.Line
+	// ResolvedBranch is the branch or short commit the live hook read from
+	// .git/HEAD in ResolvedCwd, the same value the agento11y_tag_git_branch
+	// metric label carries. It replaces the "HEAD" Claude Code writes on a
+	// detached HEAD, and only on lines whose cwd is blank or ResolvedCwd: a
+	// line from another checkout keeps "HEAD" rather than take a branch read
+	// from the wrong directory. The history importer leaves it blank:
+	// resolving at import time would stamp today's checkout on old turns.
+	ResolvedBranch string
+	// ResolvedCwd is the directory ResolvedBranch was read from. It is
+	// compared with the line's cwd textually, so a symlinked spelling of the
+	// same checkout keeps "HEAD".
+	ResolvedCwd string
 }
 
 // agent is the base agent name for every generation this run produces: the
@@ -684,7 +697,7 @@ func synthesiseSubagentGens(line transcript.Line, results []agento11y.Message, c
 				StopReason:          "end_turn",
 				StartedAt:           startedAt,
 				CompletedAt:         completedAt,
-				Tags:                buildTags(line, true, opts.ExtraTags),
+				Tags:                buildTags(line, true, opts),
 			}
 
 			// Use the tool result content as the output.
@@ -835,7 +848,7 @@ func processAssistantLine(line transcript.Line, uctx *userContext, _ *state.Sess
 		StopReason:    msg.StopReason,
 		StartedAt:     startedAt,
 		CompletedAt:   completedAt,
-		Tags:          buildTags(line, isSidechain, opts.ExtraTags),
+		Tags:          buildTags(line, isSidechain, opts),
 	}
 
 	toolNames := map[string]bool{}
@@ -864,7 +877,8 @@ func processAssistantLine(line transcript.Line, uctx *userContext, _ *state.Sess
 	return gen, true
 }
 
-func buildTags(line transcript.Line, subagent bool, extras map[string]string) map[string]string {
+func buildTags(line transcript.Line, subagent bool, opts Options) map[string]string {
+	extras := opts.ExtraTags
 	if line.GitBranch == "" && line.CWD == "" && line.Entrypoint == "" && !subagent && len(extras) == 0 {
 		return nil
 	}
@@ -872,7 +886,11 @@ func buildTags(line transcript.Line, subagent bool, extras map[string]string) ma
 	// Extras go in first; built-ins written below overwrite any collisions
 	// so user-supplied keys can never shadow git.branch/cwd/entrypoint/subagent.
 	maps.Copy(tags, extras)
-	if line.GitBranch != "" {
+	switch {
+	case line.GitBranch == "HEAD" && opts.ResolvedBranch != "" &&
+		(line.CWD == "" || filepath.Clean(line.CWD) == filepath.Clean(opts.ResolvedCwd)):
+		tags["git.branch"] = opts.ResolvedBranch
+	case line.GitBranch != "":
 		tags["git.branch"] = line.GitBranch
 	}
 	if line.CWD != "" {
