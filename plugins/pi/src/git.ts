@@ -92,11 +92,14 @@ const SCHEME = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//;
  * gitlab.com is not listed: GitLab does not document case-insensitive path
  * lookup. Any other host may be a case-sensitive server, such as gitolite or a
  * self-hosted GitLab, where lowercasing could merge two repositories.
+ * ssh.github.com and altssh.bitbucket.org are the vendors' documented SSH
+ * hosts on port 443 for the same repositories.
  */
 const CASE_INSENSITIVE_HOSTS = new Set([
   "github.com",
   "ssh.github.com",
   "bitbucket.org",
+  "altssh.bitbucket.org",
 ]);
 
 /**

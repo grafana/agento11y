@@ -574,6 +574,7 @@ func TestRepoFromRemoteURLSameRepositorySameLabel(t *testing.T) {
 		{"git@ssh.dev.azure.com:v3/org/proj/repo", "https://dev.azure.com/org/proj/_git/repo"},
 		{"https://org.visualstudio.com/DefaultCollection/proj/_git/repo", "https://dev.azure.com/org/proj/_git/repo"},
 		{"ssh://git@bitbucket.example.com:7999/proj/repo.git", "https://bitbucket.example.com/scm/proj/repo.git"},
+		{"ssh://git@altssh.bitbucket.org:443/Team/Repo.git", "git@bitbucket.org:team/repo.git"},
 		{"https://github.com/grafana/agento11y.git/", "https://github.com/grafana/agento11y"},
 		{"org-123@github.com:grafana/agento11y.git", "https://github.com/grafana/agento11y"},
 	}

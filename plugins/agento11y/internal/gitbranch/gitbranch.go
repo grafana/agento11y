@@ -238,10 +238,13 @@ func remoteHost(authority string) string {
 // gitlab.com is not listed: GitLab does not document case-insensitive path
 // lookup. Any other host may be a case-sensitive server, such as gitolite or a
 // self-hosted GitLab, where lowercasing could merge two repositories.
+// ssh.github.com and altssh.bitbucket.org are the vendors' documented SSH
+// hosts on port 443 for the same repositories.
 var caseInsensitiveHosts = map[string]bool{
-	"github.com":     true,
-	"ssh.github.com": true,
-	"bitbucket.org":  true,
+	"github.com":           true,
+	"ssh.github.com":       true,
+	"bitbucket.org":        true,
+	"altssh.bitbucket.org": true,
 }
 
 // canonicalRepo rewrites the path of a remote on a known host into the one

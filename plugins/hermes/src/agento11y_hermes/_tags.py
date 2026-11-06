@@ -28,7 +28,9 @@ _HEAD_REF = re.compile(r"^ref:\s*refs/heads/(.+)$")
 _SHA = re.compile(r"^[0-9a-fA-F]{7,}$")
 # Hosts that resolve a repository path regardless of case. gitlab.com is not
 # listed: GitLab does not document case-insensitive path lookup.
-_CASE_INSENSITIVE_HOSTS = frozenset({"github.com", "ssh.github.com", "bitbucket.org"})
+# ssh.github.com and altssh.bitbucket.org are the vendors' documented SSH hosts
+# on port 443 for the same repositories.
+_CASE_INSENSITIVE_HOSTS = frozenset({"github.com", "ssh.github.com", "bitbucket.org", "altssh.bitbucket.org"})
 
 _CACHED: dict[str, str] | None = None
 
