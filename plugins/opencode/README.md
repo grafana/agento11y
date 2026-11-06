@@ -13,6 +13,13 @@ curl -fsSL https://raw.githubusercontent.com/grafana/agento11y/main/plugins/agen
 agento11y opencode
 ```
 
+**Quick install (Windows PowerShell 5.1 or PowerShell 7):**
+
+```powershell
+irm https://raw.githubusercontent.com/grafana/agento11y/main/plugins/agento11y/scripts/install.ps1 | iex
+agento11y opencode
+```
+
 **Homebrew (macOS):**
 
 ```sh
@@ -20,14 +27,14 @@ brew install grafana/grafana/agento11y
 agento11y opencode
 ```
 
-**Go install (Windows, or any platform with Go 1.26.9+):**
+**Go install (any platform with Go 1.26.9+):**
 
 ```sh
 go install github.com/grafana/agento11y/plugins/agento11y/cmd/agento11y@latest
 agento11y opencode
 ```
 
-The script installs `agento11y` to `~/.local/bin`; `go install` uses `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`. See the [`agento11y` binary README](../agento11y/README.md#install) for all install options. The command was renamed from `sigil`; the old name still works but will be removed in a future release.
+The Unix script installs `agento11y` to `~/.local/bin`; `go install` uses `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`. The Windows script updates `PATH` and installs only `agento11y.exe`. See the [`agento11y` binary README](../agento11y/README.md#install) for installer options and the manual ZIP fallback. The command was renamed from `sigil`; the Unix quick installer and Homebrew still add that alias, but it will be removed.
 
 On first run, `agento11y opencode` asks where sessions go, saves the answer to `~/.config/agento11y/config.env`, then installs `@grafana/agento11y-opencode` and launches OpenCode. **Grafana Cloud** asks for the credentials below. **Local only** sets `AGENTO11Y_LOCAL=true` and starts the local receiver for that launch. The question needs macOS or Linux and a terminal; see [Configure](../agento11y/README.md#configure) for the full rules. Pass arguments to OpenCode after `--`, for example, `agento11y opencode -- run "say hi"`. For supported releases and OpenCode 2 behavior, see [OpenCode 2](#opencode-2).
 

@@ -10,19 +10,25 @@ Sends Cursor agent generations to [Grafana Agent Observability](https://grafana.
 curl -fsSL https://raw.githubusercontent.com/grafana/agento11y/main/plugins/agento11y/scripts/install.sh | sh
 ```
 
+**Quick install (Windows PowerShell 5.1 or PowerShell 7):**
+
+```powershell
+irm https://raw.githubusercontent.com/grafana/agento11y/main/plugins/agento11y/scripts/install.ps1 | iex
+```
+
 **Homebrew (macOS):**
 
 ```sh
 brew install grafana/grafana/agento11y
 ```
 
-**Go install (Windows, or any platform with Go 1.26.9+):**
+**Go install (any platform with Go 1.26.9+):**
 
 ```sh
 go install github.com/grafana/agento11y/plugins/agento11y/cmd/agento11y@latest
 ```
 
-The script installs `agento11y` to `~/.local/bin`; `go install` uses `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`. See the [`agento11y` binary README](../agento11y/README.md#install) for all install options. The command was renamed from `sigil`; the old name still works but will be removed in a future release.
+The Unix script installs `agento11y` to `~/.local/bin`; `go install` uses `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`. The Windows script updates `PATH` and installs only `agento11y.exe`. See the [`agento11y` binary README](../agento11y/README.md#install) for installer options and the manual ZIP fallback. The command was renamed from `sigil`; the Unix quick installer and Homebrew still add that alias, but it will be removed.
 
 Cursor is a GUI app with no `agento11y cursor` launcher, so after installing the binary you wire the hooks once with `agento11y cursor install` (next step), then add credentials.
 

@@ -19,8 +19,14 @@ For the other coding agents, install `agento11y`:
 curl -fsSL https://raw.githubusercontent.com/grafana/agento11y/main/plugins/agento11y/scripts/install.sh | sh
 # macOS with Homebrew
 brew install grafana/grafana/agento11y
-# Windows, or any platform with Go 1.26.9+
+# Any platform with Go 1.26.9+
 go install github.com/grafana/agento11y/plugins/agento11y/cmd/agento11y@latest
+```
+
+On Windows, use Windows PowerShell 5.1 or PowerShell 7:
+
+```powershell
+irm https://raw.githubusercontent.com/grafana/agento11y/main/plugins/agento11y/scripts/install.ps1 | iex
 ```
 
 Then run `agento11y login` and launch your agent, for example `agento11y codex`. The [Coding Agent Observability guide](plugins/agento11y/README.md#install) covers all install options, configuration, and supported agents.
