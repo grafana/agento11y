@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"log"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -82,6 +83,8 @@ type hookInput struct {
 	ToolInput      json.RawMessage `json:"tool_input,omitempty"`
 	ToolUseID      string          `json:"tool_use_id,omitempty"`
 	Prompt         string          `json:"prompt,omitempty"`
+	// Source says how a SessionStart began: "startup", "resume", "fork", ...
+	Source string `json:"source,omitempty"`
 }
 
 // Hook reads a single Claude Code hook payload from stdin, processes it, and
@@ -117,6 +120,10 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 	switch strings.TrimSpace(input.HookEventName) {
 	case "SessionStart":
 		st.Model = strings.TrimSpace(input.Model)
+		// Set once: a later start time would drop the fork's own turns as copies.
+		if strings.TrimSpace(input.Source) == "fork" && st.ForkedAt.IsZero() && st.Offset == 0 {
+			st.ForkedAt = time.Now()
+		}
 		if err := state.Save(input.SessionID, st); err != nil {
 			logger.Printf("save state: %v", err)
 		}
@@ -200,7 +207,7 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 	initToolState(&st, input.TranscriptPath, subFiles)
 	stop := strings.TrimSpace(input.HookEventName) == "Stop"
 	readFrom := toolReadOffset(&st, input.TranscriptPath, st.Offset)
-	raw, readPos, titles, err := readLiveSettled(hookCtx, input.TranscriptPath, readFrom, st.Offset, stop, logger)
+	raw, readPos, titles, err := readLiveSettled(hookCtx, input.TranscriptPath, readFrom, st.Offset, st.ForkedAt, stop, logger)
 	if err != nil {
 		return nil
 	}
@@ -450,7 +457,7 @@ func handleUserPromptSubmit(ctx context.Context, stdout io.Writer, input *hookIn
 // caller can distinguish "nothing to read" from "read but nothing complete",
 // and the title lines Claude Code wrote in the range.
 func readTranscriptSettled(ctx context.Context, path string, offset int64, stop bool, logger *log.Logger) ([]transcript.Line, int64, int, transcript.Titles) {
-	raw, _, titles, err := readLiveSettled(ctx, path, offset, offset, stop, logger)
+	raw, _, titles, err := readLiveSettled(ctx, path, offset, offset, time.Time{}, stop, logger)
 	if err != nil {
 		return nil, 0, 0, transcript.Titles{}
 	}
@@ -461,13 +468,22 @@ func readTranscriptSettled(ctx context.Context, path string, offset int64, stop 
 // A test seam for transient I/O faults. Each accepted batch feeds both consumers.
 var readLiveComplete = transcript.ReadCompleteWithTitles
 
-func readLiveSettled(ctx context.Context, path string, offset, generationOffset int64, stop bool, logger *log.Logger) ([]transcript.Line, int64, transcript.Titles, error) {
+// A forked session's transcript holds copies of the original's turns, which
+// that session exported; with a non-zero forkedAt the read drops them, so
+// neither the settle rules nor the export see them.
+func readLiveSettled(ctx context.Context, path string, offset, generationOffset int64, forkedAt time.Time, stop bool, logger *log.Logger) ([]transcript.Line, int64, transcript.Titles, error) {
 	deadline := time.Now().Add(transcriptSettleWindow)
 	for {
 		raw, pos, titles, err := readLiveComplete(path, offset)
 		if err != nil && (!stop || !errors.Is(err, fs.ErrNotExist)) {
 			logger.Printf("read transcript: %v", err)
 			return nil, offset, transcript.Titles{}, err
+		}
+		dropped := 0
+		if !forkedAt.IsZero() {
+			n := len(raw)
+			raw = dropForkCopies(raw, forkedAt)
+			dropped = n - len(raw)
 		}
 
 		mappingRaw := afterOffset(raw, generationOffset)
@@ -483,6 +499,9 @@ func readLiveSettled(ctx context.Context, path string, offset, generationOffset 
 		if settled || !time.Now().Before(deadline) {
 			if err != nil {
 				logger.Printf("read transcript: %v", err)
+			}
+			if dropped > 0 {
+				logger.Printf("fork: dropped %d lines copied from before %s", dropped, forkedAt.Format(time.RFC3339Nano))
 			}
 			return raw, pos, titles, err
 		}
@@ -567,6 +586,19 @@ func parseHookInput(r io.Reader) (*hookInput, error) {
 	}
 
 	return &input, nil
+}
+
+// dropForkCopies removes the lines a fork copied from the original session:
+// they keep the times they were first written, before the fork started. Claude
+// Code waits for SessionStart hooks before the fork's first model call, so the
+// fork's own lines are stamped later, wherever Claude Code writes them. A line
+// without a readable timestamp is kept, as a fork without this check would
+// keep it.
+func dropForkCopies(lines []transcript.Line, forkedAt time.Time) []transcript.Line {
+	return slices.DeleteFunc(lines, func(line transcript.Line) bool {
+		at, err := time.Parse(time.RFC3339Nano, line.Timestamp)
+		return err == nil && at.Before(forkedAt)
+	})
 }
 
 // generationStart projects a mapped generation onto the span seed the SDK
