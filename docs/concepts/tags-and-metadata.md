@@ -196,7 +196,7 @@ One repository can be cloned through several remote URLs. On hosts known to trea
 
 | Host | Remote | `repo` |
 | --- | --- | --- |
-| `github.com`, `ssh.github.com`, `bitbucket.org` | `git@github.com:Grafana/Agento11y.git`, `https://github.com/grafana/agento11y.GIT` | `grafana/agento11y` (lowercased, since these hosts ignore case) |
+| `github.com`, `ssh.github.com`, `bitbucket.org`, `altssh.bitbucket.org` | `git@github.com:Grafana/Agento11y.git`, `https://github.com/grafana/agento11y.GIT` | `grafana/agento11y` (lowercased, since these hosts ignore case) |
 | Azure DevOps (`dev.azure.com`, `ssh.dev.azure.com`, `*.visualstudio.com`) | `git@ssh.dev.azure.com:v3/org/proj/repo`, `https://dev.azure.com/org/proj/_git/repo`, `https://org.visualstudio.com/DefaultCollection/proj/_git/repo` | `org/proj/repo`, lowercased |
 | Any host except `gitlab.com`, over HTTP or HTTPS, when the path is `scm/<project>/<repo>` | `https://bitbucket.example.com/scm/proj/repo.git` | `proj/repo`, the value its Bitbucket Server SSH remote gets |
 

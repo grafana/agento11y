@@ -14,6 +14,7 @@ git@github.com:fixture/deep.git	fixture/deep	fixture/deep
 git@github.com:upstream/other.git	upstream/other	upstream/other
 git@bitbucket.org:Team/Repo.git	Team/Repo	team/repo
 https://user@bitbucket.org/Team/Repo.git	Team/Repo	team/repo
+ssh://git@altssh.bitbucket.org:443/Team/Repo.git	Team/Repo	team/repo
 git@github.example.com:Org/Repo.git	Org/Repo	Org/Repo
 https://github.example.com/Org/Repo.git	Org/Repo	Org/Repo
 git@gitolite.example.com:Foo.git	Foo	Foo
