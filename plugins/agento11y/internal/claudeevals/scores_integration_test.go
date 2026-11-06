@@ -1,12 +1,14 @@
 package claudeevals
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -57,6 +59,10 @@ func TestExportLifecycleDelayedGeneration(t *testing.T) {
 					_, _ = io.WriteString(w, `{"capabilities":["otel_generation_ingest_v1"]}`)
 					return
 				}
+				// Nothing here checks metrics, and a metrics body can be cut short.
+				if strings.HasSuffix(r.URL.Path, "/metrics") {
+					return
+				}
 				reader := io.Reader(r.Body)
 				if r.Header.Get("Content-Encoding") == "gzip" {
 					gz, err := gzip.NewReader(reader)
@@ -86,9 +92,6 @@ func TestExportLifecycleDelayedGeneration(t *testing.T) {
 							}
 						}
 					}
-					return
-				}
-				if strings.HasSuffix(r.URL.Path, "/metrics") {
 					return
 				}
 				w.Header().Set("Content-Type", "application/json")
@@ -127,6 +130,20 @@ func TestExportLifecycleDelayedGeneration(t *testing.T) {
 				}
 			}))
 			defer server.Close()
+			if tc.wantCalls == 2 {
+				// This case outlasts the 1s metrics interval, and Shutdown cancels
+				// an in-flight periodic export, which can leave the server a
+				// truncated body. Send one so every run sees it.
+				conn, err := net.Dial("tcp", server.Listener.Addr().String())
+				require.NoError(t, err)
+				defer conn.Close()
+				_, err = io.WriteString(conn, "POST /v1/metrics HTTP/1.1\r\nHost: test\r\nContent-Length: 10\r\n\r\ncut")
+				require.NoError(t, err)
+				require.NoError(t, conn.(*net.TCPConn).CloseWrite())
+				response, err := http.ReadResponse(bufio.NewReader(conn), nil)
+				require.NoError(t, err)
+				require.NoError(t, response.Body.Close())
+			}
 			t.Setenv("AGENTO11Y_PROTOCOL", tc.protocol)
 			t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "true")
 			t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", server.URL)
