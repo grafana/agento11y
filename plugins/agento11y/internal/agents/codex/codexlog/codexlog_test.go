@@ -302,7 +302,8 @@ func TestReadTokenUsageForTurnAfterOversizedLine(t *testing.T) {
 // TestReadTokenUsageForTurnClassifiesOversizedLines pins what a skipped line
 // means for the turn it sits in, read from the start of the line. Wrong usage
 // is worse than none, so a line whose type cannot be read, or a skipped
-// token_count, gives no usage.
+// token_count, gives no usage when it comes before the target turn ends.
+// After that it cannot be the target's count and is ignored.
 func TestReadTokenUsageForTurnClassifiesOversizedLines(t *testing.T) {
 	big := strings.Repeat("A", liveMaxLineBytes)
 	tokens := func(total int) string {
@@ -370,6 +371,45 @@ func TestReadTokenUsageForTurnClassifiesOversizedLines(t *testing.T) {
 			),
 			turnID: "turn-2",
 		},
+		{
+			name: "token_count after the target turn ends",
+			lines: append(append([]string{}, turn1...),
+				`{"type":"turn_context","payload":{"turn_id":"turn-2"}}`,
+				`{"type":"response_item","payload":{"type":"reasoning"}}`,
+				tokens(300),
+				`{"type":"turn_context","payload":{"turn_id":"turn-3"}}`,
+				`{"type":"event_msg","payload":{"type":"token_count","info":{"rate_limits":"`+big+`"}}}`,
+				tokens(400),
+			),
+			turnID: "turn-2",
+			want:   200,
+		},
+		{
+			name: "type unreadable after the target turn ends",
+			lines: append(append([]string{}, turn1...),
+				`{"type":"turn_context","payload":{"turn_id":"turn-2"}}`,
+				`{"type":"response_item","payload":{"type":"reasoning"}}`,
+				tokens(300),
+				`{"type":"turn_context","payload":{"turn_id":"turn-3"}}`,
+				`{"payload":{"input":"`+big+`"},"type":"response_item"}`,
+				tokens(400),
+			),
+			turnID: "turn-2",
+			want:   200,
+		},
+		{
+			name: "token_count in an unknown turn after the target",
+			lines: append(append([]string{}, turn1...),
+				`{"type":"turn_context","payload":{"turn_id":"turn-2"}}`,
+				`{"type":"response_item","payload":{"type":"reasoning"}}`,
+				tokens(300),
+				`{"type":"turn_context","payload":{"cwd":"/work","user_instructions":"`+big+`","turn_id":"turn-3"}}`,
+				`{"type":"event_msg","payload":{"type":"token_count","info":{"rate_limits":"`+big+`"}}}`,
+				tokens(400),
+			),
+			turnID: "turn-2",
+			want:   200,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -415,13 +455,14 @@ func liveRollout(t testing.TB, name string) string {
 // skipped, which gets none.
 func TestLiveCorpusTurnUsage(t *testing.T) {
 	want := map[string][]string{
-		"plain.jsonl":              {"in=100 out=10 total=110", "in=200 out=20 total=220", "in=240 out=30 total=270"},
-		"screenshot.jsonl":         {"in=100 out=10 total=110", "in=200 out=20 total=220", "in=240 out=30 total=270"},
-		"large-tool-output.jsonl":  {"in=100 out=10 total=110", "in=300 out=30 total=330", "in=100 out=10 total=110"},
-		"large-session-meta.jsonl": {"in=100 out=10 total=110", "in=150 out=15 total=165"},
-		"two-screenshots.jsonl":    {"in=100 out=10 total=110", "in=200 out=20 total=220", "in=300 out=30 total=330", "in=400 out=40 total=440"},
-		"large-tool-call.jsonl":    {"in=90 out=10 total=100", "in=225 out=25 total=250", "in=90 out=10 total=100"},
-		"large-turn-context.jsonl": {"in=90 out=10 total=100", "none", "in=90 out=10 total=100"},
+		"plain.jsonl":                {"in=100 out=10 total=110", "in=200 out=20 total=220", "in=240 out=30 total=270"},
+		"screenshot.jsonl":           {"in=100 out=10 total=110", "in=200 out=20 total=220", "in=240 out=30 total=270"},
+		"large-tool-output.jsonl":    {"in=100 out=10 total=110", "in=300 out=30 total=330", "in=100 out=10 total=110"},
+		"large-session-meta.jsonl":   {"in=100 out=10 total=110", "in=150 out=15 total=165"},
+		"two-screenshots.jsonl":      {"in=100 out=10 total=110", "in=200 out=20 total=220", "in=300 out=30 total=330", "in=400 out=40 total=440"},
+		"large-tool-call.jsonl":      {"in=90 out=10 total=100", "in=225 out=25 total=250", "in=90 out=10 total=100"},
+		"large-turn-context.jsonl":   {"in=90 out=10 total=100", "none", "in=90 out=10 total=100"},
+		"late-oversized-lines.jsonl": {"in=90 out=10 total=100", "in=90 out=10 total=100", "none"},
 	}
 	files, _ := filepath.Glob(filepath.Join("testdata", "live", "*.jsonl"))
 	if len(files) != len(want) {

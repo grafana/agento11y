@@ -396,19 +396,22 @@ func ReadTokenUsageForTurn(path, turnID string, opts ScanOptions) (TokenSnapshot
 	}
 	// A skipped line still moves the turn state, as far as its prefix shows:
 	// a turn_context ends the target turn, and anything else inside it is
-	// model activity. A skipped token_count, or a line of unknown type, may
-	// have been a baseline or a final count, so the turn gets no usage rather
-	// than a wrong one.
+	// model activity. Once another turn is active, including one whose
+	// turn_context was skipped, a line cannot be the target's baseline or
+	// final count and is ignored. Before that, a skipped token_count, or a
+	// line of unknown type, may have been either, so the turn gets no usage
+	// rather than a wrong one.
 	skipped := func(prefix []byte) (bool, error) {
 		recordType, payloadType := oversizedLineTypes(prefix)
 		switch {
-		case recordType == "", recordType == "event_msg" && (payloadType == "" || payloadType == "token_count"):
-			unattributable = true
-			return true, nil
 		case recordType == "turn_context":
 			seenAnyTurn = true
 			activeTurnID = ""
-		case targetStarted && activeTurnID == turnID:
+		case targetStarted && activeTurnID != turnID:
+		case recordType == "", recordType == "event_msg" && (payloadType == "" || payloadType == "token_count"):
+			unattributable = true
+			return true, nil
+		case targetStarted:
 			targetModelActive = true
 		}
 		return false, nil
