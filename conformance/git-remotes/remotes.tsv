@@ -59,3 +59,12 @@ https://dev.azure.com/Org/Proj/_GIT/Repo	Org/Proj/_GIT/Repo	org/proj/repo
 git@ssh.dev.azure.com:v3/org/proj/Repo.GIT	v3/org/proj/Repo.GIT	org/proj/repo
 https://org.visualstudio.com/proj/_Git/Repo.git	proj/_Git/Repo	org/proj/repo
 git@git.example.com:Group/Repo.GIT	Group/Repo.GIT	Group/Repo.GIT
+https://fixture-user:fixture-password@git.example.com/group/subgroup/repo.git?token=synthetic-query-token&next=/private/path	group/subgroup/repo	group/subgroup/repo
+ssh://git@git.example.com:2222/group/subgroup/repo.git?token=synthetic-query-token	group/subgroup/repo	group/subgroup/repo
+https://git.example.com/group/repo.git#synthetic-fragment-token?next=/private/path	group/repo	group/repo
+file:///srv/git/repo.git?token=synthetic-query-token#synthetic-fragment-token	repo	repo
+https://git.example.com/group%2Fsubgroup/repo%3Fname%23pin.git?token=synthetic-query-token	group%2Fsubgroup/repo%3Fname%23pin	group%2Fsubgroup/repo%3Fname%23pin
+git@git.example.com:group/repo?name#pin.git	group/repo?name#pin	group/repo?name#pin
+/srv/git/repo?name#pin.git	repo?name#pin	repo?name#pin
+https://host/grafana/agento11y#pin	grafana/agento11y	grafana/agento11y
+https://github.com/Grafana/Agento11y.git?ref=Main	Grafana/Agento11y	grafana/agento11y
