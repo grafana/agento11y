@@ -187,6 +187,8 @@ func configEscape(c byte) byte {
 // repository on its host: `git@host:owner/name.git`, `https://host/owner/name`
 // and `ssh://git@host:2222/owner/name` all yield `owner/name`. A filesystem
 // remote has no host-side path, so it yields the directory name alone.
+// canonicalRepo then gives each spelling of one repository the same label on
+// the hosts where that is known to be safe.
 func repoFromRemoteURL(raw string) string {
 	s := strings.TrimSpace(raw)
 	if s == "" {
@@ -196,19 +198,21 @@ func repoFromRemoteURL(raw string) string {
 		s, _, _ = strings.Cut(s, "?")
 		s, _, _ = strings.Cut(s, "#")
 	}
-	var path string
+	var authority, path string
+	overHTTP := false
 	switch {
 	case strings.HasPrefix(s, "file://"):
 		return trimRepoName(filepath.Base(strings.TrimRight(strings.TrimPrefix(s, "file://"), "/")))
 	case schemeRe.MatchString(s):
-		rest := s[strings.Index(s, "://")+3:]
-		_, after, ok := strings.Cut(rest, "/")
+		scheme, rest, _ := strings.Cut(s, "://")
+		overHTTP = strings.EqualFold(scheme, "http") || strings.EqualFold(scheme, "https")
+		var ok bool
+		authority, path, ok = strings.Cut(rest, "/")
 		if !ok {
 			return ""
 		}
-		path = after
 	case isSCPLike(s):
-		_, path, _ = strings.Cut(s, ":")
+		authority, path, _ = strings.Cut(s, ":")
 	default:
 		// A local path remote (/srv/git/name.git, ../name, ~/name).
 		return trimRepoName(filepath.Base(strings.TrimRight(s, "/")))
@@ -217,7 +221,80 @@ func repoFromRemoteURL(raw string) string {
 	if path == "" {
 		return ""
 	}
-	return trimRepoName(path)
+	return canonicalRepo(remoteHost(authority), overHTTP, path)
+}
+
+// remoteHost returns the lowercased host name of a URL authority or scp-style
+// prefix, without user info or port. An authority it can't read, such as a
+// bracketed IPv6 address, yields a name that matches no known host.
+func remoteHost(authority string) string {
+	host := authority[strings.LastIndex(authority, "@")+1:]
+	host, _, _ = strings.Cut(host, ":")
+	return strings.ToLower(host)
+}
+
+// caseInsensitiveHosts resolve a repository path regardless of case, so
+// `Grafana/Agento11y` and `grafana/agento11y` name one repository there.
+// gitlab.com is not listed: GitLab does not document case-insensitive path
+// lookup. Any other host may be a case-sensitive server, such as gitolite or a
+// self-hosted GitLab, where lowercasing could merge two repositories.
+// ssh.github.com and altssh.bitbucket.org are the vendors' documented SSH
+// hosts on port 443 for the same repositories.
+var caseInsensitiveHosts = map[string]bool{
+	"github.com":           true,
+	"ssh.github.com":       true,
+	"bitbucket.org":        true,
+	"altssh.bitbucket.org": true,
+}
+
+// canonicalRepo rewrites the path of a remote on a known host into the one
+// label that host's other remote forms also get, and drops a `.git` suffix.
+// Known hosts ignore case, so there the suffix is matched in any case too. A
+// host it doesn't know keeps the path as the remote spells it, apart from
+// Bitbucket Server's `scm/`.
+func canonicalRepo(host string, overHTTP bool, path string) string {
+	switch {
+	case caseInsensitiveHosts[host]:
+		return strings.TrimSuffix(strings.ToLower(path), ".git")
+	case host == "dev.azure.com" || host == "ssh.dev.azure.com" || strings.HasSuffix(host, ".visualstudio.com"):
+		return azureRepo(host, path)
+	}
+	path = trimRepoName(path)
+	// Bitbucket Server serves `ssh://host:7999/proj/repo` over HTTPS as
+	// `https://host/scm/proj/repo`. Exactly three segments leaves out a
+	// context path (`/bitbucket/scm/proj/repo`), which stays as it is.
+	// gitlab.com is a known host where `scm` is only a group name, so its
+	// HTTPS and SSH remotes keep the same label.
+	if rest, ok := strings.CutPrefix(path, "scm/"); ok && overHTTP && host != "gitlab.com" && strings.Count(rest, "/") == 1 {
+		return rest
+	}
+	return path
+}
+
+// azureRepo reduces every Azure DevOps remote form to lowercase
+// `org/project/repo`. SSH remotes spell it `v3/org/project/repo`, HTTPS ones
+// `org/project/_git/repo`, and legacy visualstudio.com ones carry the org in
+// the host name and may add `DefaultCollection/` or use `_ssh` for `_git`.
+// Azure ignores case, so the markers and a `.git` suffix match in any case.
+// A path in any other shape keeps the release label.
+func azureRepo(host, path string) string {
+	segments := strings.Split(strings.TrimSuffix(strings.ToLower(path), ".git"), "/")
+	switch {
+	case host == "ssh.dev.azure.com" || host == "vs-ssh.visualstudio.com":
+		if len(segments) != 4 || segments[0] != "v3" {
+			return trimRepoName(path)
+		}
+		return strings.Join(segments[1:], "/")
+	case strings.HasSuffix(host, ".visualstudio.com"):
+		segments = append([]string{strings.TrimSuffix(host, ".visualstudio.com")}, segments...)
+	}
+	if len(segments) > 1 && segments[1] == "defaultcollection" {
+		segments = append(segments[:1], segments[2:]...)
+	}
+	if len(segments) != 4 || (segments[2] != "_git" && segments[2] != "_ssh") {
+		return trimRepoName(path)
+	}
+	return segments[0] + "/" + segments[1] + "/" + segments[3]
 }
 
 // isSCPLike reports whether s uses git's scp-style syntax, `[user@]host:path`.

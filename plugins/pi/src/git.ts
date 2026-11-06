@@ -42,6 +42,11 @@ export function resolveGitRepo(cwd: string): string | undefined {
  * `git@host:owner/name.git`, `https://host/owner/name` and
  * `ssh://git@host:2222/owner/name` all yield `owner/name`. A filesystem remote
  * has no host-side path, so it yields the directory name alone.
+ * `canonicalRepo` then gives each spelling of one repository the same label
+ * on the hosts where that is known to be safe.
+ *
+ * Mirrors `repoFromRemoteURL` in plugins/agento11y/internal/gitbranch; both
+ * must give the `want` column of conformance/git-remotes/remotes.tsv.
  */
 export function repoFromRemoteUrl(raw: string | undefined): string | undefined {
   const url = (raw ?? "").trim();
@@ -51,22 +56,117 @@ export function repoFromRemoteUrl(raw: string | undefined): string | undefined {
       basename(stripTrailingSlashes(url.slice("file://".length))),
     );
   }
+  let authority: string;
   let path: string;
+  let overHttp = false;
   const scheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.exec(url);
   if (scheme) {
     const rest = url.slice(scheme[0].length);
     const slash = rest.indexOf("/");
     if (slash === -1) return undefined;
+    authority = rest.slice(0, slash);
     path = rest.slice(slash + 1);
+    overHttp = /^https?:\/\/$/i.test(scheme[0]);
   } else if (isScpLike(url)) {
-    path = url.slice(url.indexOf(":") + 1);
+    const colon = url.indexOf(":");
+    authority = url.slice(0, colon);
+    path = url.slice(colon + 1);
   } else {
     // A local path remote (/srv/git/name.git, ../name, ~/name).
     return trimRepoName(basename(stripTrailingSlashes(url)));
   }
   path = stripTrailingSlashes(path).replace(/^\/+/, "");
   if (!path) return undefined;
-  return trimRepoName(path);
+  return canonicalRepo(remoteHost(authority), overHttp, path);
+}
+
+/**
+ * Hosts that resolve a repository path regardless of case, so
+ * `Grafana/Agento11y` and `grafana/agento11y` name one repository there.
+ * gitlab.com is not listed: GitLab does not document case-insensitive path
+ * lookup. Any other host may be a case-sensitive server, such as gitolite or a
+ * self-hosted GitLab, where lowercasing could merge two repositories.
+ * ssh.github.com and altssh.bitbucket.org are the vendors' documented SSH
+ * hosts on port 443 for the same repositories.
+ */
+const CASE_INSENSITIVE_HOSTS = new Set([
+  "github.com",
+  "ssh.github.com",
+  "bitbucket.org",
+  "altssh.bitbucket.org",
+]);
+
+/**
+ * Lowercased host name of a URL authority or scp-style prefix, without user
+ * info or port. An authority it can't read, such as a bracketed IPv6 address,
+ * yields a name that matches no known host.
+ */
+function remoteHost(authority: string): string {
+  const host = authority.slice(authority.lastIndexOf("@") + 1);
+  return host.replace(/:.*$/s, "").toLowerCase();
+}
+
+/**
+ * Rewrite the path of a remote on a known host into the one label that host's
+ * other remote forms also get, and drop a `.git` suffix. Known hosts ignore
+ * case, so there the suffix is matched in any case too. A host it doesn't
+ * know keeps the path as the remote spells it, apart from Bitbucket Server's
+ * `scm/`.
+ */
+function canonicalRepo(host: string, overHttp: boolean, path: string): string {
+  if (CASE_INSENSITIVE_HOSTS.has(host)) {
+    return path.toLowerCase().replace(/\.git$/, "");
+  }
+  if (
+    host === "dev.azure.com" ||
+    host === "ssh.dev.azure.com" ||
+    host.endsWith(".visualstudio.com")
+  ) {
+    return azureRepo(host, path);
+  }
+  const repo = trimRepoName(path);
+  // Bitbucket Server serves `ssh://host:7999/proj/repo` over HTTPS as
+  // `https://host/scm/proj/repo`. Exactly three segments leaves out a context
+  // path (`/bitbucket/scm/proj/repo`), which stays as it is. gitlab.com is a
+  // known host where `scm` is only a group name, so its HTTPS and SSH remotes
+  // keep the same label.
+  if (overHttp && host !== "gitlab.com" && repo.startsWith("scm/")) {
+    const rest = repo.slice("scm/".length);
+    if (rest.split("/").length === 2) return rest;
+  }
+  return repo;
+}
+
+/**
+ * Reduce every Azure DevOps remote form to lowercase `org/project/repo`. SSH
+ * remotes spell it `v3/org/project/repo`, HTTPS ones `org/project/_git/repo`,
+ * and legacy visualstudio.com ones carry the org in the host name and may add
+ * `DefaultCollection/` or use `_ssh` for `_git`. Azure ignores case, so the
+ * markers and a `.git` suffix match in any case. A path in any other shape
+ * keeps the release label.
+ */
+function azureRepo(host: string, path: string): string {
+  let segments = path
+    .toLowerCase()
+    .replace(/\.git$/, "")
+    .split("/");
+  if (host === "ssh.dev.azure.com" || host === "vs-ssh.visualstudio.com") {
+    if (segments.length !== 4 || segments[0] !== "v3") {
+      return trimRepoName(path);
+    }
+    return segments.slice(1).join("/");
+  }
+  if (host.endsWith(".visualstudio.com")) {
+    segments = [host.slice(0, -".visualstudio.com".length), ...segments];
+  }
+  if (segments[1] === "defaultcollection") segments.splice(1, 1);
+  if (
+    segments.length !== 4 ||
+    (segments[2] !== "_git" && segments[2] !== "_ssh")
+  ) {
+    return trimRepoName(path);
+  }
+  return `${segments[0]}/${segments[1]}/${segments[3]}`;
 }
 
 /**
