@@ -2251,6 +2251,244 @@ func TestConversationDetail_SubagentTreeAndThinking(t *testing.T) {
 	assert.Equal(t, []string{"parent-1"}, child.ParentGenerationIDs, "child links back to its spawning generation")
 }
 
+// TestConversationDetail_Resume covers which recorded identity and directory
+// the detail response offers for a resume command. Records are written in the
+// listed order, which is not always chronological.
+func TestConversationDetail_Resume(t *testing.T) {
+	const (
+		piID     = "01a1b6bf-e6c8-7627-a64e-26fbc210f69f"
+		claudeID = "9F3C2A10-4B7E-4D21-9C5A-0E8F6D1B2C3A"
+	)
+	type rec struct {
+		agent    string
+		tags     map[string]string
+		metadata map[string]any
+		started  string
+	}
+	unavailable := func(reason string) *ResumeInfo {
+		return &ResumeInfo{Status: "unavailable", Reason: reason}
+	}
+	cwd := func(dir string) map[string]string { return map[string]string{"cwd": dir} }
+	cases := []struct {
+		name   string
+		convID string
+		recs   []rec
+		want   *ResumeInfo
+	}{
+		{
+			name:   "pi root with one directory",
+			convID: piID,
+			recs:   []rec{{agent: "pi", tags: cwd("/work/it's here")}},
+			want:   &ResumeInfo{Status: "ready", Agent: "pi", SessionID: piID, CWD: "/work/it's here"},
+		},
+		{
+			name:   "claude root keeps the id spelling and ignores child directories",
+			convID: claudeID,
+			recs: []rec{
+				{agent: "claude-code/explore", tags: cwd("/work/child"), started: "2026-05-21T09:00:00Z"},
+				{agent: "claude-code", tags: cwd("/work/repo"), started: "2026-05-21T10:00:00Z"},
+				{agent: "claude-code", tags: map[string]string{"cwd": "/work/sidechain", "subagent": "true"}},
+			},
+			want: &ResumeInfo{Status: "ready", Agent: "claude-code", SessionID: claudeID, CWD: "/work/repo"},
+		},
+		{
+			name:   "out-of-order records with one directory and approximate timestamps",
+			convID: piID,
+			recs: []rec{
+				{agent: "pi", tags: cwd("/work/repo"), started: "2026-05-21T10:05:00Z"},
+				{agent: "pi", started: "2026-05-21T10:05:00Z"},
+				{agent: "pi", tags: cwd("/work/repo"), started: "2026-05-21T10:00:00Z"},
+			},
+			want: &ResumeInfo{Status: "ready", Agent: "pi", SessionID: piID, CWD: "/work/repo"},
+		},
+		{
+			name:   "pi fork keeps its own session id",
+			convID: piID,
+			recs: []rec{{agent: "pi", tags: cwd("/work/repo"), metadata: map[string]any{
+				"pi.fork.parent_session_id":    "11111111-2222-4333-8444-555555555555",
+				"pi.fork.parent_generation_id": "g-parent",
+			}}},
+			want: &ResumeInfo{Status: "ready", Agent: "pi", SessionID: piID, CWD: "/work/repo"},
+		},
+		{
+			name:   "conflicting root directories regardless of timestamps",
+			convID: piID,
+			recs: []rec{
+				{agent: "pi", tags: cwd("/work/b"), started: "2026-05-21T11:00:00Z"},
+				{agent: "pi", tags: cwd("/work/a"), started: "2026-05-21T10:00:00Z"},
+			},
+			want: unavailable("conflicting_workspace"),
+		},
+		{
+			name:   "claude root that cd'd into subfolders keeps the enclosing directory",
+			convID: claudeID,
+			recs: []rec{
+				{agent: "claude-code", tags: cwd("/work/repo/web/src"), started: "2026-05-21T09:00:00Z"},
+				{agent: "claude-code", tags: cwd("/work/repo"), started: "2026-05-21T11:00:00Z"},
+				{agent: "claude-code", tags: cwd("/work/repo/go"), started: "2026-05-21T10:00:00Z"},
+			},
+			want: &ResumeInfo{Status: "ready", Agent: "claude-code", SessionID: claudeID, CWD: "/work/repo"},
+		},
+		{
+			name:   "root directory nested under the filesystem root",
+			convID: piID,
+			recs: []rec{
+				{agent: "pi", tags: cwd("/work")},
+				{agent: "pi", tags: cwd("/")},
+			},
+			want: &ResumeInfo{Status: "ready", Agent: "pi", SessionID: piID, CWD: "/"},
+		},
+		{
+			name:   "sibling with a shared name prefix is not nested",
+			convID: piID,
+			recs: []rec{
+				{agent: "pi", tags: cwd("/work/repo")},
+				{agent: "pi", tags: cwd("/work/repo-old")},
+			},
+			want: unavailable("conflicting_workspace"),
+		},
+		{
+			name:   "nested directories plus an unrelated one",
+			convID: piID,
+			recs: []rec{
+				{agent: "pi", tags: cwd("/work/repo")},
+				{agent: "pi", tags: cwd("/work/repo/sub")},
+				{agent: "pi", tags: cwd("/tmp")},
+			},
+			want: unavailable("conflicting_workspace"),
+		},
+		{
+			name:   "missing root directory even when a child recorded one",
+			convID: claudeID,
+			recs: []rec{
+				{agent: "claude-code"},
+				{agent: "claude-code/general-purpose", tags: cwd("/work/child")},
+			},
+			want: unavailable("missing_workspace"),
+		},
+		{
+			name:   "relative directory",
+			convID: piID,
+			recs:   []rec{{agent: "pi", tags: cwd("work/repo")}},
+			want:   unavailable("invalid_workspace"),
+		},
+		{
+			name:   "windows directory",
+			convID: piID,
+			recs:   []rec{{agent: "pi", tags: cwd(`C:\work\repo`)}},
+			want:   unavailable("invalid_workspace"),
+		},
+		{
+			name:   "directory with a newline",
+			convID: piID,
+			recs:   []rec{{agent: "pi", tags: cwd("/work/a\nrm -rf ~")}},
+			want:   unavailable("invalid_workspace"),
+		},
+		{
+			name:   "directory with a line separator",
+			convID: piID,
+			recs:   []rec{{agent: "pi", tags: cwd("/work/a\u2028b")}},
+			want:   unavailable("invalid_workspace"),
+		},
+		{
+			name:   "synthetic import id",
+			convID: "histconv-0123456789abcdef",
+			recs:   []rec{{agent: "claude-code", tags: cwd("/work/repo")}},
+			want:   unavailable("unsupported_id"),
+		},
+		{
+			name:   "custom non-uuid id",
+			convID: "my-session",
+			recs:   []rec{{agent: "pi", tags: cwd("/work/repo")}},
+			want:   unavailable("unsupported_id"),
+		},
+		{
+			name:   "unhyphenated uuid",
+			convID: "01a1b6bfe6c87627a64e26fbc210f69f",
+			recs:   []rec{{agent: "pi", tags: cwd("/work/repo")}},
+			want:   unavailable("unsupported_id"),
+		},
+		{
+			name:   "shortened id",
+			convID: "01a1b6bf",
+			recs:   []rec{{agent: "pi", tags: cwd("/work/repo")}},
+			want:   unavailable("unsupported_id"),
+		},
+		{
+			name:   "mixed root agents",
+			convID: piID,
+			recs: []rec{
+				{agent: "pi", tags: cwd("/work/repo")},
+				{agent: "claude-code", tags: cwd("/work/repo")},
+			},
+			want: unavailable("ambiguous_agent"),
+		},
+		{
+			name:   "supported root with another host's child",
+			convID: piID,
+			recs: []rec{
+				{agent: "pi", tags: cwd("/work/repo")},
+				{agent: "claude-code/explore"},
+			},
+			want: unavailable("ambiguous_agent"),
+		},
+		{
+			name:   "unsupported root with a supported child",
+			convID: piID,
+			recs: []rec{
+				{agent: "codex", tags: cwd("/work/repo")},
+				{agent: "pi/explore"},
+			},
+			want: unavailable("ambiguous_agent"),
+		},
+		{
+			name:   "child-only records",
+			convID: claudeID,
+			recs: []rec{
+				{agent: "claude-code/explore", tags: cwd("/work/repo")},
+				{agent: "claude-code", tags: map[string]string{"cwd": "/work/repo", "subagent": "true"}},
+			},
+			want: unavailable("missing_root"),
+		},
+		{
+			name:   "unsupported agent omits resume",
+			convID: piID,
+			recs:   []rec{{agent: "codex", tags: cwd("/work/repo")}},
+		},
+		{
+			name:   "agent names are matched exactly",
+			convID: claudeID,
+			recs:   []rec{{agent: "Claude-Code", tags: cwd("/work/repo")}},
+		},
+		{
+			name:   "records without an agent name omit resume",
+			convID: piID,
+			recs:   []rec{{tags: cwd("/work/repo")}},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStorage(t)
+			for i, r := range tc.recs {
+				started := r.started
+				if started == "" {
+					started = "2026-05-21T10:00:00Z"
+				}
+				writeGen(t, s, tc.convID, "g-"+strconv.Itoa(i), agento11y.Generation{
+					AgentName: r.agent,
+					Tags:      r.tags,
+					Metadata:  r.metadata,
+					StartedAt: mustParse(t, started),
+				}, started)
+			}
+			got, err := s.ConversationDetail(tc.convID)
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			assert.Equal(t, tc.want, got.Resume)
+		})
+	}
+}
+
 // TestConversationDetail_MediaPartsPreserved checks that media message
 // parts (upstream #386878f) survive the store round-trip and come back
 // through the query layer with their kind and ordering intact.

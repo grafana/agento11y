@@ -1,8 +1,10 @@
 import { Markdown } from 'markdown-to-jsx';
 import type { CSSProperties, MutableRefObject, ReactNode, TableHTMLAttributes } from 'react';
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, Fragment, useCallback, useContext, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { durationBetweenSeconds, formatDuration, formatTime, formatTokens, NO_VALUE } from './formatters';
 import { Notice } from './notices';
+import { resumeCommand, resumeUnavailableMessage } from './resume';
+import { ResumeAction } from './resume-action';
 import { generationIDFromHash, isPlainLeftClick } from './routing';
 import { agentColor, agentHosts, agentShort, HEADER_H, Icon, isSubagent, ModelPill } from './shell';
 import type {
@@ -966,6 +968,10 @@ function promptLine(turn: TranscriptTurn): string {
 // rows are fixed-height, because the second one's offset is the first
 // one's height.
 const TURN_RULE_H = 32;
+// Height of TraceDetailView's sticky toolbar. The toolbar grows when its
+// actions wrap, and the sticky rows and scroll offsets below follow it.
+const TOOLBAR_H = 46;
+const ToolbarHeight = createContext(TOOLBAR_H);
 const SPEAKER_H = 26;
 
 interface TurnRuleProps {
@@ -976,6 +982,7 @@ interface TurnRuleProps {
 
 function TurnRule({ turn, slowest, first }: TurnRuleProps) {
   const asked = promptLine(turn);
+  const toolbarH = useContext(ToolbarHeight);
   return (
     // A sticky box can only stick inside its own parent, so this row is a
     // direct child of the turn section rather than a wrapper's child, and
@@ -983,7 +990,7 @@ function TurnRule({ turn, slowest, first }: TurnRuleProps) {
     <div
       style={{
         position: 'sticky',
-        top: HEADER_H + 46,
+        top: HEADER_H + toolbarH,
         zIndex: 3,
         height: TURN_RULE_H,
         marginTop: first ? 0 : 20,
@@ -1086,11 +1093,12 @@ interface SpeakerLabelProps {
 
 function SpeakerLabel({ speaker, suffix }: SpeakerLabelProps) {
   const { label, colour, rule } = SPEAKERS[speaker];
+  const toolbarH = useContext(ToolbarHeight);
   return (
     <div
       style={{
         position: 'sticky',
-        top: HEADER_H + 46 + TURN_RULE_H,
+        top: HEADER_H + toolbarH + TURN_RULE_H,
         zIndex: 2,
         height: SPEAKER_H,
         display: 'flex',
@@ -1879,6 +1887,7 @@ interface TurnPagerProps {
 }
 
 function TurnPager({ turns, activeTurn, onJump }: TurnPagerProps) {
+  const toolbarH = useContext(ToolbarHeight);
   const index = Math.max(
     0,
     turns.findIndex((turn) => turn.index === activeTurn),
@@ -1899,7 +1908,7 @@ function TurnPager({ turns, activeTurn, onJump }: TurnPagerProps) {
     <div
       style={{
         position: 'sticky',
-        top: HEADER_H + 46 + 28,
+        top: HEADER_H + toolbarH + 28,
         display: 'flex',
         flexDirection: 'column',
         gap: 8,
@@ -1954,6 +1963,7 @@ interface ConversationThreadProps {
 }
 
 function ConversationThread({ turns, jumpRef }: ConversationThreadProps) {
+  const toolbarH = useContext(ToolbarHeight);
   const groups = useMemo(() => turns.flatMap((turn) => turn.blocks.filter((block) => block.kind === 'work')), [turns]);
   const [openGroups, setOpenGroups] = useState(
     () => new Set(groups.filter((group) => group.calls.length <= 40).map((group) => group.id)),
@@ -2023,7 +2033,7 @@ function ConversationThread({ turns, jumpRef }: ConversationThreadProps) {
         requestAnimationFrame(() => {
           const node = turnRefs.current[turn.startGenId];
           if (node) {
-            const top = window.scrollY + node.getBoundingClientRect().top - (HEADER_H + 46 + 24);
+            const top = window.scrollY + node.getBoundingClientRect().top - (HEADER_H + toolbarH + 24);
             window.scrollTo({
               top: Math.max(0, top),
               behavior: 'smooth',
@@ -2035,7 +2045,7 @@ function ConversationThread({ turns, jumpRef }: ConversationThreadProps) {
       if (flashTimer.current) clearTimeout(flashTimer.current);
       flashTimer.current = setTimeout(() => setFlashID(null), 1400);
     },
-    [groupByGen, turnByGen],
+    [groupByGen, turnByGen, toolbarH],
   );
   useEffect(() => {
     jumpRef.current = jumpTo;
@@ -2082,7 +2092,7 @@ function ConversationThread({ turns, jumpRef }: ConversationThreadProps) {
       for (const turn of turns) {
         const node = turnRefs.current[turn.startGenId];
         if (!node) continue;
-        if (node.getBoundingClientRect().top - (HEADER_H + 46 + 28) > 0) break;
+        if (node.getBoundingClientRect().top - (HEADER_H + toolbarH + 28) > 0) break;
         current = turn.index;
       }
       setActiveTurn(current);
@@ -2098,7 +2108,7 @@ function ConversationThread({ turns, jumpRef }: ConversationThreadProps) {
       window.removeEventListener('scroll', onScroll);
       window.removeEventListener('resize', onScroll);
     };
-  }, [turns]);
+  }, [turns, toolbarH]);
 
   const slowest = turns.reduce<TranscriptTurn | null>(
     (current, turn) => (!current || turn.durationSec > current.durationSec ? turn : current),
@@ -2576,6 +2586,7 @@ interface MetricsPanelProps {
 }
 
 function MetricsPanel({ conv, steps, turns, metrics, onJump }: MetricsPanelProps) {
+  const toolbarH = useContext(ToolbarHeight);
   const maxToolCount = metrics.toolHistogram.reduce((max, item) => Math.max(max, item.count), 0) || 1;
   const host = agentHosts(conv.agents)[0] || '';
   const stats = [
@@ -2600,9 +2611,9 @@ function MetricsPanel({ conv, steps, turns, metrics, onJump }: MetricsPanelProps
         width: 320,
         flex: 'none',
         position: 'sticky',
-        top: HEADER_H + 46,
+        top: HEADER_H + toolbarH,
         alignSelf: 'flex-start',
-        maxHeight: `calc(100vh - ${HEADER_H + 46}px)`,
+        maxHeight: `calc(100vh - ${HEADER_H + toolbarH}px)`,
         overflow: 'auto',
         borderLeft: '1px solid var(--border-weak)',
         background: 'var(--bg-primary)',
@@ -2750,8 +2761,26 @@ interface TraceDetailViewProps {
 export function TraceDetailView({ conv, detail, loading, error, backHref, backLabel, onBack }: TraceDetailViewProps) {
   const steps = useMemo(() => (detail ? detail.generations : []), [detail]);
   const turns = useMemo(() => buildTranscript(steps), [steps]);
+  // The list row can belong to a newer selection than the loaded detail for
+  // one render, and only matching detail may supply a command.
+  const resume = detail && detail.id === conv.id ? detail.resume : undefined;
+  const command = resumeCommand(resume);
+  const resumeNoteId = useId();
+  const resumeUnavailable =
+    resume && command == null
+      ? resumeUnavailableMessage(resume.status === 'unavailable' ? resume.reason : 'invalid_workspace')
+      : null;
   const metrics = useMemo(() => buildTranscriptMetrics(steps, turns), [steps, turns]);
   const jumpRef = useRef<(id: string) => void>(() => {});
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  const [toolbarH, setToolbarH] = useState(TOOLBAR_H);
+  useEffect(() => {
+    const node = toolbarRef.current;
+    if (!node || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => setToolbarH(node.offsetHeight || TOOLBAR_H));
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
   const wallSec =
     metrics.wallMs > 0 ? metrics.wallMs / 1000 : durationBetweenSeconds(conv.started_at, conv.last_activity);
   const buttonStyle: CSSProperties = {
@@ -2782,120 +2811,161 @@ export function TraceDetailView({ conv, detail, loading, error, backHref, backLa
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        flex: 1,
-        minHeight: 0,
-        background: 'var(--bg-canvas)',
-      }}
-    >
+    <ToolbarHeight.Provider value={toolbarH}>
       <div
         style={{
           display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          height: 46,
-          padding: '0 16px',
-          borderBottom: '1px solid var(--border-weak)',
-          background: 'var(--bg-primary)',
-          position: 'sticky',
-          top: HEADER_H,
-          zIndex: 4,
-          minWidth: 0,
+          flexDirection: 'column',
+          flex: 1,
+          minHeight: 0,
+          background: 'var(--bg-canvas)',
         }}
       >
-        <a
-          href={backHref}
-          aria-label={`Back to ${backLabel}`}
-          onClick={(event) => {
-            if (!isPlainLeftClick(event)) return;
-            event.preventDefault();
-            onBack();
-          }}
+        <div
+          ref={toolbarRef}
           style={{
-            fontSize: 13,
-            color: 'var(--fg2)',
-            textDecoration: 'none',
-            whiteSpace: 'nowrap',
-            flexShrink: 0,
-            cursor: 'pointer',
-          }}
-          onMouseEnter={(event) => (event.currentTarget.style.color = 'var(--fg-max)')}
-          onMouseLeave={(event) => (event.currentTarget.style.color = 'var(--fg2)')}
-        >
-          {backLabel}
-        </a>
-        <Icon name="cright" size={11} style={{ color: 'var(--fg3)', flexShrink: 0 }} />
-        <span
-          style={{
-            fontFamily: 'var(--fontFamilyMonospace)',
-            fontSize: 13,
-            color: 'var(--fg-max)',
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            rowGap: 8,
+            columnGap: 10,
+            minHeight: TOOLBAR_H,
+            boxSizing: 'border-box',
+            padding: '8px 16px',
+            borderBottom: '1px solid var(--border-weak)',
+            background: 'var(--bg-primary)',
+            position: 'sticky',
+            top: HEADER_H,
+            zIndex: 4,
             minWidth: 0,
           }}
         >
-          {conv.title || conv.id}
-        </span>
-        {(conv.models || []).map((model) => (
-          <ModelPill key={model} name={model} />
-        ))}
-        <span
-          style={{
-            fontSize: 12,
-            color: 'var(--fg3)',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {turns.length} {turns.length === 1 ? 'turn' : 'turns'} · {formatDuration(wallSec)}
-        </span>
-        <span style={{ flex: 1 }} />
-        <button
-          type="button"
-          title="Download trace as JSON"
-          onClick={onExport}
-          style={buttonStyle}
-          onMouseEnter={(event) => (event.currentTarget.style.background = 'var(--action-hover)')}
-          onMouseLeave={(event) => (event.currentTarget.style.background = 'transparent')}
-        >
-          <Icon name="download" size={12} />
-          Export JSON
-        </button>
-      </div>
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 0 }}>
-        <main style={{ flex: 1, minWidth: 0, padding: '28px 32px 96px' }}>
-          {error && (
-            <Notice kind="error" title="Failed to load session">
-              {error}
-            </Notice>
-          )}
-          {!error && loading && (
-            <div
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              flex: '1 1 240px',
+              minWidth: 0,
+              overflow: 'hidden',
+            }}
+          >
+            <a
+              href={backHref}
+              aria-label={`Back to ${backLabel}`}
+              onClick={(event) => {
+                if (!isPlainLeftClick(event)) return;
+                event.preventDefault();
+                onBack();
+              }}
               style={{
-                color: 'var(--fg3)',
+                fontSize: 13,
+                color: 'var(--fg2)',
+                textDecoration: 'none',
+                whiteSpace: 'nowrap',
+                flexShrink: 0,
+                cursor: 'pointer',
+              }}
+              onMouseEnter={(event) => (event.currentTarget.style.color = 'var(--fg-max)')}
+              onMouseLeave={(event) => (event.currentTarget.style.color = 'var(--fg2)')}
+            >
+              {backLabel}
+            </a>
+            <Icon name="cright" size={11} style={{ color: 'var(--fg3)', flexShrink: 0 }} />
+            <span
+              style={{
                 fontFamily: 'var(--fontFamilyMonospace)',
-                fontSize: 12,
+                fontSize: 13,
+                color: 'var(--fg-max)',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                minWidth: 0,
               }}
             >
-              Loading…
-            </div>
-          )}
-          {!error && !loading && detail && <ConversationThread turns={turns} jumpRef={jumpRef} />}
-        </main>
-        {!error && !loading && detail && (
-          <MetricsPanel
-            conv={conv}
-            steps={steps}
-            turns={turns}
-            metrics={metrics}
-            onJump={(id) => jumpRef.current(id)}
-          />
+              {conv.title || conv.id}
+            </span>
+            {(conv.models || []).map((model) => (
+              <ModelPill key={model} name={model} />
+            ))}
+            <span
+              style={{
+                fontSize: 12,
+                color: 'var(--fg3)',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {turns.length} {turns.length === 1 ? 'turn' : 'turns'} · {formatDuration(wallSec)}
+            </span>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginLeft: 'auto', justifyContent: 'flex-end' }}>
+            {resume && (
+              <ResumeAction
+                conversationId={conv.id}
+                agent={resume.status === 'ready' ? resume.agent : null}
+                command={command}
+                describedBy={resumeUnavailable ? resumeNoteId : undefined}
+                buttonStyle={buttonStyle}
+              />
+            )}
+            <button
+              type="button"
+              title="Download trace as JSON"
+              onClick={onExport}
+              style={buttonStyle}
+              onMouseEnter={(event) => (event.currentTarget.style.background = 'var(--action-hover)')}
+              onMouseLeave={(event) => (event.currentTarget.style.background = 'transparent')}
+            >
+              <Icon name="download" size={12} />
+              Export JSON
+            </button>
+          </div>
+        </div>
+        {resumeUnavailable && (
+          <div
+            id={resumeNoteId}
+            style={{
+              padding: '6px 16px',
+              borderBottom: '1px solid var(--border-weak)',
+              background: 'var(--bg-primary)',
+              color: 'var(--fg2)',
+              fontSize: 12,
+            }}
+          >
+            {resumeUnavailable}
+          </div>
         )}
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 0 }}>
+          <main style={{ flex: 1, minWidth: 0, padding: '28px 32px 96px' }}>
+            {error && (
+              <Notice kind="error" title="Failed to load session">
+                {error}
+              </Notice>
+            )}
+            {!error && loading && (
+              <div
+                style={{
+                  color: 'var(--fg3)',
+                  fontFamily: 'var(--fontFamilyMonospace)',
+                  fontSize: 12,
+                }}
+              >
+                Loading…
+              </div>
+            )}
+            {!error && !loading && detail && <ConversationThread turns={turns} jumpRef={jumpRef} />}
+          </main>
+          {!error && !loading && detail && (
+            <MetricsPanel
+              conv={conv}
+              steps={steps}
+              turns={turns}
+              metrics={metrics}
+              onJump={(id) => jumpRef.current(id)}
+            />
+          )}
+        </div>
       </div>
-    </div>
+    </ToolbarHeight.Provider>
   );
 }

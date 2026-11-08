@@ -186,7 +186,30 @@ export interface ConversationDetail {
   id: string;
   title?: string;
   generations: Generation[];
+  /** Absent for unsupported agents and from an older daemon. */
+  resume?: ResumeInfo;
 }
+
+export type ResumeUnavailableReason =
+  | 'unsupported_id'
+  | 'missing_workspace'
+  | 'invalid_workspace'
+  | 'conflicting_workspace'
+  | 'ambiguous_agent'
+  | 'missing_root';
+
+/** ResumeInfo in resume.go. */
+export type ResumeInfo =
+  | {
+      status: 'ready';
+      agent: 'claude-code' | 'pi';
+      session_id: string;
+      cwd: string;
+    }
+  | {
+      status: 'unavailable';
+      reason: ResumeUnavailableReason;
+    };
 
 /** TokenUsagePoint in query.go: the buckets flatten into the object. */
 export interface TokenUsagePoint extends TokenBuckets {
