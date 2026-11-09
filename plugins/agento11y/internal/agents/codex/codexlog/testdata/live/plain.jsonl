@@ -1,0 +1,15 @@
+{"type":"session_meta","payload":{"id":"sess","cwd":"/work/repo","thread_source":"cli"}}
+{"type":"turn_context","payload":{"turn_id":"turn-1"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}]}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"output_tokens":10,"total_tokens":110}}}}
+{"type":"turn_context","payload":{"turn_id":"turn-2"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"fix the test"}]}}
+{"type":"response_item","payload":{"type":"reasoning","summary":[]}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":300,"output_tokens":30,"total_tokens":330}}}}
+{"type":"turn_context","payload":{"turn_id":"turn-3"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"run it"}]}}
+{"type":"response_item","payload":{"type":"function_call","name":"shell","call_id":"call_1","arguments":"{\"command\":[\"cat\",\"build.log\"]}"}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"ok"}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":540,"output_tokens":60,"total_tokens":600}}}}

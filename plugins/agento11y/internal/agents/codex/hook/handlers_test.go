@@ -534,6 +534,61 @@ func TestStopExportsRolloutTokenUsage(t *testing.T) {
 	}
 }
 
+// TestStopExportsTokenUsageAfterOversizedLine covers a later turn in a session
+// whose rollout already holds a line past the live cap, such as a pasted
+// screenshot. Every Stop rereads the rollout from the start, so that line must
+// not cost this turn its usage.
+func TestStopExportsTokenUsageAfterOversizedLine(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	logger := log.New(io.Discard, "", 0)
+	var body []byte
+	server := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		writeAcceptedGenerationResponse(t, w, body)
+	}))
+	defer server.Close()
+	t.Setenv("SIGIL_ENDPOINT", server.URL)
+	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
+	t.Setenv("SIGIL_AUTH_TOKEN", "token")
+
+	transcript := writeHookTranscript(t,
+		`{"type":"turn_context","payload":{"turn_id":"previous"}}`,
+		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,`+strings.Repeat("A", 1100*1024)+`"}]}}`,
+		`{"type":"response_item","payload":{"type":"reasoning"}}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"output_tokens":10,"total_tokens":110}}}}`,
+		`{"type":"turn_context","payload":{"turn_id":"turn"}}`,
+		`{"type":"response_item","payload":{"type":"reasoning"}}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":260,"output_tokens":40,"total_tokens":300}}}}`,
+	)
+	if err := fragment.Update("sess", "turn", logger, func(f *fragment.Fragment) bool {
+		f.Model = "gpt-5.5"
+		f.TranscriptPath = transcript
+		return true
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	Stop(Payload{HookEventName: "Stop", SessionID: "sess", TurnID: "turn"}, config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}, logger)
+
+	var req struct {
+		Generations []struct {
+			Usage map[string]any `json:"usage"`
+		} `json:"generations"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	if err := dec.Decode(&req); err != nil || len(req.Generations) != 1 {
+		t.Fatalf("decode export body %s: %v", string(body), err)
+	}
+	usage := req.Generations[0].Usage
+	if jsonInt64(t, usage["input_tokens"]) != 160 ||
+		jsonInt64(t, usage["output_tokens"]) != 30 ||
+		jsonInt64(t, usage["total_tokens"]) != 190 {
+		t.Fatalf("turn usage = %+v; want input 160, output 30, total 190", usage)
+	}
+}
+
 func TestStopResolvesSubagentParentGeneration(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
