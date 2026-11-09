@@ -351,6 +351,13 @@ var (
 	chatgptUninstall = codex.UninstallDesktop
 )
 
+// agentInstallers names the hosts `agento11y <agent> install` routes to
+// runAgentInstall. a set rather than a chain of comparisons keeps run under the
+// gocyclo limit.
+var agentInstallers = map[string]bool{
+	"kiro": true, "claude": true, "copilot": true, "opencode": true, "pi": true, "chatgpt": true,
+}
+
 // Main is the entrypoint shared by cmd/agento11y and cmd/sigil.
 // buildVersion is the caller's main.version. Release builds stamp it through
 // ldflags; unstamped builds get their version from Go build metadata.
@@ -433,8 +440,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 	// These installers configure one host without launching it or prompting for
 	// Agent Observability credentials. They are safe to invoke from unattended
 	// setup after the current user's config.env is in place.
-	if len(args) >= 2 && args[1] == "install" &&
-		(args[0] == "kiro" || args[0] == "claude" || args[0] == "copilot" || args[0] == "opencode" || args[0] == "pi" || args[0] == "chatgpt") {
+	if len(args) >= 2 && args[1] == "install" && agentInstallers[args[0]] {
 		runAgentInstall(args[0], args[2:], stdout, stderr)
 		return
 	}
