@@ -14,7 +14,11 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agentinstall"
 )
 
-const desktopEnabledList = "agento11y-codex@agento11y  installed, enabled  /tmp/plugins/agento11y-codex\n"
+const (
+	desktopEnabledList = "agento11y-codex@agento11y  installed, enabled  /tmp/plugins/agento11y-codex\n"
+	desktopLegacyList  = "agento11y-codex@agento11y  not installed  /tmp/plugins/agento11y-codex\n" +
+		"sigil-codex@grafana-sigil  installed, enabled  /tmp/plugins/sigil-codex\n"
+)
 
 func withDesktopApp(t *testing.T) {
 	t.Helper()
@@ -23,6 +27,32 @@ func withDesktopApp(t *testing.T) {
 			return "", exec.ErrNotFound
 		}
 		return name, nil
+	})
+}
+
+// withPluginListSequence serves one `codex plugin list` output per call and
+// repeats the last one, so a test can describe the store before and after a
+// write.
+func withPluginListSequence(t *testing.T, outputs ...string) {
+	t.Helper()
+	calls := 0
+	withPluginList(t, func(_ context.Context, bin string) ([]byte, error) {
+		assert.Equal(t, DesktopCLIPath, bin)
+		out := outputs[min(calls, len(outputs)-1)]
+		calls++
+		return []byte(out), nil
+	})
+}
+
+func failWrites(t *testing.T) {
+	t.Helper()
+	withRunInstall(t, func(context.Context, string, io.Writer) error {
+		t.Fatal("install must not run")
+		return nil
+	})
+	withRunUpdate(t, func(context.Context, string, io.Writer) error {
+		t.Fatal("update must not run")
+		return nil
 	})
 }
 
@@ -39,16 +69,10 @@ func TestDesktopMissingAppReportsMissingHost(t *testing.T) {
 	assert.ErrorIs(t, err, ErrDesktopNotFound)
 }
 
-func TestInstallDesktopSkipsWhenPluginEnabled(t *testing.T) {
+func TestInstallDesktopSkipsWhenCurrentKeyEnabled(t *testing.T) {
 	withDesktopApp(t)
-	withPluginList(t, func(_ context.Context, bin string) ([]byte, error) {
-		assert.Equal(t, DesktopCLIPath, bin)
-		return []byte(desktopEnabledList), nil
-	})
-	withRunInstall(t, func(context.Context, string, io.Writer) error {
-		t.Fatal("install must not run when the plugin is already enabled")
-		return nil
-	})
+	withPluginListSequence(t, desktopEnabledList)
+	failWrites(t)
 
 	changed, err := InstallDesktop(context.Background(), io.Discard)
 	require.NoError(t, err)
@@ -57,7 +81,7 @@ func TestInstallDesktopSkipsWhenPluginEnabled(t *testing.T) {
 
 func TestInstallDesktopRegistersPluginWithBundledCLI(t *testing.T) {
 	withDesktopApp(t)
-	withPluginList(t, func(context.Context, string) ([]byte, error) { return nil, nil })
+	withPluginListSequence(t, "", desktopEnabledList)
 	var installedWith string
 	withRunInstall(t, func(_ context.Context, bin string, _ io.Writer) error {
 		installedWith = bin
@@ -73,9 +97,53 @@ func TestInstallDesktopRegistersPluginWithBundledCLI(t *testing.T) {
 	assert.Contains(t, out.String(), PluginName)
 }
 
+func TestInstallDesktopMigratesLegacyKey(t *testing.T) {
+	withDesktopApp(t)
+	withPluginListSequence(t, desktopLegacyList, desktopEnabledList)
+	withRunInstall(t, func(context.Context, string, io.Writer) error {
+		t.Fatal("a legacy install must go through the update path")
+		return nil
+	})
+	updated := false
+	withRunUpdate(t, func(_ context.Context, bin string, _ io.Writer) error {
+		updated = true
+		assert.Equal(t, DesktopCLIPath, bin)
+		return nil
+	})
+
+	var out bytes.Buffer
+	changed, err := InstallDesktop(context.Background(), &out)
+	require.NoError(t, err)
+	assert.True(t, updated)
+	assert.True(t, changed)
+	assert.Contains(t, out.String(), "Settings > Hooks")
+}
+
+func TestInstallDesktopReportsUnchangedWhenSnapshotStillLegacy(t *testing.T) {
+	withDesktopApp(t)
+	withPluginListSequence(t, desktopLegacyList)
+	withRunUpdate(t, func(context.Context, string, io.Writer) error { return nil })
+
+	var out bytes.Buffer
+	changed, err := InstallDesktop(context.Background(), &out)
+	require.NoError(t, err)
+	assert.False(t, changed)
+	assert.NotContains(t, out.String(), "Settings > Hooks")
+}
+
+func TestInstallDesktopFailsWhenNothingEnabledAfterInstall(t *testing.T) {
+	withDesktopApp(t)
+	withPluginListSequence(t, "")
+	withRunInstall(t, func(context.Context, string, io.Writer) error { return nil })
+
+	changed, err := InstallDesktop(context.Background(), io.Discard)
+	assert.False(t, changed)
+	assert.ErrorContains(t, err, "not enabled after install")
+}
+
 func TestInstallDesktopReturnsInstallError(t *testing.T) {
 	withDesktopApp(t)
-	withPluginList(t, func(context.Context, string) ([]byte, error) { return nil, nil })
+	withPluginListSequence(t, "")
 	boom := errors.New("marketplace add failed")
 	withRunInstall(t, func(context.Context, string, io.Writer) error { return boom })
 
@@ -86,23 +154,54 @@ func TestInstallDesktopReturnsInstallError(t *testing.T) {
 	assert.NotContains(t, out.String(), "Settings > Hooks")
 }
 
-func TestUninstallDesktopRemovesPlugin(t *testing.T) {
+func TestUninstallDesktopRemovesEveryInstalledKey(t *testing.T) {
 	withDesktopApp(t)
-	var gotBin string
+	withPluginListSequence(t,
+		"agento11y-codex@agento11y  installed, enabled  /tmp/a\n"+
+			"agento11y-codex@grafana-sigil  installed, disabled  /tmp/b\n"+
+			"sigil-codex@grafana-sigil  not installed  /tmp/c\n"+
+			"my-agento11y-codex@agento11y  installed, enabled  /tmp/d\n")
 	var gotSteps [][]string
 	withRunSteps(t, func(_ context.Context, bin string, _ io.Writer, steps [][]string) error {
-		gotBin, gotSteps = bin, steps
+		assert.Equal(t, DesktopCLIPath, bin)
+		gotSteps = steps
 		return nil
 	})
 
 	require.NoError(t, UninstallDesktop(context.Background(), io.Discard))
-	assert.Equal(t, DesktopCLIPath, gotBin)
-	assert.Equal(t, [][]string{{"plugin", "remove", "agento11y-codex@agento11y"}}, gotSteps)
+	assert.Equal(t, [][]string{
+		{"plugin", "remove", "agento11y-codex@agento11y"},
+		{"plugin", "remove", "agento11y-codex@grafana-sigil"},
+	}, gotSteps)
+}
+
+func TestUninstallDesktopRemovesLegacyOnlyInstall(t *testing.T) {
+	withDesktopApp(t)
+	withPluginListSequence(t, desktopLegacyList)
+	var gotSteps [][]string
+	withRunSteps(t, func(_ context.Context, _ string, _ io.Writer, steps [][]string) error {
+		gotSteps = steps
+		return nil
+	})
+
+	require.NoError(t, UninstallDesktop(context.Background(), io.Discard))
+	assert.Equal(t, [][]string{{"plugin", "remove", "sigil-codex@grafana-sigil"}}, gotSteps)
+}
+
+func TestUninstallDesktopNoopWhenNothingInstalled(t *testing.T) {
+	withDesktopApp(t)
+	withPluginListSequence(t, "agento11y-codex@agento11y  not installed  /tmp/a\n")
+	withRunSteps(t, func(context.Context, string, io.Writer, [][]string) error {
+		t.Fatal("nothing to remove")
+		return nil
+	})
+
+	require.NoError(t, UninstallDesktop(context.Background(), io.Discard))
 }
 
 func TestDesktopStatusReadsPluginList(t *testing.T) {
 	withDesktopApp(t)
-	withPluginList(t, func(context.Context, string) ([]byte, error) { return []byte(desktopEnabledList), nil })
+	withPluginListSequence(t, desktopEnabledList)
 
 	installed, version, err := DesktopStatus(context.Background())
 	require.NoError(t, err)

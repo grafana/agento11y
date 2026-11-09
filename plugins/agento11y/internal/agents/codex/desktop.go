@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -31,18 +32,36 @@ func init() {
 }
 
 // InstallDesktop registers the codex plugin for the chatgpt desktop app without
-// launching it or prompting. changed is false when the plugin is already
-// installed and enabled.
+// launching it or prompting. only the current key counts as installed: a legacy
+// key goes through the update path, which migrates it, because the app has no
+// launcher to run that migration later. changed reports whether the enabled key
+// moved, read back from codex after the write.
 func InstallDesktop(ctx context.Context, stdout io.Writer) (bool, error) {
 	bin, err := desktopBinary()
 	if err != nil {
 		return false, err
 	}
-	if installed, err := pluginInstalled(ctx, bin); err == nil && installed {
+	current := PluginName + "@" + marketplaceAlias
+	before, _ := enabledDesktopKey(ctx, bin)
+	if before == current {
 		return false, nil
 	}
-	if err := runInstall(ctx, bin, stdout); err != nil {
+	write := runInstall
+	if before != "" {
+		write = runUpdate
+	}
+	if err := write(ctx, bin, stdout); err != nil {
 		return false, err
+	}
+	after, err := enabledDesktopKey(ctx, bin)
+	if err != nil {
+		return false, fmt.Errorf("verify %s after install: %w", PluginName, err)
+	}
+	if after == "" {
+		return false, fmt.Errorf("%s is not enabled after install", PluginName)
+	}
+	if after == before {
+		return false, nil
 	}
 	// the app skips a new plugin's hooks until the user trusts them, the same
 	// review the cli asks for under /hooks.
@@ -54,14 +73,55 @@ func InstallDesktop(ctx context.Context, stdout io.Writer) (bool, error) {
 	return true, nil
 }
 
-// UninstallDesktop removes the codex plugin through the desktop app's cli. the
-// plugin is shared with the standalone cli, so this also stops capture there.
+// UninstallDesktop removes every key in pluginKeys that codex lists as
+// installed, so a registration left under a pre-rename marketplace or name
+// stops capturing too. the plugin is shared with the standalone cli, so this
+// also stops capture there.
 func UninstallDesktop(ctx context.Context, stdout io.Writer) error {
 	bin, err := desktopBinary()
 	if err != nil {
 		return err
 	}
-	return runSteps(ctx, bin, stdout, [][]string{{"plugin", "remove", PluginName + "@" + marketplaceAlias}})
+	out, err := pluginList(ctx, bin)
+	if err != nil {
+		return fmt.Errorf("list codex plugins: %w", err)
+	}
+	var steps [][]string
+	for _, key := range pluginKeys() {
+		if keyInstalled(out, key) {
+			steps = append(steps, []string{"plugin", "remove", key})
+		}
+	}
+	if len(steps) == 0 {
+		return nil
+	}
+	return runSteps(ctx, bin, stdout, steps)
+}
+
+// enabledDesktopKey returns the key of pluginKeys that codex marks installed
+// and enabled, empty when none is.
+func enabledDesktopKey(ctx context.Context, bin string) (string, error) {
+	out, err := pluginList(ctx, bin)
+	if err != nil {
+		return "", err
+	}
+	return enabledKey(out), nil
+}
+
+// keyInstalled reports whether `codex plugin list` output lists the exact key
+// as installed, enabled or not.
+func keyInstalled(out []byte, key string) bool {
+	needle := []byte(key)
+	for line := range bytes.SplitSeq(out, []byte{'\n'}) {
+		fields := bytes.Fields(line)
+		if len(fields) == 0 || !bytes.Equal(fields[0], needle) {
+			continue
+		}
+		if bytes.Contains(line, []byte("installed")) && !bytes.Contains(line, []byte("not installed")) {
+			return true
+		}
+	}
+	return false
 }
 
 // DesktopStatus reports whether the codex plugin is installed and enabled for
