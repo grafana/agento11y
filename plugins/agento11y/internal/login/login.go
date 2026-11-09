@@ -19,8 +19,8 @@
 // SIGIL_AUTH_TOKEN, the OTLP endpoint, and OTEL_EXPORTER_OTLP_HEADERS.
 // Pasting is optional: whatever the block does not carry is asked for field by
 // field. The three credentials are required, the OTLP endpoint is not. A
-// preferences group follows: content capture mode, session tags, guards, and
-// automatic tags. The stack answer only builds the printed links and is never
+// preferences group follows: content capture mode, automatic tags, session
+// tags, and guards. The stack answer only builds the printed links and is never
 // saved.
 //
 // The flow then asks the endpoint whether it accepts the credentials and
@@ -827,6 +827,11 @@ func preferenceGroups(v *formValues) []*huh.Group {
 			Description("What leaves this machine for each generation").
 			Options(contentCaptureOptions(v.contentMode)...).
 			Value(&v.contentMode),
+		huh.NewSelect[bool]().
+			Title("Automatic tags").
+			Description("Tag every session with the user, the repository, and the branch, and turn those into metric labels so Usage and Cost can be split by person, repository, or branch.\nThe values are stored with the metrics and kept for the metric retention period; the user value is often an email address.").
+			Options(autoTagSwitchOptions()...).
+			Value(&v.autoTags),
 		huh.NewInput().
 			Title("Session tags").
 			Description("Applied to every generation, e.g. team=ai,project=demo. Press Enter to skip.").
@@ -853,11 +858,6 @@ func preferenceGroups(v *formValues) []*huh.Group {
 				return validateGuardTimeout(s)
 			}).
 			Value(&v.guardTimeout),
-		huh.NewSelect[bool]().
-			Title("Automatic tags").
-			Description("Tag every session with the user, the repository, and the branch, and turn those into metric labels so Usage and Cost can be split by person, repository, or branch.\nThe values are stored with the metrics and kept for the metric retention period; the user value is often an email address.").
-			Options(autoTagSwitchOptions()...).
-			Value(&v.autoTags),
 	)
 	return []*huh.Group{
 		huh.NewGroup(fields...),
