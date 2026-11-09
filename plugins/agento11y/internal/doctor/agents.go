@@ -52,6 +52,9 @@ var agentProbes = []agentProbe{
 	{name: "kiro", bin: "kiro-cli", status: kiro.Status, configBased: true, notInstalledLabel: "not configured", note: "experimental; current workspace hooks"},
 	{name: "claude", bin: "claude", status: claudecode.Status, configBased: true},
 	{name: "codex", bin: "codex", status: codex.Status},
+	// the bundled cli's absolute path doubles as the app's presence check, so
+	// doctor skips chatgpt where the app is not installed.
+	{name: "chatgpt", bin: codex.DesktopCLIPath, status: codex.DesktopStatus, note: "Codex threads only; trust hooks in Settings > Hooks"},
 	{name: "copilot", bin: "copilot", status: copilot.Status, configBased: true, notInstalledLabel: "not configured", note: "hook-based"},
 	{name: "opencode", bin: "opencode", status: opencode.Status, configBased: true},
 	{name: "pi", bin: "pi", status: pi.Status, configBased: true},

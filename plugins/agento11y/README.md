@@ -75,6 +75,7 @@ agento11y claude
 |-------|------------|
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `agento11y claude` |
 | [Codex](https://developers.openai.com/codex) | `agento11y codex` |
+| [ChatGPT desktop (Codex threads)](../codex/README.md#chatgpt-desktop-app) | `agento11y chatgpt install`, then trust the hooks in ChatGPT |
 | [Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli/using-github-copilot-in-the-cli) | `agento11y copilot` |
 | [Cursor](https://cursor.com) | `agento11y cursor install`, then start Cursor |
 | [OpenCode](https://opencode.ai) | `agento11y opencode` |
@@ -82,7 +83,9 @@ agento11y claude
 | [Vibe](https://github.com/mistralai/vibe) | `agento11y vibe` |
 | [Kiro CLI 3 (experimental)](../kiro/README.md) | `agento11y kiro -- chat` |
 
-Cursor has no launcher. Run `agento11y cursor install` once, then start Cursor normally. Remove its hooks with `agento11y cursor uninstall`. See also [`cursor/README.md`](../cursor/README.md). Per-agent notes and glue live under [`plugins/`](../).
+Cursor has no launcher. Run `agento11y cursor install` once, then start Cursor normally. Remove its hooks with `agento11y cursor uninstall`. See also [`cursor/README.md`](../cursor/README.md).
+
+The ChatGPT desktop app has no launcher either. It is the Codex app renamed and shares `~/.codex` with the Codex CLI, so `agento11y chatgpt install` registers the same `agento11y-codex` plugin through the Codex CLI bundled inside the app; the standalone `codex` does not need to be on `PATH`. Then open **Settings > Hooks** in ChatGPT and trust the hooks. Only Codex threads are captured. See [ChatGPT desktop app](../codex/README.md#chatgpt-desktop-app). Per-agent notes and glue live under [`plugins/`](../).
 
 Kiro capture is workspace-scoped and captures prompts and tools only; assistant text, model usage, and cost are unavailable. See the [Kiro limitations](../kiro/README.md#captured-data-and-limits).
 
@@ -496,7 +499,7 @@ agento11y pi install --json
 
 Each command prints one secret-free result with `installed`, `already_installed`, `missing_host`, or `error`. OpenCode reports `error` and changes nothing for a release outside 1.3.13 to 1.x or 2.0.22 to 2.x. Copilot writes its shared user hook file and does not require the Copilot CLI on `PATH`; that file is also read by Copilot Chat in VS Code. OpenCode and pi require their respective CLI to be on the current user's `PATH`; `missing_host` is a successful deferral, so a later run can configure a host installed after the script.
 
-Claude Code provides the same command as `agento11y claude install --json`.
+Claude Code provides the same command as `agento11y claude install --json`, and the ChatGPT desktop app as `agento11y chatgpt install --json`, which reports `missing_host` when `/Applications/ChatGPT.app` is absent. A new ChatGPT install still needs its hooks trusted once in the app.
 
 #### Fleet reconciliation
 

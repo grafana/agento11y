@@ -57,6 +57,25 @@ Restart Codex, open `/hooks`, and trust the five `agento11y-codex@agento11y` hoo
 
 </details>
 
+### ChatGPT desktop app
+
+The ChatGPT desktop app for macOS is the Codex app renamed. It reads the same `~/.codex` as the CLI and runs plugin hooks for local Codex threads, so it uses this plugin. It has no launcher and does not put a `codex` binary on `PATH`, so register the plugin with:
+
+```sh
+agento11y login               # once, if you have not chosen where sessions go
+agento11y chatgpt install
+```
+
+This runs the same marketplace and plugin registration as `agento11y codex`, through the Codex CLI bundled at `/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex`. Then, in ChatGPT, open **Settings > Hooks** (or **Review hooks** in the composer), trust the five `agento11y-codex@agento11y` hooks, and start a new Codex thread. `agento11y doctor` lists the app as `chatgpt`.
+
+What is captured:
+
+- Local Codex threads only. Ordinary ChatGPT chats and cloud-orchestrated Work threads do not run local hooks.
+- Turns from the app carry the tag `codex.originator=Codex Desktop`, read from the session transcript, so they can be told apart from CLI turns. The agent name stays `codex`.
+- Hooks run `agento11y` from the app, so it must be on the `PATH` the app gives hook commands. If the hooks are trusted but nothing arrives, run `agento11y doctor`, then see [Troubleshooting](#troubleshooting).
+
+The plugin is shared with the Codex CLI: `agento11y chatgpt uninstall` removes it for both.
+
 ## 2. Credentials
 
 When `agento11y codex` prompts and you pick Grafana Cloud, it asks which Grafana stack you are on, then prints that stack's coding-agent setup page (`https://<your-stack>.grafana.net/a/grafana-agento11y-app/setup-coding-agent`) and tries to open it in a browser. Copy the environment block that page hands out, paste it into the next prompt, and the endpoint, instance ID, token, and OTLP endpoint are all filled from it. The stack is saved, so a later run offers it back and you press Enter. Make sure Agent Observability is enabled on your stack: an administrator opens **Observability → Agent Observability** once and accepts the terms.

@@ -630,6 +630,8 @@ func TestParseSessionMetaReadsWorkspace(t *testing.T) {
 		{"parent and depth aliases", `{"parent_thread_id":"alias","depth":2,"source":{"subagent":{"thread_spawn":{"parent_thread_id":"nested","depth":1}}}}`, SessionMeta{ParentSessionID: "alias", AgentDepth: 2, ThreadSource: "subagent"}, true},
 		{"nested linkage", `{"source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent","agent_role":"reviewer","agent_nickname":"scout","depth":1}}}}`, SessionMeta{ParentSessionID: "parent", AgentRole: "reviewer", AgentNickname: "scout", AgentDepth: 1, ThreadSource: "subagent"}, true},
 		{"explicit thread source only", `{"thread_source":"cli"}`, SessionMeta{ThreadSource: "cli"}, true},
+		{"desktop originator", `{"id":"sess-1","cwd":"/work/repo","originator":"Codex Desktop","source":"vscode"}`, SessionMeta{SessionID: "sess-1", Cwd: "/work/repo", Originator: "Codex Desktop"}, true},
+		{"originator alone is not success", `{"originator":"codex_cli_rs"}`, SessionMeta{Originator: "codex_cli_rs"}, false},
 		{"workspace alone is not success", `{"cwd":"/work/repo","source":"cli"}`, SessionMeta{Cwd: "/work/repo"}, false},
 		{"empty", `{}`, SessionMeta{}, false},
 		{"malformed", `{"id":"sess-1",`, SessionMeta{}, false},

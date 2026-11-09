@@ -53,7 +53,10 @@ type Inputs struct {
 	// it onto the generation and does not look up auth itself. Blank leaves
 	// user_id unset.
 	UserID string
-	Now    time.Time
+	// Originator is the client named in the rollout's session_meta, such as
+	// "Codex Desktop". blank leaves the codex.originator tag unset.
+	Originator string
+	Now        time.Time
 }
 
 type Mapped struct {
@@ -93,6 +96,9 @@ func Map(in Inputs) Mapped {
 		tags["hook.source"] = frag.Source
 	}
 	tags["codex.stop_hook_active"] = strconv.FormatBool(frag.StopHookActive)
+	if o := strings.TrimSpace(in.Originator); o != "" {
+		tags["codex.originator"] = o
+	}
 	conversationID, agentName, parentIDs, metadata := linkFields(frag, in.SubagentLink, tags, in.agent())
 	title := conversationTitle(frag, conversationID)
 	if len(parentIDs) > 0 {

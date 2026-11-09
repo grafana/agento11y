@@ -633,6 +633,51 @@ func TestStopResolvesSubagentParentGeneration(t *testing.T) {
 	}
 }
 
+func TestStopTagsDesktopOriginator(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	logger := log.New(io.Discard, "", 0)
+	var mu sync.Mutex
+	var bodies [][]byte
+	server := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read body: %v", err)
+			http.Error(w, "read body", http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		bodies = append(bodies, body)
+		mu.Unlock()
+		writeAcceptedGenerationResponse(t, w, body)
+	}))
+	defer server.Close()
+	t.Setenv("SIGIL_ENDPOINT", server.URL)
+	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
+	t.Setenv("SIGIL_AUTH_TOKEN", "token")
+	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}
+
+	transcript := writeHookTranscript(t,
+		`{"type":"session_meta","payload":{"id":"desktop","originator":"Codex Desktop","source":"vscode"}}`,
+		`{"type":"turn_context","payload":{"turn_id":"turn"}}`,
+	)
+	SessionStart(Payload{HookEventName: "SessionStart", SessionID: "desktop", TranscriptPath: transcript}, cfg, logger)
+	UserPromptSubmit(context.Background(), io.Discard, Payload{HookEventName: "UserPromptSubmit", SessionID: "desktop", TurnID: "turn", TranscriptPath: transcript}, cfg, logger)
+	Stop(Payload{HookEventName: "Stop", SessionID: "desktop", TurnID: "turn", TranscriptPath: transcript, Timestamp: "2026-11-09T10:00:00Z"}, cfg, logger)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, bodies, 1)
+	var req struct {
+		Generations []struct {
+			Tags map[string]string `json:"tags"`
+		} `json:"generations"`
+	}
+	require.NoError(t, json.Unmarshal(bodies[0], &req))
+	require.Len(t, req.Generations, 1)
+	assert.Equal(t, "Codex Desktop", req.Generations[0].Tags["codex.originator"])
+}
+
 func TestTenantOnlyAuthExports(t *testing.T) {
 	envconfig.PinAliasEnvBlank(t)
 	logger := log.New(io.Discard, "", 0)

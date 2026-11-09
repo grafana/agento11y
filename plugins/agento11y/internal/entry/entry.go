@@ -11,6 +11,7 @@
 //	agento11y pi       [--local|--no-local] [--tag k=v] [-- args...]  — exec pi after bootstrapping the @grafana/agento11y-pi extension
 //	agento11y vibe     [--local|--no-local] [--tag k=v] [-- args...]  — exec vibe after installing the sigil hook in vibe's hooks.toml
 //	agento11y cursor   install|uninstall                              — wire (or remove) the Cursor hook in ~/.cursor/hooks.json
+//	agento11y chatgpt  install [--json]|uninstall                     — register (or remove) the agento11y-codex plugin for the ChatGPT desktop app
 //	agento11y claude   install [--json]                               — register the Claude Code plugin without launching or prompting
 //	agento11y harbor   [run] -- <harbor run arguments>                — run Harbor with live experiment publishing
 //	agento11y harbor   export <job-directory> [flags]                 — publish a completed Harbor job
@@ -338,14 +339,16 @@ var registeredInstallers = agentinstall.All
 // cursorInstall and cursorUninstall are package vars so tests can stub the
 // filesystem-touching `agento11y cursor install`/`uninstall` flow.
 var (
-	cursorInstall   = cursorinstall.Run
-	cursorUninstall = cursorinstall.Uninstall
-	claudeInstall   = claudecode.Install
-	copilotInstall  = copilot.Install
-	kiroInstall     = kiro.Install
-	kiroUninstall   = kiro.Uninstall
-	opencodeInstall = opencode.Install
-	piInstall       = pi.Install
+	cursorInstall    = cursorinstall.Run
+	cursorUninstall  = cursorinstall.Uninstall
+	claudeInstall    = claudecode.Install
+	copilotInstall   = copilot.Install
+	kiroInstall      = kiro.Install
+	kiroUninstall    = kiro.Uninstall
+	opencodeInstall  = opencode.Install
+	piInstall        = pi.Install
+	chatgptInstall   = codex.InstallDesktop
+	chatgptUninstall = codex.UninstallDesktop
 )
 
 // Main is the entrypoint shared by cmd/agento11y and cmd/sigil.
@@ -423,11 +426,15 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 		return
 	}
 
+	if handleChatGPTUninstall(args, stdout, stderr) {
+		return
+	}
+
 	// These installers configure one host without launching it or prompting for
 	// Agent Observability credentials. They are safe to invoke from unattended
 	// setup after the current user's config.env is in place.
 	if len(args) >= 2 && args[1] == "install" &&
-		(args[0] == "kiro" || args[0] == "claude" || args[0] == "copilot" || args[0] == "opencode" || args[0] == "pi") {
+		(args[0] == "kiro" || args[0] == "claude" || args[0] == "copilot" || args[0] == "opencode" || args[0] == "pi" || args[0] == "chatgpt") {
 		runAgentInstall(args[0], args[2:], stdout, stderr)
 		return
 	}
@@ -1032,9 +1039,11 @@ func runAgentInstall(agent string, args []string, stdout, stderr io.Writer) {
 		logger, closeLog := cli.InitLogger("pi")
 		changed, err = piInstall(context.Background(), writer, logger)
 		closeLog()
+	case "chatgpt":
+		changed, err = chatgptInstall(context.Background(), writer)
 	}
 	switch {
-	case errors.Is(err, claudecode.ErrCLINotFound), errors.Is(err, opencode.ErrCLINotFound), errors.Is(err, pi.ErrCLINotFound):
+	case errors.Is(err, claudecode.ErrCLINotFound), errors.Is(err, opencode.ErrCLINotFound), errors.Is(err, pi.ErrCLINotFound), errors.Is(err, codex.ErrDesktopNotFound):
 		result.Status = "missing_host"
 	case err != nil:
 		result.Status, result.Error = "error", err.Error()
@@ -1666,6 +1675,25 @@ func handleKiroUninstall(args []string, stderr io.Writer) bool {
 	}
 	if err := kiroUninstall(); err != nil {
 		_, _ = fmt.Fprintln(stderr, err)
+		exit(1)
+	}
+	return true
+}
+
+// handleChatGPTUninstall removes the codex plugin through the chatgpt desktop
+// app's bundled cli. chatgpt has no launcher, so this only needs to run before
+// the unknown-agent check.
+func handleChatGPTUninstall(args []string, stdout, stderr io.Writer) bool {
+	if len(args) < 2 || args[0] != "chatgpt" || args[1] != "uninstall" {
+		return false
+	}
+	if len(args) != 2 {
+		usageError(stderr, "chatgpt uninstall", "unexpected arguments")
+		exit(2)
+		return true
+	}
+	if err := chatgptUninstall(context.Background(), stdout); err != nil {
+		_, _ = fmt.Fprintf(stderr, "agento11y: %v\n", err)
 		exit(1)
 	}
 	return true
