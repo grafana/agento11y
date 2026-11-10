@@ -113,6 +113,7 @@ def _validate_part(
         PartKind.THINKING.value,
         PartKind.TOOL_CALL.value,
         PartKind.TOOL_RESULT.value,
+        PartKind.MEDIA.value,
     ):
         raise ValueError(f"{path}[{message_index}].parts[{part_index}].kind is invalid")
 
@@ -124,6 +125,8 @@ def _validate_part(
     if getattr(part, "tool_call", None) is not None:
         field_count += 1
     if getattr(part, "tool_result", None) is not None:
+        field_count += 1
+    if getattr(part, "media", None) is not None:
         field_count += 1
 
     # Stripped text/thinking parts have empty payloads — that's expected.
@@ -151,7 +154,19 @@ def _validate_part(
             raise ValueError(f"{path}[{message_index}].parts[{part_index}].tool_call.name is required")
         return
 
-    if role != MessageRole.TOOL.value:
-        raise ValueError(f"{path}[{message_index}].parts[{part_index}].tool_result only allowed for tool role")
-    if getattr(part, "tool_result", None) is None:
-        raise ValueError(f"{path}[{message_index}].parts[{part_index}].tool_result is required")
+    if kind == PartKind.TOOL_RESULT.value:
+        if role != MessageRole.TOOL.value:
+            raise ValueError(f"{path}[{message_index}].parts[{part_index}].tool_result only allowed for tool role")
+        if getattr(part, "tool_result", None) is None:
+            raise ValueError(f"{path}[{message_index}].parts[{part_index}].tool_result is required")
+        return
+
+    if kind == PartKind.MEDIA.value:
+        # Media is allowed on every role, unlike thinking and tool_call (assistant
+        # only) and tool_result (tool only).
+        media = getattr(part, "media", None)
+        if media is None:
+            raise ValueError(f"{path}[{message_index}].parts[{part_index}].media is required")
+        if not content_stripped and getattr(media, "url", "").strip() == "":
+            raise ValueError(f"{path}[{message_index}].parts[{part_index}].media.url is required")
+        return
