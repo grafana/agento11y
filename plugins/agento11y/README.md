@@ -169,7 +169,7 @@ See [Local skill analytics](#local-skill-analytics) for retained calls on this m
 
 ## Local mode
 
-`agento11y <agent> --local` records the session to a JSONL store and starts the local Agent Observability app. The command prints the app URL (tries `http://127.0.0.1:8765`, then a higher port if needed).
+`agento11y <agent> --local` records the session locally and starts the local Agent Observability app. The command prints the app URL (tries `http://127.0.0.1:8765`, then a higher port if needed).
 
 `AGENTO11Y_LOCAL=true` in the shell or `config.env` enables local mode for every launch and installed hook. **Local only** writes `AGENTO11Y_LOCAL` as true and `AGENTO11Y_LOCAL_FORWARD` as false. Sessions then stay on the machine. **Local web UI = Yes** writes both as true, so the daemon keeps a full local copy and also forwards to Grafana Cloud. **Local web UI = No** writes both as false and sends directly to Cloud. Use `--no-local` to override a saved local destination for one launcher session without changing those keys.
 

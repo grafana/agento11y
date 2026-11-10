@@ -12,8 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
-	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -21,60 +19,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// TestServe_StampsStoreAfterPublishingStatus covers the order the daemon
-// starts things in: the status file the spawning process waits 5 seconds
-// for appears while the modification-time pass is still reading the store,
-// and the store repairs itself once the pass gets through it.
-//
-// A named pipe among the conversation files holds the pass: opening one
-// for reading returns only once this test opens the write end, so the pass
-// cannot reach the marker until the test lets it.
-func TestServe_StampsStoreAfterPublishingStatus(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "local")
-	storage, err := NewStorage(dir)
-	require.NoError(t, err)
-	activity := time.Now().Add(-90 * 24 * time.Hour).Truncate(time.Second)
-	seedConversation(t, storage, "conv-A", activity)
-	blocker := filepath.Join(dir, ConversationsDir, "conv-blocker.jsonl")
-	require.NoError(t, syscall.Mkfifo(blocker, 0o600))
-
-	logger := testLogger(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	served := make(chan error, 1)
-	go func() { served <- Serve(ctx, dir, 0, logger) }()
-	t.Cleanup(func() {
-		cancel()
-		require.NoError(t, <-served)
-	})
-	t.Cleanup(func() {
-		if w, err := os.OpenFile(blocker, os.O_WRONLY|syscall.O_NONBLOCK, 0); err == nil {
-			_ = w.Close()
-		}
-	})
-
-	require.Eventually(t, func() bool {
-		s, err := IsRunning(dir)
-		return err == nil && s != nil
-	}, 5*time.Second, 20*time.Millisecond, "daemon published its status and serves")
-
-	meta, err := readStoreMeta(dir)
-	require.NoError(t, err)
-	require.False(t, meta.MtimeStamped, "the daemon serves while the pass is still reading")
-
-	w, err := os.OpenFile(blocker, os.O_WRONLY, 0)
-	require.NoError(t, err)
-	require.NoError(t, w.Close())
-
-	require.Eventually(t, func() bool {
-		meta, err := readStoreMeta(dir)
-		return err == nil && meta.MtimeStamped
-	}, 5*time.Second, 20*time.Millisecond, "store marked as stamped")
-
-	info, err := os.Stat(filepath.Join(dir, ConversationsDir, "conv-A.jsonl"))
-	require.NoError(t, err)
-	assert.WithinDuration(t, activity, info.ModTime(), stampTolerance)
-}
 
 func TestStop_EndpointDeadButProcessAlive(t *testing.T) {
 	for _, tc := range []struct {
@@ -244,37 +188,42 @@ func TestStop_WaitsPastTheDrain(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "status file should be removed once the daemon exits")
 }
 
-// testLogger routes a daemon's diagnostics into the test's output, so a
-// failing test reports what the daemon was doing. Call it from the test
-// goroutine: it registers the cleanup that stops the writer, and t.Log
-// panics once the test and its cleanups are done.
-func testLogger(t *testing.T) *log.Logger {
-	w := &testLogWriter{t: t}
-	t.Cleanup(w.stop)
-	return log.New(w, "", 0)
-}
+func TestServePublishesHealthBeforeMigrationCompletes(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "local")
+	storage, err := NewStorage(dir)
+	require.NoError(t, err)
+	require.NoError(t, storage.AppendGeneration(generationRecord{
+		ReceivedAt:     "2026-08-20T08:00:00Z",
+		GenerationID:   "g1",
+		ConversationID: "conv-A",
+		Generation:     []byte(`{"id":"g1","conversation_id":"conv-A"}`),
+	}))
 
-type testLogWriter struct {
-	t *testing.T
+	// The first path in migration order blocks scanLatestGenerationRecords.
+	// Health must answer while that scan is still waiting.
+	blocker := filepath.Join(dir, ConversationsDir, "000-blocker.jsonl")
+	require.NoError(t, syscall.Mkfifo(blocker, 0o600))
 
-	mu      sync.Mutex
-	stopped bool
-}
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan error, 1)
+	go func() { served <- Serve(ctx, dir, 0, log.New(os.Stderr, "", 0)) }()
+	t.Cleanup(func() {
+		if w, openErr := os.OpenFile(blocker, os.O_WRONLY|syscall.O_NONBLOCK, 0); openErr == nil {
+			_ = w.Close()
+		}
+		cancel()
+		require.NoError(t, <-served)
+	})
 
-func (w *testLogWriter) Write(p []byte) (int, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if !w.stopped {
-		w.t.Log(strings.TrimRight(string(p), "\n"))
-	}
-	return len(p), nil
-}
+	var status *Status
+	require.Eventually(t, func() bool {
+		status, err = LoadStatus(dir)
+		return err == nil && status != nil && endpointAlive(status.Endpoint)
+	}, 5*time.Second, 20*time.Millisecond, "daemon publishes status and health before migration finishes")
 
-// stop drops later lines. A goroutine the test did not join can still hold
-// the logger, and writing from one after the test ends takes the whole run
-// down.
-func (w *testLogWriter) stop() {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.stopped = true
+	// Opening the writer releases the parked migration scan. Cleanup tries the
+	// same non-blockingly; OpenFile returns ENXIO when no scan is parked.
+	w, err := os.OpenFile(blocker, os.O_WRONLY, 0)
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
 }

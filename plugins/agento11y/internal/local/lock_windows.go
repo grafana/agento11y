@@ -10,8 +10,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// LockFileEx locks byte ranges. All callers use the maximum range from byte
-// zero so their locks exclude each other.
+// LockFileEx locks byte ranges. All callers use the same maximum range from byte zero.
 const lockRegionLow, lockRegionHigh = ^uint32(0), ^uint32(0)
 
 // daemonLock is a held file lock. The lock lives on the file handle, so
@@ -27,11 +26,14 @@ type daemonLock struct {
 // A second handle in the same process contends with the first. This matches
 // flock and lets the shared contention test use two handles in one process.
 func acquireFileLock(path string, wait bool) (*daemonLock, error) {
+	return acquireWindowsFileLock(path, wait, windows.LOCKFILE_EXCLUSIVE_LOCK)
+}
+
+func acquireWindowsFileLock(path string, wait bool, flags uint32) (*daemonLock, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open lockfile: %w", err)
 	}
-	flags := uint32(windows.LOCKFILE_EXCLUSIVE_LOCK)
 	if !wait {
 		flags |= windows.LOCKFILE_FAIL_IMMEDIATELY
 	}
