@@ -9,6 +9,7 @@ import type {
   Message,
   MessagePart,
   ModelRef,
+  TokenUsage,
   ToolDefinition,
   ToolExecution,
   ToolExecutionResult,
@@ -254,7 +255,7 @@ export function cloneGeneration(generation: Generation): Generation {
     input: generation.input?.map(cloneMessage),
     output: generation.output?.map(cloneMessage),
     tools: generation.tools?.map(cloneToolDefinition),
-    usage: generation.usage ? { ...generation.usage } : undefined,
+    usage: cloneUsage(generation.usage),
     startedAt: new Date(generation.startedAt),
     completedAt: new Date(generation.completedAt),
     tags: generation.tags ? { ...generation.tags } : undefined,
@@ -270,7 +271,7 @@ export function cloneGenerationResult(result: GenerationResult): GenerationResul
     input: result.input?.map(cloneMessage),
     output: result.output?.map(cloneMessage),
     tools: result.tools?.map(cloneToolDefinition),
-    usage: result.usage ? { ...result.usage } : undefined,
+    usage: cloneUsage(result.usage),
     completedAt: result.completedAt ? new Date(result.completedAt) : undefined,
     tags: result.tags ? { ...result.tags } : undefined,
     metadata: result.metadata ? { ...result.metadata } : undefined,
@@ -518,4 +519,18 @@ function normalizeRole(role: string): 'user' | 'assistant' | 'tool' | '' {
     return normalized;
   }
   return '';
+}
+
+export function cloneUsage(usage: TokenUsage | undefined): TokenUsage | undefined {
+  if (!usage) {
+    return undefined;
+  }
+  const copy = { ...usage };
+  for (const key of ['inputByModality', 'outputByModality', 'cacheReadByModality', 'cacheWriteByModality'] as const) {
+    const details = usage[key];
+    if (details) {
+      copy[key] = { ...details, tokens: { ...details.tokens } };
+    }
+  }
+  return copy;
 }
