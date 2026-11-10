@@ -370,7 +370,9 @@ type codexReplay struct {
 	link      *fragment.SubagentLink
 	sessionID string
 	userID    string
-	yield     func(HistoricalGeneration, error) bool
+	// originator is the client named in session_meta, such as "Codex Desktop".
+	originator string
+	yield      func(HistoricalGeneration, error) bool
 
 	segments      codexSegmenter
 	title         string
@@ -442,6 +444,9 @@ func (r *codexReplay) apply(rec codexlog.Record, act codexSegmentAction) {
 		meta, _ := codexlog.ParseSessionMeta(rec.Payload)
 		if meta.SessionID != "" {
 			r.sessionID = meta.SessionID
+		}
+		if meta.Originator != "" {
+			r.originator = meta.Originator
 		}
 		if r.current != nil && r.current.frag.Cwd == "" {
 			r.current.frag.Cwd = meta.Cwd
@@ -642,6 +647,7 @@ func (r *codexReplay) finalizeAndEmit(emit bool) bool {
 		// The framework Sanitizer is the single redaction point for import.
 		RawContent: true,
 		UserID:     r.userID,
+		Originator: r.originator,
 		Now:        r.importer.clock(),
 	})
 	gen := mapped.Generation

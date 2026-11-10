@@ -31,6 +31,9 @@ func publicHelpPages() map[string]clihelp.Page {
 	add("cursor", "Manage Cursor hooks. Cursor is a GUI app and has no launcher.", "<command>")
 	add("cursor install", "Install Cursor hooks and offer capture setup if needed.", "")
 	add("cursor uninstall", "Remove agento11y hooks from Cursor.", "")
+	add("chatgpt", "Manage capture for Codex threads in the ChatGPT desktop app. ChatGPT is a GUI app and has no launcher.", "<command>")
+	add("chatgpt install", "Register the agento11y-codex plugin through the app's bundled Codex CLI without prompting. Trust its hooks in Settings > Hooks afterwards.", "[--json]")
+	add("chatgpt uninstall", "Remove the agento11y-codex plugin. The plugin is shared with the Codex CLI.", "")
 	add("local", "Manage the local capture daemon and viewer.", "<command>")
 	for _, row := range []clihelp.Row{{Name: "start", Description: "Start the receiver if needed and print its address."}, {Name: "open", Description: "Start the receiver if needed, print its address, and try to open the viewer."}, {Name: "status", Description: "Report whether the receiver is running."}, {Name: "stop", Description: "Stop the receiver."}, {Name: "restart", Description: "Stop and start the receiver."}} {
 		usage := ""
@@ -79,9 +82,10 @@ func publicHelpPages() map[string]clihelp.Page {
 	}
 	children("", "Setup", "login", "doctor", "agents")
 	children("", "Launchers", launcherNames...)
-	children("", "Commands", "cursor", "guards", "harbor", "local", "history", "skills", "help")
+	children("", "Commands", "chatgpt", "cursor", "guards", "harbor", "local", "history", "skills", "help")
 	children("guards", "Commands", "test")
 	children("agents", "Commands", "reconcile")
+	children("chatgpt", "Commands", "install", "uninstall")
 	children("cursor", "Commands", "install", "uninstall")
 	children("local", "Commands", "start", "open", "status", "stop", "restart")
 	children("history", "Commands", "import")
@@ -163,7 +167,7 @@ func helpFlags(path string) *flag.FlagSet {
 		return historyHelpFlags()
 	case path == "claude eval import":
 		return claudeEvalHelpFlags()
-	case path == "kiro install" || path == "claude install" || path == "copilot install" || path == "opencode install" || path == "pi install":
+	case path == "kiro install" || path == "claude install" || path == "copilot install" || path == "opencode install" || path == "pi install" || path == "chatgpt install":
 		fs, _ := newJSONFlags(path)
 		return fs
 	default:
@@ -203,7 +207,7 @@ func usageError(stderr io.Writer, path, message string) {
 
 // helpGroups are command groups that print their help when run without a subcommand.
 var helpGroups = map[string]bool{
-	"local": true, "history": true, "skills": true, "agents": true, "cursor": true, "claude eval": true, "harbor": true,
+	"local": true, "history": true, "skills": true, "agents": true, "chatgpt": true, "cursor": true, "claude eval": true, "harbor": true,
 }
 
 func routeHelp(args []string, stdout, stderr io.Writer) bool {

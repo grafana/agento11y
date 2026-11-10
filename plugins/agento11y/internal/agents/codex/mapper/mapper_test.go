@@ -327,6 +327,19 @@ func TestMapAddsStopHookActiveTag(t *testing.T) {
 	}
 }
 
+func TestMapAddsOriginatorTag(t *testing.T) {
+	f := &fragment.Fragment{SessionID: "sess", TurnID: "turn", Model: "gpt-5.5"}
+	got := Map(Inputs{Fragment: f, Originator: " Codex Desktop ", ContentCapture: agento11y.ContentCaptureModeMetadataOnly, Now: time.Unix(1, 0)})
+	if got.Start.Tags["codex.originator"] != "Codex Desktop" || got.Generation.Tags["codex.originator"] != "Codex Desktop" {
+		t.Fatalf("originator tags = start %q, generation %q; want Codex Desktop", got.Start.Tags["codex.originator"], got.Generation.Tags["codex.originator"])
+	}
+
+	got = Map(Inputs{Fragment: f, ContentCapture: agento11y.ContentCaptureModeMetadataOnly, Now: time.Unix(1, 0)})
+	if _, ok := got.Generation.Tags["codex.originator"]; ok {
+		t.Fatalf("originator tag set without an originator: %q", got.Generation.Tags["codex.originator"])
+	}
+}
+
 func TestMapDoesNotShareTagOrMetadataMaps(t *testing.T) {
 	f := &fragment.Fragment{
 		SessionID: "child",

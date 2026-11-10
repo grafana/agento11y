@@ -267,6 +267,7 @@ func Stop(p Payload, cfg config.Config, logger *log.Logger) {
 		ContentCapture:      cfg.ContentCapture,
 		AgentName:           cfg.Agent(),
 		SkipPromptRedaction: cfg.SkipPromptRedaction,
+		Originator:          originatorForStop(p, frag, logger),
 		UserID:              userID,
 	})
 	logger.Printf("stop: export id=%s conversation=%s agent=%s model=%s", mapped.Generation.ID, mapped.Generation.ConversationID, mapped.Generation.AgentName, mapped.Generation.Model.Name)
@@ -383,8 +384,9 @@ func sweepPendingRetries(ctx context.Context, clients map[string]*agento11y.Clie
 			// The name comes from this invocation, not from the turn the
 			// fragment was written in. A name changed between turns
 			// re-stamps a retried turn with the current one.
-			AgentName: cfg.Agent(),
-			UserID:    userID,
+			AgentName:  cfg.Agent(),
+			UserID:     userID,
+			Originator: originatorForStop(retryPayload, f, logger),
 		})
 		logger.Printf("stop: retry id=%s session=%s turn=%s", mapped.Generation.ID, f.SessionID, f.TurnID)
 		if err := emitGeneration(ctx, client, f, mapped, cfg.ContentCapture, logger); err != nil {
@@ -411,6 +413,22 @@ func tokenSnapshotForStop(p Payload, frag *fragment.Fragment, logger *log.Logger
 		return nil
 	}
 	return &snapshot
+}
+
+// originatorForStop names the client that wrote the rollout, such as
+// "Codex Desktop", so desktop turns can be told apart from cli turns. session_meta
+// is the rollout's first record, so the scan stops almost at once.
+func originatorForStop(p Payload, frag *fragment.Fragment, logger *log.Logger) string {
+	path := firstNonEmpty(frag.TranscriptPath, p.TranscriptPath)
+	if path == "" {
+		return ""
+	}
+	meta, _, err := codexlog.ReadSessionMeta(path, codexlog.LiveScanOptions())
+	if err != nil {
+		logger.Printf("originator: read session meta: %v", err)
+		return ""
+	}
+	return meta.Originator
 }
 
 func recordSubagentLink(sessionID, transcriptPath string, logger *log.Logger) *fragment.SubagentLink {

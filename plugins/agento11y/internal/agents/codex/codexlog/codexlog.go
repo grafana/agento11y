@@ -43,6 +43,10 @@ type SessionMeta struct {
 	// Cwd is the workspace the session ran in. Only session_meta carries it,
 	// which is what makes a rollout attributable to a repository.
 	Cwd string
+	// Originator names the client that wrote the rollout, such as
+	// "Codex Desktop" for the chatgpt desktop app. hook payloads do not carry
+	// it, so the transcript is the only way to tell the app from the cli.
+	Originator string
 }
 
 type SpawnLink struct {
@@ -503,6 +507,7 @@ func ParseSessionMeta(raw json.RawMessage) (SessionMeta, bool) {
 		AgentNickname   string          `json:"agent_nickname"`
 		AgentDepth      int             `json:"agent_depth"`
 		Depth           int             `json:"depth"`
+		Originator      string          `json:"originator"`
 		Source          json.RawMessage `json:"source"`
 	}
 	if err := json.Unmarshal(raw, &p); err != nil {
@@ -516,6 +521,7 @@ func ParseSessionMeta(raw json.RawMessage) (SessionMeta, bool) {
 		AgentRole:       p.AgentRole,
 		AgentNickname:   p.AgentNickname,
 		AgentDepth:      firstNonZero(p.AgentDepth, p.Depth),
+		Originator:      p.Originator,
 	}
 	var source struct {
 		Subagent struct {
