@@ -50,10 +50,17 @@ func failWrites(t *testing.T) {
 		t.Fatal("install must not run")
 		return nil
 	})
-	withRunUpdate(t, func(context.Context, string, io.Writer) error {
+	withRunDesktopUpdate(t, func(context.Context, string, io.Writer) error {
 		t.Fatal("update must not run")
 		return nil
 	})
+}
+
+func withRunDesktopUpdate(t *testing.T, fn func(context.Context, string, io.Writer) error) {
+	t.Helper()
+	prev := runDesktopUpdate
+	t.Cleanup(func() { runDesktopUpdate = prev })
+	runDesktopUpdate = fn
 }
 
 func TestDesktopMissingAppReportsMissingHost(t *testing.T) {
@@ -105,7 +112,7 @@ func TestInstallDesktopMigratesLegacyKey(t *testing.T) {
 		return nil
 	})
 	updated := false
-	withRunUpdate(t, func(_ context.Context, bin string, _ io.Writer) error {
+	withRunDesktopUpdate(t, func(_ context.Context, bin string, _ io.Writer) error {
 		updated = true
 		assert.Equal(t, DesktopCLIPath, bin)
 		return nil
@@ -119,10 +126,30 @@ func TestInstallDesktopMigratesLegacyKey(t *testing.T) {
 	assert.Contains(t, out.String(), "Settings > Hooks")
 }
 
+func TestInstallDesktopMigrationPrintsOnlyDesktopTrustHint(t *testing.T) {
+	withDesktopApp(t)
+	withPluginListSequence(t, desktopLegacyList, desktopEnabledList)
+	var steps [][]string
+	withRunSteps(t, func(_ context.Context, _ string, _ io.Writer, s [][]string) error {
+		steps = append(steps, s...)
+		return nil
+	})
+	withRunFirst(t, func(context.Context, string, io.Writer, [][]string) (int, error) { return 0, nil })
+	withRunOutput(t, func(context.Context, string, ...string) ([]byte, error) { return nil, nil })
+
+	var out bytes.Buffer
+	changed, err := InstallDesktop(context.Background(), &out)
+	require.NoError(t, err)
+	assert.True(t, changed)
+	assert.Equal(t, [][]string{{"plugin", "marketplace", "upgrade"}}, steps)
+	assert.Contains(t, out.String(), "Settings > Hooks")
+	assert.NotContains(t, out.String(), "/hooks inside codex")
+}
+
 func TestInstallDesktopReportsUnchangedWhenSnapshotStillLegacy(t *testing.T) {
 	withDesktopApp(t)
 	withPluginListSequence(t, desktopLegacyList)
-	withRunUpdate(t, func(context.Context, string, io.Writer) error { return nil })
+	withRunDesktopUpdate(t, func(context.Context, string, io.Writer) error { return nil })
 
 	var out bytes.Buffer
 	changed, err := InstallDesktop(context.Background(), &out)

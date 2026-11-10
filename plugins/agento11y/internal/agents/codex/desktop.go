@@ -48,7 +48,7 @@ func InstallDesktop(ctx context.Context, stdout io.Writer) (bool, error) {
 	}
 	write := runInstall
 	if before != "" {
-		write = runUpdate
+		write = runDesktopUpdate
 	}
 	if err := write(ctx, bin, stdout); err != nil {
 		return false, err
@@ -71,6 +71,20 @@ func InstallDesktop(ctx context.Context, stdout io.Writer) (bool, error) {
 			"           you have not chosen where sessions go.\n",
 		PluginName)
 	return true, nil
+}
+
+// runDesktopUpdate is a test seam for the legacy-key migration.
+var runDesktopUpdate = defaultRunDesktopUpdate
+
+// defaultRunDesktopUpdate is the launcher's update path without its cli
+// re-trust hint: ensurePlugin only prints "open /hooks inside codex" when it is
+// given the previous key, and desktop users have no codex on PATH to open.
+// InstallDesktop prints the Settings > Hooks reminder instead.
+func defaultRunDesktopUpdate(ctx context.Context, bin string, w io.Writer) error {
+	if err := runSteps(ctx, bin, w, [][]string{{"plugin", "marketplace", "upgrade"}}); err != nil {
+		return err
+	}
+	return ensurePlugin(ctx, bin, w, "")
 }
 
 // UninstallDesktop removes every key in pluginKeys that codex lists as
