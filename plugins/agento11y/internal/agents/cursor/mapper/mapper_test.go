@@ -58,6 +58,132 @@ func TestMapFragment_BasicFields(t *testing.T) {
 	if got.Generation.ThinkingEnabled == nil || !*got.Generation.ThinkingEnabled {
 		t.Errorf("ThinkingEnabled = %v; want true", got.Generation.ThinkingEnabled)
 	}
+	if got.Generation.Mode != agento11y.GenerationModeSync || got.Generation.OperationName != "generateText" {
+		t.Errorf("mode/op = %s/%s; want sync generateText when no output event was timed", got.Generation.Mode, got.Generation.OperationName)
+	}
+	if !got.FirstTokenAt.IsZero() {
+		t.Errorf("FirstTokenAt = %s; want zero", got.FirstTokenAt)
+	}
+}
+
+func TestMapFragment_StreamsFromFirstOutput(t *testing.T) {
+	frag := basicFragment(t)
+	frag.FirstTokenAt = "2026-04-28T11:59:00.250Z"
+	got := MapFragment(Inputs{
+		Fragment:       frag,
+		ContentCapture: agento11y.ContentCaptureModeMetadataOnly,
+		Now:            fixedTime,
+	})
+	if got.Generation.Mode != agento11y.GenerationModeStream || got.Start.Mode != agento11y.GenerationModeStream {
+		t.Fatalf("mode = %s/%s; want STREAM", got.Generation.Mode, got.Start.Mode)
+	}
+	if got.Generation.OperationName != "streamText" || got.Start.OperationName != "streamText" {
+		t.Fatalf("operation = %s/%s; want streamText", got.Generation.OperationName, got.Start.OperationName)
+	}
+	want := time.Date(2026, 4, 28, 11, 59, 0, 250000000, time.UTC)
+	if !got.FirstTokenAt.Equal(want) {
+		t.Fatalf("FirstTokenAt = %s; want %s", got.FirstTokenAt, want)
+	}
+}
+
+func TestMapFragment_ThinkingTextAndModelParams(t *testing.T) {
+	dur := 5000.0
+	frag := basicFragment(t)
+	frag.Thinking = []fragment.ThinkingSegment{{
+		Text:       "plan with " + testToken,
+		DurationMs: &dur,
+	}}
+	frag.ModelParams = map[string]string{
+		"optimize_for": "cost",
+		"thinking":     "true",
+		"effort":       "max " + testToken,
+	}
+	frag.Tools[0].Status = "error"
+	frag.Tools[0].FailureType = "timeout"
+	frag.Tools[0].ErrorMessage = "Command timed out"
+
+	got := MapFragment(Inputs{
+		Fragment:       frag,
+		ContentCapture: agento11y.ContentCaptureModeFull,
+		Now:            fixedTime,
+	})
+
+	var thinking string
+	for _, msg := range got.Generation.Output {
+		for _, part := range msg.Parts {
+			if part.Kind == agento11y.PartKindThinking {
+				thinking = part.Thinking
+			}
+		}
+	}
+	if thinking != "plan with [REDACTED:grafana-cloud-token]" {
+		t.Fatalf("thinking = %q", thinking)
+	}
+	if got.Generation.Tags["model_param.optimize_for"] != "cost" || got.Generation.Tags["model_param.thinking"] != "true" {
+		t.Fatalf("model param tags = %#v", got.Generation.Tags)
+	}
+	if strings.Contains(got.Generation.Tags["model_param.effort"], testToken) || !strings.Contains(got.Generation.Tags["model_param.effort"], "[REDACTED:") {
+		t.Fatalf("effort tag = %q; want the token redacted", got.Generation.Tags["model_param.effort"])
+	}
+	if got.Start.Tags["model_param.optimize_for"] != "cost" {
+		t.Fatalf("start tags missing model param: %#v", got.Start.Tags)
+	}
+	if got.Generation.Metadata["cursor.thinking.duration_ms"] != dur {
+		t.Fatalf("thinking duration = %#v", got.Generation.Metadata["cursor.thinking.duration_ms"])
+	}
+	failures, _ := got.Generation.Metadata["cursor.tool_failures"].([]any)
+	if len(failures) != 1 {
+		t.Fatalf("tool failures = %#v", got.Generation.Metadata["cursor.tool_failures"])
+	}
+	item, _ := failures[0].(map[string]any)
+	if item["failure_type"] != "timeout" || item["tool_use_id"] != "t1" {
+		t.Fatalf("failure item = %#v", item)
+	}
+
+	dropped := MapFragment(Inputs{
+		Fragment:       frag,
+		ContentCapture: agento11y.ContentCaptureModeMetadataOnly,
+		Now:            fixedTime,
+	})
+	for _, msg := range dropped.Generation.Output {
+		for _, part := range msg.Parts {
+			if part.Thinking != "" {
+				t.Fatalf("metadata_only exported thinking %q", part.Thinking)
+			}
+		}
+	}
+	if dropped.Generation.Metadata["cursor.thinking.duration_ms"] != dur {
+		t.Fatal("duration is metadata and should survive metadata_only")
+	}
+	if dropped.Generation.Metadata["cursor.tool_failures"] == nil {
+		t.Fatal("failure type is metadata and should survive metadata_only")
+	}
+}
+
+func TestMapFragment_SumsDurationOnlyThinkingBlocks(t *testing.T) {
+	first := 1000.0
+	second := 2000.0
+	frag := basicFragment(t)
+	frag.Thinking = []fragment.ThinkingSegment{
+		{DurationMs: &first, StepID: "gen-0-ab12"},
+		{DurationMs: &second, StepID: "gen-1-cd34"},
+	}
+
+	got := MapFragment(Inputs{
+		Fragment:       frag,
+		ContentCapture: agento11y.ContentCaptureModeMetadataOnly,
+		Now:            fixedTime,
+	})
+	if got.Generation.Metadata["cursor.thinking.duration_ms"] != 3000.0 {
+		t.Fatalf("thinking duration = %#v; want 3000", got.Generation.Metadata["cursor.thinking.duration_ms"])
+	}
+	for _, msg := range got.Generation.Output {
+		for _, part := range msg.Parts {
+			if part.Thinking != "" {
+				t.Fatalf("metadata_only exported thinking %q", part.Thinking)
+			}
+		}
+	}
 }
 
 // TestMapFragment_ContentCaptureModes covers what every supported
