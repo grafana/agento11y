@@ -117,6 +117,44 @@ func TestResolveSpawnLinkMalformedOutputFailsOpen(t *testing.T) {
 	}
 }
 
+func TestReadTokenUsageForTurnRecoversFromBoundedTail(t *testing.T) {
+	path := writeTranscript(t,
+		`{"type":"turn_context","payload":{"turn_id":"target"}}`,
+		`{"type":"response_item","payload":{"type":"function_call_output","output":"`+strings.Repeat("x", 8192)+`"}}`,
+		`{"type":"token_usage_record","payload":{"turn_id":"target","usage":{"input_tokens":10,"total_tokens":10},"turn_token_usage":{"input_tokens":30,"total_tokens":30},"thread_token_usage":{"input_tokens":130,"total_tokens":130}}}`,
+		`{"type":"response_item","payload":{"type":"function_call_output","output":"`+strings.Repeat("x", 2048)+`"}}`,
+		`{"type":"token_usage_record","payload":{"turn_id":"target","usage":{"input_tokens":12,"output_tokens":3,"total_tokens":15},"turn_token_usage":{"input_tokens":42,"output_tokens":3,"total_tokens":45},"thread_token_usage":{"input_tokens":142,"output_tokens":3,"total_tokens":145}}}`,
+		`{"type":"token_usage_record","payload":{"turn_id":"other","turn_token_usage":{"input_tokens":500,"total_tokens":500},"thread_token_usage":{"input_tokens":642,"output_tokens":3,"total_tokens":645}}}`,
+		`{"type":"token_usage_record","payload":`,
+	)
+	opts := LiveScanOptions()
+	opts.MaxBytes = 4096
+	opts.MaxLineBytes = 1024
+	got, ok, err := ReadTokenUsageForTurn(path, "target", opts)
+	if err != nil || !ok {
+		t.Fatalf("usage from bounded tail: ok=%v err=%v", ok, err)
+	}
+	if got.TurnUsage.TotalTokens != 45 || got.LastUsage.TotalTokens != 15 || got.BaselineUsage.TotalTokens != 100 {
+		t.Fatalf("unexpected snapshot: %+v", got)
+	}
+}
+
+func TestReadTokenUsageForTurnDoesNotAssumeZeroBaselineInTail(t *testing.T) {
+	path := writeTranscript(t,
+		`{"type":"turn_context","payload":{"turn_id":"old"}}`,
+		strings.Repeat("x", 8192),
+		`{"type":"turn_context","payload":{"turn_id":"target"}}`,
+		`{"type":"response_item","payload":{"type":"reasoning"}}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"total_tokens":1000}}}}`,
+	)
+	opts := LiveScanOptions()
+	opts.MaxBytes = 4096
+	_, ok, err := ReadTokenUsageForTurn(path, "target", opts)
+	if err != nil || ok {
+		t.Fatalf("expected unattributed usage without a baseline, got ok=%v err=%v", ok, err)
+	}
+}
+
 func TestReadTokenUsageForTurnUsesCumulativeDelta(t *testing.T) {
 	path := writeTranscript(t,
 		`{"type":"turn_context","payload":{"turn_id":"turn-1"}}`,
