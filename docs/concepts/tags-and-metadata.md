@@ -139,6 +139,8 @@ The coding-agent plugins (claude-code, codex, copilot, cursor, opencode, pi, vib
 | `pi.call_kind` | The host made this model call outside a user turn: `compaction` for context compaction, `branch_summary` for a tree-navigation summary. Absent on ordinary turns. | pi |
 | `opencode.call_kind` | `compaction` for a separate OpenCode 2 compaction generation. Absent on ordinary turns. | opencode v2 |
 
+Claude Code history import keeps the transcript's `HEAD` as `git.branch` for turns recorded on a detached checkout, because it cannot know which commit was checked out at the time.
+
 Launchers also set a few keys specific to one host, so this table is not the full list of what arrives on a generation.
 
 ### Hermes tags
