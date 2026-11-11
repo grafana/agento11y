@@ -386,7 +386,7 @@ it enables all three names.
 | Name | Tag key | Resolved from |
 | --- | --- | --- |
 | `user` | `user` | `AGENTO11Y_USER_ID`, then Claude's selected config-directory account file, Codex's `auth.json` email, or Cursor's saved session email before current hook email. Without either, no `user` tag is attached |
-| `repo` | `repo` | Full namespace from the checkout's `origin` remote, or the checkout directory name |
+| `repo` | `repo` | Full namespace from the checkout's `origin` remote, or the checkout directory name. GitHub and Bitbucket Cloud remotes are lowercased, and Azure DevOps remotes become `org/project/repo` |
 | `branch` | `git.branch` | Checked-out branch, or a short commit SHA on detached HEAD |
 
 Narrow the list with `AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=user,repo`. A key
