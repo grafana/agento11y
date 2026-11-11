@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/xdg"
 )
@@ -38,6 +39,10 @@ type Session struct {
 	// offset, so the next one sends them again, without metrics. Cleared once
 	// an export succeeds.
 	MetricsRecorded []string `json:"metrics_recorded,omitempty"`
+	// ForkedAt is when a forked session started (SessionStart source "fork").
+	// Its transcript holds copies of the original session's turns, stamped
+	// before this, which that session exported; every read drops them.
+	ForkedAt time.Time `json:"forked_at,omitzero"`
 }
 
 func dir() string {
