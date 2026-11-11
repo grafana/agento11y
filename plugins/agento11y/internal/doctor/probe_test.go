@@ -3,6 +3,8 @@ package doctor
 import (
 	"context"
 	"encoding/base64"
+	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +17,74 @@ import (
 // probeTenant is a resolved AUTH_TENANT_ID as runProbes passes it: value plus
 // the spelling it came from.
 var probeTenant = envValue{Set: true, Value: "tenant-1", Key: "AGENTO11Y_AUTH_TENANT_ID", Source: sourceEnv}
+
+func TestProbeGenerationOTLP_ExplicitTarget(t *testing.T) {
+	for _, status := range []int{200, 202, 204, 302, 400, 401, 403, 405, 415, 500} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			for _, rawHeaders := range []map[string]string{nil, {"Authorization": "Bearer prospective", "X-Probe": "explicit"}} {
+				ambientCalls, targetCalls := 0, 0
+				ambient := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					ambientCalls++
+					w.WriteHeader(http.StatusOK)
+				}))
+				defer ambient.Close()
+				for _, key := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", "SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT"} {
+					t.Setenv(key, ambient.URL)
+				}
+				for _, key := range []string{"OTEL_EXPORTER_OTLP_HEADERS", "OTEL_EXPORTER_OTLP_TRACES_HEADERS"} {
+					t.Setenv(key, "Authorization=Bearer ambient")
+				}
+				t.Setenv("AGENTO11Y_AUTH_TENANT_ID", "ambient-tenant")
+				t.Setenv("AGENTO11Y_AUTH_TOKEN", "ambient-token")
+				t.Setenv("AGENTO11Y_OTEL_AUTH_TOKEN", "ambient-otel-token")
+				headersBefore := maps.Clone(rawHeaders)
+				target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					targetCalls++
+					if r.Method != http.MethodPost || r.URL.Path != "/prospective/v1/traces" {
+						t.Errorf("request = %s %s", r.Method, r.URL.Path)
+					}
+					if r.Header.Get("Content-Type") != "application/x-protobuf" {
+						t.Error("probe must send protobuf")
+					}
+					body, _ := io.ReadAll(r.Body)
+					if len(body) != 0 {
+						t.Error("probe must not send spans or content")
+					}
+					if r.Header.Get("Authorization") != rawHeaders["Authorization"] || r.Header.Get("X-Probe") != rawHeaders["X-Probe"] || r.Header.Get("X-Scope-OrgID") != "" {
+						t.Errorf("unexpected credentials: %v", r.Header)
+					}
+					w.Header().Set("Location", ambient.URL)
+					w.WriteHeader(status)
+				}))
+				defer target.Close()
+				url := target.URL + "/prospective/v1/traces"
+				res := ProbeGenerationOTLP(context.Background(), url, rawHeaders)
+				if res.URL != url || res.StatusCode != status || res.OK != (status >= 200 && status < 300) {
+					t.Errorf("probe result = %+v", res)
+				}
+				if targetCalls != 1 || ambientCalls != 0 {
+					t.Errorf("calls target=%d ambient=%d", targetCalls, ambientCalls)
+				}
+				if !maps.Equal(rawHeaders, headersBefore) {
+					t.Error("probe changed caller headers")
+				}
+			}
+		})
+	}
+}
+
+func TestProbeGenerationOTLP_Canceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("canceled probe reached server")
+	}))
+	defer server.Close()
+	res := ProbeGenerationOTLP(ctx, server.URL+"/v1/traces", nil)
+	if res.OK || res.StatusCode != 0 || !strings.Contains(res.Message, "canceled") {
+		t.Errorf("probe result = %+v", res)
+	}
+}
 
 func TestProbeConversations(t *testing.T) {
 	tests := []struct {

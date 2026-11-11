@@ -329,16 +329,16 @@ func TestCollectConversations(t *testing.T) {
 			wantMsg:    "no HTTP fallback",
 		},
 		{
-			name:       "OTel requires experimental opt-in",
+			name:       "OTel needs no experimental opt-in",
 			osEnv:      map[string]string{"AGENTO11Y_PROTOCOL": "otel", "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:4318"},
-			wantHealth: HealthError,
-			wantMsg:    "AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true",
+			wantHealth: HealthOK,
+			wantMsg:    "no HTTP fallback",
 		},
 		{
-			name:       "legacy experimental key does not opt in",
+			name:       "legacy OTel needs no experimental opt-in",
 			osEnv:      map[string]string{"SIGIL_PROTOCOL": "otel", "SIGIL_ENABLE_EXPERIMENTAL_FEATURES": "true", "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:4318"},
-			wantHealth: HealthError,
-			wantMsg:    "AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true",
+			wantHealth: HealthOK,
+			wantMsg:    "no HTTP fallback",
 		},
 		{
 			name:       "OTel requires an endpoint",
@@ -354,28 +354,28 @@ func TestCollectConversations(t *testing.T) {
 		},
 		{
 			name:       "all set",
-			osEnv:      map[string]string{"SIGIL_ENDPOINT": "https://x", "SIGIL_AUTH_TENANT_ID": "1", "SIGIL_AUTH_TOKEN": "glc_t"},
+			osEnv:      map[string]string{"AGENTO11Y_PROTOCOL": "http", "SIGIL_ENDPOINT": "https://x", "SIGIL_AUTH_TENANT_ID": "1", "SIGIL_AUTH_TOKEN": "glc_t"},
 			wantHealth: HealthOK,
 		},
 		{
-			name:       "none set",
-			osEnv:      map[string]string{},
+			name:       "HTTP unconfigured",
+			osEnv:      map[string]string{"AGENTO11Y_PROTOCOL": "http"},
 			wantHealth: HealthWarn,
 			wantMsg:    "not configured",
 		},
 		{
 			name:       "tenant-only credentials",
-			osEnv:      map[string]string{"SIGIL_ENDPOINT": "https://x", "SIGIL_AUTH_TENANT_ID": "1"},
+			osEnv:      map[string]string{"AGENTO11Y_PROTOCOL": "http", "SIGIL_ENDPOINT": "https://x", "SIGIL_AUTH_TENANT_ID": "1"},
 			wantHealth: HealthOK,
 		},
 		{
 			name:       "preferred-only credentials",
-			osEnv:      map[string]string{"AGENTO11Y_ENDPOINT": "https://x", "AGENTO11Y_AUTH_TENANT_ID": "1", "AGENTO11Y_AUTH_TOKEN": "glc_t"},
+			osEnv:      map[string]string{"AGENTO11Y_PROTOCOL": "http", "AGENTO11Y_ENDPOINT": "https://x", "AGENTO11Y_AUTH_TENANT_ID": "1", "AGENTO11Y_AUTH_TOKEN": "glc_t"},
 			wantHealth: HealthOK,
 		},
 		{
 			name:       "legacy-only credentials suggest migration",
-			osEnv:      map[string]string{"SIGIL_ENDPOINT": "https://x", "SIGIL_AUTH_TENANT_ID": "1", "SIGIL_AUTH_TOKEN": "glc_t"},
+			osEnv:      map[string]string{"SIGIL_PROTOCOL": "http", "SIGIL_ENDPOINT": "https://x", "SIGIL_AUTH_TENANT_ID": "1", "SIGIL_AUTH_TOKEN": "glc_t"},
 			wantHealth: HealthOK,
 			wantMsg:    "preferred names are AGENTO11Y_*",
 		},
@@ -383,13 +383,13 @@ func TestCollectConversations(t *testing.T) {
 			// Set credentials alone are not a working config: an endpoint the
 			// exporter cannot build a request from fails without the network.
 			name:       "malformed endpoint fails offline",
-			osEnv:      map[string]string{"AGENTO11Y_ENDPOINT": "not a url ://", "AGENTO11Y_AUTH_TENANT_ID": "1", "AGENTO11Y_AUTH_TOKEN": "glc_t"},
+			osEnv:      map[string]string{"AGENTO11Y_PROTOCOL": "http", "AGENTO11Y_ENDPOINT": "not a url ://", "AGENTO11Y_AUTH_TENANT_ID": "1", "AGENTO11Y_AUTH_TOKEN": "glc_t"},
 			wantHealth: HealthError,
 			wantMsg:    "AGENTO11Y_ENDPOINT is not a usable endpoint",
 		},
 		{
 			name:       "endpoint with an empty host fails offline",
-			osEnv:      map[string]string{"AGENTO11Y_ENDPOINT": "https:///generations", "AGENTO11Y_AUTH_TENANT_ID": "1", "AGENTO11Y_AUTH_TOKEN": "glc_t"},
+			osEnv:      map[string]string{"AGENTO11Y_PROTOCOL": "http", "AGENTO11Y_ENDPOINT": "https:///generations", "AGENTO11Y_AUTH_TENANT_ID": "1", "AGENTO11Y_AUTH_TOKEN": "glc_t"},
 			wantHealth: HealthError,
 			wantMsg:    "not a usable endpoint",
 		},
@@ -397,7 +397,7 @@ func TestCollectConversations(t *testing.T) {
 			// The exporter prepends https:// (http:// under INSECURE) to a
 			// scheme-less endpoint, so it is usable and doctor must accept it.
 			name:       "scheme-less endpoint stays valid",
-			osEnv:      map[string]string{"AGENTO11Y_ENDPOINT": "collector.local:4317", "AGENTO11Y_AUTH_TENANT_ID": "1", "AGENTO11Y_AUTH_TOKEN": "glc_t"},
+			osEnv:      map[string]string{"AGENTO11Y_PROTOCOL": "http", "AGENTO11Y_ENDPOINT": "collector.local:4317", "AGENTO11Y_AUTH_TENANT_ID": "1", "AGENTO11Y_AUTH_TOKEN": "glc_t"},
 			wantHealth: HealthOK,
 		},
 		{
@@ -480,13 +480,13 @@ func TestCollectConversations(t *testing.T) {
 		{
 			// The shape heuristic must not turn an error into a warning.
 			name:       "suspicious host does not downgrade a credentials error",
-			osEnv:      map[string]string{"AGENTO11Y_ENDPOINT": "https://mystack.grafana.net", "AGENTO11Y_AUTH_TOKEN": "glc_t"},
+			osEnv:      map[string]string{"AGENTO11Y_PROTOCOL": "http", "AGENTO11Y_ENDPOINT": "https://mystack.grafana.net", "AGENTO11Y_AUTH_TOKEN": "glc_t"},
 			wantHealth: HealthError,
 			wantMsg:    "incomplete credentials; missing AGENTO11Y_AUTH_TENANT_ID",
 		},
 		{
 			name:       "malformed endpoint error survives the shape check",
-			osEnv:      map[string]string{"AGENTO11Y_ENDPOINT": "https:///plugins/grafana-agento11y-app", "AGENTO11Y_AUTH_TENANT_ID": "1", "AGENTO11Y_AUTH_TOKEN": "glc_t"},
+			osEnv:      map[string]string{"AGENTO11Y_PROTOCOL": "http", "AGENTO11Y_ENDPOINT": "https:///plugins/grafana-agento11y-app", "AGENTO11Y_AUTH_TENANT_ID": "1", "AGENTO11Y_AUTH_TOKEN": "glc_t"},
 			wantHealth: HealthError,
 			wantMsg:    "not a usable endpoint",
 		},
@@ -496,6 +496,7 @@ func TestCollectConversations(t *testing.T) {
 			osEnv := tc.osEnv
 			if tc.endpoint != "" {
 				osEnv = map[string]string{
+					"AGENTO11Y_PROTOCOL":       "http",
 					"AGENTO11Y_ENDPOINT":       tc.endpoint,
 					"AGENTO11Y_AUTH_TENANT_ID": "1",
 					"AGENTO11Y_AUTH_TOKEN":     "glc_t",
@@ -519,6 +520,7 @@ func TestCollectConversations(t *testing.T) {
 
 func TestCollectConversationsConflictingTokens(t *testing.T) {
 	osEnv := map[string]string{
+		"AGENTO11Y_PROTOCOL":       "http",
 		"AGENTO11Y_ENDPOINT":       "https://x",
 		"AGENTO11Y_AUTH_TENANT_ID": "1",
 		"AGENTO11Y_AUTH_TOKEN":     "preferred-secret",
@@ -557,6 +559,7 @@ func TestTenantOnlyConversationsAreProbed(t *testing.T) {
 		return &ProbeResult{StatusCode: 200, OK: true}
 	}
 	sec := collectConversations(map[string]string{
+		"AGENTO11Y_PROTOCOL":       "http",
 		"AGENTO11Y_ENDPOINT":       "https://x",
 		"AGENTO11Y_AUTH_TENANT_ID": "1",
 	}, nil)
@@ -607,7 +610,7 @@ func TestCollectBasicAuthModeWithoutToken(t *testing.T) {
 	isolateEnv(t)
 	stubSeams(t)
 	t.Setenv("AGENTO11Y_AUTH_MODE", "basic")
-	writeConfig(t, "AGENTO11Y_ENDPOINT=https://x\nAGENTO11Y_AUTH_TENANT_ID=tenant\n")
+	writeConfig(t, "AGENTO11Y_PROTOCOL=http\nAGENTO11Y_ENDPOINT=https://x\nAGENTO11Y_AUTH_TENANT_ID=tenant\n")
 	r := Collect(context.Background(), Options{RequireCloud: true}, Params{OSEnv: SnapshotEnv()})
 	if r.Conversations.Health != HealthError || r.Conversations.Probe != nil {
 		t.Fatalf("conversations = %+v, want error without a probe", r.Conversations)
@@ -651,6 +654,7 @@ func TestCollectTenantOnlyCredentialsByInstalledAgent(t *testing.T) {
 				return &AnalyticsProbe{Metrics: &ProbeResult{StatusCode: 200, OK: true}, Traces: &ProbeResult{StatusCode: 200, OK: true}}
 			}
 			r := Collect(context.Background(), Options{RequireCloud: true}, Params{OSEnv: map[string]string{
+				"AGENTO11Y_PROTOCOL":                    "http",
 				"AGENTO11Y_ENDPOINT":                    "https://x",
 				"AGENTO11Y_AUTH_TENANT_ID":              "tenant",
 				"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": "https://otlp.example",
@@ -674,6 +678,7 @@ func TestCollectTenantOnlyCredentialsByInstalledAgent(t *testing.T) {
 // a user to edit a value the binary never reads.
 func TestRenderHuman_RowNamesOnlyTheWinningSpelling(t *testing.T) {
 	osEnv := map[string]string{
+		"AGENTO11Y_PROTOCOL":       "http",
 		"AGENTO11Y_ENDPOINT":       "https://shell.example",
 		"AGENTO11Y_AUTH_TENANT_ID": "12345",
 		"AGENTO11Y_AUTH_TOKEN":     "glc_shell",
@@ -1353,7 +1358,7 @@ func TestCollectConfig_ContentMode(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			isolateEnv(t)
 
-			sec := collectConfig(tc.osEnv, tc.fileEnv)
+			sec := collectConfig(mergeEnv(map[string]string{"AGENTO11Y_PROTOCOL": "http"}, tc.osEnv), tc.fileEnv)
 			if sec.ContentModeFellBack != tc.wantFellBack {
 				t.Fatalf("ContentModeFellBack = %v, want %v", sec.ContentModeFellBack, tc.wantFellBack)
 			}
@@ -1423,7 +1428,7 @@ func TestCollectConfig_RedactInput(t *testing.T) {
 				osEnv["SIGIL_REDACT_INPUT_MESSAGES"] = tc.raw
 			}
 
-			sec := collectConfig(osEnv, nil)
+			sec := collectConfig(mergeEnv(map[string]string{"AGENTO11Y_PROTOCOL": "http"}, osEnv), nil)
 			if sec.RedactInput != tc.wantRedact {
 				t.Fatalf("RedactInput = %v, want %v", sec.RedactInput, tc.wantRedact)
 			}
@@ -1538,7 +1543,7 @@ func TestCollectConfig_Guards(t *testing.T) {
 			// rendered rows below are matched against.
 			isolateEnv(t)
 
-			sec := collectConfig(tc.osEnv, tc.fileEnv)
+			sec := collectConfig(mergeEnv(map[string]string{"AGENTO11Y_PROTOCOL": "http"}, tc.osEnv), tc.fileEnv)
 			if sec.GuardsEnabled != tc.wantEnabled {
 				t.Fatalf("GuardsEnabled = %v, want %v", sec.GuardsEnabled, tc.wantEnabled)
 			}
@@ -1638,7 +1643,7 @@ phase = "postflight"
 				writeGuards(t, tc.guards)
 			}
 
-			sec := collectConfig(nil, nil)
+			sec := collectConfig(map[string]string{"AGENTO11Y_PROTOCOL": "http"}, nil)
 			if sec.GuardsFileExists != tc.wantExists {
 				t.Fatalf("GuardsFileExists = %v, want %v", sec.GuardsFileExists, tc.wantExists)
 			}
@@ -1775,7 +1780,7 @@ func TestCollectConfig_AgentName(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			isolateEnv(t)
-			sec := collectConfig(tc.osEnv, tc.fileEnv)
+			sec := collectConfig(mergeEnv(map[string]string{"AGENTO11Y_PROTOCOL": "http"}, tc.osEnv), tc.fileEnv)
 			if sec.AgentName != tc.wantName {
 				t.Fatalf("agent name = %q, want %q", sec.AgentName, tc.wantName)
 			}
@@ -2194,7 +2199,7 @@ func TestCollectConfig_Local(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			isolateEnv(t)
-			sec := collectConfig(tc.osEnv, tc.fileEnv)
+			sec := collectConfig(mergeEnv(map[string]string{"AGENTO11Y_PROTOCOL": "http"}, tc.osEnv), tc.fileEnv)
 			if sec.Local.Set != (tc.wantValue != "") {
 				t.Fatalf("Local.Set = %v, want %v", sec.Local.Set, tc.wantValue != "")
 			}
@@ -2290,7 +2295,7 @@ func TestCollect_LocalModeReachesTheReport(t *testing.T) {
 			if tc.unsupported {
 				receiverSupported = func() bool { return false }
 			}
-			writeConfig(t, tc.config)
+			writeConfig(t, "AGENTO11Y_PROTOCOL=http\n"+tc.config)
 
 			r := Collect(context.Background(), Options{}, Params{Version: "1.2.3"})
 			if !r.Config.Local.Set || r.Config.Local.Value != "true" {
@@ -2534,11 +2539,13 @@ func TestCollectConfig_LocalHookForward(t *testing.T) {
 
 func TestRun(t *testing.T) {
 	convOnly := map[string]string{
+		"AGENTO11Y_PROTOCOL":   "http",
 		"SIGIL_ENDPOINT":       "https://sigil.example.net",
 		"SIGIL_AUTH_TENANT_ID": "12345",
 		"SIGIL_AUTH_TOKEN":     "glc_supersecretvalue",
 	}
 	healthy := map[string]string{
+		"AGENTO11Y_PROTOCOL":                "http",
 		"SIGIL_ENDPOINT":                    "https://sigil.example.net",
 		"SIGIL_AUTH_TENANT_ID":              "12345",
 		"SIGIL_AUTH_TOKEN":                  "glc_t",
@@ -2650,6 +2657,7 @@ func TestCollectNoneAuthModeWithoutToken(t *testing.T) {
 		return &ProbeResult{StatusCode: http.StatusAccepted, OK: true}
 	}
 	r := Collect(context.Background(), Options{}, Params{OSEnv: map[string]string{
+		"AGENTO11Y_PROTOCOL":       "http",
 		"AGENTO11Y_ENDPOINT":       "https://x",
 		"AGENTO11Y_AUTH_TENANT_ID": "tenant",
 		"AGENTO11Y_AUTH_MODE":      "none",

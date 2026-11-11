@@ -33,6 +33,8 @@ function config(theme: ThemePreference): ConfigResponse {
     preview: `AGENTO11Y_THEME=${theme}\n`,
     path: '/tmp/config.env',
     stackUrl: '',
+    generationProtocol: 'otel',
+    generationProtocolError: '',
     forwardStatus: null,
   };
 }

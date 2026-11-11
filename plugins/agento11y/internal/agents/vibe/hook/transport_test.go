@@ -25,11 +25,18 @@ import (
 
 func TestPostAgentGenerationTransport(t *testing.T) {
 	for _, tc := range []struct {
-		name, protocol, gate, capture                                                          string
-		httpConfig, missingEndpoint, canceled, oldDaemon, reject, telemetryFailure, priorFound bool
-		wantFailure, recordFailure, cancelExport, synthetic                                    bool
+		name, protocol, gate, capture                                                                   string
+		httpConfig, missingEndpoint, canceled, oldDaemon, reject, partial, telemetryFailure, priorFound bool
+		wantFailure, recordFailure, cancelExport, synthetic                                             bool
 	}{
-		{name: "HTTP default", httpConfig: true},
+		{name: "implicit OTel", httpConfig: true},
+		{name: "blank OTel", protocol: " \t ", httpConfig: true},
+		{name: "implicit OTel rejected delivery", httpConfig: true, reject: true, wantFailure: true},
+		{name: "implicit OTel missing exporter", httpConfig: true, missingEndpoint: true, wantFailure: true},
+		{name: "implicit OTel canceled setup", httpConfig: true, canceled: true, wantFailure: true},
+		{name: "implicit OTel old daemon", httpConfig: true, oldDaemon: true, wantFailure: true},
+		{name: "implicit OTel partial rejection", httpConfig: true, partial: true, wantFailure: true},
+		{name: "implicit OTel canceled delivery", httpConfig: true, cancelExport: true, wantFailure: true},
 		{name: "explicit HTTP", protocol: "http", httpConfig: true},
 		{name: "recorder failure keeps state and tools", protocol: "otel", gate: "true", httpConfig: true, recordFailure: true, wantFailure: true},
 		{name: "OTel without HTTP credentials", protocol: "otel", gate: "true"},
@@ -39,7 +46,7 @@ func TestPostAgentGenerationTransport(t *testing.T) {
 		{name: "skill metadata only", protocol: "otel", gate: "true", capture: "metadata_only"},
 		{name: "synthetic slash transcript has no matching post", protocol: "otel", gate: "true", synthetic: true},
 		{name: "OTel telemetry failure is independent", protocol: "otel", gate: "true", telemetryFailure: true},
-		{name: "missing opt-in", protocol: "otel", httpConfig: true, wantFailure: true},
+		{name: "explicit OTel without opt-in", protocol: "otel", httpConfig: true},
 		{name: "missing exporter", protocol: "otel", gate: "true", httpConfig: true, missingEndpoint: true, wantFailure: true},
 		{name: "invalid protocol", protocol: "unsupported", gate: "true", httpConfig: true, wantFailure: true},
 		{name: "setup canceled removes pre-save", protocol: "otel", gate: "true", httpConfig: true, canceled: true, wantFailure: true},
@@ -57,7 +64,7 @@ func TestPostAgentGenerationTransport(t *testing.T) {
 			t.Setenv("AGENTO11Y_PROTOCOL", tc.protocol)
 			t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", tc.gate)
 			contentMode := "full_with_metadata_spans"
-			if tc.protocol != "otel" {
+			if tc.protocol == "http" {
 				contentMode = "full"
 			}
 			if tc.capture != "" {
@@ -70,7 +77,7 @@ func TestPostAgentGenerationTransport(t *testing.T) {
 			var ids []string
 			var wireSpans []*tracepb.Span
 			var output, mode, operation string
-			reject := tc.reject
+			reject := tc.reject || tc.partial
 			cancelExport := tc.cancelExport
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -132,6 +139,12 @@ func TestPostAgentGenerationTransport(t *testing.T) {
 						http.Error(w, "canceled", http.StatusBadRequest)
 						return
 					}
+					if marked && reject && tc.partial {
+						body, _ := proto.Marshal(&coltracepb.ExportTraceServiceResponse{PartialSuccess: &coltracepb.ExportTracePartialSuccess{RejectedSpans: 1, ErrorMessage: "rejected"}})
+						w.Header().Set("Content-Type", "application/x-protobuf")
+						_, _ = w.Write(body)
+						return
+					}
 					if (marked && reject) || (!marked && tc.telemetryFailure) {
 						http.Error(w, "rejected", http.StatusBadRequest)
 						return
@@ -153,7 +166,7 @@ func TestPostAgentGenerationTransport(t *testing.T) {
 				t.Setenv("AGENTO11Y_AUTH_TENANT_ID", "tenant")
 				t.Setenv("AGENTO11Y_AUTH_TOKEN", "token")
 			}
-			if !tc.missingEndpoint && tc.protocol != "" && tc.protocol != "http" {
+			if !tc.missingEndpoint && tc.protocol != "http" {
 				endpoint := server.URL
 				if tc.oldDaemon {
 					endpoint += "/otlp"
@@ -174,7 +187,7 @@ func TestPostAgentGenerationTransport(t *testing.T) {
 			event, ok := toolevents.Load(sessionID)["call_meow_3"]
 			require.True(t, ok)
 			require.Equal(t, "review", event.SkillName)
-			if tc.missingEndpoint || tc.protocol == "" || tc.protocol == "http" {
+			if tc.missingEndpoint || tc.protocol == "http" {
 				t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", "")
 			} else if tc.oldDaemon {
 				t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", server.URL+"/otlp")
@@ -216,7 +229,7 @@ func TestPostAgentGenerationTransport(t *testing.T) {
 				if tc.canceled && !strings.Contains(logs.String(), "otel setup") {
 					t.Fatalf("did not reach setup after pre-save: %s", logs.String())
 				}
-				if tc.reject || tc.cancelExport {
+				if tc.reject || tc.partial || tc.cancelExport {
 					mu.Lock()
 					if tc.cancelExport && tools == 0 {
 						t.Error("canceled hook context prevented cleanup from exporting tool spans")
@@ -242,20 +255,20 @@ func TestPostAgentGenerationTransport(t *testing.T) {
 			PostAgent(context.Background(), payload, logger)
 			mu.Lock()
 			defer mu.Unlock()
-			if tc.protocol != "otel" {
+			if tc.protocol == "http" {
 				if httpRequests != 1 || len(ids) != 0 {
 					t.Fatalf("HTTP=%d spans=%v", httpRequests, ids)
 				}
 				return
 			}
 			wantSpans := 1
-			if tc.reject || tc.cancelExport {
+			if tc.reject || tc.partial || tc.cancelExport {
 				wantSpans = 2
 			}
 			if httpRequests != 0 || len(ids) != wantSpans || ids[0] == "" || tools == 0 {
 				t.Fatalf("HTTP=%d spans=%v tools=%d", httpRequests, ids, tools)
 			}
-			if (tc.reject || tc.cancelExport) && ids[0] != ids[1] {
+			if (tc.reject || tc.partial || tc.cancelExport) && ids[0] != ids[1] {
 				t.Fatalf("retry changed generation ID: %v", ids)
 			}
 			wantMode := contentMode

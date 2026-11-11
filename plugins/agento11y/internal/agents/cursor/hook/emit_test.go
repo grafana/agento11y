@@ -28,6 +28,7 @@ import (
 // buildClient passes the cursor User-Agent token to the emit package; this guards the
 // wiring end to end through a real export request.
 func TestEmitGenerationSendsCursorUserAgent(t *testing.T) {
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	var gotUA string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotUA = r.Header.Get("User-Agent")
@@ -121,6 +122,7 @@ func TestBuildClientAttachesAutoTags(t *testing.T) {
 	defer server.Close()
 
 	envconfig.PinAliasEnvBlank(t)
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	t.Setenv("SIGIL_ENDPOINT", server.URL)
 	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
 	t.Setenv("SIGIL_AUTH_TOKEN", "token")

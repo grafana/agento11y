@@ -69,7 +69,15 @@ function settings(guardMode = 'failopen'): Settings {
 }
 
 function config(settings: Settings): ConfigResponse {
-  return { settings: { ...settings }, path: '/tmp/config.env', preview: '', stackUrl: '', forwardStatus: null };
+  return {
+    settings: { ...settings },
+    path: '/tmp/config.env',
+    preview: '',
+    stackUrl: '',
+    generationProtocol: 'otel',
+    generationProtocolError: '',
+    forwardStatus: null,
+  };
 }
 
 const history: HistoryImport = {

@@ -14,6 +14,9 @@ import (
 	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/stretchr/testify/require"
+	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
+	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
+	"google.golang.org/protobuf/proto"
 )
 
 // Metric points are stamped when they are exported, so an imported turn that
@@ -24,6 +27,7 @@ func TestImportRecordsNoLiveMetrics(t *testing.T) {
 	// The OTel generation transport records gen_ai.client.* through its own
 	// meter provider, separate from the client's meter.
 	for _, protocol := range []agento11y.GenerationExportProtocol{
+		"",
 		agento11y.GenerationExportProtocolHTTP,
 		agento11y.GenerationExportProtocolOTel,
 	} {
@@ -34,11 +38,12 @@ func TestImportRecordsNoLiveMetrics(t *testing.T) {
 func importRecordsNoLiveMetrics(t *testing.T, protocol agento11y.GenerationExportProtocol) {
 	envconfig.PinAliasEnvBlank(t)
 	pinStateHome(t)
-	t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "true")
+	t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "false")
 	var (
-		mu          sync.Mutex
-		metricBody  strings.Builder
-		traceBodies int
+		mu         sync.Mutex
+		metricBody strings.Builder
+		spans      []*tracepb.Span
+		native     int
 	)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -50,11 +55,31 @@ func importRecordsNoLiveMetrics(t *testing.T, protocol agento11y.GenerationExpor
 			metricBody.Write(body)
 			mu.Unlock()
 		case "/v1/traces":
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			var request coltracepb.ExportTraceServiceRequest
+			if err := proto.Unmarshal(body, &request); err != nil {
+				t.Error(err)
+				return
+			}
 			mu.Lock()
-			traceBodies++
+			for _, rs := range request.ResourceSpans {
+				for _, ss := range rs.ScopeSpans {
+					spans = append(spans, ss.Spans...)
+				}
+			}
 			mu.Unlock()
-		default:
+		case "/api/v1/generations:export":
+			mu.Lock()
+			native++
+			mu.Unlock()
 			_, _ = io.WriteString(w, acceptAllGenerations(r))
+		default:
+			t.Errorf("unexpected request path %q", r.URL.Path)
+			http.NotFound(w, r)
 		}
 	}))
 	defer server.Close()
@@ -90,7 +115,14 @@ func importRecordsNoLiveMetrics(t *testing.T, protocol agento11y.GenerationExpor
 
 	mu.Lock()
 	defer mu.Unlock()
-	require.Positive(t, traceBodies, "the import must still send its backdated span over OTLP")
+	require.Len(t, spans, 1, "the import must still send its backdated span over OTLP")
+	require.Equal(t, uint64(ranAt.UnixNano()), spans[0].StartTimeUnixNano)
+	require.Equal(t, uint64(ranAt.Add(5*time.Second).UnixNano()), spans[0].EndTimeUnixNano)
+	if protocol == agento11y.GenerationExportProtocolHTTP {
+		require.Equal(t, 1, native)
+	} else {
+		require.Zero(t, native, "OTel history must not duplicate generations over HTTP")
+	}
 	for _, name := range []string{
 		"gen_ai.client.token.usage",
 		"gen_ai.client.operation.duration",

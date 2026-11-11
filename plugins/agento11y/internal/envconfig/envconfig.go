@@ -317,28 +317,15 @@ func ResolveGenerationTransport() (agento11y.GenerationExportProtocol, error) {
 	return ResolveGenerationTransportWith(LookupEnv, os.Getenv)
 }
 
-// look resolves branded aliases; exact reads literal keys from the same snapshot.
-// The experimental opt-in has no SIGIL_ alias. Capture mode follows SDK policy,
-// including the full_with_metadata_spans to full upgrade for OTel.
-func ResolveGenerationTransportWith(look Lookup, exact func(string) string) (agento11y.GenerationExportProtocol, error) {
+func SelectGenerationTransportWith(look Lookup) (agento11y.GenerationExportProtocol, error) {
 	raw, key, _ := look("PROTOCOL")
 	protocol := agento11y.GenerationExportProtocol(strings.ToLower(strings.TrimSpace(raw)))
 	switch protocol {
-	case "", agento11y.GenerationExportProtocolHTTP, agento11y.GenerationExportProtocolGRPC, agento11y.GenerationExportProtocolNone:
+	case agento11y.GenerationExportProtocolHTTP, agento11y.GenerationExportProtocolGRPC, agento11y.GenerationExportProtocolNone:
 		// SDK-only transport choices must not disable shared-binary capture.
 		return agento11y.GenerationExportProtocolHTTP, nil
-	case agento11y.GenerationExportProtocolOTel:
-		if !ParseBool(exact(agento11y.EnvEnableExperimentalFeatures)) {
-			return "", fmt.Errorf("%w: otel generation export requires %s=true", agento11y.ErrExperimentalFeatureDisabled, agento11y.EnvEnableExperimentalFeatures)
-		}
-		endpoint, _, _ := look("OTEL_EXPORTER_OTLP_ENDPOINT")
-		if strings.TrimSpace(endpoint) == "" {
-			endpoint = exact("OTEL_EXPORTER_OTLP_ENDPOINT")
-		}
-		if err := validateGenerationOTLPEndpoint(endpoint); err != nil {
-			return "", err
-		}
-		return protocol, nil
+	case "", agento11y.GenerationExportProtocolOTel:
+		return agento11y.GenerationExportProtocolOTel, nil
 	default:
 		if key == "" {
 			key = PreferredKey("PROTOCOL")
@@ -347,12 +334,31 @@ func ResolveGenerationTransportWith(look Lookup, exact func(string) string) (age
 	}
 }
 
+// look resolves branded aliases; exact reads literal keys from the same snapshot.
+func ResolveGenerationTransportWith(look Lookup, exact func(string) string) (agento11y.GenerationExportProtocol, error) {
+	protocol, err := SelectGenerationTransportWith(look)
+	if err != nil {
+		return "", err
+	}
+	if protocol == agento11y.GenerationExportProtocolOTel {
+		endpoint, _, _ := look("OTEL_EXPORTER_OTLP_ENDPOINT")
+		if strings.TrimSpace(endpoint) == "" {
+			endpoint = exact("OTEL_EXPORTER_OTLP_ENDPOINT")
+		}
+		if err := validateGenerationOTLPEndpoint(endpoint); err != nil {
+			return "", err
+		}
+	}
+	return protocol, nil
+}
+
 // validateGenerationOTLPEndpoint requires an explicit HTTP(S) base URL for
 // generation export. Do not include the URL in errors: it may contain secrets.
+// url.Parse leaves Fragment empty for a bare '#', but appended signal paths become fragments.
 func validateGenerationOTLPEndpoint(endpoint string) error {
 	u, err := url.Parse(strings.TrimSpace(endpoint))
 	if err != nil || u == nil || (u.Scheme != "http" && u.Scheme != "https") ||
-		u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != "" {
+		u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(endpoint, "#") || u.Opaque != "" {
 		return fmt.Errorf("otel generation export requires a valid configured HTTP(S) OTLP base endpoint (AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT or OTEL_EXPORTER_OTLP_ENDPOINT)")
 	}
 	if port := u.Port(); port != "" {

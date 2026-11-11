@@ -157,11 +157,13 @@ func TestForwardOTLPResponse(t *testing.T) {
 			}
 			for _, tc := range []struct {
 				name      string
+				status    int
 				rejected  int64
 				body      []byte
 				wantError string
 			}{
 				{name: "warning_only"},
+				{name: "HTTP failure", status: http.StatusBadGateway, body: []byte("secret remote diagnostic"), wantError: "telemetry HTTP status 502"},
 				{name: "rejected", rejected: 2, wantError: "OTLP partial success: " + rejectedField + "=2"},
 				{name: "malformed", body: []byte("{secret remote diagnostic"), wantError: "invalid OTLP " + signal + " response"},
 				{name: "oversize", body: bytes.Repeat([]byte("x"), (1<<20)+1), wantError: "delivery failed"},
@@ -189,6 +191,9 @@ func TestForwardOTLPResponse(t *testing.T) {
 						calls.Add(1)
 						_, _ = io.Copy(io.Discard, r.Body)
 						w.Header().Set("Content-Type", contentType)
+						if tc.status != 0 {
+							w.WriteHeader(tc.status)
+						}
 						_, _ = w.Write(body)
 					}))
 					defer cloud.Close()
@@ -248,11 +253,9 @@ func TestCheckOTLPForwardResponse(t *testing.T) {
 
 func TestForwardStatusGenerationTransport(t *testing.T) {
 	base := map[string]string{
-		"AGENTO11Y_LOCAL_FORWARD":                "true",
-		"AGENTO11Y_PROTOCOL":                     "otel",
-		"AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "true",
-		"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT":  "https://otlp.example.test",
-		"OTEL_EXPORTER_OTLP_HEADERS":             "Authorization=Bearer gateway-only",
+		"AGENTO11Y_LOCAL_FORWARD":               "true",
+		"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": "https://otlp.example.test",
+		"OTEL_EXPORTER_OTLP_HEADERS":            "Authorization=Bearer gateway-only",
 	}
 	for _, tc := range []struct {
 		name                      string
@@ -262,25 +265,31 @@ func TestForwardStatusGenerationTransport(t *testing.T) {
 		sidecar, signal           string
 		wantSend                  bool
 	}{
-		{name: "OTel gateway only", wantGenerations: true},
+		{name: "implicit OTel gateway only", wantGenerations: true},
+		{name: "explicit OTel without opt-in", extra: map[string]string{"AGENTO11Y_PROTOCOL": "otel"}, wantGenerations: true},
+		{name: "empty protocol", extra: map[string]string{"AGENTO11Y_PROTOCOL": ""}, wantGenerations: true},
+		{name: "whitespace protocol", extra: map[string]string{"AGENTO11Y_PROTOCOL": "  "}, wantGenerations: true},
 		{name: "OTel dedicated token only", extra: map[string]string{"OTEL_EXPORTER_OTLP_HEADERS": "", "AGENTO11Y_AUTH_TENANT_ID": "tenant", "AGENTO11Y_OTEL_AUTH_TOKEN": "otlp-token"}, wantGenerations: true},
 		{name: "OTel bare endpoint", extra: map[string]string{"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": "", "OTEL_EXPORTER_OTLP_ENDPOINT": "https://bare.example.test"}, wantGenerations: true},
 		{name: "legacy protocol alias", extra: map[string]string{"AGENTO11Y_PROTOCOL": "", "SIGIL_PROTOCOL": "otel"}, wantGenerations: true},
 		{name: "OTel with legacy HTTP credentials", extra: map[string]string{"AGENTO11Y_ENDPOINT": "https://http.example.test", "AGENTO11Y_AUTH_TENANT_ID": "tenant", "AGENTO11Y_AUTH_TOKEN": "token"}, wantGenerations: true, wantHTTP: true},
 		{name: "OTel missing OTLP despite HTTP credentials", extra: map[string]string{"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": "", "AGENTO11Y_ENDPOINT": "https://http.example.test", "AGENTO11Y_AUTH_TENANT_ID": "tenant", "AGENTO11Y_AUTH_TOKEN": "token"}, wantHTTP: true, wantReason: "OTLP base endpoint"},
-		{name: "OTel missing opt-in", extra: map[string]string{"AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": ""}, wantReason: "ENABLE_EXPERIMENTAL_FEATURES"},
-		{name: "legacy opt-in is ignored", extra: map[string]string{"AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "", "SIGIL_ENABLE_EXPERIMENTAL_FEATURES": "true"}, wantReason: "ENABLE_EXPERIMENTAL_FEATURES"},
+		{name: "OTel disabled opt-in", extra: map[string]string{"AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "false"}, wantGenerations: true},
+		{name: "legacy opt-in is unnecessary", extra: map[string]string{"SIGIL_ENABLE_EXPERIMENTAL_FEATURES": "true"}, wantGenerations: true},
 		{name: "OTel loopback route", extra: map[string]string{"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:4319"}, wantReason: "loop back"},
 		{name: "OTel invalid route", extra: map[string]string{"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": "http://%"}, wantReason: "OTLP base endpoint"},
 		{name: "unsupported protocol", extra: map[string]string{"AGENTO11Y_PROTOCOL": "unsupported"}, wantReason: "expected http or otel"},
-		{name: "HTTP default still requires HTTP credentials", extra: map[string]string{"AGENTO11Y_PROTOCOL": ""}, wantReason: "ENDPOINT"},
+		{name: "explicit HTTP requires HTTP credentials", extra: map[string]string{"AGENTO11Y_PROTOCOL": "http"}, wantReason: "ENDPOINT"},
+		{name: "HTTP ignores missing OTLP", extra: map[string]string{"AGENTO11Y_PROTOCOL": "http", "AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": "", "AGENTO11Y_ENDPOINT": "https://http.example.test", "AGENTO11Y_AUTH_TENANT_ID": "tenant", "AGENTO11Y_AUTH_TOKEN": "token"}, wantGenerations: true, wantHTTP: true},
+		{name: "grpc retains HTTP compatibility", extra: map[string]string{"AGENTO11Y_PROTOCOL": "grpc", "AGENTO11Y_ENDPOINT": "https://http.example.test", "AGENTO11Y_AUTH_TENANT_ID": "tenant", "AGENTO11Y_AUTH_TOKEN": "token"}, wantGenerations: true, wantHTTP: true},
+		{name: "none retains HTTP compatibility", extra: map[string]string{"AGENTO11Y_PROTOCOL": "none", "AGENTO11Y_ENDPOINT": "https://http.example.test", "AGENTO11Y_AUTH_TENANT_ID": "tenant", "AGENTO11Y_AUTH_TOKEN": "token"}, wantGenerations: true, wantHTTP: true},
 		{name: "OTel HTTP extra without primary", extra: map[string]string{"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": ""}, sidecar: "http", signal: "traces", wantReason: "OTLP base endpoint"},
 		{name: "OTel HTTP extra with refused primary", extra: map[string]string{"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:4319"}, sidecar: "http", signal: "traces", wantReason: "loop back"},
-		{name: "HTTP OTLP extra without primary", extra: map[string]string{"AGENTO11Y_PROTOCOL": "", "AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": ""}, sidecar: "otlp", signal: "generations", wantReason: "ENDPOINT"},
-		{name: "HTTP matching extra", extra: map[string]string{"AGENTO11Y_PROTOCOL": "", "AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": ""}, sidecar: "http", signal: "generations", wantGenerations: true, wantSend: true},
+		{name: "HTTP OTLP extra without primary", extra: map[string]string{"AGENTO11Y_PROTOCOL": "http", "AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": ""}, sidecar: "otlp", signal: "generations", wantReason: "ENDPOINT"},
+		{name: "HTTP matching extra", extra: map[string]string{"AGENTO11Y_PROTOCOL": "http", "AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": ""}, sidecar: "http", signal: "generations", wantGenerations: true, wantSend: true},
 		{name: "OTel matching extra with refused primary", extra: map[string]string{"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:4319"}, sidecar: "otlp", signal: "traces", wantGenerations: true, wantSend: true},
 		{name: "OTel matching extra preserves endpoint error", extra: map[string]string{"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": ""}, sidecar: "otlp", signal: "traces", wantReason: "OTLP base endpoint", wantSend: true},
-		{name: "OTel matching extra preserves opt-in error", extra: map[string]string{"AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "", "AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:4319"}, sidecar: "otlp", signal: "traces", wantReason: "ENABLE_EXPERIMENTAL_FEATURES", wantSend: true},
+		{name: "OTel matching extra without opt-in", extra: map[string]string{"AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "false", "AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:4319"}, sidecar: "otlp", signal: "traces", wantGenerations: true, wantSend: true},
 		{name: "HTTP extra preserves protocol error", extra: map[string]string{"AGENTO11Y_PROTOCOL": "unsupported", "AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": ""}, sidecar: "http", signal: "generations", wantReason: "expected http or otel", wantSend: true},
 		{name: "matching extra global off", extra: map[string]string{"AGENTO11Y_LOCAL_FORWARD": "false", "AGENTO11Y_PROTOCOL": "", "AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": ""}, sidecar: "http", signal: "generations"},
 	} {
@@ -356,9 +365,13 @@ func TestForwardStatusGenerationTransport(t *testing.T) {
 		clearForwardEnv(t)
 		t.Setenv("AGENTO11Y_PROTOCOL", "http")
 		t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "false")
-		loader := newForwardLoader(writeConfigEnvFile(t, base), nil)
+		lines := maps.Clone(base)
+		lines["AGENTO11Y_PROTOCOL"] = "otel"
+		loader := newForwardLoader(writeConfigEnvFile(t, lines), nil)
 		require.True(t, loader.status().Generations)
 		require.Empty(t, loader.status().Reason)
+		require.Equal(t, "http", os.Getenv("AGENTO11Y_PROTOCOL"))
+		require.Equal(t, "false", os.Getenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES"))
 	})
 }
 

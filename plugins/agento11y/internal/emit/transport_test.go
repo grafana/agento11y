@@ -3,9 +3,11 @@ package emit
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -25,12 +27,22 @@ func TestGenerationTransport(t *testing.T) {
 		oldDaemon             bool
 		collectorStatus       int
 		insecure              bool
+		capture               string
 	}{
-		{name: "missing opt-in", protocol: "otel", provider: true, wantError: true},
+		{name: "implicit OTel without opt-in", provider: true},
+		{name: "implicit OTel with opt-out", optIn: "false", provider: true},
+		{name: "explicit OTel without opt-in", protocol: "otel", provider: true},
+		{name: "explicit OTel with opt-out", protocol: "otel", optIn: "false", provider: true},
+		{name: "implicit OTel metadata only", provider: true, capture: "metadata_only"},
+		{name: "implicit OTel full", provider: true, capture: "full"},
+		{name: "implicit OTel no tool content", provider: true, capture: "no_tool_content"},
+		{name: "implicit OTel default capture", provider: true, capture: "default"},
+		{name: "implicit OTel missing provider", wantError: true},
 		{name: "missing provider", protocol: "otel", optIn: "true", wantError: true},
 		{name: "invalid protocol", protocol: "unsupported", optIn: "true", provider: true, wantError: true},
 		{name: "OTel", protocol: "otel", optIn: "true", provider: true},
 		{name: "old local daemon", protocol: "otel", optIn: "true", provider: true, oldDaemon: true, wantError: true},
+		{name: "implicit OTel old local daemon", provider: true, oldDaemon: true, wantError: true},
 		{name: "old daemon with effective insecure URL", protocol: "otel", optIn: "true", provider: true, oldDaemon: true, insecure: true, wantError: true},
 		{name: "ordinary collector without health route", protocol: "otel", optIn: "true", provider: true, collectorStatus: 404},
 		{name: "ordinary collector without private capability", protocol: "otel", optIn: "true", provider: true, collectorStatus: 200},
@@ -38,9 +50,18 @@ func TestGenerationTransport(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			envconfig.PinAliasEnvBlank(t)
 			t.Setenv("AGENTO11Y_PROTOCOL", tc.protocol)
-			t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", tc.optIn)
+			t.Setenv(agento11y.EnvEnableExperimentalFeatures, tc.optIn)
+			t.Setenv("SIGIL_ENABLE_EXPERIMENTAL_FEATURES", "")
+			capture := tc.capture
+			if capture == "" {
+				capture = "full_with_metadata_spans"
+			}
+			if capture == "default" {
+				capture = ""
+			}
+			t.Setenv("AGENTO11Y_CONTENT_CAPTURE_MODE", capture)
 			var mu sync.Mutex
-			var httpGenerations, marked int
+			var httpGenerations, marked, spans int
 			var output, captureMode string
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				mu.Lock()
@@ -77,6 +98,7 @@ func TestGenerationTransport(t *testing.T) {
 				for _, rs := range req.ResourceSpans {
 					for _, ss := range rs.ScopeSpans {
 						for _, s := range ss.Spans {
+							spans++
 							for _, a := range s.Attributes {
 								switch a.Key {
 								case "agento11y.record":
@@ -109,7 +131,7 @@ func TestGenerationTransport(t *testing.T) {
 			}
 			t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", endpoint)
 			var providers *otel.Providers
-			if tc.provider && tc.optIn == "true" && tc.protocol == "otel" {
+			if tc.provider && (tc.protocol == "" || tc.protocol == "otel") {
 				var err error
 				providers, err = otel.SetupWithOptions(t.Context(), "test", otel.Options{Headers: map[string]string{}})
 				if err != nil {
@@ -117,7 +139,7 @@ func TestGenerationTransport(t *testing.T) {
 				}
 				defer func() { _ = providers.Shutdown(context.Background()) }()
 			}
-			client, err := NewClient(ClientOptions{Providers: providers, ContentCapture: agento11y.ContentCaptureModeFullWithMetadataSpans})
+			client, err := NewClient(ClientOptions{Providers: providers, ContentCapture: envconfig.ResolveContentMode(nil)})
 			if tc.wantError {
 				if err == nil {
 					_ = client.Shutdown(t.Context())
@@ -128,8 +150,8 @@ func TestGenerationTransport(t *testing.T) {
 				}
 				mu.Lock()
 				defer mu.Unlock()
-				if marked != 0 || httpGenerations != 0 {
-					t.Fatalf("sent generations after construction failure: spans=%d HTTP=%d", marked, httpGenerations)
+				if spans != 0 || httpGenerations != 0 {
+					t.Fatalf("sent generations after construction failure: spans=%d HTTP=%d", spans, httpGenerations)
 				}
 				return
 			}
@@ -137,6 +159,18 @@ func TestGenerationTransport(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer func() { _ = client.Shutdown(context.Background()) }()
+			if err := client.RequireExperimental(agento11y.FeatureOTelGenerationExport); err != nil {
+				t.Fatalf("CLI client did not opt in locally: %v", err)
+			}
+			if got := os.Getenv(agento11y.EnvEnableExperimentalFeatures); got != tc.optIn {
+				t.Fatalf("CLI changed global experimental opt-in to %q", got)
+			}
+			if tc.optIn != "true" && !errors.Is(agento11y.RequireExperimental(agento11y.FeatureOTelGenerationExport), agento11y.ErrExperimentalFeatureDisabled) {
+				t.Fatal("CLI client enabled experimental features globally")
+			}
+			if got := agento11y.DefaultConfig().GenerationExport.Protocol; got != agento11y.GenerationExportProtocolGRPC {
+				t.Fatalf("SDK default protocol changed to %q", got)
+			}
 			if err := Record(t.Context(), client, agento11y.GenerationStart{ID: "gen-otel", ConversationID: "conv-otel", Model: agento11y.ModelRef{Provider: "test", Name: "model"}}, agento11y.Generation{Output: []agento11y.Message{agento11y.AssistantTextMessage("retained content")}, CompletedAt: time.Now()}, nil, nil); err != nil {
 				t.Fatal(err)
 			}
@@ -145,11 +179,18 @@ func TestGenerationTransport(t *testing.T) {
 			}
 			mu.Lock()
 			defer mu.Unlock()
-			if marked != 1 || httpGenerations != 0 {
-				t.Fatalf("marked=%d HTTP generations=%d", marked, httpGenerations)
+			if marked != 1 || spans != 1 || httpGenerations != 0 {
+				t.Fatalf("marked=%d spans=%d HTTP generations=%d", marked, spans, httpGenerations)
 			}
-			if !strings.Contains(output, "retained content") || captureMode != "full" {
-				t.Fatalf("output=%q captureMode=%q", output, captureMode)
+			wantCapture := capture
+			if wantCapture == "full_with_metadata_spans" {
+				wantCapture = "full"
+			} else if wantCapture == "" {
+				wantCapture = "metadata_only"
+			}
+			wantContent := wantCapture != "metadata_only"
+			if strings.Contains(output, "retained content") != wantContent || captureMode != wantCapture {
+				t.Fatalf("output=%q captureMode=%q, want content=%t mode=%q", output, captureMode, wantContent, wantCapture)
 			}
 		})
 	}

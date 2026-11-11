@@ -92,6 +92,7 @@ func assertOneTrailerPerRow(t *testing.T, report string) {
 // primary Cloud pipelines. Its runtime rows exercise the widest column.
 func goldenHealthyReport() *Report {
 	osEnv := map[string]string{
+		"AGENTO11Y_PROTOCOL":                    "http",
 		"AGENTO11Y_ENDPOINT":                    "https://sigil.example",
 		"AGENTO11Y_AUTH_TENANT_ID":              "12345",
 		"AGENTO11Y_AUTH_TOKEN":                  "glc_secret",
@@ -104,7 +105,8 @@ func goldenHealthyReport() *Report {
 		Conversations:   conversations,
 		Analytics:       collectAnalytics(osEnv, nil, conversations.configured()),
 		Config: ConfigSection{
-			Path: "/home/u/.config/agento11y/config.env", Exists: true,
+			GenerationProtocol: resolveFamily("PROTOCOL", osEnv, nil).envValue(),
+			Path:               "/home/u/.config/agento11y/config.env", Exists: true,
 			ContentCaptureMode: "full",
 			ContentModeKey:     "AGENTO11Y_CONTENT_CAPTURE_MODE", ContentModeSource: sourceConfig,
 			RedactInput:   true,
@@ -137,11 +139,9 @@ func goldenHealthyReport() *Report {
 func goldenOTelReport() *Report {
 	r := goldenMinimalReport()
 	env := map[string]string{
-		"AGENTO11Y_PROTOCOL":                     "otel",
-		"AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "true",
-		"OTEL_EXPORTER_OTLP_ENDPOINT":            "http://127.0.0.1:9000/otlp",
-		"AGENTO11Y_AUTH_TENANT_ID":               "12345",
-		"AGENTO11Y_OTEL_AUTH_TOKEN":              "glc_secret",
+		"OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:9000/otlp",
+		"AGENTO11Y_AUTH_TENANT_ID":    "12345",
+		"AGENTO11Y_OTEL_AUTH_TOKEN":   "glc_secret",
 	}
 	r.Conversations = collectConversations(env, nil)
 	r.Conversations.Probe = &ProbeResult{URL: "http://127.0.0.1:9000/otlp/v1/traces", StatusCode: 200, OK: true}
@@ -154,16 +154,16 @@ func goldenOTelReport() *Report {
 		Traces:  r.Conversations.Probe,
 	}
 	r.Config.GenerationProtocol = resolveFamily("PROTOCOL", env, nil).envValue()
-	r.Config.ExperimentalFeatures = resolveEnv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", env, nil).envValue()
-	r.Config.ExperimentalEnabled = true
 	r.Agents = []AgentStatus{{Name: "pi", OnPath: true, Install: InstallStateInstalled, Health: HealthOK}, {Name: "opencode", OnPath: true, Install: InstallStateInstalled, Health: HealthOK}}
 	diagnoseIndependentPlugins(r)
 	return r
 }
 
-// goldenMinimalReport has no configured targets or running daemon. Its shorter
-// keys keep the column width tied to rendered rows rather than a constant.
+// goldenMinimalReport explicitly selects HTTP but has no configured targets or
+// running daemon. Its shorter keys keep the column width tied to rendered rows
+// rather than a constant.
 func goldenMinimalReport() *Report {
+	env := map[string]string{"AGENTO11Y_PROTOCOL": "http"}
 	return &Report{
 		Binary: BinarySection{Version: "v0.22.0"},
 		LocalForwarding: &LocalForwardingSection{
@@ -171,10 +171,11 @@ func goldenMinimalReport() *Report {
 			Delivery: "not_checked", DeliveryError: "local daemon unavailable",
 			Destinations: []local.ForwardDestinationInfo{},
 		},
-		Conversations: collectConversations(nil, nil),
+		Conversations: collectConversations(env, nil),
 		Analytics:     collectAnalytics(nil, nil, false),
 		Config: ConfigSection{
-			Path: "/home/u/.config/agento11y/config.env",
+			Path:               "/home/u/.config/agento11y/config.env",
+			GenerationProtocol: resolveFamily("PROTOCOL", env, nil).envValue(),
 			// The daemon's answer with LOCAL_FORWARD unset. The line itself is
 			// suppressed, which is what this fixture pins.
 			LocalHookForward: HookForwardSection{Reason: local.HookForwardReason(false, false, "", "", "")},
@@ -197,7 +198,7 @@ func goldenMinimalReport() *Report {
 // and agents whose state is neither plain "installed" nor plain "missing".
 func goldenBrokenReport() *Report {
 	conversations := collectConversations(
-		map[string]string{"AGENTO11Y_ENDPOINT": "not a url ://"},
+		map[string]string{"AGENTO11Y_PROTOCOL": "http", "AGENTO11Y_ENDPOINT": "not a url ://"},
 		map[string]string{"AGENTO11Y_AUTH_TENANT_ID": "12345", "SIGIL_AUTH_TOKEN": "glc_secret"},
 	)
 	return &Report{
@@ -211,6 +212,7 @@ func goldenBrokenReport() *Report {
 		Analytics:     collectAnalytics(nil, nil, conversations.configured()),
 		Config: ConfigSection{
 			Path: "/home/u/.config/agento11y/config.env", Exists: true,
+			GenerationProtocol: envValue{Set: true, Value: "http", Key: "AGENTO11Y_PROTOCOL", Source: sourceEnv},
 			// The mode came from a value envconfig rejected, so the row credits the
 			// built-in default and the message names the variable to fix.
 			ContentCaptureMode: "metadata_only", ContentModeFellBack: true,
