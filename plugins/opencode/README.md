@@ -226,6 +226,8 @@ File format: one `KEY=value` per line, `#` line comments, optional `export ` pre
 
 A non-empty OS env value always wins over the file; an empty or whitespace-only OS value is treated as unset and gets filled from `config.env`. Missing files are silent.
 
+OTLP metric and trace exports use the process environment's proxy settings: `HTTP_PROXY` for HTTP endpoints, `HTTPS_PROXY` for HTTPS endpoints, and `NO_PROXY` to bypass the proxy for listed hosts. Lowercase forms also work. `config.env` does not load proxy variables; set them in the environment that starts OpenCode.
+
 ## Development
 
 ```bash
