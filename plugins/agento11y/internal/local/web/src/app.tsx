@@ -362,6 +362,11 @@ export function App() {
   const [detail, setDetail] = useState<ConversationDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [errDetail, setErrDetail] = useState<string | null>(null);
+  const detailSeqRef = useRef(0);
+  // Sequence of the latest explicit open or invalidation, and of the newest
+  // detail body applied. Requests older than the open are stale.
+  const detailOpenSeqRef = useRef(0);
+  const detailAppliedSeqRef = useRef(0);
   // Import-run state arrives on the SSE stream as its own event kind, not
   // as a refetch hint: an import writes thousands of generations, and the
   // counters are what the user watches while it runs.
@@ -1142,15 +1147,29 @@ export function App() {
   // a live-update refresh (quiet=true: updates in place, keeps the
   // current view and scroll on success, swallows transient errors).
   //
-  // The success path applies the body only if the user is still on
-  // the same conversation, and clears any prior error so a recovered
-  // live refresh doesn't stay hidden behind a stale error banner.
+  // Responses can arrive out of order. A body applies only if it is newer
+  // than the last applied one and not older than the latest open, so after
+  // A -> B -> A an answer for the first A cannot replace the second, while
+  // overlapping refreshes still apply as they arrive. The success path
+  // clears any prior error so a recovered live refresh doesn't stay hidden
+  // behind a stale error banner.
+  //
+  // A failure shows only while no body has arrived since the latest open,
+  // whichever request failed. Once content is on screen, failures are
+  // swallowed; the next event retries and the current view stays as-is
+  // instead of flashing an error banner over good content. The 60s
+  // backstop only refreshes the list, so a missed detail event only
+  // recovers on another targeted event or when the user reopens the
+  // conversation.
   const fetchDetailCore = useCallback((id: string, quiet: boolean) => {
+    const seq = ++detailSeqRef.current;
     if (!quiet) {
+      detailOpenSeqRef.current = seq;
       setLoadingDetail(true);
       setErrDetail(null);
       setDetail(null);
     }
+    const current = () => seq >= detailOpenSeqRef.current && selectedIDRef.current === id;
     return fetch(`/api/v1/conversations/${encodeURIComponent(id)}`)
       .then((r) => {
         if (r.status === 404) throw new Error('Session not found in the local store.');
@@ -1158,22 +1177,16 @@ export function App() {
         return r.json();
       })
       .then((body: ConversationDetail) => {
-        if (selectedIDRef.current !== id) return;
+        if (!current() || seq <= detailAppliedSeqRef.current) return;
+        detailAppliedSeqRef.current = seq;
         setDetail(body);
         setErrDetail(null);
+        setLoadingDetail(false);
       })
       .catch((e) => {
-        if (selectedIDRef.current !== id) return;
-        // Quiet refresh failures are swallowed; the next event
-        // retries and the current view stays as-is instead of
-        // flashing an error banner over good content. The 60s
-        // backstop only refreshes the list, so a missed detail
-        // event only recovers on another targeted event or when
-        // the user reopens the conversation.
-        if (!quiet) setErrDetail(String(e.message || e));
-      })
-      .finally(() => {
-        if (!quiet) setLoadingDetail(false);
+        if (!current() || detailAppliedSeqRef.current >= detailOpenSeqRef.current) return;
+        setErrDetail(String(e.message || e));
+        setLoadingDetail(false);
       });
   }, []);
   const fetchDetail = useCallback((id: string) => fetchDetailCore(id, false), [fetchDetailCore]);
@@ -1242,6 +1255,9 @@ export function App() {
       return;
     }
     fetchDetail(selectedID);
+    return () => {
+      detailOpenSeqRef.current = ++detailSeqRef.current;
+    };
   }, [selectedID, fetchDetail]);
 
   // Live updates from the daemon. One persistent SSE connection per
