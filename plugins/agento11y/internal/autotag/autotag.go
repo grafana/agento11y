@@ -19,6 +19,7 @@ package autotag
 import (
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
@@ -164,10 +165,10 @@ func SupportedNames() string {
 // Hooks must not write to stderr, so pass the adapter logger (nil stays
 // silent); Select documents what gets logged.
 //
-// Replayed sessions must not take these values: the importer runs on a
-// different day, possibly in a different checkout, so the current user,
-// repository and branch do not describe the session it is importing. That is
-// why internal/history/export.go does not call this.
+// This is the live path, which resolves everything from the machine running
+// the session. A replayed session cannot take the branch that way, because the
+// importer runs later and possibly in another checkout; [ImportTags] is the
+// import path and resolves only the names a recorded session can vouch for.
 func FromEnv(in Inputs, logger *log.Logger) map[string]string {
 	if in.Lookup == nil {
 		in.Lookup = envconfig.LookupEnv
@@ -177,6 +178,39 @@ func FromEnv(in Inputs, logger *log.Logger) map[string]string {
 		return nil
 	}
 	return Resolve(sel.Enabled, in)
+}
+
+// ImportTags returns the auto tags that describe a replayed session: the
+// configured user, and the repository at the workspace the session recorded.
+// It returns nil when the switch is off, so an import that has not opted in
+// carries exactly the tags it carried before.
+//
+// Branch is never resolved here. The importer runs on a different day and
+// possibly in another checkout, so the branch on disk is not the one the
+// session ran on; an agent whose log records its branch carries that value as
+// a per-generation tag from its own mapper instead. An allowlist that names
+// only `branch` therefore resolves nothing on this path.
+//
+// Repo needs an absolute workspace, and anything else drops it. An empty one
+// would make Describe fall back to the process working directory, and a
+// relative or blank one is worse: gitbranch walks upward from it, so it
+// resolves against the working directory without looking like it does. Either
+// way the value would describe the machine running the import rather than the
+// session, so only an absolute path is trusted to name a checkout.
+//
+// look reads branded variables for USER_ID and TAGS; nil uses the process
+// environment. The local daemon passes a lookup over its config file, because
+// its own environment was merged when it started and would not see a switch
+// written since.
+func ImportTags(enabled map[envconfig.AutoTag]bool, workspace string, look envconfig.Lookup) map[string]string {
+	want := make(map[envconfig.AutoTag]bool, 2)
+	if enabled[envconfig.AutoTagUser] {
+		want[envconfig.AutoTagUser] = true
+	}
+	if enabled[envconfig.AutoTagRepo] && filepath.IsAbs(workspace) {
+		want[envconfig.AutoTagRepo] = true
+	}
+	return Resolve(want, Inputs{Cwd: workspace, Lookup: look})
 }
 
 // Resolve returns the client tags for the enabled names. Values are trimmed
