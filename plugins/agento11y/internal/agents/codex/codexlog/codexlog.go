@@ -114,9 +114,7 @@ type ScanOptions struct {
 // stop handler. Malformed lines are skipped: the hook reads a rollout the
 // running Codex process is still appending to, so a half-written final line is
 // ordinary and must cost that line rather than the whole scan. Oversized lines
-// are skipped too: every Stop rereads the rollout from the start, so failing on
-// one line would cost that turn and every later turn in the session their
-// usage. MaxBytes bounds the time either way.
+// are skipped too. MaxBytes bounds the bytes read per scan.
 func LiveScanOptions() ScanOptions {
 	return ScanOptions{
 		MaxLineBytes:       liveMaxLineBytes,
@@ -137,24 +135,22 @@ func ImportScanOptions() ScanOptions {
 // visit returning true stops the scan. Nothing is buffered beyond the current
 // line, so a caller can stream a rollout of any size.
 func ScanRecords(path string, opts ScanOptions, visit func(Record) (bool, error)) error {
-	return scanRecords(path, opts, visit, nil)
-}
-
-// scanRecords is ScanRecords with a hook for skipped lines: when
-// SkipOversizedLines drops a line, skipped gets its first
-// oversizedPrefixBytes and can stop the scan like visit.
-func scanRecords(path string, opts ScanOptions, visit func(Record) (bool, error), skipped func(prefix []byte) (bool, error)) error {
-	maxLine := opts.MaxLineBytes
-	if maxLine <= 0 {
-		maxLine = DefaultMaxLineBytes
-	}
 	f, err := os.Open(path)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = f.Close() }()
+	return scanRecords(bufio.NewReaderSize(f, 64*1024), opts, visit, nil)
+}
 
-	r := bufio.NewReaderSize(f, 64*1024)
+// scanRecords is ScanRecords with a hook for skipped lines: when
+// SkipOversizedLines drops a line, skipped gets its first
+// oversizedPrefixBytes and can stop the scan like visit.
+func scanRecords(r *bufio.Reader, opts ScanOptions, visit func(Record) (bool, error), skipped func(prefix []byte) (bool, error)) error {
+	maxLine := opts.MaxLineBytes
+	if maxLine <= 0 {
+		maxLine = DefaultMaxLineBytes
+	}
 	var read int64
 	lineNo := 0
 	for {
@@ -324,11 +320,33 @@ func ResolveSpawnLink(parentTranscriptPath, childSessionID string, opts ScanOpti
 	return found, ok, err
 }
 
-// ReadTokenUsageForTurn recovers one turn's token usage from a rollout. opts
-// bounds the scan; see [ReadSessionMeta].
+// ReadTokenUsageForTurn reads the newest MaxBytes of a rollout when bounded.
+// Codex's explicit turn totals can survive a window that starts mid-turn.
 func ReadTokenUsageForTurn(path, turnID string, opts ScanOptions) (TokenSnapshot, bool, error) {
 	if path == "" || turnID == "" {
 		return TokenSnapshot{}, false, nil
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return TokenSnapshot{}, false, err
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return TokenSnapshot{}, false, err
+	}
+	var start int64
+	if opts.MaxBytes > 0 && info.Size() > opts.MaxBytes {
+		start = info.Size() - opts.MaxBytes
+	}
+	reader := bufio.NewReaderSize(io.NewSectionReader(f, start, info.Size()-start), 64*1024)
+	if start > 0 {
+		// The window may start inside a JSON record. Discard through its
+		// newline without buffering the record.
+		if _, _, _, err := readLine(reader, 1); err != nil && !errors.Is(err, io.EOF) {
+			return TokenSnapshot{}, false, err
+		}
 	}
 
 	var (
@@ -344,17 +362,22 @@ func ReadTokenUsageForTurn(path, turnID string, opts ScanOptions) (TokenSnapshot
 		haveFinal         bool
 		finalInfo         TokenUsageInfo
 		unattributable    bool
+		recordSnapshot    TokenSnapshot
 	)
 
 	visit := func(rec Record) (bool, error) {
 		switch rec.Type {
+		case "token_usage_record":
+			if snapshot, ok := parseTurnUsageRecord(rec.Payload, turnID); ok {
+				recordSnapshot = snapshot
+			}
 		case "turn_context":
 			nextTurnID := ParseTurnContext(rec.Payload).TurnID
 			if nextTurnID == "" {
 				return false, nil
 			}
 			if !seenAnyTurn {
-				targetIsFirstTurn = nextTurnID == turnID
+				targetIsFirstTurn = start == 0 && nextTurnID == turnID
 			}
 			seenAnyTurn = true
 			activeTurnID = nextTurnID
@@ -414,14 +437,17 @@ func ReadTokenUsageForTurn(path, turnID string, opts ScanOptions) (TokenSnapshot
 		case targetStarted && activeTurnID != turnID:
 		case recordType == "", recordType == "event_msg" && (payloadType == "" || payloadType == "token_count"):
 			unattributable = true
-			return true, nil
 		case targetStarted:
 			targetModelActive = true
 		}
 		return false, nil
 	}
-	if err := scanRecords(path, opts, visit, skipped); err != nil {
+	if err := scanRecords(reader, opts, visit, skipped); err != nil {
 		return TokenSnapshot{}, false, err
+	}
+	if recordSnapshot.TurnID != "" {
+		recordSnapshot.ModelContextWindow = finalInfo.ModelContextWindow
+		return recordSnapshot, true, nil
 	}
 	if unattributable || !targetStarted || !haveFinal {
 		return TokenSnapshot{}, false, nil
@@ -445,6 +471,30 @@ func ReadTokenUsageForTurn(path, turnID string, opts ScanOptions) (TokenSnapshot
 		ModelContextWindow: finalInfo.ModelContextWindow,
 		Source:             "turn_context_delta",
 	}, true, nil
+}
+
+func parseTurnUsageRecord(raw json.RawMessage, turnID string) (TokenSnapshot, bool) {
+	var record struct {
+		TurnID string     `json:"turn_id"`
+		Last   TokenUsage `json:"usage"`
+		Turn   TokenUsage `json:"turn_token_usage"`
+		Thread TokenUsage `json:"thread_token_usage"`
+	}
+	if json.Unmarshal(raw, &record) != nil || record.TurnID != turnID || !HasPositiveUsage(record.Turn) {
+		return TokenSnapshot{}, false
+	}
+	baseline, ok := SubtractUsage(record.Thread, record.Turn)
+	if !ok {
+		return TokenSnapshot{}, false
+	}
+	return TokenSnapshot{
+		TurnID:        turnID,
+		TurnUsage:     record.Turn,
+		BaselineUsage: baseline,
+		LastUsage:     record.Last,
+		TotalUsage:    record.Thread,
+		Source:        "turn_token_usage_record",
+	}, true
 }
 
 // oversizedLineTypes reads the envelope type and payload type from the start
