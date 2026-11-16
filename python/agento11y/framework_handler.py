@@ -749,20 +749,13 @@ class Agento11yFrameworkHandlerBase:
             self._run_to_graph_key[run_key] = str(parent_run_id)
 
         if self._capture_workflow_steps:
-            # Top-level graph wrapper (parent=None) becomes a graph root.
-            # Tracking a set instead of a single value keeps concurrent graph
-            # invocations on the same handler isolated.
+            # Top-level graph wrapper (parent=None) becomes a graph root with
+            # its own conversation. Tracking a set instead of a single value
+            # keeps concurrent graph invocations on the same handler isolated.
+            # A new root does not take the conversation of another active root:
+            # the handler cannot tell a nested graph from a concurrent run, and
+            # the JS handler behaves the same way.
             if parent_run_id is None:
-                # Nested graph invocation (e.g. sub-agent invoked inside a tool):
-                # inherit the conversation_id from the already-active graph root
-                # so all sub-graphs appear in the same Agent Observability conversation.
-                if self._graph_root_run_keys and self._graph_run_conversation_id:
-                    existing_root = next(
-                        (r for r in self._graph_root_run_keys if r in self._graph_run_conversation_id),
-                        None,
-                    )
-                    if existing_root is not None:
-                        self._graph_run_conversation_id[run_key] = self._graph_run_conversation_id[existing_root]
                 self._graph_root_run_keys.add(run_key)
                 return
             # Only promote direct children of a graph root to workflow steps.

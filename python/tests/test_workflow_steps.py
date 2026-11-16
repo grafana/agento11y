@@ -654,6 +654,31 @@ def test_concurrent_graph_roots_are_isolated() -> None:
         assert step.parent_step_ids == []
 
 
+def test_concurrent_graph_roots_keep_their_own_conversations() -> None:
+    handler, client = _make_handler()
+    root_a, step_a, root_b, step_b = uuid4(), uuid4(), uuid4(), uuid4()
+
+    handler._on_chain_start(serialized=None, run_id=root_a, parent_run_id=None)
+    handler._on_chain_start(
+        serialized={"name": "agent"},
+        run_id=step_a,
+        parent_run_id=root_a,
+        callback_kwargs={"metadata": {"thread_id": "customer-a"}},
+    )
+    # The second run starts while the first one is inside its node.
+    handler._on_chain_start(serialized=None, run_id=root_b, parent_run_id=None)
+    handler._on_chain_start(
+        serialized={"name": "agent"},
+        run_id=step_b,
+        parent_run_id=root_b,
+        callback_kwargs={"metadata": {"thread_id": "customer-b"}},
+    )
+    for run_id in (step_a, step_b, root_a, root_b):
+        handler._on_chain_end(run_id=run_id, outputs={})
+
+    assert sorted(step.conversation_id for step in client.workflow_steps) == ["customer-a", "customer-b"]
+
+
 def test_graph_state_is_cleaned_up_after_root_ends() -> None:
     handler, _client = _make_handler()
     root = uuid4()
