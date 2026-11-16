@@ -80,6 +80,13 @@ handler = Agento11yLangChainHandler(
 
 Without any of these, each run becomes its own conversation.
 
+With the default callback span capture, model and tool spans follow the chain's
+callback parent IDs, including when there is no active application span. Separate
+invocations start separate traces; keep the conversation ID stable to group turns.
+To put multiple invocations in one trace, run them under the same application span.
+Tool execution spans carry `gen_ai.tool.call.id` when LangChain supplies it.
+Streaming content blocks and completed `AIMessageChunk` outputs are supported.
+
 ## Behavior
 
 - Lifecycle mapping:
