@@ -9,9 +9,11 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 from uuid import uuid4
 
+import pytest
 from agento11y import (
     Client,
     ClientConfig,
+    ContentCaptureMode,
     EnqueueError,
     GenerationExportConfig,
     ValidationError,
@@ -385,6 +387,141 @@ def test_enqueue_workflow_step_rejects_oversized_payload() -> None:
         client.shutdown()
 
     assert exporter.wf_batches == []
+
+
+def _raising_resolver(_metadata: dict[str, Any] | None) -> ContentCaptureMode:
+    raise RuntimeError("resolver failed")
+
+
+def _enqueue_and_export(client: Client, exporter: _RecordingExporter, step: WorkflowStep) -> WorkflowStep:
+    try:
+        client.enqueue_workflow_step(step)
+        client.flush()
+    finally:
+        client.shutdown()
+    return exporter.wf_batches[0][0]
+
+
+@pytest.mark.parametrize(
+    ("content_capture", "resolver", "want_stripped"),
+    [
+        (ContentCaptureMode.DEFAULT, None, False),
+        (ContentCaptureMode.FULL, None, False),
+        (ContentCaptureMode.NO_TOOL_CONTENT, None, False),
+        (ContentCaptureMode.FULL_WITH_METADATA_SPANS, None, False),
+        (ContentCaptureMode.METADATA_ONLY, None, True),
+        # The resolver reads the step's own metadata.
+        (
+            ContentCaptureMode.FULL,
+            lambda metadata: ContentCaptureMode.METADATA_ONLY if metadata.get("sensitive") else ContentCaptureMode.FULL,
+            True,
+        ),
+        (ContentCaptureMode.METADATA_ONLY, lambda _metadata: ContentCaptureMode.FULL, False),
+        # A failing resolver fails closed.
+        (ContentCaptureMode.FULL, _raising_resolver, True),
+    ],
+)
+def test_enqueue_workflow_step_honors_content_capture_mode(content_capture, resolver, want_stripped) -> None:
+    exporter = _RecordingExporter()
+    client = Client(
+        ClientConfig(
+            content_capture=content_capture,
+            content_capture_resolver=resolver,
+            generation_export=GenerationExportConfig(batch_size=10, flush_interval=timedelta(0)),
+            generation_exporter=exporter,
+        )
+    )
+
+    step = _enqueue_and_export(
+        client,
+        exporter,
+        WorkflowStep(
+            id="wfs_a",
+            conversation_id="c1",
+            step_name="agent",
+            input_state={"messages": [{"role": "user", "content": "hello"}]},
+            output_state={"messages": [{"role": "assistant", "content": "hi"}]},
+            error="429 Too Many Requests",
+            tags={"env": "test"},
+            metadata={"sensitive": True},
+            linked_generation_ids=["gen_a"],
+            parent_step_ids=["wfs_root"],
+        ),
+    )
+
+    if want_stripped:
+        assert step.input_state == {}
+        assert step.output_state == {}
+        assert step.error == "rate_limit"
+    else:
+        assert step.input_state == {"messages": [{"role": "user", "content": "hello"}]}
+        assert step.output_state == {"messages": [{"role": "assistant", "content": "hi"}]}
+        assert step.error == "429 Too Many Requests"
+    # Structure survives in every mode.
+    assert step.step_name == "agent"
+    assert step.tags == {"env": "test"}
+    assert step.metadata == {"sensitive": True}
+    assert step.linked_generation_ids == ["gen_a"]
+    assert step.parent_step_ids == ["wfs_root"]
+
+
+@pytest.mark.parametrize(
+    ("error", "want"),
+    [
+        ("", ""),
+        ("upstream returned 503 for prompt 'hello'", "server_error"),
+        ("request timeout while summarizing 'hello'", "timeout"),
+        ("node failed on prompt 'hello'", "sdk_error"),
+    ],
+)
+def test_metadata_only_workflow_step_keeps_error_category(error, want) -> None:
+    exporter = _RecordingExporter()
+    client = Client(
+        ClientConfig(
+            content_capture=ContentCaptureMode.METADATA_ONLY,
+            generation_export=GenerationExportConfig(batch_size=10, flush_interval=timedelta(0)),
+            generation_exporter=exporter,
+        )
+    )
+
+    step = _enqueue_and_export(
+        client, exporter, WorkflowStep(id="wfs_a", conversation_id="c1", step_name="agent", error=error)
+    )
+
+    assert step.error == want
+
+
+def test_metadata_only_strips_state_captured_by_framework_handler() -> None:
+    # Steps built by a framework handler follow the client's capture mode.
+    exporter = _RecordingExporter()
+    client = Client(
+        ClientConfig(
+            content_capture=ContentCaptureMode.METADATA_ONLY,
+            generation_export=GenerationExportConfig(batch_size=10, flush_interval=timedelta(0)),
+            generation_exporter=exporter,
+        )
+    )
+    handler = Agento11yFrameworkHandlerBase(client=client, framework_name="langgraph", capture_workflow_steps=True)
+    root, node = uuid4(), uuid4()
+
+    try:
+        handler._on_chain_start(serialized=None, run_id=root, parent_run_id=None)
+        handler._on_chain_start(
+            serialized={"name": "agent"},
+            run_id=node,
+            parent_run_id=root,
+            inputs={"messages": [{"role": "user", "content": "hello"}]},
+        )
+        handler._on_chain_end(run_id=node, outputs={"messages": [{"role": "assistant", "content": "hi"}]})
+        handler._on_chain_end(run_id=root, outputs={})
+        client.flush()
+    finally:
+        client.shutdown()
+
+    step = exporter.wf_batches[0][0]
+    assert step.step_name == "agent"
+    assert step.input_state == {}
+    assert step.output_state == {}
 
 
 def test_noop_exporter_accepts_workflow_steps() -> None:

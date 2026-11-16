@@ -86,6 +86,10 @@ This enables the **Workflow** tab in the conversation detail view, showing node 
 duration, input/output state, and which LLM generations ran inside each node. The **Dependencies**
 tab remains available for the generation-level DAG built from `parent_generation_ids`.
 
+The state usually includes the conversation messages. A client with
+`content_capture=ContentCaptureMode.METADATA_ONLY` exports the steps without their state. See
+[content capture modes](../../docs/concepts/content-capture-modes.md#workflow-steps).
+
 Always set `conversation_title` to a short human-readable label — it appears as the conversation
 name in the Agent Observability UI. Without it, the title falls back to an opaque auto-generated ID.
 
