@@ -90,9 +90,11 @@ The state usually includes the conversation messages. A client with
 `content_capture=ContentCaptureMode.METADATA_ONLY` exports the steps without their state. See
 [content capture modes](../../docs/concepts/content-capture-modes.md#workflow-steps).
 
-Each top-level invocation keeps its own conversation, also when several run at the same time on one
-handler. A graph that a node invokes with its own `callbacks` is a separate top-level invocation.
-Pass it the same `thread_id` or `conversation_id` to keep it in the same conversation.
+A top-level invocation with its own `thread_id` or `conversation_id` keeps that conversation, also
+when several run at the same time on one handler. A graph that a node invokes with its own
+`callbacks` and no `thread_id` or `conversation_id` joins the conversation of the active graph run.
+Invocations without either key that overlap on one handler can share a conversation, so give
+concurrent invocations a `thread_id`.
 
 Always set `conversation_title` to a short human-readable label — it appears as the conversation
 name in the Agent Observability UI. Without it, the title falls back to an opaque auto-generated ID.

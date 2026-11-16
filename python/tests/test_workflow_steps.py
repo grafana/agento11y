@@ -654,29 +654,39 @@ def test_concurrent_graph_roots_are_isolated() -> None:
         assert step.parent_step_ids == []
 
 
-def test_concurrent_graph_roots_keep_their_own_conversations() -> None:
+def _start_root_with_step(handler, root, step, thread_id: str | None) -> None:
+    # LangGraph copies the thread_id into the metadata of every run, the root included.
+    callback_kwargs = {"metadata": {"thread_id": thread_id}} if thread_id is not None else None
+    handler._on_chain_start(serialized=None, run_id=root, parent_run_id=None, callback_kwargs=callback_kwargs)
+    handler._on_chain_start(
+        serialized={"name": "agent"}, run_id=step, parent_run_id=root, callback_kwargs=callback_kwargs
+    )
+
+
+def test_overlapping_graph_roots_with_their_own_thread_id_keep_it() -> None:
     handler, client = _make_handler()
     root_a, step_a, root_b, step_b = uuid4(), uuid4(), uuid4(), uuid4()
 
-    handler._on_chain_start(serialized=None, run_id=root_a, parent_run_id=None)
-    handler._on_chain_start(
-        serialized={"name": "agent"},
-        run_id=step_a,
-        parent_run_id=root_a,
-        callback_kwargs={"metadata": {"thread_id": "customer-a"}},
-    )
+    _start_root_with_step(handler, root_a, step_a, "customer-a")
     # The second run starts while the first one is inside its node.
-    handler._on_chain_start(serialized=None, run_id=root_b, parent_run_id=None)
-    handler._on_chain_start(
-        serialized={"name": "agent"},
-        run_id=step_b,
-        parent_run_id=root_b,
-        callback_kwargs={"metadata": {"thread_id": "customer-b"}},
-    )
+    _start_root_with_step(handler, root_b, step_b, "customer-b")
     for run_id in (step_a, step_b, root_a, root_b):
         handler._on_chain_end(run_id=run_id, outputs={})
 
     assert sorted(step.conversation_id for step in client.workflow_steps) == ["customer-a", "customer-b"]
+
+
+def test_nested_graph_root_without_its_own_thread_id_joins_the_active_conversation() -> None:
+    handler, client = _make_handler()
+    outer_root, outer_step, inner_root, inner_step = uuid4(), uuid4(), uuid4(), uuid4()
+
+    _start_root_with_step(handler, outer_root, outer_step, "customer-a")
+    # A graph that the outer node invokes with its own callbacks starts as a new root.
+    _start_root_with_step(handler, inner_root, inner_step, None)
+    for run_id in (inner_step, inner_root, outer_step, outer_root):
+        handler._on_chain_end(run_id=run_id, outputs={})
+
+    assert [step.conversation_id for step in client.workflow_steps] == ["customer-a", "customer-a"]
 
 
 def test_graph_state_is_cleaned_up_after_root_ends() -> None:
