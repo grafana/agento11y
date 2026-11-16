@@ -153,8 +153,10 @@ handler. A graph that a node invokes with its own `callbacks` is a separate top-
 it the same `thread_id` or `conversation_id` to keep it in the same conversation.
 
 The state usually includes the conversation messages. Set `captureInputs: false` or
-`captureOutputs: false` to leave the input or output state out. The generation sanitizer does not
-run on workflow steps.
+`captureOutputs: false` to leave the input or output state out. A client with
+`contentCapture: 'metadata_only'` exports the steps without their state; see
+[content capture modes](../../../docs/concepts/content-capture-modes.md#workflow-steps). The
+generation sanitizer does not run on workflow steps.
 
 ## Contract
 

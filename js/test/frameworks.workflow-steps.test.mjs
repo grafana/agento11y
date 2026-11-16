@@ -68,6 +68,41 @@ test('captures each node of a real LangGraph graph as a workflow step', async ()
   assert.match(JSON.stringify(answer.outputState), /Paris/);
 });
 
+test('a metadata_only client exports the steps of a real graph without their state', async () => {
+  const { steps } = await capture(
+    async (client) => {
+      const model = new FakeListChatModel({ responses: ['Paris'] });
+      const graph = new StateGraph(MessagesAnnotation)
+        .addNode('answer', async (state, config) => ({ messages: [await model.invoke(state.messages, config)] }))
+        .addNode('fail', async () => {
+          throw new Error('upstream returned 503 for Capital of France?');
+        })
+        .addEdge(START, 'answer')
+        .addEdge('answer', 'fail')
+        .addEdge('fail', END)
+        .compile();
+      const handler = new Agento11yLangGraphHandler(client, { captureWorkflowSteps: true });
+
+      await assert.rejects(
+        graph.invoke({ messages: [new HumanMessage('Capital of France?')] }, { callbacks: [handler] }),
+      );
+    },
+    {},
+    { contentCapture: 'metadata_only' },
+  );
+
+  assert.deepEqual(
+    steps.map((step) => step.stepName),
+    ['answer', 'fail'],
+  );
+  for (const step of steps) {
+    assert.deepEqual(step.inputState ?? {}, {});
+    assert.deepEqual(step.outputState ?? {}, {});
+  }
+  assert.equal(steps[1].error, 'server_error');
+  assert.equal(steps[0].linkedGenerationIds.length, 1);
+});
+
 test('workflow step uses the handler agent name, not the step name', async () => {
   const { steps } = await capture(async (client) => {
     const handler = new Agento11yLangGraphHandler(client, { agentName: 'my-pipeline', captureWorkflowSteps: true });
@@ -468,9 +503,10 @@ function slowAgentGraph() {
     .compile();
 }
 
-async function capture(run, exportOverrides = {}) {
+async function capture(run, exportOverrides = {}, clientOverrides = {}) {
   const exporter = new CapturingExporter();
   const client = new Agento11yClient({
+    ...clientOverrides,
     generationExport: {
       ...defaultConfig().generationExport,
       batchSize: 50,
