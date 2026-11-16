@@ -72,7 +72,7 @@ export class Agento11yLangGraphHandler extends Agento11yFrameworkHandler {
 
   async handleChainStart(
     serialized: unknown,
-    _inputs: unknown,
+    inputs: unknown,
     runId: string,
     parentRunId?: string,
     tags?: string[],
@@ -80,11 +80,11 @@ export class Agento11yLangGraphHandler extends Agento11yFrameworkHandler {
     runType?: string,
     runName?: string,
   ): Promise<void> {
-    this.onChainStart(serialized, runId, parentRunId, tags, metadata, runType, runName);
+    this.onChainStart(serialized, runId, parentRunId, tags, metadata, runType, runName, undefined, inputs);
   }
 
-  async handleChainEnd(_outputs: unknown, runId: string): Promise<void> {
-    this.onChainEnd(runId);
+  async handleChainEnd(outputs: unknown, runId: string): Promise<void> {
+    this.onChainEnd(runId, outputs);
   }
 
   async handleChainError(error: unknown, runId: string): Promise<void> {

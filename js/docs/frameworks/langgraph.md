@@ -124,6 +124,40 @@ const handler = new Agento11yLangGraphHandler(client, {
 
 Without any of these, each run becomes its own conversation.
 
+## Workflow step capture
+
+Set `captureWorkflowSteps: true` to record each graph node as a workflow step. This fills the
+**Workflow** tab in the conversation view: node order, duration, input and output state, and the
+generations that ran inside each node.
+
+```typescript
+const handler = new Agento11yLangGraphHandler(client, {
+  agentName: 'my-pipeline',
+  captureWorkflowSteps: true,
+});
+await graph.invoke(input, { callbacks: [handler], configurable: { thread_id: 'customer-42' } });
+```
+
+With the option on, the handler:
+
+- Records each direct child run of the graph root as a step named after its LangGraph node. Sub-chains
+  inside a node and the hidden `__start__` run are not steps.
+- Links each step to the previous step of the same graph run (`parentStepIds`) and to the generations
+  that ran inside it (`linkedGenerationIds`).
+- Sets each generation's `parentGenerationIds` to the previous generation of the same graph run.
+- Puts all steps and generations of one graph invocation in one conversation.
+- Records chain runs as workflow steps instead of framework chain spans.
+
+Each top-level invocation keeps its own conversation, also when several run at the same time on one
+handler. A graph that a node invokes with its own `callbacks` is a separate top-level invocation. Pass
+it the same `thread_id` or `conversation_id` to keep it in the same conversation.
+
+The state usually includes the conversation messages. Set `captureInputs: false` or
+`captureOutputs: false` to leave the input or output state out. A client with
+`contentCapture: 'metadata_only'` exports the steps without their state; see
+[content capture modes](../../../docs/concepts/content-capture-modes.md#workflow-steps). The
+generation sanitizer does not run on workflow steps.
+
 ## Contract
 
 - `handleLLMStart` / `handleChatModelStart` starts recorder lifecycle.
@@ -141,7 +175,7 @@ Without any of these, each run becomes its own conversation.
 - `handleLLMEnd` maps output + usage and ends recorder.
 - `handleLLMError` sets call error and ends recorder.
 - `handleToolStart` / `handleToolEnd` / `handleToolError` maps into `startToolExecution(...)`.
-- `handleChainStart` / `handleChainEnd` / `handleChainError` emits framework chain spans.
+- `handleChainStart` / `handleChainEnd` / `handleChainError` emits framework chain spans, or workflow steps when `captureWorkflowSteps` is on.
 - `handleRetrieverStart` / `handleRetrieverEnd` / `handleRetrieverError` emits framework retriever spans.
 - A chain or retriever span that ends with an error leaves the error text off under `metadata_only` and `full_with_metadata_spans`, and when a `generationSanitizer` is configured. Its status then reads `sdk_error`.
 
