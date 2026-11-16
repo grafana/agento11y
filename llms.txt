@@ -580,7 +580,7 @@ trace_id / span_id     — OTel correlation
 There are two layers:
 
 - **Manual SDK API** — available in Go (`EnqueueWorkflowStep`), JS/TS (`enqueueWorkflowStep`), and Python (`enqueue_workflow_step`). Use it when forwarding pre-built workflow steps or instrumenting custom execution graphs directly. You create step IDs, parent edges, timestamps, input/output state, and linked generation IDs yourself. (Java and .NET do not expose a workflow-step API.)
-- **Framework adapter (auto-capture)** — **Python only.** Use the adapter when one exists, such as `Agento11yLangGraphHandler` for LangGraph. The adapter creates workflow steps automatically from framework callbacks. Go and JS have no framework-level auto-capture for workflow steps; use the manual API above.
+- **Framework adapter (auto-capture)** — **Python and JS/TS.** Use the adapter when one exists, such as `Agento11yLangGraphHandler` for LangGraph. The adapter creates workflow steps automatically from framework callbacks. Go has no framework-level auto-capture for workflow steps; use the manual API above.
 
 Do not use both paths for the same LangGraph node, or you will record duplicate workflow steps.
 
@@ -628,6 +628,22 @@ result = graph.invoke(
     {"prompt": "Investigate elevated API latency.", "answer": ""},
     config={"callbacks": [handler]},
 )
+```
+
+In JS/TS, the LangGraph and LangChain handlers take `captureWorkflowSteps: true`:
+
+```typescript
+import { Agento11yLangGraphHandler } from '@grafana/agento11y/langgraph';
+
+const handler = new Agento11yLangGraphHandler(client, {
+  agentName: 'my-pipeline',
+  agentVersion: '1.0.0',
+  captureWorkflowSteps: true,
+});
+const result = await graph.invoke(
+  { prompt: 'Investigate elevated API latency.', answer: '' },
+  { callbacks: [handler] },
+);
 ```
 
 ### Workflow step vs generation: decision table

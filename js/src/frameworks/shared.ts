@@ -3,12 +3,15 @@ import type { Agento11yClient } from '../client.js';
 import type {
   GenerationRecorder,
   GenerationResult,
+  GenerationStart,
   Message,
   ModelRef,
   TokenUsage,
   ToolDefinition,
   ToolExecutionRecorder,
+  WorkflowStep,
 } from '../types.js';
+import { newLocalID } from '../utils.js';
 
 type AnyRecord = Record<string, unknown>;
 
@@ -37,6 +40,9 @@ const metadataThinkingBudgetTokens = 'agento11y.gen_ai.request.thinking.budget_t
 const metadataThinkingLevel = 'agento11y.gen_ai.request.thinking.level';
 const frameworkSource = 'handler';
 const maxFrameworkMetadataDepth = 5;
+// LangGraph JS sends no chain end for the root of a stream the caller stops
+// early, so a long-lived handler keeps at most this many graph runs.
+const maxTrackedGraphRoots = 1000;
 
 export interface FrameworkHandlerOptions {
   agentName?: string;
@@ -52,6 +58,13 @@ export interface FrameworkHandlerOptions {
    * cannot override a checkpointed thread.
    */
   conversationId?: string;
+  /**
+   * Records each node of a graph run as a workflow step, with its input and
+   * output state and the generations that ran inside it. The LangGraph and
+   * LangChain handlers support it. While it is on, chain runs produce workflow
+   * steps instead of framework chain spans.
+   */
+  captureWorkflowSteps?: boolean;
   extraTags?: Record<string, string>;
   extraMetadata?: Record<string, unknown>;
 }
@@ -101,17 +114,42 @@ interface FrameworkSpan {
   metadata: Record<string, unknown>;
 }
 
+interface WorkflowStepState {
+  stepId: string;
+  conversationId: string;
+  stepName: string;
+  startedAt: Date;
+  tags: Record<string, string>;
+  metadata: Record<string, unknown>;
+  parentStepIds: string[];
+  graphRootKey: string;
+  captureOutputs: boolean;
+  inputState: Record<string, unknown>;
+  linkedGenerationIds: string[];
+}
+
 export class Agento11yFrameworkHandler {
   private readonly runs = new Map<string, RunState>();
   private readonly toolRuns = new Map<string, ToolRunState>();
   private readonly chainSpans = new Map<string, FrameworkSpan>();
   private readonly retrieverSpans = new Map<string, FrameworkSpan>();
+  private readonly workflowStepRuns = new Map<string, WorkflowStepState>();
+  // Graph-level state for workflow step wiring, keyed by the run key of each
+  // graph root so concurrent graph invocations on one handler stay isolated.
+  private readonly graphRootRunKeys = new Set<string>();
+  private readonly graphRunConversationId = new Map<string, string>();
+  private readonly graphRunLastStepId = new Map<string, string>();
+  private readonly graphRunLastGenerationId = new Map<string, string>();
+  // Parent run of every active chain or LLM run. Walked upwards from an LLM
+  // run to find the enclosing graph root and workflow step.
+  private readonly runToGraphKey = new Map<string, string>();
   private readonly agentName?: string;
   private readonly agentVersion?: string;
   private readonly providerResolver: 'auto' | ProviderResolverFn;
   private readonly provider?: string;
   private readonly captureInputs: boolean;
   private readonly captureOutputs: boolean;
+  private readonly captureWorkflowSteps: boolean;
   private readonly conversationId: string;
   private readonly extraTags: Record<string, string>;
   private readonly extraMetadata: Record<string, unknown>;
@@ -128,6 +166,10 @@ export class Agento11yFrameworkHandler {
     this.provider = options.provider;
     this.captureInputs = options.captureInputs ?? true;
     this.captureOutputs = options.captureOutputs ?? true;
+    // The graph logic relies on LangChain chain callbacks. The other adapters
+    // share these options but send chain events with different meanings.
+    this.captureWorkflowSteps =
+      (options.captureWorkflowSteps ?? false) && (frameworkName === 'langgraph' || frameworkName === 'langchain');
     this.conversationId = (options.conversationId ?? '').trim();
     this.extraTags = { ...(options.extraTags ?? {}) };
     this.extraMetadata = { ...(options.extraMetadata ?? {}) };
@@ -167,6 +209,7 @@ export class Agento11yFrameworkHandler {
     });
 
     const payload = this.startPayload(runKey, provider, modelName, context);
+    this.linkGraphGeneration(runKey, parentRunId, payload);
     const recorder = stream ? this.client.startStreamingGeneration(payload) : this.client.startGeneration(payload);
 
     this.runs.set(runKey, {
@@ -225,6 +268,7 @@ export class Agento11yFrameworkHandler {
       thinkingEnabled: asMaybeBoolean(read(invocationParams, 'thinking_enabled')),
     };
     const payload = this.startPayload(runKey, provider, modelName, context, systemPrompt, requestParams);
+    this.linkGraphGeneration(runKey, parentRunId, payload);
     const recorder = stream ? this.client.startStreamingGeneration(payload) : this.client.startGeneration(payload);
 
     this.runs.set(runKey, {
@@ -260,6 +304,7 @@ export class Agento11yFrameworkHandler {
 
   protected onLLMEnd(output: unknown, runId: string): void {
     const runState = this.runs.get(String(runId));
+    this.runToGraphKey.delete(String(runId));
     if (runState === undefined) {
       return;
     }
@@ -334,6 +379,7 @@ export class Agento11yFrameworkHandler {
 
   protected onLLMError(error: unknown, runId: string): void {
     const runState = this.runs.get(String(runId));
+    this.runToGraphKey.delete(String(runId));
     if (runState === undefined) {
       return;
     }
@@ -455,24 +501,77 @@ export class Agento11yFrameworkHandler {
     callbackRunType?: string,
     runName?: string,
     extraParams?: AnyRecord,
+    inputs?: unknown,
   ): void {
     const runKey = String(runId);
-    if (runKey.length === 0 || this.chainSpans.has(runKey)) {
+    if (runKey.length === 0) {
       return;
     }
 
-    const invocationParams = asRecord(extraParams?.invocation_params);
-    const context = this.buildFrameworkContext({
-      runId: runKey,
-      parentRunId,
-      runType: notEmpty(callbackRunType) ? String(callbackRunType).trim() : 'chain',
-      runName,
-      serialized,
-      invocationParams,
-      extraParams,
-      callbackTags,
-      callbackMetadata,
-    });
+    const parentRunKey = normalizeRunID(parentRunId);
+    const runType = notEmpty(callbackRunType) ? String(callbackRunType).trim() : 'chain';
+    const buildContext = () =>
+      this.buildFrameworkContext({
+        runId: runKey,
+        parentRunId,
+        runType,
+        runName,
+        serialized,
+        invocationParams: asRecord(extraParams?.invocation_params),
+        extraParams,
+        callbackTags,
+        callbackMetadata,
+      });
+
+    if (this.captureWorkflowSteps) {
+      // Register the parent so LLM runs below this chain can walk up to
+      // their graph root and enclosing workflow step.
+      if (parentRunKey.length > 0) {
+        this.runToGraphKey.set(runKey, parentRunKey);
+      }
+      // A top-level run becomes a graph root with its own conversation. A set
+      // of roots keeps concurrent graph invocations on the same handler
+      // isolated. Unlike the Python handler, a new root does not take the
+      // conversation of another active root: a concurrent run, or a root that
+      // never ended, would then share it.
+      if (parentRunKey.length === 0) {
+        if (this.graphRootRunKeys.size >= maxTrackedGraphRoots) {
+          const oldestRootKey = this.graphRootRunKeys.values().next().value;
+          if (oldestRootKey !== undefined) {
+            this.client.internalLogWarn(
+              `agento11y: dropping the state of graph run ${oldestRootKey}: more than ${maxTrackedGraphRoots} graph runs have not ended`,
+            );
+            this.cleanupGraphStateForRoot(oldestRootKey);
+          }
+        }
+        this.graphRootRunKeys.add(runKey);
+        return;
+      }
+      // Only direct children of a graph root become workflow steps. Sub-chains
+      // inside a node, such as conditional edge routers, are skipped.
+      if (!this.graphRootRunKeys.has(parentRunKey) || this.workflowStepRuns.has(runKey)) {
+        return;
+      }
+      // LangGraph JS runs its `__start__` input node as a hidden child run,
+      // which the Python handler never receives. Skipping hidden runs gives
+      // the same steps in both SDKs.
+      if (callbackTags?.includes('langsmith:hidden') === true) {
+        return;
+      }
+      this.startWorkflowStep(runKey, parentRunKey, buildContext(), {
+        serialized,
+        callbackMetadata,
+        extraParams,
+        runName,
+        inputs,
+      });
+      return;
+    }
+
+    if (this.chainSpans.has(runKey)) {
+      return;
+    }
+    const context = buildContext();
     const spanName = notEmpty(context.componentName)
       ? `${this.frameworkName}.chain ${context.componentName}`
       : `${this.frameworkName}.chain`;
@@ -481,12 +580,233 @@ export class Agento11yFrameworkHandler {
     this.chainSpans.set(runKey, { span, metadata: context.metadata });
   }
 
-  protected onChainEnd(runId: string): void {
+  protected onChainEnd(runId: string, outputs?: unknown): void {
+    const runKey = String(runId);
+    if (this.graphRootRunKeys.has(runKey)) {
+      this.cleanupGraphStateForRoot(runKey);
+      return;
+    }
+    if (this.workflowStepRuns.has(runKey)) {
+      this.endWorkflowStep(runKey, outputs, undefined);
+      return;
+    }
+    this.runToGraphKey.delete(runKey);
     this.endFrameworkSpan(this.chainSpans, runId, undefined);
   }
 
   protected onChainError(error: unknown, runId: string): void {
+    const runKey = String(runId);
+    if (this.graphRootRunKeys.has(runKey)) {
+      this.cleanupGraphStateForRoot(runKey);
+      return;
+    }
+    if (this.workflowStepRuns.has(runKey)) {
+      this.endWorkflowStep(runKey, undefined, error ?? new Error('framework callback error'));
+      return;
+    }
+    this.runToGraphKey.delete(runKey);
     this.endFrameworkSpan(this.chainSpans, runId, error);
+  }
+
+  private startWorkflowStep(
+    runKey: string,
+    parentRunKey: string,
+    context: FrameworkContext,
+    run: {
+      serialized: unknown;
+      callbackMetadata: AnyRecord | undefined;
+      extraParams: AnyRecord | undefined;
+      runName: string | undefined;
+      inputs: unknown;
+    },
+  ): void {
+    // The LangChain handler does not resolve the node for its framework
+    // context, but a LangChain handler on a LangGraph graph still names steps
+    // by node, as in the Python SDK.
+    const langgraphNode =
+      context.langgraphNode ||
+      resolveLangGraphNode(
+        run.callbackMetadata,
+        run.extraParams,
+        asRecord(run.extraParams?.invocation_params),
+        run.serialized,
+      );
+    // LangChain JS serializes runnables without a `name`, so the component
+    // name falls back to the class path. The run name gives a short name, as
+    // the Python handler has for most runnables.
+    const stepName = langgraphNode || asString(run.runName).trim() || context.componentName || context.runType;
+    const metadata =
+      langgraphNode.length > 0 && context.langgraphNode.length === 0
+        ? { ...context.metadata, [spanAttrFrameworkLangGraphNode]: langgraphNode }
+        : context.metadata;
+    const graphRootKey = this.findGraphRootKey(runKey);
+    const lastStepId = graphRootKey.length > 0 ? this.graphRunLastStepId.get(graphRootKey) : undefined;
+
+    this.workflowStepRuns.set(runKey, {
+      stepId: newLocalID('wfs'),
+      conversationId: this.resolveGraphConversationId(context.conversationId, parentRunKey),
+      stepName,
+      startedAt: this.client.internalNow(),
+      tags: { ...context.tags, 'agento11y.workflow_step.type': context.runType },
+      metadata,
+      parentStepIds: lastStepId !== undefined ? [lastStepId] : [],
+      graphRootKey,
+      captureOutputs: this.captureOutputs,
+      inputState: this.captureInputs ? toWorkflowState(run.inputs) : {},
+      linkedGenerationIds: [],
+    });
+  }
+
+  private endWorkflowStep(runKey: string, outputs: unknown, error: unknown): void {
+    const state = this.workflowStepRuns.get(runKey);
+    if (state === undefined) {
+      return;
+    }
+    this.workflowStepRuns.delete(runKey);
+
+    const step: WorkflowStep = {
+      id: state.stepId,
+      conversationId: state.conversationId,
+      stepName: state.stepName,
+      framework: this.frameworkName,
+      agentName: this.agentName,
+      agentVersion: this.agentVersion,
+      startedAt: state.startedAt,
+      completedAt: this.client.internalNow(),
+      inputState: state.inputState,
+      outputState: state.captureOutputs ? toWorkflowState(outputs) : {},
+      error: error === undefined ? '' : errorText(error),
+      tags: state.tags,
+      metadata: state.metadata,
+      linkedGenerationIds: [...state.linkedGenerationIds],
+      parentStepIds: state.parentStepIds,
+    };
+    try {
+      this.client.enqueueWorkflowStep(step);
+    } catch (enqueueError) {
+      this.client.internalLogWarn('agento11y: failed to enqueue workflow step', enqueueError);
+      return;
+    }
+    if (state.graphRootKey.length > 0) {
+      this.graphRunLastStepId.set(state.graphRootKey, state.stepId);
+    }
+  }
+
+  /**
+   * Wires a generation into its graph run when workflow-step capture is on:
+   * one conversation per graph run, the previous generation of the run as
+   * parent, and a link from the enclosing workflow step.
+   */
+  private linkGraphGeneration(runKey: string, parentRunId: string | undefined, payload: GenerationStart): void {
+    if (!this.captureWorkflowSteps) {
+      return;
+    }
+    const parentRunKey = normalizeRunID(parentRunId);
+    payload.conversationId = this.resolveGraphConversationId(payload.conversationId ?? '', parentRunKey);
+    if (parentRunKey.length > 0) {
+      this.runToGraphKey.set(runKey, parentRunKey);
+    }
+
+    const generationId = newLocalID('gen');
+    payload.id = generationId;
+    const graphRootKey = this.findGraphRootKey(runKey);
+    if (graphRootKey.length > 0) {
+      const lastGenerationId = this.graphRunLastGenerationId.get(graphRootKey);
+      if (lastGenerationId !== undefined) {
+        payload.parentGenerationIds = [lastGenerationId];
+      }
+      this.graphRunLastGenerationId.set(graphRootKey, generationId);
+    }
+    this.findEnclosingWorkflowStep(runKey)?.linkedGenerationIds.push(generationId);
+  }
+
+  /**
+   * Walks the parent chain from runKey to a known graph root. Returns "" when
+   * there is none. The visited set guards against a cycle in the parent map.
+   */
+  private findGraphRootKey(runKey: string): string {
+    const visited = new Set<string>();
+    let current: string | undefined = runKey;
+    while (current !== undefined && current.length > 0 && !visited.has(current)) {
+      if (this.graphRootRunKeys.has(current)) {
+        return current;
+      }
+      visited.add(current);
+      current = this.runToGraphKey.get(current);
+    }
+    return '';
+  }
+
+  /**
+   * Walks the parent chain to the closest ancestor that is a workflow step.
+   * An LLM run is often inside a sub-chain (LCEL composition, conditional
+   * edges), so the step can be one or two levels above its direct parent.
+   */
+  private findEnclosingWorkflowStep(runKey: string): WorkflowStepState | undefined {
+    const visited = new Set<string>();
+    let current = this.runToGraphKey.get(runKey);
+    while (current !== undefined && current.length > 0 && !visited.has(current)) {
+      visited.add(current);
+      const state = this.workflowStepRuns.get(current);
+      if (state !== undefined) {
+        return state;
+      }
+      current = this.runToGraphKey.get(current);
+    }
+    return undefined;
+  }
+
+  /** Gives every run under one graph invocation the same conversation id. */
+  private resolveGraphConversationId(conversationId: string, parentRunKey: string): string {
+    if (!this.captureWorkflowSteps || parentRunKey.length === 0) {
+      return conversationId;
+    }
+    const rootKey = this.findGraphRootKey(parentRunKey);
+    if (rootKey.length === 0) {
+      return conversationId;
+    }
+    const cached = this.graphRunConversationId.get(rootKey);
+    if (cached !== undefined && cached.length > 0) {
+      return cached;
+    }
+    this.graphRunConversationId.set(rootKey, conversationId);
+    return conversationId;
+  }
+
+  /**
+   * Removes all state of a graph run when its root ends, including parent
+   * entries of runs below it, so the maps of a long-lived handler do not grow without bound.
+   */
+  private cleanupGraphStateForRoot(rootRunKey: string): void {
+    const descendants = [...this.runToGraphKey.keys()].filter((runKey) => this.reachesRun(runKey, rootRunKey));
+    for (const runKey of descendants) {
+      this.runToGraphKey.delete(runKey);
+      const orphan = this.workflowStepRuns.get(runKey);
+      if (orphan !== undefined) {
+        this.workflowStepRuns.delete(runKey);
+        this.client.internalLogWarn(
+          `agento11y: dropping in-flight workflow step ${orphan.stepId} (node ${orphan.stepName}): the chain end callback never fired`,
+        );
+      }
+    }
+    this.graphRootRunKeys.delete(rootRunKey);
+    this.graphRunConversationId.delete(rootRunKey);
+    this.graphRunLastStepId.delete(rootRunKey);
+    this.graphRunLastGenerationId.delete(rootRunKey);
+  }
+
+  /** Reports whether walking the parent chain from startKey reaches targetKey. */
+  private reachesRun(startKey: string, targetKey: string): boolean {
+    const visited = new Set<string>();
+    let current = this.runToGraphKey.get(startKey);
+    while (current !== undefined && current.length > 0 && !visited.has(current)) {
+      if (current === targetKey) {
+        return true;
+      }
+      visited.add(current);
+      current = this.runToGraphKey.get(current);
+    }
+    return false;
   }
 
   protected onRetrieverStart(
@@ -538,7 +858,7 @@ export class Agento11yFrameworkHandler {
     context: FrameworkContext,
     systemPrompt?: string,
     requestParams?: ChatRequestParams,
-  ) {
+  ): GenerationStart {
     return {
       conversationId: context.conversationId,
       agentName: this.agentName,
@@ -1620,6 +1940,69 @@ function asError(value: unknown): Error {
 
 function isRecord(value: unknown): value is AnyRecord {
   return typeof value === 'object' && value !== null;
+}
+
+/**
+ * Converts graph state to a JSON-safe record for a workflow step's Struct
+ * fields. The JSON round trip turns class instances, such as LangChain
+ * messages, into their `toJSON` form. Like the Python SDK, a value that is not
+ * an object goes under `raw`, and one value JSON cannot encode does not hide
+ * the rest of the state.
+ */
+function toWorkflowState(value: unknown): Record<string, unknown> {
+  if (value === undefined || value === null) {
+    return {};
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(JSON.stringify(value, workflowStateReplacer()));
+  } catch {
+    return { raw: String(value) };
+  }
+  if (isRecord(parsed) && !Array.isArray(parsed)) {
+    return parsed;
+  }
+  return { raw: parsed };
+}
+
+/**
+ * JSON replacer for workflow state: BigInt becomes text, Map and Set become
+ * an object and an array, and a reference back to an enclosing object becomes
+ * "[Circular]".
+ */
+function workflowStateReplacer(): (this: unknown, key: string, value: unknown) => unknown {
+  const ancestors: unknown[] = [];
+  return function (this: unknown, _key: string, value: unknown): unknown {
+    if (typeof value === 'bigint') {
+      return value.toString();
+    }
+    if (typeof value !== 'object' || value === null) {
+      return value;
+    }
+    // `this` is the object that holds the current key, so popping down to it
+    // leaves only the path from the root to the current value.
+    while (ancestors.length > 0 && ancestors[ancestors.length - 1] !== this) {
+      ancestors.pop();
+    }
+    if (ancestors.includes(value)) {
+      return '[Circular]';
+    }
+    const converted = value instanceof Map ? Object.fromEntries(value) : value instanceof Set ? [...value] : value;
+    ancestors.push(converted);
+    return converted;
+  };
+}
+
+/** Returns the text of an error, as `str(error)` does in the Python SDK. */
+function errorText(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === 'string') {
+    return error;
+  }
+  const message = read(error, 'message');
+  return typeof message === 'string' ? message : String(error);
 }
 
 function notEmpty(value: string | undefined): boolean {

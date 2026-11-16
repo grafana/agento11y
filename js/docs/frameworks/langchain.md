@@ -85,6 +85,20 @@ const handler = new Agento11yLangChainHandler(client, {
 
 Without any of these, each run becomes its own conversation.
 
+## Workflow step capture
+
+Set `captureWorkflowSteps: true` to record each direct child run of a top-level chain as a workflow
+step. On a LangGraph graph, steps are named after their node; otherwise they are named after the
+run name, such as `ChatPromptTemplate`. The behavior matches the LangGraph handler; see
+[workflow step capture](./langgraph.md#workflow-step-capture).
+
+```typescript
+const handler = new Agento11yLangChainHandler(client, {
+  agentName: 'my-chain',
+  captureWorkflowSteps: true,
+});
+```
+
 ## Contract
 
 - `handleLLMStart` / `handleChatModelStart` starts recorder lifecycle.
@@ -102,7 +116,7 @@ Without any of these, each run becomes its own conversation.
 - `handleLLMEnd` maps output + usage and ends recorder.
 - `handleLLMError` sets call error and ends recorder.
 - `handleToolStart` / `handleToolEnd` / `handleToolError` maps into `startToolExecution(...)`.
-- `handleChainStart` / `handleChainEnd` / `handleChainError` emits framework chain spans.
+- `handleChainStart` / `handleChainEnd` / `handleChainError` emits framework chain spans, or workflow steps when `captureWorkflowSteps` is on.
 - `handleRetrieverStart` / `handleRetrieverEnd` / `handleRetrieverError` emits framework retriever spans.
 - A chain or retriever span that ends with an error leaves the error text off under `metadata_only` and `full_with_metadata_spans`, and when a `generationSanitizer` is configured. Its status then reads `sdk_error`.
 
