@@ -1805,6 +1805,148 @@ func TestEnqueueWorkflowStepFlushesExport(t *testing.T) {
 	}
 }
 
+func TestEnqueueWorkflowStepHonorsContentCaptureMode(t *testing.T) {
+	tests := []struct {
+		name         string
+		mode         ContentCaptureMode
+		resolver     func(context.Context, map[string]any) ContentCaptureMode
+		wantStripped bool
+	}{
+		{name: "default", mode: ContentCaptureModeDefault},
+		{name: "full", mode: ContentCaptureModeFull},
+		{name: "no_tool_content", mode: ContentCaptureModeNoToolContent},
+		{name: "full_with_metadata_spans", mode: ContentCaptureModeFullWithMetadataSpans},
+		{name: "metadata_only", mode: ContentCaptureModeMetadataOnly, wantStripped: true},
+		{
+			name: "resolver reads step metadata",
+			mode: ContentCaptureModeFull,
+			resolver: func(_ context.Context, metadata map[string]any) ContentCaptureMode {
+				if metadata["sensitive"] == true {
+					return ContentCaptureModeMetadataOnly
+				}
+				return ContentCaptureModeFull
+			},
+			wantStripped: true,
+		},
+		{
+			name: "resolver overrides metadata_only",
+			mode: ContentCaptureModeMetadataOnly,
+			resolver: func(context.Context, map[string]any) ContentCaptureMode {
+				return ContentCaptureModeFull
+			},
+		},
+		{
+			name: "panicking resolver fails closed",
+			mode: ContentCaptureModeFull,
+			resolver: func(context.Context, map[string]any) ContentCaptureMode {
+				panic("resolver failed")
+			},
+			wantStripped: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			step := exportWorkflowStep(t, Config{ContentCapture: tt.mode, ContentCaptureResolver: tt.resolver}, WorkflowStep{
+				ID:                  "wfs-capture",
+				ConversationID:      "c1",
+				StepName:            "agent",
+				InputState:          map[string]any{"prompt": "hello"},
+				OutputState:         map[string]any{"answer": "hi"},
+				Error:               "429 Too Many Requests",
+				Tags:                map[string]string{"env": "test"},
+				Metadata:            map[string]any{"sensitive": true},
+				LinkedGenerationIDs: []string{"gen-a"},
+				ParentStepIDs:       []string{"wfs-root"},
+			})
+
+			gotInput := step.GetInputState().GetFields()["prompt"].GetStringValue()
+			gotOutput := step.GetOutputState().GetFields()["answer"].GetStringValue()
+			if tt.wantStripped {
+				if len(step.GetInputState().GetFields()) != 0 || len(step.GetOutputState().GetFields()) != 0 {
+					t.Fatalf("expected empty state, got input=%v output=%v", step.GetInputState(), step.GetOutputState())
+				}
+				if step.GetError() != "rate_limit" {
+					t.Fatalf("error = %q, want rate_limit", step.GetError())
+				}
+			} else {
+				if gotInput != "hello" || gotOutput != "hi" {
+					t.Fatalf("expected state to be kept, got input=%q output=%q", gotInput, gotOutput)
+				}
+				if step.GetError() != "429 Too Many Requests" {
+					t.Fatalf("error = %q, want the original text", step.GetError())
+				}
+			}
+			// Structure survives in every mode.
+			if step.GetStepName() != "agent" {
+				t.Fatalf("step name = %q, want agent", step.GetStepName())
+			}
+			if step.GetTags()["env"] != "test" {
+				t.Fatalf("tags = %v, want env=test", step.GetTags())
+			}
+			if !step.GetMetadata().GetFields()["sensitive"].GetBoolValue() {
+				t.Fatalf("metadata = %v, want sensitive=true", step.GetMetadata())
+			}
+			if len(step.GetLinkedGenerationIds()) != 1 || len(step.GetParentStepIds()) != 1 {
+				t.Fatalf("links = %v / %v, want one of each", step.GetLinkedGenerationIds(), step.GetParentStepIds())
+			}
+		})
+	}
+}
+
+func TestMetadataOnlyWorkflowStepKeepsErrorCategory(t *testing.T) {
+	tests := []struct {
+		name string
+		err  string
+		want string
+	}{
+		{name: "no error", err: "", want: ""},
+		{name: "server_error", err: "upstream returned 503 for prompt 'hello'", want: "server_error"},
+		{name: "timeout", err: "request timeout while summarizing 'hello'", want: "timeout"},
+		{name: "sdk_error", err: "node failed on prompt 'hello'", want: "sdk_error"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			step := exportWorkflowStep(t, Config{ContentCapture: ContentCaptureModeMetadataOnly}, WorkflowStep{
+				ID:             "wfs-error",
+				ConversationID: "c1",
+				StepName:       "agent",
+				Error:          tt.err,
+			})
+			if step.GetError() != tt.want {
+				t.Fatalf("error = %q, want %q", step.GetError(), tt.want)
+			}
+		})
+	}
+}
+
+// exportWorkflowStep enqueues one step on a client built from config and
+// returns the step as the exporter received it.
+func exportWorkflowStep(t *testing.T, config Config, in WorkflowStep) *agento11yv1.WorkflowStep {
+	t.Helper()
+	exporter := &capturingGenerationExporter{}
+	config.GenerationExport = GenerationExportConfig{BatchSize: 10, FlushInterval: time.Hour}
+	config.testGenerationExporter = exporter
+	client, _, _ := newTestClient(t, config)
+
+	if err := client.EnqueueWorkflowStep(in); err != nil {
+		t.Fatalf("enqueue workflow step: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := client.Flush(ctx); err != nil {
+		t.Fatalf("flush workflow step: %v", err)
+	}
+
+	exporter.mu.Lock()
+	defer exporter.mu.Unlock()
+	if len(exporter.workflowStepRequests) != 1 || len(exporter.workflowStepRequests[0].WorkflowSteps) != 1 {
+		t.Fatalf("expected one exported workflow step, got %d requests", len(exporter.workflowStepRequests))
+	}
+	return exporter.workflowStepRequests[0].WorkflowSteps[0]
+}
+
 func TestShutdownFlushesPendingWorkflowStepExport(t *testing.T) {
 	exporter := &capturingGenerationExporter{}
 	client, _, _ := newTestClient(t, Config{

@@ -1,6 +1,6 @@
 # Content Capture Modes
 
-Content capture decides which fields the agento11y SDK includes in exported generations and OTel span attributes. Use it to exclude prompts, tool I/O, and model responses from destinations that should not receive them.
+Content capture decides which fields the agento11y SDK includes in exported generations, workflow steps, and OTel span attributes. Use it to exclude prompts, tool I/O, and model responses from destinations that should not receive them.
 
 Each SDK README links here for language-specific examples.
 
@@ -28,6 +28,17 @@ Each SDK README links here for language-specific examples.
 The matrix above describes gRPC/HTTP generation export with companion spans. Experimental OTel generation export differs as described below.
 
 Embedding input text capture is gated by both the effective capture mode and `EmbeddingCapture.CaptureInput` / `embeddingCapture.captureInput`. Setting the flag does not bypass `metadata_only` or `full_with_metadata_spans`.
+
+### Workflow steps
+
+Go, Python, and JS export workflow steps through their own gRPC/HTTP ingest channel. Java and .NET have no workflow-step API.
+
+| Mode | Workflow step export |
+| --- | --- |
+| `full`, `no_tool_content`, `full_with_metadata_spans` | `input_state`, `output_state`, and `error` are exported as given. |
+| `metadata_only` | `input_state` and `output_state` are removed. A non-empty `error` is replaced by its category, such as `rate_limit`, `timeout`, or `sdk_error`. Step name, IDs, linked generations, parent steps, timing, tags, and metadata are kept. |
+
+A framework adapter step, such as a LangGraph node captured with `capture_workflow_steps=True`, carries the graph state, which usually includes the conversation messages and tool results. `no_tool_content` does not remove tool results from that state. Use `metadata_only` to keep the state out of the ingest channel. The generation sanitizer does not run on workflow steps.
 
 ### Skill and process attribute privacy
 
@@ -78,7 +89,7 @@ Local capture stays full. Only `AGENTO11Y_CONTENT_CAPTURE_MODE=full` forwards fu
 
 ## Caveats
 
-No capture mode strips user-provided `metadata` or `tags` on a generation or tool execution. SDK-internal metadata keys that carry content (e.g. `call_error`, `agento11y.conversation.title`) are stripped along with the matching content. Keep sensitive content out of `metadata` and `tags` when using `metadata_only` or `full_with_metadata_spans`.
+No capture mode strips user-provided `metadata` or `tags` on a generation, tool execution, or workflow step. SDK-internal metadata keys that carry content (e.g. `call_error`, `agento11y.conversation.title`) are stripped along with the matching content. Keep sensitive content out of `metadata` and `tags` when using `metadata_only` or `full_with_metadata_spans`.
 
 Capture modes decide *which fields ship*, not what's inside them. To sanitize the fields that do ship (e.g. strip secrets out of assistant text under `full`), use the pre-ingest redactor: `GenerationSanitizer` in Go, `generationSanitizer` in JS/TS, the equivalent in Python.
 
@@ -121,6 +132,10 @@ Tool executions:
 Embeddings:
 
 - All SDKs: resolver return value > client-level setting, then the embedding input-capture flag gates whether input texts can be attached to spans.
+
+Workflow steps:
+
+- Go, Python, and JS: resolver return value > client-level setting. The resolver receives the step's `metadata`. Go passes it a background context, because `EnqueueWorkflowStep` takes none. Python does not read `with_content_capture_mode(...)` for workflow steps.
 
 A resolver return value of `default` defers to the next layer. Resolver exceptions are caught and treated as `metadata_only` (fail-closed).
 

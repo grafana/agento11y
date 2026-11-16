@@ -662,6 +662,9 @@ func (c *Client) StartStreamingGeneration(ctx context.Context, start GenerationS
 
 // EnqueueWorkflowStep enqueues a workflow execution node for export.
 //
+// Under ContentCaptureModeMetadataOnly the step is exported without its
+// input and output state, and a non-empty error is replaced by its category.
+//
 // The otel export protocol has no workflow-step encoding. In that mode
 // EnqueueWorkflowStep drops the step and returns ErrWorkflowStepEnqueueFailed.
 func (c *Client) EnqueueWorkflowStep(step WorkflowStep) error {
@@ -684,6 +687,12 @@ func (c *Client) EnqueueWorkflowStep(step WorkflowStep) error {
 	}
 	if len(c.config.Tags) > 0 {
 		normalized.Tags = mergeTags(c.config.Tags, normalized.Tags)
+	}
+	// Workflow steps gate on client config + resolver only, like embeddings.
+	// EnqueueWorkflowStep takes no context, so the resolver gets a background one.
+	resolverMode := callContentCaptureResolver(context.Background(), c.config.ContentCaptureResolver, normalized.Metadata)
+	if resolveClientContentCaptureMode(resolveContentCaptureMode(resolverMode, c.config.ContentCapture)) == ContentCaptureModeMetadataOnly {
+		stripWorkflowStepContent(&normalized)
 	}
 	if c.otelExportEnabled() {
 		// Nothing that uses otel mode emits workflow steps today.

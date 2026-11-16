@@ -2,6 +2,7 @@ package agento11y
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -128,6 +129,30 @@ func stampContentCaptureMetadata(g *Generation, mode ContentCaptureMode) {
 // wire-proto shape a forwarder reduces.
 func stripContent(g *Generation, errorCategory string) {
 	contentcapture.Strip(generationTarget{g: g}, errorCategory)
+}
+
+// stripWorkflowStepContent removes the content a workflow step carries under
+// metadata-only capture. The input and output state hold application data,
+// such as graph messages, and the error text can quote them. The error keeps
+// its category so a failed step still reads as failed. IDs, links, timing,
+// tags, and metadata stay.
+func stripWorkflowStepContent(step *WorkflowStep) {
+	step.InputState = nil
+	step.OutputState = nil
+	if step.Error != "" {
+		step.Error = errorTextCategory(step.Error)
+	}
+}
+
+// errorTextCategory classifies error text the way the Python and JS SDKs
+// classify an error string. classifyErrorCategory alone does not match
+// "timeout" in the text, so the same step would get a different category here.
+func errorTextCategory(text string) string {
+	lower := strings.ToLower(text)
+	if strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline exceeded") {
+		return "timeout"
+	}
+	return classifyErrorCategory(errors.New(text), true)
 }
 
 // generationTarget adapts the public Generation struct to
