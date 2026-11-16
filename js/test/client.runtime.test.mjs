@@ -311,6 +311,108 @@ test('workflow step enqueue rejection does not record the step in the debug snap
   }
 });
 
+const workflowStepCaptureCases = [
+  { name: 'default', contentCapture: 'default', wantStripped: false },
+  { name: 'full', contentCapture: 'full', wantStripped: false },
+  { name: 'no_tool_content', contentCapture: 'no_tool_content', wantStripped: false },
+  { name: 'full_with_metadata_spans', contentCapture: 'full_with_metadata_spans', wantStripped: false },
+  { name: 'metadata_only', contentCapture: 'metadata_only', wantStripped: true },
+  {
+    name: 'resolver reads step metadata',
+    contentCapture: 'full',
+    contentCaptureResolver: (metadata) => (metadata?.sensitive === true ? 'metadata_only' : 'full'),
+    wantStripped: true,
+  },
+  {
+    name: 'resolver overrides metadata_only',
+    contentCapture: 'metadata_only',
+    contentCaptureResolver: () => 'full',
+    wantStripped: false,
+  },
+  {
+    name: 'failing resolver fails closed',
+    contentCapture: 'full',
+    contentCaptureResolver: () => {
+      throw new Error('resolver failed');
+    },
+    wantStripped: true,
+  },
+];
+
+for (const tc of workflowStepCaptureCases) {
+  test(`workflow step enqueue honors content capture mode: ${tc.name}`, async () => {
+    const exporter = new MockGenerationExporter();
+    const client = newClient(
+      exporter,
+      { batchSize: 10, flushIntervalMs: 60_000 },
+      { contentCapture: tc.contentCapture, contentCaptureResolver: tc.contentCaptureResolver },
+    );
+
+    try {
+      client.enqueueWorkflowStep({
+        id: 'wfs-capture',
+        conversationId: 'c1',
+        stepName: 'agent',
+        inputState: { messages: [{ role: 'user', content: 'hello' }] },
+        outputState: { messages: [{ role: 'assistant', content: 'hi' }] },
+        error: '429 Too Many Requests',
+        tags: { env: 'test' },
+        metadata: { sensitive: true },
+        linkedGenerationIds: ['gen-a'],
+        parentStepIds: ['wfs-root'],
+      });
+
+      // The debug snapshot shows the step as it will be exported.
+      assert.deepEqual(client.debugSnapshot().workflowSteps[0].inputState, wantInputState(tc.wantStripped));
+
+      await client.flush();
+
+      const step = exporter.workflowStepRequests[0].workflowSteps[0];
+      assert.deepEqual(step.inputState, wantInputState(tc.wantStripped));
+      if (tc.wantStripped) {
+        assert.deepEqual(step.outputState, {});
+        assert.equal(step.error, 'rate_limit');
+      } else {
+        assert.deepEqual(step.outputState, { messages: [{ role: 'assistant', content: 'hi' }] });
+        assert.equal(step.error, '429 Too Many Requests');
+      }
+      // Structure survives in every mode.
+      assert.equal(step.stepName, 'agent');
+      assert.deepEqual(step.tags, { env: 'test' });
+      assert.deepEqual(step.metadata, { sensitive: true });
+      assert.deepEqual(step.linkedGenerationIds, ['gen-a']);
+      assert.deepEqual(step.parentStepIds, ['wfs-root']);
+    } finally {
+      await client.shutdown();
+    }
+  });
+}
+
+function wantInputState(stripped) {
+  return stripped ? {} : { messages: [{ role: 'user', content: 'hello' }] };
+}
+
+for (const [error, want] of [
+  ['', ''],
+  ["upstream returned 503 for prompt 'hello'", 'server_error'],
+  ["request timeout while summarizing 'hello'", 'timeout'],
+  ["node failed on prompt 'hello'", 'sdk_error'],
+]) {
+  test(`metadata_only workflow step keeps error category: ${want || 'no error'}`, async () => {
+    const exporter = new MockGenerationExporter();
+    const client = newClient(exporter, { batchSize: 10, flushIntervalMs: 60_000 }, { contentCapture: 'metadata_only' });
+
+    try {
+      client.enqueueWorkflowStep({ id: 'wfs-error', conversationId: 'c1', stepName: 'agent', error });
+      await client.flush();
+
+      assert.equal(exporter.workflowStepRequests[0].workflowSteps[0].error ?? '', want);
+    } finally {
+      await client.shutdown();
+    }
+  });
+}
+
 test('flush retries failed workflow step exports with backoff and succeeds', async () => {
   const exporter = new MockGenerationExporter();
   exporter.workflowStepFailuresBeforeSuccess = 2;

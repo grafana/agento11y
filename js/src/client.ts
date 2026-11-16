@@ -24,6 +24,7 @@ import {
   shouldIncludeToolContent,
   stampContentCaptureMetadata,
   stripContent,
+  stripWorkflowStepContent,
 } from './content_capture.js';
 import {
   agentNameFromContext,
@@ -323,7 +324,11 @@ export class Agento11yClient {
     }
   }
 
-  /** Enqueues a workflow execution node for export. */
+  /**
+   * Enqueues a workflow execution node for export. Under `metadata_only` the
+   * step is exported without its input and output state, and a non-empty
+   * error is replaced by its category.
+   */
   enqueueWorkflowStep(step: WorkflowStep): void {
     this.assertOpen();
     // Validate the raw input before defaulting timestamps, matching Go and
@@ -767,6 +772,12 @@ export class Agento11yClient {
     normalized.startedAt = new Date(startedAt);
     normalized.completedAt = new Date(normalized.completedAt ?? normalized.startedAt);
     normalized.tags = mergeStringRecords(this.config.tags, normalized.tags);
+    // Workflow steps gate on client config + resolver only, like embeddings.
+    const resolverMode = callContentCaptureResolver(this.config.contentCaptureResolver, normalized.metadata);
+    const mode = resolveClientContentCaptureMode(resolveContentCaptureMode(resolverMode, this.config.contentCapture));
+    if (mode === 'metadata_only') {
+      stripWorkflowStepContent(normalized, errorCategoryFromError(normalized.error, true));
+    }
     return normalized;
   }
 

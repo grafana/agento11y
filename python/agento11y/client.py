@@ -302,6 +302,19 @@ def _strip_content(generation: Generation, error_category: str) -> None:
         tool.input_schema_json = b""
 
 
+def _strip_workflow_step_content(step: WorkflowStep) -> None:
+    """Strips the content a workflow step carries under METADATA_ONLY.
+
+    The input and output state hold application data, such as graph messages,
+    and the error text can quote them. The error keeps its category so a failed
+    step still reads as failed. IDs, links, timing, tags, and metadata stay.
+    """
+    step.input_state = {}
+    step.output_state = {}
+    if step.error != "":
+        step.error = _error_category_from_exception(step.error, fallback_sdk=True)
+
+
 def _strip_message_content(message: Message) -> None:
     """Strips all content from message parts (text, thinking, tool call input, tool result)."""
     for part in message.parts:
@@ -1141,6 +1154,10 @@ class Client:
         queued. This matches the Go and JS SDKs, so an identical input produces
         an identical exported step across languages.
 
+        Under ``ContentCaptureMode.METADATA_ONLY`` the step is exported without
+        its ``input_state`` and ``output_state``, and a non-empty ``error`` is
+        replaced by its category.
+
         For framework-driven capture prefer a framework adapter (LangGraph,
         LangChain), which additionally handles step IDs, identity inheritance,
         and ``linked_generation_ids`` for nested generations.
@@ -1168,6 +1185,17 @@ class Client:
             merged: dict[str, str] = dict(self._config.tags)
             merged.update(normalized.tags)
             normalized.tags = merged
+        # Workflow steps gate on client config + resolver only, like
+        # embeddings: Go's EnqueueWorkflowStep takes no context, so
+        # ``with_content_capture_mode`` is not consulted here either.
+        resolver_mode = _call_content_capture_resolver(
+            self._config.content_capture_resolver, normalized.metadata, self._config.logger
+        )
+        step_mode = _resolve_client_content_capture_mode(
+            _resolve_content_capture_mode(resolver_mode, self._config.content_capture)
+        )
+        if step_mode == ContentCaptureMode.METADATA_ONLY:
+            _strip_workflow_step_content(normalized)
 
         max_payload_bytes = self._config.generation_export.payload_max_bytes
         if max_payload_bytes > 0:

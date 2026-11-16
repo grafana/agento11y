@@ -1,4 +1,4 @@
-import type { ContentCaptureMode, ContentCaptureResolver, Generation, Message } from './types.js';
+import type { ContentCaptureMode, ContentCaptureResolver, Generation, Message, WorkflowStep } from './types.js';
 
 export const metadataKeyContentCaptureMode = 'agento11y.sdk.content_capture_mode';
 
@@ -88,6 +88,21 @@ export function stripContent(generation: Generation, errorCategory: string): voi
       tool.description = '';
       tool.inputSchemaJSON = '';
     }
+  }
+}
+
+/**
+ * Strips the content a workflow step carries under `metadata_only`. The input
+ * and output state hold application data, such as graph messages, and the
+ * error text can quote them. `errorCategory` replaces a non-empty error so a
+ * failed step still reads as failed. IDs, links, timing, tags, and metadata
+ * stay.
+ */
+export function stripWorkflowStepContent(step: WorkflowStep, errorCategory: string): void {
+  step.inputState = {};
+  step.outputState = {};
+  if (step.error !== undefined && step.error.length > 0) {
+    step.error = errorCategory.length > 0 ? errorCategory : 'sdk_error';
   }
 }
 
