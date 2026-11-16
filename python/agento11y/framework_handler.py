@@ -7,6 +7,7 @@ import logging
 import math
 import secrets
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -26,6 +27,7 @@ from agento11y import (
     ModelRef,
     Part,
     PartKind,
+    TokenInputSemantics,
     ToolCall,
     ToolDefinition,
     ToolExecutionStart,
@@ -393,11 +395,12 @@ class Agento11yFrameworkHandlerBase:
         if graph_root_key:
             self._graph_run_last_generation_id[graph_root_key] = start.id
 
-        recorder = (
-            self._client.start_streaming_generation(start)
-            if mode == GenerationMode.STREAM
-            else self._client.start_generation(start)
-        )
+        with self._parent_span_context(parent_run_id):
+            recorder = (
+                self._client.start_streaming_generation(start)
+                if mode == GenerationMode.STREAM
+                else self._client.start_generation(start)
+            )
         self._runs[run_key] = _RunState(
             recorder=recorder,
             input_messages=input_messages,
@@ -507,11 +510,12 @@ class Agento11yFrameworkHandlerBase:
         if graph_root_key:
             self._graph_run_last_generation_id[graph_root_key] = start.id
 
-        recorder = (
-            self._client.start_streaming_generation(start)
-            if mode == GenerationMode.STREAM
-            else self._client.start_generation(start)
-        )
+        with self._parent_span_context(parent_run_id):
+            recorder = (
+                self._client.start_streaming_generation(start)
+                if mode == GenerationMode.STREAM
+                else self._client.start_generation(start)
+            )
         self._runs[run_key] = _RunState(
             recorder=recorder,
             input_messages=input_messages,
@@ -520,11 +524,13 @@ class Agento11yFrameworkHandlerBase:
             request_provider=provider_name,
         )
 
-    def _on_llm_new_token(self, *, token: str, run_id: UUID) -> None:
+    def _on_llm_new_token(self, *, token: str | list[Any], run_id: UUID) -> None:
         run_state = self._runs.get(str(run_id))
         if run_state is None:
             return
 
+        if not isinstance(token, str):
+            token = "".join(item if isinstance(item, str) else _as_str(_read(item, "text")) for item in token)
         if token.strip() == "":
             return
 
@@ -547,9 +553,9 @@ class Agento11yFrameworkHandlerBase:
             response_message = _first_generation_message(response)
             response_metadata = _read(response_message, "response_metadata")
             raw_usage = (
-                _read(llm_output, "token_usage")
+                _read(response_message, "usage_metadata")
+                or _read(llm_output, "token_usage")
                 or _read(llm_output, "usage")
-                or _read(response_message, "usage_metadata")
             )
             usage = _map_framework_usage(raw_usage)
             response_model = _as_str(_read(llm_output, "model_name")) or _as_str(_read(response_metadata, "model_name"))
@@ -654,16 +660,18 @@ class Agento11yFrameworkHandlerBase:
         tool_name = _resolve_tool_name(serialized, callback_kwargs)
         include_content = self._capture_inputs or self._capture_outputs
 
-        recorder = self._client.start_tool_execution(
-            ToolExecutionStart(
-                tool_name=tool_name,
-                tool_description=_resolve_tool_description(serialized),
-                conversation_id=conversation_id,
-                agent_name=self._agent_name,
-                agent_version=self._agent_version,
-                include_content=include_content,
+        with self._parent_span_context(parent_run_id):
+            recorder = self._client.start_tool_execution(
+                ToolExecutionStart(
+                    tool_name=tool_name,
+                    tool_call_id=_as_str(_read(callback_kwargs, "tool_call_id")).strip(),
+                    tool_description=_resolve_tool_description(serialized),
+                    conversation_id=conversation_id,
+                    agent_name=self._agent_name,
+                    agent_version=self._agent_version,
+                    include_content=include_content,
+                )
             )
-        )
         arguments: Any = None
         if self._capture_inputs:
             arguments = _resolve_tool_arguments(input_str, callback_kwargs)
@@ -991,7 +999,8 @@ class Agento11yFrameworkHandlerBase:
         if component != "":
             span_name = f"{self._framework_name}.{fallback_component} {component}"
 
-        span = self._framework_tracer().start_span(span_name, kind=SpanKind.INTERNAL)
+        with self._parent_span_context(parent_run_id):
+            span = self._framework_tracer().start_span(span_name, kind=SpanKind.INTERNAL)
         span.set_attribute(_span_attr_operation_name, operation_name)
         span.set_attribute(_span_attr_framework_name, self._framework_name)
         span.set_attribute(_span_attr_framework_source, self._framework_source)
@@ -1068,6 +1077,14 @@ class Agento11yFrameworkHandlerBase:
             span.record_exception(error)
             span.set_status(Status(StatusCode.ERROR, str(error)))
         span.end()
+
+    def _parent_span_context(self, parent_run_id: UUID | None):
+        # Callbacks may run in different tasks/threads; never leave a span attached between callbacks.
+        parent_key = _normalize_run_key(parent_run_id)
+        state = self._chain_spans.get(parent_key) or self._retriever_spans.get(parent_key)
+        if state is not None:
+            return otel_trace.use_span(state.span, end_on_exit=False)
+        return nullcontext()
 
     def _framework_tracer(self):
         tracer = getattr(self._client, "_tracer", None)
@@ -1571,26 +1588,7 @@ def _map_chat_input_message(message: Any) -> Message | None:
     if tool_result_part is not None:
         return Message(role=MessageRole.TOOL, parts=[tool_result_part])
 
-    parts: list[Part] = []
-
-    text = _extract_message_text(message)
-    if text != "":
-        parts.append(Part(kind=PartKind.TEXT, text=text))
-
-    for tool_call in _as_list(_read(message, "tool_calls")):
-        tool_call_part = _map_langchain_tool_call_part(tool_call)
-        if tool_call_part is not None:
-            parts.append(tool_call_part)
-
-    for tool_result in _as_list(_read(message, "tool_results")):
-        tool_result_part = _map_framework_tool_result_part(tool_result)
-        if tool_result_part is not None:
-            parts.append(tool_result_part)
-
-    if not parts:
-        return None
-
-    return Message(role=_normalize_message_role(message, parts), parts=parts)
+    return _map_framework_message(message)
 
 
 def _map_inline_tool_message_part(message: Any) -> Part | None:
@@ -1653,14 +1651,28 @@ def _map_output_messages(response: Any) -> list[Message]:
 
 
 def _map_generation_candidate_message(candidate: Any) -> Message | None:
-    message = _read(candidate, "message")
+    return _map_framework_message(_read(candidate, "message"))
+
+
+def _map_framework_message(message: Any) -> Message | None:
     parts: list[Part] = []
 
     text = _extract_message_text(message)
     if text != "":
         parts.append(Part(kind=PartKind.TEXT, text=text))
 
-    for tool_call in _as_list(_read(message, "tool_calls")):
+    tool_calls = _as_list(_read(message, "tool_calls"))
+    for block in _as_list(_read(message, "content")):
+        if _read(block, "type") == "thinking":
+            thinking = _as_str(_read(block, "thinking"))
+            if thinking:
+                parts.append(Part(kind=PartKind.THINKING, thinking=thinking))
+        elif _read(block, "type") == "tool_use" and not tool_calls:
+            tool_call_part = _map_langchain_tool_call_part(block)
+            if tool_call_part is not None:
+                parts.append(tool_call_part)
+
+    for tool_call in tool_calls:
         tool_call_part = _map_langchain_tool_call_part(tool_call)
         if tool_call_part is not None:
             parts.append(tool_call_part)
@@ -1684,6 +1696,8 @@ def _map_langchain_tool_call_part(tool_call: Any) -> Part | None:
     args = _read(tool_call, "args")
     if args is None:
         args = _read(tool_call, "arguments")
+    if args is None:
+        args = _read(tool_call, "input")
 
     return Part(
         kind=PartKind.TOOL_CALL,
@@ -1785,8 +1799,15 @@ def _map_framework_usage(raw_usage: Any):
         usage.cache_read_input_tokens = cache_read
 
     cache_write = _as_int(_read(input_token_details, "cache_creation"))
+    if cache_write == 0:
+        cache_write = _as_int(_read(input_token_details, "ephemeral_5m_input_tokens")) + _as_int(
+            _read(input_token_details, "ephemeral_1h_input_tokens")
+        )
     if cache_write > 0 and usage.cache_write_input_tokens == 0:
         usage.cache_write_input_tokens = cache_write
+
+    if input_token_details is not None:
+        usage.input_semantics = TokenInputSemantics.INCLUSIVE
 
     reasoning = _as_int(_read(output_token_details, "reasoning"))
     if reasoning > 0 and usage.reasoning_tokens == 0:
@@ -1801,7 +1822,7 @@ def _is_system_role(role: str) -> bool:
 
 def _normalize_role(role: str) -> MessageRole:
     normalized = role.strip().lower()
-    if normalized in {"assistant", "ai", "model"}:
+    if normalized in {"assistant", "ai", "model", "aimessagechunk"}:
         return MessageRole.ASSISTANT
     if normalized == "tool":
         return MessageRole.TOOL

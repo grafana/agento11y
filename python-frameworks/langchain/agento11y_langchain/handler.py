@@ -126,7 +126,7 @@ class Agento11yLangChainHandler(_Agento11yLangChainBase, BaseCallbackHandler):
             callback_kwargs=_merge_callback_kwargs(kwargs, tags=tags, metadata=metadata, run_name=run_name),
         )
 
-    def on_llm_new_token(self, token: str, *, run_id: UUID, **_kwargs: Any) -> None:
+    def on_llm_new_token(self, token: str | list[Any], *, run_id: UUID, **_kwargs: Any) -> None:
         self._on_llm_new_token(token=token, run_id=run_id)
 
     def on_llm_end(self, response: Any, *, run_id: UUID, **_kwargs: Any) -> None:
@@ -262,7 +262,7 @@ class Agento11yAsyncLangChainHandler(_Agento11yLangChainBase, AsyncCallbackHandl
             callback_kwargs=_merge_callback_kwargs(kwargs, tags=tags, metadata=metadata, run_name=run_name),
         )
 
-    async def on_llm_new_token(self, token: str, *, run_id: UUID, **_kwargs: Any) -> None:
+    async def on_llm_new_token(self, token: str | list[Any], *, run_id: UUID, **_kwargs: Any) -> None:
         self._on_llm_new_token(token=token, run_id=run_id)
 
     async def on_llm_end(self, response: Any, *, run_id: UUID, **_kwargs: Any) -> None:

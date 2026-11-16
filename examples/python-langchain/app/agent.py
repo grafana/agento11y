@@ -8,19 +8,16 @@ needed. Compare with `classifier.py` for the raw-SDK pattern.
 
 from __future__ import annotations
 
-import os
 from datetime import date
 from typing import Any
 
-from langchain.agents import create_agent
-from langchain_anthropic import ChatAnthropic
-from langchain_core.tools import tool
-
 from agento11y import Client
 from agento11y_langchain import with_agento11y_langchain_callbacks
+from langchain.agents import create_agent
+from langchain.chat_models import init_chat_model
+from langchain_core.tools import tool
 
 from .weather import known_cities, lookup_forecast
-
 
 SYSTEM_PROMPT_TEMPLATE = (
     "You are a concise weather assistant. Only answer weather questions. "
@@ -53,15 +50,7 @@ def get_weather(city: str, date: str) -> str:
 
 
 def build_agent(model_name: str) -> Any:
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        raise RuntimeError("ANTHROPIC_API_KEY must be set before building the agent.")
-
-    llm = ChatAnthropic(
-        model_name=model_name,
-        temperature=0,
-        timeout=None,
-        stop=None,
-    )
+    llm = init_chat_model(model_name)
     return create_agent(
         model=llm,
         tools=[get_weather],
@@ -101,11 +90,7 @@ def _final_text(result: Any) -> str:
         if isinstance(content, str) and content.strip():
             return content
         if isinstance(content, list):
-            parts = [
-                part.get("text", "")
-                for part in content
-                if isinstance(part, dict) and part.get("type") == "text"
-            ]
+            parts = [part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text"]
             joined = "".join(parts).strip()
             if joined:
                 return joined

@@ -24,6 +24,7 @@ Both LLM calls run under the same `conversation_id`, so they land grouped togeth
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/)
 - An `ANTHROPIC_API_KEY`
+- Optionally, an `OPENAI_API_KEY` and `AGENT_MODEL=gpt-4.1-mini` to use an OpenAI agent. The direct-SDK classifier still uses Anthropic.
 
 ## Setup
 
@@ -86,12 +87,12 @@ See `[.env.example](./.env.example)`.
 
 | Variable                           | Purpose                                                                                                                               |
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `ANTHROPIC_API_KEY`                | Required. Used by both the agent and the classifier.                                                                                  |
+| `ANTHROPIC_API_KEY`                | Required for the classifier and for Anthropic agents.                                                                                  |
 | `AGENTO11Y_ENDPOINT`                   | API URL from Agent Observability → Configuration. Required for Grafana Cloud.                                                            |
 | `AGENTO11Y_AUTH_TENANT_ID`             | Numeric instance ID. Sent as `X-Scope-OrgID` and used as basic-auth user.                                                             |
 | `AGENTO11Y_AUTH_TOKEN`                 | Cloud Access Policy Token (`glc_…`) with `sigil:write` scope. Required for Cloud.                                                     |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`      | OTLP target for traces + metrics. Use the Grafana Cloud OTLP gateway URL or your collector endpoint.                                  |
 | `OTEL_EXPORTER_OTLP_INSECURE`      | Set only when your collector endpoint explicitly requires plaintext gRPC.                                                             |
 | `OTEL_SERVICE_NAME`                | Service name tag on spans / metrics.                                                                                                  |
-| `AGENT_MODEL` / `CLASSIFIER_MODEL` | Anthropic model IDs.                                                                                                                  |
+| `AGENT_MODEL` / `CLASSIFIER_MODEL` | Agent model ID (Anthropic or OpenAI) / Anthropic classifier model ID.                                                                                                                  |
 
