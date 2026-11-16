@@ -1,9 +1,12 @@
 """Real message coverage for async graph callbacks and concurrent roots."""
 
 import asyncio
+import inspect
 from uuid import uuid4
 
-from agento11y_langgraph import Agento11yAsyncLangGraphHandler
+import pytest
+from agento11y.client import GenerationRecorder
+from agento11y_langgraph import Agento11yAsyncLangGraphHandler, Agento11yLangGraphHandler
 from langchain_core.messages import AIMessageChunk, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGenerationChunk, LLMResult
 from opentelemetry import trace
@@ -11,6 +14,38 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from test_langgraph_handler import _CapturingExporter, _new_client
+
+
+@pytest.mark.parametrize("handler_type", [Agento11yLangGraphHandler, Agento11yAsyncLangGraphHandler])
+def test_graph_forwards_non_text_chunks(monkeypatch, handler_type):
+    client = _new_client(_CapturingExporter())
+    handler = handler_type(client=client)
+    times = []
+    monkeypatch.setattr(GenerationRecorder, "set_first_token_at", lambda self, timestamp: times.append(timestamp))
+    run_id = uuid4()
+    chunk = ChatGenerationChunk(
+        message=AIMessageChunk(content=[], tool_call_chunks=[{"name": "add", "id": "call_add", "args": "", "index": 0}])
+    )
+
+    async def run():
+        for callback, args, kwargs in [
+            (
+                handler.on_chat_model_start,
+                ({"name": "ChatAnthropic"}, [[HumanMessage(content="add")]]),
+                {"invocation_params": {"model": "claude-haiku-4-5", "streaming": True}},
+            ),
+            (handler.on_llm_new_token, ("",), {"chunk": chunk}),
+            (handler.on_llm_error, (RuntimeError("stream interrupted"),), {}),
+        ]:
+            result = callback(*args, run_id=run_id, **kwargs)
+            if inspect.isawaitable(result):
+                await result
+        assert len(times) == 1
+
+    try:
+        asyncio.run(run())
+    finally:
+        client.shutdown()
 
 
 def test_async_graph_chunks_tool_ids_and_isolated_parents():

@@ -152,11 +152,37 @@ def test_thinking_and_tool_use_blocks(recording, normalized):
     client.flush()
     generation = exporter.requests[0].generations[0]
     for mapped in [generation.input[0], generation.output[0]]:
+        assert [p.kind.value for p in mapped.parts] == ["thinking", "text", "tool_call"]
         assert [p.thinking for p in mapped.parts if p.kind.value == "thinking"] == ["Use addition."]
         calls = [p.tool_call for p in mapped.parts if p.tool_call]
         assert len(calls) == 1
         assert calls[0].id == "call_add"
         assert calls[0].input_json == b'{"a": 1, "b": 2}'
+
+
+def test_interleaved_blocks_preserve_order_and_normalized_tool_arguments(recording):
+    handler, client, exporter, _, _ = recording
+    message = AIMessage(
+        content=[
+            {"type": "thinking", "thinking": "First step."},
+            {"type": "text", "text": "Before."},
+            {"type": "tool_use", "id": "call_add", "name": "add", "input": {"a": 0}},
+            {"type": "text", "text": "After."},
+            {"type": "thinking", "thinking": "Next step."},
+        ],
+        tool_calls=[{"id": "call_add", "name": "add", "args": {"a": 1, "b": 2}}],
+    )
+    run = uuid4()
+    handler.on_chat_model_start(
+        {"name": "ChatAnthropic"}, [[message]], run_id=run, invocation_params={"model": "claude-haiku-4-5"}
+    )
+    handler.on_llm_end(LLMResult(generations=[[ChatGeneration(message=message)]]), run_id=run)
+    client.flush()
+    generation = exporter.requests[0].generations[0]
+    for mapped in [generation.input[0], generation.output[0]]:
+        assert [p.kind.value for p in mapped.parts] == ["thinking", "text", "tool_call", "text", "thinking"]
+        assert [p.text for p in mapped.parts if p.kind.value == "text"] == ["Before.", "After."]
+        assert mapped.parts[2].tool_call.input_json == b'{"a": 1, "b": 2}'
 
 
 def test_streamed_content_blocks(recording):

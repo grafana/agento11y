@@ -524,18 +524,29 @@ class Agento11yFrameworkHandlerBase:
             request_provider=provider_name,
         )
 
-    def _on_llm_new_token(self, *, token: str | list[Any], run_id: UUID) -> None:
+    def _on_llm_new_token(self, *, token: str | list[Any], run_id: UUID, chunk: Any = None) -> None:
         run_state = self._runs.get(str(run_id))
         if run_state is None:
             return
 
-        if not isinstance(token, str):
-            token = "".join(item if isinstance(item, str) else _as_str(_read(item, "text")) for item in token)
-        if token.strip() == "":
+        message = _read(chunk, "message")
+        content = token or _read(message, "content")
+        blocks = [content] if isinstance(content, str) else _as_list(content)
+        deltas = blocks + _as_list(_read(message, "tool_call_chunks"))
+        if not any(
+            block.strip()
+            if isinstance(block, str)
+            else any(
+                _read(block, key)
+                for key in ("text", "thinking", "reasoning", "partial_json", "name", "id", "args", "input")
+            )
+            for block in deltas
+        ):
             return
 
-        if run_state.capture_outputs:
-            run_state.output_chunks.append(token)
+        text = "".join(block if isinstance(block, str) else _as_str(_read(block, "text")) for block in blocks)
+        if run_state.capture_outputs and text.strip():
+            run_state.output_chunks.append(text)
 
         if not run_state.first_token_recorded:
             run_state.first_token_recorded = True
@@ -1657,25 +1668,33 @@ def _map_generation_candidate_message(candidate: Any) -> Message | None:
 def _map_framework_message(message: Any) -> Message | None:
     parts: list[Part] = []
 
-    text = _extract_message_text(message)
-    if text != "":
-        parts.append(Part(kind=PartKind.TEXT, text=text))
-
     tool_calls = _as_list(_read(message, "tool_calls"))
-    for block in _as_list(_read(message, "content")):
+    calls_by_id = {_as_str(_read(call, "id")): call for call in tool_calls if _as_str(_read(call, "id"))}
+    recorded_call_ids: set[str] = set()
+    content = _read(message, "content")
+    blocks = content if isinstance(content, list) else [content]
+    for block in blocks:
         if _read(block, "type") == "thinking":
             thinking = _as_str(_read(block, "thinking"))
             if thinking:
                 parts.append(Part(kind=PartKind.THINKING, thinking=thinking))
-        elif _read(block, "type") == "tool_use" and not tool_calls:
-            tool_call_part = _map_langchain_tool_call_part(block)
+        elif _read(block, "type") == "tool_use":
+            call_id = _as_str(_read(block, "id"))
+            tool_call_part = _map_langchain_tool_call_part(calls_by_id.get(call_id, block))
             if tool_call_part is not None:
                 parts.append(tool_call_part)
+                if call_id:
+                    recorded_call_ids.add(call_id)
+        else:
+            text = _extract_message_text({"content": block})
+            if text:
+                parts.append(Part(kind=PartKind.TEXT, text=text))
 
     for tool_call in tool_calls:
-        tool_call_part = _map_langchain_tool_call_part(tool_call)
-        if tool_call_part is not None:
-            parts.append(tool_call_part)
+        if _as_str(_read(tool_call, "id")) not in recorded_call_ids:
+            tool_call_part = _map_langchain_tool_call_part(tool_call)
+            if tool_call_part is not None:
+                parts.append(tool_call_part)
 
     for tool_result in _as_list(_read(message, "tool_results")):
         tool_result_part = _map_framework_tool_result_part(tool_result)
