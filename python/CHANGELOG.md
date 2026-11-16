@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.23.0] - 2026-11-16
+
+### Bug Fixes
+
+- **langchain**: support streamed tool calls, usage, and trace parenting (#1113)
+- **go,js,python**: apply content capture modes to workflow steps (#1110)
+- **deps**: update certifi to 2026.10.19 (#1060)
+- **security/low/python**: update dependency setuptools to v84 [security] (#1056)
+- **security/medium/python**: update dependency opentelemetry-api to v1.45.2 [security] (#1040)
+- **python**: preserve Bedrock provider labels in framework callbacks (#1015)
+
 ## [0.22.0] - 2026-10-29
 
 ### Features
