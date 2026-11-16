@@ -681,12 +681,28 @@ def test_nested_graph_root_without_its_own_thread_id_joins_the_active_conversati
     outer_root, outer_step, inner_root, inner_step = uuid4(), uuid4(), uuid4(), uuid4()
 
     _start_root_with_step(handler, outer_root, outer_step, "customer-a")
-    # A graph that the outer node invokes with its own callbacks starts as a new root.
+    # A run that starts outside the outer run's callback context, such as a
+    # Strands sub-agent or a graph started in its own thread, is a new root.
     _start_root_with_step(handler, inner_root, inner_step, None)
     for run_id in (inner_step, inner_root, outer_step, outer_root):
         handler._on_chain_end(run_id=run_id, outputs={})
 
     assert [step.conversation_id for step in client.workflow_steps] == ["customer-a", "customer-a"]
+
+
+def test_root_without_its_own_thread_id_does_not_guess_between_active_conversations() -> None:
+    handler, client = _make_handler()
+    root_a, step_a, root_b, step_b, inner_root, inner_step = (uuid4() for _ in range(6))
+
+    _start_root_with_step(handler, root_a, step_a, "customer-a")
+    _start_root_with_step(handler, root_b, step_b, "customer-b")
+    # Either run could have started this one, so it keeps its own conversation.
+    _start_root_with_step(handler, inner_root, inner_step, None)
+    for run_id in (inner_step, inner_root, step_a, step_b, root_a, root_b):
+        handler._on_chain_end(run_id=run_id, outputs={})
+
+    inner = next(step for step in client.workflow_steps if step.conversation_id not in ("customer-a", "customer-b"))
+    assert inner.conversation_id.startswith("agento11y:framework:langgraph:")
 
 
 def test_graph_state_is_cleaned_up_after_root_ends() -> None:

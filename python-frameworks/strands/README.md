@@ -103,6 +103,12 @@ agent("Remember my timezone is UTC+1.", invocation_state={"conversation_id": "cu
 agent("What timezone did I give you?", invocation_state={"conversation_id": "customer-42"})
 ```
 
+A sub-agent called from a tool starts its own invocation, usually with an empty `invocation_state`.
+When it uses the same hook provider and has no conversation key, it joins the conversation of the
+active invocation. If several invocations with different keys are active on the hook provider, the
+sub-agent gets its own conversation instead. Pass the outer `conversation_id` to the sub-agent to
+keep it in the outer conversation.
+
 ## Metadata and Lineage
 
 Required framework tags:

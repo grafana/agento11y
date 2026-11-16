@@ -770,20 +770,20 @@ class Agento11yFrameworkHandlerBase:
                 # Nested graph invocation (e.g. sub-agent invoked inside a tool):
                 # inherit the conversation_id from the already-active graph root
                 # so all sub-graphs appear in the same Agent Observability conversation.
-                # A root with its own conversation key keeps it: the handler
-                # cannot tell a nested graph from an unrelated run that overlaps
-                # with it on the same handler.
-                if (
-                    self._graph_root_run_keys
-                    and self._graph_run_conversation_id
-                    and not self._has_own_conversation_key(run_key, serialized, callback_kwargs)
+                # The handler cannot tell a nested run from an unrelated run that
+                # overlaps with it, so a root with its own conversation key keeps
+                # it, and a root without one inherits only while a single
+                # conversation is active.
+                if self._graph_root_run_keys and not self._has_own_conversation_key(
+                    run_key, serialized, callback_kwargs
                 ):
-                    existing_root = next(
-                        (r for r in self._graph_root_run_keys if r in self._graph_run_conversation_id),
-                        None,
-                    )
-                    if existing_root is not None:
-                        self._graph_run_conversation_id[run_key] = self._graph_run_conversation_id[existing_root]
+                    active_conversation_ids = {
+                        self._graph_run_conversation_id[root]
+                        for root in self._graph_root_run_keys
+                        if root in self._graph_run_conversation_id
+                    }
+                    if len(active_conversation_ids) == 1:
+                        self._graph_run_conversation_id[run_key] = active_conversation_ids.pop()
                 self._graph_root_run_keys.add(run_key)
                 return
             # Only promote direct children of a graph root to workflow steps.
