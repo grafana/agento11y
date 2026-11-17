@@ -9,6 +9,7 @@ import type { Redactor } from "./mappers.js";
 import { buildBuiltinTags } from "./tags.js";
 import { emitToolSpans } from "./toolSpans.js";
 import {
+  copyOfferedTools,
   mapNativeCompactionGeneration,
   mapNativeGeneration,
   type NativeBlock,
@@ -18,9 +19,11 @@ import {
   type NativeEventOf,
   type NativeLocation,
   type NativeModel,
+  type NativeOfferedTool,
   type NativeTool,
   nativeAgentName,
   nativeOutput,
+  nativeToolDefinitions,
   nativeToolRecords,
 } from "./v2-mappers.js";
 import type { GuardRedactions } from "./v2-redactions.js";
@@ -40,6 +43,7 @@ interface Assistant {
   streamedAt?: number;
   input: Message[];
   systemPrompt?: string;
+  tools?: NativeOfferedTool[];
   blocks: NativeBlock[];
   toolObservations: Map<string, string | null>;
   parent?: string;
@@ -51,6 +55,7 @@ interface Assistant {
 interface SessionState {
   history: Message[];
   systemPrompt?: string;
+  tools?: NativeOfferedTool[];
   inbox: Map<string, InboxItem>;
   assistant?: Assistant;
   compaction?: NativeCompactionStart & { seq: number };
@@ -114,6 +119,7 @@ export function createNativeCapture({
 }: NativeCaptureOptions): {
   handleEvent(event: NativeEvent): void;
   observeSystemPrompt(sessionID: string, systemPrompt: string): void;
+  observeToolDefinitions(sessionID: string, tools: unknown): void;
   observeToolExecution(observation: NativeToolObservation): void;
   stopObservingTools(): void;
   shutdown(): Promise<void>;
@@ -222,6 +228,14 @@ export function createNativeCapture({
             assistant.title === undefined
               ? undefined
               : redactions.title(sessionID, assistant.title),
+          // Guards don't rewrite tool definitions. Text a guard removed from the request is removed here too.
+          tools: assistant.tools?.map((tool) => ({
+            ...tool,
+            description: redactions.text(sessionID, tool.description),
+            ...(tool.inputSchemaJSON !== undefined && {
+              inputSchemaJSON: redactions.text(sessionID, tool.inputSchemaJSON),
+            }),
+          })),
         }
       : assistant;
     if (drop) redactions?.forget(sessionID);
@@ -270,15 +284,11 @@ export function createNativeCapture({
         isSubagent: assistant.subagent,
       }),
       metadata: assistant.lineage,
-      tools: [
-        ...new Set(
-          assistant.blocks.flatMap((block) =>
-            block.type === "tool" ? [block.name] : [],
-          ),
-        ),
-      ]
-        .sort()
-        .map((name) => ({ name, type: "function" })),
+      tools: nativeToolDefinitions(
+        config.contentCapture !== "metadata_only" ? exported.tools : undefined,
+        assistant.blocks,
+        (text) => redactor.redact(text),
+      ),
     };
     // Host failure messages may contain secrets; retain only the structured error type.
     const error =
@@ -580,6 +590,7 @@ export function createNativeCapture({
           startedAt: event.data.started,
           input: structuredClone(session.history),
           systemPrompt: session.systemPrompt,
+          tools: session.tools,
           blocks: [],
           toolObservations: new Map(),
           parent: session.lastGeneration ?? session.spawningGeneration,
@@ -598,6 +609,7 @@ export function createNativeCapture({
         };
         // Only consume here: older async terminal/retry events can follow the next context hook.
         session.systemPrompt = undefined;
+        session.tools = undefined;
         return;
       }
       case "session.execution.succeeded":
@@ -716,6 +728,11 @@ export function createNativeCapture({
     // Pinned hosts call context before step.started; test-hosts.mjs guards this ordering.
     getSession(sessionID).systemPrompt = systemPrompt;
   }
+  function observeToolDefinitions(sessionID: string, tools: unknown): void {
+    if (closed || draining || config.contentCapture === "metadata_only") return;
+    // Same ordering as observeSystemPrompt: context runs before step.started.
+    getSession(sessionID).tools = copyOfferedTools(tools);
+  }
   function observeToolExecution(observation: NativeToolObservation): void {
     if (closed || !observingTools) return;
     const { sessionID, messageID, id, tool, agent, skillName } = observation;
@@ -754,6 +771,7 @@ export function createNativeCapture({
   return {
     handleEvent,
     observeSystemPrompt,
+    observeToolDefinitions,
     observeToolExecution,
     stopObservingTools,
     shutdown,

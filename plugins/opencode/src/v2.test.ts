@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   handleEvent: vi.fn(),
   observeToolExecution: vi.fn(),
   observeSystemPrompt: vi.fn(),
+  observeToolDefinitions: vi.fn(),
   stopObservingTools: vi.fn(),
   registerGuards: vi.fn(),
   registerFinalChecks: vi.fn(),
@@ -93,6 +94,7 @@ describe("native setup ownership", () => {
       handleEvent: mocks.handleEvent,
       observeToolExecution: mocks.observeToolExecution,
       observeSystemPrompt: mocks.observeSystemPrompt,
+      observeToolDefinitions: mocks.observeToolDefinitions,
       stopObservingTools: mocks.stopObservingTools,
       shutdown: mocks.captureShutdown,
     });
@@ -122,18 +124,24 @@ describe("native setup ownership", () => {
       hook.mock.invocationCallOrder[0]!,
     );
     const observe = registration![1];
+    const tools = {
+      bash: { description: "Run a command", input: { type: "object" } },
+    };
     const event = {
       sessionID: "s",
       system: [{ text: "agent prompt" }, { text: "instructions" }],
+      tools,
     };
     await observe(event as never);
     expect(mocks.observeSystemPrompt).toHaveBeenCalledWith(
       "s",
       "agent prompt\n\ninstructions",
     );
+    expect(mocks.observeToolDefinitions).toHaveBeenCalledWith("s", tools);
     await cleanup?.();
     await observe(event as never);
     expect(mocks.observeSystemPrompt).toHaveBeenCalledOnce();
+    expect(mocks.observeToolDefinitions).toHaveBeenCalledOnce();
   });
 
   it.each(
@@ -164,10 +172,13 @@ describe("native setup ownership", () => {
     await cleanup?.();
   });
 
-  it("never propagates capture errors into the model request", async () => {
+  it.each([
+    "observeSystemPrompt",
+    "observeToolDefinitions",
+  ] as const)("never propagates a failing %s into the model request", async (failing) => {
     const { context } = host();
     const cleanup = await setupV2(context);
-    mocks.observeSystemPrompt.mockImplementation(() => {
+    mocks[failing].mockImplementation(() => {
       throw new Error("capture failed");
     });
     const observe = vi
@@ -176,9 +187,16 @@ describe("native setup ownership", () => {
       .at(-1)![1];
     await expect(
       Promise.resolve().then(() =>
-        observe({ sessionID: "s", system: [{ text: "prompt" }] } as never),
+        observe({
+          sessionID: "s",
+          system: [{ text: "prompt" }],
+          tools: {},
+        } as never),
       ),
     ).resolves.toBeUndefined();
+    // One failing observation does not skip the other.
+    expect(mocks.observeSystemPrompt).toHaveBeenCalledOnce();
+    expect(mocks.observeToolDefinitions).toHaveBeenCalledOnce();
     await cleanup?.();
   });
 

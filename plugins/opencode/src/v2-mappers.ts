@@ -5,6 +5,7 @@ import type {
   Message,
   MessagePart,
   TokenUsage,
+  ToolDefinition,
 } from "@grafana/agento11y";
 import type { Plugin } from "@opencode/plugin";
 import type { Agento11yOpencodeConfig } from "./config.js";
@@ -368,6 +369,84 @@ export function mapNativeCompactionGeneration(
       error: terminalEvent.data.error.type,
     }),
   };
+}
+
+/** A tool the host offered the model for one step. */
+export interface NativeOfferedTool {
+  name: string;
+  description: string;
+  /** The input schema as JSON. Absent when the host sent none or it could not be encoded. */
+  inputSchemaJSON?: string;
+}
+
+/**
+ * Copies the tool set from a `context` hook payload. The payload belongs to the
+ * host, and a later hook can change it, so capture keeps only this copy.
+ */
+export function copyOfferedTools(
+  tools: unknown,
+): NativeOfferedTool[] | undefined {
+  if (tools === null || typeof tools !== "object") return undefined;
+  const offered: NativeOfferedTool[] = [];
+  for (const [name, tool] of Object.entries(tools)) {
+    // The SDK rejects the whole generation for a blank tool name.
+    if (name.trim().length === 0 || tool === null || typeof tool !== "object")
+      continue;
+    const { description, input } = tool as {
+      description?: unknown;
+      input?: unknown;
+    };
+    let inputSchemaJSON: string | undefined;
+    try {
+      const encoded = JSON.stringify(input);
+      if (typeof encoded === "string") inputSchemaJSON = encoded;
+    } catch {
+      // The tool is still listed without a schema.
+    }
+    offered.push({
+      name,
+      description: typeof description === "string" ? description : "",
+      ...(inputSchemaJSON !== undefined && { inputSchemaJSON }),
+    });
+  }
+  return offered;
+}
+
+/**
+ * The tool definitions for one step, sorted by name: every tool the host
+ * offered the model, with its description and input schema, plus a name-only
+ * entry for each called tool that was not offered. Without an offered set
+ * (metadata_only, or no `context` hook observed) the list holds the called
+ * tools only. `redact` runs on each description and schema. A schema that is
+ * not valid JSON after redaction is left out, never exported unredacted.
+ */
+export function nativeToolDefinitions(
+  offered: readonly NativeOfferedTool[] | undefined,
+  blocks: readonly NativeBlock[],
+  redact: (text: string) => string,
+): ToolDefinition[] {
+  const tools = new Map<string, ToolDefinition>();
+  for (const tool of offered ?? []) {
+    const definition: ToolDefinition = { name: tool.name, type: "function" };
+    if (tool.description) definition.description = redact(tool.description);
+    if (tool.inputSchemaJSON !== undefined) {
+      const schema = redact(tool.inputSchemaJSON);
+      try {
+        JSON.parse(schema);
+        definition.inputSchemaJSON = schema;
+      } catch {
+        // Redaction split a JSON escape.
+      }
+    }
+    tools.set(tool.name, definition);
+  }
+  for (const block of blocks) {
+    if (block.type === "tool" && !tools.has(block.name))
+      tools.set(block.name, { name: block.name, type: "function" });
+  }
+  return [...tools.values()].sort((left, right) =>
+    left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
+  );
 }
 
 export function nativeToolRecords(

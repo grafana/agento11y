@@ -1070,6 +1070,28 @@ async function realHost(
       );
       [generation] = capture.state.generations;
     }
+    if (version.startsWith("2.")) {
+      // The context hook's tool set is the one the final model request offered.
+      const offered = (capture.state.models.at(-1)?.tools ?? [])
+        .map((tool) => tool.function?.name)
+        .sort();
+      assert(
+        offered.length > 0,
+        `Host ${version}: the request offered no tools`,
+      );
+      assert.deepEqual(
+        generation.tools.map((tool) => tool.name).sort(),
+        offered,
+        `Host ${version}: exported tools differ from the offered tools`,
+      );
+      for (const tool of generation.tools) {
+        assert(
+          tool.description,
+          `Host ${version}: ${tool.name} lacks a description`,
+        );
+        JSON.parse(Buffer.from(tool.input_schema_json, "base64").toString());
+      }
+    }
     assert(
       generation.id && generation.conversation_id,
       "Generation identity/session missing",
