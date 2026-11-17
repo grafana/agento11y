@@ -125,6 +125,8 @@ To re-enter credentials later, run `agento11y login`. It asks where sessions go 
 
 ## Experimental OTel generation export
 
+This launcher transport option is separate from ingestion of third-party OpenTelemetry GenAI spans. Framework OTel instrumentation does not need this option.
+
 HTTP remains the default. To export generations as OpenTelemetry (OTel) spans, set these values in the environment or `~/.config/agento11y/config.env`:
 
 ```dotenv
@@ -253,6 +255,23 @@ When a plugin ships content, it redacts known secret formats first, using the sa
 
 You are acting as a coding agent inside the user's repository. Your goal is to add or improve Grafana Agent observability instrumentation with minimal, safe changes.
 
+## Choose OpenTelemetry or the Grafana SDK
+
+Agent Observability accepts compatible OpenTelemetry GenAI spans. The Grafana SDK is not required to populate conversations, prompts, responses, tool calls, or token usage. Metrics alone do not carry conversation content.
+
+Before adding an SDK, check whether the application already emits compatible GenAI spans. Follow [Instrument agents with OpenTelemetry](https://grafana.com/docs/grafana-cloud/observe-and-act/agent-observability/get-started/opentelemetry/):
+
+- Configure a tracer provider and exporter with the stack's OTLP connection details and `traces:write` permission.
+- Opt in with `agento11y.record=true` on the resource or span. Preserve existing resource attributes. A span-level `false` excludes that span.
+- Include `gen_ai.operation.name` (`chat`, `generate_content`, `text_completion`, or `invoke_agent`), `gen_ai.provider.name`, and `gen_ai.request.model`.
+- Capture `gen_ai.input.messages` and `gen_ai.output.messages` as span attributes in the OTel GenAI message format. Content sent only as OTLP logs does not populate conversations.
+- Reuse `gen_ai.conversation.id` across calls in one conversation; without it, grouping falls back to the trace. Set `gen_ai.agent.name` on inference spans.
+- Preserve attributes through collectors and check sampling. Redact sensitive content before export.
+
+Do not add a second generation exporter for calls already recorded through this path. A framework's OTel exporter is not proof of compatibility; verify its actual span attributes and content. A missing Grafana framework adapter does not mean OTel is unsupported.
+
+Use the Grafana SDK for its provider/framework integrations, manual recorders, hooks, or experiment APIs as needed. The SDK configuration and examples below describe that path, not prerequisites for third-party OpenTelemetry ingestion.
+
 ## Environment
 
 The agento11y SDK reads these `AGENTO11Y_*` env vars automatically. Set them before the SDK starts:
@@ -314,7 +333,7 @@ Capture modes do not strip `tags`/`metadata`/`user_id`; do not put secrets there
 ## Mission
 
 1. Find AI generation and tool/agent execution paths in the user's code.
-2. Add agento11y instrumentation using the local language SDK where possible.
+2. Reuse compatible OpenTelemetry instrumentation when present, or add the local Grafana language SDK. Avoid duplicate generation recording.
 3. Preserve behavior and keep diffs small.
 4. Add or update tests for changed instrumentation behavior.
 5. Explain what was instrumented and why.
@@ -333,17 +352,19 @@ Return:
 
 ## Agent Observability architecture and ingest model (must follow)
 
-- Agent Observability uses generation-first ingest:
+- Compatible third-party GenAI spans reach Agent Observability through the Grafana Cloud OTLP endpoint; no custom generation-export call is required.
+- The Grafana SDK's direct generation-export path uses:
   - gRPC: `agento11y.v1.GenerationIngestService.ExportGenerations`
-  - HTTP parity: `POST /api/v1/generations:export`
-- Traces/metrics go through OTel collector/Alloy or direct OTLP, **not** through Agent Observability ingest.
+  - HTTP parity: `POST /api/v1/generations:export` (use HTTP for Grafana Cloud).
+- Send application traces and metrics through Alloy, an OTel Collector, or the Cloud OTLP endpoint. Do not send OTLP payloads to the SDK's generation-export HTTP endpoint.
+- Generation cost is calculated at ingest from reported usage and the applicable model price, independently of client token metrics. Client metrics still supply metrics-backed latency and tool panels.
 - Required generation modes:
   - non-stream: `SYNC`
   - stream: `STREAM`
 - Raw provider artifacts are default OFF and only enabled for explicit debug opt-in.
 - Set stable `agent_name` and `agent_version` on generations and framework handlers. `agent_version` is optional for generation ingest, but it is required for version-level Performance charts because Agent Observability joins Prometheus metrics by the SDK-emitted `gen_ai.agent.version` label.
 
-## OTel setup (required)
+## OTel provider setup for the Grafana SDK
 
 The agento11y SDK internally emits OTel spans and metrics (`gen_ai.client.operation.duration`, `gen_ai.client.token.usage`, `gen_ai.client.time_to_first_token`, `gen_ai.client.tool_calls_per_operation`). **Without a configured TracerProvider and MeterProvider these go to the default no-op and are silently lost.**
 
@@ -401,14 +422,18 @@ defer mp.Shutdown(ctx)
 #### JS/TS
 ```typescript
 import { metrics } from '@opentelemetry/api';
+import { resourceFromAttributes } from '@opentelemetry/resources';
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
 import { BatchSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { MeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
 import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-http';
 
-const tp = new NodeTracerProvider({ resource });
-tp.addSpanProcessor(new BatchSpanProcessor(new OTLPTraceExporter()));
+const resource = resourceFromAttributes({ 'service.name': 'my-app' });
+const tp = new NodeTracerProvider({
+  resource,
+  spanProcessors: [new BatchSpanProcessor(new OTLPTraceExporter())],
+});
 tp.register();
 
 const mp = new MeterProvider({

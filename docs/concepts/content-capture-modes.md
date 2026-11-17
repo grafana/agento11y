@@ -4,6 +4,8 @@ Content capture decides which fields the agento11y SDK includes in exported gene
 
 Each SDK README links here for language-specific examples.
 
+These modes configure Grafana SDKs and plugins, not third-party OpenTelemetry instrumentation. For the [OpenTelemetry ingestion path](./otel-setup.md#send-conversations-through-opentelemetry), configure content capture and redaction in your instrumentation before export. Prompts and responses must be present in GenAI span attributes to populate conversation content. Metrics or OTLP logs alone are not a substitute.
+
 ## Modes
 
 | Mode | Meaning |
@@ -75,6 +77,8 @@ See [client metrics](./tool-call-vs-tool-execution.md#client-metrics) for applic
 The local forwarder also strips the three private attributes from spans and span events in reduced modes.
 
 ### Experimental OTel generation export
+
+This SDK/launcher transport option is separate from ingestion of third-party OpenTelemetry GenAI spans. You do not need to enable it to use an existing framework's OTel instrumentation.
 
 OTel generation export sends generations as spans. See the [CLI guide](../../plugins/agento11y/README.md#experimental-otel-generation-export) for setup and supported agents.
 

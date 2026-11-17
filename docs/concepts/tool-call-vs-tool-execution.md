@@ -9,6 +9,8 @@ Agent Observability distinguishes between two related but distinct concepts when
 | **Tool Call** | The LLM's request to invoke a tool | Part of generation output messages | `MessagePart.toolCall(...)` |
 | **Tool Execution** | Your code actually running the tool | Separate OTel span | `startToolExecution(...)` |
 
+The same distinction applies to [OpenTelemetry ingestion](./otel-setup.md#send-conversations-through-opentelemetry). Compatible GenAI message attributes carry tool-call and tool-result parts in a generation; a separate `execute_tool` span records execution timing. A tool span alone does not create a generation or reconstruct missing conversation messages. Keep trace context and tool-call IDs consistent when recording both.
+
 ## Tool Call (Message Part)
 
 A **tool call** is what the LLM outputs when it decides it wants to use a tool. It's part of the generation's message content—the model's **request** to invoke a tool.
@@ -27,7 +29,7 @@ Message output = new Message()
 
 In the Agent Observability UI:
 - Shows as **"Call weather"** in the conversation view
-- Input/output content is visible because it's stored in the generation payload
+- Captured arguments and tool results are visible when the generation messages include them; a tool call alone does not contain its execution result
 - **Not** listed in the Tools tab (it's embedded in the generation)
 
 ## Tool Execution (Span)

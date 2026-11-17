@@ -2,6 +2,8 @@
 
 `Grafana.Agento11y` extends OpenTelemetry-style instrumentation with normalized AI generation records.
 
+Already emitting OpenTelemetry GenAI spans? Agent Observability can ingest compatible spans, including conversation content, without this SDK. Refer to [Choose an instrumentation path](../docs/concepts/otel-setup.md#choose-an-instrumentation-path). The SDK setup below describes direct generation export and companion telemetry.
+
 ## Packages
 
 - `Grafana.Agento11y`: core runtime (`Agento11yClient`, generation/tool recorders, generation export)
