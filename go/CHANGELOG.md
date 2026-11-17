@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.20.1] - 2026-11-17
+
+### Bug Fixes
+
+- **go,js,python**: apply content capture modes to workflow steps (#1110)
+
 ## [0.20.0] - 2026-10-29
 
 ### Features
