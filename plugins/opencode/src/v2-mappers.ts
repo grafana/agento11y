@@ -5,6 +5,7 @@ import type {
   Message,
   MessagePart,
   TokenUsage,
+  ToolDefinition,
 } from "@grafana/agento11y";
 import type { Plugin } from "@opencode/plugin";
 import type { Agento11yOpencodeConfig } from "./config.js";
@@ -368,6 +369,105 @@ export function mapNativeCompactionGeneration(
       error: terminalEvent.data.error.type,
     }),
   };
+}
+
+/** A tool the host offered the model for one step. */
+export interface NativeOfferedTool {
+  name: string;
+  description: string;
+  /** The input schema as JSON. Absent unless the host sent a schema object that could be encoded. */
+  inputSchemaJSON?: string;
+}
+
+/**
+ * Copies the tool set from a `context` hook payload. The payload belongs to the
+ * host, and a later hook can change it, so capture keeps only this copy.
+ */
+export function copyOfferedTools(
+  tools: unknown,
+): NativeOfferedTool[] | undefined {
+  if (tools === null || typeof tools !== "object") return undefined;
+  const offered: NativeOfferedTool[] = [];
+  for (const [name, tool] of Object.entries(tools)) {
+    // The SDK rejects the whole generation for a blank tool name.
+    if (name.trim().length === 0 || tool === null || typeof tool !== "object")
+      continue;
+    const { description, input } = tool as {
+      description?: unknown;
+      input?: unknown;
+    };
+    let inputSchemaJSON: string | undefined;
+    // A tool input schema is a JSON object. Any other value is left out.
+    if (input !== null && typeof input === "object" && !Array.isArray(input)) {
+      try {
+        inputSchemaJSON = JSON.stringify(input);
+      } catch {
+        // The tool is still listed without a schema.
+      }
+    }
+    offered.push({
+      name,
+      description: typeof description === "string" ? description : "",
+      ...(inputSchemaJSON !== undefined && { inputSchemaJSON }),
+    });
+  }
+  return offered;
+}
+
+/**
+ * Redacts a schema in two passes. The first pass redacts each string value as
+ * plain text, because JSON escapes hide quotes, backslashes and newlines from
+ * the patterns. The second pass redacts the encoded document, so key/value
+ * patterns see member names next to their values. Returns undefined when the
+ * result is not valid JSON, so a schema is never exported unredacted.
+ */
+function redactSchemaJSON(
+  schemaJSON: string,
+  redact: (text: string) => string,
+): string | undefined {
+  try {
+    const values = JSON.stringify(JSON.parse(schemaJSON), (_key, value) =>
+      typeof value === "string" ? redact(value) : value,
+    );
+    const schema = redact(values);
+    JSON.parse(schema);
+    return schema;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The tool definitions for one step, sorted by name: every tool the host
+ * offered the model, with its description and input schema, plus a name-only
+ * entry for each called tool that was not offered. Without an offered set
+ * (metadata_only, or no `context` hook observed) the list holds the called
+ * tools only. `redact` runs on each description and on each schema, as
+ * `redactSchemaJSON` describes.
+ */
+export function nativeToolDefinitions(
+  offered: readonly NativeOfferedTool[] | undefined,
+  blocks: readonly NativeBlock[],
+  redact: (text: string) => string,
+): ToolDefinition[] {
+  const tools = new Map<string, ToolDefinition>();
+  for (const tool of offered ?? []) {
+    const definition: ToolDefinition = { name: tool.name, type: "function" };
+    if (tool.description) definition.description = redact(tool.description);
+    const schema =
+      tool.inputSchemaJSON === undefined
+        ? undefined
+        : redactSchemaJSON(tool.inputSchemaJSON, redact);
+    if (schema !== undefined) definition.inputSchemaJSON = schema;
+    tools.set(tool.name, definition);
+  }
+  for (const block of blocks) {
+    if (block.type === "tool" && !tools.has(block.name))
+      tools.set(block.name, { name: block.name, type: "function" });
+  }
+  return [...tools.values()].sort((left, right) =>
+    left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
+  );
 }
 
 export function nativeToolRecords(

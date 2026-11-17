@@ -248,6 +248,24 @@ describe("native v2 capture: real SDK golden and OTLP", () => {
           event.data.sessionID,
           `Agent system prompt\n\nPrefer concise answers; token: ${nativeFixture.secret}\n\nUse the observed repository context; DATABASE_PASSWORD=${nativeFixture.envSecret}`,
         );
+        capture.observeToolDefinitions(event.data.sessionID, {
+          read: {
+            description: "Read a file",
+            input: {
+              type: "object",
+              properties: { filePath: { type: "string" } },
+              required: ["filePath"],
+            },
+          },
+          bash: {
+            description: `Run a shell command; token: ${nativeFixture.secret}`,
+            input: {
+              type: "object",
+              properties: { command: { type: "string" } },
+              required: ["command"],
+            },
+          },
+        });
       }
       capture.handleEvent(event);
     }
@@ -358,7 +376,36 @@ describe("native v2 capture: real SDK golden and OTLP", () => {
       "opencode.settlement": "step.ended",
       cost_usd: 0.005,
     });
-    expect(turn.tools.map((tool: any) => tool.name)).toEqual(["bash"]);
+    // The context hook supplies the tools offered to the model, not only the called ones.
+    expect(turn.tools).toEqual(
+      contentCapture === "metadata_only"
+        ? [
+            {
+              name: "bash",
+              description: "",
+              type: "function",
+              input_schema_json: "",
+            },
+          ]
+        : [
+            {
+              name: "bash",
+              description: `Run a shell command; token: ${REDACTED}`,
+              type: "function",
+              input_schema_json: Buffer.from(
+                '{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}',
+              ).toString("base64"),
+            },
+            {
+              name: "read",
+              description: "Read a file",
+              type: "function",
+              input_schema_json: Buffer.from(
+                '{"type":"object","properties":{"filePath":{"type":"string"}},"required":["filePath"]}',
+              ).toString("base64"),
+            },
+          ],
+    );
     // The context hook supplies the composed agent prompt and instruction sources.
     expect(turn.system_prompt).toBe(
       contentCapture === "metadata_only"

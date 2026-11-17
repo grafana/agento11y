@@ -4,6 +4,7 @@ import type { Agento11yOpencodeConfig } from "./config.js";
 import { stableOpencodeCompactionGenerationId } from "./lineage.js";
 import { createRedactor } from "./redaction.js";
 import {
+  copyOfferedTools,
   mapNativeCompactionGeneration,
   mapNativeGeneration,
   mapNativeMessages,
@@ -12,8 +13,10 @@ import {
   type NativeCompactionStart,
   type NativeCompactionTerminal,
   type NativeEventOf,
+  type NativeOfferedTool,
   type NativeTokens,
   nativeOutput,
+  nativeToolDefinitions,
   nativeToolRecords,
 } from "./v2-mappers.js";
 import { nativeFixture } from "./v2-testdata.js";
@@ -796,5 +799,201 @@ describe("native Promise payload mapping", () => {
     ]);
     expect(records).toHaveLength(1);
     expect(records[0]).not.toHaveProperty("skillName");
+  });
+});
+
+describe("native offered tools", () => {
+  it.each([
+    { name: "an undefined payload", tools: undefined, expected: undefined },
+    { name: "a null payload", tools: null, expected: undefined },
+    { name: "a string payload", tools: "bash", expected: undefined },
+    { name: "an empty tool set", tools: {}, expected: [] },
+    {
+      name: "malformed entries",
+      tools: {
+        "": { description: "no name", input: {} },
+        "  ": { description: "blank name", input: {} },
+        read: null,
+        write: "not an object",
+        glob: { description: 42 },
+      },
+      expected: [{ name: "glob", description: "" }],
+    },
+    {
+      name: "a schema JSON cannot encode",
+      tools: { big: { description: "d", input: { maximum: 1n } } },
+      expected: [{ name: "big", description: "d" }],
+    },
+    {
+      name: "schemas that are not JSON objects",
+      tools: {
+        a: { description: "d", input: null },
+        b: { description: "d", input: "object" },
+        c: { description: "d", input: true },
+        d: { description: "d", input: [] },
+      },
+      expected: ["a", "b", "c", "d"].map((name) => ({
+        name,
+        description: "d",
+      })),
+    },
+    {
+      name: "a description and schema",
+      tools: {
+        bash: {
+          description: "Run a command",
+          input: {
+            type: "object",
+            properties: { command: { type: "string" } },
+          },
+        },
+      },
+      expected: [
+        {
+          name: "bash",
+          description: "Run a command",
+          inputSchemaJSON:
+            '{"type":"object","properties":{"command":{"type":"string"}}}',
+        },
+      ],
+    },
+  ])("copies $name", ({ tools, expected }) => {
+    expect(copyOfferedTools(tools)).toEqual(expected);
+  });
+
+  it("keeps its copy when the host changes the payload later", () => {
+    const input = { type: "object" };
+    const tools = { bash: { description: "Run a command", input } };
+    const copied = copyOfferedTools(tools);
+    tools.bash.description = "changed";
+    input.type = "string";
+    expect(copied).toEqual([
+      {
+        name: "bash",
+        description: "Run a command",
+        inputSchemaJSON: '{"type":"object"}',
+      },
+    ]);
+  });
+});
+
+describe("native tool definitions", () => {
+  const called = (...names: string[]): NativeBlock[] =>
+    names.map((name, index) => ({ type: "tool", id: `call-${index}`, name }));
+  const offered: NativeOfferedTool[] = [
+    {
+      name: "read",
+      description: "Read a file",
+      inputSchemaJSON: '{"type":"object"}',
+    },
+    { name: "bash", description: "", inputSchemaJSON: '{"type":"object"}' },
+  ];
+  const identity = (text: string) => text;
+
+  it.each([
+    {
+      name: "the called tools when no offered set was observed",
+      offered: undefined,
+      blocks: called("read", "invalid", "read"),
+      expected: [
+        { name: "invalid", type: "function" },
+        { name: "read", type: "function" },
+      ],
+    },
+    {
+      name: "the offered tools, sorted, plus called tools that were not offered",
+      offered,
+      blocks: [...blocks, ...called("invalid")],
+      expected: [
+        {
+          name: "bash",
+          type: "function",
+          inputSchemaJSON: '{"type":"object"}',
+        },
+        { name: "invalid", type: "function" },
+        {
+          name: "read",
+          type: "function",
+          description: "Read a file",
+          inputSchemaJSON: '{"type":"object"}',
+        },
+      ],
+    },
+    {
+      name: "no tools for an empty offered set and no calls",
+      offered: [],
+      blocks: [],
+      expected: [],
+    },
+  ])("lists $name", ({ offered, blocks, expected }) => {
+    expect(nativeToolDefinitions(offered, blocks, identity)).toEqual(expected);
+  });
+
+  it("redacts secrets in descriptions and schemas", () => {
+    const secret = "ghp_abcdefghijklmnopqrstuvwxyz1234567890";
+    const [tool] = nativeToolDefinitions(
+      [
+        {
+          name: "deploy",
+          description: `Deploy with token ${secret}`,
+          inputSchemaJSON: JSON.stringify({
+            type: "object",
+            properties: { token: { type: "string", default: secret } },
+          }),
+        },
+      ],
+      [],
+      (text) => redactor.redact(text),
+    );
+    expect(JSON.stringify(tool)).not.toContain(secret);
+    expect(tool?.description).toContain("[REDACTED");
+    expect(() => JSON.parse(tool?.inputSchemaJSON ?? "")).not.toThrow();
+    expect(tool?.inputSchemaJSON).toContain("[REDACTED");
+  });
+
+  it.each([
+    {
+      // JSON escapes the quotes, so only the plain-text pass over values sees the pair.
+      name: "a key/value pair quoted inside a string value",
+      schema: {
+        type: "object",
+        properties: {
+          body: { description: 'Example: {"password": "hunter2longsecret"}' },
+        },
+      },
+    },
+    {
+      // The value alone matches nothing, so only the pass over the encoded document sees its key.
+      name: "a value under a secret member name",
+      schema: { type: "object", password: "hunter2longsecret" },
+    },
+  ])("redacts $name in a schema", ({ schema }) => {
+    const [tool] = nativeToolDefinitions(
+      [
+        {
+          name: "api",
+          description: "",
+          inputSchemaJSON: JSON.stringify(schema),
+        },
+      ],
+      [],
+      (text) => redactor.redact(text),
+    );
+    expect(tool?.inputSchemaJSON).toBeDefined();
+    expect(tool?.inputSchemaJSON).not.toContain("hunter2longsecret");
+    expect(() => JSON.parse(tool?.inputSchemaJSON ?? "")).not.toThrow();
+  });
+
+  it("leaves out a schema that redaction turned into invalid JSON", () => {
+    const [tool] = nativeToolDefinitions(
+      [{ name: "read", description: "Read", inputSchemaJSON: '{"a":"b"}' }],
+      [],
+      (text) => text.replace("}", ""),
+    );
+    expect(tool).toEqual({
+      name: "read",
+      type: "function",
+      description: "Read",
+    });
   });
 });

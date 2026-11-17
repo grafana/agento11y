@@ -1302,6 +1302,194 @@ describe("native system prompt snapshots", () => {
   });
 });
 
+describe("native tool definitions", () => {
+  const offered = {
+    read: { description: "Read a file", input: { type: "object" } },
+    skill: { description: "Load a skill", input: { type: "object" } },
+  };
+  const definition = (name: string, description: string) => ({
+    name,
+    type: "function",
+    description,
+    inputSchemaJSON: '{"type":"object"}',
+  });
+  const names = (generation: Recorded) =>
+    generation.seed.tools?.map((tool) => tool.name);
+
+  it("isolates sessions, freezes retries, and never reuses a previous step's tools", async () => {
+    const { capture, generations } = harness();
+    capture.observeToolDefinitions("s", offered);
+    capture.observeToolDefinitions("child", {
+      task: { description: "Run a subagent", input: {} },
+    });
+    capture.handleEvent(start());
+    capture.observeToolDefinitions("s", {
+      retry: { description: "Retry", input: {} },
+    });
+    capture.handleEvent(start());
+    await replay(capture, [...skillTools(), end()]);
+    capture.handleEvent(start("child", "child-a"));
+    capture.handleEvent(end("child", "child-a"));
+    capture.observeToolDefinitions("s", {
+      write: { description: "Write a file", input: {} },
+    });
+    capture.handleEvent(start("s", "b"));
+    capture.handleEvent(end("s", "b"));
+    capture.handleEvent(start("s", "c"));
+    capture.handleEvent(end("s", "c"));
+    await capture.shutdown();
+    expect(generations.map(names)).toEqual([
+      ["read", "skill"],
+      ["task"],
+      ["write"],
+      [],
+    ]);
+    expect(generations[0]?.seed.tools).toEqual([
+      definition("read", "Read a file"),
+      definition("skill", "Load a skill"),
+    ]);
+  });
+
+  it("keeps only the called tool names under metadata_only", async () => {
+    const { capture, generations } = harness(home, {
+      contentCapture: "metadata_only",
+    });
+    capture.observeToolDefinitions("s", offered);
+    await replay(capture, [start(), ...skillTools(), end()]);
+    expect(generations[0]?.seed.tools).toEqual([
+      { name: "skill", type: "function" },
+    ]);
+  });
+
+  it("redacts definitions with secret patterns and guard redactions", async () => {
+    const redactions = createGuardRedactions();
+    const { capture, generations } = harness(
+      home,
+      {},
+      createNativeCapture,
+      redactions,
+    );
+    redactions.record(
+      "s",
+      [{ role: "user", parts: [{ type: "text", text: "Ask Project Falcon" }] }],
+      [{ role: "user", parts: [{ type: "text", text: "Ask [REDACTED]" }] }],
+    );
+    capture.observeToolDefinitions("s", {
+      lookup: {
+        description:
+          "Query Project Falcon with ghp_abcdefghijklmnopqrstuvwxyz1234567890",
+        input: { type: "object", description: "Project Falcon input" },
+      },
+    });
+    await replay(capture, [start(), end()]);
+    const [tool] = generations[0]?.seed.tools ?? [];
+    expect(JSON.stringify(tool)).not.toContain("Falcon");
+    expect(JSON.stringify(tool)).not.toContain("ghp_");
+    expect(tool?.description).toMatch(/^Query \[REDACTED\] with \[REDACTED/);
+    expect(JSON.parse(tool?.inputSchemaJSON ?? "")).toEqual({
+      type: "object",
+      description: "[REDACTED] input",
+    });
+  });
+
+  // JSON doubles each backslash and escapes newlines, so the guard span only
+  // matches the schema's decoded string values.
+  it.each([
+    "C:\\Users\\falcon\\notes",
+    "line one\nProject Falcon",
+  ])("removes a guard span that JSON escapes from a schema: %j", async (span) => {
+    const redactions = createGuardRedactions();
+    const { capture, generations } = harness(
+      home,
+      {},
+      createNativeCapture,
+      redactions,
+    );
+    redactions.record(
+      "s",
+      [{ role: "user", parts: [{ type: "text", text: `see ${span} now` }] }],
+      [{ role: "user", parts: [{ type: "text", text: "see [REDACTED] now" }] }],
+    );
+    capture.observeToolDefinitions("s", {
+      lookup: {
+        description: "Look up notes",
+        input: { type: "object", description: `Notes from ${span}` },
+      },
+    });
+    await replay(capture, [start(), end()]);
+    const [tool] = generations[0]?.seed.tools ?? [];
+    expect(JSON.parse(tool?.inputSchemaJSON ?? "")).toEqual({
+      type: "object",
+      description: "Notes from [REDACTED]",
+    });
+  });
+
+  it.each([
+    "full",
+    "no_tool_content",
+    "metadata_only",
+    "full_with_metadata_spans",
+  ] satisfies ContentCaptureMode[])("exports definitions through the real SDK under %s", async (contentCapture) => {
+    const exported: Generation[] = [];
+    const client = new Agento11yClient({
+      contentCapture,
+      hooks: { enabled: false },
+      generationExport: { protocol: "none" },
+      generationExporter: {
+        exportGenerations: async ({ generations }) => {
+          exported.push(...generations);
+          return {
+            results: generations.map((g) => ({
+              generationId: g.id,
+              accepted: true,
+            })),
+          };
+        },
+        exportWorkflowSteps: async () => ({ results: [] }),
+      },
+    });
+    const capture = createNativeCapture({
+      client,
+      config: { ...config, contentCapture },
+      redactor: createRedactor(),
+      ...home,
+      debugLog: vi.fn(),
+    });
+    try {
+      capture.observeToolDefinitions("s", offered);
+      await replay(capture, [start(), ...skillTools(), end()]);
+      await capture.shutdown();
+      await client.flush();
+    } finally {
+      await client.shutdown();
+    }
+    expect(exported).toHaveLength(1);
+    const tools = exported[0]?.tools?.map(
+      ({ name, description, inputSchemaJSON }) => ({
+        name,
+        description: description || undefined,
+        inputSchemaJSON: inputSchemaJSON || undefined,
+      }),
+    );
+    expect(tools).toEqual(
+      contentCapture === "metadata_only"
+        ? [{ name: "skill" }]
+        : [
+            {
+              name: "read",
+              description: "Read a file",
+              inputSchemaJSON: '{"type":"object"}',
+            },
+            {
+              name: "skill",
+              description: "Load a skill",
+              inputSchemaJSON: '{"type":"object"}',
+            },
+          ],
+    );
+  });
+});
+
 describe("native capture with guard redactions", () => {
   // A guard-only pattern: the plugin's own secret redaction doesn't know it.
   const PROMPT = "Status update on Project Falcon for the board";
