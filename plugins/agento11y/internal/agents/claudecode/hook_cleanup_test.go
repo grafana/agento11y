@@ -18,13 +18,15 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/state"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/transcript"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/xdg"
+	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestHookTerminalFailureCleanup(t *testing.T) {
 	for _, fault := range []string{
 		"success-control", "parent-read", "missing-parent", "child-read", "discovery",
 		"invalid-protocol", "spawns-only", "pending-only", "completed-only", "missing-endpoint", "missing-tenant", "missing-token",
-		"otel-opt-in", "otel-endpoint", "otel-setup", "client-setup", "record", "flush",
+		"implicit-otel", "blank-otel", "otel-endpoint", "otel-setup", "client-setup", "record", "flush", "partial",
 		"missing-transcript-path",
 	} {
 		t.Run(fault, func(t *testing.T) {
@@ -100,12 +102,19 @@ func TestHookTerminalFailureCleanup(t *testing.T) {
 				t.Setenv("SIGIL_"+suffix, "")
 				t.Setenv("AGENTO11Y_"+suffix, "")
 				wantLog = "not exporting: missing AGENTO11Y_" + suffix
-			case "otel-opt-in", "otel-endpoint", "otel-setup", "client-setup", "record", "flush":
-				t.Setenv("AGENTO11Y_PROTOCOL", "otel")
-				t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "true")
+			case "implicit-otel", "blank-otel", "otel-endpoint", "otel-setup", "client-setup", "record", "flush", "partial":
+				t.Setenv("SIGIL_PROTOCOL", "")
+				t.Setenv("AGENTO11Y_PROTOCOL", "")
+				t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "false")
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					if r.URL.Path == "/healthz" {
 						_, _ = io.WriteString(w, `{"capabilities":[]}`)
+						return
+					}
+					if fault == "partial" && strings.HasSuffix(r.URL.Path, "/traces") {
+						body, _ := proto.Marshal(&coltracepb.ExportTraceServiceResponse{PartialSuccess: &coltracepb.ExportTracePartialSuccess{RejectedSpans: 1, ErrorMessage: "rejected"}})
+						w.Header().Set("Content-Type", "application/x-protobuf")
+						_, _ = w.Write(body)
 						return
 					}
 					if fault == "flush" {
@@ -117,9 +126,8 @@ func TestHookTerminalFailureCleanup(t *testing.T) {
 				t.Cleanup(server.Close)
 				t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", server.URL)
 				switch fault {
-				case "otel-opt-in":
-					t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "false")
-					wantLog = "not exporting:"
+				case "blank-otel":
+					t.Setenv("AGENTO11Y_PROTOCOL", " \t ")
 				case "otel-endpoint":
 					t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", "invalid")
 					wantLog = "not exporting:"
@@ -138,7 +146,7 @@ func TestHookTerminalFailureCleanup(t *testing.T) {
 					}
 					putToolTranscript(t, path, call+strings.ReplaceAll(string(data[len(call):]), `"model":"claude-opus-4"`, `"model":""`))
 					wantLog = "enqueue:"
-				case "flush":
+				case "flush", "partial":
 					wantLog = "flush:"
 				}
 			case "missing-transcript-path":
@@ -161,12 +169,12 @@ func TestHookTerminalFailureCleanup(t *testing.T) {
 			if len(got.Tools.Pending) != 0 || len(got.Tools.Spawns) != 0 || len(got.Tools.CompletedChildren) != 0 {
 				t.Errorf("SessionEnd retained pending=%d spawns=%d completed=%d", len(got.Tools.Pending), len(got.Tools.Spawns), len(got.Tools.CompletedChildren))
 			}
-			if fault != "success-control" && fault != "child-read" {
+			if fault != "success-control" && fault != "implicit-otel" && fault != "blank-otel" && fault != "child-read" {
 				before.Tools.Pending, before.Tools.Spawns, before.Tools.CompletedChildren = nil, nil, nil
 				if !reflect.DeepEqual(withoutRecordedMetrics(got), before) {
 					t.Error("failed terminal path changed state beyond tool cleanup")
 				}
-				if fault != "record" && fault != "flush" && len(rec.Ended()) != spansBefore {
+				if fault != "record" && fault != "flush" && fault != "partial" && len(rec.Ended()) != spansBefore {
 					t.Error("failed pre-export path exported")
 				}
 			} else {

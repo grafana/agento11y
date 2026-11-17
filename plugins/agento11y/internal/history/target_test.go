@@ -30,11 +30,16 @@ func TestResolveTargetFreezesEnvironmentAndCallerMaps(t *testing.T) {
 	t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", "https://collector.example.invalid")
 	t.Setenv("AGENTO11Y_CONTENT_CAPTURE_MODE", "metadata_only")
 	headers := map[string]string{"X-Snapshot": "before"}
-	target, err := ResolveTarget(Target{Headers: headers}, nil)
+	otlpHeaders := map[string]string{"X-Collector": "before"}
+	target, err := ResolveTarget(Target{Headers: headers, OTLPHeaders: otlpHeaders}, nil)
 	require.NoError(t, err)
 	key := target.destination()
 	headers["X-Snapshot"] = "after"
+	otlpHeaders["X-Collector"] = "after"
 	target.Headers["X-Snapshot"] = "edited"
+	target.OTLPHeaders["X-Collector"] = "edited"
+	target.Protocol = agento11y.GenerationExportProtocolHTTP
+	target.OTLPEndpoint = "https://edited-collector.example.invalid"
 	target.Endpoint = "https://edited.example.invalid"
 	target.TenantID = "edited"
 	t.Setenv("AGENTO11Y_ENDPOINT", "https://after.example.invalid")
@@ -49,8 +54,9 @@ func TestResolveTargetFreezesEnvironmentAndCallerMaps(t *testing.T) {
 	require.Equal(t, "token-before", resolved.AuthToken)
 	require.Equal(t, "metadata_only", resolved.ContentMode)
 	require.Equal(t, "before", resolved.Headers["X-Snapshot"])
-	require.Equal(t, agento11y.GenerationExportProtocolHTTP, resolved.Protocol)
-	require.Empty(t, resolved.OTLPEndpoint)
+	require.Equal(t, "before", resolved.OTLPHeaders["X-Collector"])
+	require.Equal(t, agento11y.GenerationExportProtocolOTel, resolved.Protocol)
+	require.Equal(t, "https://collector.example.invalid", resolved.OTLPEndpoint)
 	require.Equal(t, key, target.destination())
 }
 
@@ -65,18 +71,22 @@ func TestResolveTargetFreezesEffectiveOTLPRoute(t *testing.T) {
 			wantOTLP     string
 			wantProtocol agento11y.GenerationExportProtocol
 		}{
-			{name: "default HTTP"},
+			{name: "implicit OTel", wantOTLP: "http://collector.example.invalid/otlp", wantProtocol: agento11y.GenerationExportProtocolOTel},
+			{name: "whitespace OTel", envProtocol: " \t ", wantOTLP: "http://collector.example.invalid/otlp", wantProtocol: agento11y.GenerationExportProtocolOTel},
 			{name: "ambient HTTP", envProtocol: " HTTP "},
 			{name: "HTTP overrides ambient OTel", protocol: agento11y.GenerationExportProtocolHTTP, envProtocol: "otel"},
 			{name: "grpc falls back to HTTP", envProtocol: " GrPc "},
 			{name: "none falls back to HTTP", envProtocol: " NONE "},
-			{name: "requested OTel", protocol: " OtEl ", wantOTLP: "http://collector.example.invalid/otlp", wantProtocol: agento11y.GenerationExportProtocolOTel},
+			{name: "OTel overrides ambient HTTP", protocol: " OtEl ", envProtocol: "http", wantOTLP: "http://collector.example.invalid/otlp", wantProtocol: agento11y.GenerationExportProtocolOTel},
+			{name: "OTel overrides invalid ambient protocol", protocol: agento11y.GenerationExportProtocolOTel, envProtocol: "unsupported", wantOTLP: "http://collector.example.invalid/otlp", wantProtocol: agento11y.GenerationExportProtocolOTel},
 			{name: "ambient OTel", envProtocol: " OtEl ", wantOTLP: "http://collector.example.invalid/otlp", wantProtocol: agento11y.GenerationExportProtocolOTel},
-			{name: "local HTTP", local: true, wantOTLP: "http://localhost:12345/otlp"},
+			{name: "local HTTP", local: true, protocol: agento11y.GenerationExportProtocolHTTP},
+			{name: "local implicit OTel", local: true, wantOTLP: "http://localhost:12345/otlp", wantProtocol: agento11y.GenerationExportProtocolOTel},
 			{name: "local OTel", local: true, envProtocol: "otel", wantOTLP: "http://localhost:12345/otlp", wantProtocol: agento11y.GenerationExportProtocolOTel},
-			{name: "explicit HTTP collector", otlp: " https://explicit.example.invalid/otlp ", wantOTLP: "https://explicit.example.invalid/otlp"},
+			{name: "explicit HTTP collector", protocol: agento11y.GenerationExportProtocolHTTP, otlp: " https://explicit.example.invalid/otlp ", wantOTLP: "https://explicit.example.invalid/otlp"},
 			{name: "explicit OTel collector", envProtocol: "otel", otlp: "https://explicit.example.invalid/otlp", wantOTLP: "https://explicit.example.invalid/otlp", wantProtocol: agento11y.GenerationExportProtocolOTel},
-			{name: "explicit local collector", local: true, otlp: "http://localhost:23456/collector", wantOTLP: "http://localhost:23456/collector"},
+			{name: "explicit local collector", local: true, otlp: "http://localhost:23456/collector", wantOTLP: "http://localhost:23456/collector", wantProtocol: agento11y.GenerationExportProtocolOTel},
+			{name: "HTTP overrides invalid ambient protocol", protocol: agento11y.GenerationExportProtocolHTTP, envProtocol: "unsupported"},
 		} {
 			t.Run(endpointKey+"/"+tc.name, func(t *testing.T) {
 				envconfig.PinAliasEnvBlank(t)
@@ -84,7 +94,7 @@ func TestResolveTargetFreezesEffectiveOTLPRoute(t *testing.T) {
 				t.Setenv(endpointKey, "https://collector.example.invalid/otlp/v1/traces")
 				t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE", "true")
 				t.Setenv("AGENTO11Y_PROTOCOL", tc.envProtocol)
-				t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "true")
+				t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "false")
 				input := Target{
 					Endpoint: "https://api.example.invalid", TenantID: "tenant", AuthToken: "token",
 					Protocol: tc.protocol, OTLPEndpoint: tc.otlp, ContentMode: "metadata_only",
@@ -124,9 +134,10 @@ func TestTargetExporterHTTPOnlyUsesExplicitOTLPRoute(t *testing.T) {
 		for _, tc := range []struct {
 			name     string
 			protocol string
+			override agento11y.GenerationExportProtocol
 			explicit bool
 		}{
-			{name: "default HTTP"},
+			{name: "HTTP overrides ambient OTel", protocol: "otel", override: agento11y.GenerationExportProtocolHTTP},
 			{name: "ambient HTTP", protocol: "http"},
 			{name: "grpc falls back to HTTP", protocol: "grpc"},
 			{name: "none falls back to HTTP", protocol: "none"},
@@ -170,7 +181,7 @@ func TestTargetExporterHTTPOnlyUsesExplicitOTLPRoute(t *testing.T) {
 					http.DefaultTransport = previous
 				}()
 
-				target := Target{Endpoint: "http://api.example.invalid", TenantID: "tenant", AuthToken: "test-token"}
+				target := Target{Endpoint: "http://api.example.invalid", TenantID: "tenant", AuthToken: "test-token", Protocol: tc.override}
 				if tc.explicit {
 					target.OTLPEndpoint = server.URL + "/explicit"
 				}
@@ -198,11 +209,12 @@ func TestTargetExporterHTTPOnlyUsesExplicitOTLPRoute(t *testing.T) {
 
 func TestResolveCloudOTelRequiresIdentityNotAPIToken(t *testing.T) {
 	envconfig.PinAliasEnvBlank(t)
-	t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "true")
-	base := Target{Endpoint: "https://api.example.invalid", TenantID: "tenant", Protocol: agento11y.GenerationExportProtocolOTel, OTLPEndpoint: "https://collector.example.invalid"}
+	t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "false")
+	base := Target{Endpoint: "https://api.example.invalid", TenantID: "tenant", OTLPEndpoint: "https://collector.example.invalid"}
 	otel, err := ResolveTarget(base, nil)
 	require.NoError(t, err)
 	require.Empty(t, otel.AuthToken)
+	require.Equal(t, agento11y.GenerationExportProtocolOTel, otel.Protocol)
 	base.Protocol, base.AuthToken = agento11y.GenerationExportProtocolHTTP, "rotated-token"
 	base.OTLPEndpoint = "https://other-collector.example.invalid"
 	httpTarget, err := ResolveTarget(base, nil)
@@ -230,7 +242,7 @@ func TestResolveCloudOTelRequiresIdentityNotAPIToken(t *testing.T) {
 
 func TestTargetExporterOTelUsesSnapshotAndNoGenerationHTTP(t *testing.T) {
 	envconfig.PinAliasEnvBlank(t)
-	t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "true")
+	t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "false")
 	var mu sync.Mutex
 	var spans []*tracepb.Span
 	var generationHTTP int
@@ -267,7 +279,6 @@ func TestTargetExporterOTelUsesSnapshotAndNoGenerationHTTP(t *testing.T) {
 	t.Cleanup(collector.Close)
 	target, err := ResolveTarget(Target{
 		Endpoint: "https://api.example.invalid", TenantID: "tenant",
-		Protocol:     agento11y.GenerationExportProtocolOTel,
 		OTLPEndpoint: collector.URL, OTLPHeaders: map[string]string{"Authorization": "Bearer snapshot"},
 		ContentMode: "full_with_metadata_spans",
 	}, nil)
@@ -317,7 +328,7 @@ func TestTargetExporterOTelUsesSnapshotAndNoGenerationHTTP(t *testing.T) {
 
 func TestTargetExporterRejectsOldLocalDaemon(t *testing.T) {
 	envconfig.PinAliasEnvBlank(t)
-	t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "true")
+	t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "false")
 	var generationRequests atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/healthz" {
@@ -329,12 +340,111 @@ func TestTargetExporterRejectsOldLocalDaemon(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	_, _, err := NewTargetExporter(t.Context(), Target{Endpoint: server.URL, Protocol: agento11y.GenerationExportProtocolOTel}, nil)
+	_, _, err := NewTargetExporter(t.Context(), Target{Endpoint: server.URL}, nil)
 	require.ErrorContains(t, err, "restart")
 	require.Zero(t, generationRequests.Load())
 }
 
-func TestResolvedOTelTargetFreezesOptIn(t *testing.T) {
+func TestLocalTargetExporterIsolatesImplicitOTel(t *testing.T) {
+	for _, protocol := range []agento11y.GenerationExportProtocol{"", agento11y.GenerationExportProtocolOTel, agento11y.GenerationExportProtocolHTTP} {
+		t.Run(string(protocol), func(t *testing.T) {
+			envconfig.PinAliasEnvBlank(t)
+			t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "false")
+			t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", "https://cloud.example.invalid")
+			t.Setenv("AGENTO11Y_AUTH_TENANT_ID", "cloud-tenant")
+			t.Setenv("AGENTO11Y_AUTH_TOKEN", "cloud-token")
+			t.Setenv("OTEL_EXPORTER_OTLP_HEADERS", "Authorization=Bearer cloud")
+			var mu sync.Mutex
+			var bodies []byte
+			var paths []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/healthz" {
+					_, _ = io.WriteString(w, `{"capabilities":["otel_generation_ingest_v1"]}`)
+					return
+				}
+				assert.Empty(t, r.Header.Get("Authorization"))
+				assert.Equal(t, "1", r.Header.Get(ForwardMarkerHeader))
+				assert.Equal(t, "snapshot", r.Header.Get("X-Local"))
+				if r.URL.Path == "/otlp/v1/metrics" {
+					return // Empty provider resource metrics are not live usage.
+				}
+				if r.URL.Path == "/api/v1/generations:export" {
+					body, err := io.ReadAll(r.Body)
+					assert.NoError(t, err)
+					mu.Lock()
+					bodies = append(bodies, body...)
+					paths = append(paths, r.URL.Path)
+					mu.Unlock()
+					r.Body = io.NopCloser(strings.NewReader(string(body)))
+					_, _ = io.WriteString(w, acceptAllGenerations(r))
+					return
+				}
+				assert.Equal(t, "/otlp/v1/traces", r.URL.Path)
+				body, err := io.ReadAll(r.Body)
+				assert.NoError(t, err)
+				mu.Lock()
+				bodies = append(bodies, body...)
+				paths = append(paths, r.URL.Path)
+				mu.Unlock()
+			}))
+			defer server.Close()
+			exporter, cleanup, err := NewTargetExporter(t.Context(), Target{
+				Endpoint: server.URL, Protocol: protocol, ContentMode: "metadata_only",
+				AuthToken: "explicit-cloud-token",
+				Headers:   map[string]string{"aUtHoRiZaTiOn": "Bearer explicit", ForwardMarkerHeader: "0", "X-Local": "snapshot"},
+			}, nil)
+			require.NoError(t, err)
+			defer func() { require.NoError(t, cleanup(context.Background())) }()
+			gen := turn("local")
+			gen.Gen.Output = []agento11y.Message{agento11y.AssistantTextMessage("full historical content")}
+			require.NoError(t, exporter.ExportHistoricalGeneration(t.Context(), gen))
+			require.NoError(t, exporter.Flush(t.Context()))
+			mu.Lock()
+			defer mu.Unlock()
+			require.Contains(t, string(bodies), "full historical content", "local imports must force full capture")
+			require.NotContains(t, string(bodies), "cloud-token")
+			if protocol == agento11y.GenerationExportProtocolHTTP {
+				require.Equal(t, []string{"/api/v1/generations:export"}, paths)
+			} else {
+				require.Equal(t, []string{"/otlp/v1/traces"}, paths)
+			}
+		})
+	}
+}
+
+func TestResolveTargetSelectsBeforeDestinationValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		protocol agento11y.GenerationExportProtocol
+		ambient  string
+		endpoint string
+		otlp     string
+		want     string
+	}{
+		{name: "unknown before missing endpoint", protocol: "invalid", want: "unsupported Target.Protocol"},
+		{name: "unknown ambient before missing endpoint", ambient: "invalid", want: "unsupported AGENTO11Y_PROTOCOL"},
+		{name: "implicit OTel missing collector", endpoint: "https://api.example.invalid", want: "OTLP base endpoint"},
+		{name: "whitespace override selects OTel", protocol: " \t ", ambient: "http", endpoint: "https://api.example.invalid", want: "OTLP base endpoint"},
+		{name: "OTel overrides HTTP and validates collector", protocol: " OtEl ", ambient: "http", endpoint: "https://api.example.invalid", otlp: "grpc://collector.example.invalid", want: "OTLP base endpoint"},
+		{name: "HTTP ignores invalid ambient protocol", protocol: " HTTP ", ambient: "invalid", endpoint: "https://api.example.invalid"},
+		{name: "local OTel rejects remote route", endpoint: "http://localhost:12345", otlp: "https://collector.example.invalid", want: "loopback OTLP"},
+		{name: "local HTTP rejects explicit remote route", protocol: "http", endpoint: "http://localhost:12345", otlp: "https://collector.example.invalid", want: "loopback OTLP"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			envconfig.PinAliasEnvBlank(t)
+			t.Setenv("AGENTO11Y_PROTOCOL", tc.ambient)
+			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+			_, err := ResolveTarget(Target{Protocol: tc.protocol, Endpoint: tc.endpoint, OTLPEndpoint: tc.otlp, TenantID: "tenant", AuthToken: "token"}, nil)
+			if tc.want != "" {
+				require.ErrorContains(t, err, tc.want)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestResolvedOTelTargetNeedsNoGlobalOptIn(t *testing.T) {
 	envconfig.PinAliasEnvBlank(t)
 	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/healthz" {
@@ -342,8 +452,8 @@ func TestResolvedOTelTargetFreezesOptIn(t *testing.T) {
 		}
 	}))
 	defer collector.Close()
-	t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "true")
-	target, err := ResolveTarget(Target{Endpoint: "https://api.example.invalid", TenantID: "tenant", Protocol: agento11y.GenerationExportProtocolOTel, OTLPEndpoint: collector.URL}, nil)
+	t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "false")
+	target, err := ResolveTarget(Target{Endpoint: "https://api.example.invalid", TenantID: "tenant", OTLPEndpoint: collector.URL}, nil)
 	require.NoError(t, err)
 	t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "false")
 	_, cleanup, err := NewTargetExporter(t.Context(), target, nil)

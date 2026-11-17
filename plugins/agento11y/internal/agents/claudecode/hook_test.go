@@ -674,6 +674,7 @@ func TestReadTranscriptSettled_StopWaitsPastToolUseTail(t *testing.T) {
 // it waits out the settle window. A SessionEnd can close a session that never
 // wrote a transcript, so it returns at once instead of delaying the exit.
 func TestHook_OnlyStopWaitsForMissingTranscript(t *testing.T) {
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	prev := transcriptSettleWindow
 	transcriptSettleWindow = time.Second
 	t.Cleanup(func() { transcriptSettleWindow = prev })

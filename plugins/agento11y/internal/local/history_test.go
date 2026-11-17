@@ -1,9 +1,11 @@
 package local
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -11,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,6 +22,8 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/history"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	colmetric "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
+	"google.golang.org/protobuf/proto"
 )
 
 // TestHistoryConversationTitleKeyMatches pins the one duplicated string in the
@@ -193,6 +198,8 @@ func TestHistoryOfferStopsAfterACompletedImport(t *testing.T) {
 func TestHistoryImportFailsWhenNothingLands(t *testing.T) {
 	isolateHistoryState(t)
 	srv, _ := newHistoryServer(t)
+	// This fixture exercises per-turn HTTP export failures, not an OTLP health check.
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	// Point the import at an endpoint that refuses every export.
 	broken := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "no", http.StatusInternalServerError)
@@ -673,26 +680,35 @@ func TestHistoryImportRunsAsynchronously(t *testing.T) {
 
 // A transport or listener change must not replay already imported turns.
 func TestHistoryImportIsIdempotent(t *testing.T) {
-	isolateHistoryState(t)
-	t.Setenv("AGENTO11Y_PROTOCOL", "http")
-	srv, _ := newHistoryServer(t)
-	writeHistoryTranscript(t, "sess-1", 2, time.Now().Add(-2*time.Hour))
+	for _, tc := range []struct{ name, first, second string }{
+		{name: "HTTP to implicit OTel", first: "http"},
+		{name: "HTTP to explicit OTel", first: "http", second: "otel"},
+		{name: "implicit OTel to HTTP", second: "http"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateHistoryState(t)
+			srv, _ := newHistoryServer(t)
+			t.Setenv("AGENTO11Y_PROTOCOL", tc.first)
+			writeHistoryTranscript(t, "sess-1", 2, time.Now().Add(-2*time.Hour))
 
-	first := waitForTerminalRun(t, srv, startImport(t, srv, `{"agent":"claude-code"}`))
-	require.Equal(t, 2, first.Imported)
+			first := waitForTerminalRun(t, srv, startImport(t, srv, `{"agent":"claude-code"}`))
+			require.Equal(t, importStatusCompleted, first.Status)
+			require.Equal(t, 2, first.Imported)
 
-	t.Setenv("AGENTO11Y_PROTOCOL", "otel")
-	t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "true")
-	otherPort := httptest.NewServer(srv)
-	t.Cleanup(otherPort.Close)
-	srv.SetLocalEndpoint(otherPort.URL)
-	second := waitForTerminalRun(t, srv, startImport(t, srv, `{"agent":"claude-code"}`))
-	assert.Equal(t, 0, second.Imported)
-	assert.Equal(t, 2, second.Skipped)
+			t.Setenv("AGENTO11Y_PROTOCOL", tc.second)
+			otherPort := httptest.NewServer(srv)
+			t.Cleanup(otherPort.Close)
+			srv.SetLocalEndpoint(otherPort.URL)
+			second := waitForTerminalRun(t, srv, startImport(t, srv, `{"agent":"claude-code"}`))
+			require.Equal(t, importStatusCompleted, second.Status)
+			assert.Equal(t, 0, second.Imported)
+			assert.Equal(t, 2, second.Skipped)
 
-	detail, err := srv.storage.ConversationDetail("sess-1")
-	require.NoError(t, err)
-	assert.Len(t, detail.Generations, 2, "a skipped rerun must not add entries")
+			detail, err := srv.storage.ConversationDetail("sess-1")
+			require.NoError(t, err)
+			assert.Len(t, detail.Generations, 2, "a skipped rerun must not add entries")
+		})
+	}
 }
 
 func TestHistoryImportRejectsASecondRun(t *testing.T) {
@@ -876,8 +892,12 @@ func TestHistoryRunListIsBounded(t *testing.T) {
 // forwarding enabled and credentials configured, an import must put nothing on
 // the wire while the local store keeps the full content.
 func TestHistoryImportNeverForwardsToCloud(t *testing.T) {
-	for _, protocol := range []string{"http", "otel"} {
-		t.Run(protocol, func(t *testing.T) { testHistoryImportNeverForwardsToCloud(t, protocol) })
+	for _, tc := range []struct{ name, protocol string }{
+		{name: "implicit OTel"},
+		{name: "HTTP", protocol: "http"},
+		{name: "OTel", protocol: "otel"},
+	} {
+		t.Run(tc.name, func(t *testing.T) { testHistoryImportNeverForwardsToCloud(t, tc.protocol) })
 	}
 }
 
@@ -885,7 +905,7 @@ func testHistoryImportNeverForwardsToCloud(t *testing.T, protocol string) {
 	isolateHistoryState(t)
 	clearForwardEnv(t)
 	t.Setenv("AGENTO11Y_PROTOCOL", protocol)
-	t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "true")
+	t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "")
 	t.Setenv("AGENTO11Y_HEADERS", "Authorization=Bearer ambient-generation,X-Ambient=secret")
 	t.Setenv("OTEL_EXPORTER_OTLP_HEADERS", "Authorization=Bearer ambient-otlp,X-Ambient=secret")
 	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_HEADERS", "Authorization=Bearer ambient-trace")
@@ -898,6 +918,12 @@ func testHistoryImportNeverForwardsToCloud(t *testing.T, protocol string) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer cloud.Close()
+	// A local import must derive the daemon's /otlp destination rather than
+	// inherit any Cloud collector, even the per-signal SDK settings.
+	t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", cloud.URL+"/otlp")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", cloud.URL+"/ambient")
+	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", cloud.URL+"/v1/traces")
+	t.Setenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", cloud.URL+"/v1/metrics")
 
 	configPath := writeConfigEnvFile(t, map[string]string{
 		"AGENTO11Y_LOCAL_FORWARD":               "true",
@@ -911,7 +937,8 @@ func testHistoryImportNeverForwardsToCloud(t *testing.T, protocol string) {
 	require.NoError(t, err)
 	srv := NewServer(storage, nil, configPath)
 	t.Cleanup(srv.Close)
-	var traces, metrics, generationHTTP atomic.Int64
+	var traces, generationHTTP atomic.Int64
+	var metricNames sync.Map
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			assert.Empty(t, r.Header.Get("Authorization"), "local history must replace Cloud authorization")
@@ -921,7 +948,32 @@ func testHistoryImportNeverForwardsToCloud(t *testing.T, protocol string) {
 			case "/otlp/v1/traces":
 				traces.Add(1)
 			case "/otlp/v1/metrics":
-				metrics.Add(1)
+				reader := io.Reader(r.Body)
+				if r.Header.Get("Content-Encoding") == "gzip" {
+					gz, err := gzip.NewReader(reader)
+					if !assert.NoError(t, err) {
+						return
+					}
+					defer gz.Close()
+					reader = gz
+				}
+				body, err := io.ReadAll(reader)
+				if !assert.NoError(t, err) {
+					return
+				}
+				var request colmetric.ExportMetricsServiceRequest
+				if !assert.NoError(t, proto.Unmarshal(body, &request)) {
+					return
+				}
+				for _, resource := range request.ResourceMetrics {
+					for _, scope := range resource.ScopeMetrics {
+						for _, metric := range scope.Metrics {
+							metricNames.Store(metric.Name, true)
+						}
+					}
+				}
+				r.Body = io.NopCloser(strings.NewReader(string(body)))
+				r.Header.Del("Content-Encoding")
 			case "/api/v1/generations:export":
 				generationHTTP.Add(1)
 			}
@@ -968,8 +1020,17 @@ func testHistoryImportNeverForwardsToCloud(t *testing.T, protocol string) {
 	assert.Contains(t, string(raw), "private-v2-answer")
 	assert.Contains(t, string(raw), "private-v2-prompt")
 	assert.Positive(t, traces.Load(), "the SDK must send traces with the no-forward header")
-	assert.Positive(t, metrics.Load(), "the SDK must send metrics with the no-forward header")
-	if protocol == "otel" {
+	// Operational metrics may still be sent, but backfilled usage must not
+	// appear as live usage at import time.
+	for _, name := range []string{
+		"gen_ai.client.token.usage",
+		"gen_ai.client.operation.duration",
+		"gen_ai.client.tool_calls_per_operation",
+	} {
+		_, recorded := metricNames.Load(name)
+		assert.False(t, recorded, "history recorded live metric %s", name)
+	}
+	if protocol != "http" {
 		assert.Zero(t, generationHTTP.Load(), "OTel must not also export HTTP generations")
 	} else {
 		assert.Positive(t, generationHTTP.Load())

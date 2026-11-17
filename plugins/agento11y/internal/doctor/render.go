@@ -129,7 +129,7 @@ func renderHuman(w io.Writer, r *Report, color bool) {
 	writeSection(&b, p, "Conversations (generation export)", r.Conversations.Health)
 	protocol := r.Conversations.Protocol
 	if protocol == "" {
-		protocol = "http"
+		protocol = "otel"
 	}
 	b.kv("transport", protocol)
 	b.kv("endpoint", describeEnv(p, r.Conversations.Endpoint))
@@ -186,7 +186,7 @@ func renderHuman(w io.Writer, r *Report, color bool) {
 		exists = "present"
 	}
 	b.kv("file", fmt.Sprintf("%s %s", r.Config.Path, p.faint("("+exists+")")))
-	requested := withTrailer("http", describeSource(p, "default"))
+	requested := withTrailer("otel", describeSource(p, "default"))
 	if r.Config.GenerationProtocol.Set {
 		requested = describeEnv(p, r.Config.GenerationProtocol)
 	}
@@ -403,9 +403,9 @@ func brokenSections(r *Report) []string {
 // error, or neither a configured Cloud pipeline nor usable local-only capture.
 //
 // The second case is the reason this is not just brokenSections. A machine
-// with no endpoint, no tenant and no token reports every pipeline as a
-// warning, never an error, so the summary above says "no problems detected".
-// That reader has wired nothing and needs the paste block most.
+// explicitly selecting HTTP with no endpoint, tenant or token reports the
+// pipelines as warnings, so the summary above says "no problems detected".
+// That reader has wired nothing and still needs the paste block.
 func needsSetup(r *Report) bool {
 	return len(brokenSections(r)) > 0 || (!r.Conversations.configured() && !r.localCaptureConfigured)
 }

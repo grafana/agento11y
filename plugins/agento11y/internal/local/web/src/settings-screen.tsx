@@ -1253,7 +1253,7 @@ export function parseConnectBlock(text: string | null | undefined): ConnectBlock
         report(out.placeholders);
         return;
       }
-      if (field.url && !isHTTPURL(value)) {
+      if (field.url && !(field.name === 'otlpEndpoint' ? isGenerationOTLPURL(value) : isHTTPURL(value))) {
         report(out.invalid);
         return;
       }
@@ -1271,6 +1271,59 @@ function isHTTPURL(value: string): boolean {
   } catch (_) {
     return false;
   }
+}
+
+// URL normalizes malformed input that Go's net/url rejects, so check the
+// original authority and escapes before using its parsed host.
+function isGenerationOTLPURL(value: string): boolean {
+  const match = /^https?:\/\/([^/?#]+)([^?#]*)$/i.exec(value);
+  const authority = match?.[1];
+  if (
+    !authority ||
+    /[\s\\%{}^`|]/.test(authority) ||
+    value.includes('\\') ||
+    [...value].some((character) => character < ' ' || character === '\u007f') ||
+    /%(?![\da-f]{2})/i.test(value) ||
+    authority.includes('@')
+  ) {
+    return false;
+  }
+  const hostPort = /^(\[[^\]]+\]|[^:]+)(?::(\d*))?$/.exec(authority);
+  if (!hostPort) return false;
+  const port = hostPort[2];
+  if (port && (Number(port) < 1 || Number(port) > 65535)) return false;
+  try {
+    return !!new URL(value).hostname;
+  } catch (_) {
+    return false;
+  }
+}
+
+function connectReadinessError(
+  parsed: ConnectBlock,
+  generationProtocol: string | undefined,
+  generationProtocolError: string | undefined,
+  configError: string | null,
+): string | null {
+  if (
+    configError ||
+    typeof generationProtocolError !== 'string' ||
+    generationProtocolError !== '' ||
+    (generationProtocol !== 'otel' && generationProtocol !== 'http')
+  ) {
+    return 'Generation transport status is unavailable or invalid. Run agento11y doctor, correct any configuration errors in config.env, then wait for settings to refresh successfully before connecting.';
+  }
+  if (generationProtocol === 'http') return null;
+  if (!isGenerationOTLPURL(parsed.otlpEndpoint)) {
+    return 'OTel requires a valid HTTP(S) OTLP base endpoint. Copy a block with OTEL_EXPORTER_OTLP_ENDPOINT. If your stack has no OTLP endpoint, set AGENTO11Y_PROTOCOL=http in config.env and wait for settings to refresh. Credential paste does not change the generation protocol.';
+  }
+  const host = new URL(parsed.otlpEndpoint).hostname.toLowerCase();
+  // The daemon can inherit an insecure downgrade that is not exposed in
+  // Settings. Reject loopback even with HTTPS rather than risk a relay loop.
+  if (host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '[::ffff:7f00:1]') {
+    return 'The OTLP endpoint points back to a local receiver and could cause a forwarding loop. Use a non-loopback OTLP endpoint, or set AGENTO11Y_PROTOCOL=http in config.env and wait for settings to refresh.';
+  }
+  return null;
 }
 
 // parseBlockValue reads one assignment's value the way internal/dotenv reads
@@ -1382,6 +1435,9 @@ function ConnectStep({ n, title, help, children }: ConnectStepProps) {
 }
 
 interface SettingsConnectFlowProps {
+  generationProtocol: string | undefined;
+  generationProtocolError: string | undefined;
+  configError: string | null;
   savedStackURL: string;
   configPath: string;
   capture: string;
@@ -1399,6 +1455,9 @@ interface SettingsConnectFlowProps {
 // the flow is open: the textarea is controlled, and parseConnectBlock re-runs
 // on every render. Only the feedback strip withholds the token value.
 export function SettingsConnectFlow({
+  generationProtocol,
+  generationProtocolError,
+  configError,
   savedStackURL,
   configPath,
   capture,
@@ -1415,6 +1474,8 @@ export function SettingsConnectFlow({
   const setupHref = setupPageURL(stackUrl);
   const parsed = parseConnectBlock(paste);
   const ok = !!(parsed.endpoint && parsed.tenantId && parsed.token);
+  const readinessError = connectReadinessError(parsed, generationProtocol, generationProtocolError, configError);
+  const ready = ok && !readinessError;
   const missing = [
     !parsed.endpoint && 'AGENTO11Y_ENDPOINT',
     !parsed.tenantId && 'AGENTO11Y_AUTH_TENANT_ID',
@@ -1430,12 +1491,13 @@ export function SettingsConnectFlow({
     : parsed.placeholders.length > 0
       ? `${parsed.placeholders.join(', ')} is still a placeholder. Fill it in on the setup page, then copy the block again.`
       : parsed.invalid.length > 0
-        ? `${parsed.invalid.join(', ')} is not an http:// or https:// URL.`
+        ? `${parsed.invalid.join(', ')} requires a valid HTTP(S) URL. OTLP base endpoints cannot include credentials, a query, or a fragment.`
         : `Missing ${missing.join(', ')}. Copy the whole block from the setup page.`;
   // Full forwarding asks first here too. Reaching it from a fresh install
   // takes two clicks otherwise, while the same widening in the connected
   // panel is confirmed.
   const submit = () => {
+    if (!ready) return;
     if (draftMode === 'full') {
       setConfirmFull(true);
       return;
@@ -1669,7 +1731,8 @@ export function SettingsConnectFlow({
         >
           <button
             type="button"
-            disabled={!ok}
+            disabled={!ready}
+            aria-describedby={readinessError ? 'connect-readiness-error' : undefined}
             onClick={submit}
             style={{
               height: 32,
@@ -1677,17 +1740,22 @@ export function SettingsConnectFlow({
               borderRadius: 2,
               fontSize: 13,
               fontWeight: 500,
-              background: ok ? 'var(--primary-main)' : 'var(--disabled-control-bg)',
-              border: `1px solid ${ok ? 'var(--primary-main)' : 'transparent'}`,
-              color: ok ? '#fff' : 'var(--fg3)',
-              cursor: ok ? 'pointer' : 'not-allowed',
+              background: ready ? 'var(--primary-main)' : 'var(--disabled-control-bg)',
+              border: `1px solid ${ready ? 'var(--primary-main)' : 'transparent'}`,
+              color: ready ? '#fff' : 'var(--fg3)',
+              cursor: ready ? 'pointer' : 'not-allowed',
               fontFamily: 'var(--fontFamily)',
             }}
           >
             Connect
           </button>
-          {ok && <span style={{ fontSize: 12, color: 'var(--fg3)' }}>Writes config.env and starts forwarding.</span>}
+          {ready && <span style={{ fontSize: 12, color: 'var(--fg3)' }}>Writes config.env and starts forwarding.</span>}
         </div>
+        {readinessError && (
+          <div id="connect-readiness-error" style={{ marginTop: 12 }}>
+            <Notice kind="warning">{readinessError}</Notice>
+          </div>
+        )}
       </ConnectStep>
 
       {/* An endpoint on its own is a valid configuration (a local collector
@@ -1726,8 +1794,10 @@ export function SettingsConnectFlow({
           otlpEndpoint={parsed.otlpEndpoint}
           managedPrimary={managedPrimary}
           destinations={destinations}
+          readinessError={readinessError || (!ok ? 'Paste a complete connection block before connecting.' : null)}
           onCancel={() => setConfirmFull(false)}
           onConfirm={() => {
+            if (!ready) return;
             setConfirmFull(false);
             onConnect(parsed, 'full');
           }}
@@ -1772,6 +1842,7 @@ function fullContentRecipientError(
 }
 
 interface ConfirmFullContentModalProps extends PrimaryConnection {
+  readinessError?: string | null;
   managedPrimary?: PrimaryConnection;
   destinations?: ForwardDestination[];
   onCancel: () => void;
@@ -1783,6 +1854,7 @@ interface ConfirmFullContentModalProps extends PrimaryConnection {
 // CONTENT_CAPTURE_MODE covers, because the modal is the last thing the user
 // reads before the write.
 function ConfirmFullContentModal({
+  readinessError,
   endpoint,
   otlpEndpoint,
   tenantId,
@@ -1793,11 +1865,9 @@ function ConfirmFullContentModal({
   onCancel,
   onConfirm,
 }: ConfirmFullContentModalProps) {
-  const recipientError = fullContentRecipientError(
-    { endpoint, otlpEndpoint, tenantId, token, tokenCleared },
-    managedPrimary,
-    destinations,
-  );
+  const recipientError =
+    readinessError ||
+    fullContentRecipientError({ endpoint, otlpEndpoint, tenantId, token, tokenCleared }, managedPrimary, destinations);
   const available = !recipientError;
   const effectivePrimary = destinations?.find((d) => d.name === 'primary');
   endpoint = endpoint.trim() || effectivePrimary?.endpoint || '';
@@ -1905,6 +1975,7 @@ interface SettingsCloudTabProps {
   savedTenantId: string;
   savedGuards: string;
   config: ConfigResponse | null;
+  configError: string | null;
   stackUrl: string;
   configured: boolean;
   configPath: string;
@@ -2042,6 +2113,7 @@ function SettingsCloudTab({
   savedTenantId,
   savedGuards,
   config,
+  configError,
   stackUrl,
   configured,
   configPath,
@@ -2058,6 +2130,9 @@ function SettingsCloudTab({
   const showConnect = !configured && !manual;
   const connectFlow = showConnect ? (
     <SettingsConnectFlow
+      generationProtocol={config?.generationProtocol}
+      generationProtocolError={config?.generationProtocolError}
+      configError={configError}
       savedStackURL={stackUrl}
       configPath={configPath}
       capture={form.capture}
@@ -2898,6 +2973,7 @@ interface SettingsTabPanelsProps {
   addTag: () => void;
   removeTag: (index: number) => void;
   config: ConfigResponse | null;
+  configError: string | null;
   stackUrl: string;
   configured: boolean;
   configPath: string;
@@ -2920,6 +2996,7 @@ function SettingsTabPanels({
   addTag,
   removeTag,
   config,
+  configError,
   stackUrl,
   configured,
   configPath,
@@ -2940,6 +3017,7 @@ function SettingsTabPanels({
           savedTenantId={savedTenantId}
           savedGuards={savedGuards}
           config={config}
+          configError={configError}
           stackUrl={stackUrl}
           configured={configured}
           configPath={configPath}
@@ -3463,6 +3541,7 @@ export function SettingsSecurityView({
             addTag={addTag}
             removeTag={removeTag}
             config={liveConfig}
+            configError={configError}
             stackUrl={config?.stackUrl || ''}
             configured={cloudConfigured(saved)}
             configPath={path}

@@ -111,30 +111,65 @@ func TestForwardLoader_Resolve(t *testing.T) {
 		wantConfigWarnings []string
 	}{
 		{
-			// Credentials the generation export cannot use, but a usable OTLP
-			// target: the OTLP leg forwards on its own and the status says so.
-			name: "otlp_only_when_generation_creds_missing",
+			name: "implicit_otel_without_http_credentials",
 			lines: map[string]string{
 				"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": cloud,
 				"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": "https://otlp.example.test",
 				"OTEL_EXPORTER_OTLP_HEADERS":            "Authorization=Bearer gateway-token",
 			},
+			wantEnabled:    true,
+			wantStrip:      true,
+			wantStatusMode: forwardModeMetadataOnly,
+			wantOTLP:       true,
+			wantHookReason: guardsOffHookReason,
+		},
+		{
+			name: "implicit_otel_full",
+			lines: map[string]string{
+				"AGENTO11Y_LOCAL_FORWARD":               "true",
+				"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": "https://otlp.example.test",
+				"AGENTO11Y_CONTENT_CAPTURE_MODE":        "full",
+			},
+			wantEnabled:    true,
+			wantOTLP:       true,
+			wantStatusMode: forwardModeFull,
+			wantHookReason: guardsOffHookReason,
+		},
+		{
+			name: "implicit_otel_metadata_spans_still_strips",
+			lines: map[string]string{
+				"AGENTO11Y_LOCAL_FORWARD":               "true",
+				"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": "https://otlp.example.test",
+				"AGENTO11Y_CONTENT_CAPTURE_MODE":        "full_with_metadata_spans",
+			},
+			wantEnabled:    true,
+			wantStrip:      true,
+			wantOTLP:       true,
+			wantStatusMode: forwardModeMetadataOnly,
+			wantHookReason: guardsOffHookReason,
+		},
+		{
+			name: "implicit_otel_missing_otlp_keeps_legacy_http_route",
+			lines: map[string]string{
+				"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": cloud,
+				"AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k",
+			},
 			wantEnabled:      true,
 			wantStrip:        true,
-			wantStatusMode:   forwardModeMetadataOnly,
 			wantStatusReason: true,
-			wantOTLP:         true,
+			wantStatusMode:   forwardModeMetadataOnly,
 			wantHookReason:   guardsOffHookReason,
 		},
 		{
 			name:           "disabled_when_toggle_unset",
-			lines:          map[string]string{"AGENTO11Y_ENDPOINT": cloud, "AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k"},
+			lines:          map[string]string{"AGENTO11Y_PROTOCOL": "http", "AGENTO11Y_ENDPOINT": cloud, "AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k"},
 			wantEnabled:    false,
 			wantStatusMode: forwardModeOff,
 		},
 		{
 			name: "disabled_ignores_inactive_policy",
 			lines: map[string]string{
+				"AGENTO11Y_PROTOCOL":      "http",
 				"AGENTO11Y_LOCAL_FORWARD": "false", "AGENTO11Y_ENDPOINT": cloud,
 				"AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k",
 				"AGENTO11Y_CONTENT_CAPTURE_MODE": "typo", "AGENTO11Y_GUARDS_ENABLED": "typo",
@@ -145,6 +180,7 @@ func TestForwardLoader_Resolve(t *testing.T) {
 		{
 			name: "enabled_warns_on_invalid_policy",
 			lines: map[string]string{
+				"AGENTO11Y_PROTOCOL":      "http",
 				"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": cloud,
 				"AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k",
 				"AGENTO11Y_CONTENT_CAPTURE_MODE": "typo", "AGENTO11Y_GUARDS_ENABLED": "typo",
@@ -158,7 +194,7 @@ func TestForwardLoader_Resolve(t *testing.T) {
 		},
 		{
 			name:           "enabled_defaults_to_metadata_only",
-			lines:          map[string]string{"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": cloud, "AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k"},
+			lines:          map[string]string{"AGENTO11Y_PROTOCOL": "http", "AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": cloud, "AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k"},
 			wantEnabled:    true,
 			wantStrip:      true,
 			wantStatusMode: forwardModeMetadataOnly,
@@ -166,7 +202,7 @@ func TestForwardLoader_Resolve(t *testing.T) {
 		},
 		{
 			name:           "enabled_full_does_not_strip",
-			lines:          map[string]string{"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": cloud, "AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k", "AGENTO11Y_CONTENT_CAPTURE_MODE": "full"},
+			lines:          map[string]string{"AGENTO11Y_PROTOCOL": "http", "AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": cloud, "AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k", "AGENTO11Y_CONTENT_CAPTURE_MODE": "full"},
 			wantEnabled:    true,
 			wantStrip:      false,
 			wantStatusMode: forwardModeFull,
@@ -174,7 +210,7 @@ func TestForwardLoader_Resolve(t *testing.T) {
 		},
 		{
 			name:           "advanced_capture_mode_still_strips",
-			lines:          map[string]string{"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": cloud, "AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k", "AGENTO11Y_CONTENT_CAPTURE_MODE": "no_tool_content"},
+			lines:          map[string]string{"AGENTO11Y_PROTOCOL": "http", "AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": cloud, "AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k", "AGENTO11Y_CONTENT_CAPTURE_MODE": "no_tool_content"},
 			wantEnabled:    true,
 			wantStrip:      true,
 			wantStatusMode: forwardModeMetadataOnly,
@@ -182,7 +218,7 @@ func TestForwardLoader_Resolve(t *testing.T) {
 		},
 		{
 			name:           "legacy_spellings_resolve",
-			lines:          map[string]string{"SIGIL_LOCAL_FORWARD": "true", "SIGIL_ENDPOINT": cloud, "SIGIL_AUTH_TENANT_ID": "t", "SIGIL_AUTH_TOKEN": "k", "SIGIL_CONTENT_CAPTURE_MODE": "full"},
+			lines:          map[string]string{"SIGIL_PROTOCOL": "http", "SIGIL_LOCAL_FORWARD": "true", "SIGIL_ENDPOINT": cloud, "SIGIL_AUTH_TENANT_ID": "t", "SIGIL_AUTH_TOKEN": "k", "SIGIL_CONTENT_CAPTURE_MODE": "full"},
 			wantEnabled:    true,
 			wantStrip:      false,
 			wantStatusMode: forwardModeFull,
@@ -193,6 +229,7 @@ func TestForwardLoader_Resolve(t *testing.T) {
 			// ParseSettings and dotenv.ApplyEnv.
 			name: "preferred_spelling_wins",
 			lines: map[string]string{
+				"AGENTO11Y_PROTOCOL": "http", "SIGIL_PROTOCOL": "otel",
 				"AGENTO11Y_LOCAL_FORWARD": "true", "SIGIL_LOCAL_FORWARD": "false",
 				"AGENTO11Y_ENDPOINT": cloud, "SIGIL_ENDPOINT": "https://other.example.test",
 				"AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k",
@@ -205,7 +242,7 @@ func TestForwardLoader_Resolve(t *testing.T) {
 		},
 		{
 			name:           "allows_local_endpoint",
-			lines:          map[string]string{"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": "http://127.0.0.1:4317", "AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k"},
+			lines:          map[string]string{"AGENTO11Y_PROTOCOL": "http", "AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": "http://127.0.0.1:4317", "AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k"},
 			wantEnabled:    true,
 			wantStrip:      true,
 			wantStatusMode: forwardModeMetadataOnly,
@@ -213,7 +250,7 @@ func TestForwardLoader_Resolve(t *testing.T) {
 		},
 		{
 			name:           "allows_local_endpoint_with_placeholder_creds",
-			lines:          map[string]string{"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": "http://127.0.0.1:8080", "AGENTO11Y_AUTH_TENANT_ID": "local", "AGENTO11Y_AUTH_TOKEN": "local"},
+			lines:          map[string]string{"AGENTO11Y_PROTOCOL": "http", "AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": "http://127.0.0.1:8080", "AGENTO11Y_AUTH_TENANT_ID": "local", "AGENTO11Y_AUTH_TOKEN": "local"},
 			wantEnabled:    true,
 			wantStrip:      true,
 			wantStatusMode: forwardModeMetadataOnly,
@@ -221,7 +258,7 @@ func TestForwardLoader_Resolve(t *testing.T) {
 		},
 		{
 			name:           "allows_local_endpoint_without_creds",
-			lines:          map[string]string{"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": "http://localhost:8080"},
+			lines:          map[string]string{"AGENTO11Y_PROTOCOL": "http", "AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": "http://localhost:8080"},
 			wantEnabled:    true,
 			wantStrip:      true,
 			wantStatusMode: forwardModeMetadataOnly,
@@ -229,7 +266,7 @@ func TestForwardLoader_Resolve(t *testing.T) {
 		},
 		{
 			name:             "refuses_placeholder_creds",
-			lines:            map[string]string{"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": cloud, "AGENTO11Y_AUTH_TENANT_ID": "local", "AGENTO11Y_AUTH_TOKEN": "local"},
+			lines:            map[string]string{"AGENTO11Y_PROTOCOL": "http", "AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": cloud, "AGENTO11Y_AUTH_TENANT_ID": "local", "AGENTO11Y_AUTH_TOKEN": "local"},
 			wantEnabled:      false,
 			wantStatusMode:   forwardModeOff,
 			wantStatusReason: true,
@@ -237,7 +274,7 @@ func TestForwardLoader_Resolve(t *testing.T) {
 		},
 		{
 			name:             "refuses_empty_endpoint",
-			lines:            map[string]string{"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k"},
+			lines:            map[string]string{"AGENTO11Y_PROTOCOL": "http", "AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k"},
 			wantEnabled:      false,
 			wantStatusMode:   forwardModeOff,
 			wantStatusReason: true,
@@ -245,7 +282,7 @@ func TestForwardLoader_Resolve(t *testing.T) {
 		},
 		{
 			name:             "refuses_invalid_endpoint",
-			lines:            map[string]string{"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": "http://%", "AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k"},
+			lines:            map[string]string{"AGENTO11Y_PROTOCOL": "http", "AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": "http://%", "AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k"},
 			wantEnabled:      false,
 			wantStatusMode:   forwardModeOff,
 			wantStatusReason: true,
@@ -257,6 +294,7 @@ func TestForwardLoader_Resolve(t *testing.T) {
 			// asserts implicitly.
 			name: "hooks_refused_when_guards_off",
 			lines: map[string]string{
+				"AGENTO11Y_PROTOCOL":      "http",
 				"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": cloud,
 				"AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k",
 			},
@@ -268,6 +306,7 @@ func TestForwardLoader_Resolve(t *testing.T) {
 		{
 			name: "hooks_chain_when_guards_on",
 			lines: map[string]string{
+				"AGENTO11Y_PROTOCOL":      "http",
 				"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": cloud,
 				"AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k",
 				"AGENTO11Y_GUARDS_ENABLED": "true",
@@ -281,6 +320,7 @@ func TestForwardLoader_Resolve(t *testing.T) {
 			// A local daemon can receive telemetry, but its hook endpoint always allows.
 			name: "hooks_refused_for_local_endpoint",
 			lines: map[string]string{
+				"AGENTO11Y_PROTOCOL":      "http",
 				"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": "http://127.0.0.1:8080",
 				"AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k",
 				"AGENTO11Y_GUARDS_ENABLED": "true",
@@ -293,6 +333,7 @@ func TestForwardLoader_Resolve(t *testing.T) {
 		{
 			name: "hooks_refused_without_credentials",
 			lines: map[string]string{
+				"AGENTO11Y_PROTOCOL":      "http",
 				"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": cloud,
 				"AGENTO11Y_AUTH_TENANT_ID": "t",
 				"AGENTO11Y_GUARDS_ENABLED": "true",
@@ -305,6 +346,7 @@ func TestForwardLoader_Resolve(t *testing.T) {
 		{
 			name: "hooks_refused_for_placeholder_credentials",
 			lines: map[string]string{
+				"AGENTO11Y_PROTOCOL":      "http",
 				"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": cloud,
 				"AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": envconfig.LocalAuthPlaceholder,
 				"AGENTO11Y_GUARDS_ENABLED": "true",
@@ -317,6 +359,7 @@ func TestForwardLoader_Resolve(t *testing.T) {
 		{
 			name: "hooks_resolve_from_legacy_spellings",
 			lines: map[string]string{
+				"SIGIL_PROTOCOL":      "http",
 				"SIGIL_LOCAL_FORWARD": "true", "SIGIL_ENDPOINT": cloud,
 				"SIGIL_AUTH_TENANT_ID": "t", "SIGIL_AUTH_TOKEN": "k",
 				"SIGIL_GUARDS_ENABLED": "true",
@@ -365,7 +408,7 @@ func TestForwardLoader_Resolve(t *testing.T) {
 			assert.Equal(t, tc.wantEnabled, st.Enabled)
 			assert.Equal(t, tc.wantStatusMode, st.Mode)
 			assert.Equal(t, tc.wantOTLP, st.OTLP)
-			assert.Equal(t, cfg.genURL != "", st.Generations)
+			assert.Equal(t, tc.wantEnabled && !tc.wantStatusReason, st.Generations)
 			assert.Equal(t, tc.wantHookURL != "", st.Hooks)
 			assert.Equal(t, cfg.hookReason, st.HookReason)
 			if tc.wantStatusReason {
@@ -1170,6 +1213,7 @@ func TestForwardLoader_StatusReportsFailures(t *testing.T) {
 
 	clearForwardEnv(t)
 	l := newForwardLoader(writeConfigEnvFile(t, map[string]string{
+		"AGENTO11Y_PROTOCOL":      "http",
 		"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": srv.URL,
 		"AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k",
 	}), nil)

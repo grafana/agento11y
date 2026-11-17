@@ -4,6 +4,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
 
 func envMap(env []string) map[string]string {
@@ -20,10 +22,41 @@ func TestLaunchEnvApply(t *testing.T) {
 	launch := LaunchEnv{Endpoint: "http://127.0.0.1:4319", OTLPEndpoint: "http://127.0.0.1:4320/otlp"}
 
 	cases := []struct {
-		name string
-		env  []string
-		want map[string]string
+		name         string
+		env          []string
+		want         map[string]string
+		absent       []string
+		wantProtocol string
 	}{
+		{
+			name: "implicit OTel without global opt-in",
+			want: map[string]string{
+				"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:4320/otlp",
+				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT":     "http://127.0.0.1:4320/otlp",
+				"AGENTO11Y_CONTENT_CAPTURE_MODE":        "full",
+			},
+			absent: []string{"AGENTO11Y_PROTOCOL", "SIGIL_PROTOCOL", "AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES"},
+		},
+		{
+			name: "explicit OTel without global opt-in",
+			env:  []string{"AGENTO11Y_PROTOCOL=otel", "AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=false"},
+			want: map[string]string{
+				"AGENTO11Y_PROTOCOL":                     "otel",
+				"AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "false",
+			},
+		},
+		{
+			name:   "legacy OTel without global opt-in",
+			env:    []string{"SIGIL_PROTOCOL=otel"},
+			want:   map[string]string{"SIGIL_PROTOCOL": "otel"},
+			absent: []string{"AGENTO11Y_PROTOCOL", "AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES"},
+		},
+		{
+			name:         "explicit HTTP remains selected",
+			env:          []string{"AGENTO11Y_PROTOCOL=http"},
+			want:         map[string]string{"AGENTO11Y_PROTOCOL": "http"},
+			wantProtocol: "http",
+		},
 		{
 			name: "overrides inherited preferred and legacy endpoints",
 			env: []string{
@@ -46,7 +79,7 @@ func TestLaunchEnvApply(t *testing.T) {
 			},
 		},
 		{
-			name: "keeps experimental OTel selection with full local capture",
+			name: "keeps explicit OTel and existing opt-in with full local capture",
 			env: []string{
 				"AGENTO11Y_PROTOCOL=otel",
 				"AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true",
@@ -103,6 +136,24 @@ func TestLaunchEnvApply(t *testing.T) {
 				if got[k] != want {
 					t.Errorf("%s = %q, want %q", k, got[k], want)
 				}
+			}
+			for _, key := range tc.absent {
+				if value, ok := got[key]; ok {
+					t.Errorf("local launch injected %s=%q", key, value)
+				}
+			}
+			protocol, err := envconfig.ResolveGenerationTransportWith(func(suffix string) (string, string, bool) {
+				return envconfig.LookupMap(got, suffix)
+			}, func(key string) string { return got[key] })
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantProtocol := tc.wantProtocol
+			if wantProtocol == "" {
+				wantProtocol = "otel"
+			}
+			if string(protocol) != wantProtocol {
+				t.Errorf("effective protocol = %q, want %q", protocol, wantProtocol)
 			}
 		})
 	}

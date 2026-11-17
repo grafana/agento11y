@@ -24,6 +24,7 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/guard"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/doctor"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
@@ -70,6 +71,7 @@ func writeDotenv(t *testing.T, contents string) string {
 // to exercise the "env unset" path.
 func clearSeededEnv(t *testing.T) {
 	t.Helper()
+	t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", "")
 	for _, suffix := range seededSuffixes {
 		t.Setenv(envconfig.PreferredKey(suffix), "")
 		t.Setenv(envconfig.LegacyKey(suffix), "")
@@ -356,6 +358,33 @@ func TestNormalizeContentMode(t *testing.T) {
 	}
 }
 
+func TestContentCaptureOptions(t *testing.T) {
+	for _, tc := range []struct {
+		current string
+		want    []huh.Option[string]
+	}{
+		{contentModeMetadataOnly, nil},
+		{contentModeFull, nil},
+		{contentModeNoToolContent, []huh.Option[string]{
+			huh.NewOption("No tool content — capture generations, drop tool args and results", contentModeNoToolContent),
+		}},
+		{contentModeFullWithMetadataSpans, []huh.Option[string]{
+			huh.NewOption("Full content; metadata-only spans with HTTP, full-content spans with direct OTel", contentModeFullWithMetadataSpans),
+		}},
+	} {
+		t.Run(tc.current, func(t *testing.T) {
+			want := []huh.Option[string]{
+				huh.NewOption("Metadata only — no prompts, responses, or tool I/O (default)", contentModeMetadataOnly),
+				huh.NewOption("Full — capture everything", contentModeFull),
+			}
+			want = append(want, tc.want...)
+			if got := contentCaptureOptions(tc.current); !reflect.DeepEqual(got, want) {
+				t.Errorf("contentCaptureOptions(%q) = %v, want %v", tc.current, got, want)
+			}
+		})
+	}
+}
+
 func TestSeedGuards(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -494,7 +523,7 @@ otlp_token = "extra-secret"
 			}
 			switch action {
 			case "credentials only":
-				out, err := runNonInteractive(t, RunOpts{ConfigPath: path, Endpoint: "https://primary.example", TenantID: "123", Token: "primary-secret", SkipVerify: true})
+				out, err := runNonInteractive(t, RunOpts{ConfigPath: path, Endpoint: "https://primary.example", TenantID: "123", Token: "primary-secret", SkipVerify: true, GenerationProtocol: agento11y.GenerationExportProtocolHTTP})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -1019,6 +1048,7 @@ func runBlockForTest(t *testing.T, existing string, shell map[string]string, opt
 	}
 	var stderr bytes.Buffer
 	opts.ConfigPath, opts.Stdin, opts.Stderr, opts.SkipVerify = path, nonTTYStdin(t), &stderr, true
+	opts.GenerationProtocol = agento11y.GenerationExportProtocolHTTP
 	_, err := Run(context.Background(), opts)
 	got, readErr := dotenv.ReadDotenv(path, nil)
 	if readErr != nil {
@@ -2016,9 +2046,10 @@ func TestShouldOfferLocalDaemon(t *testing.T) {
 
 func TestCanKeepCloudConnection(t *testing.T) {
 	complete := formValues{
-		stackURL: "https://alpha.grafana.net",
-		endpoint: "https://ingest.example.com",
-		tenantID: "123",
+		otelEndpoint: "http://127.0.0.1:4318",
+		stackURL:     "https://alpha.grafana.net",
+		endpoint:     "https://ingest.example.com",
+		tenantID:     "123",
 	}
 	tests := []struct {
 		name          string
@@ -2771,13 +2802,14 @@ func TestRun_VerifiesBeforeWriting(t *testing.T) {
 			}
 
 			stderr, err := runNonInteractive(t, RunOpts{
-				ConfigPath: path,
-				Endpoint:   endpoint,
-				TenantID:   tenant,
-				Token:      token,
-				SkipVerify: c.skipVerify,
-				AssumeYes:  c.assumeYes,
-				Probe:      probe,
+				ConfigPath:         path,
+				Endpoint:           endpoint,
+				TenantID:           tenant,
+				Token:              token,
+				SkipVerify:         c.skipVerify,
+				AssumeYes:          c.assumeYes,
+				Probe:              probe,
+				GenerationProtocol: agento11y.GenerationExportProtocolHTTP,
 			})
 			if !errors.Is(err, c.wantErr) {
 				t.Fatalf("Run err = %v, want %v", err, c.wantErr)
@@ -2836,13 +2868,14 @@ func TestRun_ProbeResolvesInsecureLikeExporter(t *testing.T) {
 			var calls []probeCall
 			var stderr bytes.Buffer
 			_, err := Run(context.Background(), RunOpts{
-				ConfigPath: path,
-				Stdin:      nonTTYStdin(t),
-				Stderr:     &stderr,
-				Endpoint:   "https://agento11y.example.com",
-				TenantID:   "123",
-				Token:      "glc_secret",
-				Probe:      stubProbe(&doctor.ProbeResult{StatusCode: 200, OK: true}, path, &calls),
+				ConfigPath:         path,
+				Stdin:              nonTTYStdin(t),
+				Stderr:             &stderr,
+				Endpoint:           "https://agento11y.example.com",
+				TenantID:           "123",
+				Token:              "glc_secret",
+				Probe:              stubProbe(&doctor.ProbeResult{StatusCode: 200, OK: true}, path, &calls),
+				GenerationProtocol: agento11y.GenerationExportProtocolHTTP,
 			})
 			if err != nil {
 				t.Fatalf("Run: %v", err)
@@ -3078,7 +3111,8 @@ func TestRun_ExplicitValues(t *testing.T) {
 		},
 		{
 			name: "the same token keeps the saved OTLP headers",
-			file: existing + `OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic b2xk"` + "\n",
+			file: existing + "SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318\n" +
+				`OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic b2xk"` + "\n",
 			opts: RunOpts{
 				Endpoint: "https://old.example",
 				TenantID: "111",
@@ -3156,6 +3190,11 @@ func TestRun_ExplicitValues(t *testing.T) {
 			}
 			path := writeDotenv(t, c.file)
 			opts := c.opts
+			// This table tests credential persistence, not readiness. Supply a
+			// valid destination; required-field failures have their own table.
+			if opts.OTLPEndpoint == "" {
+				opts.OTLPEndpoint = "http://127.0.0.1:4318"
+			}
 			opts.ConfigPath = path
 			opts.Stdin = nonTTYStdin(t)
 			opts.Stderr = io.Discard
@@ -3273,12 +3312,13 @@ func TestRun_NextStepOnlyWhenAsked(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.env")
 			var calls []probeCall
 			stderr, err := runNonInteractive(t, RunOpts{
-				ConfigPath:   path,
-				ShowNextStep: show,
-				Endpoint:     "https://agento11y.example.com",
-				TenantID:     "123",
-				Token:        "glc_secret",
-				Probe:        stubProbe(&doctor.ProbeResult{StatusCode: 200, OK: true}, path, &calls),
+				ConfigPath:         path,
+				ShowNextStep:       show,
+				Endpoint:           "https://agento11y.example.com",
+				TenantID:           "123",
+				Token:              "glc_secret",
+				Probe:              stubProbe(&doctor.ProbeResult{StatusCode: 200, OK: true}, path, &calls),
+				GenerationProtocol: agento11y.GenerationExportProtocolHTTP,
 			})
 			if err != nil {
 				t.Fatalf("Run: %v", err)
@@ -3297,6 +3337,343 @@ func TestRun_NextStepOnlyWhenAsked(t *testing.T) {
 			// either.
 			if got := strings.Contains(stderr, skills.SetupCodingAgentCommand); got != show {
 				t.Errorf("skill hint printed = %v, want %v:\n%s", got, show, stderr)
+			}
+		})
+	}
+}
+
+func TestProspectiveProbe_PasteAndFixedCollectorIsolation(t *testing.T) {
+	for _, fixedCollector := range []bool{false, true} {
+		t.Run(strconv.FormatBool(fixedCollector), func(t *testing.T) {
+			clearSeededEnv(t)
+			var calls int
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				want := "Bearer pasted-otlp-token"
+				if fixedCollector {
+					want = "Basic MTIzOnBhc3RlZC1hcGktdG9rZW4="
+				}
+				if r.Header.Get("Authorization") != want {
+					t.Errorf("Authorization = %q, want %q", r.Header.Get("Authorization"), want)
+				}
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer server.Close()
+			v := formValues{generationProtocol: agento11y.GenerationExportProtocolOTel}
+			fixed := fixedValues{}
+			if fixedCollector {
+				fixed.otelEndpoint = server.URL
+				v.otelEndpoint = fixed.otelEndpoint
+			}
+			applyPaste(&v, fixed, "AGENTO11Y_ENDPOINT=http://127.0.0.1:1\n"+
+				"AGENTO11Y_AUTH_TENANT_ID=123\nAGENTO11Y_AUTH_TOKEN=pasted-api-token\n"+
+				"OTEL_EXPORTER_OTLP_ENDPOINT="+server.URL+"\n"+
+				"OTEL_EXPORTER_OTLP_HEADERS='Authorization=Bearer pasted-otlp-token'\n"+
+				"AGENTO11Y_PROTOCOL=http\nAGENTO11Y_AUTH_MODE=none\nAGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true\n")
+			if v.generationProtocol != agento11y.GenerationExportProtocolOTel {
+				t.Fatal("paste changed selected transport")
+			}
+			outcome, err := verifyCredentials(context.Background(), RunOpts{
+				Stderr: io.Discard,
+				Probe: func(context.Context, string, string, string, bool) *doctor.ProbeResult {
+					return &doctor.ProbeResult{OK: true}
+				},
+			}, v, false, false)
+			if err != nil || outcome != verifyPassed || calls != 1 {
+				t.Fatalf("verification = %v, %v; calls=%d", outcome, err, calls)
+			}
+			updates := buildUpdates(v, false)
+			if fixedCollector && updates["OTEL_EXPORTER_OTLP_HEADERS"] != "" {
+				t.Fatal("pasted collector headers followed fixed endpoint into persistence")
+			}
+			if updates["AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES"] != "true" {
+				t.Error("paste lost the experimental setting")
+			}
+			for _, suffix := range []string{"PROTOCOL", "AUTH_MODE"} {
+				if _, ok := updates[envconfig.PreferredKey(suffix)]; ok {
+					t.Errorf("credential paste writes %s", suffix)
+				}
+			}
+		})
+	}
+}
+
+func TestRun_GenerationReadiness(t *testing.T) {
+	for _, tc := range []struct {
+		name, file, endpoint string
+		block                string
+		savedProtocol        string
+		env                  map[string]string
+		override             agento11y.GenerationExportProtocol
+		yes                  bool
+		wantErr              string
+	}{
+		{name: "implicit OTel requires endpoint even without verification", wantErr: "OTLP base endpoint"},
+		{name: "API-only block requires OTLP", block: blockCreds, wantErr: "OTLP base endpoint"},
+		{name: "block OTel overrides saved HTTP", file: "AGENTO11Y_PROTOCOL=http\n", block: blockCreds + "AGENTO11Y_PROTOCOL=otel\n", wantErr: "OTLP base endpoint"},
+		{name: "block invalid protocol", block: blockCreds + "AGENTO11Y_PROTOCOL=invalid\n", wantErr: "unsupported AGENTO11Y_PROTOCOL"},
+		{name: "caller HTTP overrides block OTel", block: blockCreds + "AGENTO11Y_PROTOCOL=otel\n", override: agento11y.GenerationExportProtocolHTTP, savedProtocol: "otel"},
+		{name: "setup block HTTP does not change OTel default", block: blockCreds + "AGENTO11Y_PROTOCOL=http\n", wantErr: "OTLP base endpoint"},
+		{name: "yes does not bypass required endpoint", yes: true, wantErr: "OTLP base endpoint"},
+		{name: "blank protocol is OTel", file: "AGENTO11Y_PROTOCOL='  '\n", wantErr: "OTLP base endpoint"},
+		{name: "explicit OTel", file: "SIGIL_PROTOCOL=otel\n", endpoint: "http://127.0.0.1:4318"},
+		{name: "default OTel", endpoint: "http://127.0.0.1:4318/otlp"},
+		{name: "HTTP permits API only", file: "AGENTO11Y_PROTOCOL=http\n"},
+		{name: "grpc compatibility", file: "SIGIL_PROTOCOL=grpc\n"},
+		{name: "none compatibility", file: "SIGIL_PROTOCOL=none\n"},
+		{name: "unknown protocol", file: "AGENTO11Y_PROTOCOL=bogus\n", wantErr: "unsupported AGENTO11Y_PROTOCOL"},
+		{name: "shell over file", file: "AGENTO11Y_PROTOCOL=otel\n", env: map[string]string{"SIGIL_PROTOCOL": "http"}},
+		{name: "preferred file alias wins", file: "AGENTO11Y_PROTOCOL=otel\nSIGIL_PROTOCOL=http\n", wantErr: "OTLP base endpoint"},
+		{name: "caller scoped HTTP", file: "AGENTO11Y_PROTOCOL=otel\n", override: agento11y.GenerationExportProtocolHTTP},
+		{name: "caller scoped OTel", file: "AGENTO11Y_PROTOCOL=http\n", override: agento11y.GenerationExportProtocolOTel, wantErr: "OTLP base endpoint"},
+		{name: "unknown caller protocol", override: "invalid", wantErr: "unsupported"},
+		{name: "generic file endpoint", file: "OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318\n"},
+		{name: "generic shell endpoint", env: map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:4318"}},
+		{name: "saved endpoint", file: "SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318\n"},
+		{name: "userinfo rejected", endpoint: "http://user:secret@127.0.0.1:4318", wantErr: "OTLP base endpoint"},
+		{name: "query rejected", endpoint: "http://127.0.0.1:4318?secret=value", wantErr: "OTLP base endpoint"},
+		{name: "fragment rejected", endpoint: "http://127.0.0.1:4318#traces", wantErr: "OTLP base endpoint"},
+		{name: "bad port rejected", endpoint: "http://127.0.0.1:65536", wantErr: "invalid port"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clearSeededEnv(t)
+			envconfig.PinAliasEnvBlank(t)
+			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+			for key, value := range tc.env {
+				t.Setenv(key, value)
+			}
+			path := writeDotenv(t, tc.file)
+			beforeProtocol := os.Getenv("AGENTO11Y_PROTOCOL")
+			_, err := Run(context.Background(), RunOpts{
+				ConfigPath: path, Stdin: nonTTYStdin(t),
+				Endpoint: "http://127.0.0.1:1", TenantID: "123", Token: "test-token",
+				OTLPEndpoint: tc.endpoint, GenerationProtocol: tc.override, Block: tc.block,
+				SkipVerify: !tc.yes, AssumeYes: tc.yes,
+				Probe: func(context.Context, string, string, string, bool) *doctor.ProbeResult {
+					t.Fatal("required-field validation must precede verification")
+					return nil
+				},
+			})
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("Run error = %v, want %q", err, tc.wantErr)
+				}
+				got, _ := os.ReadFile(path)
+				if string(got) != tc.file {
+					t.Fatal("failed validation modified config")
+				}
+			} else if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if os.Getenv("AGENTO11Y_PROTOCOL") != cmp.Or(tc.savedProtocol, beforeProtocol) {
+				t.Fatal("caller override changed process protocol")
+			}
+			before, _ := dotenv.ParseDotenv(strings.NewReader(tc.file))
+			after := dotenv.LoadDotenv(path, nil)
+			for _, key := range []string{"AGENTO11Y_PROTOCOL", "SIGIL_PROTOCOL"} {
+				if tc.savedProtocol != "" {
+					before[key] = tc.savedProtocol
+				}
+				if before[key] != after[key] {
+					t.Errorf("saved %s changed from %q to %q", key, before[key], after[key])
+				}
+			}
+		})
+	}
+}
+
+func TestRun_ProspectiveOTLPVerification(t *testing.T) {
+	for _, tc := range []struct {
+		name                    string
+		apiStatus, otlpStatus   int
+		yes, skip, replaceToken bool
+		httpOnly                bool
+		wantSave                bool
+		insecureKey             string
+		insecureFile            bool
+		useBlock                bool
+		blockSettings           string
+		savedOTLPToken          string
+		moveCollector           bool
+		secureBlockKey          string
+	}{
+		{name: "both accepted", apiStatus: 200, otlpStatus: 200, wantSave: true},
+		{name: "rotated token clears saved OTLP token before probing", apiStatus: 200, otlpStatus: 200, replaceToken: true, savedOTLPToken: "old-otlp-token", wantSave: true},
+		{name: "new collector never receives saved OTLP token", apiStatus: 200, otlpStatus: 200, moveCollector: true, savedOTLPToken: "old-otlp-token", wantSave: true},
+		{name: "block OTLP token is probed", apiStatus: 200, otlpStatus: 200, useBlock: true, blockSettings: "AGENTO11Y_OTEL_AUTH_TOKEN=block-otlp-token\n", wantSave: true},
+		{name: "block selects OTel over saved HTTP", apiStatus: 200, otlpStatus: 200, useBlock: true, blockSettings: "AGENTO11Y_PROTOCOL=otel\n", wantSave: true},
+		{name: "block enables branded TLS before probing", apiStatus: 200, otlpStatus: 200, useBlock: true, secureBlockKey: "AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE"},
+		{name: "block enables generic TLS before probing", apiStatus: 200, otlpStatus: 200, useBlock: true, secureBlockKey: "OTEL_EXPORTER_OTLP_INSECURE"},
+		{name: "block cannot disable TLS for probe", apiStatus: 200, otlpStatus: 200, useBlock: true, blockSettings: "OTEL_EXPORTER_OTLP_INSECURE=true\n", wantSave: true},
+		{name: "preferred insecure environment", apiStatus: 200, otlpStatus: 200, wantSave: true, insecureKey: "AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE"},
+		{name: "legacy insecure environment", apiStatus: 200, otlpStatus: 200, wantSave: true, insecureKey: "SIGIL_OTEL_EXPORTER_OTLP_INSECURE"},
+		{name: "generic insecure environment", apiStatus: 200, otlpStatus: 200, wantSave: true, insecureKey: "OTEL_EXPORTER_OTLP_INSECURE"},
+		{name: "preferred insecure file", apiStatus: 200, otlpStatus: 200, wantSave: true, insecureKey: "AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE", insecureFile: true},
+		{name: "generic insecure file", apiStatus: 200, otlpStatus: 200, wantSave: true, insecureKey: "OTEL_EXPORTER_OTLP_INSECURE", insecureFile: true},
+		{name: "HTTP does not probe optional OTLP", apiStatus: 200, otlpStatus: 403, httpOnly: true, wantSave: true},
+		{name: "OTLP unauthorized despite API success", apiStatus: 200, otlpStatus: 401},
+		{name: "OTLP forbidden", apiStatus: 200, otlpStatus: 403},
+		{name: "OTLP method not allowed", apiStatus: 200, otlpStatus: 405},
+		{name: "OTLP unsupported content type", apiStatus: 200, otlpStatus: 415},
+		{name: "OTLP redirect", apiStatus: 200, otlpStatus: 302},
+		{name: "OTLP success cannot hide API failure", apiStatus: 401, otlpStatus: 200},
+		{name: "yes still probes and overrides failure", apiStatus: 200, otlpStatus: 403, yes: true, wantSave: true},
+		{name: "no verify skips both probes", skip: true, wantSave: true},
+		{name: "replacement clears stale headers before probing", apiStatus: 200, otlpStatus: 200, replaceToken: true, wantSave: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clearSeededEnv(t)
+			envconfig.PinAliasEnvBlank(t)
+			t.Setenv("OTEL_EXPORTER_OTLP_HEADERS", "Authorization=Bearer ambient-secret")
+			var ambientCalls int
+			ambient := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				ambientCalls++
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer ambient.Close()
+			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", ambient.URL)
+			t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", ambient.URL)
+			t.Setenv("OTEL_EXPORTER_OTLP_TRACES_HEADERS", "Authorization=Bearer signal-secret")
+
+			const headers = "Authorization=Bearer prospective-secret,X-Probe=saved"
+			token := "same-token"
+			if tc.replaceToken {
+				token = "replacement-token"
+			}
+			path := ""
+			original := ""
+			apiCalls, otlpCalls := 0, 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if os.Getenv("AGENTO11Y_AUTH_TOKEN") != "" || os.Getenv("OTEL_EXPORTER_OTLP_HEADERS") != "Authorization=Bearer ambient-secret" {
+					t.Error("verification mutated process credentials")
+				}
+				if got, _ := os.ReadFile(path); string(got) != original {
+					t.Error("config changed before verification completed")
+				}
+				if r.Method != http.MethodPost {
+					t.Errorf("method = %s", r.Method)
+				}
+				switch r.URL.Path {
+				case "/api/v1/generations:export":
+					apiCalls++
+					w.WriteHeader(tc.apiStatus)
+				case "/otlp/v1/traces":
+					otlpCalls++
+					if r.Header.Get("Content-Type") != "application/x-protobuf" {
+						t.Error("OTLP probe must use protobuf")
+					}
+					body, _ := io.ReadAll(r.Body)
+					if len(body) != 0 {
+						t.Error("probe must not send spans")
+					}
+					wantAuth := "Bearer prospective-secret"
+					if tc.replaceToken || tc.moveCollector || tc.useBlock {
+						otlpToken := token
+						if strings.Contains(tc.blockSettings, "AGENTO11Y_OTEL_AUTH_TOKEN=") {
+							otlpToken = "block-otlp-token"
+						}
+						wantAuth = "Basic " + base64.StdEncoding.EncodeToString([]byte("123:"+otlpToken))
+					}
+					if got := r.Header.Get("Authorization"); got != wantAuth {
+						t.Errorf("OTLP Authorization = %q, want %q", got, wantAuth)
+					}
+					if !tc.replaceToken && !tc.moveCollector && !tc.useBlock && r.Header.Get("X-Probe") != "saved" {
+						t.Error("prospective explicit headers were lost")
+					}
+					w.Header().Set("Location", ambient.URL)
+					w.WriteHeader(tc.otlpStatus)
+				default:
+					t.Errorf("unexpected path %s", r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer server.Close()
+			original = "AGENTO11Y_AUTH_TOKEN=same-token\n" +
+				"OTEL_EXPORTER_OTLP_HEADERS='" + headers + "'\n" +
+				"AGENTO11Y_AUTH_MODE=basic\nAGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=false\n"
+			collector := server.URL + "/otlp"
+			if tc.insecureKey != "" {
+				collector = strings.Replace(collector, "http://", "https://", 1)
+				if tc.insecureFile {
+					original += tc.insecureKey + "=true\n"
+				} else {
+					t.Setenv(tc.insecureKey, "true")
+				}
+			}
+			if tc.secureBlockKey != "" {
+				collector = strings.Replace(collector, "http://", "https://", 1)
+				original += tc.secureBlockKey + "=true\n"
+				tc.blockSettings += tc.secureBlockKey + "=false\n"
+			}
+			savedCollector := collector
+			if tc.moveCollector {
+				savedCollector = ambient.URL
+			}
+			original += "AGENTO11Y_ENDPOINT=" + server.URL + "\n" +
+				"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT=" + savedCollector + "\n"
+			if tc.savedOTLPToken != "" {
+				original += "AGENTO11Y_OTEL_AUTH_TOKEN=" + tc.savedOTLPToken + "\n"
+			}
+			if tc.useBlock {
+				original = strings.Replace(original, "OTEL_EXPORTER_OTLP_HEADERS='"+headers+"'\n", "", 1)
+			}
+			if strings.Contains(tc.blockSettings, "AGENTO11Y_PROTOCOL=otel") {
+				original += "AGENTO11Y_PROTOCOL=http\n"
+			}
+			path = writeDotenv(t, original)
+			var output bytes.Buffer
+			protocol := agento11y.GenerationExportProtocol("")
+			if tc.httpOnly {
+				protocol = agento11y.GenerationExportProtocolHTTP
+			}
+			opts := RunOpts{
+				ConfigPath: path, Stdin: nonTTYStdin(t), Stderr: &output,
+				Endpoint: server.URL, TenantID: "123", Token: token, OTLPEndpoint: collector,
+				AssumeYes: tc.yes, SkipVerify: tc.skip, GenerationProtocol: protocol,
+			}
+			if tc.useBlock {
+				opts.Endpoint, opts.TenantID, opts.Token, opts.OTLPEndpoint = "", "", "", ""
+				opts.Block = "AGENTO11Y_ENDPOINT=" + server.URL + "\nAGENTO11Y_AUTH_TENANT_ID=123\n" +
+					"AGENTO11Y_AUTH_TOKEN=" + token + "\nOTEL_EXPORTER_OTLP_ENDPOINT=" + collector + "\n" + tc.blockSettings
+			}
+			_, err := Run(context.Background(), opts)
+			if tc.wantSave && err != nil || !tc.wantSave && !errors.Is(err, ErrNotVerified) {
+				t.Fatalf("Run error = %v, wantSave = %v", err, tc.wantSave)
+			}
+			wantCalls := 1
+			if tc.skip {
+				wantCalls = 0
+			}
+			wantOTLPCalls := wantCalls
+			if tc.httpOnly || tc.secureBlockKey != "" {
+				wantOTLPCalls = 0
+			}
+			if apiCalls != wantCalls || otlpCalls != wantOTLPCalls || ambientCalls != 0 {
+				t.Errorf("probe calls API=%d OTLP=%d ambient=%d", apiCalls, otlpCalls, ambientCalls)
+			}
+			if !tc.wantSave {
+				got, _ := os.ReadFile(path)
+				if string(got) != original {
+					t.Error("verification failure changed config")
+				}
+			} else {
+				saved := dotenv.LoadDotenv(path, nil)
+				wantProtocol := ""
+				if strings.Contains(tc.blockSettings, "AGENTO11Y_PROTOCOL=otel") {
+					wantProtocol = "otel"
+				}
+				if tc.savedOTLPToken != "" && saved["AGENTO11Y_OTEL_AUTH_TOKEN"] != "" {
+					t.Error("stale OTLP token was saved")
+				}
+				if strings.Contains(tc.blockSettings, "AGENTO11Y_OTEL_AUTH_TOKEN=") && saved["AGENTO11Y_OTEL_AUTH_TOKEN"] != "block-otlp-token" {
+					t.Error("block OTLP token was not saved")
+				}
+				if saved["AGENTO11Y_AUTH_MODE"] != "basic" || saved["AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES"] != "false" || saved["AGENTO11Y_PROTOCOL"] != wantProtocol {
+					t.Error("credential save changed transport settings")
+				}
+			}
+			if !tc.skip && tc.otlpStatus == 200 && tc.secureBlockKey == "" && !strings.Contains(output.String(), "does not confirm generation storage") {
+				t.Errorf("missing storage disclaimer: %s", output.String())
 			}
 		})
 	}
@@ -3581,7 +3958,7 @@ func TestRun_Block(t *testing.T) {
 			// The loader drops a ` #` tail, so the endpoint inside it is not
 			// a live line either.
 			name: "an endpoint in a trailing comment stays dead",
-			opts: RunOpts{Block: "AGENTO11Y_ENDPOINT=https://block.example.com\n" +
+			opts: RunOpts{GenerationProtocol: agento11y.GenerationExportProtocolHTTP, Block: "AGENTO11Y_ENDPOINT=https://block.example.com\n" +
 				"AGENTO11Y_AUTH_TENANT_ID=456\n" +
 				"AGENTO11Y_AUTH_TOKEN=glc_x # was: AGENTO11Y_ENDPOINT=https://staging.example\n"},
 			wantFile: map[string]string{
@@ -3594,10 +3971,11 @@ func TestRun_Block(t *testing.T) {
 			// supply the rest.
 			name: "flags may override every line of the block",
 			opts: RunOpts{
-				Block:    "AGENTO11Y_ENDPOINT=https://block.example.com\nAGENTO11Y_AUTH_TENANT_ID=456\n",
-				Endpoint: "https://mine.example.com",
-				TenantID: "789",
-				Token:    "glc_mine",
+				GenerationProtocol: agento11y.GenerationExportProtocolHTTP,
+				Block:              "AGENTO11Y_ENDPOINT=https://block.example.com\nAGENTO11Y_AUTH_TENANT_ID=456\n",
+				Endpoint:           "https://mine.example.com",
+				TenantID:           "789",
+				Token:              "glc_mine",
 			},
 			wantFile: map[string]string{
 				"SIGIL_ENDPOINT":       "https://mine.example.com",
@@ -3687,9 +4065,10 @@ func TestRun_BlockReportsOnlyWhatItSaved(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.env")
 	var stderr bytes.Buffer
 	_, err := Run(context.Background(), RunOpts{
-		ConfigPath: path,
-		Stdin:      nonTTYStdin(t),
-		Stderr:     &stderr,
+		GenerationProtocol: agento11y.GenerationExportProtocolHTTP,
+		ConfigPath:         path,
+		Stdin:              nonTTYStdin(t),
+		Stderr:             &stderr,
 		Block: "AGENTO11Y_ENDPOINT=https://block.example.com\nAGENTO11Y_AUTH_TENANT_ID=456\n" +
 			"AGENTO11Y_AUTH_TOKEN=glc_block\nAGENTO11Y_DEBUG=true\nAGENTO11Y_BIN=/tmp/evil\n",
 		Probe: func(context.Context, string, string, string, bool) *doctor.ProbeResult {
@@ -4689,6 +5068,7 @@ func TestRun_CredentialCopiesReportedOnlyWhenSaved(t *testing.T) {
 	}
 	stderr, err := runNonInteractive(t, RunOpts{
 		ConfigPath: path, Endpoint: "https://b.example.com", TenantID: "456", Token: "new_token_b", Probe: rejected,
+		GenerationProtocol: agento11y.GenerationExportProtocolHTTP,
 	})
 	if !errors.Is(err, ErrNotVerified) {
 		t.Fatalf("Run err = %v, want ErrNotVerified", err)

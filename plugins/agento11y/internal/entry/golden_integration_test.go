@@ -155,6 +155,8 @@ func runGoldenScenario(t *testing.T, name string) {
 	sc := loadScenario(t, dir)
 
 	stateDir, capture := startHookExport(t, sc)
+	// These goldens describe native HTTP request bodies, not the default transport.
+	t.Setenv("SIGIL_PROTOCOL", "http")
 	transcriptPaths := writeTranscripts(t, sc.Transcripts, sc.SiblingFiles)
 
 	eventOutput := make([]string, 0, len(sc.Events))
@@ -826,8 +828,8 @@ func assertGoldenJSON(t *testing.T, path string, got []goldenExport) {
 }
 
 // setHookExportEnv configures the canonical SIGIL_* env vars to point at the
-// fake export server and disables OTel transport so spans/metrics do not try
-// to reach a non-existent collector during the test.
+// fake export server. Transport is deliberately left unset: callers testing
+// native HTTP payloads must select HTTP explicitly.
 //
 // Both spellings of every alias family are pinned blank first, so dotenv
 // materialization (which writes both names) is rolled back between scenarios
@@ -843,7 +845,6 @@ func setHookExportEnv(t *testing.T, endpoint string) {
 	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
 	t.Setenv("SIGIL_AUTH_TOKEN", "token")
 	t.Setenv("SIGIL_AUTH_MODE", "basic")
-	t.Setenv("SIGIL_PROTOCOL", "http")
 	t.Setenv("SIGIL_USER_ID", "test-user")
 	t.Setenv("SIGIL_TAGS", "")
 	t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "full")

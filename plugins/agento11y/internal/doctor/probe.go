@@ -197,6 +197,13 @@ func probeOTLPSignal(ctx context.Context, target otel.ProbeTarget, tenant envVal
 	return res
 }
 
+// ProbeGenerationOTLP checks an explicit traces URL with only the supplied
+// headers. It never resolves ambient configuration or credentials. Acceptance
+// proves connectivity, not that generation-bearing spans will be stored.
+func ProbeGenerationOTLP(ctx context.Context, tracesURL string, headers map[string]string) *ProbeResult {
+	return probeGenerationOTLP(ctx, otel.ProbeTarget{URL: tracesURL, Headers: headers}, envValue{})
+}
+
 func probeGenerationOTLP(ctx context.Context, target otel.ProbeTarget, tenant envValue) *ProbeResult {
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()

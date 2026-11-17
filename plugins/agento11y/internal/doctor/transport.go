@@ -2,7 +2,9 @@ package doctor
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/grafana/agento11y/go/agento11y"
@@ -21,11 +23,14 @@ type HTTPAPISection struct {
 }
 
 func requestedProtocol(osEnv, fileEnv map[string]string) string {
-	raw := resolveFamily("PROTOCOL", osEnv, fileEnv).value
-	if raw == "" {
-		return "http"
+	protocol, err := envconfig.SelectGenerationTransportWith(func(suffix string) (string, string, bool) {
+		r := resolveFamily(suffix, osEnv, fileEnv)
+		return r.value, r.key, r.set
+	})
+	if err != nil {
+		return strings.ToLower(resolveFamily("PROTOCOL", osEnv, fileEnv).value)
 	}
-	return strings.ToLower(raw)
+	return string(protocol)
 }
 
 func resolveGenerationTransport(osEnv, fileEnv map[string]string) (agento11y.GenerationExportProtocol, error) {
@@ -82,7 +87,7 @@ func collectOTelConversations(osEnv, fileEnv map[string]string) ConversationsSec
 		TenantID: resolveFamily("AUTH_TENANT_ID", osEnv, fileEnv).envValue(),
 		Token:    token.tokenValue(),
 		Health:   HealthOK,
-		Messages: []string{"experimental OTel generation export; no HTTP fallback"},
+		Messages: []string{"OTel generation export; no HTTP fallback"},
 	}
 	if headersHaveAuthorization(resolveEnv("OTEL_EXPORTER_OTLP_HEADERS", osEnv, fileEnv).value) {
 		sec.Messages = append(sec.Messages, "OTLP authentication uses OTEL_EXPORTER_OTLP_HEADERS")
@@ -153,6 +158,12 @@ func runGenerationOTelProbe(ctx context.Context, r *Report, osEnv, fileEnv map[s
 	if localhealth.IsDaemonEndpoint(target.URL) {
 		// The capability check must not inherit exporter authorization headers.
 		err := localhealth.RequireGenerationIngest(ctx, target.URL)
+		var unreachable *url.Error
+		if managedLocalOnly(osEnv, fileEnv) && errors.As(err, &unreachable) {
+			// Launchers and local-mode hooks start the daemon on demand.
+			sec.Messages = append(sec.Messages, "local daemon is not running; the next launch or hook starts it")
+			return
+		}
 		sec.LocalCapability = &ProbeResult{OK: err == nil, Message: localhealth.OTelGenerationCapability}
 		if err != nil {
 			sec.Health = HealthError

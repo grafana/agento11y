@@ -151,10 +151,9 @@ func NewTargetExporter(ctx context.Context, target Target, logger *log.Logger) (
 	var providers *otel.Providers
 	if t.OTLPEndpoint != "" {
 		providers, err = otel.SetupWithOptions(ctx, otelInstancePrefix+uuid.NewString(), otel.Options{
-			GenerationProtocol:         t.Protocol,
-			EnableExperimentalFeatures: t.EnableExperimentalFeatures,
-			Endpoint:                   t.OTLPEndpoint,
-			Headers:                    otlpHeaders(t.OTLPHeaders),
+			GenerationProtocol: t.Protocol,
+			Endpoint:           t.OTLPEndpoint,
+			Headers:            otlpHeaders(t.OTLPHeaders),
 		})
 		if err != nil {
 			return nil, nil, err
@@ -169,9 +168,8 @@ func NewTargetExporter(ctx context.Context, target Target, logger *log.Logger) (
 		return providers.Shutdown(cleanupCtx)
 	}
 	cfg := agento11y.Config{
-		ContentCapture:             envconfig.ResolveContentModeValue(logger, "", t.ContentMode),
-		EnableExperimentalFeatures: t.EnableExperimentalFeatures,
-		Logger:                     logger,
+		ContentCapture: envconfig.ResolveContentModeValue(logger, "", t.ContentMode),
+		Logger:         logger,
 		GenerationExport: agento11y.GenerationExportConfig{
 			Protocol: t.Protocol,
 			Endpoint: emit.ExportEndpointFor(t.Endpoint),

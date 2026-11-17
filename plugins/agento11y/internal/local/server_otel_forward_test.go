@@ -46,11 +46,9 @@ func TestReceiverOTelGenerationFailureSurvivesToolSuccess(t *testing.T) {
 			}))
 			defer cloud.Close()
 			path := writeConfigEnvFile(t, map[string]string{
-				"AGENTO11Y_LOCAL_FORWARD":                "true",
-				"AGENTO11Y_PROTOCOL":                     "otel",
-				"AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "true",
-				"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT":  cloud.URL,
-				"AGENTO11Y_CONTENT_CAPTURE_MODE":         mode,
+				"AGENTO11Y_LOCAL_FORWARD":               "true",
+				"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": cloud.URL,
+				"AGENTO11Y_CONTENT_CAPTURE_MODE":        mode,
 			})
 			receiver := NewServer(storage, nil, path)
 			defer receiver.Close()
@@ -137,6 +135,7 @@ func TestReceiverOTelGenerationFailureSurvivesToolSuccess(t *testing.T) {
 
 func TestReceiverOTelGenerationForwarding(t *testing.T) {
 	for _, tc := range []struct {
+		protocol string
 		mode     string
 		rejected bool
 	}{
@@ -145,8 +144,13 @@ func TestReceiverOTelGenerationForwarding(t *testing.T) {
 		{mode: "full_with_metadata_spans"},
 		{mode: "no_tool_content"},
 		{mode: "metadata_only", rejected: true},
+		{protocol: "otel", mode: "metadata_only"},
+		{protocol: "otel", mode: "full"},
+		{protocol: "otel", mode: "full_with_metadata_spans"},
+		{protocol: "otel", mode: "no_tool_content"},
+		{protocol: "otel", mode: "metadata_only", rejected: true},
 	} {
-		t.Run(fmt.Sprintf("%s/rejected=%t", tc.mode, tc.rejected), func(t *testing.T) {
+		t.Run(fmt.Sprintf("protocol=%q/%s/rejected=%t", tc.protocol, tc.mode, tc.rejected), func(t *testing.T) {
 			clearForwardEnv(t)
 			storage, err := NewStorage(t.TempDir())
 			require.NoError(t, err)
@@ -156,6 +160,7 @@ func TestReceiverOTelGenerationForwarding(t *testing.T) {
 				marker    string
 			}
 			delivered := make(chan traceDelivery, 2)
+			httpBodies := make(chan []byte, 2)
 			var httpGenerations atomic.Int32
 			cloud := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				body, _ := io.ReadAll(r.Body)
@@ -164,6 +169,7 @@ func TestReceiverOTelGenerationForwarding(t *testing.T) {
 					delivered <- traceDelivery{body: body, persisted: err == nil && len(detail.Generations) == 1 && len(detail.Generations[0].Input) == 1 && len(detail.Generations[0].Input[0].Parts) == 1 && detail.Generations[0].Input[0].Parts[0].Text == "secret input", marker: r.Header.Get(ForwardMarkerHeader)}
 				} else if r.URL.Path == wire.GenerationExportHTTPPath {
 					httpGenerations.Add(1)
+					httpBodies <- body
 					r.Body = io.NopCloser(bytes.NewReader(body))
 					writeAcceptedGenerationResponse(w, r)
 					return
@@ -177,19 +183,22 @@ func TestReceiverOTelGenerationForwarding(t *testing.T) {
 			}))
 			defer cloud.Close()
 			path := writeConfigEnvFile(t, map[string]string{
-				"AGENTO11Y_LOCAL_FORWARD":                "true",
-				"AGENTO11Y_PROTOCOL":                     "otel",
-				"AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "true",
-				"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT":  cloud.URL,
-				"AGENTO11Y_ENDPOINT":                     cloud.URL,
-				"AGENTO11Y_AUTH_TENANT_ID":               "test-tenant",
-				"AGENTO11Y_AUTH_TOKEN":                   "test-token",
-				"AGENTO11Y_CONTENT_CAPTURE_MODE":         tc.mode,
+				"AGENTO11Y_LOCAL_FORWARD":               "true",
+				"AGENTO11Y_PROTOCOL":                    tc.protocol,
+				"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": cloud.URL,
+				"AGENTO11Y_ENDPOINT":                    cloud.URL,
+				"AGENTO11Y_AUTH_TENANT_ID":              "test-tenant",
+				"AGENTO11Y_AUTH_TOKEN":                  "test-token",
+				"AGENTO11Y_CONTENT_CAPTURE_MODE":        tc.mode,
 			})
 			receiver := NewServer(storage, log.New(io.Discard, "", 0), path)
 			defer receiver.Close()
 			receiver.forward.client = cloud.Client()
-			client, _, _, transport := generationSpanTestClient(t, agento11y.ContentCaptureModeFull)
+			capture := agento11y.ContentCaptureModeFull
+			if tc.mode == "full_with_metadata_spans" {
+				capture = agento11y.ContentCaptureModeFullWithMetadataSpans
+			}
+			client, _, _, transport := generationSpanTestClient(t, capture)
 			_, recorder := client.StartGeneration(context.Background(), agento11y.GenerationStart{
 				ID: "forward-generation", ConversationID: "forward-conversation", ConversationTitle: "secret title",
 				SystemPrompt: "secret system", Model: agento11y.ModelRef{Provider: "openai", Name: "model"},
@@ -203,6 +212,10 @@ func TestReceiverOTelGenerationForwarding(t *testing.T) {
 			require.NoError(t, client.Flush(context.Background()))
 			body, err := proto.Marshal(&transport.request)
 			require.NoError(t, err)
+			localGeneration := generationSpanTestDecode(t, &transport.request)
+			require.Len(t, localGeneration, 1)
+			require.Equal(t, "secret input", localGeneration[0].GetInput()[0].GetParts()[0].GetText())
+			require.Equal(t, "full", localGeneration[0].GetMetadata().GetFields()["agento11y.sdk.content_capture_mode"].GetStringValue())
 			request := newLocalRequest(http.MethodPost, otlpTracesPath, bytes.NewReader(gzipBytes(t, body)))
 			request.Header.Set("Content-Type", wire.ContentTypeProto)
 			request.Header.Set("Content-Encoding", "gzip")
@@ -264,6 +277,39 @@ func TestReceiverOTelGenerationForwarding(t *testing.T) {
 			receiver.forward.wait()
 			require.EqualValues(t, 1, httpGenerations.Load(), "legacy Pi/OpenCode HTTP ingress remains forwarded under OTel")
 			require.Empty(t, delivered)
+			require.Len(t, httpBodies, 1)
+			httpCopy, err := wire.UnmarshalExportGenerationsJSON(<-httpBodies)
+			require.NoError(t, err)
+			require.Len(t, httpCopy.GetGenerations(), 1)
+			if tc.mode == "full" {
+				require.True(t, proto.Equal(legacy, httpCopy.GetGenerations()[0]))
+			} else {
+				encoded, err := proto.Marshal(httpCopy)
+				require.NoError(t, err)
+				require.NotContains(t, string(encoded), "secret")
+				require.Equal(t, "metadata_only", httpCopy.GetGenerations()[0].GetMetadata().GetFields()["agento11y.sdk.content_capture_mode"].GetStringValue())
+			}
+			beforeRelayed := receiver.forward.status()
+			for _, ingress := range []struct {
+				path, contentType string
+				body              []byte
+			}{
+				{otlpTracesPath, wire.ContentTypeProto, body},
+				{wire.GenerationExportHTTPPath, wire.ContentTypeJSON, envelope},
+			} {
+				request := newLocalRequest(http.MethodPost, ingress.path, bytes.NewReader(ingress.body))
+				request.Header.Set("Content-Type", ingress.contentType)
+				request.Header.Set(ForwardMarkerHeader, "1")
+				response := httptest.NewRecorder()
+				receiver.ServeHTTP(response, request)
+				require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+				receiver.forward.wait()
+			}
+			require.Empty(t, delivered, "relayed OTLP ingress must not loop")
+			require.Empty(t, httpBodies, "relayed HTTP ingress must not loop")
+			require.EqualValues(t, 1, httpGenerations.Load())
+			require.Equal(t, beforeRelayed.Legs, receiver.forward.status().Legs)
+			require.Equal(t, beforeRelayed.Failures, receiver.forward.status().Failures)
 			if tc.rejected {
 				require.Len(t, receiver.forward.status().Failures, 1, "HTTP success must not clear the OTLP rejection")
 			}

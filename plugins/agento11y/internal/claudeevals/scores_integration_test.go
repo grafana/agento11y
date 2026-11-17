@@ -31,6 +31,9 @@ func TestExportLifecycleDelayedGeneration(t *testing.T) {
 		wantCalls int32
 		wantErr   bool
 	}{
+		{name: "implicit OTel delayed visibility", rejection: missingGenerationMessage, wantCalls: 2},
+		{name: "implicit OTel other rejection", rejection: "trial was not found", wantCalls: 1, wantErr: true},
+		{name: "implicit OTel caller deadline leaves run open", rejection: missingGenerationMessage, expires: true, wantCalls: 1, wantErr: true},
 		{name: "OTel delayed visibility", protocol: "otel", rejection: missingGenerationMessage, wantCalls: 2},
 		{name: "OTel other rejection", protocol: "otel", rejection: "trial was not found", wantCalls: 1, wantErr: true},
 		{name: "HTTP remains immediate", protocol: "http", rejection: missingGenerationMessage, wantCalls: 1, wantErr: true},
@@ -38,6 +41,9 @@ func TestExportLifecycleDelayedGeneration(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			envconfig.PinAliasEnvBlank(t)
+			for _, key := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"} {
+				t.Setenv(key, "")
+			}
 			p, err := Parse(bytes.NewReader(fixture(t)), Options{})
 			require.NoError(t, err)
 			p.IncludeTrajectory = true
@@ -50,7 +56,7 @@ func TestExportLifecycleDelayedGeneration(t *testing.T) {
 			for i := range trial.Scores {
 				trial.Scores[i].GenerationID = trial.Trajectory.Generation.ID
 			}
-			var generations, scores, updates, finalized atomic.Int32
+			var generations, httpGenerations, scores, updates, finalized, runs, trials atomic.Int32
 			var firstPending map[string]any
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/healthz" {
@@ -98,11 +104,19 @@ func TestExportLifecycleDelayedGeneration(t *testing.T) {
 				}
 				switch {
 				case strings.HasSuffix(r.URL.Path, ":upsert"):
+					runs.Add(1)
+					assert.Equal(t, http.MethodPost, r.Method)
 					fmt.Fprintf(w, `{"run":{"experiment_id":%q,"status":"running"}}`, p.Runs[0].Create.RunID)
 				case strings.HasSuffix(r.URL.Path, "/generations:export"):
+					httpGenerations.Add(1)
 					generations.Add(1)
 					fmt.Fprintf(w, `{"results":[{"generation_id":%q,"accepted":true}]}`, trial.Trajectory.Generation.ID)
 				case strings.HasSuffix(r.URL.Path, "/scores:export"):
+					assert.Equal(t, http.MethodPost, r.Method)
+					assert.Equal(t, int32(1), runs.Load(), "experiment must exist before scores")
+					assert.Equal(t, int32(1), trials.Load(), "trial must exist before scores")
+					assert.Zero(t, updates.Load(), "trial must remain open until scores are accepted")
+					assert.Zero(t, finalized.Load(), "run must remain open until scores are accepted")
 					assert.Equal(t, int32(1), generations.Load(), "trajectory must be confirmed first and never replayed for scores")
 					batch := req["scores"].([]any)
 					if scores.Add(1) == 1 {
@@ -115,12 +129,18 @@ func TestExportLifecycleDelayedGeneration(t *testing.T) {
 						fmt.Fprintf(w, `{"results":[{"score_id":%q,"accepted":true,"status":"accepted"}],"accepted":1}`, trial.Scores[1].ScoreID)
 					}
 				case strings.HasSuffix(r.URL.Path, ":finalize"):
+					assert.Equal(t, http.MethodPost, r.Method)
+					assert.Equal(t, tc.wantCalls, scores.Load())
+					assert.Equal(t, int32(1), updates.Load())
 					finalized.Add(1)
 					fmt.Fprint(w, `{}`)
 				case r.Method == http.MethodPatch:
+					assert.Equal(t, tc.wantCalls, scores.Load())
 					updates.Add(1)
 					fmt.Fprint(w, `{}`)
 				case strings.HasSuffix(r.URL.Path, "/trials"):
+					trials.Add(1)
+					assert.Equal(t, http.MethodPost, r.Method)
 					fmt.Fprint(w, `{}`)
 				default:
 					t.Errorf("unexpected request: %s", r.URL.Path)
@@ -128,7 +148,7 @@ func TestExportLifecycleDelayedGeneration(t *testing.T) {
 			}))
 			defer server.Close()
 			t.Setenv("AGENTO11Y_PROTOCOL", tc.protocol)
-			t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "true")
+			t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "")
 			t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", server.URL)
 			t.Setenv("AGENTO11Y_ENDPOINT", server.URL)
 			t.Setenv("AGENTO11Y_AUTH_TENANT_ID", "test")
@@ -160,6 +180,13 @@ func TestExportLifecycleDelayedGeneration(t *testing.T) {
 			}
 			assert.Equal(t, tc.wantCalls, scores.Load())
 			assert.Equal(t, int32(1), generations.Load())
+			assert.Equal(t, int32(1), runs.Load(), "experiments must still use HTTP")
+			assert.Equal(t, int32(1), trials.Load(), "trials must still use HTTP")
+			if tc.protocol == "http" {
+				assert.Equal(t, int32(1), httpGenerations.Load())
+			} else {
+				assert.Zero(t, httpGenerations.Load(), "OTel trajectories must not also export HTTP generations")
+			}
 		})
 	}
 }

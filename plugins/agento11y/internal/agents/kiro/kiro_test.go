@@ -167,6 +167,7 @@ func TestMalformedHooksAndTightenedCapture(t *testing.T) {
 }
 
 func TestHTTPExport(t *testing.T) {
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	bodies := make(chan []byte, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/generations:export" {

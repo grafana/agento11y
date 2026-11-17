@@ -1776,9 +1776,12 @@ func TestServer_Config_RoundTrip(t *testing.T) {
 	assert.True(t, got.Settings.AutoUpdate)
 	assert.Equal(t, guardsOff, got.Settings.Guards)
 	assert.False(t, got.Settings.LocalForward)
+	assert.Equal(t, "otel", got.GenerationProtocol)
+	assert.Empty(t, got.GenerationProtocolError)
 	assert.Equal(t, forwardStatus{Mode: forwardModeOff, Destinations: []forwardDestinationStatus{}, ForwardingPath: filepath.Join(filepath.Dir(srv.configPath), forwardingFile)}, got.ForwardStatus)
 	assert.Empty(t, got.ForwardStatus.Reason, "forwarding off by default is not a paused state")
 
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	// Save a non-default configuration.
 	resp := putConfig(t, srv, Settings{
 		Theme:        themeSystem,
@@ -1806,6 +1809,8 @@ func TestServer_Config_RoundTrip(t *testing.T) {
 	assert.False(t, saved.Settings.AutoUpdate)
 	assert.Equal(t, "alice", saved.Settings.UserID)
 	assert.True(t, saved.Settings.LocalForward)
+	assert.Equal(t, "http", saved.GenerationProtocol)
+	assert.Empty(t, saved.GenerationProtocolError)
 	// The saved toggle plus usable credentials resolve to a live forwarding
 	// posture, reduced to metadata_only by the saved capture mode. No OTLP
 	// endpoint was configured, so that leg reports why it stays off. Guards
@@ -1840,6 +1845,154 @@ func TestServer_Config_RoundTrip(t *testing.T) {
 	var reread configResponse
 	require.NoError(t, json.Unmarshal(rr2.Body.Bytes(), &reread))
 	assert.Equal(t, saved.Settings, reread.Settings)
+}
+
+func TestServer_Config_GenerationProtocol(t *testing.T) {
+	for _, tc := range []struct {
+		name, file, preferredEnv, legacyEnv, want, wantError string
+	}{
+		{name: "missing", want: "otel"},
+		{name: "empty", want: "otel"},
+		{name: "empty protocol", file: "AGENTO11Y_PROTOCOL=\n", want: "otel"},
+		{name: "whitespace", file: "AGENTO11Y_PROTOCOL='  '\n", want: "otel"},
+		{name: "otel without endpoint or opt-in", file: "AGENTO11Y_PROTOCOL=otel\nAGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=false\n", want: "otel"},
+		{name: "http", file: "AGENTO11Y_PROTOCOL=http\n", want: "http"},
+		{name: "grpc compatibility", file: "AGENTO11Y_PROTOCOL=grpc\n", want: "http"},
+		{name: "none compatibility", file: "AGENTO11Y_PROTOCOL=none\n", want: "http"},
+		{name: "case and trim", file: "AGENTO11Y_PROTOCOL=' HTTP '\n", want: "http"},
+		{name: "unknown", file: "AGENTO11Y_PROTOCOL=typo\n", wantError: "unsupported AGENTO11Y_PROTOCOL"},
+		{name: "legacy unknown", file: "SIGIL_PROTOCOL=typo\n", preferredEnv: "http", wantError: "unsupported SIGIL_PROTOCOL"},
+		{name: "file preferred beats file legacy", file: "AGENTO11Y_PROTOCOL=otel\nSIGIL_PROTOCOL=http\n", want: "otel"},
+		{name: "file legacy beats preferred shell", file: "SIGIL_PROTOCOL=http\n", preferredEnv: "otel", want: "http"},
+		{name: "file preferred beats legacy shell", file: "AGENTO11Y_PROTOCOL=http\n", legacyEnv: "otel", want: "http"},
+		{name: "blank preferred falls back to file legacy", file: "AGENTO11Y_PROTOCOL=' '\nSIGIL_PROTOCOL=none\n", preferredEnv: "otel", want: "http"},
+		{name: "blank file falls back to shell", file: "AGENTO11Y_PROTOCOL=' '\n", preferredEnv: "http", want: "http"},
+		{name: "shell preferred beats legacy", preferredEnv: "otel", legacyEnv: "http", want: "otel"},
+		{name: "shell legacy", legacyEnv: "grpc", want: "http"},
+		{name: "shell unknown", preferredEnv: "typo", wantError: "unsupported AGENTO11Y_PROTOCOL"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodPatch} {
+				t.Run(method, func(t *testing.T) {
+					srv, dir := newTestServer(t)
+					path := configPathFor(dir)
+					if tc.file != "" || tc.name == "empty" {
+						require.NoError(t, os.WriteFile(path, []byte(tc.file), 0o600))
+					}
+					t.Setenv("AGENTO11Y_PROTOCOL", tc.preferredEnv)
+					t.Setenv("SIGIL_PROTOCOL", tc.legacyEnv)
+					before := dotenv.LoadDotenv(path, nil)
+					var resp *http.Response
+					switch method {
+					case http.MethodPut:
+						resp = putConfig(t, srv, Settings{Theme: themeLight, Guards: guardsOff, AutoUpdate: true,
+							Endpoint: "https://cloud.example.test", TenantID: "123", Token: "test-token"})
+					case http.MethodPatch:
+						resp = patchTheme(t, srv, `{"theme":"light"}`)
+					default:
+						resp = doReq(t, srv, method, "/api/v1/config", "")
+					}
+					defer resp.Body.Close()
+					require.Equal(t, http.StatusOK, resp.StatusCode)
+					var body map[string]json.RawMessage
+					decodeJSON(t, resp.Body, &body)
+					require.Contains(t, body, "generationProtocol")
+					require.Contains(t, body, "generationProtocolError")
+					var protocol, protocolError string
+					require.NoError(t, json.Unmarshal(body["generationProtocol"], &protocol))
+					require.NoError(t, json.Unmarshal(body["generationProtocolError"], &protocolError))
+					assert.Equal(t, tc.want, protocol)
+					if tc.wantError == "" {
+						assert.Empty(t, protocolError)
+					} else {
+						assert.Contains(t, protocolError, tc.wantError)
+					}
+					var settings Settings
+					require.NoError(t, json.Unmarshal(body["settings"], &settings))
+					assert.False(t, settings.LocalForward, "status must resolve even with forwarding disabled")
+					if method != http.MethodGet {
+						assert.Equal(t, themeLight, settings.Theme)
+						assert.Equal(t, "light", dotenv.LoadDotenv(path, nil)["AGENTO11Y_THEME"], "status errors must not block unrelated edits")
+					}
+					after := dotenv.LoadDotenv(path, nil)
+					for _, key := range []string{"AGENTO11Y_PROTOCOL", "SIGIL_PROTOCOL", "AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES"} {
+						assert.Equal(t, strings.TrimSpace(before[key]), strings.TrimSpace(after[key]), "read-only key %s", key)
+					}
+					var settingsKeys map[string]json.RawMessage
+					require.NoError(t, json.Unmarshal(body["settings"], &settingsKeys))
+					assert.NotContains(t, settingsKeys, "generationProtocol")
+					assert.NotContains(t, settingsKeys, "generationProtocolError")
+				})
+			}
+		})
+	}
+}
+
+func TestServer_Config_ReadErrors(t *testing.T) {
+	for _, kind := range []string{"directory", "scan failure"} {
+		t.Run(kind, func(t *testing.T) {
+			srv, dir := newTestServer(t)
+			path := configPathFor(dir)
+			if kind == "directory" {
+				require.NoError(t, os.Mkdir(path, 0o700))
+			} else {
+				require.NoError(t, os.WriteFile(path, []byte("AGENTO11Y_PROTOCOL=http\n"+strings.Repeat("x", 70*1024)), 0o600))
+			}
+			t.Setenv("AGENTO11Y_PROTOCOL", "otel")
+			resp := doReq(t, srv, http.MethodGet, "/api/v1/config", "")
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+			var got configResponse
+			decodeJSON(t, resp.Body, &got)
+			assert.Empty(t, got.GenerationProtocol)
+			assert.Contains(t, got.GenerationProtocolError, "read config:")
+		})
+	}
+}
+
+func TestServer_Config_PersistedSaveReadError(t *testing.T) {
+	for _, method := range []string{http.MethodPut, http.MethodPatch} {
+		t.Run(method, func(t *testing.T) {
+			srv, dir := newTestServer(t)
+			path := configPathFor(dir)
+			// This line is readable initially, but the writer's added quotes
+			// push it over bufio.Scanner's limit. The save succeeds and only
+			// the response re-read fails.
+			const prefix = "AGENTO11Y_UNMANAGED="
+			line := prefix + strings.Repeat("x", 64*1024-len(prefix)-4) + " y"
+			require.NoError(t, os.WriteFile(path, []byte("AGENTO11Y_PROTOCOL=http\n"+line+"\n"), 0o600))
+			_, err := dotenv.ReadDotenv(path, nil)
+			require.NoError(t, err)
+			var resp *http.Response
+			if method == http.MethodPut {
+				resp = putConfig(t, srv, Settings{Theme: themeLight, Guards: guardsOff, AutoUpdate: true})
+			} else {
+				resp = patchTheme(t, srv, `{"theme":"light"}`)
+			}
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusOK, resp.StatusCode, "a persisted save must not be reported as failed")
+			var saved configResponse
+			decodeJSON(t, resp.Body, &saved)
+			assert.Equal(t, themeLight, saved.Settings.Theme)
+			assert.Contains(t, saved.Preview, "AGENTO11Y_THEME=light")
+			assert.Empty(t, saved.GenerationProtocol)
+			assert.Contains(t, saved.GenerationProtocolError, "read config:")
+			onDisk, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Contains(t, string(onDisk), "AGENTO11Y_THEME=light\n")
+			assert.Contains(t, string(onDisk), "AGENTO11Y_PROTOCOL=http\n")
+			_, err = dotenv.ReadDotenv(path, nil)
+			require.Error(t, err)
+
+			resp = doReq(t, srv, http.MethodGet, "/api/v1/config", "")
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+			var got configResponse
+			decodeJSON(t, resp.Body, &got)
+			assert.Equal(t, saved.GenerationProtocol, got.GenerationProtocol)
+			assert.Equal(t, saved.GenerationProtocolError, got.GenerationProtocolError)
+		})
+	}
 }
 
 func TestServer_Config_PatchTheme(t *testing.T) {

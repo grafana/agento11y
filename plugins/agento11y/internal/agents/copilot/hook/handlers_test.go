@@ -32,6 +32,7 @@ import (
 )
 
 func TestHookSequenceExportsOnStop(t *testing.T) {
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "full")
@@ -98,6 +99,7 @@ func TestStopLocalEndpointAllowsMissingCredentials(t *testing.T) {
 			envconfig.PinAliasEnvBlank(t)
 			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 			logger := log.New(io.Discard, "", 0)
+			t.Setenv("AGENTO11Y_PROTOCOL", "http")
 			var gotAuth string
 			var requestCount atomic.Int64
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -207,6 +209,7 @@ func TestErrorOccurredStoresMetadataOnlyOutsideFullMode(t *testing.T) {
 }
 
 func TestStopEnrichesExportFromTranscript(t *testing.T) {
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "full")
@@ -254,6 +257,7 @@ func TestStopEnrichesExportFromTranscript(t *testing.T) {
 // through to the exported body. The mapper tests cover the flag itself and
 // the config test covers Load; this one covers the wire between them.
 func TestStopPromptRedactionWiring(t *testing.T) {
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	const secret = "glc_abcdefghijklmnopqrstuvwxyz"
 
 	tests := []struct {
@@ -299,6 +303,7 @@ func TestStopPromptRedactionWiring(t *testing.T) {
 }
 
 func TestStopRetainsActiveTurnWhenExportFlushFails(t *testing.T) {
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "full")
@@ -322,6 +327,7 @@ func TestStopRetainsActiveTurnWhenExportFlushFails(t *testing.T) {
 }
 
 func TestStopClearsActiveTurnWhenFragmentLoadFails(t *testing.T) {
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "full")
@@ -351,6 +357,7 @@ func TestStopClearsActiveTurnWhenFragmentLoadFails(t *testing.T) {
 }
 
 func TestStopClearsActiveTurnWhenDeleteFailsAfterSuccessfulExport(t *testing.T) {
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "full")
@@ -385,6 +392,7 @@ func TestStopClearsActiveTurnWhenDeleteFailsAfterSuccessfulExport(t *testing.T) 
 }
 
 func TestStopUsesPromptHashForMetadataOnlyTranscriptEnrichment(t *testing.T) {
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "metadata_only")
@@ -484,6 +492,7 @@ func writeAcceptedGenerationResponse(t *testing.T, w http.ResponseWriter, body [
 }
 
 func TestStopWaitsForCurrentCLITranscriptTurnInsteadOfReusingPreviousTurn(t *testing.T) {
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "full")
@@ -881,6 +890,7 @@ func TestAgentNameOverrideGuardAndExport(t *testing.T) {
 			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 			logger := log.New(io.Discard, "", 0)
 
+			t.Setenv("AGENTO11Y_PROTOCOL", "http")
 			var guardAgents, guardConversationIDs, exportAgents, exportConversationIDs []string
 			var exportProviders []string
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

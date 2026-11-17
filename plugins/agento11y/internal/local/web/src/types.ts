@@ -399,6 +399,8 @@ export interface ConfigResponse {
   path: string;
   /** The stack `agento11y login` was pointed at. Read-only; a save never writes it. */
   stackUrl: string;
+  generationProtocol: string;
+  generationProtocolError: string;
   forwardStatus: ForwardStatus | null;
 }
 

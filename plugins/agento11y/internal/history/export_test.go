@@ -343,6 +343,7 @@ func TestExporterSurfacesFailures(t *testing.T) {
 // the daemon forwards.
 func TestNewTargetExporterUsesExplicitEndpointAndHeaders(t *testing.T) {
 	envconfig.PinAliasEnvBlank(t)
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	t.Setenv("AGENTO11Y_ENDPOINT", "https://cloud.example.invalid")
 
 	var mu sync.Mutex
@@ -405,6 +406,7 @@ func TestNewTargetExporterUsesExplicitEndpointAndHeaders(t *testing.T) {
 
 func TestNewTargetExporterFallsBackToTheConfiguredEndpoint(t *testing.T) {
 	envconfig.PinAliasEnvBlank(t)
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	t.Setenv("AGENTO11Y_ENDPOINT", "https://cloud.example.invalid")
 	t.Setenv("AGENTO11Y_AUTH_TENANT_ID", "tenant")
 	t.Setenv("AGENTO11Y_AUTH_TOKEN", "token")
@@ -435,7 +437,17 @@ func TestNewTargetExporterRejectsAnIncompleteTarget(t *testing.T) {
 		},
 		{
 			name:   "a Cloud endpoint with no credentials",
+			target: Target{Endpoint: "https://cloud.example.invalid", Protocol: agento11y.GenerationExportProtocolHTTP},
+			want:   "no credentials configured",
+		},
+		{
+			name:   "implicit OTel needs a collector before credentials",
 			target: Target{Endpoint: "https://cloud.example.invalid"},
+			want:   "OTLP base endpoint",
+		},
+		{
+			name:   "implicit OTel still needs tenant identity",
+			target: Target{Endpoint: "https://cloud.example.invalid", OTLPEndpoint: "https://collector.example.invalid"},
 			want:   "no credentials configured",
 		},
 	}
@@ -457,6 +469,7 @@ func TestNewTargetExporterRejectsAnIncompleteTarget(t *testing.T) {
 // loopback import must work on a machine that has never run `agento11y login`.
 func TestLocalTargetNeedsNoCredentials(t *testing.T) {
 	envconfig.PinAliasEnvBlank(t)
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, acceptAllGenerations(r))
 	}))
@@ -481,6 +494,7 @@ func TestLocalTargetNeedsNoCredentials(t *testing.T) {
 // replayed turn would be wrong.
 func TestNewTargetExporterIgnoresAutoTags(t *testing.T) {
 	envconfig.PinAliasEnvBlank(t)
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	t.Setenv("AGENTO11Y_AUTO_CODING_AGENT_TAGS", "true")
 
 	var mu sync.Mutex
@@ -682,6 +696,7 @@ func TestLoopbackEndpointAlwaysCarriesTheForwardMarker(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			envconfig.PinAliasEnvBlank(t)
+			t.Setenv("AGENTO11Y_PROTOCOL", "http")
 			// Go only skips a proxy for a lower-case localhost, so a proxy in
 			// the environment would carry the LOCALHOST case away.
 			for _, key := range []string{"HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"} {
@@ -866,7 +881,7 @@ func TestOpenCodeV2SDKLoopback(t *testing.T) {
 				var cleanup func(context.Context) error
 				var err error
 				exp, cleanup, err = NewTargetExporter(context.Background(), Target{
-					Endpoint: srv.URL, ContentMode: "metadata_only",
+					Endpoint: srv.URL, Protocol: agento11y.GenerationExportProtocolHTTP, ContentMode: "metadata_only",
 				}, log.New(io.Discard, "", 0))
 				if err != nil {
 					t.Fatal(err)

@@ -351,18 +351,17 @@ AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana
 
 Find these values at `https://<your-grafana>.grafana.net/a/grafana-agento11y-app/setup-coding-agent`.
 
-### Experimental OTel generation export
+### Generation transport
 
-HTTP remains the default. To export generations as OpenTelemetry (OTel) spans, set these values in the environment or `~/.config/agento11y/config.env`:
+The shared Go CLI exports generations as OpenTelemetry (OTel) spans by default. Configure `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_ENDPOINT`) and authentication for an endpoint that supports Agent Observability generation ingestion. For HTTP export, set `AGENTO11Y_PROTOCOL=http` in the environment or `config.env` before setup.
 
-```dotenv
-AGENTO11Y_PROTOCOL=otel
-AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true
-```
+Configurations without `AGENTO11Y_PROTOCOL` switch to OTel too. Compared with HTTP:
 
-Configure `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_ENDPOINT`) and OTLP authentication. Use an endpoint that supports Agent Observability generation ingestion.
+- With the default `metadata_only`, generations omit message and tool-definition documents, including roles. HTTP keeps a reduced structure.
+- `full_with_metadata_spans` becomes `full`, so generation spans include prompts and responses.
+- Without `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT`, generations go to `OTEL_EXPORTER_OTLP_ENDPOINT`, even if it was set for another collector.
 
-OTel export supports Claude Code, Codex, Copilot, Cursor, Vibe, and Kiro. Local mode, history imports, and Claude plugin eval imports also support OTel. Pi and OpenCode live plugins still use HTTP.
+OTel export supports Claude Code, Codex, Copilot, Cursor, Vibe, Kiro, local mode, history imports, and Claude plugin eval imports. Pi and OpenCode live plugins still use HTTP and reject explicit `otel`.
 
 Guards, scores, and experiment APIs still need HTTP credentials.
 
@@ -384,7 +383,7 @@ A plugin can only export fields the host agent passes through to it, so individu
 Scripts and devcontainers can pass the Cloud connection values as flags. Preferences have no flags; set them in the config file or answer the prompt.
 
 ```sh
-agento11y login --endpoint https://agento11y-prod-<region>.grafana.net --tenant <instance-id> --token glc_...
+agento11y login --endpoint https://agento11y-prod-<region>.grafana.net --tenant <instance-id> --token glc_... --otlp-endpoint https://otlp-gateway-prod-<region>.grafana.net/otlp
 ```
 
 | Flag | Meaning |
@@ -393,17 +392,17 @@ agento11y login --endpoint https://agento11y-prod-<region>.grafana.net --tenant 
 | `--tenant id` | instance ID |
 | `--token value` | access-policy token with the `sigil:write` scope |
 | `--token-stdin` | read the token from stdin; requires `--endpoint` and `--tenant`, or an `--env-file` that sets them |
-| `--otlp-endpoint url` | OTLP endpoint for SDK traces and metrics |
+| `--otlp-endpoint url` | OTLP endpoint for default Go generations, traces, and metrics |
 | `--env-file path` | read an environment block from a file, or from stdin when the path is `-`, and save its settings; login names on stderr any key it does not take (see below) |
 | `--no-verify` | write the file without checking the credentials |
 | `--yes` | save even when the check fails |
 
-Passing `--endpoint`, `--tenant`, and a token together skips the value prompts. Login verifies the credentials before it writes the file. If verification fails and stdin is a terminal, login asks whether to save anyway. Pass `--yes` or `--no-verify` so a script never stops there.
+Passing `--endpoint`, `--tenant`, and a token together skips the value prompts. Default OTel setup also requires a valid OTLP endpoint, saved or supplied with `--otlp-endpoint`. Login checks API credentials and the selected OTel destination before saving. `--yes` and `--no-verify` do not bypass required fields. If verification fails and stdin is a terminal, login asks whether to save anyway. Pass `--yes` or `--no-verify` so a script never stops there.
 
 Keep the token out of your shell history with `--token-stdin`:
 
 ```sh
-printf %s "$TOKEN" | agento11y login --endpoint https://agento11y-prod-<region>.grafana.net --tenant <instance-id> --token-stdin
+printf %s "$TOKEN" | agento11y login --endpoint https://agento11y-prod-<region>.grafana.net --tenant <instance-id> --token-stdin --otlp-endpoint https://otlp-gateway-prod-<region>.grafana.net/otlp
 ```
 
 A team can share one environment block instead, as a file or through a password manager. Save the block from the setup page, then pass the file, or pipe it in with `-`:
@@ -413,7 +412,7 @@ agento11y login --env-file team.env
 op document get agento11y-cloud-env | agento11y login --env-file -
 ```
 
-Login takes the settings it knows from the block. The credentials and OTLP lines connect to the stack. The preferences the login form asks about (content capture, session tags, guards, and automatic tags) become the form's answers, so after a paste you see them and can change them before saving. A block cannot preset guards off, fail-open, or the guard timeout, but you can still choose any of them in the form. A block's stack URL is used unless you already chose a stack in that run. Login also saves `AGENTO11Y_PROTOCOL`, `AGENTO11Y_OTEL_AUTH_TOKEN`, `AGENTO11Y_EXPORT_TIMEOUT_MS`, `AGENTO11Y_INSECURE`, `AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE`, `OTEL_EXPORTER_OTLP_INSECURE`, `AGENTO11Y_REDACT_INPUT_MESSAGES`, `AGENTO11Y_AUTO_UPDATE`, `AGENTO11Y_ANONYMOUS_USAGE_STATS`, `AGENTO11Y_DEBUG`, `AGENTO11Y_THEME`, `AGENTO11Y_USER_ID_SOURCE`, and `AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES`, within the limits in the table below, and once the file is written it names each saved key on stderr. The setup page's `AGENTO11Y_PROTOCOL=http` and `AGENTO11Y_AUTH_MODE=basic` lines are the defaults, so they do not replace a saved choice. `AGENTO11Y_OTEL_AUTH_TOKEN` carries the export credential, so like the OTLP headers it is dropped when `--tenant`, `--token`, or `--otlp-endpoint` replaces the block's value, or when the block has no OTLP endpoint of its own. A block chooses the stack its users report to and nothing else that leaves their machines. Login skips these keys, names each one on stderr with its reason, and exits 0:
+Login takes the settings it knows from the block. The credentials and OTLP lines connect to the stack. The preferences the login form asks about (content capture, session tags, guards, and automatic tags) become the form's answers, so after a paste you see them and can change them before saving. A block cannot preset guards off, fail-open, or the guard timeout, but you can still choose any of them in the form. A block's stack URL is used unless you already chose a stack in that run. Login also saves `AGENTO11Y_PROTOCOL`, `AGENTO11Y_OTEL_AUTH_TOKEN`, `AGENTO11Y_EXPORT_TIMEOUT_MS`, `AGENTO11Y_INSECURE`, `AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE`, `OTEL_EXPORTER_OTLP_INSECURE`, `AGENTO11Y_REDACT_INPUT_MESSAGES`, `AGENTO11Y_AUTO_UPDATE`, `AGENTO11Y_ANONYMOUS_USAGE_STATS`, `AGENTO11Y_DEBUG`, `AGENTO11Y_THEME`, `AGENTO11Y_USER_ID_SOURCE`, and `AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES`, within the limits in the table below, and once the file is written it names each saved key on stderr. Login ignores the setup page's `AGENTO11Y_PROTOCOL=http` and `AGENTO11Y_AUTH_MODE=basic` lines, so they do not replace a saved choice or the OTel default. To keep HTTP, set `AGENTO11Y_PROTOCOL=http` in `config.env`. `AGENTO11Y_OTEL_AUTH_TOKEN` carries the export credential, so like the OTLP headers it is dropped when `--tenant`, `--token`, or `--otlp-endpoint` replaces the block's value, or when the block has no OTLP endpoint of its own. A block chooses the stack its users report to and nothing else that leaves their machines. Login skips these keys, names each one on stderr with its reason, and exits 0:
 
 | Key | Why login skips it |
 |---|---|
@@ -542,14 +541,14 @@ Run `agento11y doctor` first. It's a read-only diagnostic that reports both expo
 agento11y doctor
 ```
 
-With default HTTP capture, conversations and analytics use separate pipelines. Experimental OTel generations share the trace route:
+Default Go generations and traces share the OTLP trace route.
 
-- **Conversations** (the chat transcripts) use `AGENTO11Y_ENDPOINT` + `AGENTO11Y_AUTH_TENANT_ID` + `AGENTO11Y_AUTH_TOKEN` by default. The token needs `sigil:write`. With experimental OTel selected, Go producers use the configured OTLP trace route instead.
-- **Analytics** (the Agent Observability metrics and traces) export over `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_ENDPOINT`). The token needs `metrics:write` and `traces:write`.
+- Conversations use OTLP by default. With explicit HTTP or Pi/OpenCode live capture, they use `AGENTO11Y_ENDPOINT` and API credentials (`sigil:write`).
+- Analytics uses `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_ENDPOINT`). Cloud OTLP credentials need `metrics:write` and `traces:write`.
 
-In OTel mode, doctor checks the selected transport, experimental opt-in, and trace route. A successful probe does not confirm storage in Agent Observability.
+Doctor checks the selected transport and destination. A successful probe does not confirm storage in Agent Observability.
 
-With default HTTP capture, the common failure is conversations showing up while the analytics page stays empty: the OTLP endpoint is unset, or the token lacks the metrics/traces scopes. `agento11y doctor` flags that case explicitly and exits non-zero when a pipeline is broken.
+With HTTP capture, conversations can arrive while analytics stays empty. Check the OTLP endpoint and metrics/traces scopes.
 
 For onboarding checks and unattended rollout, require a complete healthy Cloud
 connection rather than accepting an unconfigured installation:

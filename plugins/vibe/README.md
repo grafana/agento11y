@@ -78,7 +78,7 @@ Run `agento11y login` once for credentials.
 
 ## 2. Credentials
 
-Credentials are shared with every other `agento11y` launcher; see [`pi/README.md`](../pi/README.md#2-credentials) for the field-by-field walkthrough of the Grafana Cloud path. Once `~/.config/agento11y/config.env` exists, every launcher (and the Mistral Vibe hook) picks it up. If you only have the old `~/.config/sigil/config.env`, that file is used instead.
+Credentials are shared with every other `agento11y` launcher; see [Generation transport](../agento11y/README.md#generation-transport) for connection requirements. Once `~/.config/agento11y/config.env` exists, every launcher (and the Mistral Vibe hook) picks it up. If you only have the old `~/.config/sigil/config.env`, that file is used instead.
 
 ## 3. Verify
 
@@ -128,10 +128,10 @@ Mistral Vibe does not support blocking messages with `preflight` guards.
 
 | Variable | Default | Description |
 |---|---|---|
-| `AGENTO11Y_ENDPOINT` | — | Agent Observability API URL. Find it at `/plugins/grafana-agento11y-app`. Without it the turn is not exported. |
+| `AGENTO11Y_ENDPOINT` | — | Agent Observability API URL for HTTP generations, guards, scores, and experiments. |
 | `AGENTO11Y_AUTH_TENANT_ID` | — | Grafana Cloud instance ID. |
 | `AGENTO11Y_AUTH_TOKEN` | — | `glc_…` Cloud Access Policy Token. |
-| `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP endpoint. Falls back to `OTEL_EXPORTER_OTLP_ENDPOINT`. With neither set, tool spans and metrics are dropped and the `post_tool` hook records nothing. |
+| `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` | — | Required for default OTel generations, traces, and metrics. Falls back to `OTEL_EXPORTER_OTLP_ENDPOINT`. |
 | `AGENTO11Y_OTEL_AUTH_TOKEN` | `AGENTO11Y_AUTH_TOKEN` | Override the OTel password. |
 | `AGENTO11Y_CONTENT_CAPTURE_MODE` | `metadata_only` | `metadata_only`, `no_tool_content`, `full`, or `full_with_metadata_spans`. |
 | `AGENTO11Y_TAGS` | — | `key=value,key=value` tags on every generation and as `agento11y.tag.<key>` on OTel spans/metrics. Same as `--tag`. |
@@ -157,7 +157,7 @@ If your OTLP **Instance ID** (on the OpenTelemetry card) differs from your Agent
 | Hooks never fire, and `vibe` warns that `type` should be one of three other names | The `hooks.toml` entries are spelled for the other side of the 2.21.0 rename. Re-run `agento11y vibe`, which rewrites the three types for the installed version. |
 | Hooks never fire on Mistral Vibe below 2.21.0 | Those versions read `hooks.toml` only behind a flag. `agento11y vibe` sets `VIBE_ENABLE_EXPERIMENTAL_HOOKS=true` for you; when you start `vibe` yourself, export that variable or set `enable_experimental_hooks = true` in `~/.vibe/config.toml`. |
 | No `[[hooks]]` entries in `hooks.toml` | Re-run `agento11y vibe` (it upserts them before exec) and check `agento11y doctor`, which reads the same file. |
-| Hooks fire but nothing appears in Agent Observability | Check `AGENTO11Y_ENDPOINT`, `AGENTO11Y_AUTH_TENANT_ID`, and `AGENTO11Y_AUTH_TOKEN`. Without all three the hook logs `not exporting: missing …` and skips the turn. |
+| Hooks fire but nothing appears in Agent Observability | Run `agento11y doctor`. Default OTel needs a usable OTLP destination; explicit HTTP needs the API endpoint and credentials. |
 | No latency or tool-call charts | Set `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` (or the standard `OTEL_EXPORTER_OTLP_ENDPOINT`). Tool spans only leave the process through the OTel exporter. |
 | Prompt or tool content is missing | Check `AGENTO11Y_CONTENT_CAPTURE_MODE`. The default is `metadata_only`. |
 | A tool call was blocked unexpectedly | Guards are enabled and a deny rule matched, or `AGENTO11Y_GUARDS_FAIL_OPEN=false` and the guard call itself failed (missing credentials, timeout, transport error). The reason is shown to the model and logged; turn guards off with `AGENTO11Y_GUARDS_ENABLED=false`. |

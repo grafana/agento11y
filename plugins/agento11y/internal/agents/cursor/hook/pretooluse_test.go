@@ -228,6 +228,7 @@ func TestAgentNameOverrideGuardAndExport(t *testing.T) {
 			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 			logger := log.New(&bytes.Buffer{}, "", 0)
 
+			t.Setenv("AGENTO11Y_PROTOCOL", "http")
 			var guardAgents, guardConversationIDs, exportAgents, exportConversationIDs []string
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				body, _ := io.ReadAll(r.Body)

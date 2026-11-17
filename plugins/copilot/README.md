@@ -122,7 +122,7 @@ The shared hooks file wires these GitHub Copilot hook triggers:
 only. The handler accepts both the lower-camel and PascalCase event payload
 shapes.
 
-## Content Capture
+## Content Capture (HTTP)
 
 | Mode | User prompt | Assistant text | Tool args/results | Error text |
 | --- | --- | --- | --- | --- |
@@ -163,7 +163,7 @@ Limits:
 | `AGENTO11Y_ENDPOINT` | — | Agent Observability API URL. Find it at `/plugins/grafana-agento11y-app`. |
 | `AGENTO11Y_AUTH_TENANT_ID` | — | Grafana Cloud instance ID. |
 | `AGENTO11Y_AUTH_TOKEN` | — | `glc_…` Cloud Access Policy Token. |
-| `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP endpoint. Without it, the Agent Observability latency and tool-call panels stay empty. |
+| `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` | — | Required for default OTel generations, traces, and metrics. Falls back to `OTEL_EXPORTER_OTLP_ENDPOINT`. |
 | `AGENTO11Y_OTEL_AUTH_TOKEN` | `AGENTO11Y_AUTH_TOKEN` | Override the OTel password. |
 | `AGENTO11Y_CONTENT_CAPTURE_MODE` | `metadata_only` | `metadata_only`, `no_tool_content`, `full`, or `full_with_metadata_spans`. |
 | `AGENTO11Y_REDACT_INPUT_MESSAGES` | `true` | Redact known secret formats out of user prompt text. Set to `false` to export prompts without redaction; assistant and tool content stay redacted. |
@@ -192,7 +192,7 @@ When the documented Copilot hook payloads provide it, the plugin exports:
 - model, Copilot CLI version, reasoning effort, and request/message identifiers from the local Copilot transcript when available
 - output token counts from the local Copilot transcript when available
 - tool names and tool call order
-- tool arguments and results when `AGENTO11Y_CONTENT_CAPTURE_MODE=full`
+- tool arguments and results when the effective capture mode is `full`
 - tool status from `PostToolUse` and `PostToolUseFailure`
 - error metadata from `ErrorOccurred`
 - subagent lifecycle metadata from `SubagentStart` and `SubagentStop`
@@ -238,7 +238,7 @@ field and the `AGENTO11Y_DEBUG` log line (`dispatch: event=… surface=…`).
 | Hooks file missing at `~/.copilot/hooks/agento11y.json` | Re-run `agento11y copilot -- <args>` (it writes the file before launching). For VS Code, also add `~/.copilot/hooks` to `chat.hookFilesLocations`. |
 | Turns appear twice in Agent Observability | A leftover `sigil-copilot` plugin is firing alongside the shared file. Remove it: `copilot plugin uninstall sigil-copilot` (newer `agento11y copilot` runs do this automatically). |
 | Command not found | Reinstall `agento11y` (see step 1). Check `agento11y --version` and that its install dir is on `PATH`. |
-| Hooks run but nothing appears in Agent Observability | Check `AGENTO11Y_ENDPOINT`, `AGENTO11Y_AUTH_TENANT_ID`, and `AGENTO11Y_AUTH_TOKEN`. Without all three, the plugin discards the completed fragment. |
+| Hooks run but nothing appears in Agent Observability | Run `agento11y doctor`. Default OTel needs a usable OTLP destination; explicit HTTP needs the API endpoint and credentials. |
 | No latency/tool charts in Agent Observability | Set `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` so the plugin can emit traces and metrics. |
 | Prompt or tool content is missing | Check `AGENTO11Y_CONTENT_CAPTURE_MODE`. The default is `metadata_only`. |
 | Assistant response text is missing | Check that `agentStop` included a readable `transcriptPath` and that the local `events.jsonl` transcript still exists under `~/.copilot/session-state/<session-id>/`. |

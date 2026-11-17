@@ -21,7 +21,6 @@ import (
 	"maps"
 	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -94,11 +93,6 @@ type exporterConfig struct {
 	endpoint string
 	headers  map[string]string
 	insecure bool
-	// headersExplicit records that the caller supplied the header set, so
-	// an empty set must be passed to the exporter rather than left out.
-	// The SDK reads OTEL_EXPORTER_OTLP_HEADERS itself, and leaving the
-	// option out lets those ambient headers through.
-	headersExplicit bool
 }
 
 func (p *Providers) Tracer(name string) trace.Tracer {
@@ -198,11 +192,9 @@ type Options struct {
 	// IDGenerator optionally preserves trace identities during historical imports.
 	IDGenerator sdktrace.IDGenerator
 	// GenerationProtocol overrides the ambient generation transport. Empty
-	// resolves AGENTO11Y_PROTOCOL (SIGIL_ fallback), defaulting to HTTP. OTel
-	// still requires the preferred-only experimental opt-in and a valid endpoint.
+	// resolves AGENTO11Y_PROTOCOL (SIGIL_ fallback), defaulting to OTel. OTel
+	// requires a valid OTLP endpoint, but no global experimental opt-in.
 	GenerationProtocol agento11y.GenerationExportProtocol
-	// EnableExperimentalFeatures preserves an import's resolved opt-in.
-	EnableExperimentalFeatures *bool
 	// Endpoint replaces the environment OTLP endpoint when non-empty. Its
 	// scheme also decides the transport, so AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE
 	// cannot downgrade an https endpoint named here to cleartext.
@@ -213,8 +205,9 @@ type Options struct {
 }
 
 // Setup creates OTLP HTTP trace + metric providers from the environment.
-// Returns nil providers (no error) when no OTLP endpoint is configured, unless
-// OTel generation export was requested, in which case missing config is an error.
+// Generation export defaults to OTel and requires a valid OTLP endpoint.
+// With explicit HTTP generation export, a missing OTLP endpoint returns nil
+// providers (no error); a configured endpoint enables tool traces and metrics.
 //
 // instanceID is written to the resource as service.instance.id so concurrent
 // agent sessions on the same host produce distinct OTel resource identities
@@ -241,13 +234,7 @@ func SetupWithOptions(ctx context.Context, instanceID string, opts Options) (*Pr
 		}
 		return envconfig.LookupEnv(suffix)
 	}
-	exact := func(key string) string {
-		if key == agento11y.EnvEnableExperimentalFeatures && opts.EnableExperimentalFeatures != nil {
-			return strconv.FormatBool(*opts.EnableExperimentalFeatures)
-		}
-		return os.Getenv(key)
-	}
-	protocol, err := envconfig.ResolveGenerationTransportWith(look, exact)
+	protocol, err := envconfig.ResolveGenerationTransportWith(look, os.Getenv)
 	if err != nil {
 		return nil, err
 	}
@@ -361,8 +348,8 @@ func cloneHeaders(in map[string]string) map[string]string {
 }
 
 // resolveExporterConfig applies opts over the environment-derived
-// configuration. ok is false when no endpoint is configured at all, which
-// is how Setup reports "nothing to export to" without an error.
+// configuration. ok is false when no endpoint is configured at all. Setup
+// permits that only with HTTP generation export; OTel validation rejects it.
 func resolveExporterConfig(opts Options) (exporterConfig, bool) {
 	endpoint := firstNonBlank(opts.Endpoint, EndpointFromEnv())
 	if endpoint == "" {
@@ -371,7 +358,6 @@ func resolveExporterConfig(opts Options) (exporterConfig, bool) {
 	cfg := exporterConfigFromEnv(endpoint)
 	if opts.Headers != nil {
 		cfg.headers = cloneHeaders(opts.Headers)
-		cfg.headersExplicit = true
 	}
 	if strings.TrimSpace(opts.Endpoint) != "" {
 		// The caller named the destination, so its scheme decides the
@@ -405,10 +391,12 @@ func exporterConfigFromEnv(endpoint string) exporterConfig {
 // SDK applies after its own environment pass and which sets the transport from
 // the URL scheme. That is why cfg.insecure alone decides cleartext: an ambient
 // OTEL_EXPORTER_OTLP_INSECURE cannot reach past it.
+// WithHeaders replaces the SDK's env-derived map, even when empty; omitting
+// it would leak signal-specific headers that our resolver and probes ignore.
 func traceOptions(cfg exporterConfig) []otlptracehttp.Option {
-	opts := []otlptracehttp.Option{otlptracehttp.WithEndpointURL(SignalEndpointURL(cfg.endpoint, "traces"))}
-	if len(cfg.headers) > 0 || cfg.headersExplicit {
-		opts = append(opts, otlptracehttp.WithHeaders(cfg.headers))
+	opts := []otlptracehttp.Option{
+		otlptracehttp.WithEndpointURL(SignalEndpointURL(cfg.endpoint, "traces")),
+		otlptracehttp.WithHeaders(cfg.headers),
 	}
 	if cfg.insecure {
 		opts = append(opts, otlptracehttp.WithInsecure())
@@ -417,9 +405,9 @@ func traceOptions(cfg exporterConfig) []otlptracehttp.Option {
 }
 
 func metricOptions(cfg exporterConfig) []otlpmetrichttp.Option {
-	opts := []otlpmetrichttp.Option{otlpmetrichttp.WithEndpointURL(SignalEndpointURL(cfg.endpoint, "metrics"))}
-	if len(cfg.headers) > 0 || cfg.headersExplicit {
-		opts = append(opts, otlpmetrichttp.WithHeaders(cfg.headers))
+	opts := []otlpmetrichttp.Option{
+		otlpmetrichttp.WithEndpointURL(SignalEndpointURL(cfg.endpoint, "metrics")),
+		otlpmetrichttp.WithHeaders(cfg.headers),
 	}
 	if cfg.insecure {
 		opts = append(opts, otlpmetrichttp.WithInsecure())

@@ -58,6 +58,8 @@ function config(theme: ThemePreference, overrides: Partial<Settings> = {}): Conf
     preview: `AGENTO11Y_THEME=${theme}\n`,
     path: '/tmp/config.env',
     stackUrl: '',
+    generationProtocol: 'otel',
+    generationProtocolError: '',
     forwardStatus: null,
   };
 }

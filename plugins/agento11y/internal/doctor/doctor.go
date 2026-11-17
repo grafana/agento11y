@@ -5,7 +5,7 @@
 // plugin state, and never writes update-check stamps. It only reads.
 //
 // HTTP generation export and OTLP analytics use separate routes and scopes.
-// Experimental OTel generation export shares the OTLP trace route.
+// OTel generation export is the default and shares the OTLP trace route.
 package doctor
 
 import (
@@ -184,6 +184,8 @@ type tokenValue struct {
 // ConfigSection reports config.env validity and the resolved feature settings
 // that every agent hook reads (content capture, guards, tags).
 type ConfigSection struct {
+	// GenerationProtocol records explicit configuration only. Unset/blank selects
+	// OTel without attributing that built-in default to an environment variable.
 	GenerationProtocol   envValue `json:"generation_protocol"`
 	ExperimentalFeatures envValue `json:"experimental_features"`
 	ExperimentalEnabled  bool     `json:"experimental_enabled"`
@@ -612,10 +614,10 @@ func Collect(ctx context.Context, opts Options, p Params) *Report {
 		r.Analytics = AnalyticsSection{Health: HealthOK, Messages: []string{"local capture is enabled; metrics and traces use the local daemon"}}
 	}
 	forward := daemonFamily("LOCAL_FORWARD", osEnv, fileEnv)
-	r.localCaptureConfigured = r.Conversations.Protocol == "http" && receiverSupported() &&
+	r.localCaptureConfigured = r.Conversations.Health != HealthError && receiverSupported() &&
 		r.Config.Local.Set && envconfig.ParseBool(r.Config.Local.Value) &&
 		!envconfig.ParseBool(forward.value) &&
-		!r.Conversations.Endpoint.Set && !r.Conversations.TenantID.Set && !r.Conversations.Token.Set
+		!resolveFamily("ENDPOINT", osEnv, fileEnv).set && !r.Conversations.TenantID.Set && !r.Conversations.Token.Set
 	if r.localCaptureConfigured {
 		r.Conversations.Health = HealthOK
 		r.Conversations.Messages = []string{"local capture is enabled; Grafana Cloud credentials are not required"}
@@ -809,10 +811,10 @@ func (r *Report) exitCode() int {
 	return 0
 }
 
-// exitCodeFor preserves doctor's default diagnostic behavior: a fresh machine
-// has setup to do but is not a broken installation. --require-cloud is the
-// opt-in contract for onboarding and automation that need Cloud export ready
-// now rather than a best-effort report.
+// exitCodeFor fails for invalid pipeline/config settings, including a missing
+// OTLP endpoint with the default OTel transport. --require-cloud additionally
+// requires configured, healthy Cloud pipelines rather than local-only capture
+// or an unconfigured explicit HTTP transport.
 func (r *Report) exitCodeFor(opts Options) int {
 	if r.exitCode() != 0 {
 		return 1

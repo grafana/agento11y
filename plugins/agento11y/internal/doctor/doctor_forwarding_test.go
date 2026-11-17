@@ -116,7 +116,7 @@ func TestLocalForwardingInspection(t *testing.T) {
 				t.Fatal("extra OTLP destination was probed")
 				return nil
 			}
-			r := Collect(t.Context(), Options{}, Params{})
+			r := Collect(t.Context(), Options{}, Params{OSEnv: map[string]string{"AGENTO11Y_PROTOCOL": "http"}})
 			sec := r.LocalForwarding
 			if sec == nil || (sec.Error != "") != tc.invalid || len(sec.Destinations) != tc.want {
 				t.Fatal("unexpected forwarding inspection")
@@ -151,7 +151,7 @@ func TestLocalForwardingUnreadableFile(t *testing.T) {
 	if err := os.MkdirAll(path, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	r := Collect(t.Context(), Options{}, Params{})
+	r := Collect(t.Context(), Options{}, Params{OSEnv: map[string]string{"AGENTO11Y_PROTOCOL": "http"}})
 	if r.LocalForwarding.Error == "" || r.LocalForwarding.Health != HealthWarn || r.exitCode() != 0 {
 		t.Fatal("unreadable extra file did not remain an advisory diagnostic")
 	}
@@ -188,7 +188,7 @@ func TestLocalForwardingInvalidFileDoesNotOverrideCloud(t *testing.T) {
 		analytics++
 		return &AnalyticsProbe{Metrics: &ProbeResult{StatusCode: 200}, Traces: &ProbeResult{StatusCode: 200}}
 	}
-	r := Collect(t.Context(), Options{}, Params{OSEnv: map[string]string{"AGENTO11Y_ENDPOINT": "https://shell.example.test"}})
+	r := Collect(t.Context(), Options{}, Params{OSEnv: map[string]string{"AGENTO11Y_PROTOCOL": "http", "AGENTO11Y_ENDPOINT": "https://shell.example.test"}})
 	// Primary probes retain shell-first precedence, while local forwarding uses the file.
 	if conversations != 1 || analytics != 1 || !r.cloudReady() || r.exitCodeFor(Options{RequireCloud: true}) != 0 {
 		t.Fatal("invalid extra file changed primary probes or require-cloud")
@@ -252,6 +252,7 @@ func TestLocalForwardingPrimaryRoutes(t *testing.T) {
 				return &AnalyticsProbe{Metrics: &ProbeResult{StatusCode: 200}, Traces: &ProbeResult{StatusCode: 200}}
 			}
 			r := Collect(t.Context(), Options{}, Params{OSEnv: map[string]string{
+				"AGENTO11Y_PROTOCOL": "http",
 				"AGENTO11Y_ENDPOINT": "https://shell.example.test", "AGENTO11Y_AUTH_TENANT_ID": "shell-tenant", "AGENTO11Y_AUTH_TOKEN": "shell-token",
 				"OTEL_EXPORTER_OTLP_ENDPOINT": tc.shellOTLP,
 			}})

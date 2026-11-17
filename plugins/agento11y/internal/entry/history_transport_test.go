@@ -24,16 +24,18 @@ import (
 
 func TestHistoryCLIFreezesTargetBeforeExporterAndLedger(t *testing.T) {
 	for _, agent := range []string{"claude-code", "auto"} {
-		for _, protocol := range []string{"http", "otel"} {
+		for _, protocol := range []string{"", "http", "otel", "grpc", "none"} {
 			t.Run(agent+"/"+protocol, func(t *testing.T) {
 				isolateDotenvHome(t)
 				withHistoryNow(t)
 				writeClaudeHistory(t, "frozen-session", 24*time.Hour)
-				t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "true")
+				t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "false")
 				t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 				t.Setenv("OTEL_EXPORTER_OTLP_HEADERS", "Authorization=Bearer collector-before")
+				effective := agento11y.GenerationExportProtocolHTTP
 				apiToken := "token-before"
-				if protocol == "otel" {
+				if protocol == "" || protocol == "otel" {
+					effective = agento11y.GenerationExportProtocolOTel
 					apiToken = ""
 				}
 				pin := func() {
@@ -58,13 +60,13 @@ func TestHistoryCLIFreezesTargetBeforeExporterAndLedger(t *testing.T) {
 					constructed++
 					assert.Equal(t, "https://127.0.0.1:9999", target.Endpoint)
 					assert.Equal(t, "tenant-before", target.TenantID)
-					assert.Equal(t, agento11y.GenerationExportProtocol(protocol), target.Protocol)
+					assert.Equal(t, effective, target.Protocol)
 					if mutate {
 						t.Setenv("AGENTO11Y_ENDPOINT", "https://127.0.0.1:9998")
 						t.Setenv("AGENTO11Y_AUTH_TENANT_ID", "tenant-after")
 						t.Setenv("AGENTO11Y_AUTH_TOKEN", "token-after")
 						t.Setenv("AGENTO11Y_PROTOCOL", "unsupported")
-						t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "false")
+						t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "true")
 						t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", "invalid")
 						t.Setenv("OTEL_EXPORTER_OTLP_HEADERS", "Authorization=Bearer after")
 						t.Setenv("AGENTO11Y_CONTENT_CAPTURE_MODE", "metadata_only")
@@ -73,19 +75,17 @@ func TestHistoryCLIFreezesTargetBeforeExporterAndLedger(t *testing.T) {
 					frozen, err := history.ResolveTarget(target, nil)
 					require.NoError(t, err)
 					assert.Equal(t, "https://127.0.0.1:9999", frozen.Endpoint)
-					if protocol == "otel" {
+					if effective == agento11y.GenerationExportProtocolOTel {
 						assert.Equal(t, "http://127.0.0.1:4318", frozen.OTLPEndpoint)
 					} else {
 						assert.Empty(t, frozen.OTLPEndpoint)
 					}
 					assert.Equal(t, "tenant-before", frozen.TenantID)
 					assert.Equal(t, apiToken, frozen.AuthToken)
-					assert.Equal(t, agento11y.GenerationExportProtocol(protocol), frozen.Protocol)
+					assert.Equal(t, effective, frozen.Protocol)
 					assert.Equal(t, "full_with_metadata_spans", frozen.ContentMode)
 					assert.Equal(t, map[string]string{"X-Snapshot": "before"}, frozen.Headers)
 					assert.Equal(t, "Bearer collector-before", frozen.OTLPHeaders["Authorization"])
-					require.NotNil(t, frozen.EnableExperimentalFeatures)
-					assert.True(t, *frozen.EnableExperimentalFeatures)
 					// A non-production exporter makes RunImport use the CLI's target.
 					return acceptingExporter{exported: &exported}, func(context.Context) error { return nil }, nil
 				}
@@ -95,13 +95,27 @@ func TestHistoryCLIFreezesTargetBeforeExporterAndLedger(t *testing.T) {
 				assert.Equal(t, 1, exported)
 				mutate = false
 				pin()
-				t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "true")
+				t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "false")
 				t.Setenv("OTEL_EXPORTER_OTLP_HEADERS", "Authorization=Bearer collector-before")
 				stdout, stderr, code = runHistory(t, args...)
 				require.Nil(t, code, "stderr=%s", stderr)
 				assert.Contains(t, stdout, "1 already imported, 0 failed")
 				assert.Equal(t, 1, exported)
 				assert.Equal(t, 2, constructed)
+
+				if effective == agento11y.GenerationExportProtocolOTel {
+					effective = agento11y.GenerationExportProtocolHTTP
+				} else {
+					effective = agento11y.GenerationExportProtocolOTel
+				}
+				apiToken = "switch-token"
+				pin()
+				t.Setenv("AGENTO11Y_PROTOCOL", string(effective))
+				stdout, stderr, code = runHistory(t, args...)
+				require.Nil(t, code, "stderr=%s", stderr)
+				assert.Contains(t, stdout, "1 already imported, 0 failed")
+				assert.Equal(t, 1, exported)
+				assert.Equal(t, 3, constructed)
 			})
 		}
 	}
@@ -113,11 +127,16 @@ func TestHistoryIndependentAgentsSupportOTel(t *testing.T) {
 			isolateDotenvHome(t)
 			withHistoryNow(t)
 			writeIndependentHistory(t, agent)
-			t.Setenv("AGENTO11Y_PROTOCOL", "otel")
-			t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "true")
+			// These independent plugins' live HTTP exception does not apply to
+			// Go history imports: an unset protocol is OTel without global opt-in.
+			t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "false")
 			t.Setenv("AGENTO11Y_CONTENT_CAPTURE_MODE", "metadata_only")
 			t.Setenv("OTEL_EXPORTER_OTLP_HEADERS", "Authorization=Bearer must-not-leak")
-			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1")
+			t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", "malformed-cloud-collector")
+			t.Setenv("AGENTO11Y_ENDPOINT", "https://cloud.example.com")
+			t.Setenv("AGENTO11Y_AUTH_TENANT_ID", "cloud-tenant")
+			t.Setenv("AGENTO11Y_AUTH_TOKEN", "cloud-token")
 			storage, err := local.NewStorage(t.TempDir())
 			require.NoError(t, err)
 			handler := local.NewServer(storage, nil, filepath.Join(t.TempDir(), "config.env"))
@@ -130,6 +149,7 @@ func TestHistoryIndependentAgentsSupportOTel(t *testing.T) {
 					assert.Equal(t, "1", r.Header.Get(history.ForwardMarkerHeader))
 				case "/otlp/v1/metrics":
 					assert.Equal(t, "1", r.Header.Get(history.ForwardMarkerHeader))
+					assertHistoryNoLiveMetrics(t, r)
 				case "/api/v1/generations:export":
 					generations.Add(1)
 					t.Error("OTel history sent an HTTP generation export")
@@ -167,8 +187,7 @@ func TestHistoryOldDaemonStopsBeforeExporter(t *testing.T) {
 			isolateDotenvHome(t)
 			withHistoryNow(t)
 			writeClaudeHistory(t, "session", 24*time.Hour)
-			t.Setenv("AGENTO11Y_PROTOCOL", "otel")
-			t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "true")
+			t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "false")
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				assert.Equal(t, "/healthz", r.URL.Path)
 				_, _ = io.WriteString(w, `{}`)

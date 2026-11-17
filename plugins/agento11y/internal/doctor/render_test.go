@@ -16,10 +16,12 @@ func sampleReport() *Report {
 	return &Report{
 		Binary: BinarySection{Version: "v1.2.3"},
 		Config: ConfigSection{
-			Path: "/tmp/agento11y/config.env", Exists: true,
+			GenerationProtocol: envValue{Set: true, Value: "http", Source: sourceEnv, Key: "AGENTO11Y_PROTOCOL"},
+			Path:               "/tmp/agento11y/config.env", Exists: true,
 			ContentCaptureMode: "metadata_only", Health: HealthOK,
 		},
 		Conversations: ConversationsSection{
+			Protocol: "http",
 			Endpoint: envValue{Set: true, Value: "https://sigil.example", Source: sourceEnv, Key: "AGENTO11Y_ENDPOINT"},
 			TenantID: envValue{Set: true, Value: "12345", Source: sourceEnv, Key: "AGENTO11Y_AUTH_TENANT_ID"},
 			Token:    tokenValue{Set: true, Prefix: "glc_", Source: sourceEnv, Key: "AGENTO11Y_AUTH_TOKEN"},

@@ -16,7 +16,7 @@ agento11y doctor v0.22.0
 
 ✓ Config
   file:                 /home/u/.config/agento11y/config.env (present)
-  generation:           http (default)
+  generation:           http (AGENTO11Y_PROTOCOL, env)
   experimental:         false (default)
   content capture:      full (AGENTO11Y_CONTENT_CAPTURE_MODE, config.env)
   prompt redaction:     enabled

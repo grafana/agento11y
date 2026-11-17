@@ -57,6 +57,7 @@ func TestExportConfig(t *testing.T) {
 }
 
 func TestNewClientUsesSDKEnvResolution(t *testing.T) {
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
 	t.Setenv("SIGIL_ENDPOINT", "http://localhost:8080")
 	// The adapters leave basic-auth credentials to the SDK's env resolution; the
 	// SDK validates that basic_password is present, so provide them.
@@ -120,6 +121,7 @@ func TestNewClientAppliesClientTags(t *testing.T) {
 			// exported would send this generation to that endpoint instead of the test
 			// server.
 			envconfig.PinAliasEnvBlank(t)
+			t.Setenv("AGENTO11Y_PROTOCOL", "http")
 			t.Setenv("SIGIL_ENDPOINT", server.URL)
 			t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
 			t.Setenv("SIGIL_AUTH_TOKEN", "token")
@@ -253,6 +255,7 @@ func TestNewClientTokenlessAuth(t *testing.T) {
 			t.Setenv("AGENTO11Y_ENDPOINT", "http://localhost:8080")
 			t.Setenv("AGENTO11Y_AUTH_TENANT_ID", "tenant")
 			t.Setenv("AGENTO11Y_AUTH_MODE", mode)
+			t.Setenv("AGENTO11Y_PROTOCOL", "http")
 			client, err := NewClient(ClientOptions{})
 			if err != nil {
 				t.Fatal(err)
@@ -284,6 +287,7 @@ func TestNewClientDefaultAuth(t *testing.T) {
 			t.Setenv("AGENTO11Y_ENDPOINT", "http://localhost:8080")
 			t.Setenv("AGENTO11Y_AUTH_TENANT_ID", tc.tenant)
 			t.Setenv("AGENTO11Y_AUTH_TOKEN", tc.token)
+			t.Setenv("AGENTO11Y_PROTOCOL", "http")
 			if got := exportConfig("", tc.auth).Auth.Mode; got != tc.want {
 				t.Fatalf("auth mode = %q, want %q", got, tc.want)
 			}
