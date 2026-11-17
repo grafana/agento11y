@@ -375,7 +375,7 @@ export function mapNativeCompactionGeneration(
 export interface NativeOfferedTool {
   name: string;
   description: string;
-  /** The input schema as JSON. Absent when the host sent none or it could not be encoded. */
+  /** The input schema as JSON. Absent unless the host sent a schema object that could be encoded. */
   inputSchemaJSON?: string;
 }
 
@@ -397,11 +397,13 @@ export function copyOfferedTools(
       input?: unknown;
     };
     let inputSchemaJSON: string | undefined;
-    try {
-      const encoded = JSON.stringify(input);
-      if (typeof encoded === "string") inputSchemaJSON = encoded;
-    } catch {
-      // The tool is still listed without a schema.
+    // A tool input schema is a JSON object. Any other value is left out.
+    if (input !== null && typeof input === "object" && !Array.isArray(input)) {
+      try {
+        inputSchemaJSON = JSON.stringify(input);
+      } catch {
+        // The tool is still listed without a schema.
+      }
     }
     offered.push({
       name,
@@ -413,12 +415,35 @@ export function copyOfferedTools(
 }
 
 /**
+ * Redacts a schema in two passes. The first pass redacts each string value as
+ * plain text, because JSON escapes hide quotes, backslashes and newlines from
+ * the patterns. The second pass redacts the encoded document, so key/value
+ * patterns see member names next to their values. Returns undefined when the
+ * result is not valid JSON, so a schema is never exported unredacted.
+ */
+function redactSchemaJSON(
+  schemaJSON: string,
+  redact: (text: string) => string,
+): string | undefined {
+  try {
+    const values = JSON.stringify(JSON.parse(schemaJSON), (_key, value) =>
+      typeof value === "string" ? redact(value) : value,
+    );
+    const schema = redact(values);
+    JSON.parse(schema);
+    return schema;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * The tool definitions for one step, sorted by name: every tool the host
  * offered the model, with its description and input schema, plus a name-only
  * entry for each called tool that was not offered. Without an offered set
  * (metadata_only, or no `context` hook observed) the list holds the called
- * tools only. `redact` runs on each description and schema. A schema that is
- * not valid JSON after redaction is left out, never exported unredacted.
+ * tools only. `redact` runs on each description and on each schema, as
+ * `redactSchemaJSON` describes.
  */
 export function nativeToolDefinitions(
   offered: readonly NativeOfferedTool[] | undefined,
@@ -429,15 +454,11 @@ export function nativeToolDefinitions(
   for (const tool of offered ?? []) {
     const definition: ToolDefinition = { name: tool.name, type: "function" };
     if (tool.description) definition.description = redact(tool.description);
-    if (tool.inputSchemaJSON !== undefined) {
-      const schema = redact(tool.inputSchemaJSON);
-      try {
-        JSON.parse(schema);
-        definition.inputSchemaJSON = schema;
-      } catch {
-        // Redaction split a JSON escape.
-      }
-    }
+    const schema =
+      tool.inputSchemaJSON === undefined
+        ? undefined
+        : redactSchemaJSON(tool.inputSchemaJSON, redact);
+    if (schema !== undefined) definition.inputSchemaJSON = schema;
     tools.set(tool.name, definition);
   }
   for (const block of blocks) {

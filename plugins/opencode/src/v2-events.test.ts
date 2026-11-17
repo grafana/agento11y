@@ -1392,6 +1392,38 @@ describe("native tool definitions", () => {
     });
   });
 
+  // JSON doubles each backslash and escapes newlines, so the guard span only
+  // matches the schema's decoded string values.
+  it.each([
+    "C:\\Users\\falcon\\notes",
+    "line one\nProject Falcon",
+  ])("removes a guard span that JSON escapes from a schema: %j", async (span) => {
+    const redactions = createGuardRedactions();
+    const { capture, generations } = harness(
+      home,
+      {},
+      createNativeCapture,
+      redactions,
+    );
+    redactions.record(
+      "s",
+      [{ role: "user", parts: [{ type: "text", text: `see ${span} now` }] }],
+      [{ role: "user", parts: [{ type: "text", text: "see [REDACTED] now" }] }],
+    );
+    capture.observeToolDefinitions("s", {
+      lookup: {
+        description: "Look up notes",
+        input: { type: "object", description: `Notes from ${span}` },
+      },
+    });
+    await replay(capture, [start(), end()]);
+    const [tool] = generations[0]?.seed.tools ?? [];
+    expect(JSON.parse(tool?.inputSchemaJSON ?? "")).toEqual({
+      type: "object",
+      description: "Notes from [REDACTED]",
+    });
+  });
+
   it.each([
     "full",
     "no_tool_content",

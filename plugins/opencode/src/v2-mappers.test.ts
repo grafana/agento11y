@@ -825,6 +825,19 @@ describe("native offered tools", () => {
       expected: [{ name: "big", description: "d" }],
     },
     {
+      name: "schemas that are not JSON objects",
+      tools: {
+        a: { description: "d", input: null },
+        b: { description: "d", input: "object" },
+        c: { description: "d", input: true },
+        d: { description: "d", input: [] },
+      },
+      expected: ["a", "b", "c", "d"].map((name) => ({
+        name,
+        description: "d",
+      })),
+    },
+    {
       name: "a description and schema",
       tools: {
         bash: {
@@ -936,6 +949,39 @@ describe("native tool definitions", () => {
     expect(tool?.description).toContain("[REDACTED");
     expect(() => JSON.parse(tool?.inputSchemaJSON ?? "")).not.toThrow();
     expect(tool?.inputSchemaJSON).toContain("[REDACTED");
+  });
+
+  it.each([
+    {
+      // JSON escapes the quotes, so only the plain-text pass over values sees the pair.
+      name: "a key/value pair quoted inside a string value",
+      schema: {
+        type: "object",
+        properties: {
+          body: { description: 'Example: {"password": "hunter2longsecret"}' },
+        },
+      },
+    },
+    {
+      // The value alone matches nothing, so only the pass over the encoded document sees its key.
+      name: "a value under a secret member name",
+      schema: { type: "object", password: "hunter2longsecret" },
+    },
+  ])("redacts $name in a schema", ({ schema }) => {
+    const [tool] = nativeToolDefinitions(
+      [
+        {
+          name: "api",
+          description: "",
+          inputSchemaJSON: JSON.stringify(schema),
+        },
+      ],
+      [],
+      (text) => redactor.redact(text),
+    );
+    expect(tool?.inputSchemaJSON).toBeDefined();
+    expect(tool?.inputSchemaJSON).not.toContain("hunter2longsecret");
+    expect(() => JSON.parse(tool?.inputSchemaJSON ?? "")).not.toThrow();
   });
 
   it("leaves out a schema that redaction turned into invalid JSON", () => {

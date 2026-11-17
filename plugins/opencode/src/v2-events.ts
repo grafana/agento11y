@@ -228,16 +228,16 @@ export function createNativeCapture({
             assistant.title === undefined
               ? undefined
               : redactions.title(sessionID, assistant.title),
-          // Guards don't rewrite tool definitions. Text a guard removed from the request is removed here too.
-          tools: assistant.tools?.map((tool) => ({
-            ...tool,
-            description: redactions.text(sessionID, tool.description),
-            ...(tool.inputSchemaJSON !== undefined && {
-              inputSchemaJSON: redactions.text(sessionID, tool.inputSchemaJSON),
-            }),
-          })),
         }
       : assistant;
+    // Guards don't rewrite tool definitions, but text a guard removed from the
+    // request is removed from them too. Build them before the spans are forgotten.
+    const tools = nativeToolDefinitions(
+      assistant.tools,
+      assistant.blocks,
+      (text) =>
+        redactor.redact(redactions ? redactions.text(sessionID, text) : text),
+    );
     if (drop) redactions?.forget(sessionID);
     const result = mapNativeGeneration(
       {
@@ -284,11 +284,8 @@ export function createNativeCapture({
         isSubagent: assistant.subagent,
       }),
       metadata: assistant.lineage,
-      tools: nativeToolDefinitions(
-        config.contentCapture !== "metadata_only" ? exported.tools : undefined,
-        assistant.blocks,
-        (text) => redactor.redact(text),
-      ),
+      // observeToolDefinitions keeps no offered set under metadata_only.
+      tools,
     };
     // Host failure messages may contain secrets; retain only the structured error type.
     const error =
