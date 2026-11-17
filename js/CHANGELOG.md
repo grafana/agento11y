@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.17.0] - 2026-11-17
+
+### Features
+
+- **js**: capture workflow steps in the LangGraph and LangChain handlers (#1111)
+- **plugins/pi**: expand guards, fix telemetry, and report export failures (#1000)
+
+### Bug Fixes
+
+- **go,js,python**: apply content capture modes to workflow steps (#1110)
+
 ## [0.16.0] - 2026-10-29
 
 ### Features
