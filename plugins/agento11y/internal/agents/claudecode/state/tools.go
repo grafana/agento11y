@@ -53,6 +53,13 @@ type PendingTool struct {
 	Parent    ToolParent  `json:"parent"`
 	Ambiguous bool        `json:"ambiguous,omitempty"`
 	Emitted   bool        `json:"emitted,omitempty"`
+	// Slash marks a skill the user invoked as a slash command. Call is the
+	// command record, Result the meta line Claude Code expanded from it, and
+	// the parent is the first generation Claude Code attributes to the skill.
+	Slash bool `json:"slash,omitempty"`
+	// SkillBody records that the expansion was a SKILL.md body, which proves
+	// a skill load without waiting for Claude Code's attribution.
+	SkillBody bool `json:"skill_body,omitempty"`
 }
 
 // ToolSpawn survives a late acknowledgement until mapping and child association finish.

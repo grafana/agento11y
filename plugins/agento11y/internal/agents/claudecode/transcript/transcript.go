@@ -35,6 +35,9 @@ type Line struct {
 	// example "general-purpose". The mapper appends it to the agent name so a
 	// subagent turn is distinguishable from a main-thread one.
 	AttributionAgent string `json:"attributionAgent"`
+	// AttributionSkill is the skill Claude Code attributes an assistant line
+	// to. It confirms that a slash command the user typed ran as a skill.
+	AttributionSkill string `json:"attributionSkill"`
 	// IsMeta marks a user line Claude Code wrote itself rather than one the
 	// user typed: the caveat in front of a local command such as /model, or
 	// the expanded body of a slash command or skill.
@@ -299,4 +302,19 @@ func readLine(r *bufio.Reader, max int, completeOnly bool) (line []byte, consume
 	line = bytes.TrimSuffix(buf, []byte("\n"))
 	line = bytes.TrimSuffix(line, []byte("\r"))
 	return line, consumed, tooLong, nil
+}
+
+// TagText returns the trimmed text between <tag> and </tag> in s, or "" when s
+// has no such element or it is not closed. Claude Code writes slash command
+// records this way, for example <command-name>/review</command-name>.
+func TagText(s, tag string) string {
+	_, rest, ok := strings.Cut(s, "<"+tag+">")
+	if !ok {
+		return ""
+	}
+	inner, _, ok := strings.Cut(rest, "</"+tag+">")
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(inner)
 }

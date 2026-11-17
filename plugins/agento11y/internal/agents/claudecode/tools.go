@@ -18,6 +18,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/subagent"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/transcript"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/redact"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/skillidentity"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -169,8 +170,14 @@ func observeTools(st *state.Session, path string, raw []transcript.Line, pos int
 		delete(st.Tools.LegacySpawnOffsets, path)
 	}
 	lines := uncoveredToolLines(afterOffset(raw, st.Tools.Offsets[path]), files, path)
+	// Scan for unexpanded slash candidates only while one can exist.
+	openSlash := hasOpenSlashSkill(st)
 	for _, line := range lines {
 		scope := toolScope(path, line)
+		if openSlash {
+			dropUnexpandedSlashSkills(st, path, scope, line)
+			openSlash = hasOpenSlashSkill(st)
+		}
 		at, _ := time.Parse(time.RFC3339Nano, line.Timestamp)
 		source := state.ToolSource{Start: line.StartOffset, End: line.EndOffset, At: at}
 		pending := func(id string) *state.PendingTool {
@@ -216,9 +223,12 @@ func observeTools(st *state.Session, path string, raw []transcript.Line, pos int
 			if json.Unmarshal(line.Message, &msg) != nil {
 				continue
 			}
-			_, blocks, err := transcript.ParseUserContent(msg.Content)
+			text, blocks, err := transcript.ParseUserContent(msg.Content)
 			if err != nil {
 				continue
+			}
+			if observeSlashSkill(st, path, scope, line, text, blocks, source) {
+				openSlash = true
 			}
 			for _, block := range blocks {
 				if block.Type != "tool_result" || block.ToolUseID == "" {
@@ -241,6 +251,141 @@ func observeTools(st *state.Session, path string, raw []transcript.Line, pos int
 		}
 	}
 	st.Tools.Offsets[path] = pos
+}
+
+// hasOpenSlashSkill reports whether a slash candidate still waits for its
+// expansion, so the per-line drop scan runs only while one exists.
+func hasOpenSlashSkill(st *state.Session) bool {
+	for _, p := range st.Tools.Pending {
+		if p.Slash && p.Result == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// dropUnexpandedSlashSkills forgets slash candidates that the line proves were
+// never expanded: the expansion is written as the record's direct child, so any
+// other line in the same scope ends the wait. Local commands such as /model
+// leave a candidate behind that this removes.
+func dropUnexpandedSlashSkills(st *state.Session, path, scope string, line transcript.Line) {
+	for key, p := range st.Tools.Pending {
+		if !p.Slash || p.Result != nil || p.Path != path || p.SessionID != line.SessionID || p.Scope != scope || p.Call == nil || line.StartOffset < p.Call.End {
+			continue
+		}
+		if line.IsMeta && skilldetect.SlashCommandIDPrefix+line.ParentUUID == p.ID {
+			continue
+		}
+		delete(st.Tools.Pending, key)
+	}
+}
+
+// observeSlashSkill records a skill the user invoked as a slash command. Claude
+// Code pastes the skill body into the prompt instead of calling the Skill tool,
+// so the command record stands in for the call and its expanded meta child for
+// the result. associateSlashSkills confirms and parents it. It reports whether
+// it created a candidate that now waits for its expansion.
+func observeSlashSkill(st *state.Session, path, scope string, line transcript.Line, text string, blocks []transcript.UserContentBlock, source state.ToolSource) bool {
+	if line.IsSidechain {
+		return false
+	}
+	if line.IsMeta {
+		key := toolKey(line.SessionID, scope, skilldetect.SlashCommandIDPrefix+line.ParentUUID)
+		if p := st.Tools.Pending[key]; line.ParentUUID != "" && p != nil && p.Slash && p.Result == nil {
+			p.Result = &state.ToolResult{ToolSource: source}
+			p.SkillBody = skilldetect.SkillBody(text, blocks)
+		}
+		return false
+	}
+	skill, ok := skilldetect.SlashCommandInBlocks(text, blocks)
+	if !ok || line.UUID == "" {
+		return false
+	}
+	id := skilldetect.SlashCommandIDPrefix + line.UUID
+	key := toolKey(line.SessionID, scope, id)
+	if st.Tools.Pending[key] != nil {
+		return false
+	}
+	st.Tools.Pending[key] = &state.PendingTool{
+		SessionID: line.SessionID, Scope: scope, Path: path, ID: id,
+		Name: "Skill", SkillName: skill, Call: &source, Slash: true,
+	}
+	return true
+}
+
+// toolParentFor copies the generation fields a tool span inherits.
+func toolParentFor(gen agento11y.Generation) state.ToolParent {
+	return state.ToolParent{
+		ID:             gen.ID,
+		ConversationID: gen.ConversationID,
+		AgentName:      gen.AgentName,
+		AgentVersion:   gen.AgentVersion,
+		Model:          gen.Model.Name,
+		Provider:       gen.Model.Provider,
+	}
+}
+
+// associateSlashSkills parents each expanded slash skill on the first
+// generation that follows its expansion: the turn that has the skill in its
+// context. The load counts when the expansion was a SKILL.md body or when
+// Claude Code attributes that turn to the same skill; that keeps attempts
+// whose answer was interrupted, like a native Skill call that failed. A plain
+// prompt command that Claude Code does not treat as this skill is dropped.
+func associateSlashSkills(st *state.Session, path string, sources map[int]transcript.Line, gens []agento11y.Generation, out [][]*state.PendingTool) {
+	path = toolPath(path)
+	type candidate struct {
+		index int
+		start int64
+	}
+	var cands []candidate
+	for i := range gens {
+		line, ok := sources[i]
+		if !ok {
+			continue
+		}
+		start := line.StartOffset
+		if len(line.AssistantSources) > 0 {
+			start = line.AssistantSources[0].StartOffset
+		}
+		cands = append(cands, candidate{i, start})
+	}
+	if len(cands) == 0 {
+		return
+	}
+	scopes := map[int]string{}
+	for _, key := range slices.Sorted(maps.Keys(st.Tools.Pending)) {
+		p := st.Tools.Pending[key]
+		if !p.Slash || p.Result == nil || p.Parent.Ready || p.Path != path {
+			continue
+		}
+		first := -1
+		var firstAt int64
+		for _, c := range cands {
+			line := sources[c.index]
+			if line.SessionID != p.SessionID || c.start < p.Result.End || (first >= 0 && c.start >= firstAt) {
+				continue
+			}
+			scope, ok := scopes[c.index]
+			if !ok {
+				scope = toolScope(path, line)
+				scopes[c.index] = scope
+			}
+			if scope != p.Scope {
+				continue
+			}
+			first, firstAt = c.index, c.start
+		}
+		if first < 0 {
+			continue
+		}
+		attributed, ok := skillidentity.Validate(sources[first].AttributionSkill)
+		if !p.SkillBody && (!ok || attributed != p.SkillName) {
+			delete(st.Tools.Pending, key)
+			continue
+		}
+		p.Parent = toolParentFor(gens[first])
+		out[first] = append(out[first], p)
+	}
 }
 
 func toolResultChildIDs(block transcript.UserContentBlock, files []string) []string {
@@ -377,19 +522,13 @@ func associateTools(st *state.Session, path string, sources map[int]transcript.L
 	out := make([][]*state.PendingTool, len(gens))
 	eachToolAssociation(st, path, sources, gens, func(i int, p *state.PendingTool, call *agento11y.ToolCall) {
 		gen := gens[i]
-		p.Parent = state.ToolParent{
-			ID:             gen.ID,
-			ConversationID: gen.ConversationID,
-			AgentName:      gen.AgentName,
-			AgentVersion:   gen.AgentVersion,
-			Model:          gen.Model.Name,
-			Provider:       gen.Model.Provider,
-		}
+		p.Parent = toolParentFor(gen)
 		if spawn := st.Tools.Spawns[toolKey(p.SessionID, p.Scope, p.ID)]; spawn != nil {
 			spawn.AgentName = spawnAgentName(call)
 		}
 		out[i] = append(out[i], p)
 	})
+	associateSlashSkills(st, path, sources, gens, out)
 	return out
 }
 

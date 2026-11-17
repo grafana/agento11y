@@ -118,7 +118,7 @@ Generic convenience loops (`execute_tool_calls` / `executeToolCalls` and the .NE
 
 | Execution kind | Use | Suffix after `execute_tool {tool}` |
 | --- | --- | --- |
-| `load_skill` | A dedicated tool loads skill instructions. | Skill name, if available. |
+| `load_skill` | A dedicated tool loads skill instructions. The Claude Code plugin also reports a skill the user invokes as a `/skill` slash command this way; see [Claude Code](../../plugins/claude-code/README.md#3-verify). | Skill name, if available. |
 | `read_skill_resource` | A dedicated tool reads a skill resource. | Skill and resource names; resource alone if no skill; otherwise no suffix. |
 | `command` | A tool executes commands, with or without a skill. | Skill and resource names; resource alone; executable name; otherwise no suffix, in that order. |
 
