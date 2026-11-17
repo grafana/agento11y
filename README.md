@@ -4,7 +4,7 @@
   <img src="./assets/readme/agento11y-tri-shot.png" alt="Grafana Agent observability landing, analytics, and conversation explore views" width="100%" />
 </p>
 
-[Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/) monitors the agents you build and the coding agents you use. This repo provides the open-source SDKs and plugins that send telemetry to it.
+[Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/observe-and-act/agent-observability/) monitors the agents you build and the coding agents you use. This repo provides the open-source SDKs and plugins that send telemetry to it.
 
 ## Coding agent observability
 
@@ -27,7 +27,15 @@ Then run `agento11y login` and launch your agent, for example `agento11y codex`.
 
 ## Observability for agents you build
 
-Use Grafana Agent Observability to monitor the agents you build and run in your own apps and services — generations, tools, cost, traces, and evals. Instrument them with the SDKs (Go, Python, JS, .NET, Java). The rest of this README covers setup.
+Use Grafana Agent Observability to monitor generations, tools, cost, traces, and evals in your apps and services. Choose compatible OpenTelemetry instrumentation or a Grafana SDK (Go, Python, JS, .NET, Java).
+
+### Use existing OpenTelemetry instrumentation
+
+OpenTelemetry GenAI spans can populate conversations, including captured prompts, responses, tool calls, and token usage, without a Grafana SDK or a custom generation exporter. Metrics alone do not carry this content.
+
+Follow [Instrument agents with OpenTelemetry](https://grafana.com/docs/grafana-cloud/observe-and-act/agent-observability/get-started/opentelemetry/) to configure your stack's OTLP endpoint, opt in with `agento11y.record=true`, and capture GenAI message attributes. Reuse `gen_ai.conversation.id` across calls in a conversation. A framework does not need a dedicated Grafana adapter, but its exported spans must match the supported format.
+
+For the requirements and the differences from SDK export, refer to [OpenTelemetry setup](docs/concepts/otel-setup.md). Do not export the same call through both instrumentation paths. The rest of this README covers the Grafana SDK path.
 
 ### Instrument an application with an AI coding agent
 
@@ -141,6 +149,8 @@ rec.SetResult(agento11y.Generation{
 
 ### Framework integrations
 
+These are Grafana SDK adapters, not the complete list of frameworks that can send data to Agent Observability. Frameworks with compatible OpenTelemetry GenAI instrumentation can use the [OpenTelemetry path](#use-existing-opentelemetry-instrumentation) without an adapter.
+
 | Language | Frameworks | Where |
 |----------|------------|-------|
 | Python | LangChain, LangGraph, OpenAI Agents, LlamaIndex, Google ADK, Strands Agents, Claude Agent SDK, LiteLLM, Pydantic AI | [`python-frameworks/`](python-frameworks/) |
@@ -196,7 +206,7 @@ Application SDK hooks evaluate Agent Observability guard rules on your request p
 
 The SDKs default to `no_tool_content`: full generation messages ship to Agent Observability, but tool-execution arguments and results stay out of spans. The coding-agent plugins default to `metadata_only`. See [Content Capture Modes](docs/concepts/content-capture-modes.md) for the mode matrix, defaults per surface, and the generation, tool-execution, and embedding resolution rules.
 
-The SDKs emit spans and metrics through OpenTelemetry providers your application registers, and do not create those providers themselves. If you skip that step, conversations still arrive but analytics stays empty. See [OpenTelemetry Setup](docs/concepts/otel-setup.md) for the wiring and the failure modes.
+The SDKs emit spans and metrics through OpenTelemetry providers your application registers, and do not create those providers themselves. With direct SDK export, conversations can still arrive without those providers, but companion traces and client-metrics panels can be missing. Generation cost is calculated at ingest from reported usage and the applicable model price, independently of client token metrics. See [OpenTelemetry Setup](docs/concepts/otel-setup.md) for the wiring and the failure modes.
 
 To attach custom key/values (team, project, env, request id, end-user id), see [Tags and Metadata](docs/concepts/tags-and-metadata.md). It covers which of client tags, per-generation tags, metadata, and `user_id` reach the generation export vs OTel spans vs metrics, and the cardinality rules for metric labels.
 
@@ -210,11 +220,11 @@ https://<your-stack>.grafana.net/plugins/grafana-agento11y-app
 
 Follow *Create a token in Cloud Access Policies* on the Connection page and create one token scoped with `sigil:write`, `metrics:write`, `traces:write`, and `logs:write`. The same token then covers both `AGENTO11Y_AUTH_TOKEN` (Agent Observability ingest) and `OTEL_EXPORTER_OTLP_HEADERS` (OTel traces and metrics).
 
-See the [Grafana Cloud Agent observability getting started docs](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/get-started/grafana-cloud/) for the full setup flow.
+See the [Grafana Cloud Agent observability getting started docs](https://grafana.com/docs/grafana-cloud/observe-and-act/agent-observability/get-started/grafana-cloud/) for the full setup flow.
 
 ### Why Grafana Agent observability
 
-- The SDK emits traces and metrics as standard OTLP, so they can use existing OTel pipelines. Conversations and generations go through Agent Observability ingest so Grafana can join them with traces, costs, and scores.
+- Compatible OpenTelemetry GenAI spans can supply conversations and generations through your existing OTLP pipeline. Grafana SDKs also support direct generation export with companion OTel traces and metrics.
 - It uses OTel GenAI semantic conventions where they exist. agento11y-specific fields cover agent versions, generation IDs, and tool executions.
 - Prompt and tool changes create agent versions when the producer does not send a version string.
 - Evaluators can score live traffic, so teams can find regressions without reviewing every conversation manually.

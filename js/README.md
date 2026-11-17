@@ -2,6 +2,8 @@
 
 `@grafana/agento11y` records normalized LLM generation and tool-execution telemetry using your OpenTelemetry tracer/meter setup.
 
+Already emitting OpenTelemetry GenAI spans? Agent Observability can ingest compatible spans, including conversation content, without this SDK. Refer to [Choose an instrumentation path](../docs/concepts/otel-setup.md#choose-an-instrumentation-path). The SDK setup below describes direct generation export and companion telemetry.
+
 ## Installation
 
 ```bash
@@ -263,7 +265,7 @@ await otel.start();
 ```
 
 See [OpenTelemetry Setup](../docs/concepts/otel-setup.md) for the full wiring, including the OTLP
-metric exporter, and why analytics stays empty when this step is skipped.
+metric exporter, and which companion traces and client-metrics panels need them. Generation-derived cost does not require client token metrics.
 
 ## Core API
 

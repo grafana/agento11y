@@ -1,6 +1,8 @@
 # Grafana Agent Observability Java SDK (Core)
 
-If you already use OpenTelemetry, agento11y is a thin extension for Agent observability.
+The Java SDK adds normalized generation recording to your OpenTelemetry setup.
+
+Already emitting OpenTelemetry GenAI spans? Agent Observability can ingest compatible spans, including conversation content, without this SDK. Refer to [Choose an instrumentation path](../docs/concepts/otel-setup.md#choose-an-instrumentation-path). The SDK setup below describes direct generation export and companion telemetry.
 
 The Java SDK records normalized generation payloads, correlates them with traces, and exports generations through transport-aware clients.
 

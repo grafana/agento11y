@@ -1,6 +1,8 @@
 # Grafana Agent Observability Go SDK
 
-The agento11y Go SDK records LLM generations and tool calls for [Grafana Agent observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/). It emits OpenTelemetry spans and metrics through your existing OTel setup and sends normalized generation payloads through the Agent Observability ingest channel.
+The agento11y Go SDK records LLM generations and tool calls for [Grafana Agent observability](https://grafana.com/docs/grafana-cloud/observe-and-act/agent-observability/). It emits OpenTelemetry spans and metrics through your existing OTel setup and sends normalized generation payloads through the Agent Observability ingest channel.
+
+Already emitting OpenTelemetry GenAI spans? Agent Observability can ingest compatible spans, including conversation content, without this SDK. Refer to [Choose an instrumentation path](../docs/concepts/otel-setup.md#choose-an-instrumentation-path). The SDK setup below describes direct generation export and companion telemetry.
 
 ## Install
 
@@ -221,7 +223,7 @@ otel.SetMeterProvider(mp)
 
 The providers above have no exporters attached, so nothing leaves the process. See
 [OpenTelemetry Setup](../docs/concepts/otel-setup.md) for the full wiring, including the OTLP
-exporters, and why analytics stays empty when this step is skipped.
+exporters, and which companion traces and client-metrics panels need them. Generation-derived cost does not require client token metrics.
 
 ### Instrumentation-only mode (no generation send)
 

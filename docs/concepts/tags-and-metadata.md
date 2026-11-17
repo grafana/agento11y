@@ -1,5 +1,7 @@
 # Tags and Metadata
 
+This page describes Grafana SDK tags and metadata. With third-party [OpenTelemetry instrumentation](./otel-setup.md#send-conversations-through-opentelemetry), set `gen_ai.conversation.id` to group calls and `gen_ai.agent.name` to identify the agent on inference spans. Arbitrary resource or span attributes are not automatically SDK client tags or metric dimensions. Keep user and request IDs out of metric labels.
+
 The SDK lets you attach custom key/value data (team, project, environment, request ID, end-user ID) to what you record.
 Where each piece of data appears depends on how you attach it.
 There are three cross-SDK mechanisms.
