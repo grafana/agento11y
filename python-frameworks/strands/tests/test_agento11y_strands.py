@@ -395,6 +395,7 @@ def _assert_no_state_left(hooks) -> None:
     assert handler._run_to_graph_key == {}
     assert handler._graph_root_run_keys == set()
     assert handler._tool_invocation_last_generation_id == {}
+    assert hooks._tool_calls == {}
     assert hooks._tool_callers_before == {}
 
 
@@ -562,7 +563,51 @@ def test_strands_agent_started_after_the_tool_is_top_level(case: str) -> None:
     # A run below the caller would follow the caller's generation. A top-level run starts its own lineage.
     assert generations["first"].parent_generation_ids == []
     assert generations["second"].parent_generation_ids == [generations["first"].id]
+    assert hooks._tool_calls == {}
     assert hooks._tool_callers_before == {}
+
+
+# An async tool that awaits invoke_async runs the sub-agent in the tool's own context, so the
+# sub-agent's tool hooks change the value that the outer tool still needs.
+@pytest.mark.parametrize("sub_tool_end", ["never", "in_another_context"])
+def test_strands_sub_agent_tool_that_did_not_end_here_restores_the_outer_caller(sub_tool_end: str) -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        hooks = create_agento11y_strands_hook_provider(client=client, provider_resolver="auto")
+        outer_state = {"session_id": "session-1"}
+        sub_state = {}
+        second_state = {}
+        outer_agent = _agent("outer")
+        sub_agent = _agent("sub")
+        second_agent = _agent("second")
+
+        hooks.before_invocation(SimpleNamespace(agent=outer_agent, invocation_state=outer_state))
+        _model_call(hooks, outer_agent, outer_state, "delegating")
+        hooks.before_tool_call(_tool_event(outer_agent, outer_state))
+        hooks.before_invocation(SimpleNamespace(agent=sub_agent, invocation_state=sub_state))
+        _model_call(hooks, sub_agent, sub_state, "sub calls a tool")
+        hooks.before_tool_call(_tool_event(sub_agent, sub_state))
+        if sub_tool_end == "in_another_context":
+            # A background tool ends in its own context, and the sub-agent calls the model again.
+            contextvars.copy_context().run(hooks.after_tool_call, _tool_ended(sub_agent, sub_state))
+            _model_call(hooks, sub_agent, sub_state, "sub after its tool")
+        # Otherwise an interrupt stops the sub-agent's tool before AfterToolCallEvent.
+        hooks.after_invocation(SimpleNamespace(agent=sub_agent, invocation_state=sub_state))
+        # The outer tool goes on and invokes a second agent in the same context.
+        hooks.before_invocation(SimpleNamespace(agent=second_agent, invocation_state=second_state))
+        _model_call(hooks, second_agent, second_state, "second")
+        hooks.after_invocation(SimpleNamespace(agent=second_agent, invocation_state=second_state))
+        hooks.after_tool_call(_tool_ended(outer_agent, outer_state))
+        hooks.after_invocation(SimpleNamespace(agent=outer_agent, invocation_state=outer_state))
+        client.flush()
+    finally:
+        client.shutdown()
+
+    generations = _generations_by_text(exporter)
+    assert generations["second"].parent_generation_ids == [generations["delegating"].id]
+    assert generations["second"].conversation_id == "session-1"
+    _assert_no_state_left(hooks)
 
 
 def test_strands_two_hook_providers_on_one_agent_each_link_the_agent_called_from_a_tool() -> None:

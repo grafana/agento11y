@@ -59,8 +59,10 @@ class Agento11yStrandsHookProvider:
         self._model_run_ids: dict[int, list[UUID]] = {}
         self._tool_run_ids: dict[str, UUID] = {}
         self._tool_fallback_run_ids: dict[int, list[UUID]] = {}
-        # Tool run id -> (run that called the tool, tool caller set before it).
-        self._tool_callers_before: dict[UUID, tuple[UUID, UUID | None]] = {}
+        # Tool run id -> run that called the tool.
+        self._tool_calls: dict[UUID, UUID] = {}
+        # Calling run -> tool caller that was set before its first tool call.
+        self._tool_callers_before: dict[UUID, UUID | None] = {}
         self._multi_agent_run_ids: dict[int, list[UUID]] = {}
         self._node_run_ids: dict[tuple[int, str], list[UUID]] = {}
         self._node_executor_run_ids: dict[tuple[int, int], list[UUID]] = {}
@@ -100,16 +102,16 @@ class Agento11yStrandsHookProvider:
         if run_id is None:
             return
         self._remove_run(self._invocation_state_run_ids, self._state_key(event), run_id)
-        self._forget_tool_calls_of(run_id)
+        self._end_tool_caller(run_id)
         self._agento11y_handler.on_chain_end({"status": "completed"}, run_id=run_id)
 
     def before_model_call(self, event: Any) -> None:
-        # The agent's tools have ended when it calls the model again. A tool
-        # that ended in another context, such as a background tool, left this
-        # agent's run as the caller here.
         agent_run_id = self._agent_run_id(event)
-        if agent_run_id is not None and self._tool_caller() == agent_run_id:
-            self._set_tool_caller(None)
+        if agent_run_id is not None:
+            # The agent's tools have ended when it calls the model again. A tool
+            # that ended in another context, such as a background tool, left
+            # this agent's run as the caller here.
+            self._restore_tool_caller(agent_run_id)
         run_id = uuid4()
         self._stack_for(self._model_run_ids, event, agent_scoped=True).append(run_id)
         agent = _read(event, "agent")
@@ -150,7 +152,10 @@ class Agento11yStrandsHookProvider:
             self._stack_for(self._tool_fallback_run_ids, event, agent_scoped=True).append(run_id)
         caller_run_id = self._agent_run_id(event)
         if caller_run_id is not None:
-            self._tool_callers_before[run_id] = (caller_run_id, self._tool_caller())
+            self._tool_calls[run_id] = caller_run_id
+            current_caller = self._tool_caller()
+            if current_caller != caller_run_id:
+                self._tool_callers_before.setdefault(caller_run_id, current_caller)
             self._set_tool_caller(caller_run_id)
 
         selected_tool = _read(event, "selected_tool")
@@ -179,12 +184,12 @@ class Agento11yStrandsHookProvider:
             run_id = self._pop_stack(self._tool_fallback_run_ids, event, agent_scoped=True)
         if run_id is None:
             return
-        before = self._tool_callers_before.pop(run_id, None)
-        if before is not None:
+        caller_run_id = self._tool_calls.pop(run_id, None)
+        if caller_run_id is not None:
             # A tool that ends in another context than it started, such as a
             # background tool, restores the value in that context. The caller's
-            # next model call clears it in the first one.
-            self._set_tool_caller(before[1])
+            # next model call, or its end, restores it in the first one.
+            self._restore_tool_caller(caller_run_id)
 
         exception = _read(event, "exception")
         if exception is not None:
@@ -215,7 +220,7 @@ class Agento11yStrandsHookProvider:
     def after_multi_agent_invocation(self, event: Any) -> None:
         run_id = self._pop_stack(self._multi_agent_run_ids, event, source_scoped=True)
         if run_id is not None:
-            self._forget_tool_calls_of(run_id)
+            self._end_tool_caller(run_id)
             self._agento11y_handler.on_chain_end({"status": "completed"}, run_id=run_id)
 
     def before_node_call(self, event: Any) -> None:
@@ -253,7 +258,7 @@ class Agento11yStrandsHookProvider:
                     executor_stack.remove(run_id)
                 if not executor_stack:
                     self._node_executor_run_ids.pop(executor_key, None)
-            self._forget_tool_calls_of(run_id)
+            self._end_tool_caller(run_id)
             self._agento11y_handler.on_chain_end({"status": "completed"}, run_id=run_id)
 
     def _agent_run_id(self, event: Any) -> UUID | None:
@@ -277,12 +282,20 @@ class Agento11yStrandsHookProvider:
             callers[id(self)] = run_id
         _tool_callers.set(callers)
 
-    def _forget_tool_calls_of(self, run_id: UUID) -> None:
+    def _restore_tool_caller(self, caller_run_id: UUID) -> None:
+        # Put back the caller that was set before this run called its first tool,
+        # for example the outer agent of a sub-agent that runs in the outer tool's context.
+        if self._tool_caller() == caller_run_id:
+            self._set_tool_caller(self._tool_callers_before.get(caller_run_id))
+
+    def _end_tool_caller(self, run_id: UUID) -> None:
         # A tool call that never ended, for example after an interrupt, has no
-        # AfterToolCallEvent. Drop it when its caller ends.
-        for tool_run_id, (caller_run_id, _) in tuple(self._tool_callers_before.items()):
+        # AfterToolCallEvent. Restore the value and drop the records when the caller ends.
+        self._restore_tool_caller(run_id)
+        for tool_run_id, caller_run_id in tuple(self._tool_calls.items()):
             if caller_run_id == run_id:
-                self._tool_callers_before.pop(tool_run_id, None)
+                self._tool_calls.pop(tool_run_id, None)
+        self._tool_callers_before.pop(run_id, None)
 
     def _active_tool_caller(self) -> UUID | None:
         """Return the run whose tool is executing in this context, if that run is still active
