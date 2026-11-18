@@ -6,7 +6,7 @@ import json
 import secrets
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from agento11y import (
@@ -25,6 +25,9 @@ from agento11y import (
 )
 from agento11y.framework_handler import Agento11yFrameworkHandlerBase, ProviderResolver, merge_framework_callback_kwargs
 from agento11y.usage import map_usage
+
+if TYPE_CHECKING:
+    from agento11y.framework_handler import _WorkflowStepState
 
 _framework_name = "strands"
 _framework_source = "hooks"
@@ -82,6 +85,8 @@ class Agento11yStrandsHandler(Agento11yFrameworkHandlerBase):
         )
         self._strands_runs: dict[str, _StrandsRunState] = {}
         self._workflow_step_last_generation_id: dict[str, str] = {}
+        # Agent invocation started by a tool -> last generation in its own lineage.
+        self._tool_invocation_last_generation_id: dict[str, str] = {}
 
     def set_default_agent_name(self, agent_name: str) -> None:
         """Set the generation agent name from Strands when the caller did not configure one."""
@@ -136,21 +141,9 @@ class Agento11yStrandsHandler(Agento11yFrameworkHandlerBase):
 
         if parent_run_id is not None:
             self._run_to_graph_key[run_key] = str(parent_run_id)
-        graph_root_key = self._find_graph_root_key(run_key)
-        workflow_step = self._find_enclosing_workflow_step(run_key)
-        parent_generation_ids: list[str] = []
-        if workflow_step is not None:
-            same_step_generation_id = self._workflow_step_last_generation_id.get(workflow_step.step_id, "")
-            if same_step_generation_id:
-                parent_generation_ids = [same_step_generation_id]
-            elif workflow_step.parent_step_ids and graph_root_key:
-                last_generation_id = self._graph_run_last_generation_id.get(graph_root_key, "")
-                if last_generation_id:
-                    parent_generation_ids = [last_generation_id]
-        elif graph_root_key:
-            last_generation_id = self._graph_run_last_generation_id.get(graph_root_key, "")
-            if last_generation_id:
-                parent_generation_ids = [last_generation_id]
+        tool_invocation_key, workflow_step, graph_root_key = self._lineage_scope(run_key)
+        upstream_generation_id = self._upstream_generation_id(tool_invocation_key, workflow_step, graph_root_key)
+        parent_generation_ids = [upstream_generation_id] if upstream_generation_id else []
 
         tags_payload = dict(self._extra_tags)
         tags_payload["agento11y.framework.name"] = self._framework_name
@@ -177,6 +170,8 @@ class Agento11yStrandsHandler(Agento11yFrameworkHandlerBase):
         if start.id == "":
             start.id = f"gen_{secrets.token_hex(8)}"
         self._track_run_generation_id(run_key, start.id)
+        if tool_invocation_key:
+            self._tool_invocation_last_generation_id[tool_invocation_key] = start.id
         if workflow_step is not None:
             self._workflow_step_last_generation_id[workflow_step.step_id] = start.id
         if graph_root_key:
@@ -319,6 +314,20 @@ class Agento11yStrandsHandler(Agento11yFrameworkHandlerBase):
             self._graph_run_conversation_id[run_key] = conversation_id
             self._graph_root_run_keys.add(run_key)
             return
+        if run_type == "invocation" and parent_run_id is not None and self._capture_workflow_steps:
+            # An agent invoked from a tool of another agent. Linking it below
+            # the caller's run puts its generations in the caller's
+            # conversation. It is not a node of the caller, so it is not
+            # recorded as a workflow step.
+            run_key = str(run_id)
+            self._run_to_graph_key[run_key] = str(parent_run_id)
+            # Its first generation follows the caller's last generation. Its own
+            # lineage stays separate, so agents invoked by other tool calls of
+            # the same turn do not follow each other.
+            self._tool_invocation_last_generation_id[run_key] = self._upstream_generation_id(
+                *self._lineage_scope(run_key)
+            )
+            return
         self._on_chain_start(
             serialized=serialized,
             run_id=run_id,
@@ -328,6 +337,8 @@ class Agento11yStrandsHandler(Agento11yFrameworkHandlerBase):
         )
 
     def on_chain_end(self, _outputs: dict[str, Any] | None, *, run_id: UUID, **_kwargs: Any) -> None:
+        if self._end_tool_invocation(str(run_id)):
+            return
         workflow_step = self._workflow_step_runs.get(str(run_id))
         self._on_chain_end(run_id=run_id)
         if workflow_step is not None:
@@ -335,11 +346,57 @@ class Agento11yStrandsHandler(Agento11yFrameworkHandlerBase):
         self._run_to_graph_key.pop(str(run_id), None)
 
     def on_chain_error(self, error: BaseException, *, run_id: UUID, **_kwargs: Any) -> None:
+        if self._end_tool_invocation(str(run_id)):
+            return
         workflow_step = self._workflow_step_runs.get(str(run_id))
         self._on_chain_error(error=error, run_id=run_id)
         if workflow_step is not None:
             self._workflow_step_last_generation_id.pop(workflow_step.step_id, None)
         self._run_to_graph_key.pop(str(run_id), None)
+
+    def _lineage_scope(self, run_key: str) -> tuple[str, _WorkflowStepState | None, str]:
+        """Return (tool invocation key, workflow step, graph root key) whose last generation a
+        generation below run_key follows. The nearest agent invocation started by a tool wins
+        over an enclosing workflow step or graph root."""
+        visited: set[str] = set()
+        current = self._run_to_graph_key.get(run_key, "")
+        while current and current not in visited:
+            if current in self._tool_invocation_last_generation_id:
+                return current, None, ""
+            if current in self._workflow_step_runs or current in self._graph_root_run_keys:
+                break
+            visited.add(current)
+            current = self._run_to_graph_key.get(current, "")
+        return "", self._find_enclosing_workflow_step(run_key), self._find_graph_root_key(run_key)
+
+    def _upstream_generation_id(
+        self, tool_invocation_key: str, workflow_step: _WorkflowStepState | None, graph_root_key: str
+    ) -> str:
+        if tool_invocation_key:
+            return self._tool_invocation_last_generation_id.get(tool_invocation_key, "")
+        if workflow_step is not None:
+            same_step_generation_id = self._workflow_step_last_generation_id.get(workflow_step.step_id, "")
+            if same_step_generation_id:
+                return same_step_generation_id
+            if workflow_step.parent_step_ids and graph_root_key:
+                return self._graph_run_last_generation_id.get(graph_root_key, "")
+            return ""
+        if graph_root_key:
+            return self._graph_run_last_generation_id.get(graph_root_key, "")
+        return ""
+
+    def _end_tool_invocation(self, run_key: str) -> bool:
+        """End an agent invocation that a tool started. Return False for any other run."""
+        if run_key not in self._tool_invocation_last_generation_id:
+            return False
+        self._tool_invocation_last_generation_id.pop(run_key, None)
+        # The caller's root cleanup finds runs through this link, so remove the
+        # runs below this invocation now, before the link goes.
+        descendants = [key for key in tuple(self._run_to_graph_key) if self._reaches_run(key, run_key)]
+        for key in descendants:
+            self._run_to_graph_key.pop(key, None)
+        self._run_to_graph_key.pop(run_key, None)
+        return True
 
 
 def _map_chat_inputs(messages: list[list[Any]]) -> list[Message]:
