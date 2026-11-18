@@ -163,14 +163,19 @@ with an empty `invocation_state`. If both agents use the same hook provider and
 the agent that called the tool:
 
 - Its generations get the caller's `conversation_id`, also when its own `invocation_state`
-  names another conversation.
+  names another conversation. Its tool executions keep the conversation of its own
+  `invocation_state`. When that state names no conversation, each tool execution gets a
+  fallback conversation. Pass the caller's `conversation_id` in the invoked agent's
+  `invocation_state` to keep the tool executions in the caller's conversation too.
 - Its first generation lists the caller's generation that called the tool in
   `parent_generation_ids`. Agents invoked by other tool calls of the same turn do not list
   each other, and the caller's next generation does not list the invoked agent's generations.
 - It is not recorded as a workflow step of the caller. When the caller is a multi-agent node,
   its generations are linked to that node's workflow step.
 
-A multi-agent run that a tool starts gets the caller's `conversation_id`.
+A multi-agent run that a tool starts gets the caller's `conversation_id`. It starts its own
+lineage, so its first node generation does not list the caller's generation that called the
+tool.
 
 With `capture_workflow_steps` off, the invoked agent's span is a child of the caller's span,
 and its generations keep their own conversation.
@@ -200,6 +205,9 @@ not linked:
 - An agent with its own hook provider is a top-level run with its own conversation. Pass the
   caller's `conversation_id` in its `invocation_state` to keep it in the same conversation.
 - A tool that runs the agent in its own thread pool without copying the context.
+
+Background tools are not tested. Strands can start a background tool outside the context of
+the tool call, so an agent that a background tool invokes can be recorded as a top-level run.
 
 With `SequentialToolExecutor`, the tool runs in the task that iterates the caller's events. An
 agent that application code starts in that task while the tool runs is recorded below the

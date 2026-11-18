@@ -59,8 +59,6 @@ class Agento11yStrandsHookProvider:
         self._model_run_ids: dict[int, list[UUID]] = {}
         self._tool_run_ids: dict[str, UUID] = {}
         self._tool_fallback_run_ids: dict[int, list[UUID]] = {}
-        # Tool run id -> run that called the tool.
-        self._tool_calls: dict[UUID, UUID] = {}
         # Calling run -> tool caller that was set before its first tool call.
         self._tool_callers_before: dict[UUID, UUID | None] = {}
         self._multi_agent_run_ids: dict[int, list[UUID]] = {}
@@ -87,11 +85,14 @@ class Agento11yStrandsHookProvider:
         agent = _read(event, "agent")
         run_name = _agent_name(agent)
         self._agento11y_handler.set_default_agent_name(run_name)
+        # A graph or swarm that a tool starts runs its node agents in the tool's
+        # context. A node agent belongs to its node, not to the agent that called the tool.
+        parent_run_id = None if self._node_executor_run(event) is not None else self._active_tool_caller()
         self._agento11y_handler.on_chain_start(
             {"name": run_name},
             {},
             run_id=run_id,
-            parent_run_id=self._active_tool_caller(),
+            parent_run_id=parent_run_id,
             metadata=_metadata(event),
             run_type="invocation",
             run_name=run_name,
@@ -152,7 +153,6 @@ class Agento11yStrandsHookProvider:
             self._stack_for(self._tool_fallback_run_ids, event, agent_scoped=True).append(run_id)
         caller_run_id = self._agent_run_id(event)
         if caller_run_id is not None:
-            self._tool_calls[run_id] = caller_run_id
             current_caller = self._tool_caller()
             if current_caller != caller_run_id:
                 self._tool_callers_before.setdefault(caller_run_id, current_caller)
@@ -184,7 +184,7 @@ class Agento11yStrandsHookProvider:
             run_id = self._pop_stack(self._tool_fallback_run_ids, event, agent_scoped=True)
         if run_id is None:
             return
-        caller_run_id = self._tool_calls.pop(run_id, None)
+        caller_run_id = self._agent_run_id(event)
         if caller_run_id is not None:
             # A tool that ends in another context than it started, such as a
             # background tool, restores the value in that context. The caller's
@@ -290,11 +290,8 @@ class Agento11yStrandsHookProvider:
 
     def _end_tool_caller(self, run_id: UUID) -> None:
         # A tool call that never ended, for example after an interrupt, has no
-        # AfterToolCallEvent. Restore the value and drop the records when the caller ends.
+        # AfterToolCallEvent. Restore the value when the caller ends.
         self._restore_tool_caller(run_id)
-        for tool_run_id, caller_run_id in tuple(self._tool_calls.items()):
-            if caller_run_id == run_id:
-                self._tool_calls.pop(tool_run_id, None)
         self._tool_callers_before.pop(run_id, None)
 
     def _active_tool_caller(self) -> UUID | None:
@@ -331,26 +328,30 @@ class Agento11yStrandsHookProvider:
         agent_scoped: bool = False,
         source_scoped: bool = False,
     ) -> UUID | None:
-        stack = store.get(self._event_key(event, agent_scoped=agent_scoped, source_scoped=source_scoped), [])
-        return stack[-1] if stack else None
+        return _last(store.get(self._event_key(event, agent_scoped=agent_scoped, source_scoped=source_scoped), []))
 
     def _peek_node_stack(self, event: Any) -> UUID | None:
         source_key = self._state_key(event)
         node_id = _as_string(_read(event, "node_id"))
         if node_id:
-            stack = self._node_run_ids.get((source_key, node_id), [])
-            return stack[-1] if stack else None
-        executor = _read(event, "agent") or _read(event, "source") or _read(_read(event, "invocation_state"), "agent")
-        if executor is not None:
-            stack = self._node_executor_run_ids.get((self._state_key(event), id(executor)), [])
-            if stack:
-                return stack[-1]
+            return _last(self._node_run_ids.get((source_key, node_id), []))
+        run_id = self._node_executor_run(event)
+        if run_id is not None:
+            return run_id
 
         # Some custom executors do not expose their Agent identity. Only use a
         # fallback when it is unambiguous; Strands graphs may run nodes in parallel.
         # Copy the items first: a graph on another thread can add or end a node meanwhile.
-        active = [stack[-1] for (key, _), stack in tuple(self._node_run_ids.items()) if key == source_key and stack]
+        last_runs = [_last(stack) for (key, _), stack in tuple(self._node_run_ids.items()) if key == source_key]
+        active = [run_id for run_id in last_runs if run_id is not None]
         return active[0] if len(active) == 1 else None
+
+    def _node_executor_run(self, event: Any) -> UUID | None:
+        """Return the active node run whose executor is the event's agent or source."""
+        executor = _read(event, "agent") or _read(event, "source") or _read(_read(event, "invocation_state"), "agent")
+        if executor is None:
+            return None
+        return _last(self._node_executor_run_ids.get((self._state_key(event), id(executor)), []))
 
     def _pop_stack(
         self,
@@ -394,6 +395,14 @@ class Agento11yStrandsHookProvider:
 
     def _tool_key(self, event: Any, tool_use_id: str) -> str:
         return f"{self._event_key(event, agent_scoped=True, source_scoped=False)}:{tool_use_id}"
+
+
+def _last(stack: list[UUID]) -> UUID | None:
+    # Another thread can pop the last run between a check for an empty stack and the index.
+    try:
+        return stack[-1]
+    except IndexError:
+        return None
 
 
 def _node_executor(source: Any, node_id: str) -> Any:

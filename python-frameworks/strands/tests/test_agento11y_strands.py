@@ -23,6 +23,7 @@ from agento11y_strands import (
     create_agento11y_strands_hook_provider,
     with_agento11y_strands_hooks,
 )
+from strands.models import Model
 
 
 class _CapturingExporter:
@@ -349,6 +350,38 @@ def test_strands_nested_multi_agent_inherits_fallback_conversation_and_exports_n
         client.shutdown()
 
 
+class _ScriptedModel(Model):
+    """Answer with the given turns in order: "tools:<a>,<b>" calls those tools, anything else is text."""
+
+    def __init__(self, *turns: str) -> None:
+        self._turns = list(turns)
+
+    def update_config(self, **_config) -> None:
+        return
+
+    def get_config(self):
+        return {"model_id": "scripted", "provider": "custom"}
+
+    async def structured_output(self, *_args, **_kwargs):
+        raise NotImplementedError
+        yield
+
+    async def stream(self, *_args, **_kwargs):
+        turn = self._turns.pop(0)
+        yield {"messageStart": {"role": "assistant"}}
+        if turn.startswith("tools:"):
+            for name in turn.removeprefix("tools:").split(","):
+                yield {"contentBlockStart": {"start": {"toolUse": {"name": name, "toolUseId": f"call-{name}"}}}}
+                yield {"contentBlockDelta": {"delta": {"toolUse": {"input": json.dumps({"input": "hi"})}}}}
+                yield {"contentBlockStop": {}}
+            yield {"messageStop": {"stopReason": "tool_use"}}
+            return
+        yield {"contentBlockStart": {"start": {}}}
+        yield {"contentBlockDelta": {"delta": {"text": turn}}}
+        yield {"contentBlockStop": {}}
+        yield {"messageStop": {"stopReason": "end_turn"}}
+
+
 @pytest.fixture(autouse=True)
 def _no_tool_caller_between_tests():
     # Some tests end a tool in another context on purpose, which leaves a caller set in this one.
@@ -390,13 +423,17 @@ def _generations_by_text(exporter: _CapturingExporter) -> dict:
     return {generation.output[0].parts[0].text: generation for generation in generations}
 
 
-def _assert_no_state_left(hooks) -> None:
-    handler = hooks._agento11y_handler
-    assert handler._run_to_graph_key == {}
-    assert handler._graph_root_run_keys == set()
-    assert handler._tool_invocation_last_generation_id == {}
-    assert hooks._tool_calls == {}
+def _assert_no_tool_call_state_left(hooks) -> None:
+    assert hooks._agento11y_handler._graph_root_run_keys == set()
+    assert hooks._agento11y_handler._tool_invocation_last_generation_id == {}
     assert hooks._tool_callers_before == {}
+
+
+def _assert_no_state_left(hooks) -> None:
+    # Graph tests use _assert_no_tool_call_state_left: the links of node generations stay in
+    # _run_to_graph_key after the node ends.
+    assert hooks._agento11y_handler._run_to_graph_key == {}
+    _assert_no_tool_call_state_left(hooks)
 
 
 # The caller's conversation wins over a key of the invoked agent, as it does for the nodes of a graph.
@@ -472,6 +509,7 @@ def test_strands_node_agent_tool_invokes_an_agent_below_the_node() -> None:
     assert {generation.conversation_id for generation in generations.values()} == {"graph-1"}
     assert generations["done"].parent_generation_ids == [generations["delegating"].id]
     assert generations["final"].parent_generation_ids == [generations["delegating"].id]
+    _assert_no_tool_call_state_left(hooks)
 
 
 def test_strands_multi_agent_invoked_from_a_tool_joins_the_caller_conversation() -> None:
@@ -491,7 +529,12 @@ def test_strands_multi_agent_invoked_from_a_tool_joins_the_caller_conversation()
         # The tool starts the swarm with a state of its own, so the state does not link it to the caller.
         hooks.before_multi_agent_invocation(SimpleNamespace(source=source, invocation_state=swarm_state))
         hooks.before_node_call(SimpleNamespace(source=source, node_id="node", invocation_state=swarm_state))
+        # The node agent runs in the tool's context, but it belongs to its node, so it is not
+        # recorded as an agent that the tool invoked.
+        hooks.before_invocation(SimpleNamespace(agent=node_agent, invocation_state=swarm_state))
+        assert hooks._agento11y_handler._tool_invocation_last_generation_id == {}
         _model_call(hooks, node_agent, swarm_state, "done")
+        hooks.after_invocation(SimpleNamespace(agent=node_agent, invocation_state=swarm_state))
         hooks.after_node_call(SimpleNamespace(source=source, node_id="node", invocation_state=swarm_state))
         hooks.after_multi_agent_invocation(SimpleNamespace(source=source, invocation_state=swarm_state))
         hooks.after_tool_call(_tool_ended(outer_agent, outer_state))
@@ -505,6 +548,43 @@ def test_strands_multi_agent_invoked_from_a_tool_joins_the_caller_conversation()
     assert step.step_name == "node"
     assert step.linked_generation_ids == [generations["done"].id]
     assert step.conversation_id == generations["done"].conversation_id == generations["delegating"].conversation_id
+    _assert_no_tool_call_state_left(hooks)
+
+
+def test_strands_agent_called_from_a_tool_drops_its_workflow_step_that_never_ended(caplog) -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        hooks = create_agento11y_strands_hook_provider(client=client, provider_resolver="auto")
+        outer_state = {}
+        sub_state = {}
+        graph_state = {}
+        outer_agent = _agent("outer")
+        sub_agent = _agent("sub")
+        node_agent = _agent("node")
+        source = SimpleNamespace(name="graph", nodes={"node": SimpleNamespace(executor=node_agent)})
+
+        hooks.before_invocation(SimpleNamespace(agent=outer_agent, invocation_state=outer_state))
+        _model_call(hooks, outer_agent, outer_state, "delegating")
+        hooks.before_tool_call(_tool_event(outer_agent, outer_state))
+        hooks.before_invocation(SimpleNamespace(agent=sub_agent, invocation_state=sub_state))
+        _model_call(hooks, sub_agent, sub_state, "sub calls a tool")
+        hooks.before_tool_call(_tool_event(sub_agent, sub_state))
+        # The sub-agent's tool starts a graph whose node never gets AfterNodeCallEvent.
+        hooks.before_multi_agent_invocation(SimpleNamespace(source=source, invocation_state=graph_state))
+        hooks.before_node_call(SimpleNamespace(source=source, node_id="node", invocation_state=graph_state))
+        assert hooks._agento11y_handler._workflow_step_runs != {}
+        hooks.after_tool_call(_tool_ended(sub_agent, sub_state))
+        hooks.after_invocation(SimpleNamespace(agent=sub_agent, invocation_state=sub_state))
+        hooks.after_tool_call(_tool_ended(outer_agent, outer_state))
+        hooks.after_invocation(SimpleNamespace(agent=outer_agent, invocation_state=outer_state))
+        client.flush()
+    finally:
+        client.shutdown()
+
+    # The caller's root cleanup cannot reach the step after the sub-agent ends, so the sub-agent drops it.
+    assert hooks._agento11y_handler._workflow_step_runs == {}
+    assert "on_chain_end callback never fired" in caplog.text
 
 
 @pytest.mark.parametrize(
@@ -563,7 +643,6 @@ def test_strands_agent_started_after_the_tool_is_top_level(case: str) -> None:
     # A run below the caller would follow the caller's generation. A top-level run starts its own lineage.
     assert generations["first"].parent_generation_ids == []
     assert generations["second"].parent_generation_ids == [generations["first"].id]
-    assert hooks._tool_calls == {}
     assert hooks._tool_callers_before == {}
 
 
@@ -691,56 +770,27 @@ def test_strands_agent_called_from_a_tool_without_workflow_capture_nests_its_spa
 
 
 @pytest.mark.parametrize("executor", ["concurrent", "sequential"])
-@pytest.mark.parametrize("async_tool", [False, True])
-def test_strands_real_agents_called_from_tools_follow_the_caller(executor: str, async_tool: bool) -> None:
+@pytest.mark.parametrize("sub_agent_tool", ["sync", "async", "as_tool"])
+def test_strands_real_agents_called_from_tools_follow_the_caller(executor: str, sub_agent_tool: str) -> None:
     from strands import Agent, tool
-    from strands.models import Model
     from strands.tools.executors import ConcurrentToolExecutor, SequentialToolExecutor
 
-    class _ScriptedModel(Model):
-        """Answer with the given turns in order: "tools:<a>,<b>" calls those tools, anything else is text."""
-
-        def __init__(self, *turns: str) -> None:
-            self._turns = list(turns)
-
-        def update_config(self, **_config) -> None:
-            return
-
-        def get_config(self):
-            return {"model_id": "scripted", "provider": "custom"}
-
-        async def structured_output(self, *_args, **_kwargs):
-            raise NotImplementedError
-            yield
-
-        async def stream(self, *_args, **_kwargs):
-            turn = self._turns.pop(0)
-            yield {"messageStart": {"role": "assistant"}}
-            if turn.startswith("tools:"):
-                for name in turn.removeprefix("tools:").split(","):
-                    yield {"contentBlockStart": {"start": {"toolUse": {"name": name, "toolUseId": f"call-{name}"}}}}
-                    yield {"contentBlockDelta": {"delta": {"toolUse": {"input": json.dumps({"question": "hi"})}}}}
-                    yield {"contentBlockStop": {}}
-                yield {"messageStop": {"stopReason": "tool_use"}}
-                return
-            yield {"contentBlockStart": {"start": {}}}
-            yield {"contentBlockDelta": {"delta": {"text": turn}}}
-            yield {"contentBlockStop": {}}
-            yield {"messageStop": {"stopReason": "end_turn"}}
-
     def make_tool(name: str, sub_agent):
-        if async_tool:
+        if sub_agent_tool == "as_tool":
+            # Strands runs the sub-agent's stream_async inside the tool.
+            return sub_agent.as_tool(name=name)
+        if sub_agent_tool == "async":
 
-            async def ask(question: str) -> str:
+            async def ask(input: str) -> str:
                 """Ask a sub-agent."""
-                return str(await sub_agent.invoke_async(question))
+                return str(await sub_agent.invoke_async(input))
 
         else:
 
-            def ask(question: str) -> str:
+            def ask(input: str) -> str:
                 """Ask a sub-agent."""
                 # Strands runs a sync tool in a worker thread, and the sub-agent call starts another one.
-                return str(sub_agent(question))
+                return str(sub_agent(input))
 
         return tool(name=name)(ask)
 
@@ -772,6 +822,51 @@ def test_strands_real_agents_called_from_tools_follow_the_caller(executor: str, 
     assert by_agent["sub_b"][0].parent_generation_ids == [tool_call.id]
     assert final.parent_generation_ids == [tool_call.id]
     _assert_no_state_left(hooks)
+
+
+def test_strands_real_graph_called_from_a_tool_joins_the_caller_conversation() -> None:
+    from strands import Agent, tool
+    from strands.multiagent import GraphBuilder
+
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        hooks = create_agento11y_strands_hook_provider(client=client, provider_resolver="auto")
+        first = Agent(name="first", model=_ScriptedModel("first-done"), hooks=[hooks], callback_handler=None)
+        second = Agent(name="second", model=_ScriptedModel("second-done"), hooks=[hooks], callback_handler=None)
+        builder = GraphBuilder()
+        builder.set_hook_providers([hooks])
+        builder.add_node(first, "first")
+        builder.add_node(second, "second")
+        builder.add_edge("first", "second")
+        graph = builder.build()
+
+        @tool
+        def run_graph(input: str) -> str:
+            """Run a graph."""
+            return str(graph(input))
+
+        outer_agent = Agent(
+            name="outer",
+            model=_ScriptedModel("tools:run_graph", "final"),
+            tools=[run_graph],
+            hooks=[hooks],
+            callback_handler=None,
+        )
+        outer_agent("hello", invocation_state={"session_id": "session-1"})
+        client.flush()
+    finally:
+        client.shutdown()
+
+    generations = [generation for request in exporter.requests for generation in request.generations]
+    by_agent = {name: [g for g in generations if g.agent_name == name] for name in ("outer", "first", "second")}
+    steps = [step for request in exporter.workflow_requests for step in request.workflow_steps]
+    assert {generation.conversation_id for generation in generations} == {"session-1"}
+    assert {step.step_name: step.conversation_id for step in steps} == {"first": "session-1", "second": "session-1"}
+    # The graph is its own root, so its first node does not follow the caller's generation.
+    assert by_agent["first"][0].parent_generation_ids == []
+    assert by_agent["second"][0].parent_generation_ids == [by_agent["first"][0].id]
+    _assert_no_tool_call_state_left(hooks)
 
 
 def test_strands_graph_fallback_conversation_id_is_shared_by_steps_and_generations() -> None:

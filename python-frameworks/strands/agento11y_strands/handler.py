@@ -391,10 +391,10 @@ class Agento11yStrandsHandler(Agento11yFrameworkHandlerBase):
             return False
         self._tool_invocation_last_generation_id.pop(run_key, None)
         # The caller's root cleanup finds runs through this link, so remove the
-        # runs below this invocation now, before the link goes.
-        descendants = [key for key in tuple(self._run_to_graph_key) if self._reaches_run(key, run_key)]
-        for key in descendants:
-            self._run_to_graph_key.pop(key, None)
+        # runs below this invocation now, before the link goes. The root cleanup
+        # also works below a run that is not a root, and it drops workflow steps
+        # that never ended with a warning.
+        self._cleanup_graph_state_for_root(run_key)
         self._run_to_graph_key.pop(run_key, None)
         return True
 
