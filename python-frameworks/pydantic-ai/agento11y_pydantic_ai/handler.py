@@ -121,7 +121,7 @@ class Agento11yPydanticAIHandler(Agento11yFrameworkHandlerBase):
             callback_kwargs=merge_framework_callback_kwargs(kwargs, tags=tags, metadata=metadata, run_name=run_name),
         )
 
-    def on_llm_new_token(self, token: str, *, run_id: UUID, **_kwargs: Any) -> None:
+    def on_llm_new_token(self, token: str | list[Any], *, run_id: UUID, **_kwargs: Any) -> None:
         self._on_llm_new_token(token=token, run_id=run_id)
 
     def on_llm_end(self, response: Any, *, run_id: UUID, **_kwargs: Any) -> None:

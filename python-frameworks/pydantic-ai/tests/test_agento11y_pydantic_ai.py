@@ -3,12 +3,24 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from collections.abc import AsyncIterator
 from datetime import timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
-from agento11y import Client, ClientConfig, GenerationExportConfig
+from agento11y import (
+    Client,
+    ClientConfig,
+    GenerationExportConfig,
+    Message,
+    MessageRole,
+    Part,
+    PartKind,
+    ToolCall,
+    ToolResult,
+)
 from agento11y.models import ExportGenerationResult, ExportGenerationsResponse
 from agento11y_pydantic_ai import (
     Agento11yPydanticAICapability,
@@ -17,9 +29,27 @@ from agento11y_pydantic_ai import (
     create_agento11y_pydantic_ai_handler,
     with_agento11y_pydantic_ai_capability,
 )
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from pydantic import BaseModel
+from pydantic_ai import Agent, ModelRetry, ToolOutput
+from pydantic_ai.messages import (
+    ImageUrl,
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ThinkingPart,
+    ToolCallPart,
+    UserPromptPart,
+)
+from pydantic_ai.models import ModelRequestParameters
+from pydantic_ai.models.function import AgentInfo, DeltaThinkingPart, FunctionModel
+from pydantic_ai.tools import ToolDefinition as PydanticToolDefinition
+from pydantic_ai.usage import RequestUsage
 
 
 class _CapturingExporter:
@@ -258,33 +288,9 @@ def test_agento11y_pydantic_ai_capability_wrap_model_request() -> None:
         metadata = None
         model = None
 
-    class _Usage:
-        input_tokens = 10
-        output_tokens = 5
-        cache_read_tokens = 3
-        cache_write_tokens = 2
-
-    class _TextPart:
-        part_kind = "text"
-        content = "world"
-
-    class _ModelResponse:
-        parts = [_TextPart()]
-        model_name = "gpt-5"
-        finish_reason = "stop"
-        usage = _Usage()
-
-    class _UserPart:
-        part_kind = "user-prompt"
-        content = "hello"
-
-    class _ModelRequest:
-        kind = "request"
-        parts = [_UserPart()]
-
     class _RequestContext:
         model = "gpt-5"
-        messages = [_ModelRequest()]
+        messages = [ModelRequest(parts=[UserPromptPart(content="hello")])]
 
     try:
         capability = create_agento11y_pydantic_ai_capability(client=client, provider_resolver="auto")
@@ -294,7 +300,12 @@ def test_agento11y_pydantic_ai_capability_wrap_model_request() -> None:
             request_context = _RequestContext()
 
             async def handler(rc: Any) -> Any:
-                return _ModelResponse()
+                return ModelResponse(
+                    parts=[TextPart(content="world")],
+                    model_name="gpt-5",
+                    finish_reason="stop",
+                    usage=RequestUsage(input_tokens=10, output_tokens=5, cache_read_tokens=3, cache_write_tokens=2),
+                )
 
             await capability.wrap_model_request(ctx, request_context=request_context, handler=handler)
 
@@ -305,7 +316,9 @@ def test_agento11y_pydantic_ai_capability_wrap_model_request() -> None:
         assert generation.model.name == "gpt-5"
         assert generation.model.provider == "openai"
         assert generation.conversation_id == "agento11y:framework:pydantic-ai:pydantic-run-42"
-        assert generation.output[0].parts[0].text == "world"
+        assert generation.input == [_text(MessageRole.USER, "hello")]
+        assert generation.output == [_text(MessageRole.ASSISTANT, "world")]
+        assert generation.stop_reason == "stop"
         assert generation.usage.input_tokens == 10
         assert generation.usage.output_tokens == 5
         assert generation.usage.cache_read_input_tokens == 3
@@ -899,3 +912,284 @@ def test_agento11y_pydantic_ai_handler_explicitly_has_no_embedding_lifecycle() -
         assert not hasattr(handler, "on_embedding_error")
     finally:
         client.shutdown()
+
+
+def _record_agent_run(model_function: Any, prompt: Any, **agent_kwargs: Any) -> tuple[list[Any], list[Any]]:
+    """Run a real agent on a FunctionModel; return its exported generations and finished spans."""
+    exporter = _CapturingExporter()
+    span_exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    client = _new_client(exporter, tracer=provider.get_tracer("agento11y-pydantic-ai-agent-run"))
+    try:
+        agent = Agent(
+            FunctionModel(model_function),
+            capabilities=[create_agento11y_pydantic_ai_capability(client=client)],
+            **agent_kwargs,
+        )
+        agent.run_sync(prompt)
+        client.flush()
+    finally:
+        client.shutdown()
+        provider.shutdown()
+    generations = [generation for request in exporter.requests for generation in request.generations]
+    return generations, list(span_exporter.get_finished_spans())
+
+
+def _text(role: MessageRole, text: str) -> Message:
+    return Message(role=role, parts=[Part(kind=PartKind.TEXT, text=text)])
+
+
+def _tool_call(part: Part) -> tuple[str, str, Any]:
+    assert part.kind == PartKind.TOOL_CALL and part.tool_call is not None
+    return part.tool_call.id, part.tool_call.name, json.loads(part.tool_call.input_json)
+
+
+def test_agento11y_pydantic_ai_agent_run_records_tool_calls_results_and_thinking() -> None:
+    def get_weather(city: str) -> str:
+        return f"Sunny in {city}"
+
+    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if len(messages) == 1:
+            return ModelResponse(
+                parts=[
+                    ThinkingPart(content="The user wants Paris weather."),
+                    ToolCallPart(tool_name="get_weather", args={"city": "Paris"}, tool_call_id="call-1"),
+                ]
+            )
+        return ModelResponse(parts=[TextPart(content="It is sunny in Paris.")])
+
+    generations, spans = _record_agent_run(model, "Weather in Paris?", tools=[get_weather])
+
+    assert [generation.mode.value for generation in generations] == ["SYNC", "SYNC"]
+    calling, answering = generations
+    assistant_turn = Message(
+        role=MessageRole.ASSISTANT,
+        parts=[
+            Part(kind=PartKind.THINKING, thinking="The user wants Paris weather."),
+            Part(
+                kind=PartKind.TOOL_CALL,
+                tool_call=ToolCall(
+                    id="call-1", name="get_weather", input_json=calling.output[0].parts[1].tool_call.input_json
+                ),
+            ),
+        ],
+    )
+    assert calling.output == [assistant_turn]
+    assert _tool_call(calling.output[0].parts[1]) == ("call-1", "get_weather", {"city": "Paris"})
+    assert answering.input == [
+        _text(MessageRole.USER, "Weather in Paris?"),
+        assistant_turn,
+        Message(
+            role=MessageRole.TOOL,
+            parts=[
+                Part(
+                    kind=PartKind.TOOL_RESULT,
+                    tool_result=ToolResult(tool_call_id="call-1", name="get_weather", content="Sunny in Paris"),
+                )
+            ],
+        ),
+    ]
+    assert answering.output == [_text(MessageRole.ASSISTANT, "It is sunny in Paris.")]
+    tool_span = next(span for span in spans if span.attributes.get("gen_ai.operation.name") == "execute_tool")
+    assert tool_span.attributes.get("gen_ai.tool.call.id") == "call-1"
+
+
+def test_agento11y_pydantic_ai_agent_run_records_tool_retry_as_error_result() -> None:
+    def get_weather(city: str) -> str:
+        if city == "Atlantis":
+            raise ModelRetry("Unknown city: Atlantis")
+        return f"Sunny in {city}"
+
+    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        city, call_id = ("Atlantis", "call-1") if len(messages) == 1 else ("Paris", "call-2")
+        if len(messages) == 5:
+            return ModelResponse(parts=[TextPart(content="It is sunny in Paris.")])
+        return ModelResponse(parts=[ToolCallPart(tool_name="get_weather", args={"city": city}, tool_call_id=call_id)])
+
+    generations, _ = _record_agent_run(model, "Weather in Atlantis?", tools=[get_weather])
+
+    assert len(generations) == 3
+    retried = generations[1].input[-1]
+    assert retried.role == MessageRole.TOOL
+    result = retried.parts[0].tool_result
+    assert (result.tool_call_id, result.name, result.is_error) == ("call-1", "get_weather", True)
+    assert "Unknown city: Atlantis" in result.content
+    succeeded = generations[2].input[-1].parts[0].tool_result
+    assert (succeeded.tool_call_id, succeeded.content, succeeded.is_error) == ("call-2", "Sunny in Paris", False)
+
+
+def test_agento11y_pydantic_ai_agent_run_records_output_tool_and_plain_text_retry() -> None:
+    class Verdict(BaseModel):
+        approved: bool
+
+    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if len(messages) == 1:
+            return ModelResponse(parts=[TextPart(content="Looks fine to me.")])
+        output_tool = info.output_tools[0].name
+        return ModelResponse(parts=[ToolCallPart(tool_name=output_tool, args={"approved": True}, tool_call_id="out-1")])
+
+    generations, _ = _record_agent_run(model, "Review this.", output_type=ToolOutput(Verdict))
+
+    assert len(generations) == 2
+    prompt, prose, feedback = generations[1].input
+    assert prompt == _text(MessageRole.USER, "Review this.")
+    assert prose == _text(MessageRole.ASSISTANT, "Looks fine to me.")
+    assert feedback.role == MessageRole.USER
+    assert "tool" in feedback.parts[0].text.lower()
+    assert _tool_call(generations[1].output[0].parts[0]) == ("out-1", "final_result", {"approved": True})
+
+
+def test_agento11y_pydantic_ai_agent_run_records_output_tools_beside_function_tools() -> None:
+    class Verdict(BaseModel):
+        approved: bool
+
+    def lookup_city(city: str) -> str:
+        """Lookup a city."""
+        return city
+
+    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        output_tool = info.output_tools[0].name
+        return ModelResponse(parts=[ToolCallPart(tool_name=output_tool, args={"approved": True}, tool_call_id="out-1")])
+
+    generations, _ = _record_agent_run(model, "Review this.", tools=[lookup_city], output_type=ToolOutput(Verdict))
+
+    (generation,) = generations
+    tools = {tool.name: tool for tool in generation.tools}
+    assert list(tools) == ["lookup_city", "final_result"]
+    assert "approved" in json.loads(tools["final_result"].input_schema_json)["properties"]
+
+
+@pytest.mark.skipif(
+    not hasattr(ModelRequestParameters, "visibility_of"),
+    reason="this pydantic-ai cannot withhold a tool from a request",
+)
+def test_agento11y_pydantic_ai_capability_records_no_tool_withheld_from_the_request() -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+
+    class _RunContext:
+        run_id = "pydantic-withheld-1"
+        deps = None
+        metadata = None
+        model = None
+        agent = None
+
+    class _RequestContext:
+        model = "gpt-5"
+        messages: list[Any] = []
+        model_settings = None
+        model_request_parameters = ModelRequestParameters(
+            function_tools=[
+                PydanticToolDefinition(name="lookup_city"),
+                PydanticToolDefinition(name="archive_city", defer_loading=True),
+            ]
+        )
+
+    try:
+        capability = create_agento11y_pydantic_ai_capability(client=client)
+
+        async def handler(rc: Any) -> ModelResponse:
+            return ModelResponse(parts=[TextPart(content="Done.")])
+
+        asyncio.run(capability.wrap_model_request(_RunContext(), request_context=_RequestContext(), handler=handler))
+        client.flush()
+        assert [tool.name for tool in exporter.requests[0].generations[0].tools] == ["lookup_city"]
+    finally:
+        client.shutdown()
+
+
+def test_agento11y_pydantic_ai_agent_run_joins_system_prompt_and_instructions() -> None:
+    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[TextPart(content="Done.")])
+
+    generations, _ = _record_agent_run(
+        model, "Go.", system_prompt="You review code.", instructions="Answer in one sentence."
+    )
+
+    assert generations[0].system_prompt == "You review code.\n\nAnswer in one sentence."
+    assert generations[0].input == [_text(MessageRole.USER, "Go.")]
+
+
+def test_agento11y_pydantic_ai_agent_run_records_text_items_of_a_multimodal_prompt() -> None:
+    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[TextPart(content="A cat.")])
+
+    generations, _ = _record_agent_run(model, ["Describe this.", ImageUrl(url="https://example.invalid/cat.png")])
+
+    assert generations[0].input == [_text(MessageRole.USER, "Describe this.")]
+
+
+def test_agento11y_pydantic_ai_agent_run_stream_records_time_to_first_token() -> None:
+    async def stream_model(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:
+        yield "Hel"
+        yield "lo."
+
+    exporter = _CapturingExporter()
+    reader = InMemoryMetricReader()
+    meter_provider = MeterProvider(metric_readers=[reader])
+    client = Client(
+        ClientConfig(
+            meter=meter_provider.get_meter("agento11y-pydantic-ai-stream"),
+            generation_export=GenerationExportConfig(batch_size=10, flush_interval=timedelta(seconds=60)),
+            generation_exporter=exporter,
+        )
+    )
+    agent = Agent(
+        FunctionModel(stream_function=stream_model),
+        capabilities=[create_agento11y_pydantic_ai_capability(client=client)],
+    )
+
+    async def _run() -> None:
+        async with agent.run_stream("Hi") as result:
+            await result.get_output()
+
+    try:
+        asyncio.run(_run())
+        client.flush()
+        metrics = reader.get_metrics_data()
+    finally:
+        client.shutdown()
+        meter_provider.shutdown()
+
+    generation = exporter.requests[0].generations[0]
+    assert generation.mode.value == "STREAM"
+    assert generation.output == [_text(MessageRole.ASSISTANT, "Hello.")]
+    ttft_points = [
+        point
+        for resource_metrics in metrics.resource_metrics
+        for scope_metrics in resource_metrics.scope_metrics
+        for metric in scope_metrics.metrics
+        if metric.name == "gen_ai.client.time_to_first_token"
+        for point in metric.data.data_points
+    ]
+    assert [point.count for point in ttft_points] == [1]
+
+
+def test_agento11y_pydantic_ai_failed_stream_keeps_the_text_it_streamed() -> None:
+    async def stream_model(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[Any]:
+        yield {0: DeltaThinkingPart(content="Plan")}
+        yield {0: DeltaThinkingPart(content=" the reply.")}
+        yield "Hello"
+        yield " world"
+        raise RuntimeError("connection reset")
+
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    agent = Agent(
+        FunctionModel(stream_function=stream_model),
+        capabilities=[create_agento11y_pydantic_ai_capability(client=client)],
+    )
+
+    async def _drain(ctx: Any, events: AsyncIterator[Any]) -> None:
+        async for _ in events:
+            pass
+
+    try:
+        with pytest.raises(RuntimeError, match="connection reset"):
+            agent.run_sync("Hi", event_stream_handler=_drain)
+        client.flush()
+    finally:
+        client.shutdown()
+
+    assert exporter.requests[0].generations[0].output == [_text(MessageRole.ASSISTANT, "Hello world")]

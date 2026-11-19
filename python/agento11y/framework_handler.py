@@ -1666,6 +1666,10 @@ def _map_generation_candidate_message(candidate: Any) -> Message | None:
 
 
 def _map_framework_message(message: Any) -> Message | None:
+    # An integration that maps its framework's own message types records them as they are.
+    if isinstance(message, Message):
+        return message
+
     parts: list[Part] = []
 
     tool_calls = _as_list(_read(message, "tool_calls"))

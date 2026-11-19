@@ -17,6 +17,7 @@ from pydantic_ai.exceptions import (
     ToolRetryError,
 )
 
+from ._messages import map_request_messages, map_response_message, stream_token
 from .handler import Agento11yPydanticAIHandler
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,12 @@ class Agento11yPydanticAICapability(AbstractCapability):
     async def for_run(self, ctx: Any) -> Agento11yPydanticAICapability:
         """Per-run isolated state — each agent run gets its own stacks."""
         return Agento11yPydanticAICapability(self._agento11y_handler)
+
+    @property
+    def has_wrap_run_event_stream(self) -> bool:
+        # Pydantic AI calls wrap_run_event_stream on every run that streams; reporting the
+        # override would also make run() and run_sync() stream every model request.
+        return False
 
     async def wrap_run(self, ctx: Any, *, handler: Any) -> Any:
         run_id = uuid4()
@@ -97,9 +104,8 @@ class Agento11yPydanticAICapability(AbstractCapability):
         parent_run_id = self._run_stack[-1] if self._run_stack else None
 
         model_name = _resolve_pydantic_model_name(request_context)
-        invocation_params = _build_invocation_params(model_name, request_context, handler)
-
-        messages = _map_pydantic_messages(request_context)
+        messages, system_prompts = map_request_messages(request_context.messages)
+        invocation_params = _build_invocation_params(model_name, request_context, handler, system_prompts)
         serialized: dict[str, Any] = {"name": _agent_name(ctx)}
         if model_name != "":
             serialized["kwargs"] = {"model": model_name}
@@ -161,6 +167,7 @@ class Agento11yPydanticAICapability(AbstractCapability):
             metadata=metadata,
             run_name=tool_name,
             inputs=args,
+            tool_call_id=_as_string(_read(call, "tool_call_id")),
         )
 
         try:
@@ -188,8 +195,8 @@ class Agento11yPydanticAICapability(AbstractCapability):
 
     async def wrap_run_event_stream(self, ctx: Any, *, stream: Any) -> Any:
         async for event in stream:
-            token = _extract_stream_token(event)
-            if token != "" and self._llm_run_ids:
+            token = stream_token(event)
+            if token and self._llm_run_ids:
                 try:
                     self._agento11y_handler.on_llm_new_token(token, run_id=self._llm_run_ids[-1])
                 except Exception:
@@ -234,7 +241,9 @@ def _agent_name(ctx: Any) -> str:
     return "pydantic_ai_agent"
 
 
-def _build_invocation_params(model_name: str, request_context: Any, handler: Any) -> dict[str, Any]:
+def _build_invocation_params(
+    model_name: str, request_context: Any, handler: Any, system_prompts: list[str]
+) -> dict[str, Any]:
     params: dict[str, Any] = {}
     if model_name != "":
         params["model"] = model_name
@@ -250,7 +259,7 @@ def _build_invocation_params(model_name: str, request_context: Any, handler: Any
     if tools:
         params["tools"] = tools
 
-    system_prompt = _join_instruction_parts(request_params)
+    system_prompt = _system_prompt(system_prompts, request_params)
     if system_prompt != "":
         params["system_prompt"] = system_prompt
 
@@ -264,13 +273,13 @@ def _build_invocation_params(model_name: str, request_context: Any, handler: Any
 
 
 def _map_pydantic_tools(request_params: Any) -> list[ToolDefinition]:
-    tool_defs = _read(request_params, "function_tools")
-    if not isinstance(tool_defs, (list, tuple)):
-        return []
+    # The tools the model is offered, as pydantic-ai's own instrumentation records them: output tools ride
+    # beside function tools, and a tool deferred loading withholds from the request (pydantic-ai 2.x) is not one.
+    visibility_of = _read(request_params, "visibility_of")
     result: list[ToolDefinition] = []
-    for tool_def in tool_defs:
+    for tool_def in (*_sequence(request_params, "function_tools"), *_sequence(request_params, "output_tools")):
         name = _as_string(_read(tool_def, "name"))
-        if name == "":
+        if name == "" or (callable(visibility_of) and visibility_of(name) == "withheld"):
             continue
         result.append(
             ToolDefinition(
@@ -283,12 +292,11 @@ def _map_pydantic_tools(request_params: Any) -> list[ToolDefinition]:
     return result
 
 
-def _join_instruction_parts(request_params: Any) -> str:
+def _system_prompt(system_prompts: list[str], request_params: Any) -> str:
+    # Pydantic AI's models send system prompt parts ahead of instructions.
     parts = _read(request_params, "instruction_parts")
-    if not isinstance(parts, (list, tuple)):
-        return ""
-    contents = [_as_string(_read(part, "content")) for part in parts]
-    return "\n\n".join(c for c in contents if c != "")
+    instructions = [_as_string(_read(part, "content")) for part in parts] if isinstance(parts, (list, tuple)) else []
+    return "\n\n".join(text for text in [*system_prompts, *instructions] if text != "")
 
 
 def _schema_to_bytes(schema: Any) -> bytes:
@@ -344,53 +352,6 @@ def _run_context_metadata(ctx: Any) -> dict[str, Any]:
     return metadata
 
 
-_REQUEST_PART_ROLES: dict[str, str] = {
-    "system-prompt": "system",
-    "user-prompt": "user",
-    "tool-return": "tool",
-    "retry-prompt": "user",
-}
-
-
-def _map_pydantic_messages(request_context: Any) -> list[dict[str, Any]]:
-    messages_list = _read(request_context, "messages")
-    if not isinstance(messages_list, list):
-        return []
-    result: list[dict[str, Any]] = []
-    for message in messages_list:
-        parts = _read(message, "parts")
-        if not isinstance(parts, (list, tuple)):
-            continue
-        kind = _as_string(_read(message, "kind"))
-        if kind == "request":
-            for part in parts:
-                role = _REQUEST_PART_ROLES.get(_as_string(_read(part, "part_kind")))
-                if role:
-                    text = _as_string(_read(part, "content"))
-                    if text != "":
-                        result.append({"role": role, "content": text})
-        elif kind == "response":
-            texts: list[str] = []
-            tool_calls: list[dict[str, Any]] = []
-            for part in parts:
-                part_kind = _as_string(_read(part, "part_kind"))
-                if part_kind == "text":
-                    text = _as_string(_read(part, "content"))
-                    if text != "":
-                        texts.append(text)
-                elif part_kind == "tool-call":
-                    tool_calls.append(_tool_call_dict_from_part(part))
-            if texts or tool_calls:
-                msg: dict[str, Any] = {
-                    "role": "assistant",
-                    "content": " ".join(texts) if texts else "",
-                }
-                if tool_calls:
-                    msg["tool_calls"] = tool_calls
-                result.append(msg)
-    return result
-
-
 def _map_pydantic_response(response: Any, fallback_model_name: str) -> dict[str, Any]:
     llm_output: dict[str, Any] = {}
     model_name = _as_string(_read(response, "model_name")) or fallback_model_name
@@ -405,15 +366,10 @@ def _map_pydantic_response(response: Any, fallback_model_name: str) -> dict[str,
     if token_usage is not None:
         llm_output["token_usage"] = token_usage
 
-    text = _extract_response_text(response)
-    tool_calls = _extract_response_tool_calls(response)
-    payload: dict[str, Any] = {"llm_output": llm_output}
-    if text != "" or tool_calls:
-        generation: dict[str, Any] = {"text": text}
-        if tool_calls:
-            generation["message"] = {"additional_kwargs": {"tool_calls": tool_calls}}
-        payload["generations"] = [[generation]]
-    return payload
+    return {
+        "llm_output": llm_output,
+        "generations": [[{"message": message} for message in map_response_message(response)]],
+    }
 
 
 def _map_pydantic_usage(usage: Any) -> TokenUsage | None:
@@ -433,48 +389,6 @@ def _map_pydantic_usage(usage: Any) -> TokenUsage | None:
     ).normalize()
 
 
-def _extract_response_text(response: Any) -> str:
-    parts = _read(response, "parts")
-    if not isinstance(parts, (list, tuple)):
-        return ""
-    texts: list[str] = []
-    for part in parts:
-        part_kind = _as_string(_read(part, "part_kind"))
-        if part_kind == "text":
-            text = _as_string(_read(part, "content"))
-            if text != "":
-                texts.append(text)
-    return " ".join(texts).strip()
-
-
-def _extract_response_tool_calls(response: Any) -> list[dict[str, Any]]:
-    parts = _read(response, "parts")
-    if not isinstance(parts, (list, tuple)):
-        return []
-    return [_tool_call_dict_from_part(part) for part in parts if _as_string(_read(part, "part_kind")) == "tool-call"]
-
-
-def _tool_call_dict_from_part(part: Any) -> dict[str, Any]:
-    call_info: dict[str, Any] = {
-        "function": {
-            "name": _as_string(_read(part, "tool_name")),
-            "arguments": _json_string(_read(part, "args")),
-        },
-    }
-    call_id = _as_string(_read(part, "tool_call_id"))
-    if call_id != "":
-        call_info["id"] = call_id
-    return call_info
-
-
-def _extract_stream_token(event: Any) -> str:
-    event_kind = _as_string(_read(event, "event_kind"))
-    if event_kind == "part_delta":
-        delta = _read(event, "delta")
-        return _as_string(_read(delta, "content_delta"))
-    return ""
-
-
 def _tool_name(call: Any, tool_def: Any) -> str:
     for candidate in (
         _as_string(_read(call, "tool_name")),
@@ -485,21 +399,17 @@ def _tool_name(call: Any, tool_def: Any) -> str:
     return "framework_tool"
 
 
-def _json_string(value: Any) -> str:
-    if isinstance(value, str):
-        return value
-    try:
-        return json.dumps(value, default=str, sort_keys=True)
-    except Exception:
-        return str(value)
-
-
 def _read(value: Any, key: str) -> Any:
     if value is None:
         return None
     if isinstance(value, dict):
         return value.get(key)
     return getattr(value, key, None)
+
+
+def _sequence(value: Any, key: str) -> list[Any] | tuple[Any, ...]:
+    items = _read(value, key)
+    return items if isinstance(items, (list, tuple)) else []
 
 
 def _as_string(value: Any) -> str:
