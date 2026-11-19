@@ -1112,3 +1112,48 @@ def test_run_config_model_with_serving_prefix_keeps_custom_provider() -> None:
     generation = exporter.requests[0].generations[0]
     assert generation.model.provider == "custom"
     assert generation.model.name == "azure/gpt-4o"
+
+
+class _FakeModelProvider:
+    def __init__(self, model: Model) -> None:
+        self.model = model
+        self.requested: list[str | None] = []
+
+    def get_model(self, model_name: str | None) -> Model:
+        self.requested.append(model_name)
+        return self.model
+
+
+def test_run_config_passed_to_runner_is_recorded_per_run() -> None:
+    # Hooks created without a RunConfig and reused across runs must record each run's own
+    # RunConfig model, including run_sync and run_streamed, not a snapshot or the SDK default.
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    provider = _FakeModelProvider(_StreamingFakeModel())
+    hooks = with_agento11y_openai_agents_hooks(None, client=client)["hooks"]
+    agent = Agent(name="assistant", instructions="Be brief.")
+
+    def config(name: str) -> RunConfig:
+        return RunConfig(model=name, model_provider=provider, tracing_disabled=True)
+
+    try:
+
+        async def run_async() -> None:
+            await Runner.run(agent, "hi", hooks=hooks, run_config=config("gpt-4o-mini"))
+            streamed = Runner.run_streamed(agent, "hi", hooks=hooks, run_config=config("gpt-4o"))
+            async for _ in streamed.stream_events():
+                pass
+
+        asyncio.run(run_async())
+        Runner.run_sync(agent, "hi", hooks=hooks, run_config=config("gpt-4.1-nano"))
+        client.flush()
+
+        generations = [g for request in exporter.requests for g in request.generations]
+        assert [(g.model.name, g.model.provider, g.mode.value) for g in generations] == [
+            ("gpt-4o-mini", "openai", "SYNC"),
+            ("gpt-4o", "openai", "STREAM"),
+            ("gpt-4.1-nano", "openai", "SYNC"),
+        ]
+        assert provider.requested == ["gpt-4o-mini", "gpt-4o", "gpt-4.1-nano"]
+    finally:
+        client.shutdown()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import inspect
 import json
 from typing import Any
@@ -80,6 +81,11 @@ class Agento11yOpenAIAgentsRunHooks(RunHooks):
         # currently streaming in that run (None between calls).
         self._streamed_llm_runs: dict[int, UUID | None] = {}
         _install_run_streamed_patch()
+
+    def _effective_run_config(self) -> Any | None:
+        """RunConfig of the run in progress, else the one given when the hooks were created."""
+        current = _current_run_config.get()
+        return current if current is not None else self._run_config
 
     def _register_streamed_result(self, result: Any) -> None:
         """Mark a RunResultStreaming's run as streamed and observe its raw model deltas."""
@@ -209,7 +215,7 @@ class Agento11yOpenAIAgentsRunHooks(RunHooks):
 
         parent_run_id = self._agent_run_id(context, agent)
 
-        model_provider, model_name = _model_ref(agent, self._run_config)
+        model_provider, model_name = _model_ref(agent, self._effective_run_config())
         invocation_params: dict[str, Any] = {}
         if model_name != "":
             invocation_params["model"] = model_name
@@ -244,7 +250,7 @@ class Agento11yOpenAIAgentsRunHooks(RunHooks):
             await _invoke_handler(
                 self._agento11y_handler,
                 "on_llm_end",
-                _build_llm_end_response(response, model_name=_model_ref(agent, self._run_config)[1]),
+                _build_llm_end_response(response, model_name=_model_ref(agent, self._effective_run_config())[1]),
                 run_id=run_id,
             )
         if not llm_stack:
@@ -361,11 +367,22 @@ def with_agento11y_openai_agents_hooks(
     return merged
 
 
+# RunConfig passed to the Runner call in progress. RunHooks callbacks don't receive it,
+# so the runner patch below records it for the duration of each run.
+_current_run_config: contextvars.ContextVar[Any | None] = contextvars.ContextVar(
+    "agento11y_openai_agents_run_config", default=None
+)
+
 _run_streamed_patched = False
 
 
 def _install_run_streamed_patch() -> None:
-    """Let our RunHooks see Runner.run_streamed runs, which RunHooks callbacks cannot tell apart."""
+    """Let our RunHooks see each run's RunConfig and tell Runner.run_streamed runs apart.
+
+    RunHooks callbacks receive neither. Runner.run, run_sync and run_streamed are wrapped to
+    expose `run_config` through a context variable for that run (tasks the runner starts copy
+    it), and run_streamed results are registered with our hooks to record STREAM and TTFT.
+    """
     global _run_streamed_patched
     if _run_streamed_patched:
         return
@@ -374,28 +391,64 @@ def _install_run_streamed_patch() -> None:
         from agents.run import AgentRunner
     except Exception:  # pragma: no cover - openai-agents missing or reshaped
         return
-    original = getattr(AgentRunner, "run_streamed", None)
-    if original is None:  # pragma: no cover - reshaped SDK
-        return
-    try:
-        signature = inspect.signature(original)
-    except (TypeError, ValueError):  # pragma: no cover - defensive
-        signature = None
 
-    def run_streamed(self: Any, *args: Any, **kwargs: Any) -> Any:
-        result = original(self, *args, **kwargs)
-        hooks = kwargs.get("hooks")
-        if hooks is None and signature is not None:
+    def bound_arguments(original: Any, self: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return dict(inspect.signature(original).bind(self, *args, **kwargs).arguments)
+        except (TypeError, ValueError):  # pragma: no cover - original validates the call itself
+            return dict(kwargs)
+
+    def option(arguments: dict[str, Any], name: str) -> Any:
+        if name in arguments:
+            return arguments[name]
+        extra = arguments.get("kwargs")
+        return extra.get(name) if isinstance(extra, dict) else None
+
+    original_run = getattr(AgentRunner, "run", None)
+    if original_run is not None:
+
+        async def run(self: Any, *args: Any, **kwargs: Any) -> Any:
+            token = _current_run_config.set(option(bound_arguments(original_run, self, args, kwargs), "run_config"))
             try:
-                hooks = signature.bind(self, *args, **kwargs).arguments.get("hooks")
-            except TypeError:  # pragma: no cover - original already validated the call
-                hooks = None
-        if isinstance(hooks, Agento11yOpenAIAgentsRunHooks):
-            hooks._register_streamed_result(result)
-        return result
+                return await original_run(self, *args, **kwargs)
+            finally:
+                _current_run_config.reset(token)
 
-    run_streamed.__wrapped__ = original  # type: ignore[attr-defined]
-    AgentRunner.run_streamed = run_streamed  # type: ignore[method-assign]
+        run.__wrapped__ = original_run  # type: ignore[attr-defined]
+        AgentRunner.run = run  # type: ignore[method-assign]
+
+    original_run_sync = getattr(AgentRunner, "run_sync", None)
+    if original_run_sync is not None:
+
+        def run_sync(self: Any, *args: Any, **kwargs: Any) -> Any:
+            arguments = bound_arguments(original_run_sync, self, args, kwargs)
+            token = _current_run_config.set(option(arguments, "run_config"))
+            try:
+                return original_run_sync(self, *args, **kwargs)
+            finally:
+                _current_run_config.reset(token)
+
+        run_sync.__wrapped__ = original_run_sync  # type: ignore[attr-defined]
+        AgentRunner.run_sync = run_sync  # type: ignore[method-assign]
+
+    original_streamed = getattr(AgentRunner, "run_streamed", None)
+    if original_streamed is not None:
+
+        def run_streamed(self: Any, *args: Any, **kwargs: Any) -> Any:
+            arguments = bound_arguments(original_streamed, self, args, kwargs)
+            # The runner starts its background task inside this call, so the task copies the value.
+            token = _current_run_config.set(option(arguments, "run_config"))
+            try:
+                result = original_streamed(self, *args, **kwargs)
+            finally:
+                _current_run_config.reset(token)
+            hooks = option(arguments, "hooks")
+            if isinstance(hooks, Agento11yOpenAIAgentsRunHooks):
+                hooks._register_streamed_result(result)
+            return result
+
+        run_streamed.__wrapped__ = original_streamed  # type: ignore[attr-defined]
+        AgentRunner.run_streamed = run_streamed  # type: ignore[method-assign]
 
 
 async def _invoke_handler(handler: Any, method_name: str, *args: Any, **kwargs: Any) -> None:
