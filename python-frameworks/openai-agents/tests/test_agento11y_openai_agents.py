@@ -991,3 +991,26 @@ def test_agent_without_model_records_run_config_or_default_model(
     assert generation.response_model == expected_model
     if not response:
         assert generation.model.name == expected_model
+
+
+def test_run_config_model_with_serving_prefix_keeps_custom_provider() -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    run_options = {"run_config": SimpleNamespace(model="azure/gpt-4o")}
+    hooks = with_agento11y_openai_agents_hooks(run_options, client=client)["hooks"]
+    context = SimpleNamespace(context={"conversation_id": "conv-azure"})
+    agent = SimpleNamespace(name="assistant", model=None)
+
+    async def run() -> None:
+        await hooks.on_agent_start(context, agent)
+        await hooks.on_llm_start(context, agent, None, ["hi"])
+        await hooks.on_llm_end(context, agent, {"output": [{"content": "Hello."}]})
+        await hooks.on_agent_end(context, agent, "Hello.")
+
+    asyncio.run(run())
+    client.flush()
+    client.shutdown()
+
+    generation = exporter.requests[0].generations[0]
+    assert generation.model.provider == "custom"
+    assert generation.model.name == "azure/gpt-4o"
