@@ -9,6 +9,23 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    name: Select CI suites
+    runs-on: ubuntu-latest
+    outputs:
+      scope: ${{ steps.scope.outputs.scope }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Select suites from the complete PR diff
+        id: scope
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 .github/scripts/ci-scope.py
+
   scripts:
     name: Workflow scripts
     runs-on: ubuntu-latest
@@ -16,6 +33,9 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+
+      - name: Test CI suite selection
+        run: python3 .github/scripts/ci-scope.test.py
 
       - name: Test bump-version.sh
         run: ./.github/scripts/bump-version.test.sh
@@ -33,6 +53,8 @@ jobs:
         run: ./.github/scripts/changelog-latest-section.test.sh
 
   proto:
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.scope), 'all') || contains(fromJSON(needs.changes.outputs.scope), 'proto')
     name: Protobuf drift
     runs-on: ubuntu-latest
     steps:
@@ -72,6 +94,8 @@ jobs:
         run: mise run lint:ts:redaction-generator
 
   conformance:
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.scope), 'all') || contains(fromJSON(needs.changes.outputs.scope), 'conformance')
     name: Cross-SDK conformance
     runs-on: ubuntu-latest
     steps:
@@ -134,6 +158,7 @@ jobs:
         run: mise run test:go:otelgenai-race
 
   go-module:
+    needs: changes
     name: Go module
     runs-on: ubuntu-latest
     strategy:
@@ -151,15 +176,22 @@ jobs:
           - module: go/otelgenai/conformance
             lint_args: --timeout=5m --build-tags=conformance,tool_execution_kinds
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Check whether this module is affected
+        id: scope
+        run: echo "run=${{ contains(fromJSON(needs.changes.outputs.scope), 'all') || contains(fromJSON(needs.changes.outputs.scope), 'go-all') || contains(fromJSON(needs.changes.outputs.scope), matrix.module) }}" >> "$GITHUB_OUTPUT"
+
+      - if: steps.scope.outputs.run == 'true'
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
 
-      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+      - if: steps.scope.outputs.run == 'true'
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version-file: ${{ matrix.module }}/go.mod
 
       - name: golangci-lint
+        if: steps.scope.outputs.run == 'true'
         uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9.2.0
         env:
           # Force each module to lint with GOWORK=off so it resolves its own
@@ -170,18 +202,19 @@ jobs:
           working-directory: ./${{ matrix.module }}
 
       - name: Test
+        if: steps.scope.outputs.run == 'true'
         run: cd ${{ matrix.module }} && GOWORK=off go test ./...
 
       # TestAgentIntegration drives the real agent CLIs against a fake model.
       # testdata/agent-clis pins them, so a new agent release arrives as its
       # own dependency bump and fails there instead of on an unrelated PR.
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        if: matrix.module == 'plugins/agento11y'
+        if: steps.scope.outputs.run == 'true' && matrix.module == 'plugins/agento11y'
         with:
           node-version: '24'
 
       - name: Agent CLI integration
-        if: matrix.module == 'plugins/agento11y'
+        if: steps.scope.outputs.run == 'true' && matrix.module == 'plugins/agento11y'
         env:
           GOWORK: "off"
           AGENT_CLI_TESTS: claude,codex
@@ -191,7 +224,7 @@ jobs:
           PATH="$PWD/testdata/agent-clis/node_modules/.bin:$PATH" go test . -run TestAgentIntegration -count=1 -v
 
       - name: Build agento11y CLI
-        if: matrix.module == 'plugins/agento11y'
+        if: steps.scope.outputs.run == 'true' && matrix.module == 'plugins/agento11y'
         env:
           GOWORK: "off"
         run: |
@@ -203,6 +236,8 @@ jobs:
           done
 
   go-plugin-windows:
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.scope), 'all') || contains(fromJSON(needs.changes.outputs.scope), 'go-plugin-windows')
     name: Go plugin (Windows)
     runs-on: windows-latest
     steps:
@@ -223,21 +258,27 @@ jobs:
   go:
     name: Go SDK
     runs-on: ubuntu-latest
-    needs: [go-module, go-plugin-windows]
+    needs: [changes, scripts, go-module, go-plugin-windows]
     if: always()
     steps:
       - name: Verify all Go jobs succeeded
         run: |
+          if [[ "${{ needs.changes.result }}" != "success" || "${{ needs.scripts.result }}" != "success" ]]; then
+            echo "CI selection or workflow-script checks failed"
+            exit 1
+          fi
           if [[ "${{ needs.go-module.result }}" != "success" ]]; then
             echo "Go module matrix did not succeed: ${{ needs.go-module.result }}"
             exit 1
           fi
-          if [[ "${{ needs.go-plugin-windows.result }}" != "success" ]]; then
+          if [[ "${{ needs.go-plugin-windows.result }}" != "success" && "${{ needs.go-plugin-windows.result }}" != "skipped" ]]; then
             echo "Go plugin Windows job did not succeed: ${{ needs.go-plugin-windows.result }}"
             exit 1
           fi
 
   typescript:
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.scope), 'all') || contains(fromJSON(needs.changes.outputs.scope), 'typescript')
     name: TypeScript SDK
     runs-on: ubuntu-latest
     steps:
@@ -304,6 +345,8 @@ jobs:
         run: pnpm --filter @grafana/agento11y-opencode run build
 
   hermes-checks:
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.scope), 'all') || contains(fromJSON(needs.changes.outputs.scope), 'hermes')
     name: Hermes lint, types, and artifacts
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -322,6 +365,8 @@ jobs:
       - run: mise run build:py:plugin-hermes
 
   hermes-test:
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.scope), 'all') || contains(fromJSON(needs.changes.outputs.scope), 'hermes')
     name: Hermes Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -342,6 +387,8 @@ jobs:
       - run: mise run test:py:plugin-hermes ${{ matrix.python-version }}
 
   python-lint:
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.scope), 'all') || contains(fromJSON(needs.changes.outputs.scope), 'python-lint')
     name: Python Lint
     runs-on: ubuntu-latest
     steps:
@@ -360,6 +407,7 @@ jobs:
         run: mise run lint:py
 
   python:
+    needs: changes
     name: Python SDK
     runs-on: ubuntu-latest
     strategy:
@@ -381,21 +429,32 @@ jobs:
           - { name: harbor, cmd: "uv run --with './python[dev]' --with './python-frameworks/harbor[dev]' pytest python-frameworks/harbor/tests" }
           - { name: strands, cmd: "uv run --with './python[dev]' --with './python-frameworks/strands[dev]' pytest python-frameworks/strands/tests" }
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      # Keep every existing matrix check name for branch protection.
+      - name: Check whether this suite is affected
+        id: scope
+        run: echo "run=${{ contains(fromJSON(needs.changes.outputs.scope), 'all') || contains(fromJSON(needs.changes.outputs.scope), 'python-all') || contains(fromJSON(needs.changes.outputs.scope), format('python:{0}', matrix.suite.name)) }}" >> "$GITHUB_OUTPUT"
+
+      - if: steps.scope.outputs.run == 'true'
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
 
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+      - if: steps.scope.outputs.run == 'true'
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.11'
 
       - name: Install uv
+        if: steps.scope.outputs.run == 'true'
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Test ${{ matrix.suite.name }}
+        if: steps.scope.outputs.run == 'true'
         run: ${{ matrix.suite.cmd }}
 
   python-core:
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.scope), 'all') || contains(fromJSON(needs.changes.outputs.scope), 'python-core')
     name: Python SDK core / ${{ matrix.python-version }}
     runs-on: ubuntu-latest
     env:
@@ -425,6 +484,8 @@ jobs:
         run: mise run test:py:sdk-core
 
   dotnet:
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.scope), 'all') || contains(fromJSON(needs.changes.outputs.scope), 'dotnet')
     name: .NET SDK
     runs-on: ubuntu-latest
     env:
@@ -468,6 +529,8 @@ jobs:
           retention-days: 5
 
   java:
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.scope), 'all') || contains(fromJSON(needs.changes.outputs.scope), 'java')
     name: Java SDK
     runs-on: ubuntu-latest
     steps:

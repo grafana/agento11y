@@ -2,6 +2,37 @@
 
 Notes for contributors working in this repo.
 
+## Pull request CI scope
+
+CI selects existing suites from the complete pull request diff against its merge
+base. Pushes to `main` still run the full workflow.
+
+- Docs-only changes skip runtime suites. Embedded plugin skills and test fixtures
+  are runtime inputs, not documentation-only changes.
+- Python provider/framework changes run that integration's existing test suite
+  and Python lint. Python core changes also run all Python suites, the core version
+  matrix, Hermes, drift checks, and cross-SDK conformance.
+- Go provider/framework changes run that module. Go core changes run all Go
+  modules, Windows checks, drift checks, and conformance.
+- Launcher changes run launcher/Windows checks, the real-agent CLI integration,
+  viewer/TypeScript checks, and drift checks. Pi/OpenCode changes run TypeScript
+  checks; Hermes changes run Hermes checks.
+- TypeScript, Java, and .NET retain their existing grouped suite boundaries.
+- Shared contracts, CI/toolchain configuration, root lockfiles, and unknown paths
+  run everything. Add new integrations to the workflow before narrowing their scope.
+
+The selector is `.github/scripts/ci-scope.py`. The workflow and its script checks
+always run. Python and Go matrices keep their existing check names; unaffected
+entries succeed without installing dependencies or running tests. This preserves
+branch protection without changing required-check rules. The required **Go SDK**
+check also fails if suite selection or workflow-script checks fail.
+
+Run the selection checks locally with:
+
+```sh
+python3 .github/scripts/ci-scope.test.py
+```
+
 ## Hermes plugin
 
 [`plugins/hermes`](../plugins/hermes/README.md) is the Python distribution `agento11y-hermes`, with module `agento11y_hermes`. Install it in Hermes's Python environment, not through the shared launcher.
