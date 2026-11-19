@@ -48,7 +48,7 @@ llm = OpenAI(
 agent = FunctionAgent(tools=tools, llm=llm)
 ```
 
-Each generation records the provider's token usage (including Anthropic cache reads and writes), the stop reason, and its tool calls with their ids. Streamed calls (`stream_chat`, and every `FunctionAgent` turn) record `STREAM` mode and time to first token. Each tool the agent runs gets an `execute_tool` span with `gen_ai.tool.call.id`. The handler reads streamed chunks and tool steps from the LlamaIndex instrumentation dispatcher, which it subscribes to when it is created.
+Each generation records the provider's token usage (including Anthropic cache reads and writes), the stop reason, and its tool calls with their ids. OpenAI sends usage on a stream only in a final chunk that `stream_options={"include_usage": True}` requests. Without that option, streamed OpenAI generations (every `FunctionAgent` turn, `stream_chat`, `astream_chat`) record no usage. Anthropic streams always report usage. Streamed calls (`stream_chat`, and every `FunctionAgent` turn) record `STREAM` mode and time to first token. Each tool the agent runs gets an `execute_tool` span with `gen_ai.tool.call.id`. The handler reads streamed chunks and tool steps from the LlamaIndex instrumentation dispatcher, which it subscribes to when it is created.
 
 ## Conversation mapping
 
