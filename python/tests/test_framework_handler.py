@@ -10,10 +10,12 @@ from agento11y.framework_handler import (
     Agento11yFrameworkHandlerBase,
     _extract_tool_output,
     _map_chat_input_message,
+    _map_chat_inputs,
     _map_framework_usage,
+    _map_output_messages,
     _resolve_provider,
 )
-from agento11y.models import MessageRole, PartKind
+from agento11y.models import Message, MessageRole, Part, PartKind, ToolCall, ToolResult
 
 
 @pytest.mark.parametrize("provider", ["bedrock", "amazon_bedrock", "aws.bedrock"])
@@ -155,6 +157,34 @@ def test_map_chat_input_message_leaves_other_roles_as_text() -> None:
     assert mapped is not None
     assert mapped.role is MessageRole.USER
     assert [part.kind for part in mapped.parts] == [PartKind.TEXT]
+
+
+_TYPED_MESSAGES = [
+    Message(
+        role=MessageRole.ASSISTANT,
+        parts=[
+            Part(kind=PartKind.THINKING, thinking="Look the city up."),
+            Part(
+                kind=PartKind.TOOL_CALL, tool_call=ToolCall(id="call_1", name="weather", input_json=b'{"city":"Paris"}')
+            ),
+        ],
+    ),
+    Message(
+        role=MessageRole.TOOL,
+        parts=[
+            Part(
+                kind=PartKind.TOOL_RESULT,
+                tool_result=ToolResult(tool_call_id="call_1", name="weather", content="unknown city", is_error=True),
+            )
+        ],
+    ),
+]
+
+
+@pytest.mark.parametrize("message", _TYPED_MESSAGES, ids=["assistant-tool-call", "tool-result"])
+def test_typed_messages_are_recorded_unchanged_as_inputs_and_outputs(message: Message) -> None:
+    assert _map_chat_inputs([[message]]) == ([message], "")
+    assert _map_output_messages({"generations": [[{"message": message}]]}) == [message]
 
 
 def test_map_framework_usage_reads_langchain_cache_read_and_cache_creation() -> None:
