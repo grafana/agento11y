@@ -531,6 +531,28 @@ def _serialized_llm_payload(callback_context: Any, model_name: str) -> dict[str,
     return serialized
 
 
+# LiteLLM provider prefixes that name a provider agento11y records directly.
+# Serving platforms that host several vendors' models (``vertex_ai``, ``azure``,
+# ``openrouter``, ...) are left alone so their generations are not attributed to
+# whichever vendor the stripped model name resembles.
+_LITELLM_PROVIDER_PREFIXES = {
+    "openai": "openai",
+    "anthropic": "anthropic",
+    "gemini": "gemini",
+    "bedrock": "bedrock",
+}
+
+
+def _split_litellm_model(model_name: str) -> tuple[str, str]:
+    """Split ADK ``LiteLlm`` model strings like ``openai/gpt-4o-mini`` into (provider, model)."""
+    prefix, sep, rest = model_name.partition("/")
+    provider = _LITELLM_PROVIDER_PREFIXES.get(prefix.strip().lower(), "")
+    rest = rest.strip()
+    if sep == "" or provider == "" or rest == "":
+        return "", model_name
+    return provider, rest
+
+
 def _adk_invocation_params(llm_request: Any) -> dict[str, Any]:
     config = _read(llm_request, "config")
     invocation_params: dict[str, Any] = {}
@@ -539,6 +561,9 @@ def _adk_invocation_params(llm_request: Any) -> dict[str, Any]:
         _as_string(_read(llm_request, "model")),
         _as_string(_read(config, "model")),
     )
+    provider, model_name = _split_litellm_model(model_name)
+    if provider != "":
+        invocation_params["provider"] = provider
     if model_name != "":
         invocation_params["model"] = model_name
 
