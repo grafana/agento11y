@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import time
 from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
 from typing import Any
@@ -834,17 +835,42 @@ _DRAIN_TIMEOUT_SECONDS = 10.0
 def _drain_sync_executor(timeout: float) -> None:
     """Waits until every task already submitted to LiteLLM's logging pool has finished.
 
-    The pool is a ``ThreadPoolExecutor`` that dequeues in FIFO order and has
-    no join. Submitting one barrier task per worker occupies every worker only
-    once each has finished the tasks queued ahead of it.
+    Recent LiteLLM uses a ``BoundedLoggingThreadPoolExecutor`` whose
+    ``_pending_slots`` semaphore holds one slot per queued or running task, so
+    the pool is idle once every slot is free again. Waiting on that count
+    starts no threads. Older LiteLLM uses a plain ``ThreadPoolExecutor``; there
+    the fallback is a barrier task per worker.
     """
     try:
         from litellm import utils as litellm_utils
     except Exception:  # noqa: BLE001
         return
     executor = getattr(litellm_utils, "executor", None)
+    if executor is None:
+        return
+    slots = getattr(executor, "_pending_slots", None)
+    capacity = getattr(executor, "_max_pending_tasks", None)
+    if isinstance(slots, threading.Semaphore) and isinstance(capacity, int):
+        _wait_for_free_slots(slots, capacity, timeout)
+        return
+    _drain_with_barrier(executor, timeout)
+
+
+def _wait_for_free_slots(slots: threading.Semaphore, capacity: int, timeout: float) -> None:
+    deadline = time.monotonic() + timeout
+    delay = 0.001
+    while getattr(slots, "_value", capacity) < capacity:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            logger.warning("agento11y: timed out waiting for LiteLLM logging callbacks")
+            return
+        time.sleep(min(delay, remaining))
+        delay = min(delay * 2, 0.05)
+
+
+def _drain_with_barrier(executor: Any, timeout: float) -> None:
     workers = getattr(executor, "_max_workers", 0)
-    if executor is None or workers <= 0:
+    if workers <= 0:
         return
     barrier = threading.Barrier(workers + 1, timeout=timeout)
 
@@ -858,7 +884,7 @@ def _drain_sync_executor(timeout: float) -> None:
         futures = [executor.submit(_wait) for _ in range(workers)]
     except RuntimeError:  # executor already shut down
         return
-    if any(f.cancelled() for f in futures):  # backlog full, barrier cannot complete
+    if any(f.cancelled() for f in futures):
         barrier.abort()
         logger.warning("agento11y: LiteLLM logging backlog is full; not waiting for pending callbacks")
         return

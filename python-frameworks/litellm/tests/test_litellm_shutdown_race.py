@@ -65,3 +65,55 @@ def test_flush_inside_event_loop_points_to_aflush(wired: Any) -> None:
     with pytest.raises(RuntimeError, match="aflush"):
         asyncio.run(run())
     handler.shutdown()
+
+
+def test_drain_waits_for_running_task_without_growing_pool(monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+    import time
+
+    from agento11y_litellm import handler as handler_mod
+    from litellm import utils as litellm_utils
+    from litellm.litellm_core_utils.thread_pool_executor import BoundedLoggingThreadPoolExecutor
+
+    executor = BoundedLoggingThreadPoolExecutor(max_workers=50, max_pending_tasks=100)
+    monkeypatch.setattr(litellm_utils, "executor", executor)
+    done = threading.Event()
+    executor.submit(lambda: (time.sleep(0.1), done.set()))
+    handler_mod._drain_sync_executor(5.0)
+    assert done.is_set()
+    assert len(executor._threads) == 1
+    executor.shutdown()
+
+
+def test_drain_times_out_on_stuck_task(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    import threading
+
+    from agento11y_litellm import handler as handler_mod
+    from litellm import utils as litellm_utils
+    from litellm.litellm_core_utils.thread_pool_executor import BoundedLoggingThreadPoolExecutor
+
+    executor = BoundedLoggingThreadPoolExecutor(max_workers=2, max_pending_tasks=10)
+    monkeypatch.setattr(litellm_utils, "executor", executor)
+    release = threading.Event()
+    executor.submit(release.wait)
+    handler_mod._drain_sync_executor(0.05)
+    assert "timed out" in caplog.text
+    release.set()
+    executor.shutdown()
+
+
+def test_drain_falls_back_to_barrier_on_plain_pool(monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    from agento11y_litellm import handler as handler_mod
+    from litellm import utils as litellm_utils
+
+    executor = ThreadPoolExecutor(max_workers=2)
+    monkeypatch.setattr(litellm_utils, "executor", executor)
+    done = threading.Event()
+    executor.submit(lambda: (time.sleep(0.1), done.set()))
+    handler_mod._drain_sync_executor(5.0)
+    assert done.is_set()
+    executor.shutdown()
