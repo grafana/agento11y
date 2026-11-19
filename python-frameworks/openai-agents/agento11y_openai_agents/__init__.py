@@ -66,9 +66,11 @@ class Agento11yOpenAIAgentsRunHooks(RunHooks):
         *,
         agento11y_handler: Agento11yOpenAIAgentsHandler | Agento11yAsyncOpenAIAgentsHandler,
         delegate: Any | None = None,
+        run_config: Any | None = None,
     ) -> None:
         self._agento11y_handler = agento11y_handler
         self._delegate = delegate
+        self._run_config = run_config
         self._agent_run_stacks: dict[int, list[tuple[int, UUID]]] = {}
         self._llm_run_stacks: dict[tuple[int, int], list[UUID]] = {}
         self._tool_run_stacks: dict[tuple[int, int, str | None], list[UUID]] = {}
@@ -207,7 +209,7 @@ class Agento11yOpenAIAgentsRunHooks(RunHooks):
 
         parent_run_id = self._agent_run_id(context, agent)
 
-        model_provider, model_name = _model_ref(agent)
+        model_provider, model_name = _model_ref(agent, self._run_config)
         invocation_params: dict[str, Any] = {}
         if model_name != "":
             invocation_params["model"] = model_name
@@ -242,7 +244,7 @@ class Agento11yOpenAIAgentsRunHooks(RunHooks):
             await _invoke_handler(
                 self._agento11y_handler,
                 "on_llm_end",
-                _build_llm_end_response(response, model_name=_model_ref(agent)[1]),
+                _build_llm_end_response(response, model_name=_model_ref(agent, self._run_config)[1]),
                 run_id=run_id,
             )
         if not llm_stack:
@@ -311,16 +313,24 @@ def create_agento11y_openai_agents_hooks(
     *,
     client: Client,
     existing_hooks: Any | None = None,
+    run_config: Any | None = None,
     async_handler: bool = False,
     **handler_kwargs: Any,
 ) -> Agento11yOpenAIAgentsRunHooks:
-    """Create a RunHooks instance wired to agento11y instrumentation."""
+    """Create a RunHooks instance wired to agento11y instrumentation.
+
+    Pass the run's `RunConfig` so agents without their own `model` record the model it selects.
+    """
     agento11y_handler = create_agento11y_openai_agents_handler(
         client=client,
         async_handler=async_handler,
         **handler_kwargs,
     )
-    return Agento11yOpenAIAgentsRunHooks(agento11y_handler=agento11y_handler, delegate=existing_hooks)
+    return Agento11yOpenAIAgentsRunHooks(
+        agento11y_handler=agento11y_handler,
+        delegate=existing_hooks,
+        run_config=run_config,
+    )
 
 
 def with_agento11y_openai_agents_hooks(
@@ -344,6 +354,7 @@ def with_agento11y_openai_agents_hooks(
     merged["hooks"] = create_agento11y_openai_agents_hooks(
         client=client,
         existing_hooks=existing,
+        run_config=merged.get("run_config"),
         async_handler=async_handler,
         **handler_kwargs,
     )
@@ -413,9 +424,17 @@ def _agent_name(agent: Any) -> str:
     return "openai_agent"
 
 
-def _model_ref(agent: Any) -> tuple[str, str]:
-    """Return (provider, model) for an agent's model, which may be a string or a `Model` object."""
-    model = _read(agent, "model")
+def _model_ref(agent: Any, run_config: Any | None = None) -> tuple[str, str]:
+    """Return (provider, model) for the model the runner uses, as a string or a `Model` object.
+
+    Mirrors the SDK: `RunConfig.model` overrides the agent's model, and an agent with
+    neither falls back to the SDK default model.
+    """
+    model = _read(run_config, "model") if run_config is not None else None
+    if model is None or model == "":
+        model = _read(agent, "model")
+    if model is None or model == "":
+        model = _sdk_default_model()
     if isinstance(model, str):
         raw = model.strip()
     else:
@@ -438,6 +457,17 @@ _LITELLM_PROVIDER_PREFIXES = {
     "gemini": "gemini",
     "bedrock": "bedrock",
 }
+
+
+def _sdk_default_model() -> str:
+    try:
+        from agents.models import get_default_model
+    except Exception:  # pragma: no cover - older openai-agents without default_models
+        return ""
+    try:
+        return _as_string(get_default_model())
+    except Exception:  # pragma: no cover - defensive: env-driven lookup failed
+        return ""
 
 
 def _split_provider_prefix(model: str) -> tuple[str, str]:
