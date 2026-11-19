@@ -158,6 +158,11 @@ function anthropicMessagesFromStream(
   const outputText = summary.outputText ?? extractAnthropicStreamText(events);
   const fallbackOutput: Message[] = outputText.length > 0 ? [{ role: 'assistant', content: outputText }] : [];
   const streamUsageMetadata = anthropicStreamUsageMetadata(events);
+  const assembled = summary.finalResponse ? undefined : assembleAnthropicStream(events);
+  const assembledOutput = assembled ? mapAnthropicResponseOutput(assembled.response) : [];
+  const assembledHasToolCalls = assembledOutput.some((message) =>
+    (message.parts ?? []).some((part) => part.type === 'tool_call'),
+  );
 
   const result: GenerationResult = summary.finalResponse
     ? {
@@ -168,15 +173,21 @@ function anthropicMessagesFromStream(
             : fallbackOutput,
       }
     : {
-        responseModel: String((request as AnyRecord).model ?? ''),
+        responseId: assembled?.id,
+        responseModel: assembled?.model ?? String((request as AnyRecord).model ?? ''),
         maxTokens: mappedRequest.maxTokens,
         temperature: mappedRequest.temperature,
         topP: mappedRequest.topP,
         toolChoice: mappedRequest.toolChoice,
         thinkingEnabled: mappedRequest.thinkingEnabled,
         input: mappedRequest.input,
-        output: fallbackOutput,
+        output:
+          assembledOutput.length > 0 && (assembledHasToolCalls || summary.outputText === undefined)
+            ? assembledOutput
+            : fallbackOutput,
         tools: mappedRequest.tools,
+        usage: mapAnthropicUsage(assembled?.usage),
+        stopReason: normalizeStopReason(assembled?.stopReason),
         metadata: mergeMetadata(
           metadataWithThinkingBudget(options.metadata, mappedRequest.thinkingBudget),
           streamUsageMetadata,
@@ -321,7 +332,7 @@ function mapAnthropicContentParts(content: unknown, role: Message['role']): NonN
         toolCall: {
           id: typeof rawBlock.id === 'string' ? rawBlock.id : undefined,
           name,
-          inputJSON: jsonString(rawBlock.input),
+          inputJSON: typeof rawBlock.input === 'string' ? rawBlock.input : jsonString(rawBlock.input),
         },
         metadata: { providerType: blockType },
       });
@@ -525,17 +536,103 @@ function extractAnthropicStreamText(events: MessagesStreamEvent[]): string {
       }
       if (typeof event.delta.text === 'string' && event.delta.text.length > 0) {
         chunks.push(event.delta.text);
-        continue;
       }
-    }
-
-    const fallback = extractText(event);
-    if (fallback.length > 0) {
-      chunks.push(fallback);
     }
   }
 
   return chunks.join('');
+}
+
+/**
+ * Rebuilds the final message from raw stream events when the caller passes no
+ * finalResponse: id and model from message_start, content blocks (text,
+ * tool_use with input_json_delta arguments, thinking), usage merged from
+ * message_start and message_delta, and stop_reason from message_delta.
+ */
+function assembleAnthropicStream(events: MessagesStreamEvent[]): {
+  id?: string;
+  model?: string;
+  usage?: AnyRecord;
+  stopReason?: string;
+  response: MessagesCreateResponse;
+} {
+  let id: string | undefined;
+  let model: string | undefined;
+  let usage: AnyRecord | undefined;
+  let stopReason: string | undefined;
+  const blocks: Array<{ block: AnyRecord; partialJSON: string } | undefined> = [];
+
+  for (const event of events) {
+    const record = event as AnyRecord;
+    const type = typeof record.type === 'string' ? record.type : '';
+    if (type === 'message_start' && isRecord(record.message)) {
+      const message = record.message;
+      if (typeof message.id === 'string' && message.id.length > 0) {
+        id = message.id;
+      }
+      if (typeof message.model === 'string' && message.model.length > 0) {
+        model = message.model;
+      }
+      if (isRecord(message.usage)) {
+        usage = { ...message.usage };
+      }
+      continue;
+    }
+    if (type === 'content_block_start' && isRecord(record.content_block)) {
+      const index = typeof record.index === 'number' ? record.index : blocks.length;
+      blocks[index] = { block: { ...record.content_block }, partialJSON: '' };
+      continue;
+    }
+    if (type === 'content_block_delta' && isRecord(record.delta)) {
+      const delta = record.delta;
+      const index = typeof record.index === 'number' ? record.index : Math.max(blocks.length - 1, 0);
+      let entry = blocks[index];
+      if (entry === undefined) {
+        entry = { block: { type: 'text', text: '' }, partialJSON: '' };
+        blocks[index] = entry;
+      }
+      if (typeof delta.text === 'string') {
+        entry.block.text = `${typeof entry.block.text === 'string' ? entry.block.text : ''}${delta.text}`;
+      } else if (typeof delta.partial_json === 'string') {
+        entry.partialJSON += delta.partial_json;
+      } else if (typeof delta.thinking === 'string') {
+        entry.block.thinking = `${typeof entry.block.thinking === 'string' ? entry.block.thinking : ''}${delta.thinking}`;
+      }
+      continue;
+    }
+    if (type === 'message_delta') {
+      if (isRecord(record.delta) && typeof record.delta.stop_reason === 'string') {
+        stopReason = record.delta.stop_reason;
+      }
+      if (isRecord(record.usage)) {
+        // message_delta usage is cumulative; keep message_start fields it omits.
+        const merged: AnyRecord = { ...(usage ?? {}) };
+        for (const [key, value] of Object.entries(record.usage)) {
+          if (value !== undefined && value !== null) {
+            merged[key] = value;
+          }
+        }
+        usage = merged;
+      }
+    }
+  }
+
+  const content: AnyRecord[] = [];
+  for (const entry of blocks) {
+    if (entry === undefined) {
+      continue;
+    }
+    if (entry.partialJSON.length > 0) {
+      try {
+        entry.block.input = JSON.parse(entry.partialJSON);
+      } catch {
+        entry.block.input = entry.partialJSON;
+      }
+    }
+    content.push(entry.block);
+  }
+
+  return { id, model, usage, stopReason, response: { content } as unknown as MessagesCreateResponse };
 }
 
 function anthropicStreamUsageMetadata(events: MessagesStreamEvent[]): Record<string, unknown> | undefined {
@@ -644,6 +741,9 @@ function extractText(value: unknown): string {
     if ('content' in value && value.content !== undefined && value.content !== null) {
       return extractText(value.content);
     }
+    // Non-text blocks (tool_use, thinking, ...) have no text to contribute;
+    // String() would render them as "[object Object]".
+    return '';
   }
 
   return String(value).trim();

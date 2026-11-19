@@ -1207,3 +1207,245 @@ function singleEmbeddingSpan(spanExporter) {
   assert.equal(spans.length, 1);
   return spans[0];
 }
+
+test('openai chat stream wrapper derives usage, stop reason and response id from events-only summaries', async () => {
+  const generation = await captureSingleGeneration(async (client) => {
+    await openai.chat.completions.stream(
+      client,
+      {
+        model: 'gpt-4o-mini',
+        stream: true,
+        stream_options: { include_usage: true },
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      async () => ({
+        events: [
+          {
+            id: 'chatcmpl-1',
+            model: 'gpt-4o-mini-2024-07-18',
+            object: 'chat.completion.chunk',
+            created: 0,
+            choices: [{ index: 0, delta: { role: 'assistant', content: 'Hello' } }],
+          },
+          {
+            id: 'chatcmpl-1',
+            model: 'gpt-4o-mini-2024-07-18',
+            object: 'chat.completion.chunk',
+            created: 0,
+            choices: [{ index: 0, delta: { content: ' there' }, finish_reason: 'stop' }],
+          },
+          {
+            id: 'chatcmpl-1',
+            model: 'gpt-4o-mini-2024-07-18',
+            object: 'chat.completion.chunk',
+            created: 0,
+            choices: [],
+            usage: {
+              prompt_tokens: 12,
+              completion_tokens: 3,
+              total_tokens: 15,
+              prompt_tokens_details: { cached_tokens: 4 },
+            },
+          },
+        ],
+      }),
+    );
+  });
+
+  assert.equal(generation.mode, 'STREAM');
+  assert.equal(generation.responseId, 'chatcmpl-1');
+  assert.equal(generation.responseModel, 'gpt-4o-mini-2024-07-18');
+  assert.equal(generation.stopReason, 'stop');
+  assert.equal(generation.usage.inputTokens, 12);
+  assert.equal(generation.usage.outputTokens, 3);
+  assert.equal(generation.usage.totalTokens, 15);
+  assert.equal(generation.usage.cacheReadInputTokens, 4);
+  assert.equal(generation.output[0].content, 'Hello there');
+});
+
+test('openai chat fromStream assembles tool_calls deltas into tool-call parts', () => {
+  const chunk = (choice) => ({
+    id: 'chatcmpl-2',
+    model: 'gpt-4o-mini',
+    object: 'chat.completion.chunk',
+    created: 0,
+    choices: [choice],
+  });
+  const mapped = openai.chat.completions.fromStream(
+    { model: 'gpt-4o-mini', stream: true, messages: [{ role: 'user', content: 'weather?' }] },
+    {
+      events: [
+        chunk({
+          index: 0,
+          delta: {
+            role: 'assistant',
+            tool_calls: [
+              { index: 0, id: 'call_a', type: 'function', function: { name: 'get_weather', arguments: '' } },
+            ],
+          },
+        }),
+        chunk({ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: '{"city":' } }] } }),
+        chunk({ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: '"Paris"}' } }] } }),
+        chunk({
+          index: 0,
+          delta: {
+            tool_calls: [{ index: 1, id: 'call_b', type: 'function', function: { name: 'get_time', arguments: '{}' } }],
+          },
+        }),
+        chunk({ index: 0, delta: {}, finish_reason: 'tool_calls' }),
+        {
+          id: 'chatcmpl-2',
+          model: 'gpt-4o-mini',
+          object: 'chat.completion.chunk',
+          created: 0,
+          choices: [],
+          usage: { prompt_tokens: 50, completion_tokens: 20, total_tokens: 70 },
+        },
+      ],
+    },
+  );
+
+  assert.equal(mapped.stopReason, 'tool_calls');
+  assert.equal(mapped.usage.inputTokens, 50);
+  assert.equal(mapped.usage.outputTokens, 20);
+  assert.deepEqual(
+    mapped.output[0].parts.map((part) => part.toolCall),
+    [
+      { id: 'call_a', name: 'get_weather', inputJSON: '{"city":"Paris"}' },
+      { id: 'call_b', name: 'get_time', inputJSON: '{}' },
+    ],
+  );
+});
+
+test('anthropic stream wrapper derives usage incl. cache buckets and stop reason from events-only summaries', async () => {
+  const generation = await captureSingleGeneration(async (client) => {
+    await anthropic.messages.stream(
+      client,
+      { model: 'claude-haiku-5-5', max_tokens: 64, messages: [{ role: 'user', content: 'hi' }] },
+      async () => ({
+        events: [
+          {
+            type: 'message_start',
+            message: {
+              id: 'msg_1',
+              type: 'message',
+              role: 'assistant',
+              model: 'claude-haiku-5-5-20261001',
+              content: [],
+              stop_reason: null,
+              usage: {
+                input_tokens: 10,
+                output_tokens: 1,
+                cache_read_input_tokens: 30,
+                cache_creation_input_tokens: 5,
+              },
+            },
+          },
+          { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+          { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Hello' } },
+          { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: ' there' } },
+          { type: 'content_block_stop', index: 0 },
+          {
+            type: 'message_delta',
+            delta: { stop_reason: 'end_turn', stop_sequence: null },
+            usage: { output_tokens: 7 },
+          },
+          { type: 'message_stop' },
+        ],
+      }),
+    );
+  });
+
+  assert.equal(generation.mode, 'STREAM');
+  assert.equal(generation.responseId, 'msg_1');
+  assert.equal(generation.responseModel, 'claude-haiku-5-5-20261001');
+  assert.equal(generation.stopReason, 'end_turn');
+  assert.equal(generation.usage.inputTokens, 45);
+  assert.equal(generation.usage.outputTokens, 7);
+  assert.equal(generation.usage.cacheReadInputTokens, 30);
+  assert.equal(generation.usage.cacheWriteInputTokens, 5);
+  assert.equal(generation.usage.totalTokens, 52);
+  assert.equal(generation.output[0].content, 'Hello there');
+});
+
+test('anthropic fromStream assembles tool_use input_json_delta into tool-call parts', () => {
+  const mapped = anthropic.messages.fromStream(
+    { model: 'claude-haiku-5-5', max_tokens: 64, messages: [{ role: 'user', content: 'weather?' }] },
+    {
+      events: [
+        {
+          type: 'message_start',
+          message: {
+            id: 'msg_2',
+            model: 'claude-haiku-5-5',
+            content: [],
+            usage: { input_tokens: 40, output_tokens: 1 },
+          },
+        },
+        { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Checking.' } },
+        { type: 'content_block_stop', index: 0 },
+        {
+          type: 'content_block_start',
+          index: 1,
+          content_block: { type: 'tool_use', id: 'toolu_1', name: 'get_weather', input: {} },
+        },
+        { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"city": ' } },
+        { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '"Paris"}' } },
+        { type: 'content_block_stop', index: 1 },
+        { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 25 } },
+        { type: 'message_stop' },
+      ],
+    },
+  );
+
+  assert.equal(mapped.stopReason, 'tool_use');
+  assert.equal(mapped.usage.inputTokens, 40);
+  assert.equal(mapped.usage.outputTokens, 25);
+  assert.equal(mapped.output[0].content, 'Checking.');
+  const toolCalls = mapped.output[0].parts.filter((part) => part.type === 'tool_call').map((part) => part.toolCall);
+  assert.equal(toolCalls.length, 1);
+  assert.equal(toolCalls[0].id, 'toolu_1');
+  assert.equal(toolCalls[0].name, 'get_weather');
+  assert.deepEqual(JSON.parse(toolCalls[0].inputJSON), { city: 'Paris' });
+});
+
+test('openai chat fromStream keeps a tool name that later chunks repeat', () => {
+  const chunk = (toolCall) => ({
+    id: 'chatcmpl-3',
+    model: 'gpt-4o-mini',
+    object: 'chat.completion.chunk',
+    created: 0,
+    choices: [{ index: 0, delta: { tool_calls: [toolCall] } }],
+  });
+  const mapped = openai.chat.completions.fromStream(
+    { model: 'gpt-4o-mini', stream: true, messages: [{ role: 'user', content: 'weather?' }] },
+    {
+      events: [
+        chunk({ index: 0, id: 'call_a', type: 'function', function: { name: 'get_weather', arguments: '{"city":' } }),
+        chunk({ index: 0, function: { name: 'get_weather', arguments: '"Paris"}' } }),
+      ],
+    },
+  );
+
+  assert.equal(mapped.output[0].parts[0].toolCall.name, 'get_weather');
+  assert.equal(mapped.output[0].parts[0].toolCall.inputJSON, '{"city":"Paris"}');
+});
+
+test('anthropic fromStream keeps truncated tool input JSON unencoded', () => {
+  const mapped = anthropic.messages.fromStream(
+    { model: 'claude-haiku-5-5', max_tokens: 64, messages: [{ role: 'user', content: 'weather?' }] },
+    {
+      events: [
+        {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'tool_use', id: 'toolu_2', name: 'get_weather', input: {} },
+        },
+        { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"city": "Par' } },
+      ],
+    },
+  );
+
+  assert.equal(mapped.output[0].parts[0].toolCall.inputJSON, '{"city": "Par');
+});
