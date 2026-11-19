@@ -332,7 +332,7 @@ function mapAnthropicContentParts(content: unknown, role: Message['role']): NonN
         toolCall: {
           id: typeof rawBlock.id === 'string' ? rawBlock.id : undefined,
           name,
-          inputJSON: jsonString(rawBlock.input),
+          inputJSON: typeof rawBlock.input === 'string' ? rawBlock.input : jsonString(rawBlock.input),
         },
         metadata: { providerType: blockType },
       });

@@ -801,7 +801,7 @@ function assembleChatStream(events: ChatStreamEvent[]): {
         }
         const fn = isRecord(rawToolCall.function) ? rawToolCall.function : undefined;
         if (typeof fn?.name === 'string') {
-          toolCall.function.name += fn.name;
+          toolCall.function.name = fn.name.length > 0 ? fn.name : toolCall.function.name;
         }
         if (typeof fn?.arguments === 'string') {
           toolCall.function.arguments += fn.arguments;

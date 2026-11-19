@@ -1409,3 +1409,43 @@ test('anthropic fromStream assembles tool_use input_json_delta into tool-call pa
   assert.equal(toolCalls[0].name, 'get_weather');
   assert.deepEqual(JSON.parse(toolCalls[0].inputJSON), { city: 'Paris' });
 });
+
+test('openai chat fromStream keeps a tool name that later chunks repeat', () => {
+  const chunk = (toolCall) => ({
+    id: 'chatcmpl-3',
+    model: 'gpt-4o-mini',
+    object: 'chat.completion.chunk',
+    created: 0,
+    choices: [{ index: 0, delta: { tool_calls: [toolCall] } }],
+  });
+  const mapped = openai.chat.completions.fromStream(
+    { model: 'gpt-4o-mini', stream: true, messages: [{ role: 'user', content: 'weather?' }] },
+    {
+      events: [
+        chunk({ index: 0, id: 'call_a', type: 'function', function: { name: 'get_weather', arguments: '{"city":' } }),
+        chunk({ index: 0, function: { name: 'get_weather', arguments: '"Paris"}' } }),
+      ],
+    },
+  );
+
+  assert.equal(mapped.output[0].parts[0].toolCall.name, 'get_weather');
+  assert.equal(mapped.output[0].parts[0].toolCall.inputJSON, '{"city":"Paris"}');
+});
+
+test('anthropic fromStream keeps truncated tool input JSON unencoded', () => {
+  const mapped = anthropic.messages.fromStream(
+    { model: 'claude-haiku-5-5', max_tokens: 64, messages: [{ role: 'user', content: 'weather?' }] },
+    {
+      events: [
+        {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'tool_use', id: 'toolu_2', name: 'get_weather', input: {} },
+        },
+        { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"city": "Par' } },
+      ],
+    },
+  );
+
+  assert.equal(mapped.output[0].parts[0].toolCall.inputJSON, '{"city": "Par');
+});
