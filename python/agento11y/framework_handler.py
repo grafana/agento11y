@@ -550,6 +550,7 @@ class Agento11yFrameworkHandlerBase:
 
         if not run_state.first_token_recorded:
             run_state.first_token_recorded = True
+            _upgrade_to_stream(run_state.recorder)
             run_state.recorder.set_first_token_at(datetime.now(timezone.utc))
 
     def _on_llm_end(self, *, response: Any, run_id: UUID) -> None:
@@ -1237,6 +1238,18 @@ def _normalize_provider_name(value: str) -> str:
     if normalized in {"openai", "anthropic", "gemini"}:
         return normalized
     return "" if normalized == "" else "custom"
+
+
+def _upgrade_to_stream(recorder: Any) -> None:
+    # `.stream()` / `.astream()` on a default chat model sets neither `stream` nor
+    # `streaming` in invocation_params, so the start-time check reports SYNC.
+    # A streamed token is the reliable signal; switch the generation to STREAM.
+    seed = getattr(recorder, "seed", None)
+    if seed is None or seed.mode == GenerationMode.STREAM:
+        return
+    seed.mode = GenerationMode.STREAM
+    if seed.operation_name == "generateText":
+        seed.operation_name = "streamText"
 
 
 def _is_streaming(invocation_params: dict[str, Any] | None) -> bool:
