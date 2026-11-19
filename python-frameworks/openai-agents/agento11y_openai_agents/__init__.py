@@ -382,11 +382,16 @@ def _map_response_items(items: list[Any], *, tool_names: dict[str, str], default
     for item in items:
         item_type = _read(item, "type")
         if item_type == "function_call":
+            name = _as_string(_read(item, "name"))
+            if name == "":
+                # validate_generation requires a tool call name; drop the part rather
+                # than fail the whole generation.
+                continue
             part = Part(
                 kind=PartKind.TOOL_CALL,
                 tool_call=ToolCall(
                     id=_as_string(_read(item, "call_id")),
-                    name=_as_string(_read(item, "name")),
+                    name=name,
                     input_json=_as_string(_read(item, "arguments")).encode("utf-8"),
                 ),
             )

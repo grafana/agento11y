@@ -863,3 +863,31 @@ def test_tool_calls_and_results_map_to_parts_and_tool_spans_carry_call_ids() -> 
     finally:
         client.shutdown()
         provider.shutdown()
+
+
+def test_function_call_without_name_is_dropped_instead_of_failing_generation() -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    hooks = Agento11yOpenAIAgentsRunHooks(agento11y_handler=Agento11yOpenAIAgentsHandler(client=client))
+    context = RunContextWrapper(context=None)
+    agent = SimpleNamespace(name="weather", model="gpt-4o-mini")
+    output = [
+        {"type": "function_call", "call_id": "call_0", "name": "", "arguments": "{}"},
+        {"type": "function_call", "call_id": "call_1", "name": "get_time", "arguments": "{}"},
+    ]
+
+    async def run() -> None:
+        await hooks.on_agent_start(_agent_hook_context(context), agent)
+        await hooks.on_llm_start(context, agent, None, [{"role": "user", "content": "time?"}])
+        await hooks.on_llm_end(context, agent, {"output": output})
+        await hooks.on_agent_end(_agent_hook_context(context), agent, "")
+
+    try:
+        with with_content_capture_mode(ContentCaptureMode.FULL):
+            asyncio.run(run())
+        client.flush()
+        generation = exporter.requests[0].generations[0]
+        names = [part.tool_call.name for message in generation.output for part in message.parts if part.tool_call]
+        assert names == ["get_time"]
+    finally:
+        client.shutdown()
