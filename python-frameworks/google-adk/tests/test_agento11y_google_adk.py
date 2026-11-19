@@ -842,3 +842,100 @@ def test_agento11y_google_adk_keeps_serving_platform_prefixes() -> None:
         generation = _record_plugin_generation(model)
         assert generation.model.provider == "custom"
         assert generation.model.name == model
+
+
+def _run_model_call(streaming_mode_name: str, *, drop_final: bool = False):
+    from google.adk.agents.run_config import RunConfig, StreamingMode
+    from google.adk.models.llm_response import LlmResponse
+
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+
+    class _Session:
+        id = "adk-sse-session-42"
+        state: dict[str, str] = {}
+
+    class _InvocationContext:
+        invocation_id = "adk-sse-invocation-42"
+        session = _Session()
+        agent_name = "adk-sse-agent"
+        run_config = RunConfig(streaming_mode=getattr(StreamingMode, streaming_mode_name))
+
+    class _CallbackContext:
+        invocation_context = _InvocationContext()
+
+    class _LlmRequest:
+        model = "openai/gpt-4o-mini"
+        contents = [genai_types.Content(role="user", parts=[genai_types.Part(text="hello")])]
+
+    def _text(text: str) -> genai_types.Content:
+        return genai_types.Content(role="model", parts=[genai_types.Part(text=text)])
+
+    responses = []
+    if streaming_mode_name == "SSE":
+        responses += [
+            LlmResponse(content=_text("hello "), partial=True),
+            LlmResponse(content=_text("world"), partial=True),
+        ]
+    responses.append(
+        LlmResponse(
+            content=_text("hello world"),
+            partial=False,
+            finish_reason=genai_types.FinishReason.STOP,
+            usage_metadata=genai_types.GenerateContentResponseUsageMetadata(
+                prompt_token_count=11, candidates_token_count=5, total_token_count=16
+            ),
+        )
+    )
+    if drop_final:
+        responses.pop()
+
+    try:
+        plugin = create_agento11y_google_adk_plugin(client=client)
+
+        async def _run() -> None:
+            invocation_context = _InvocationContext()
+            callback_context = _CallbackContext()
+            await plugin.before_run_callback(invocation_context=invocation_context)
+            await plugin.before_model_callback(callback_context=callback_context, llm_request=_LlmRequest())
+            for response in responses:
+                # ADK runs after_model_callback on every response, then on_event_callback on its event.
+                await plugin.after_model_callback(callback_context=callback_context, llm_response=response)
+                event = {"partial": response.partial, "content": response.content}
+                await plugin.on_event_callback(invocation_context=invocation_context, event=event)
+            await plugin.after_run_callback(invocation_context=invocation_context)
+
+        asyncio.run(_run())
+        client.flush()
+        return [generation for request in exporter.requests for generation in request.generations]
+    finally:
+        client.shutdown()
+
+
+def test_agento11y_google_adk_plugin_records_sse_stream_with_final_usage() -> None:
+    generations = _run_model_call("SSE")
+
+    assert len(generations) == 1
+    generation = generations[0]
+    assert generation.mode.value == "STREAM"
+    assert generation.usage.input_tokens == 11
+    assert generation.usage.output_tokens == 5
+    assert generation.usage.total_tokens == 16
+    assert generation.stop_reason != ""
+    assert generation.output[0].parts[0].text == "hello world"
+
+
+def test_agento11y_google_adk_plugin_keeps_non_streaming_runs_sync() -> None:
+    generations = _run_model_call("NONE")
+
+    assert len(generations) == 1
+    assert generations[0].mode.value == "SYNC"
+    assert generations[0].usage.input_tokens == 11
+
+
+def test_agento11y_google_adk_plugin_closes_sse_stream_without_final_response() -> None:
+    generations = _run_model_call("SSE", drop_final=True)
+
+    assert len(generations) == 1
+    assert generations[0].mode.value == "STREAM"
+    assert generations[0].output[0].parts[0].text == "hello world"
