@@ -173,7 +173,15 @@ def map_usage(raw: Any) -> TokenUsage:
     if _read(raw, "prompt_tokens") is not None:
         return from_openai_chat(raw)
 
-    if _read(raw, "input_tokens_details") is not None or _read(raw, "output_tokens_details") is not None:
+    if _read(raw, "input_tokens_details") is not None:
+        return from_openai_responses(raw)
+
+    if _read(raw, "output_tokens_details") is not None:
+        # Anthropic Messages usage also carries output_tokens_details (e.g.
+        # thinking_tokens). Its top-level cache keys never appear in OpenAI
+        # Responses usage, which nests cache counts under input_tokens_details.
+        if _read(raw, "cache_read_input_tokens") is not None or _read(raw, "cache_creation_input_tokens") is not None:
+            return from_anthropic(raw)
         return from_openai_responses(raw)
 
     if _read(raw, "input_tokens") is not None:

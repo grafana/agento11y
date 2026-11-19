@@ -415,3 +415,50 @@ class TestHelperEdgeCases:
         raw = {"input_tokens": value}
         usage = from_anthropic(raw)
         assert usage.input_tokens == expected
+
+
+class TestMapUsageAnthropicWithOutputDetails:
+    """Anthropic usage carries ``output_tokens_details`` too; it must not be read as OpenAI Responses."""
+
+    def test_anthropic_cache_keys_with_output_details(self):
+        raw = {
+            "input_tokens": 2,
+            "output_tokens": 5,
+            "cache_creation_input_tokens": 432,
+            "cache_read_input_tokens": 18104,
+            "output_tokens_details": {"thinking_tokens": 0},
+        }
+        usage = map_usage(raw)
+        assert usage == from_anthropic(raw)
+        assert usage.input_tokens == 2 + 432 + 18104
+        assert usage.output_tokens == 5
+        assert usage.cache_read_input_tokens == 18104
+        assert usage.cache_write_input_tokens == 432
+        assert usage.input_semantics == TokenInputSemantics.INCLUSIVE
+
+    def test_anthropic_sdk_object_with_output_details(self):
+        raw = SimpleNamespace(
+            input_tokens=3,
+            output_tokens=7,
+            cache_creation_input_tokens=0,
+            cache_read_input_tokens=4096,
+            output_tokens_details=SimpleNamespace(thinking_tokens=0),
+        )
+        usage = map_usage(raw)
+        assert usage.input_tokens == 4099
+        assert usage.cache_read_input_tokens == 4096
+        assert usage.cache_write_input_tokens == 0
+
+    def test_openai_responses_unchanged(self):
+        raw = {
+            "input_tokens": 300,
+            "output_tokens": 150,
+            "total_tokens": 450,
+            "input_tokens_details": {"cached_tokens": 80},
+            "output_tokens_details": {"reasoning_tokens": 40},
+        }
+        assert map_usage(raw) == from_openai_responses(raw)
+
+    def test_openai_responses_output_details_only_unchanged(self):
+        raw = {"input_tokens": 10, "output_tokens": 4, "output_tokens_details": {"reasoning_tokens": 2}}
+        assert map_usage(raw) == from_openai_responses(raw)
