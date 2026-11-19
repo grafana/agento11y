@@ -953,3 +953,41 @@ def test_model_objects_and_provider_prefixes_resolve_model_and_provider(
     assert generation.response_model == expected_model
     if not response:
         assert generation.model.name == expected_model
+
+
+@pytest.mark.parametrize(
+    ("agent_model", "run_options", "response", "expected_model"),
+    [
+        (None, {"run_config": SimpleNamespace(model="gpt-4o-mini")}, {}, "gpt-4o-mini"),
+        ("gpt-4o", {"run_config": SimpleNamespace(model="gpt-4o-mini")}, {}, "gpt-4o-mini"),
+        (None, {"run_config": SimpleNamespace(model=_FakeModelObject("openai/gpt-4o-mini"))}, {}, "gpt-4o-mini"),
+        (None, {"run_config": SimpleNamespace(model=None)}, {}, "gpt-4.1-mini"),
+        (None, {}, {}, "gpt-4.1-mini"),
+        (None, {}, {"model": "gpt-4o-mini-2024-07-18"}, "gpt-4o-mini-2024-07-18"),
+    ],
+)
+def test_agent_without_model_records_run_config_or_default_model(
+    monkeypatch, agent_model, run_options, response, expected_model
+) -> None:
+    monkeypatch.setenv("OPENAI_DEFAULT_MODEL", "gpt-4.1-mini")
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    hooks = with_agento11y_openai_agents_hooks(run_options, client=client)["hooks"]
+    context = SimpleNamespace(context={"conversation_id": "conv-default-model"})
+    agent = SimpleNamespace(name="assistant", model=agent_model)
+
+    async def run() -> None:
+        await hooks.on_agent_start(context, agent)
+        await hooks.on_llm_start(context, agent, None, ["hi"])
+        await hooks.on_llm_end(context, agent, {"output": [{"content": "Hello."}], **response})
+        await hooks.on_agent_end(context, agent, "Hello.")
+
+    asyncio.run(run())
+    client.flush()
+    client.shutdown()
+
+    generation = exporter.requests[0].generations[0]
+    assert generation.model.provider == "openai"
+    assert generation.response_model == expected_model
+    if not response:
+        assert generation.model.name == expected_model
