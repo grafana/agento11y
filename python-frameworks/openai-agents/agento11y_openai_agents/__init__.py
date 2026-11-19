@@ -7,7 +7,7 @@ import json
 from typing import Any
 from uuid import UUID, uuid4
 
-from agento11y import Client
+from agento11y import Client, Message, MessageRole, Part, PartKind, ToolCall, ToolResult
 
 from .handler import Agento11yAsyncOpenAIAgentsHandler, Agento11yOpenAIAgentsHandler
 
@@ -185,9 +185,9 @@ class Agento11yOpenAIAgentsRunHooks(RunHooks):
 
         await _invoke_handler(
             self._agento11y_handler,
-            "on_llm_start",
+            "on_chat_model_start",
             serialized,
-            _input_prompts(system_prompt, input_items),
+            [_input_messages(system_prompt, input_items)],
             run_id=run_id,
             parent_run_id=parent_run_id,
             invocation_params=invocation_params,
@@ -242,6 +242,7 @@ class Agento11yOpenAIAgentsRunHooks(RunHooks):
             metadata=_context_metadata(context),
             run_name=tool_name,
             inputs=tool_input,
+            tool_call_id=_as_string(_read(context, "tool_call_id")),
         )
 
     async def on_tool_end(self, context: Any, agent: Any, tool: Any, result: Any) -> None:
@@ -358,15 +359,81 @@ def _tool_name(tool: Any) -> str:
     return "framework_tool"
 
 
-def _input_prompts(system_prompt: str | None, input_items: list[Any]) -> list[str]:
-    prompts: list[str] = []
+def _input_messages(system_prompt: str | None, input_items: list[Any]) -> list[Any]:
+    messages: list[Any] = []
     if isinstance(system_prompt, str) and system_prompt.strip() != "":
-        prompts.append(system_prompt.strip())
-    for item in input_items:
+        messages.append({"role": "system", "content": system_prompt.strip()})
+    tool_names = {
+        _as_string(_read(item, "call_id")): _as_string(_read(item, "name"))
+        for item in input_items
+        if _read(item, "type") == "function_call"
+    }
+    messages.extend(_map_response_items(input_items, tool_names=tool_names, default_role=MessageRole.USER))
+    return messages
+
+
+def _map_response_items(items: list[Any], *, tool_names: dict[str, str], default_role: MessageRole) -> list[Any]:
+    """Map Responses API items (messages, function calls, call outputs) to messages.
+
+    Consecutive function calls are grouped into one assistant message, matching
+    how the model emitted them in a single turn.
+    """
+    messages: list[Any] = []
+    for item in items:
+        item_type = _read(item, "type")
+        if item_type == "function_call":
+            name = _as_string(_read(item, "name"))
+            if name == "":
+                # validate_generation requires a tool call name; drop the part rather
+                # than fail the whole generation.
+                continue
+            part = Part(
+                kind=PartKind.TOOL_CALL,
+                tool_call=ToolCall(
+                    id=_as_string(_read(item, "call_id")),
+                    name=name,
+                    input_json=_as_string(_read(item, "arguments")).encode("utf-8"),
+                ),
+            )
+            last = messages[-1] if messages else None
+            if (
+                isinstance(last, Message)
+                and last.role is MessageRole.ASSISTANT
+                and all(existing.kind is PartKind.TOOL_CALL for existing in last.parts)
+            ):
+                last.parts.append(part)
+            else:
+                messages.append(Message(role=MessageRole.ASSISTANT, parts=[part]))
+            continue
+        if item_type == "function_call_output":
+            call_id = _as_string(_read(item, "call_id"))
+            output = _read(item, "output")
+            messages.append(
+                Message(
+                    role=MessageRole.TOOL,
+                    parts=[
+                        Part(
+                            kind=PartKind.TOOL_RESULT,
+                            tool_result=ToolResult(
+                                tool_call_id=call_id,
+                                name=tool_names.get(call_id, ""),
+                                content=output if isinstance(output, str) else _tool_input_string(output),
+                            ),
+                        )
+                    ],
+                )
+            )
+            continue
         text = _message_text(item)
-        if text != "":
-            prompts.append(text)
-    return prompts or [""]
+        if text == "":
+            continue
+        role = _as_string(_read(item, "role")).lower()
+        if role in ("system", "developer"):
+            messages.append({"role": "system", "content": text})
+            continue
+        mapped_role = {"assistant": MessageRole.ASSISTANT, "user": MessageRole.USER}.get(role, default_role)
+        messages.append(Message(role=mapped_role, parts=[Part(kind=PartKind.TEXT, text=text)]))
+    return messages
 
 
 def _message_text(value: Any) -> str:
@@ -458,7 +525,11 @@ def _build_llm_end_response(response: Any, *, model_name: str) -> dict[str, Any]
         llm_output["token_usage"] = usage
 
     payload: dict[str, Any] = {"llm_output": llm_output}
-    if text != "":
+    output = _read(response, "output")
+    if isinstance(output, list) and any(_read(item, "type") == "function_call" for item in output):
+        messages = _map_response_items(output, tool_names={}, default_role=MessageRole.ASSISTANT)
+        payload["generations"] = [[{"message": message} for message in messages]]
+    elif text != "":
         payload["generations"] = [[{"text": text}]]
     return payload
 
