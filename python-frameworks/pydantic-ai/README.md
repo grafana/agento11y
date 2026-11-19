@@ -69,6 +69,16 @@ Primary mapping is Pydantic AI run identity:
 2. `thread_id` from `ctx.deps` or `ctx.metadata`
 3. fallback `agento11y:framework:pydantic-ai:<run_id>`
 
+## Recorded messages
+
+Each generation records the message history Pydantic AI sent the model and the response it returned, rendered by Pydantic AI itself, on Pydantic AI 1.x and 2.x:
+
+- System prompt parts and instructions are joined into the generation's system prompt, in the order Pydantic AI's models send them.
+- Tool calls keep their call id, name, and JSON arguments; tool results keep the call id and name they answer, and failed or retried calls are marked as errors.
+- Thinking is recorded as thinking parts. Retry feedback that answers no tool call is recorded as a user message.
+- Images, audio, documents, and files are not recorded: the Python SDK has no media part yet.
+- Tool executions record the id of the tool call they run.
+
 ## Metadata and lineage
 
 - Required: `agento11y.framework.run_type`
