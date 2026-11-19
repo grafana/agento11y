@@ -192,6 +192,10 @@ function chatCompletionsFromStream(
   const outputText = summary.outputText ?? extractChatStreamText(summary.events ?? []);
   const fallbackOutput: Message[] = outputText.length > 0 ? [{ role: 'assistant', content: outputText }] : [];
 
+  const assembled = summary.finalResponse ? undefined : assembleChatStream(summary.events ?? []);
+  const assembledOutput = assembled ? mapChatResponseOutput(assembled.response) : [];
+  const assembledHasToolCalls = assembledOutput.some((message) => (message.parts ?? []).length > 0);
+
   const result: GenerationResult = summary.finalResponse
     ? {
         ...chatCompletionsFromRequestResponse(request as unknown as ChatCreateRequest, summary.finalResponse, options),
@@ -201,15 +205,21 @@ function chatCompletionsFromStream(
             : fallbackOutput,
       }
     : {
-        responseModel: String((request as AnyRecord).model ?? ''),
+        responseId: assembled?.id,
+        responseModel: assembled?.model ?? String((request as AnyRecord).model ?? ''),
         maxTokens,
         temperature,
         topP,
         toolChoice,
         thinkingEnabled: hasValue((request as AnyRecord).reasoning) ? true : undefined,
         input: requestMessages.input,
-        output: fallbackOutput,
+        output:
+          assembledOutput.length > 0 && (assembledHasToolCalls || summary.outputText === undefined)
+            ? assembledOutput
+            : fallbackOutput,
         tools: mappedTools,
+        usage: mapChatUsage(assembled?.usage),
+        stopReason: normalizeChatStopReason(assembled?.finishReason),
         metadata: metadataWithThinkingBudget(options.metadata, thinkingBudget),
         tags: options.tags ? { ...options.tags } : undefined,
       };
@@ -722,6 +732,100 @@ function normalizeChatStopReason(value: string | undefined): string | undefined 
     return undefined;
   }
   return value;
+}
+
+/**
+ * Rebuilds the final chat completion from raw stream chunks when the caller
+ * passes no finalResponse: id/model from the chunks, text and refusal deltas,
+ * tool_calls deltas merged by index, the last finish_reason, and the usage
+ * chunk that stream_options.include_usage adds at the end.
+ */
+function assembleChatStream(events: ChatStreamEvent[]): {
+  id?: string;
+  model?: string;
+  usage?: unknown;
+  finishReason?: string;
+  response: ChatResponse;
+} {
+  let id: string | undefined;
+  let model: string | undefined;
+  let usage: unknown;
+  let finishReason: string | undefined;
+  let content = '';
+  let refusal = '';
+  const toolCalls: Array<{ id?: string; type: string; function: { name: string; arguments: string } } | undefined> = [];
+
+  for (const event of events) {
+    const record = event as unknown as AnyRecord;
+    if (typeof record.id === 'string' && record.id.length > 0) {
+      id = record.id;
+    }
+    if (typeof record.model === 'string' && record.model.length > 0) {
+      model = record.model;
+    }
+    if (isRecord(record.usage)) {
+      usage = record.usage;
+    }
+    for (const choice of event.choices ?? []) {
+      if ((choice.index ?? 0) !== 0) {
+        continue;
+      }
+      if (typeof choice.finish_reason === 'string' && choice.finish_reason.length > 0) {
+        finishReason = choice.finish_reason;
+      }
+      const delta: unknown = choice.delta;
+      if (!isRecord(delta)) {
+        continue;
+      }
+      if (typeof delta.content === 'string') {
+        content += delta.content;
+      }
+      if (typeof delta.refusal === 'string') {
+        refusal += delta.refusal;
+      }
+      if (!Array.isArray(delta.tool_calls)) {
+        continue;
+      }
+      for (const rawToolCall of delta.tool_calls) {
+        if (!isRecord(rawToolCall)) {
+          continue;
+        }
+        const index = typeof rawToolCall.index === 'number' ? rawToolCall.index : toolCalls.length;
+        let toolCall = toolCalls[index];
+        if (toolCall === undefined) {
+          toolCall = { type: 'function', function: { name: '', arguments: '' } };
+          toolCalls[index] = toolCall;
+        }
+        if (typeof rawToolCall.id === 'string' && rawToolCall.id.length > 0) {
+          toolCall.id = rawToolCall.id;
+        }
+        const fn = isRecord(rawToolCall.function) ? rawToolCall.function : undefined;
+        if (typeof fn?.name === 'string') {
+          toolCall.function.name += fn.name;
+        }
+        if (typeof fn?.arguments === 'string') {
+          toolCall.function.arguments += fn.arguments;
+        }
+      }
+    }
+  }
+
+  const message: AnyRecord = { role: 'assistant', content: content.length > 0 ? content : null };
+  if (refusal.length > 0) {
+    message.refusal = refusal;
+  }
+  const assembledToolCalls = toolCalls.filter((toolCall) => toolCall !== undefined);
+  if (assembledToolCalls.length > 0) {
+    message.tool_calls = assembledToolCalls;
+  }
+
+  return {
+    id,
+    model,
+    usage,
+    finishReason,
+    response: { choices: [{ index: 0, message, finish_reason: finishReason }] } as unknown as ChatResponse,
+  };
 }
 
 function extractChatStreamText(events: ChatStreamEvent[]): string {
