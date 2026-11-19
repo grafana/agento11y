@@ -37,7 +37,16 @@ Conversation ID precedence:
 
 1. `conversation_id` / `session_id` / `group_id`
 2. `thread_id`
-3. fallback `agento11y:framework:llamaindex:<run_id>`
+3. the handler's `conversation_id` option
+4. fallback `agento11y:framework:llamaindex:<run_id>`
+
+Pass `conversation_id` (and optionally `conversation_title`) when LlamaIndex events carry no session key, so every generation from one handler lands in one conversation:
+
+```python
+config = with_agento11y_llamaindex_callbacks(
+    None, client=client, agent_name="support-agent", conversation_id="session-42"
+)
+```
 
 ## Metadata and lineage
 

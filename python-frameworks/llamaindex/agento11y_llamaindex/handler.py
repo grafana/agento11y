@@ -25,6 +25,9 @@ class _Agento11yLlamaIndexBase(Agento11yFrameworkHandlerBase):
         provider: str = "",
         capture_inputs: bool = True,
         capture_outputs: bool = True,
+        capture_workflow_steps: bool = False,
+        conversation_id: str = "",
+        conversation_title: str = "",
         extra_tags: dict[str, str] | None = None,
         extra_metadata: dict[str, Any] | None = None,
     ) -> None:
@@ -40,6 +43,9 @@ class _Agento11yLlamaIndexBase(Agento11yFrameworkHandlerBase):
             provider=provider,
             capture_inputs=capture_inputs,
             capture_outputs=capture_outputs,
+            capture_workflow_steps=capture_workflow_steps,
+            conversation_id=conversation_id,
+            conversation_title=conversation_title,
             extra_tags=extra_tags,
             extra_metadata=extra_metadata,
         )
