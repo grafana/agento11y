@@ -873,10 +873,13 @@ def _run_model_call(streaming_mode_name: str, *, drop_final: bool = False):
 
     responses = []
     if streaming_mode_name == "SSE":
-        responses += [LlmResponse(content=_text("hel"), partial=True), LlmResponse(content=_text("lo"), partial=True)]
+        responses += [
+            LlmResponse(content=_text("hello "), partial=True),
+            LlmResponse(content=_text("world"), partial=True),
+        ]
     responses.append(
         LlmResponse(
-            content=_text("hello"),
+            content=_text("hello world"),
             partial=False,
             finish_reason=genai_types.FinishReason.STOP,
             usage_metadata=genai_types.GenerateContentResponseUsageMetadata(
@@ -919,7 +922,7 @@ def test_agento11y_google_adk_plugin_records_sse_stream_with_final_usage() -> No
     assert generation.usage.output_tokens == 5
     assert generation.usage.total_tokens == 16
     assert generation.stop_reason != ""
-    assert generation.output[0].parts[0].text == "hello"
+    assert generation.output[0].parts[0].text == "hello world"
 
 
 def test_agento11y_google_adk_plugin_keeps_non_streaming_runs_sync() -> None:
@@ -935,4 +938,4 @@ def test_agento11y_google_adk_plugin_closes_sse_stream_without_final_response() 
 
     assert len(generations) == 1
     assert generations[0].mode.value == "STREAM"
-    assert generations[0].output[0].parts[0].text == "hello"
+    assert generations[0].output[0].parts[0].text == "hello world"

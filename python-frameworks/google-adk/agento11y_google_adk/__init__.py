@@ -133,8 +133,8 @@ class Agento11yGoogleAdkCallbacks:
             if run_id is None:
                 return None
             self._streamed_run_ids.add(run_id)
-            token = _adk_content_text(_read(llm_response, "content"))
-            if token != "":
+            token = _adk_stream_chunk_text(_read(llm_response, "content"))
+            if token.strip() != "":
                 await _invoke_handler(self._agento11y_handler, "on_llm_new_token", token, run_id=run_id)
             return None
 
@@ -941,6 +941,14 @@ def _adk_event_text(event: Any) -> str:
         _as_string(_read(event, "text")),
         _as_string(_read(event, "delta")),
     )
+
+
+def _adk_stream_chunk_text(content: Any) -> str:
+    """Text of one SSE partial chunk, unstripped so whitespace between chunks survives."""
+    parts = _read(content, "parts")
+    if not isinstance(parts, list):
+        return ""
+    return "".join(text for part in parts if isinstance(text := _read(part, "text"), str))
 
 
 def _adk_content_text(content: Any) -> str:
