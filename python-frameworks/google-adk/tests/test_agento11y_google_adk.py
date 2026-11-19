@@ -834,3 +834,11 @@ def test_agento11y_google_adk_keeps_gemini_model_names() -> None:
     resource = "projects/p/locations/us-central1/publishers/google/models/gemini-2.5-pro"
     generation = _record_plugin_generation(resource)
     assert generation.model.name == resource
+
+
+def test_agento11y_google_adk_keeps_serving_platform_prefixes() -> None:
+    # Multi-vendor serving platforms must not be attributed to the model's vendor.
+    for model in ("vertex_ai/claude-sonnet-4-5", "azure/gpt-4o", "vertex_ai/gemini-2.5-pro"):
+        generation = _record_plugin_generation(model)
+        assert generation.model.provider == "custom"
+        assert generation.model.name == model
