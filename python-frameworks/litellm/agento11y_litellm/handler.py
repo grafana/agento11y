@@ -913,7 +913,10 @@ async def _drain_spawned_enqueues(timeout: float) -> None:
     except Exception:  # noqa: BLE001
         await asyncio.sleep(0)
         return
-    await drain_logging_tasks(timeout)
+    try:
+        await drain_logging_tasks(timeout)
+    except Exception:  # noqa: BLE001
+        logger.warning("agento11y: failed waiting for LiteLLM logging tasks", exc_info=True)
 
 
 async def _drain_async_worker(timeout: float) -> None:

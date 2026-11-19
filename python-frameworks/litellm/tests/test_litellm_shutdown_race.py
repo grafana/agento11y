@@ -139,3 +139,17 @@ def test_adrain_waits_for_spawned_enqueue_task() -> None:
         assert ran == [True]
 
     asyncio.run(main())
+
+
+def test_ashutdown_still_shuts_down_client_when_task_drain_raises(monkeypatch: pytest.MonkeyPatch, wired: Any) -> None:
+    from litellm.responses import streaming_iterator
+
+    async def boom(timeout: float = 5.0) -> None:
+        raise ValueError("boom")
+
+    monkeypatch.setattr(streaming_iterator, "drain_logging_tasks", boom)
+    _, handler = wired
+    shut: list[bool] = []
+    monkeypatch.setattr(handler._client, "shutdown", lambda: shut.append(True))
+    asyncio.run(handler.ashutdown())
+    assert shut == [True]
