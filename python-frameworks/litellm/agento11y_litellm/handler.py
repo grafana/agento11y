@@ -933,14 +933,17 @@ async def _drain_async_worker(timeout: float) -> None:
         logger.warning("agento11y: failed flushing LiteLLM's async logging worker", exc_info=True)
 
 
-def drain_litellm_callbacks(timeout: float = _DRAIN_TIMEOUT_SECONDS) -> None:
-    """Runs every LiteLLM logging callback that is still pending, outside an event loop."""
+def _reject_running_loop() -> None:
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        pass
-    else:
-        raise RuntimeError("agento11y: inside a running event loop, use aflush() or ashutdown()")
+        return
+    raise RuntimeError("agento11y: inside a running event loop, use aflush() or ashutdown()")
+
+
+def drain_litellm_callbacks(timeout: float = _DRAIN_TIMEOUT_SECONDS) -> None:
+    """Runs every LiteLLM logging callback that is still pending, outside an event loop."""
+    _reject_running_loop()
     # Async completions can submit sync callbacks too, so drain the queue first.
     if getattr(_async_logging_worker(), "_queue", None) is not None:
         asyncio.run(_drain_async_worker(timeout))
@@ -995,6 +998,7 @@ class Agento11yLiteLLMLogger(CustomLogger):
         request therefore runs before the generation is recorded. Call this
         instead. Inside a running event loop, use :meth:`aflush`.
         """
+        _reject_running_loop()  # wrong API: leave the client open for aflush/ashutdown
         try:
             drain_litellm_callbacks(timeout)
         finally:
@@ -1007,6 +1011,7 @@ class Agento11yLiteLLMLogger(CustomLogger):
         generations LiteLLM has not handed to this logger yet. Inside a running
         event loop, use :meth:`ashutdown`.
         """
+        _reject_running_loop()  # wrong API: leave the client open for aflush/ashutdown
         try:
             drain_litellm_callbacks(timeout)
         finally:

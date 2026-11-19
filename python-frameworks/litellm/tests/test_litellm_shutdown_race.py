@@ -175,3 +175,18 @@ def test_shutdown_continues_when_worker_flush_raises(monkeypatch: pytest.MonkeyP
     handler.shutdown()
     assert sync_drained.is_set()
     assert shut == [True]
+
+
+def test_sync_shutdown_inside_event_loop_leaves_client_open(monkeypatch: pytest.MonkeyPatch, wired: Any) -> None:
+    _, handler = wired
+    calls: list[str] = []
+    monkeypatch.setattr(handler._client, "shutdown", lambda: calls.append("shutdown"))
+    monkeypatch.setattr(handler._client, "flush", lambda: calls.append("flush"))
+
+    async def run() -> None:
+        for method in (handler.shutdown, handler.flush):
+            with pytest.raises(RuntimeError, match="ashutdown"):
+                method()
+
+    asyncio.run(run())
+    assert calls == []
