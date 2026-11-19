@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import threading
 from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
 from typing import Any
@@ -826,6 +828,85 @@ def _extract_detailed_usage(response_obj: Any, slo: dict[str, Any]) -> TokenUsag
     return usage
 
 
+_DRAIN_TIMEOUT_SECONDS = 10.0
+
+
+def _drain_sync_executor(timeout: float) -> None:
+    """Waits until every task already submitted to LiteLLM's logging pool has finished.
+
+    The pool is a ``ThreadPoolExecutor`` that dequeues in FIFO order and has
+    no join. Submitting one barrier task per worker occupies every worker only
+    once each has finished the tasks queued ahead of it.
+    """
+    try:
+        from litellm import utils as litellm_utils
+    except Exception:  # noqa: BLE001
+        return
+    executor = getattr(litellm_utils, "executor", None)
+    workers = getattr(executor, "_max_workers", 0)
+    if executor is None or workers <= 0:
+        return
+    barrier = threading.Barrier(workers + 1, timeout=timeout)
+
+    def _wait() -> None:
+        try:
+            barrier.wait()
+        except threading.BrokenBarrierError:
+            pass
+
+    try:
+        futures = [executor.submit(_wait) for _ in range(workers)]
+    except RuntimeError:  # executor already shut down
+        return
+    if any(f.cancelled() for f in futures):  # backlog full, barrier cannot complete
+        barrier.abort()
+        logger.warning("agento11y: LiteLLM logging backlog is full; not waiting for pending callbacks")
+        return
+    try:
+        barrier.wait()
+    except threading.BrokenBarrierError:
+        logger.warning("agento11y: timed out waiting for LiteLLM logging callbacks")
+
+
+def _async_logging_worker() -> Any:
+    try:
+        from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    except Exception:  # noqa: BLE001
+        return None
+    return GLOBAL_LOGGING_WORKER
+
+
+async def _drain_async_worker(timeout: float) -> None:
+    worker = _async_logging_worker()
+    flush = getattr(worker, "flush", None)
+    if flush is None:
+        return
+    try:
+        await asyncio.wait_for(flush(), timeout)
+    except asyncio.TimeoutError:
+        logger.warning("agento11y: timed out waiting for LiteLLM async logging callbacks")
+
+
+def drain_litellm_callbacks(timeout: float = _DRAIN_TIMEOUT_SECONDS) -> None:
+    """Runs every LiteLLM logging callback that is still pending, outside an event loop."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+    else:
+        raise RuntimeError("agento11y: inside a running event loop, use aflush() or ashutdown()")
+    # Async completions can submit sync callbacks too, so drain the queue first.
+    if getattr(_async_logging_worker(), "_queue", None) is not None:
+        asyncio.run(_drain_async_worker(timeout))
+    _drain_sync_executor(timeout)
+
+
+async def adrain_litellm_callbacks(timeout: float = _DRAIN_TIMEOUT_SECONDS) -> None:
+    """Async form of :func:`drain_litellm_callbacks`."""
+    await _drain_async_worker(timeout)
+    await asyncio.to_thread(_drain_sync_executor, timeout)
+
+
 class Agento11yLiteLLMLogger(CustomLogger):
     """LiteLLM callback logger that exports generations to Agent Observability.
 
@@ -858,6 +939,38 @@ class Agento11yLiteLLMLogger(CustomLogger):
         self._conversation_id = conversation_id
         self._extra_tags = dict(extra_tags) if extra_tags else {}
         self._extra_metadata = dict(extra_metadata) if extra_metadata else {}
+
+    def flush(self, timeout: float = _DRAIN_TIMEOUT_SECONDS) -> None:
+        """Waits for LiteLLM's pending callbacks, then flushes the client.
+
+        LiteLLM does not call loggers inline: ``completion`` hands the success
+        callback to a thread pool and ``acompletion`` to a queue that drains on
+        the event loop or at exit. ``client.flush()`` called straight after a
+        request therefore runs before the generation is recorded. Call this
+        instead. Inside a running event loop, use :meth:`aflush`.
+        """
+        drain_litellm_callbacks(timeout)
+        self._client.flush()
+
+    def shutdown(self, timeout: float = _DRAIN_TIMEOUT_SECONDS) -> None:
+        """Waits for LiteLLM's pending callbacks, then shuts the client down.
+
+        Use this instead of ``client.shutdown()``, which would drop the
+        generations LiteLLM has not handed to this logger yet. Inside a running
+        event loop, use :meth:`ashutdown`.
+        """
+        drain_litellm_callbacks(timeout)
+        self._client.shutdown()
+
+    async def aflush(self, timeout: float = _DRAIN_TIMEOUT_SECONDS) -> None:
+        """Async form of :meth:`flush`, for use inside a running event loop."""
+        await adrain_litellm_callbacks(timeout)
+        self._client.flush()
+
+    async def ashutdown(self, timeout: float = _DRAIN_TIMEOUT_SECONDS) -> None:
+        """Async form of :meth:`shutdown`, for use inside a running event loop."""
+        await adrain_litellm_callbacks(timeout)
+        self._client.shutdown()
 
     def log_success_event(self, kwargs: dict, response_obj: Any, start_time: datetime, end_time: datetime) -> None:
         self._log_event(kwargs, response_obj, start_time, end_time, is_failure=False)

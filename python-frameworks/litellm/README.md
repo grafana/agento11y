@@ -44,7 +44,8 @@ To export generations, follow these steps:
    from agento11y_litellm import Agento11yLiteLLMLogger
 
    client = Client()
-   litellm.callbacks = [Agento11yLiteLLMLogger(client=client, agent_name="my-agent")]
+   handler = Agento11yLiteLLMLogger(client=client, agent_name="my-agent")
+   litellm.callbacks = [handler]
    ```
 
 1. Call LiteLLM as you normally do.
@@ -58,10 +59,17 @@ To export generations, follow these steps:
    ```
 
 1. Flush buffered telemetry before your process exits.
+   Shut down through the logger, not the client:
+   LiteLLM runs callbacks in a background thread pool or async queue,
+   so `client.shutdown()` right after a call drops generations LiteLLM has not handed over yet.
 
    ```python
-   client.shutdown()
+   handler.shutdown()  # handler is the Agento11yLiteLLMLogger; in async code: await handler.ashutdown()
    ```
+
+   `handler.flush()` and `await handler.aflush()` do the same without closing the client.
+   With `asyncio.run`, call `ashutdown()` inside the coroutine:
+   LiteLLM cancels callbacks still pending when the event loop closes.
 
 Streaming works the same way.
 A streamed call is exported as one generation in `STREAM` mode, carrying the time of the first token:
