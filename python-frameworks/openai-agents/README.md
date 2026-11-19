@@ -58,6 +58,23 @@ Metadata includes:
 
 Resolver order: explicit provider option -> framework metadata -> model prefix inference -> `custom`.
 
+## Token usage with streamed Chat Completions models
+
+`Runner.run_streamed` generations carry the token usage that OpenAI Agents reports for each model response. The default Responses model always reports it. `OpenAIChatCompletionsModel` only requests usage on a stream (`stream_options={"include_usage": True}`) when its client points at `https://api.openai.com`. With any other OpenAI-compatible `base_url`, the stream has no usage, so the generation records no input or output tokens. Opt in through `ModelSettings`:
+
+```python
+from agents import Agent, ModelSettings, OpenAIChatCompletionsModel
+from openai import AsyncOpenAI
+
+agent = Agent(
+    name="assistant",
+    model=OpenAIChatCompletionsModel("my-model", AsyncOpenAI(base_url="https://llm.example.com/v1")),
+    model_settings=ModelSettings(include_usage=True),
+)
+```
+
+The endpoint has to support `stream_options`. If it rejects the field or ignores it, usage stays empty.
+
 ## Troubleshooting
 
 - If conversations are fragmented, pass stable `session_id` or `conversation_id` in callback metadata.
