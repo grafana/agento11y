@@ -19,9 +19,21 @@ from agento11y_openai_agents import (
     create_agento11y_openai_agents_handler,
     with_agento11y_openai_agents_hooks,
 )
-from agents import Agent, Model, ModelResponse, RunConfig, RunHooks, Runner, Usage
+from agents import (
+    Agent,
+    Model,
+    ModelResponse,
+    ModelSettings,
+    OpenAIChatCompletionsModel,
+    RunConfig,
+    RunHooks,
+    Runner,
+    Usage,
+)
 from agents.run_context import AgentHookContext, RunContextWrapper
 from agents.tool_context import ToolContext
+from openai import AsyncOpenAI
+from openai.types.chat import ChatCompletionChunk
 from openai.types.responses import (
     Response,
     ResponseCompletedEvent,
@@ -1279,3 +1291,67 @@ def test_hosted_tools_record_their_api_tool_kind_as_type() -> None:
         ("web_search", "web_search", b""),
         ("file_search", "file_search", b""),
     ]
+
+
+def _chat_chunk(delta: dict, *, finish_reason: str | None = None, usage: dict | None = None) -> ChatCompletionChunk:
+    return ChatCompletionChunk.model_validate(
+        {
+            "id": "chatcmpl_1",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": "gpt-4o-mini",
+            "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}] if delta is not None else [],
+            "usage": usage,
+        }
+    )
+
+
+@pytest.mark.parametrize("include_usage", [True, None])
+def test_run_streamed_chat_completions_records_usage_from_final_chunk(include_usage) -> None:
+    # OpenAIChatCompletionsModel only asks for stream usage (stream_options.include_usage) from
+    # api.openai.com by default; other OpenAI-compatible endpoints need ModelSettings(include_usage=True).
+    openai_client = AsyncOpenAI(api_key="test", base_url="http://localhost:1/v1")
+    sent: dict = {}
+
+    async def create(**kwargs):
+        sent.update(kwargs)
+        wants_usage = isinstance(kwargs.get("stream_options"), dict) and kwargs["stream_options"].get("include_usage")
+
+        async def chunks():
+            yield _chat_chunk({"role": "assistant", "content": "Four."})
+            yield _chat_chunk({}, finish_reason="stop")
+            if wants_usage:
+                yield _chat_chunk(None, usage={"prompt_tokens": 24, "completion_tokens": 7, "total_tokens": 31})
+
+        return chunks()
+
+    openai_client.chat.completions.create = create  # type: ignore[method-assign]
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    agent = Agent(
+        name="assistant",
+        instructions="Answer briefly.",
+        model=OpenAIChatCompletionsModel("gpt-4o-mini", openai_client),
+        model_settings=ModelSettings(include_usage=include_usage),
+    )
+    options = with_agento11y_openai_agents_hooks(None, client=client)
+
+    async def run() -> None:
+        result = Runner.run_streamed(agent, "2+2?", run_config=RunConfig(tracing_disabled=True), **options)
+        async for _ in result.stream_events():
+            pass
+
+    try:
+        asyncio.run(run())
+        client.flush()
+        generation = exporter.requests[0].generations[0]
+        assert generation.mode.value == "STREAM"
+        assert sent["stream"] is True
+        if include_usage:
+            assert sent["stream_options"] == {"include_usage": True}
+            assert (generation.usage.input_tokens, generation.usage.output_tokens) == (24, 7)
+        else:
+            assert not isinstance(sent.get("stream_options"), dict)
+            assert (generation.usage.input_tokens, generation.usage.output_tokens) == (0, 0)
+    finally:
+        client.shutdown()
