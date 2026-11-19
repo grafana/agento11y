@@ -551,12 +551,13 @@ def test_strands_multi_agent_invoked_from_a_tool_joins_the_caller_conversation()
     _assert_no_tool_call_state_left(hooks)
 
 
-def test_strands_agent_called_from_a_tool_drops_its_workflow_step_that_never_ended(caplog) -> None:
+@pytest.mark.parametrize("started_by", ["sub_agent", "outer_agent"])
+def test_strands_graph_that_never_ends_is_removed_with_the_agent_that_started_it(caplog, started_by) -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
         hooks = create_agento11y_strands_hook_provider(client=client, provider_resolver="auto")
-        outer_state = {}
+        outer_state = {"session_id": "session-1"}
         sub_state = {}
         graph_state = {}
         outer_agent = _agent("outer")
@@ -567,24 +568,36 @@ def test_strands_agent_called_from_a_tool_drops_its_workflow_step_that_never_end
         hooks.before_invocation(SimpleNamespace(agent=outer_agent, invocation_state=outer_state))
         _model_call(hooks, outer_agent, outer_state, "delegating")
         hooks.before_tool_call(_tool_event(outer_agent, outer_state))
-        hooks.before_invocation(SimpleNamespace(agent=sub_agent, invocation_state=sub_state))
-        _model_call(hooks, sub_agent, sub_state, "sub calls a tool")
-        hooks.before_tool_call(_tool_event(sub_agent, sub_state))
-        # The sub-agent's tool starts a graph whose node never gets AfterNodeCallEvent.
+        if started_by == "sub_agent":
+            hooks.before_invocation(SimpleNamespace(agent=sub_agent, invocation_state=sub_state))
+            _model_call(hooks, sub_agent, sub_state, "sub calls a tool")
+            hooks.before_tool_call(_tool_event(sub_agent, sub_state))
+        # The graph and its node never end, as when a resume of the graph raises.
         hooks.before_multi_agent_invocation(SimpleNamespace(source=source, invocation_state=graph_state))
         hooks.before_node_call(SimpleNamespace(source=source, node_id="node", invocation_state=graph_state))
         assert hooks._agento11y_handler._workflow_step_runs != {}
-        hooks.after_tool_call(_tool_ended(sub_agent, sub_state))
-        hooks.after_invocation(SimpleNamespace(agent=sub_agent, invocation_state=sub_state))
+        if started_by == "sub_agent":
+            hooks.after_tool_call(_tool_ended(sub_agent, sub_state))
+            hooks.after_invocation(SimpleNamespace(agent=sub_agent, invocation_state=sub_state))
         hooks.after_tool_call(_tool_ended(outer_agent, outer_state))
         hooks.after_invocation(SimpleNamespace(agent=outer_agent, invocation_state=outer_state))
+
+        later_agent = _agent("later")
+        later_state = {"session_id": "session-2"}
+        hooks.before_invocation(SimpleNamespace(agent=later_agent, invocation_state=later_state))
+        _model_call(hooks, later_agent, later_state, "later run")
+        hooks.after_invocation(SimpleNamespace(agent=later_agent, invocation_state=later_state))
         client.flush()
     finally:
         client.shutdown()
 
-    # The caller's root cleanup cannot reach the step after the sub-agent ends, so the sub-agent drops it.
-    assert hooks._agento11y_handler._workflow_step_runs == {}
+    handler = hooks._agento11y_handler
+    assert handler._workflow_step_runs == {}
     assert "on_chain_end callback never fired" in caplog.text
+    assert handler._graph_run_conversation_id == {}
+    _assert_no_tool_call_state_left(hooks)
+    # A later run on the same provider keeps its own conversation.
+    assert _generations_by_text(exporter)["later run"].conversation_id == "session-2"
 
 
 @pytest.mark.parametrize(

@@ -398,6 +398,15 @@ class Agento11yStrandsHandler(Agento11yFrameworkHandlerBase):
         self._run_to_graph_key.pop(run_key, None)
         return True
 
+    def _cleanup_graph_state_for_root(self, root_run_key: str) -> None:
+        # A multi-agent run that an agent or a node starts is a graph root with a
+        # parent. Strands does not end it when a resume of the run raises before the
+        # run starts. Remove such a root together with the run above it.
+        nested_root_keys = [key for key in tuple(self._graph_root_run_keys) if self._reaches_run(key, root_run_key)]
+        super()._cleanup_graph_state_for_root(root_run_key)
+        for key in nested_root_keys:
+            super()._cleanup_graph_state_for_root(key)
+
 
 def _map_chat_inputs(messages: list[list[Any]]) -> list[Message]:
     output: list[Message] = []
