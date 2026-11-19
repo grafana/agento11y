@@ -117,3 +117,25 @@ def test_drain_falls_back_to_barrier_on_plain_pool(monkeypatch: pytest.MonkeyPat
     handler_mod._drain_sync_executor(5.0)
     assert done.is_set()
     executor.shutdown()
+
+
+def test_adrain_waits_for_spawned_enqueue_task() -> None:
+    from agento11y_litellm import handler as handler_mod
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    from litellm.responses.streaming_iterator import spawn_logging_task
+
+    ran: list[bool] = []
+
+    async def callback() -> None:
+        ran.append(True)
+
+    async def enqueue_later() -> None:
+        await asyncio.sleep(0.05)
+        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=callback())
+
+    async def main() -> None:
+        spawn_logging_task(asyncio.get_running_loop(), enqueue_later(), task_name="test enqueue")
+        await handler_mod.adrain_litellm_callbacks(5.0)
+        assert ran == [True]
+
+    asyncio.run(main())

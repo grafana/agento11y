@@ -902,7 +902,22 @@ def _async_logging_worker() -> Any:
     return GLOBAL_LOGGING_WORKER
 
 
+async def _drain_spawned_enqueues(timeout: float) -> None:
+    """Waits for LiteLLM's tasks that have yet to put a callback on the worker queue.
+
+    ``acompletion`` spawns a task that enqueues the success callback later, so
+    the queue can still be empty right after the call returns.
+    """
+    try:
+        from litellm.responses.streaming_iterator import drain_logging_tasks
+    except Exception:  # noqa: BLE001
+        await asyncio.sleep(0)
+        return
+    await drain_logging_tasks(timeout)
+
+
 async def _drain_async_worker(timeout: float) -> None:
+    await _drain_spawned_enqueues(timeout)
     worker = _async_logging_worker()
     flush = getattr(worker, "flush", None)
     if flush is None:
