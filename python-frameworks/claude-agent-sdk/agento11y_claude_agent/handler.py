@@ -37,7 +37,7 @@ from agento11y import (
     hook_denied_from_response,
     user_text_message,
 )
-from agento11y.usage import map_usage
+from agento11y.usage import from_anthropic
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
@@ -255,7 +255,9 @@ class Agento11yClaudeAgentHandler:
                     # recorded before the guard ran is covered too.
                     input=[self._redacted(message) for message in self._input_messages] if self._capture_inputs else [],
                     output=self._output_messages if self._capture_outputs else [],
-                    usage=map_usage(self._usage),
+                    # Claude Agent SDK usage is always Anthropic-shaped, but the CLI's
+                    # output_tokens_details would make map_usage pick the OpenAI path.
+                    usage=from_anthropic(self._usage),
                     response_model=self._response_model,
                     stop_reason=self._stop_reason,
                     metadata=metadata,
@@ -938,12 +940,22 @@ def _system_prompt_text(system_prompt: Any) -> str:
     return ""
 
 
+# ResultMessage.model_usage is camelCase; from_anthropic reads snake_case keys.
+_model_usage_keys = {
+    "inputTokens": "input_tokens",
+    "outputTokens": "output_tokens",
+    "cacheReadInputTokens": "cache_read_input_tokens",
+    "cacheCreationInputTokens": "cache_write_input_tokens",
+}
+
+
 def _merge_model_usage(model_usage: dict[str, Any]) -> dict[str, int]:
     merged: dict[str, int] = {}
     for usage in model_usage.values():
         if not isinstance(usage, dict):
             continue
-        for key, value in usage.items():
+        for raw_key, value in usage.items():
+            key = _model_usage_keys.get(raw_key, raw_key)
             int_value = _as_int(value)
             if int_value:
                 merged[key] = merged.get(key, 0) + int_value

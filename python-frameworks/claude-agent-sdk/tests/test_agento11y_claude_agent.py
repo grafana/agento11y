@@ -277,7 +277,8 @@ async def test_agento11y_query_records_claude_agent_stream() -> None:
         assert generation.output[0].parts[1].kind == PartKind.TOOL_CALL
         assert generation.output[0].parts[1].tool_call.name == "Read"
         assert generation.output[1].parts[0].text == "Final answer."
-        assert generation.usage.input_tokens == 100
+        # Anthropic input_tokens exclude the cache buckets; agento11y reports them inclusive.
+        assert generation.usage.input_tokens == 130
         assert generation.usage.output_tokens == 25
         assert generation.usage.cache_read_input_tokens == 20
         assert generation.usage.cache_write_input_tokens == 10
@@ -1433,5 +1434,72 @@ async def test_claude_agent_handler_redacts_split_value_containing_a_shorter_one
         client.flush()
         generation = exporter.requests[0].generations[0]
         assert _recorded_input_text(generation) == ["[REDACTED]", "[REDACTED]", "Ask [REDACTED] later."]
+    finally:
+        client.shutdown()
+
+
+_CLI_RESULT_USAGE = {
+    # Shape of ResultMessage.usage from the Claude Code CLI. output_tokens_details
+    # must not send it down the OpenAI Responses path and drop the cache counts.
+    "input_tokens": 2,
+    "cache_creation_input_tokens": 432,
+    "cache_read_input_tokens": 18104,
+    "output_tokens": 5,
+    "output_tokens_details": {"thinking_tokens": 0},
+    "server_tool_use": {"web_search_requests": 0},
+    "cache_creation": {"ephemeral_5m_input_tokens": 432, "ephemeral_1h_input_tokens": 0},
+}
+
+_CLI_MODEL_USAGE = {
+    "claude-haiku-5-5": {
+        "inputTokens": 2,
+        "outputTokens": 5,
+        "cacheReadInputTokens": 18104,
+        "cacheCreationInputTokens": 432,
+        "costUSD": 0.0002,
+    }
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "usage_kwargs",
+    [
+        pytest.param({"usage": _CLI_RESULT_USAGE}, id="usage"),
+        pytest.param({"model_usage": _CLI_MODEL_USAGE}, id="model-usage"),
+    ],
+)
+async def test_agento11y_query_records_anthropic_prompt_cache_usage(usage_kwargs) -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+
+    async def fake_query(**_kwargs) -> AsyncIterator[object]:
+        yield ResultMessage(
+            subtype="success",
+            duration_ms=100,
+            duration_api_ms=90,
+            is_error=False,
+            num_turns=1,
+            session_id="session-cache",
+            stop_reason="end_turn",
+            result="blue",
+            **usage_kwargs,
+        )
+
+    try:
+        async for _ in agento11y_query(
+            prompt="What color is item 7?",
+            client=client,
+            options=ClaudeAgentOptions(model="claude-haiku-5-5"),
+            _query_fn=fake_query,
+        ):
+            pass
+
+        client.flush()
+        usage = exporter.requests[0].generations[0].usage
+        assert usage.cache_read_input_tokens == 18104
+        assert usage.cache_write_input_tokens == 432
+        assert usage.input_tokens == 2 + 432 + 18104
+        assert usage.output_tokens == 5
     finally:
         client.shutdown()
