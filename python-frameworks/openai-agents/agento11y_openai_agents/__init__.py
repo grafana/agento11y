@@ -175,10 +175,12 @@ class Agento11yOpenAIAgentsRunHooks(RunHooks):
 
         parent_run_id = self._agent_run_id(context, agent)
 
-        model_name = _model_name(agent)
+        model_provider, model_name = _model_ref(agent)
         invocation_params: dict[str, Any] = {}
         if model_name != "":
             invocation_params["model"] = model_name
+        if model_provider != "":
+            invocation_params["provider"] = model_provider
         serialized = {"name": _agent_name(agent)}
         if model_name != "":
             serialized["kwargs"] = {"model": model_name}
@@ -203,7 +205,7 @@ class Agento11yOpenAIAgentsRunHooks(RunHooks):
             await _invoke_handler(
                 self._agento11y_handler,
                 "on_llm_end",
-                _build_llm_end_response(response, model_name=_model_name(agent)),
+                _build_llm_end_response(response, model_name=_model_ref(agent)[1]),
                 run_id=run_id,
             )
         if not llm_stack:
@@ -337,18 +339,27 @@ def _agent_name(agent: Any) -> str:
     return "openai_agent"
 
 
-def _model_name(agent: Any) -> str:
+def _model_ref(agent: Any) -> tuple[str, str]:
+    """Return (provider, model) for an agent's model, which may be a string or a `Model` object."""
     model = _read(agent, "model")
-    candidates = (
-        _as_string(model),
-        _as_string(_read(model, "model")),
-        _as_string(_read(model, "model_name")),
-        _as_string(_read(model, "name")),
-    )
-    for candidate in candidates:
-        if candidate != "":
-            return candidate
-    return ""
+    if isinstance(model, str):
+        raw = model.strip()
+    else:
+        # `Model` objects such as LitellmModel carry the id on an attribute; their
+        # str() is only the object repr.
+        raw = _first_non_empty(
+            _as_string(_read(model, "model")),
+            _as_string(_read(model, "model_name")),
+        )
+    return _split_provider_prefix(raw)
+
+
+def _split_provider_prefix(model: str) -> tuple[str, str]:
+    # LiteLLM-style ids ("anthropic/claude-haiku-5-5") name the provider first.
+    provider, sep, name = model.partition("/")
+    if sep and provider.strip() != "" and name.strip() != "":
+        return provider.strip().lower(), name.strip()
+    return "", model
 
 
 def _tool_name(tool: Any) -> str:
@@ -516,7 +527,8 @@ def _context_metadata(context: Any) -> dict[str, Any]:
 def _build_llm_end_response(response: Any, *, model_name: str) -> dict[str, Any]:
     text = _extract_openai_agents_output_text(response)
     llm_output: dict[str, Any] = {}
-    resolved_model_name = _first_non_empty(model_name, _as_string(_read(response, "model")))
+    # The model the provider reports beats the configured alias.
+    resolved_model_name = _first_non_empty(_as_string(_read(response, "model")), model_name)
     if resolved_model_name != "":
         llm_output["model_name"] = resolved_model_name
 

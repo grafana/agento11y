@@ -891,3 +891,52 @@ def test_function_call_without_name_is_dropped_instead_of_failing_generation() -
         assert names == ["get_time"]
     finally:
         client.shutdown()
+
+class _FakeModelObject:
+    """Stands in for an openai-agents `Model` such as `LitellmModel`, whose str() is its repr."""
+
+    def __init__(self, model: str) -> None:
+        self.model = model
+
+
+@pytest.mark.parametrize(
+    ("model", "response", "expected_model", "expected_provider"),
+    [
+        (_FakeModelObject("anthropic/claude-haiku-5-5"), {}, "claude-haiku-5-5", "anthropic"),
+        (_FakeModelObject("claude-haiku-5-5"), {}, "claude-haiku-5-5", "anthropic"),
+        (_FakeModelObject("openai/gpt-4o-mini"), {}, "gpt-4o-mini", "openai"),
+        (
+            _FakeModelObject("anthropic/claude-haiku-5-5"),
+            {"model": "claude-haiku-5-5-20261001"},
+            "claude-haiku-5-5-20261001",
+            "anthropic",
+        ),
+        ("anthropic/claude-haiku-5-5", {}, "claude-haiku-5-5", "anthropic"),
+        ("gpt-4o-mini", {}, "gpt-4o-mini", "openai"),
+    ],
+)
+def test_model_objects_and_provider_prefixes_resolve_model_and_provider(
+    model, response, expected_model, expected_provider
+) -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    handler = Agento11yOpenAIAgentsHandler(client=client)
+    hooks = Agento11yOpenAIAgentsRunHooks(agento11y_handler=handler)
+    context = SimpleNamespace(context={"conversation_id": "conv-model"})
+    agent = SimpleNamespace(name="assistant", model=model)
+
+    async def run() -> None:
+        await hooks.on_agent_start(context, agent)
+        await hooks.on_llm_start(context, agent, None, ["hi"])
+        await hooks.on_llm_end(context, agent, {"output": [{"content": "Hello."}], **response})
+        await hooks.on_agent_end(context, agent, "Hello.")
+
+    asyncio.run(run())
+    client.flush()
+    client.shutdown()
+
+    generation = exporter.requests[0].generations[0]
+    assert generation.model.provider == expected_provider
+    assert generation.response_model == expected_model
+    if not response:
+        assert generation.model.name == expected_model
