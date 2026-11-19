@@ -354,42 +354,26 @@ def _model_ref(agent: Any) -> tuple[str, str]:
     return _split_provider_prefix(raw)
 
 
-# LiteLLM routing prefixes. Only these are split off; any other slash is part of
-# the model id (e.g. a HuggingFace "org/model" name) and is kept intact.
-_LITELLM_PROVIDER_PREFIXES = frozenset(
-    {
-        "openai",
-        "anthropic",
-        "gemini",
-        "vertex_ai",
-        "azure",
-        "azure_ai",
-        "bedrock",
-        "groq",
-        "mistral",
-        "cohere",
-        "together_ai",
-        "fireworks_ai",
-        "deepseek",
-        "xai",
-        "ollama",
-        "ollama_chat",
-        "openrouter",
-        "huggingface",
-        "perplexity",
-        "databricks",
-        "watsonx",
-    }
-)
+# LiteLLM provider prefixes that name a provider agento11y records directly.
+# Serving platforms that host several vendors' models (``vertex_ai``, ``azure``,
+# ``openrouter``, ...) are left alone so their generations are not attributed to
+# whichever vendor the stripped model name resembles. Matches the google-adk adapter.
+_LITELLM_PROVIDER_PREFIXES = {
+    "openai": "openai",
+    "anthropic": "anthropic",
+    "gemini": "gemini",
+    "bedrock": "bedrock",
+}
 
 
 def _split_provider_prefix(model: str) -> tuple[str, str]:
-    # LiteLLM-style ids ("anthropic/claude-haiku-5-5") name the provider first.
-    provider, sep, name = model.partition("/")
-    provider = provider.strip().lower()
-    if sep and provider in _LITELLM_PROVIDER_PREFIXES and name.strip() != "":
-        return provider, name.strip()
-    return "", model
+    """Split LiteLLM-style ids like ``anthropic/claude-haiku-5-5`` into (provider, model)."""
+    prefix, sep, rest = model.partition("/")
+    provider = _LITELLM_PROVIDER_PREFIXES.get(prefix.strip().lower(), "")
+    rest = rest.strip()
+    if sep == "" or provider == "" or rest == "":
+        return "", model
+    return provider, rest
 
 
 def _tool_name(tool: Any) -> str:

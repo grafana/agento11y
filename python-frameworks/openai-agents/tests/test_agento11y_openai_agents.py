@@ -892,6 +892,7 @@ def test_function_call_without_name_is_dropped_instead_of_failing_generation() -
     finally:
         client.shutdown()
 
+
 class _FakeModelObject:
     """Stands in for an openai-agents `Model` such as `LitellmModel`, whose str() is its repr."""
 
@@ -915,7 +916,16 @@ class _FakeModelObject:
         ("gpt-4o-mini", {}, "gpt-4o-mini", "openai"),
         # An unknown prefix is part of the model id, not a provider.
         (_FakeModelObject("meta-llama/Llama-3.1-8B"), {}, "meta-llama/Llama-3.1-8B", "custom"),
-        (_FakeModelObject("huggingface/meta-llama/Llama-3.1-8B"), {}, "meta-llama/Llama-3.1-8B", "custom"),
+        # Multi-vendor serving platforms keep the whole id and are not attributed to the vendor.
+        (_FakeModelObject("azure/gpt-4o"), {}, "azure/gpt-4o", "custom"),
+        (_FakeModelObject("vertex_ai/claude-sonnet-4-5"), {}, "vertex_ai/claude-sonnet-4-5", "custom"),
+        ("vertex_ai/gemini-2.5-pro", {}, "vertex_ai/gemini-2.5-pro", "custom"),
+        (
+            _FakeModelObject("huggingface/meta-llama/Llama-3.1-8B"),
+            {},
+            "huggingface/meta-llama/Llama-3.1-8B",
+            "custom",
+        ),
     ],
 )
 def test_model_objects_and_provider_prefixes_resolve_model_and_provider(
