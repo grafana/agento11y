@@ -929,6 +929,8 @@ async def _drain_async_worker(timeout: float) -> None:
         await asyncio.wait_for(flush(), timeout)
     except asyncio.TimeoutError:
         logger.warning("agento11y: timed out waiting for LiteLLM async logging callbacks")
+    except Exception:  # noqa: BLE001
+        logger.warning("agento11y: failed flushing LiteLLM's async logging worker", exc_info=True)
 
 
 def drain_litellm_callbacks(timeout: float = _DRAIN_TIMEOUT_SECONDS) -> None:
@@ -993,8 +995,10 @@ class Agento11yLiteLLMLogger(CustomLogger):
         request therefore runs before the generation is recorded. Call this
         instead. Inside a running event loop, use :meth:`aflush`.
         """
-        drain_litellm_callbacks(timeout)
-        self._client.flush()
+        try:
+            drain_litellm_callbacks(timeout)
+        finally:
+            self._client.flush()
 
     def shutdown(self, timeout: float = _DRAIN_TIMEOUT_SECONDS) -> None:
         """Waits for LiteLLM's pending callbacks, then shuts the client down.
@@ -1003,18 +1007,24 @@ class Agento11yLiteLLMLogger(CustomLogger):
         generations LiteLLM has not handed to this logger yet. Inside a running
         event loop, use :meth:`ashutdown`.
         """
-        drain_litellm_callbacks(timeout)
-        self._client.shutdown()
+        try:
+            drain_litellm_callbacks(timeout)
+        finally:
+            self._client.shutdown()
 
     async def aflush(self, timeout: float = _DRAIN_TIMEOUT_SECONDS) -> None:
         """Async form of :meth:`flush`, for use inside a running event loop."""
-        await adrain_litellm_callbacks(timeout)
-        self._client.flush()
+        try:
+            await adrain_litellm_callbacks(timeout)
+        finally:
+            self._client.flush()
 
     async def ashutdown(self, timeout: float = _DRAIN_TIMEOUT_SECONDS) -> None:
         """Async form of :meth:`shutdown`, for use inside a running event loop."""
-        await adrain_litellm_callbacks(timeout)
-        self._client.shutdown()
+        try:
+            await adrain_litellm_callbacks(timeout)
+        finally:
+            self._client.shutdown()
 
     def log_success_event(self, kwargs: dict, response_obj: Any, start_time: datetime, end_time: datetime) -> None:
         self._log_event(kwargs, response_obj, start_time, end_time, is_failure=False)

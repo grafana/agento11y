@@ -153,3 +153,25 @@ def test_ashutdown_still_shuts_down_client_when_task_drain_raises(monkeypatch: p
     monkeypatch.setattr(handler._client, "shutdown", lambda: shut.append(True))
     asyncio.run(handler.ashutdown())
     assert shut == [True]
+
+
+def test_shutdown_continues_when_worker_flush_raises(monkeypatch: pytest.MonkeyPatch, wired: Any) -> None:
+    import threading
+
+    from agento11y_litellm import handler as handler_mod
+
+    class _BrokenWorker:
+        _queue = object()
+
+        async def flush(self) -> None:
+            raise RuntimeError("queue bound to a different event loop")
+
+    monkeypatch.setattr(handler_mod, "_async_logging_worker", lambda: _BrokenWorker())
+    sync_drained = threading.Event()
+    monkeypatch.setattr(handler_mod, "_drain_sync_executor", lambda timeout: sync_drained.set())
+    _, handler = wired
+    shut: list[bool] = []
+    monkeypatch.setattr(handler._client, "shutdown", lambda: shut.append(True))
+    handler.shutdown()
+    assert sync_drained.is_set()
+    assert shut == [True]
