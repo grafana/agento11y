@@ -1070,6 +1070,41 @@ async function realHost(
       );
       [generation] = capture.state.generations;
     }
+    if (version.startsWith("2.")) {
+      // The context hook's tool set is the one the final model request offered.
+      // The loopback rejects title and other auxiliary requests, so the last
+      // request is the primary one in both scenarios.
+      const offered = new Map(
+        (capture.state.models.at(-1)?.tools ?? []).map((tool) => [
+          tool.function?.name,
+          tool.function,
+        ]),
+      );
+      assert(offered.size > 0, `Host ${version}: the request offered no tools`);
+      assert.deepEqual(
+        generation.tools.map((tool) => tool.name).sort(),
+        [...offered.keys()].sort(),
+        `Host ${version}: exported tools differ from the offered tools`,
+      );
+      // Exported text matches the request unless redaction changed it.
+      const sameOrRedacted = (exported, sent) =>
+        exported === sent || exported.includes("[REDACTED");
+      for (const tool of generation.tools) {
+        const sent = offered.get(tool.name);
+        assert(
+          sameOrRedacted(tool.description, sent.description),
+          `Host ${version}: ${tool.name} description differs from the request`,
+        );
+        const schema = Buffer.from(tool.input_schema_json, "base64").toString();
+        assert(
+          sameOrRedacted(
+            JSON.stringify(JSON.parse(schema)),
+            JSON.stringify(sent.parameters),
+          ),
+          `Host ${version}: ${tool.name} schema differs from the request`,
+        );
+      }
+    }
     assert(
       generation.id && generation.conversation_id,
       "Generation identity/session missing",

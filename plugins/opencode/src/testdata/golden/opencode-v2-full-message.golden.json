@@ -158,9 +158,15 @@
         "tools": [
           {
             "name": "bash",
-            "description": "",
+            "description": "Run a shell command; token: [REDACTED:grafana-cloud-token]",
             "type": "function",
-            "input_schema_json": ""
+            "input_schema_json": "eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJjb21tYW5kIjp7InR5cGUiOiJzdHJpbmcifX0sInJlcXVpcmVkIjpbImNvbW1hbmQiXX0="
+          },
+          {
+            "name": "read",
+            "description": "Read a file",
+            "type": "function",
+            "input_schema_json": "eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJmaWxlUGF0aCI6eyJ0eXBlIjoic3RyaW5nIn19LCJyZXF1aXJlZCI6WyJmaWxlUGF0aCJdfQ=="
           }
         ],
         "usage": {

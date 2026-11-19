@@ -200,9 +200,9 @@ export function legacyToolOverrideNames(
 
 /**
  * Name-only function tool definitions, deduplicated and sorted by name.
- * OpenCode does not expose tool descriptions or schemas to the plugin, so
- * this matches the claude-code plugin: the catalog builds up over time from
- * the tools each generation used.
+ * OpenCode 1 hooks do not expose tool descriptions or schemas to the plugin,
+ * so this matches the claude-code plugin: the catalog builds up over time from
+ * the tools each generation used. OpenCode 2 uses `nativeToolDefinitions`.
  */
 export function mapToolDefinitions(names: Iterable<string>): ToolDefinition[] {
   const uniq = new Set<string>();

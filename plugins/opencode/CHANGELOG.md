@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.28.0] - 2026-11-17
+
+### Features
+
+- **plugins/opencode**: export offered tool definitions on OpenCode 2 (#1117)
+
 ## [0.27.0] - 2026-11-04
 
 ### Breaking Changes

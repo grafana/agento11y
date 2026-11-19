@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import json
 from typing import Any
 from uuid import UUID, uuid4
@@ -38,6 +39,16 @@ except Exception:  # pragma: no cover - lightweight fallback for local unit test
     HookRegistry = Any  # type: ignore[assignment]
 
 
+# Strands starts every agent invocation without a parent, also when a tool of
+# another agent invokes it. The tool body runs in the context of its
+# BeforeToolCallEvent, and Strands copies that context into the threads it
+# starts. This value maps each hook provider to the run whose tool is
+# executing, so an agent invoked inside the tool can find its caller.
+_tool_callers: contextvars.ContextVar[dict[int, UUID] | None] = contextvars.ContextVar(
+    "agento11y_strands_tool_callers", default=None
+)
+
+
 class Agento11yStrandsHookProvider:
     """HookProvider-compatible Strands bridge that records model and tool lifecycles."""
 
@@ -48,6 +59,8 @@ class Agento11yStrandsHookProvider:
         self._model_run_ids: dict[int, list[UUID]] = {}
         self._tool_run_ids: dict[str, UUID] = {}
         self._tool_fallback_run_ids: dict[int, list[UUID]] = {}
+        # Calling run -> tool caller that was set before its first tool call.
+        self._tool_callers_before: dict[UUID, UUID | None] = {}
         self._multi_agent_run_ids: dict[int, list[UUID]] = {}
         self._node_run_ids: dict[tuple[int, str], list[UUID]] = {}
         self._node_executor_run_ids: dict[tuple[int, int], list[UUID]] = {}
@@ -72,11 +85,14 @@ class Agento11yStrandsHookProvider:
         agent = _read(event, "agent")
         run_name = _agent_name(agent)
         self._agento11y_handler.set_default_agent_name(run_name)
+        # A graph or swarm that a tool starts runs its node agents in the tool's
+        # context. A node agent belongs to its node, not to the agent that called the tool.
+        parent_run_id = None if self._node_executor_run(event) is not None else self._active_tool_caller()
         self._agento11y_handler.on_chain_start(
             {"name": run_name},
             {},
             run_id=run_id,
-            parent_run_id=None,
+            parent_run_id=parent_run_id,
             metadata=_metadata(event),
             run_type="invocation",
             run_name=run_name,
@@ -87,28 +103,27 @@ class Agento11yStrandsHookProvider:
         if run_id is None:
             return
         self._remove_run(self._invocation_state_run_ids, self._state_key(event), run_id)
+        self._end_tool_caller(run_id)
         self._agento11y_handler.on_chain_end({"status": "completed"}, run_id=run_id)
 
     def before_model_call(self, event: Any) -> None:
+        agent_run_id = self._agent_run_id(event)
+        if agent_run_id is not None:
+            # The agent's tools have ended when it calls the model again. A tool
+            # that ended in another context, such as a background tool, left
+            # this agent's run as the caller here.
+            self._restore_tool_caller(agent_run_id)
         run_id = uuid4()
         self._stack_for(self._model_run_ids, event, agent_scoped=True).append(run_id)
         agent = _read(event, "agent")
         self._agento11y_handler.set_default_agent_name(_agent_name(agent))
         model_name = _model_name(agent)
         invocation_params = _model_invocation_params(agent, model_name=model_name)
-        # A model call made by a multi-agent node should be nested below the
-        # node, not directly below the outer invocation.  Fall back through
-        # the multi-agent and ordinary invocation stacks for non-graph runs.
-        parent_run_id = (
-            self._peek_node_stack(event)
-            or self._peek_stack(self._multi_agent_run_ids, event, source_scoped=True)
-            or self._peek_stack(self._invocation_run_ids, event, agent_scoped=True)
-        )
         self._agento11y_handler.on_chat_model_start(
             _serialized_agent(agent, model_name=model_name),
             [_agent_messages(agent)],
             run_id=run_id,
-            parent_run_id=parent_run_id,
+            parent_run_id=agent_run_id,
             invocation_params=invocation_params,
             metadata=_metadata(event),
             run_name=_agent_name(agent),
@@ -136,6 +151,12 @@ class Agento11yStrandsHookProvider:
             self._tool_run_ids[self._tool_key(event, tool_use_id)] = run_id
         else:
             self._stack_for(self._tool_fallback_run_ids, event, agent_scoped=True).append(run_id)
+        caller_run_id = self._agent_run_id(event)
+        if caller_run_id is not None:
+            current_caller = self._tool_caller()
+            if current_caller != caller_run_id:
+                self._tool_callers_before.setdefault(caller_run_id, current_caller)
+            self._set_tool_caller(caller_run_id)
 
         selected_tool = _read(event, "selected_tool")
         tool_name = _first_non_empty(_as_string(_read(tool_use, "name")), _tool_name(selected_tool))
@@ -163,6 +184,12 @@ class Agento11yStrandsHookProvider:
             run_id = self._pop_stack(self._tool_fallback_run_ids, event, agent_scoped=True)
         if run_id is None:
             return
+        caller_run_id = self._agent_run_id(event)
+        if caller_run_id is not None:
+            # A tool that ends in another context than it started, such as a
+            # background tool, restores the value in that context. The caller's
+            # next model call, or its end, restores it in the first one.
+            self._restore_tool_caller(caller_run_id)
 
         exception = _read(event, "exception")
         if exception is not None:
@@ -180,7 +207,11 @@ class Agento11yStrandsHookProvider:
             {"name": run_name or "multi_agent"},
             {},
             run_id=run_id,
-            parent_run_id=(self._peek_node_stack(event) or self._peek_stack(self._invocation_state_run_ids, event)),
+            parent_run_id=(
+                self._peek_node_stack(event)
+                or self._peek_stack(self._invocation_state_run_ids, event)
+                or self._active_tool_caller()
+            ),
             metadata=_metadata(event),
             run_type="multi_agent",
             run_name=run_name or "multi_agent",
@@ -189,6 +220,7 @@ class Agento11yStrandsHookProvider:
     def after_multi_agent_invocation(self, event: Any) -> None:
         run_id = self._pop_stack(self._multi_agent_run_ids, event, source_scoped=True)
         if run_id is not None:
+            self._end_tool_caller(run_id)
             self._agento11y_handler.on_chain_end({"status": "completed"}, run_id=run_id)
 
     def before_node_call(self, event: Any) -> None:
@@ -226,7 +258,57 @@ class Agento11yStrandsHookProvider:
                     executor_stack.remove(run_id)
                 if not executor_stack:
                     self._node_executor_run_ids.pop(executor_key, None)
+            self._end_tool_caller(run_id)
             self._agento11y_handler.on_chain_end({"status": "completed"}, run_id=run_id)
+
+    def _agent_run_id(self, event: Any) -> UUID | None:
+        # A multi-agent node's model and tool calls belong below the node, not
+        # directly below the outer invocation. Fall back through the
+        # multi-agent and ordinary invocation stacks for non-graph runs.
+        return (
+            self._peek_node_stack(event)
+            or self._peek_stack(self._multi_agent_run_ids, event, source_scoped=True)
+            or self._peek_stack(self._invocation_run_ids, event, agent_scoped=True)
+        )
+
+    def _tool_caller(self) -> UUID | None:
+        return (_tool_callers.get() or {}).get(id(self))
+
+    def _set_tool_caller(self, run_id: UUID | None) -> None:
+        callers = dict(_tool_callers.get() or {})
+        if run_id is None:
+            callers.pop(id(self), None)
+        else:
+            callers[id(self)] = run_id
+        _tool_callers.set(callers)
+
+    def _restore_tool_caller(self, caller_run_id: UUID) -> None:
+        # Put back the caller that was set before this run called its first tool,
+        # for example the outer agent of a sub-agent that runs in the outer tool's context.
+        if self._tool_caller() == caller_run_id:
+            self._set_tool_caller(self._tool_callers_before.get(caller_run_id))
+
+    def _end_tool_caller(self, run_id: UUID) -> None:
+        # A tool call that never ended, for example after an interrupt, has no
+        # AfterToolCallEvent. Restore the value when the caller ends.
+        self._restore_tool_caller(run_id)
+        self._tool_callers_before.pop(run_id, None)
+
+    def _active_tool_caller(self) -> UUID | None:
+        """Return the run whose tool is executing in this context, if that run is still active
+        on this hook provider."""
+        run_id = self._tool_caller()
+        if run_id is None:
+            return None
+        stores: tuple[dict[Any, list[UUID]], ...] = (
+            self._invocation_run_ids,
+            self._multi_agent_run_ids,
+            self._node_run_ids,
+        )
+        # Sub-agents run in other threads, so copy the values before iterating.
+        if any(run_id in stack for store in stores for stack in tuple(store.values())):
+            return run_id
+        return None
 
     def _stack_for(
         self,
@@ -246,25 +328,30 @@ class Agento11yStrandsHookProvider:
         agent_scoped: bool = False,
         source_scoped: bool = False,
     ) -> UUID | None:
-        stack = store.get(self._event_key(event, agent_scoped=agent_scoped, source_scoped=source_scoped), [])
-        return stack[-1] if stack else None
+        return _last(store.get(self._event_key(event, agent_scoped=agent_scoped, source_scoped=source_scoped), []))
 
     def _peek_node_stack(self, event: Any) -> UUID | None:
         source_key = self._state_key(event)
         node_id = _as_string(_read(event, "node_id"))
         if node_id:
-            stack = self._node_run_ids.get((source_key, node_id), [])
-            return stack[-1] if stack else None
-        executor = _read(event, "agent") or _read(event, "source") or _read(_read(event, "invocation_state"), "agent")
-        if executor is not None:
-            stack = self._node_executor_run_ids.get((self._state_key(event), id(executor)), [])
-            if stack:
-                return stack[-1]
+            return _last(self._node_run_ids.get((source_key, node_id), []))
+        run_id = self._node_executor_run(event)
+        if run_id is not None:
+            return run_id
 
         # Some custom executors do not expose their Agent identity. Only use a
         # fallback when it is unambiguous; Strands graphs may run nodes in parallel.
-        active = [stack[-1] for (key, _), stack in self._node_run_ids.items() if key == source_key and stack]
+        # Copy the items first: a graph on another thread can add or end a node meanwhile.
+        last_runs = [_last(stack) for (key, _), stack in tuple(self._node_run_ids.items()) if key == source_key]
+        active = [run_id for run_id in last_runs if run_id is not None]
         return active[0] if len(active) == 1 else None
+
+    def _node_executor_run(self, event: Any) -> UUID | None:
+        """Return the active node run whose executor is the event's agent or source."""
+        executor = _read(event, "agent") or _read(event, "source") or _read(_read(event, "invocation_state"), "agent")
+        if executor is None:
+            return None
+        return _last(self._node_executor_run_ids.get((self._state_key(event), id(executor)), []))
 
     def _pop_stack(
         self,
@@ -308,6 +395,14 @@ class Agento11yStrandsHookProvider:
 
     def _tool_key(self, event: Any, tool_use_id: str) -> str:
         return f"{self._event_key(event, agent_scoped=True, source_scoped=False)}:{tool_use_id}"
+
+
+def _last(stack: list[UUID]) -> UUID | None:
+    # Another thread can pop the last run between a check for an empty stack and the index.
+    try:
+        return stack[-1]
+    except IndexError:
+        return None
 
 
 def _node_executor(source: Any, node_id: str) -> Any:

@@ -4,6 +4,8 @@ Content capture decides which fields the agento11y SDK includes in exported gene
 
 Each SDK README links here for language-specific examples.
 
+These modes configure Grafana SDKs and plugins, not third-party OpenTelemetry instrumentation. For the [OpenTelemetry ingestion path](./otel-setup.md#send-conversations-through-opentelemetry), configure content capture and redaction in your instrumentation before export. Prompts and responses must be present in GenAI span attributes to populate conversation content. Metrics or OTLP logs alone are not a substitute.
+
 ## Modes
 
 | Mode | Meaning |
@@ -75,6 +77,8 @@ See [client metrics](./tool-call-vs-tool-execution.md#client-metrics) for applic
 The local forwarder also strips the three private attributes from spans and span events in reduced modes.
 
 ### Experimental OTel generation export
+
+This SDK/launcher transport option is separate from ingestion of third-party OpenTelemetry GenAI spans. You do not need to enable it to use an existing framework's OTel instrumentation.
 
 OTel generation export sends generations as spans. See the [CLI guide](../../plugins/agento11y/README.md#experimental-otel-generation-export) for setup and supported agents.
 
@@ -190,14 +194,14 @@ Every plugin applies the same tier per content field as the SDKs' generation san
 | User prompt | 1 + 2 | Where a human pastes a `.env` file, a config block or a command line. |
 | System prompt | 1 + 2 | Assembled content: tool definitions, environment dumps, pasted config. |
 | Tool arguments, tool results | 1 + 2 | Structured data, on the generation and on the span. |
-| Tool descriptions and encoded schemas (JS sanitizer only) | 1 + 2 | Copied definitions, including schema member names and key/value pairs. |
+| Tool descriptions and encoded schemas (JS sanitizer and OpenCode 2 plugin only) | 1 + 2 | Copied definitions, including schema member names and key/value pairs. |
 | Assistant text, thinking | 1 | Model prose. |
 | Conversation title | 1 | The agent's own session title when it has one (Claude Code's, for example), else the first prompt, truncated. |
 | Error messages | 1 | Sentences. |
 
 Tier 2 on a prompt has a real cost: `sort key: name` is exported as `sort key: [REDACTED:env-secret-value]`, because the heuristic cannot tell that `key:` is part of a sentence. Turn prompt redaction off with `AGENTO11Y_REDACT_INPUT_MESSAGES=false` if the prompt text matters more than the coverage. Tier 2 is kept off prose for that reason, and a secret a model repeats in prose is still caught by tier 1 as long as it has a known format.
 
-The JS sanitizer validates tool schema JSON before and after redacting the complete encoded string. It omits invalid schema bodies instead of restoring raw content. It preserves executable host definitions and follows the configured email policy. Go, Python, and .NET sanitizers still lack equivalent tool-definition redaction. Pi omits offered-tool bodies regardless of this SDK capability.
+The JS sanitizer validates tool schema JSON before and after redacting the complete encoded string. It omits invalid schema bodies instead of restoring raw content. It preserves executable host definitions and follows the configured email policy. Go, Python, and .NET sanitizers still lack equivalent tool-definition redaction. Pi omits offered-tool bodies regardless of this SDK capability. The OpenCode plugin exports offered-tool bodies on OpenCode 2 only, outside `metadata_only`. It redacts each description. It redacts each schema twice: first every string value as plain text, then the encoded schema. It omits a schema that is not valid JSON after redaction.
 
 On a tool payload that decodes as JSON, the shared `agento11y` binary also redacts a value under a secret-looking key (`authorization`, `cookie`, `client_secret`), which the tier 2 key list does not cover. The SDK-based OpenCode, Pi, and Hermes sanitizers do not: they redact the encoded JSON as text, so they catch only the key names in the tier 2 patterns.
 

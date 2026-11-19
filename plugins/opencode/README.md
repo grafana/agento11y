@@ -87,7 +87,7 @@ To include conversation text, add this to your `config.env`:
 AGENTO11Y_CONTENT_CAPTURE_MODE=full
 ```
 
-OpenCode redacts known secret formats out of assistant text, the system prompt, tool arguments, tool results, and user prompts before export. Set `AGENTO11Y_REDACT_INPUT_MESSAGES=false` to send prompt text without redaction; assistant and tool content stay redacted either way.
+OpenCode redacts known secret formats out of assistant text, the system prompt, tool descriptions and input schemas, tool arguments, tool results, and user prompts before export. Set `AGENTO11Y_REDACT_INPUT_MESSAGES=false` to send prompt text without redaction; assistant and tool content stay redacted either way.
 
 ## 3. Verify
 
@@ -127,6 +127,10 @@ Sessions started with plain `opencode` use the background service. The plugin st
 ### System prompts
 
 On OpenCode 2, ordinary generations capture the composed system prompt exposed by the session `context` hook, including the agent's `system` text and rendered instruction sources, from the first turn. Capture works with guards on or off; guard rewrites and local secret redaction still apply. `metadata_only` omits the prompt. Instruction-change events alone are not treated as a system prompt. Changes made by later plugins or provider-specific serialization are outside this hook's view.
+
+### Tool definitions
+
+On OpenCode 2, each ordinary generation lists the tools that the session `context` hook offered the model for that step, with each tool's description and input schema. A tool the model called that is not in that set is listed by name only. Descriptions and schemas get the same secret redaction and guard rewrites as the system prompt. A schema that is not valid JSON after redaction is left out. `metadata_only` sends no descriptions or schemas and lists only the tools the model called, by name. OpenCode 1 gives plugins no tool descriptions or schemas, so OpenCode 1 generations list the called tools by name only.
 
 ### Compaction records
 

@@ -160,6 +160,15 @@ handler = Agento11yLangGraphHandler(
 
 Without any of these, each run becomes its own conversation.
 
+With the default callback span capture (`capture_workflow_steps=False`), model and
+tool spans follow the chain's callback parent IDs, including when there is no
+active application span. Separate invocations start separate traces; a stable
+conversation ID or checkpoint thread ID groups turns. Use a shared application
+span if multiple invocations should belong to one trace. Workflow-step capture
+is a separate mode and does not create these chain spans.
+Tool execution spans carry `gen_ai.tool.call.id` when LangGraph supplies it.
+Streaming content blocks and completed `AIMessageChunk` outputs are supported.
+
 ## Persistent thread example (LangGraph checkpointer)
 
 ```python
