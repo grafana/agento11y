@@ -531,6 +531,24 @@ def _serialized_llm_payload(callback_context: Any, model_name: str) -> dict[str,
     return serialized
 
 
+# Leading segments of Google resource names ("projects/.../models/gemini-2.5-pro",
+# "models/gemini-2.5-flash"), which are not LiteLLM provider prefixes.
+_GOOGLE_RESOURCE_PREFIXES = frozenset({"projects", "models", "tunedmodels", "publishers", "endpoints"})
+
+# LiteLLM provider prefixes whose agento11y provider name differs.
+_LITELLM_PROVIDER_ALIASES = {"vertex_ai": "gemini", "google": "gemini"}
+
+
+def _split_litellm_model(model_name: str) -> tuple[str, str]:
+    """Split ADK ``LiteLlm`` model strings like ``openai/gpt-4o-mini`` into (provider, model)."""
+    prefix, sep, rest = model_name.partition("/")
+    prefix = prefix.strip().lower()
+    rest = rest.strip()
+    if sep == "" or prefix == "" or rest == "" or prefix in _GOOGLE_RESOURCE_PREFIXES:
+        return "", model_name
+    return _LITELLM_PROVIDER_ALIASES.get(prefix, prefix), rest
+
+
 def _adk_invocation_params(llm_request: Any) -> dict[str, Any]:
     config = _read(llm_request, "config")
     invocation_params: dict[str, Any] = {}
@@ -539,6 +557,9 @@ def _adk_invocation_params(llm_request: Any) -> dict[str, Any]:
         _as_string(_read(llm_request, "model")),
         _as_string(_read(config, "model")),
     )
+    provider, model_name = _split_litellm_model(model_name)
+    if provider != "":
+        invocation_params["provider"] = provider
     if model_name != "":
         invocation_params["model"] = model_name
 

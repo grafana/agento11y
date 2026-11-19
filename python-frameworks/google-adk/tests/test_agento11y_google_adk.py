@@ -772,3 +772,65 @@ def test_agento11y_google_adk_plugin_tracks_nested_agent_chain_runs() -> None:
 
     end_run_ids = [entry["kwargs"]["run_id"] for entry in capture.ends]
     assert end_run_ids == [child_agent_run_id, parent_agent_run_id, invocation_run_id]
+
+
+def _record_plugin_generation(model: str):
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+
+    class _Session:
+        id = f"adk-model-session-{model}"
+        state: dict[str, str] = {}
+
+    class _InvocationContext:
+        invocation_id = "adk-model-invocation"
+        session = _Session()
+        agent_name = "adk-model-agent"
+
+    class _CallbackContext:
+        invocation_context = _InvocationContext()
+
+    class _LlmRequest:
+        contents = [genai_types.Content(role="user", parts=[genai_types.Part(text="hi")])]
+        config = genai_types.GenerateContentConfig()
+        tools_dict = {}
+
+    _LlmRequest.model = model
+
+    class _LlmResponse:
+        content = genai_types.Content(role="model", parts=[genai_types.Part(text="hello")])
+        finish_reason = "STOP"
+
+    try:
+        plugin = create_agento11y_google_adk_plugin(client=client)
+
+        async def _run() -> None:
+            callback_context = _CallbackContext()
+            await plugin.before_model_callback(callback_context=callback_context, llm_request=_LlmRequest())
+            await plugin.after_model_callback(callback_context=callback_context, llm_response=_LlmResponse())
+
+        asyncio.run(_run())
+        client.flush()
+        return exporter.requests[0].generations[0]
+    finally:
+        client.shutdown()
+
+
+def test_agento11y_google_adk_parses_litellm_provider_prefix() -> None:
+    generation = _record_plugin_generation("openai/gpt-4o-mini")
+    assert generation.model.provider == "openai"
+    assert generation.model.name == "gpt-4o-mini"
+
+    generation = _record_plugin_generation("anthropic/claude-haiku-5-5")
+    assert generation.model.provider == "anthropic"
+    assert generation.model.name == "claude-haiku-5-5"
+
+
+def test_agento11y_google_adk_keeps_gemini_model_names() -> None:
+    generation = _record_plugin_generation("gemini-2.5-flash")
+    assert generation.model.provider == "gemini"
+    assert generation.model.name == "gemini-2.5-flash"
+
+    resource = "projects/p/locations/us-central1/publishers/google/models/gemini-2.5-pro"
+    generation = _record_plugin_generation(resource)
+    assert generation.model.name == resource
