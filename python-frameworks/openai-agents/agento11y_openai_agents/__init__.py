@@ -563,8 +563,9 @@ def _tool_definitions(agent: Any) -> list[ToolDefinition]:
             ToolDefinition(
                 name=name,
                 description=_as_string(_read(tool, "description")),
-                # Function tools carry a parameter schema; hosted tools (web search, ...) don't.
-                type="function" if isinstance(schema, dict) else _as_string(_read(tool, "type")),
+                # Function tools carry a parameter schema. Hosted tools (WebSearchTool, ...)
+                # don't, and their name is the API tool kind (web_search, file_search, ...).
+                type="function" if isinstance(schema, dict) else _as_string(_read(tool, "type")) or name,
                 input_schema_json=_json_bytes(schema) if isinstance(schema, dict) else b"",
             )
         )

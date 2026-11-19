@@ -1267,3 +1267,15 @@ def test_generations_record_agent_tool_definitions_and_stop_reason(model_factory
             assert schema["required"] == ["city"]
     finally:
         client.shutdown()
+
+
+def test_hosted_tools_record_their_api_tool_kind_as_type() -> None:
+    from agento11y_openai_agents import _tool_definitions
+    from agents import FileSearchTool, WebSearchTool
+
+    agent = Agent(name="assistant", tools=[WebSearchTool(), FileSearchTool(vector_store_ids=["vs_1"])])
+    definitions = _tool_definitions(agent)
+    assert [(d.name, d.type, d.input_schema_json) for d in definitions] == [
+        ("web_search", "web_search", b""),
+        ("file_search", "file_search", b""),
+    ]
