@@ -31,6 +31,25 @@ config = with_agento11y_llamaindex_callbacks(None, client=client, provider_resol
 # query_engine = index.as_query_engine(callback_manager=config["callback_manager"])
 ```
 
+## Workflow agents
+
+Set the callback manager on the LLM that a `FunctionAgent` (or `AgentWorkflow`) uses:
+
+```python
+from llama_index.core.agent.workflow import FunctionAgent
+from llama_index.llms.openai import OpenAI
+
+llm = OpenAI(
+    model="gpt-4o-mini",
+    # OpenAI only reports usage on a stream when asked to.
+    additional_kwargs={"stream_options": {"include_usage": True}},
+    callback_manager=config["callback_manager"],
+)
+agent = FunctionAgent(tools=tools, llm=llm)
+```
+
+Each generation records the provider's token usage (including Anthropic cache reads and writes), the stop reason, and its tool calls with their ids. Streamed calls (`stream_chat`, and every `FunctionAgent` turn) record `STREAM` mode and time to first token. Each tool the agent runs gets an `execute_tool` span with `gen_ai.tool.call.id`. The handler reads streamed chunks and tool steps from the LlamaIndex instrumentation dispatcher, which it subscribes to when it is created.
+
 ## Conversation mapping
 
 Conversation ID precedence:
