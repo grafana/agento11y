@@ -19,9 +19,18 @@ from agento11y_openai_agents import (
     create_agento11y_openai_agents_handler,
     with_agento11y_openai_agents_hooks,
 )
-from agents import RunHooks
+from agents import Agent, Model, ModelResponse, RunConfig, RunHooks, Runner, Usage
 from agents.run_context import AgentHookContext, RunContextWrapper
 from agents.tool_context import ToolContext
+from openai.types.responses import (
+    Response,
+    ResponseCompletedEvent,
+    ResponseOutputMessage,
+    ResponseOutputText,
+    ResponseTextDeltaEvent,
+)
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -953,3 +962,92 @@ def test_model_objects_and_provider_prefixes_resolve_model_and_provider(
     assert generation.response_model == expected_model
     if not response:
         assert generation.model.name == expected_model
+
+
+class _StreamingFakeModel(Model):
+    def __init__(self) -> None:
+        self.stream_calls = 0
+        self.sync_calls = 0
+
+    @staticmethod
+    def _output() -> list:
+        return [
+            ResponseOutputMessage.model_construct(
+                id="msg_1",
+                type="message",
+                role="assistant",
+                status="completed",
+                content=[ResponseOutputText.model_construct(type="output_text", text="Red, blue.", annotations=[])],
+            )
+        ]
+
+    async def get_response(self, *args, **kwargs) -> ModelResponse:
+        self.sync_calls += 1
+        return ModelResponse(output=self._output(), usage=Usage(), response_id="resp_1")
+
+    async def stream_response(self, *args, **kwargs):
+        self.stream_calls += 1
+        for index, delta in enumerate(("Red", ", blue.")):
+            await asyncio.sleep(0.01)
+            yield ResponseTextDeltaEvent.model_construct(
+                type="response.output_text.delta",
+                delta=delta,
+                item_id="msg_1",
+                output_index=0,
+                content_index=0,
+                sequence_number=index,
+            )
+        yield ResponseCompletedEvent.model_construct(
+            type="response.completed",
+            sequence_number=2,
+            response=Response.model_construct(id="resp_1", output=self._output(), usage=None),
+        )
+
+
+def _ttft_count(reader: InMemoryMetricReader) -> int:
+    data = reader.get_metrics_data()
+    return sum(
+        point.count
+        for resource in (data.resource_metrics if data else [])
+        for scope in resource.scope_metrics
+        for metric in scope.metrics
+        if metric.name == "gen_ai.client.time_to_first_token"
+        for point in metric.data.data_points
+    )
+
+
+@pytest.mark.parametrize("streamed", [True, False])
+def test_runner_run_streamed_records_stream_mode_and_ttft(streamed) -> None:
+    exporter = _CapturingExporter()
+    reader = InMemoryMetricReader()
+    client = Client(
+        ClientConfig(
+            meter_provider=MeterProvider(metric_readers=[reader]),
+            generation_export=GenerationExportConfig(batch_size=10, flush_interval=timedelta(seconds=60)),
+            generation_exporter=exporter,
+        )
+    )
+    model = _StreamingFakeModel()
+    agent = Agent(name="assistant", instructions="Answer briefly.", model=model)
+    run_config = RunConfig(tracing_disabled=True)
+    options = with_agento11y_openai_agents_hooks(None, client=client)
+
+    async def run() -> object:
+        if not streamed:
+            return await Runner.run(agent, "colors?", run_config=run_config, **options)
+        result = Runner.run_streamed(agent, "colors?", run_config=run_config, **options)
+        async for _ in result.stream_events():
+            pass
+        return result
+
+    try:
+        result = asyncio.run(run())
+        assert result.final_output == "Red, blue."
+        assert (model.stream_calls, model.sync_calls) == ((1, 0) if streamed else (0, 1))
+        client.flush()
+        generation = exporter.requests[0].generations[0]
+        assert generation.mode.value == ("STREAM" if streamed else "SYNC")
+        assert _ttft_count(reader) == (1 if streamed else 0)
+        assert not options["hooks"]._streamed_llm_runs
+    finally:
+        client.shutdown()
