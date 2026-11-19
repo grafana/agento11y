@@ -92,6 +92,7 @@ class Agento11yGoogleAdkCallbacks:
         self._llm_run_stacks: dict[str, list[UUID]] = {}
         self._tool_run_ids: dict[str, UUID] = {}
         self._tool_fallback_run_stacks: dict[str, list[UUID]] = {}
+        self._streamed_run_ids: set[UUID] = set()
 
     async def before_model_callback(
         self,
@@ -105,6 +106,8 @@ class Agento11yGoogleAdkCallbacks:
         self._llm_run_stacks.setdefault(invocation_key, []).append(run_id)
 
         invocation_params = _adk_invocation_params(llm_request)
+        if _adk_is_sse_streaming(callback_context):
+            invocation_params["stream"] = True
         model_name = _as_string(invocation_params.get("model"))
 
         messages = _adk_messages(_read(llm_request, "contents"))
@@ -123,9 +126,22 @@ class Agento11yGoogleAdkCallbacks:
 
     async def after_model_callback(self, callback_context: Any, llm_response: Any) -> None:
         invocation_key = self._invocation_key(callback_context)
+        if _is_true(_read(llm_response, "partial")):
+            # SSE streaming calls this once per partial chunk; only the final
+            # non-partial response carries usage and finish_reason.
+            run_id = self._peek_llm_run_id(invocation_key)
+            if run_id is None:
+                return None
+            self._streamed_run_ids.add(run_id)
+            token = _adk_content_text(_read(llm_response, "content"))
+            if token != "":
+                await _invoke_handler(self._agento11y_handler, "on_llm_new_token", token, run_id=run_id)
+            return None
+
         run_id = self._pop_llm_run_id(invocation_key)
         if run_id is None:
             return None
+        self._streamed_run_ids.discard(run_id)
 
         await _invoke_handler(
             self._agento11y_handler,
@@ -141,6 +157,7 @@ class Agento11yGoogleAdkCallbacks:
         run_id = self._pop_llm_run_id(invocation_key)
         if run_id is None:
             return None
+        self._streamed_run_ids.discard(run_id)
 
         await _invoke_handler(self._agento11y_handler, "on_llm_error", error, run_id=run_id)
         return None
@@ -267,7 +284,8 @@ class Agento11yGoogleAdkPlugin(BasePlugin):
             _invocation_key(invocation_context),
         )
         llm_run_id = self._callbacks._peek_llm_run_id(invocation_key)
-        if llm_run_id is None:
+        if llm_run_id is None or llm_run_id in self._callbacks._streamed_run_ids:
+            # after_model_callback already recorded this partial chunk.
             return None
 
         is_partial = _is_true(_read(event, "partial"))
@@ -287,7 +305,8 @@ class Agento11yGoogleAdkPlugin(BasePlugin):
         run_id = self._run_ids.pop(invocation_key, None)
         if run_id is None:
             return None
-        self._callbacks._llm_run_stacks.pop(invocation_key, None)
+        for llm_run_id in self._callbacks._llm_run_stacks.pop(invocation_key, []):
+            self._callbacks._streamed_run_ids.discard(llm_run_id)
         self._agent_run_stacks.pop(invocation_key, None)
         await _invoke_handler(self._agento11y_handler, "on_chain_end", {"status": "completed"}, run_id=run_id)
         return None
@@ -620,6 +639,15 @@ def _adk_invocation_params(llm_request: Any) -> dict[str, Any]:
         invocation_params["thinking_level"] = thinking_level
 
     return invocation_params
+
+
+def _adk_is_sse_streaming(callback_context: Any) -> bool:
+    run_config = _first_non_none(
+        _read(callback_context, "run_config"),
+        _read(_adk_invocation_context(callback_context), "run_config"),
+    )
+    streaming_mode = _read(run_config, "streaming_mode")
+    return _as_string(_first_non_none(_read(streaming_mode, "value"), streaming_mode)).lower() == "sse"
 
 
 def _adk_tool_definitions(config_tools: Any, tools_dict: Any) -> list[ToolDefinition]:
