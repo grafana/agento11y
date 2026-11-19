@@ -473,7 +473,7 @@ def _map_llamaindex_message(message: Any, *, role: str = "") -> Message | None:
                 thinking = _as_string(_read(block, "content"))
                 if thinking != "":
                     parts.append(Part(kind=PartKind.THINKING, thinking=thinking))
-            elif block_type == "tool_call":
+            elif block_type == "tool_call" and _as_string(_read(block, "tool_name")) != "":
                 parts.append(
                     _tool_call_part(
                         _read(block, "tool_call_id"), _read(block, "tool_name"), _read(block, "tool_kwargs")

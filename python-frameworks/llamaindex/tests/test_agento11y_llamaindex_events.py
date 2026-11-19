@@ -241,3 +241,18 @@ def test_sync_chat_records_usage_and_stop_reason_in_sync_mode(recording) -> None
     assert generation.stop_reason == "stop"
     assert (generation.usage.input_tokens, generation.usage.output_tokens) == (12, 3)
     assert _ttft_count(recording.metrics) == 0
+
+
+def test_tool_call_block_without_name_is_skipped() -> None:
+    from agento11y_llamaindex import _map_llamaindex_message
+
+    message = ChatMessage(
+        role="assistant",
+        blocks=[
+            TextBlock(text="checking"),
+            ToolCallBlock(tool_call_id="call_blank", tool_name="", tool_kwargs={}),
+        ],
+    )
+    mapped = _map_llamaindex_message(message)
+    assert mapped is not None
+    assert [part.kind for part in mapped.parts] == [PartKind.TEXT]
