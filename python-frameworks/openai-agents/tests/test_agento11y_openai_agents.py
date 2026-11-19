@@ -913,6 +913,9 @@ class _FakeModelObject:
         ),
         ("anthropic/claude-haiku-5-5", {}, "claude-haiku-5-5", "anthropic"),
         ("gpt-4o-mini", {}, "gpt-4o-mini", "openai"),
+        # An unknown prefix is part of the model id, not a provider.
+        (_FakeModelObject("meta-llama/Llama-3.1-8B"), {}, "meta-llama/Llama-3.1-8B", "custom"),
+        (_FakeModelObject("huggingface/meta-llama/Llama-3.1-8B"), {}, "meta-llama/Llama-3.1-8B", "custom"),
     ],
 )
 def test_model_objects_and_provider_prefixes_resolve_model_and_provider(

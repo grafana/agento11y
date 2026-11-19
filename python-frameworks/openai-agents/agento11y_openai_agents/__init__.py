@@ -354,11 +354,41 @@ def _model_ref(agent: Any) -> tuple[str, str]:
     return _split_provider_prefix(raw)
 
 
+# LiteLLM routing prefixes. Only these are split off; any other slash is part of
+# the model id (e.g. a HuggingFace "org/model" name) and is kept intact.
+_LITELLM_PROVIDER_PREFIXES = frozenset(
+    {
+        "openai",
+        "anthropic",
+        "gemini",
+        "vertex_ai",
+        "azure",
+        "azure_ai",
+        "bedrock",
+        "groq",
+        "mistral",
+        "cohere",
+        "together_ai",
+        "fireworks_ai",
+        "deepseek",
+        "xai",
+        "ollama",
+        "ollama_chat",
+        "openrouter",
+        "huggingface",
+        "perplexity",
+        "databricks",
+        "watsonx",
+    }
+)
+
+
 def _split_provider_prefix(model: str) -> tuple[str, str]:
     # LiteLLM-style ids ("anthropic/claude-haiku-5-5") name the provider first.
     provider, sep, name = model.partition("/")
-    if sep and provider.strip() != "" and name.strip() != "":
-        return provider.strip().lower(), name.strip()
+    provider = provider.strip().lower()
+    if sep and provider in _LITELLM_PROVIDER_PREFIXES and name.strip() != "":
+        return provider, name.strip()
     return "", model
 
 
