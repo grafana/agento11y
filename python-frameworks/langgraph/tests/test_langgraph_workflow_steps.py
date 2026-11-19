@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import timedelta
 
+import pytest
 from agento11y import Client, ClientConfig, GenerationExportConfig
 from agento11y.models import (
     ExportGenerationResult,
@@ -41,7 +42,8 @@ class _CapturingExporter:
         return
 
 
-def test_concurrent_graph_runs_on_one_handler_keep_their_own_conversations() -> None:
+@pytest.mark.parametrize("second_thread_id", ["customer-b", None])
+def test_concurrent_graph_runs_on_one_handler_keep_their_own_conversations(second_thread_id: str | None) -> None:
     exporter = _CapturingExporter()
     client = Client(
         ClientConfig(
@@ -50,9 +52,13 @@ def test_concurrent_graph_runs_on_one_handler_keep_their_own_conversations() -> 
         )
     )
     model = FakeListChatModel(responses=["ok", "ok"])
+    events: dict[str, asyncio.Event] = {}
 
     async def agent(state, config):
-        await asyncio.sleep(0.03)
+        if state["messages"][0].content == "first":
+            # Keep the first run inside its node until the second run has ended.
+            events["first_inside"].set()
+            await asyncio.wait_for(events["second_done"].wait(), timeout=5)
         return {"messages": [await model.ainvoke(state["messages"], config)]}
 
     builder = StateGraph(MessagesState)
@@ -62,17 +68,18 @@ def test_concurrent_graph_runs_on_one_handler_keep_their_own_conversations() -> 
     graph = builder.compile()
     handler = Agento11yAsyncLangGraphHandler(client=client, capture_workflow_steps=True)
 
-    def invoke(thread_id: str):
-        return graph.ainvoke(
-            {"messages": [HumanMessage(thread_id)]},
-            {"callbacks": [handler], "configurable": {"thread_id": thread_id}},
-        )
+    def invoke(text: str, thread_id: str | None):
+        configurable = {"thread_id": thread_id} if thread_id is not None else {}
+        return graph.ainvoke({"messages": [HumanMessage(text)]}, {"callbacks": [handler], "configurable": configurable})
 
     async def run() -> None:
-        first = asyncio.create_task(invoke("customer-a"))
-        # Start the second run while the first one is inside its node.
-        await asyncio.sleep(0.005)
-        await asyncio.gather(first, invoke("customer-b"))
+        events["first_inside"] = asyncio.Event()
+        events["second_done"] = asyncio.Event()
+        first = asyncio.create_task(invoke("first", "customer-a"))
+        await asyncio.wait_for(events["first_inside"].wait(), timeout=5)
+        await invoke("second", second_thread_id)
+        events["second_done"].set()
+        await first
 
     try:
         asyncio.run(run())
@@ -80,7 +87,17 @@ def test_concurrent_graph_runs_on_one_handler_keep_their_own_conversations() -> 
     finally:
         client.shutdown()
 
-    assert len(exporter.workflow_steps) == 2
-    for step in exporter.workflow_steps:
-        assert step.conversation_id in str(step.input_state)
-    assert sorted(generation.conversation_id for generation in exporter.generations) == ["customer-a", "customer-b"]
+    def run_of(text: str) -> str:
+        return "first" if "first" in text else "second"
+
+    step_conversations = {run_of(str(step.input_state)): step.conversation_id for step in exporter.workflow_steps}
+    generation_conversations = {
+        run_of(generation.input[0].parts[0].text): generation.conversation_id for generation in exporter.generations
+    }
+    assert len(exporter.workflow_steps) == len(exporter.generations) == 2
+    assert step_conversations == generation_conversations
+    assert step_conversations["first"] == "customer-a"
+    if second_thread_id is not None:
+        assert step_conversations["second"] == second_thread_id
+    else:
+        assert step_conversations["second"].startswith("agento11y:framework:langgraph:")

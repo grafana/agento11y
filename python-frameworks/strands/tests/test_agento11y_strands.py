@@ -294,72 +294,55 @@ def test_strands_parallel_nodes_keep_model_runs_and_workflow_links_isolated() ->
         client.shutdown()
 
 
-def _record_agent_as_tool(outer_state: dict, sub_state: dict, other_state: dict | None = None) -> dict[str, str]:
-    """Record an outer agent whose tool invokes a sub-agent, and return each agent's conversation.
-
-    With other_state, an unrelated agent invocation overlaps with the sub-agent on the same hooks.
-    """
+def _record_overlapping_invocations(first_state: dict, second_state: dict) -> dict[str, list[str]]:
+    """Record a second agent invocation that runs while a first one is active on the same hook
+    provider, with no tool call between them. Return the conversations of each agent's generations."""
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
         hooks = create_agento11y_strands_hook_provider(client=client, provider_resolver="auto")
-        outer_agent = _agent("outer")
-        sub_agent = _agent("sub")
-        other_agent = _agent("other")
+        first_agent = _agent("first")
+        second_agent = _agent("second")
 
-        def model_call(agent, state, text) -> None:
-            hooks.before_model_call(SimpleNamespace(agent=agent, invocation_state=state))
-            hooks.after_model_call(
-                SimpleNamespace(
-                    agent=agent,
-                    invocation_state=state,
-                    stop_response=SimpleNamespace(
-                        message={"role": "assistant", "content": [{"text": text}]}, stop_reason="end_turn"
-                    ),
-                    exception=None,
-                )
-            )
-
-        hooks.before_invocation(SimpleNamespace(agent=outer_agent, invocation_state=outer_state))
-        model_call(outer_agent, outer_state, "delegating")
-        if other_state is not None:
-            hooks.before_invocation(SimpleNamespace(agent=other_agent, invocation_state=other_state))
-            model_call(other_agent, other_state, "other")
-        # Every Strands invocation starts as a top-level run, the sub-agent's too.
-        hooks.before_invocation(SimpleNamespace(agent=sub_agent, invocation_state=sub_state))
-        model_call(sub_agent, sub_state, "done")
-        hooks.after_invocation(SimpleNamespace(agent=sub_agent, invocation_state=sub_state))
-        if other_state is not None:
-            hooks.after_invocation(SimpleNamespace(agent=other_agent, invocation_state=other_state))
-        model_call(outer_agent, outer_state, "final")
-        hooks.after_invocation(SimpleNamespace(agent=outer_agent, invocation_state=outer_state))
+        hooks.before_invocation(SimpleNamespace(agent=first_agent, invocation_state=first_state))
+        _model_call(hooks, first_agent, first_state, "first before")
+        hooks.before_invocation(SimpleNamespace(agent=second_agent, invocation_state=second_state))
+        _model_call(hooks, second_agent, second_state, "second")
+        hooks.after_invocation(SimpleNamespace(agent=second_agent, invocation_state=second_state))
+        _model_call(hooks, first_agent, first_state, "first after")
+        hooks.after_invocation(SimpleNamespace(agent=first_agent, invocation_state=first_state))
         client.flush()
     finally:
         client.shutdown()
-    generations = [generation for request in exporter.requests for generation in request.generations]
-    return {generation.agent_name: generation.conversation_id for generation in generations}
+    conversations: dict[str, list[str]] = {}
+    for request in exporter.requests:
+        for generation in request.generations:
+            conversations.setdefault(generation.agent_name, []).append(generation.conversation_id)
+    return conversations
 
 
-def test_strands_agent_as_tool_joins_the_outer_conversation() -> None:
-    conversations = _record_agent_as_tool({"session_id": "session-1"}, {})
-    assert conversations == {"outer": "session-1", "sub": "session-1"}
+@pytest.mark.parametrize(
+    ("first_state", "second_state"),
+    [
+        pytest.param({"session_id": "session-1"}, {"session_id": "session-2"}, id="both_with_a_key"),
+        pytest.param({"session_id": "session-1"}, {}, id="second_without_a_key"),
+        pytest.param({}, {}, id="neither_with_a_key"),
+    ],
+)
+def test_strands_overlapping_invocation_keeps_its_own_conversation(first_state: dict, second_state: dict) -> None:
+    # An agent that a tool calls is a child of the caller and joins its conversation. Without a
+    # tool call, the provider cannot tell a nested invocation from an unrelated one.
+    conversations = _record_overlapping_invocations(first_state, second_state)
 
-    conversations = _record_agent_as_tool({}, {})
-    assert conversations["sub"] == conversations["outer"]
-
-
-def test_strands_agent_as_tool_with_its_own_session_keeps_it() -> None:
-    conversations = _record_agent_as_tool({"session_id": "session-1"}, {"session_id": "session-2"})
-    assert conversations == {"outer": "session-1", "sub": "session-2"}
-
-
-def test_strands_agent_as_tool_is_not_put_in_an_overlapping_invocation() -> None:
-    conversations = _record_agent_as_tool({"session_id": "session-1"}, {}, other_state={"session_id": "session-2"})
-
-    # Two conversations are active, so the sub-agent gets its own instead of a guess.
-    assert conversations["outer"] == "session-1"
-    assert conversations["other"] == "session-2"
-    assert conversations["sub"].startswith("agento11y:framework:strands:")
+    assert len(conversations["first"]) == 2
+    assert len(set(conversations["first"])) == 1
+    assert len(conversations["second"]) == 1
+    assert conversations["second"] != conversations["first"][:1]
+    expected_second = second_state.get("session_id")
+    if expected_second is not None:
+        assert conversations["second"] == [expected_second]
+    else:
+        assert conversations["second"][0].startswith("agento11y:framework:strands:")
 
 
 def test_strands_nested_multi_agent_inherits_fallback_conversation_and_exports_node_step() -> None:

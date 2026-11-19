@@ -256,20 +256,6 @@ class Agento11yFrameworkHandlerBase:
         if state is not None:
             state.linked_generation_ids.append(generation_id)
 
-    def _has_own_conversation_key(
-        self, run_key: str, serialized: dict[str, Any] | None, callback_kwargs: dict[str, Any] | None
-    ) -> bool:
-        """Return True if the run carries its own conversation or thread key.
-        The handler-level ``conversation_id`` default does not count."""
-        conversation_id, _ = _resolve_framework_conversation_id(
-            framework_name=self._framework_name,
-            run_key=run_key,
-            serialized=serialized,
-            invocation_params=None,
-            callback_kwargs=callback_kwargs,
-        )
-        return conversation_id != _synthetic_conversation_id(self._framework_name, run_key)
-
     def _is_graph_node(self, parent_run_id: UUID | None) -> bool:
         """Return True if parent_run_id is one of the active graph roots
         (i.e. this chain is a direct child of a compiled graph, not a
@@ -786,23 +772,10 @@ class Agento11yFrameworkHandlerBase:
             # Tracking a set instead of a single value keeps concurrent graph
             # invocations on the same handler isolated.
             if parent_run_id is None:
-                # Nested graph invocation (e.g. sub-agent invoked inside a tool):
-                # inherit the conversation_id from the already-active graph root
-                # so all sub-graphs appear in the same Agent Observability conversation.
-                # The handler cannot tell a nested run from an unrelated run that
-                # overlaps with it, so a root with its own conversation key keeps
-                # it, and a root without one inherits only while a single
-                # conversation is active.
-                if self._graph_root_run_keys and not self._has_own_conversation_key(
-                    run_key, serialized, callback_kwargs
-                ):
-                    active_conversation_ids = {
-                        self._graph_run_conversation_id[root]
-                        for root in self._graph_root_run_keys
-                        if root in self._graph_run_conversation_id
-                    }
-                    if len(active_conversation_ids) == 1:
-                        self._graph_run_conversation_id[run_key] = active_conversation_ids.pop()
+                # A root never takes the conversation of another active root. The
+                # handler cannot tell a nested run from an unrelated run that
+                # overlaps with it. A nested run joins the outer conversation as a
+                # child run (parent_run_id) or with the same conversation key.
                 self._graph_root_run_keys.add(run_key)
                 return
             # Only promote direct children of a graph root to workflow steps.
@@ -1322,11 +1295,7 @@ def _resolve_framework_conversation_id(
         return handler_conversation_id, ""
 
     # Deterministic fallback when framework context does not expose a stable conversation key.
-    return _synthetic_conversation_id(framework_name, run_key), ""
-
-
-def _synthetic_conversation_id(framework_name: str, run_key: str) -> str:
-    return f"agento11y:framework:{framework_name}:{run_key}"
+    return f"agento11y:framework:{framework_name}:{run_key}", ""
 
 
 def _thread_id_from_payload(payload: Any) -> str:

@@ -103,11 +103,8 @@ agent("Remember my timezone is UTC+1.", invocation_state={"conversation_id": "cu
 agent("What timezone did I give you?", invocation_state={"conversation_id": "customer-42"})
 ```
 
-A sub-agent called from a tool starts its own invocation, usually with an empty `invocation_state`.
-When it uses the same hook provider and has no conversation key, it joins the conversation of the
-active invocation. If several invocations with different keys are active on the hook provider, the
-sub-agent gets its own conversation instead. Pass the outer `conversation_id` to the sub-agent to
-keep it in the outer conversation.
+Invocations that overlap on one hook provider keep their own conversations. An agent that a
+tool invokes joins the caller's conversation, see [Agents Called from Tools](#agents-called-from-tools).
 
 ## Metadata and Lineage
 
@@ -205,11 +202,11 @@ root_agent("Delegate this request", invocation_state={"conversation_id": "custom
 ```
 
 The adapter finds the caller through the context that Strands gives the tool. Sync and async
-tools, `Agent.__call__`, `invoke_async` and `stream_async` keep that context. These cases are
-not linked:
+tools, `Agent.__call__`, `invoke_async` and `stream_async` keep that context. In these cases,
+the invoked agent is a top-level run with its own conversation. Pass the caller's
+`conversation_id` in its `invocation_state` to keep it in the same conversation:
 
-- An agent with its own hook provider is a top-level run with its own conversation. Pass the
-  caller's `conversation_id` in its `invocation_state` to keep it in the same conversation.
+- An agent with its own hook provider.
 - A tool that runs the agent in its own thread pool without copying the context.
 
 Background tools are not tested. Strands can start a background tool outside the context of
