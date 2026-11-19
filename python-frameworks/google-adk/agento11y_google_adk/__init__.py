@@ -305,8 +305,12 @@ class Agento11yGoogleAdkPlugin(BasePlugin):
         run_id = self._run_ids.pop(invocation_key, None)
         if run_id is None:
             return None
-        for llm_run_id in self._callbacks._llm_run_stacks.pop(invocation_key, []):
-            self._callbacks._streamed_run_ids.discard(llm_run_id)
+        for llm_run_id in reversed(self._callbacks._llm_run_stacks.pop(invocation_key, [])):
+            if llm_run_id in self._callbacks._streamed_run_ids:
+                # The SSE stream stopped before its final response; close the
+                # generation with the chunks received so it is still exported.
+                self._callbacks._streamed_run_ids.discard(llm_run_id)
+                await _invoke_handler(self._agento11y_handler, "on_llm_end", {"llm_output": {}}, run_id=llm_run_id)
         self._agent_run_stacks.pop(invocation_key, None)
         await _invoke_handler(self._agento11y_handler, "on_chain_end", {"status": "completed"}, run_id=run_id)
         return None

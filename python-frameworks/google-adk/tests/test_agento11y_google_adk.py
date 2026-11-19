@@ -844,7 +844,7 @@ def test_agento11y_google_adk_keeps_serving_platform_prefixes() -> None:
         assert generation.model.name == model
 
 
-def _run_model_call(streaming_mode_name: str):
+def _run_model_call(streaming_mode_name: str, *, drop_final: bool = False):
     from google.adk.agents.run_config import RunConfig, StreamingMode
     from google.adk.models.llm_response import LlmResponse
 
@@ -884,6 +884,8 @@ def _run_model_call(streaming_mode_name: str):
             ),
         )
     )
+    if drop_final:
+        responses.pop()
 
     try:
         plugin = create_agento11y_google_adk_plugin(client=client)
@@ -926,3 +928,11 @@ def test_agento11y_google_adk_plugin_keeps_non_streaming_runs_sync() -> None:
     assert len(generations) == 1
     assert generations[0].mode.value == "SYNC"
     assert generations[0].usage.input_tokens == 11
+
+
+def test_agento11y_google_adk_plugin_closes_sse_stream_without_final_response() -> None:
+    generations = _run_model_call("SSE", drop_final=True)
+
+    assert len(generations) == 1
+    assert generations[0].mode.value == "STREAM"
+    assert generations[0].output[0].parts[0].text == "hello"
