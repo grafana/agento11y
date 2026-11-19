@@ -456,7 +456,7 @@ def test_overlapping_calls_of_same_tool_close_with_their_own_results(end_order, 
             asyncio.run(run())
         starts = handler.on_tool_start.call_args_list
         assert starts[0].kwargs["run_id"] != starts[1].kwargs["run_id"]
-        parent = handler.on_llm_start.call_args if active_llm else handler.on_chain_start.call_args
+        parent = handler.on_chat_model_start.call_args if active_llm else handler.on_chain_start.call_args
         assert all(start.kwargs["parent_run_id"] == parent.kwargs["run_id"] for start in starts)
         for end, index in zip(handler.on_tool_end.call_args_list, end_order, strict=True):
             assert end.kwargs["run_id"] == starts[index].kwargs["run_id"]
@@ -608,7 +608,7 @@ def test_parallel_runs_of_same_agent_tool_keep_their_own_lineage(end_order, pare
         for end, index in zip(handler.on_chain_end.call_args_list[:2], end_order, strict=True):
             assert end.kwargs["run_id"] == child_ids[index]
             assert end.args == ({"output": f"result-{index}"},)
-        llm_starts = handler.on_llm_start.call_args_list
+        llm_starts = handler.on_chat_model_start.call_args_list
         assert [start.kwargs["parent_run_id"] for start in llm_starts[:2]] == child_ids
         inner_starts = tool_starts[2:] if parent_tool else tool_starts
         for start, llm_start in zip(inner_starts, llm_starts[:2], strict=True):
@@ -755,8 +755,8 @@ def test_callbacks_without_tool_state_keep_legacy_correlation(shared_usage) -> N
     asyncio.run(run())
     agent_id = handler.on_chain_start.call_args.kwargs["run_id"]
     assert handler.on_chain_end.call_args.kwargs["run_id"] == agent_id
-    assert handler.on_llm_start.call_args.kwargs["parent_run_id"] == agent_id
-    assert handler.on_llm_end.call_args.kwargs["run_id"] == handler.on_llm_start.call_args.kwargs["run_id"]
+    assert handler.on_chat_model_start.call_args.kwargs["parent_run_id"] == agent_id
+    assert handler.on_llm_end.call_args.kwargs["run_id"] == handler.on_chat_model_start.call_args.kwargs["run_id"]
     assert handler.on_tool_start.call_args.kwargs["parent_run_id"] == agent_id
     assert handler.on_tool_end.call_args.kwargs["run_id"] == handler.on_tool_start.call_args.kwargs["run_id"]
     assert not hooks._agent_run_stacks
@@ -776,3 +776,90 @@ def test_agento11y_openai_agents_handler_explicitly_has_no_embedding_lifecycle()
         assert not hasattr(handler, "on_embedding_error")
     finally:
         client.shutdown()
+
+
+def test_tool_calls_and_results_map_to_parts_and_tool_spans_carry_call_ids() -> None:
+    from agents.items import ModelResponse
+    from agents.usage import Usage
+    from openai.types.responses import ResponseFunctionToolCall, ResponseOutputMessage, ResponseOutputText
+
+    exporter = _CapturingExporter()
+    span_exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    client = _new_client(exporter, tracer=provider.get_tracer("tool-calls-test"))
+    hooks = Agento11yOpenAIAgentsRunHooks(agento11y_handler=Agento11yOpenAIAgentsHandler(client=client))
+    context = RunContextWrapper(context=None)
+    agent = SimpleNamespace(name="weather", model="gpt-4o-mini")
+    tools = [SimpleNamespace(name="get_weather"), SimpleNamespace(name="get_time")]
+    calls = [
+        ResponseFunctionToolCall(
+            type="function_call", id=f"fc_{i}", call_id=f"call_{i}", name=tool.name, arguments='{"city":"Paris"}'
+        )
+        for i, tool in enumerate(tools)
+    ]
+    user = {"role": "user", "content": "Weather and time in Paris?"}
+    first = ModelResponse(output=list(calls), usage=Usage(), response_id="resp_1")
+    final_message = ResponseOutputMessage(
+        type="message",
+        id="msg_1",
+        role="assistant",
+        status="completed",
+        content=[ResponseOutputText(type="output_text", text="Sunny, 14:05.", annotations=[])],
+    )
+    second = ModelResponse(output=[final_message], usage=Usage(), response_id="resp_2")
+    results = [
+        {"type": "function_call_output", "call_id": "call_0", "output": "Sunny"},
+        {"type": "function_call_output", "call_id": "call_1", "output": "14:05"},
+    ]
+
+    async def run() -> None:
+        await hooks.on_agent_start(_agent_hook_context(context), agent)
+        await hooks.on_llm_start(context, agent, "Use the tools.", [user])
+        await hooks.on_llm_end(context, agent, first)
+        for call, tool, result in zip(calls, tools, results, strict=True):
+            tool_context = ToolContext.from_agent_context(
+                context, tool_call_id=call.call_id, tool_name=tool.name, tool_arguments=call.arguments
+            )
+            await hooks.on_tool_start(tool_context, agent, tool)
+            await hooks.on_tool_end(tool_context, agent, tool, result["output"])
+        history = [user, *(call.model_dump() for call in calls), *results]
+        await hooks.on_llm_start(context, agent, "Use the tools.", history)
+        await hooks.on_llm_end(context, agent, second)
+        await hooks.on_agent_end(_agent_hook_context(context), agent, "Sunny, 14:05.")
+
+    try:
+        with with_content_capture_mode(ContentCaptureMode.FULL):
+            asyncio.run(run())
+        client.flush()
+        generations = [generation for request in exporter.requests for generation in request.generations]
+        assert len(generations) == 2
+
+        first_gen, second_gen = generations
+        assert first_gen.system_prompt == "Use the tools."
+        output_calls = [part.tool_call for message in first_gen.output for part in message.parts if part.tool_call]
+        assert [(call.id, call.name, json.loads(call.input_json)) for call in output_calls] == [
+            ("call_0", "get_weather", {"city": "Paris"}),
+            ("call_1", "get_time", {"city": "Paris"}),
+        ]
+
+        input_calls = [part.tool_call.id for message in second_gen.input for part in message.parts if part.tool_call]
+        input_results = [
+            (part.tool_result.tool_call_id, part.tool_result.name, part.tool_result.content)
+            for message in second_gen.input
+            for part in message.parts
+            if part.tool_result
+        ]
+        assert input_calls == ["call_0", "call_1"]
+        assert input_results == [("call_0", "get_weather", "Sunny"), ("call_1", "get_time", "14:05")]
+        assert [part.text for message in second_gen.output for part in message.parts] == ["Sunny, 14:05."]
+
+        tool_spans = [
+            span
+            for span in span_exporter.get_finished_spans()
+            if span.attributes.get("gen_ai.operation.name") == "execute_tool"
+        ]
+        assert sorted(span.attributes.get("gen_ai.tool.call.id") for span in tool_spans) == ["call_0", "call_1"]
+    finally:
+        client.shutdown()
+        provider.shutdown()
