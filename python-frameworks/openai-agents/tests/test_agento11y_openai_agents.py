@@ -19,9 +19,21 @@ from agento11y_openai_agents import (
     create_agento11y_openai_agents_handler,
     with_agento11y_openai_agents_hooks,
 )
-from agents import Agent, Model, ModelResponse, RunConfig, RunHooks, Runner, Usage
+from agents import (
+    Agent,
+    Model,
+    ModelResponse,
+    ModelSettings,
+    OpenAIChatCompletionsModel,
+    RunConfig,
+    RunHooks,
+    Runner,
+    Usage,
+)
 from agents.run_context import AgentHookContext, RunContextWrapper
 from agents.tool_context import ToolContext
+from openai import AsyncOpenAI
+from openai.types.chat import ChatCompletionChunk
 from openai.types.responses import (
     Response,
     ResponseCompletedEvent,
@@ -1155,5 +1167,191 @@ def test_run_config_passed_to_runner_is_recorded_per_run() -> None:
             ("gpt-4.1-nano", "openai", "SYNC"),
         ]
         assert provider.requested == ["gpt-4o-mini", "gpt-4o", "gpt-4.1-nano"]
+    finally:
+        client.shutdown()
+
+
+def _weather_tools() -> list:
+    from agents import function_tool
+
+    @function_tool
+    def get_weather(city: str) -> str:
+        """Get the current weather for a city."""
+        return f"Sunny in {city}"
+
+    @function_tool
+    def get_time(city: str) -> str:
+        """Get the local time in a city."""
+        return f"14:05 in {city}"
+
+    return [get_weather, get_time]
+
+
+class _ToolCallingFakeModel(Model):
+    """Returns two function calls, then a final message (Responses API items)."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def get_response(self, *args, **kwargs) -> ModelResponse:
+        from openai.types.responses import ResponseFunctionToolCall
+
+        self.calls += 1
+        if self.calls == 1:
+            output = [
+                ResponseFunctionToolCall(
+                    type="function_call", id=f"fc_{i}", call_id=f"call_{i}", name=name, arguments='{"city":"Paris"}'
+                )
+                for i, name in enumerate(("get_weather", "get_time"))
+            ]
+        else:
+            output = _StreamingFakeModel._output()
+        return ModelResponse(output=output, usage=Usage(), response_id=f"resp_{self.calls}")
+
+    def stream_response(self, *args, **kwargs):  # pragma: no cover - not used
+        raise NotImplementedError
+
+
+class _FakeChatCompletions:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def create(self, **kwargs):
+        from openai.types.chat import ChatCompletion
+
+        self.calls += 1
+        if self.calls == 1:
+            message = {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": f"call_{i}", "type": "function", "function": {"name": name, "arguments": '{"city":"Paris"}'}}
+                    for i, name in enumerate(("get_weather", "get_time"))
+                ],
+            }
+            finish_reason = "tool_calls"
+        else:
+            message = {"role": "assistant", "content": "Red, blue."}
+            finish_reason = "stop"
+        return ChatCompletion.model_validate(
+            {
+                "id": f"chatcmpl_{self.calls}",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-4o-mini",
+                "choices": [{"index": 0, "message": message, "finish_reason": finish_reason}],
+            }
+        )
+
+
+def _chat_completions_model() -> Model:
+    from agents import OpenAIChatCompletionsModel
+
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(completions=_FakeChatCompletions()), base_url="https://api.openai.com/v1"
+    )
+    return OpenAIChatCompletionsModel(model="gpt-4o-mini", openai_client=fake_client)
+
+
+@pytest.mark.parametrize("model_factory", [_ToolCallingFakeModel, _chat_completions_model], ids=["responses", "chat"])
+def test_generations_record_agent_tool_definitions_and_stop_reason(model_factory) -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    agent = Agent(name="assistant", instructions="Use the tools.", model=model_factory(), tools=_weather_tools())
+    options = with_agento11y_openai_agents_hooks(None, client=client)
+
+    try:
+        result = asyncio.run(
+            Runner.run(agent, "Weather in Paris?", run_config=RunConfig(tracing_disabled=True), **options)
+        )
+        assert result.final_output == "Red, blue."
+        client.flush()
+        generations = [g for request in exporter.requests for g in request.generations]
+        assert [g.stop_reason for g in generations] == ["tool_calls", "stop"]
+        for generation in generations:
+            assert [(t.name, t.type) for t in generation.tools] == [
+                ("get_weather", "function"),
+                ("get_time", "function"),
+            ]
+            assert generation.tools[0].description == "Get the current weather for a city."
+            schema = json.loads(generation.tools[0].input_schema_json)
+            assert schema["properties"]["city"]["type"] == "string"
+            assert schema["required"] == ["city"]
+    finally:
+        client.shutdown()
+
+
+def test_hosted_tools_record_their_api_tool_kind_as_type() -> None:
+    from agento11y_openai_agents import _tool_definitions
+    from agents import FileSearchTool, WebSearchTool
+
+    agent = Agent(name="assistant", tools=[WebSearchTool(), FileSearchTool(vector_store_ids=["vs_1"])])
+    definitions = _tool_definitions(agent)
+    assert [(d.name, d.type, d.input_schema_json) for d in definitions] == [
+        ("web_search", "web_search", b""),
+        ("file_search", "file_search", b""),
+    ]
+
+
+def _chat_chunk(delta: dict, *, finish_reason: str | None = None, usage: dict | None = None) -> ChatCompletionChunk:
+    return ChatCompletionChunk.model_validate(
+        {
+            "id": "chatcmpl_1",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": "gpt-4o-mini",
+            "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}] if delta is not None else [],
+            "usage": usage,
+        }
+    )
+
+
+@pytest.mark.parametrize("include_usage", [True, None])
+def test_run_streamed_chat_completions_records_usage_from_final_chunk(include_usage) -> None:
+    # OpenAIChatCompletionsModel only asks for stream usage (stream_options.include_usage) from
+    # api.openai.com by default; other OpenAI-compatible endpoints need ModelSettings(include_usage=True).
+    openai_client = AsyncOpenAI(api_key="test", base_url="http://localhost:1/v1")
+    sent: dict = {}
+
+    async def create(**kwargs):
+        sent.update(kwargs)
+        wants_usage = isinstance(kwargs.get("stream_options"), dict) and kwargs["stream_options"].get("include_usage")
+
+        async def chunks():
+            yield _chat_chunk({"role": "assistant", "content": "Four."})
+            yield _chat_chunk({}, finish_reason="stop")
+            if wants_usage:
+                yield _chat_chunk(None, usage={"prompt_tokens": 24, "completion_tokens": 7, "total_tokens": 31})
+
+        return chunks()
+
+    openai_client.chat.completions.create = create  # type: ignore[method-assign]
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    agent = Agent(
+        name="assistant",
+        instructions="Answer briefly.",
+        model=OpenAIChatCompletionsModel("gpt-4o-mini", openai_client),
+        model_settings=ModelSettings(include_usage=include_usage),
+    )
+    options = with_agento11y_openai_agents_hooks(None, client=client)
+
+    async def run() -> None:
+        result = Runner.run_streamed(agent, "2+2?", run_config=RunConfig(tracing_disabled=True), **options)
+        async for _ in result.stream_events():
+            pass
+
+    try:
+        asyncio.run(run())
+        client.flush()
+        generation = exporter.requests[0].generations[0]
+        assert generation.mode.value == "STREAM"
+        assert sent["stream"] is True
+        if include_usage:
+            assert sent["stream_options"] == {"include_usage": True}
+            assert (generation.usage.input_tokens, generation.usage.output_tokens) == (24, 7)
+        else:
+            assert not isinstance(sent.get("stream_options"), dict)
+            assert (generation.usage.input_tokens, generation.usage.output_tokens) == (0, 0)
     finally:
         client.shutdown()

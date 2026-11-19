@@ -8,7 +8,7 @@ import json
 from typing import Any
 from uuid import UUID, uuid4
 
-from agento11y import Client, Message, MessageRole, Part, PartKind, ToolCall, ToolResult
+from agento11y import Client, Message, MessageRole, Part, PartKind, ToolCall, ToolDefinition, ToolResult
 
 from .handler import Agento11yAsyncOpenAIAgentsHandler, Agento11yOpenAIAgentsHandler
 
@@ -221,6 +221,9 @@ class Agento11yOpenAIAgentsRunHooks(RunHooks):
             invocation_params["model"] = model_name
         if model_provider != "":
             invocation_params["provider"] = model_provider
+        tools = _tool_definitions(agent)
+        if tools:
+            invocation_params["tools"] = tools
         if context_key in self._streamed_llm_runs:
             invocation_params["stream"] = True
             self._streamed_llm_runs[context_key] = run_id
@@ -541,6 +544,71 @@ def _tool_name(tool: Any) -> str:
     return "framework_tool"
 
 
+def _tool_definitions(agent: Any) -> list[ToolDefinition]:
+    """Definitions of the agent's own tools, as the model sees them.
+
+    Reads `Agent.tools` rather than `get_all_tools()` so recording never triggers MCP
+    listing calls; MCP server tools and handoffs are not included.
+    """
+    tools = _read(agent, "tools")
+    if not isinstance(tools, (list, tuple)):
+        return []
+    definitions: list[ToolDefinition] = []
+    for tool in tools:
+        name = _as_string(_read(tool, "name"))
+        if name == "":
+            continue
+        schema = _read(tool, "params_json_schema")
+        definitions.append(
+            ToolDefinition(
+                name=name,
+                description=_as_string(_read(tool, "description")),
+                # Function tools carry a parameter schema. Hosted tools (WebSearchTool, ...)
+                # don't, and their name is the API tool kind (web_search, file_search, ...).
+                type="function" if isinstance(schema, dict) else _as_string(_read(tool, "type")) or name,
+                input_schema_json=_json_bytes(schema) if isinstance(schema, dict) else b"",
+            )
+        )
+    return definitions
+
+
+def _json_bytes(value: Any) -> bytes:
+    try:
+        return json.dumps(value, default=str, sort_keys=True).encode("utf-8")
+    except Exception:
+        return b""
+
+
+# Output items that end the turn so the runner can execute a client-side tool.
+_CLIENT_TOOL_CALL_TYPES = {
+    "function_call",
+    "custom_tool_call",
+    "computer_call",
+    "local_shell_call",
+    "shell_call",
+    "apply_patch_call",
+}
+
+
+def _stop_reason(response: Any) -> str:
+    """Derive the finish reason from a ModelResponse's output items.
+
+    ModelResponse drops the provider's finish reason, but every model the SDK ships
+    (Responses, Chat Completions, LiteLLM) converts it into output items: tool calls
+    mean `tool_calls`, a completed assistant message means `stop`. An incomplete
+    message has no recoverable cause, so it records nothing.
+    """
+    output = _read(response, "output")
+    if not isinstance(output, list):
+        return ""
+    if any(_read(item, "type") in _CLIENT_TOOL_CALL_TYPES for item in output):
+        return "tool_calls"
+    statuses = [_as_string(_read(item, "status")) for item in output if _read(item, "type") == "message"]
+    if statuses and all(status in ("", "completed") for status in statuses):
+        return "stop"
+    return ""
+
+
 def _input_messages(system_prompt: str | None, input_items: list[Any]) -> list[Any]:
     messages: list[Any] = []
     if isinstance(system_prompt, str) and system_prompt.strip() != "":
@@ -706,6 +774,9 @@ def _build_llm_end_response(response: Any, *, model_name: str) -> dict[str, Any]
     usage = _usage_payload(_read(response, "usage"))
     if usage is not None:
         llm_output["token_usage"] = usage
+    stop_reason = _stop_reason(response)
+    if stop_reason != "":
+        llm_output["finish_reason"] = stop_reason
 
     payload: dict[str, Any] = {"llm_output": llm_output}
     output = _read(response, "output")
