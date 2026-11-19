@@ -19,9 +19,18 @@ from agento11y_openai_agents import (
     create_agento11y_openai_agents_handler,
     with_agento11y_openai_agents_hooks,
 )
-from agents import RunHooks
+from agents import Agent, Model, ModelResponse, RunConfig, RunHooks, Runner, Usage
 from agents.run_context import AgentHookContext, RunContextWrapper
 from agents.tool_context import ToolContext
+from openai.types.responses import (
+    Response,
+    ResponseCompletedEvent,
+    ResponseOutputMessage,
+    ResponseOutputText,
+    ResponseTextDeltaEvent,
+)
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -953,3 +962,198 @@ def test_model_objects_and_provider_prefixes_resolve_model_and_provider(
     assert generation.response_model == expected_model
     if not response:
         assert generation.model.name == expected_model
+
+
+class _StreamingFakeModel(Model):
+    def __init__(self) -> None:
+        self.stream_calls = 0
+        self.sync_calls = 0
+
+    @staticmethod
+    def _output() -> list:
+        return [
+            ResponseOutputMessage.model_construct(
+                id="msg_1",
+                type="message",
+                role="assistant",
+                status="completed",
+                content=[ResponseOutputText.model_construct(type="output_text", text="Red, blue.", annotations=[])],
+            )
+        ]
+
+    async def get_response(self, *args, **kwargs) -> ModelResponse:
+        self.sync_calls += 1
+        return ModelResponse(output=self._output(), usage=Usage(), response_id="resp_1")
+
+    async def stream_response(self, *args, **kwargs):
+        self.stream_calls += 1
+        for index, delta in enumerate(("Red", ", blue.")):
+            await asyncio.sleep(0.01)
+            yield ResponseTextDeltaEvent.model_construct(
+                type="response.output_text.delta",
+                delta=delta,
+                item_id="msg_1",
+                output_index=0,
+                content_index=0,
+                sequence_number=index,
+            )
+        yield ResponseCompletedEvent.model_construct(
+            type="response.completed",
+            sequence_number=2,
+            response=Response.model_construct(id="resp_1", output=self._output(), usage=None),
+        )
+
+
+def _ttft_count(reader: InMemoryMetricReader) -> int:
+    data = reader.get_metrics_data()
+    return sum(
+        point.count
+        for resource in (data.resource_metrics if data else [])
+        for scope in resource.scope_metrics
+        for metric in scope.metrics
+        if metric.name == "gen_ai.client.time_to_first_token"
+        for point in metric.data.data_points
+    )
+
+
+@pytest.mark.parametrize("streamed", [True, False])
+def test_runner_run_streamed_records_stream_mode_and_ttft(streamed) -> None:
+    exporter = _CapturingExporter()
+    reader = InMemoryMetricReader()
+    client = Client(
+        ClientConfig(
+            meter_provider=MeterProvider(metric_readers=[reader]),
+            generation_export=GenerationExportConfig(batch_size=10, flush_interval=timedelta(seconds=60)),
+            generation_exporter=exporter,
+        )
+    )
+    model = _StreamingFakeModel()
+    agent = Agent(name="assistant", instructions="Answer briefly.", model=model)
+    run_config = RunConfig(tracing_disabled=True)
+    options = with_agento11y_openai_agents_hooks(None, client=client)
+
+    async def run() -> object:
+        if not streamed:
+            return await Runner.run(agent, "colors?", run_config=run_config, **options)
+        result = Runner.run_streamed(agent, "colors?", run_config=run_config, **options)
+        async for _ in result.stream_events():
+            pass
+        return result
+
+    try:
+        result = asyncio.run(run())
+        assert result.final_output == "Red, blue."
+        assert (model.stream_calls, model.sync_calls) == ((1, 0) if streamed else (0, 1))
+        client.flush()
+        generation = exporter.requests[0].generations[0]
+        assert generation.mode.value == ("STREAM" if streamed else "SYNC")
+        assert _ttft_count(reader) == (1 if streamed else 0)
+        assert not options["hooks"]._streamed_llm_runs
+    finally:
+        client.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("agent_model", "run_options", "response", "expected_model"),
+    [
+        (None, {"run_config": SimpleNamespace(model="gpt-4o-mini")}, {}, "gpt-4o-mini"),
+        ("gpt-4o", {"run_config": SimpleNamespace(model="gpt-4o-mini")}, {}, "gpt-4o-mini"),
+        (None, {"run_config": SimpleNamespace(model=_FakeModelObject("openai/gpt-4o-mini"))}, {}, "gpt-4o-mini"),
+        (None, {"run_config": SimpleNamespace(model=None)}, {}, "gpt-4.1-mini"),
+        (None, {}, {}, "gpt-4.1-mini"),
+        (None, {}, {"model": "gpt-4o-mini-2024-07-18"}, "gpt-4o-mini-2024-07-18"),
+    ],
+)
+def test_agent_without_model_records_run_config_or_default_model(
+    monkeypatch, agent_model, run_options, response, expected_model
+) -> None:
+    monkeypatch.setenv("OPENAI_DEFAULT_MODEL", "gpt-4.1-mini")
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    hooks = with_agento11y_openai_agents_hooks(run_options, client=client)["hooks"]
+    context = SimpleNamespace(context={"conversation_id": "conv-default-model"})
+    agent = SimpleNamespace(name="assistant", model=agent_model)
+
+    async def run() -> None:
+        await hooks.on_agent_start(context, agent)
+        await hooks.on_llm_start(context, agent, None, ["hi"])
+        await hooks.on_llm_end(context, agent, {"output": [{"content": "Hello."}], **response})
+        await hooks.on_agent_end(context, agent, "Hello.")
+
+    asyncio.run(run())
+    client.flush()
+    client.shutdown()
+
+    generation = exporter.requests[0].generations[0]
+    assert generation.model.provider == "openai"
+    assert generation.response_model == expected_model
+    if not response:
+        assert generation.model.name == expected_model
+
+
+def test_run_config_model_with_serving_prefix_keeps_custom_provider() -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    run_options = {"run_config": SimpleNamespace(model="azure/gpt-4o")}
+    hooks = with_agento11y_openai_agents_hooks(run_options, client=client)["hooks"]
+    context = SimpleNamespace(context={"conversation_id": "conv-azure"})
+    agent = SimpleNamespace(name="assistant", model=None)
+
+    async def run() -> None:
+        await hooks.on_agent_start(context, agent)
+        await hooks.on_llm_start(context, agent, None, ["hi"])
+        await hooks.on_llm_end(context, agent, {"output": [{"content": "Hello."}]})
+        await hooks.on_agent_end(context, agent, "Hello.")
+
+    asyncio.run(run())
+    client.flush()
+    client.shutdown()
+
+    generation = exporter.requests[0].generations[0]
+    assert generation.model.provider == "custom"
+    assert generation.model.name == "azure/gpt-4o"
+
+
+class _FakeModelProvider:
+    def __init__(self, model: Model) -> None:
+        self.model = model
+        self.requested: list[str | None] = []
+
+    def get_model(self, model_name: str | None) -> Model:
+        self.requested.append(model_name)
+        return self.model
+
+
+def test_run_config_passed_to_runner_is_recorded_per_run() -> None:
+    # Hooks created without a RunConfig and reused across runs must record each run's own
+    # RunConfig model, including run_sync and run_streamed, not a snapshot or the SDK default.
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    provider = _FakeModelProvider(_StreamingFakeModel())
+    hooks = with_agento11y_openai_agents_hooks(None, client=client)["hooks"]
+    agent = Agent(name="assistant", instructions="Be brief.")
+
+    def config(name: str) -> RunConfig:
+        return RunConfig(model=name, model_provider=provider, tracing_disabled=True)
+
+    try:
+
+        async def run_async() -> None:
+            await Runner.run(agent, "hi", hooks=hooks, run_config=config("gpt-4o-mini"))
+            streamed = Runner.run_streamed(agent, "hi", hooks=hooks, run_config=config("gpt-4o"))
+            async for _ in streamed.stream_events():
+                pass
+
+        asyncio.run(run_async())
+        Runner.run_sync(agent, "hi", hooks=hooks, run_config=config("gpt-4.1-nano"))
+        client.flush()
+
+        generations = [g for request in exporter.requests for g in request.generations]
+        assert [(g.model.name, g.model.provider, g.mode.value) for g in generations] == [
+            ("gpt-4o-mini", "openai", "SYNC"),
+            ("gpt-4o", "openai", "STREAM"),
+            ("gpt-4.1-nano", "openai", "SYNC"),
+        ]
+        assert provider.requested == ["gpt-4o-mini", "gpt-4o", "gpt-4.1-nano"]
+    finally:
+        client.shutdown()
