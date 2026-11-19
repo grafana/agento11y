@@ -46,7 +46,9 @@ from pydantic_ai.messages import (
     ToolCallPart,
     UserPromptPart,
 )
+from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai.models.function import AgentInfo, DeltaThinkingPart, FunctionModel
+from pydantic_ai.tools import ToolDefinition as PydanticToolDefinition
 from pydantic_ai.usage import RequestUsage
 
 
@@ -1036,6 +1038,65 @@ def test_agento11y_pydantic_ai_agent_run_records_output_tool_and_plain_text_retr
     assert feedback.role == MessageRole.USER
     assert "tool" in feedback.parts[0].text.lower()
     assert _tool_call(generations[1].output[0].parts[0]) == ("out-1", "final_result", {"approved": True})
+
+
+def test_agento11y_pydantic_ai_agent_run_records_output_tools_beside_function_tools() -> None:
+    class Verdict(BaseModel):
+        approved: bool
+
+    def lookup_city(city: str) -> str:
+        """Lookup a city."""
+        return city
+
+    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        output_tool = info.output_tools[0].name
+        return ModelResponse(parts=[ToolCallPart(tool_name=output_tool, args={"approved": True}, tool_call_id="out-1")])
+
+    generations, _ = _record_agent_run(model, "Review this.", tools=[lookup_city], output_type=ToolOutput(Verdict))
+
+    (generation,) = generations
+    tools = {tool.name: tool for tool in generation.tools}
+    assert list(tools) == ["lookup_city", "final_result"]
+    assert "approved" in json.loads(tools["final_result"].input_schema_json)["properties"]
+
+
+@pytest.mark.skipif(
+    not hasattr(ModelRequestParameters, "visibility_of"),
+    reason="this pydantic-ai cannot withhold a tool from a request",
+)
+def test_agento11y_pydantic_ai_capability_records_no_tool_withheld_from_the_request() -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+
+    class _RunContext:
+        run_id = "pydantic-withheld-1"
+        deps = None
+        metadata = None
+        model = None
+        agent = None
+
+    class _RequestContext:
+        model = "gpt-5"
+        messages: list[Any] = []
+        model_settings = None
+        model_request_parameters = ModelRequestParameters(
+            function_tools=[
+                PydanticToolDefinition(name="lookup_city"),
+                PydanticToolDefinition(name="archive_city", defer_loading=True),
+            ]
+        )
+
+    try:
+        capability = create_agento11y_pydantic_ai_capability(client=client)
+
+        async def handler(rc: Any) -> ModelResponse:
+            return ModelResponse(parts=[TextPart(content="Done.")])
+
+        asyncio.run(capability.wrap_model_request(_RunContext(), request_context=_RequestContext(), handler=handler))
+        client.flush()
+        assert [tool.name for tool in exporter.requests[0].generations[0].tools] == ["lookup_city"]
+    finally:
+        client.shutdown()
 
 
 def test_agento11y_pydantic_ai_agent_run_joins_system_prompt_and_instructions() -> None:

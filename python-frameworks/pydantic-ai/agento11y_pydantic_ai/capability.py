@@ -273,13 +273,13 @@ def _build_invocation_params(
 
 
 def _map_pydantic_tools(request_params: Any) -> list[ToolDefinition]:
-    tool_defs = _read(request_params, "function_tools")
-    if not isinstance(tool_defs, (list, tuple)):
-        return []
+    # The tools the model is offered, as pydantic-ai's own instrumentation records them: output tools ride
+    # beside function tools, and a tool deferred loading withholds from the request (pydantic-ai 2.x) is not one.
+    visibility_of = _read(request_params, "visibility_of")
     result: list[ToolDefinition] = []
-    for tool_def in tool_defs:
+    for tool_def in (*_sequence(request_params, "function_tools"), *_sequence(request_params, "output_tools")):
         name = _as_string(_read(tool_def, "name"))
-        if name == "":
+        if name == "" or (callable(visibility_of) and visibility_of(name) == "withheld"):
             continue
         result.append(
             ToolDefinition(
@@ -405,6 +405,11 @@ def _read(value: Any, key: str) -> Any:
     if isinstance(value, dict):
         return value.get(key)
     return getattr(value, key, None)
+
+
+def _sequence(value: Any, key: str) -> list[Any] | tuple[Any, ...]:
+    items = _read(value, key)
+    return items if isinstance(items, (list, tuple)) else []
 
 
 def _as_string(value: Any) -> str:

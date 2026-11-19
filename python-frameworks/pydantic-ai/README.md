@@ -78,6 +78,7 @@ Each generation records the message history Pydantic AI sent the model and the r
 - Thinking is recorded as thinking parts. Retry feedback that answers no tool call is recorded as a user message.
 - Images, audio, documents, and files are not recorded: the Python SDK has no media part yet.
 - Tool executions record the id of the tool call they run.
+- A generation's tools are the ones the request offered the model: function tools, then output tools such as `final_result`. A tool that deferred loading withholds from the request is not recorded.
 
 ## Metadata and lineage
 
