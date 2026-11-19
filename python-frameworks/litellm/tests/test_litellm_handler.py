@@ -1123,12 +1123,11 @@ def test_litellm_params_trace_id_beats_payload_trace_id() -> None:
         client.shutdown()
 
 
-def test_payload_trace_id_beats_the_static_conversation_id() -> None:
-    """The payload trace id ranks with the other resolved ids, above the static one.
+def test_static_conversation_id_beats_payload_trace_id() -> None:
+    """An explicit ``conversation_id`` on the logger outranks LiteLLM's trace id.
 
-    ``litellm_params``' trace id already outranks the handler's ``conversation_id``,
-    so a route that only publishes its trace id in the payload has to behave the
-    same way, or the same proxy would group two routes differently.
+    LiteLLM generates a trace id for every call, so letting it win made the
+    logger's ``conversation_id`` argument a no-op.
     """
     exporter = _CapturingExporter()
     client = _new_client(exporter)
@@ -1143,7 +1142,25 @@ def test_payload_trace_id_beats_the_static_conversation_id() -> None:
         )
         client.flush()
 
-        assert exporter.requests[0].generations[0].conversation_id == "payload-trace-3"
+        assert exporter.requests[0].generations[0].conversation_id == "static-conv"
+    finally:
+        client.shutdown()
+
+
+def test_static_conversation_id_beats_litellm_trace_id() -> None:
+    """The logger default also outranks ``litellm_params.litellm_trace_id``."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client, conversation_id="static-conv")
+        kwargs: dict[str, Any] = {
+            "standard_logging_object": _base_slo(trace_id="payload-trace-4"),
+            "litellm_params": {"metadata": {}, "litellm_trace_id": "params-trace-4"},
+        }
+        handler.log_success_event(kwargs=kwargs, response_obj=None, start_time=_START, end_time=_END)
+        client.flush()
+
+        assert exporter.requests[0].generations[0].conversation_id == "static-conv"
     finally:
         client.shutdown()
 

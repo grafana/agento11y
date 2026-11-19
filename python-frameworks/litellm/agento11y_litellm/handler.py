@@ -907,22 +907,31 @@ class Agento11yLiteLLMLogger(CustomLogger):
         return _first_metadata_value(_metadata_sources(kwargs), ("agent_version",)) or self._agent_version
 
     def _resolve_conversation_id(self, kwargs: dict[str, Any], slo: dict[str, Any]) -> str:
-        """Resolve conversation_id from per-request metadata, falling back to static.
+        """Resolve conversation_id, most explicit source first.
 
-        Checks metadata keys first (conversation_id, session_id, thread_id),
-        then LiteLLM's built-in session tracking fields (litellm_session_id,
-        litellm_trace_id) in both metadata and litellm_params, and last the
-        logged payload's own ``trace_id``.
+        1. Per-request metadata keys (conversation_id, session_id, thread_id).
+        2. LiteLLM's ``litellm_session_id``, which the caller always sets.
+        3. The logger's own ``conversation_id`` argument.
+        4. LiteLLM's ``litellm_trace_id``, then the logged payload's ``trace_id``.
 
-        The payload is the only place ``/v1/messages`` carries the trace id: that
-        route leaves ``litellm_params`` without one, so before this fallback its
-        generations exported with an empty conversation id, which leaves them out
-        of every conversation and out of conversation search. Where both are set
-        they hold the same id, so the fallback never regroups another route.
+        LiteLLM generates a trace id for every call, so ranking it above the
+        logger's ``conversation_id`` made that argument a no-op. The payload is
+        the only place ``/v1/messages`` carries the trace id, which is why it is
+        still the last fallback: without it those generations export with an
+        empty conversation id.
         """
         litellm_params = kwargs.get("litellm_params") or {}
-        resolved = _resolve_conversation_id_from(litellm_params, _metadata_sources_from(litellm_params))
-        return resolved or str(slo.get("trace_id") or "") or self._conversation_id
+        sources = _metadata_sources_from(litellm_params)
+        explicit = _first_metadata_value(sources, _CONVERSATION_ID_METADATA_KEYS) or _first_metadata_value(
+            sources, ("litellm_session_id",)
+        )
+        if not explicit and litellm_params.get("litellm_session_id"):
+            explicit = str(litellm_params["litellm_session_id"])
+        if explicit:
+            return explicit
+        if self._conversation_id:
+            return self._conversation_id
+        return _resolve_conversation_id_from(litellm_params, sources) or str(slo.get("trace_id") or "")
 
     def _record_generation(
         self,
