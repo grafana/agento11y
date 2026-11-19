@@ -265,6 +265,9 @@ func runAgentProcess(ctx context.Context, dir string, argv []string) agentOutcom
 	cmd := newAgentCommand(ctx, dir, argv)
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
+	if cleanupErr := cleanupAgentProcess(cmd); cleanupErr != nil {
+		err = errors.Join(err, fmt.Errorf("clean up agent descendants: %w", cleanupErr))
+	}
 	outcome := agentOutcome{argv: argv, stdout: stdout.String(), stderr: stderr.String(), exitCode: -1, err: err}
 	var exitErr *exec.ExitError
 	switch {

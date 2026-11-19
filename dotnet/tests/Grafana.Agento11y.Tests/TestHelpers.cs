@@ -2,6 +2,7 @@ using Grpc.Core;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using System.Collections.Concurrent;
@@ -397,6 +398,11 @@ internal sealed class GrpcIngestServer : IDisposable
         _store.ResponseDelay = responseDelay;
         Port = ReservePort();
         _host = Host.CreateDefaultBuilder()
+            // The default builder watches appsettings*.json for reloads, which costs
+            // one inotify instance per server. Parallel tests exhaust the Linux
+            // runner limit (128) and fail with IOException, so turn it off.
+            .ConfigureHostConfiguration(config => config.AddInMemoryCollection(
+                new Dictionary<string, string?> { ["hostBuilder:reloadConfigOnChange"] = "false" }))
             .ConfigureWebHostDefaults(webBuilder =>
             {
                 webBuilder.UseKestrel(options =>

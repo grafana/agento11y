@@ -365,3 +365,30 @@ def test_agento11y_llamaindex_handler_explicitly_has_no_embedding_lifecycle() ->
         assert not hasattr(handler, "on_embedding_error")
     finally:
         client.shutdown()
+
+
+def test_agento11y_llamaindex_handler_conversation_id_groups_all_generations() -> None:
+    from llama_index.core.llms.mock import MockLLM
+
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+
+    try:
+        config = with_agento11y_llamaindex_callbacks(
+            None,
+            client=client,
+            agent_name="support-agent",
+            conversation_id="conv-llamaindex-1",
+            conversation_title="Support chat",
+        )
+        llm = MockLLM(max_tokens=4, callback_manager=config["callback_manager"])
+        llm.complete("first question")
+        llm.complete("second question")
+
+        client.flush()
+        generations = [generation for request in exporter.requests for generation in request.generations]
+        assert len(generations) == 2
+        assert {generation.conversation_id for generation in generations} == {"conv-llamaindex-1"}
+        assert {generation.agent_name for generation in generations} == {"support-agent"}
+    finally:
+        client.shutdown()

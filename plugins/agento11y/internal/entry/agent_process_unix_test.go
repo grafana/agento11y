@@ -9,6 +9,18 @@ import (
 	"syscall"
 )
 
+func cleanupAgentProcess(cmd *exec.Cmd) error {
+	if cmd.Process == nil {
+		return nil
+	}
+	// Codex can exit successfully while its marketplace Git clone is still running.
+	err := cmd.Cancel()
+	if errors.Is(err, os.ErrProcessDone) {
+		return nil
+	}
+	return err
+}
+
 func configureAgentProcess(cmd *exec.Cmd) {
 	// The npm launcher and its native child must share the cancellation target.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
