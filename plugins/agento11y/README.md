@@ -466,7 +466,7 @@ AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=user,repo
 | Name | Tag key | Resolved from |
 | --- | --- | --- |
 | `user` | `user` | `AGENTO11Y_USER_ID`, then the identity the host agent knows. Without either, no `user` tag is attached |
-| `repo` | `repo` | `owner/name` of the checkout's `origin` remote, or the checkout directory name |
+| `repo` | `repo` | `owner/name` of the checkout's `origin` remote, or the checkout directory name. GitHub and Bitbucket Cloud remotes are lowercased, and Azure DevOps remotes become `org/project/repo` |
 | `branch` | `git.branch` | Branch checked out in the session's directory |
 
 A key already set in `AGENTO11Y_TAGS` wins, an unresolved value leaves its key off, and an unsupported name is logged and skipped. The allowlist does nothing while the switch is off. Because these are client tags, they arrive in Prometheus as `agento11y_tag_user`, `agento11y_tag_repo`, and `agento11y_tag_git_branch`.
