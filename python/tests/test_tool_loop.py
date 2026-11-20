@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 from datetime import timedelta
 
+import pytest
 from agento11y import (
     Client,
     ClientConfig,
+    ContentCaptureMode,
     EmbeddingCaptureConfig,
     ExecuteToolCallsOptions,
     GenerationExportConfig,
@@ -16,6 +18,7 @@ from agento11y import (
     Part,
     PartKind,
     ToolCall,
+    create_secret_redaction_sanitizer,
     tool_call_part,
 )
 from conftest import CapturingGenerationExporter
@@ -23,8 +26,16 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+_API_KEY = "sk-proj-" + "a" * 48
 
-def _new_client(exporter: CapturingGenerationExporter, span_exporter: InMemorySpanExporter) -> Client:
+
+def _new_client(
+    exporter: CapturingGenerationExporter,
+    span_exporter: InMemorySpanExporter,
+    *,
+    content_capture: ContentCaptureMode = ContentCaptureMode.DEFAULT,
+    generation_sanitizer=None,
+) -> Client:
     tp = TracerProvider()
     tp.add_span_processor(SimpleSpanProcessor(span_exporter))
     generation_export = GenerationExportConfig(
@@ -42,6 +53,8 @@ def _new_client(exporter: CapturingGenerationExporter, span_exporter: InMemorySp
             generation_export=generation_export,
             embedding_capture=EmbeddingCaptureConfig(),
             generation_exporter=exporter,
+            content_capture=content_capture,
+            generation_sanitizer=generation_sanitizer,
         )
     )
 
@@ -121,6 +134,55 @@ def test_execute_tool_calls_executor_error() -> None:
         err_spans = [s for s in spans.get_finished_spans() if s.name == "execute_tool boom"]
         assert len(err_spans) == 1
         assert err_spans[0].status.status_code.name == "ERROR"
+    finally:
+        client.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("content_capture", "generation_sanitizer", "exception_message"),
+    [
+        pytest.param(ContentCaptureMode.DEFAULT, None, f"upstream rejected {_API_KEY}", id="default"),
+        pytest.param(
+            ContentCaptureMode.DEFAULT,
+            create_secret_redaction_sanitizer(),
+            "upstream rejected [REDACTED:openai-project-key]",
+            id="sanitizer",
+        ),
+        pytest.param(ContentCaptureMode.METADATA_ONLY, None, None, id="metadata_only"),
+    ],
+)
+def test_execute_tool_calls_records_the_executor_error_only_as_the_recorder_does(
+    content_capture: ContentCaptureMode, generation_sanitizer, exception_message: str | None
+) -> None:
+    exporter = CapturingGenerationExporter()
+    spans = InMemorySpanExporter()
+    client = _new_client(exporter, spans, content_capture=content_capture, generation_sanitizer=generation_sanitizer)
+    try:
+        messages = [
+            Message(
+                role=MessageRole.ASSISTANT,
+                parts=[tool_call_part(ToolCall(id="c1", name="boom", input_json=b"{}"))],
+            )
+        ]
+
+        def run(_name: str, _args: object) -> object:
+            raise RuntimeError(f"upstream rejected {_API_KEY}")
+
+        client.execute_tool_calls(messages, run, options=ExecuteToolCallsOptions())
+
+        span = next(s for s in spans.get_finished_spans() if s.name == "execute_tool boom")
+        assert span.status.status_code.name == "ERROR"
+        if exception_message is None:
+            assert len(span.events) == 0
+            assert span.status.description == span.attributes["error.category"]
+        else:
+            assert len(span.events) == 1
+            assert span.events[0].attributes["exception.message"] == exception_message
+        if exception_message is None or generation_sanitizer is not None:
+            span_text = json.dumps(
+                [dict(span.attributes), span.status.description, [dict(e.attributes) for e in span.events]]
+            )
+            assert _API_KEY not in span_text
     finally:
         client.shutdown()
 
