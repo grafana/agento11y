@@ -18,12 +18,14 @@ from agento11y import (
     HookEvaluateRequest,
     HookInput,
     HookModel,
+    Media,
     Message,
     MessageRole,
     Part,
     PartKind,
     ToolCall,
     ToolResult,
+    media_part,
 )
 from agento11y.hooks import _parse_response, _serialize_request
 from hooks_fixtures import (
@@ -353,6 +355,47 @@ def test_hooks_request_serializes_a_part_less_message_as_an_empty_array() -> Non
     assert body["input"]["messages"] == [{"role": "user", "parts": []}]
 
 
+def test_hooks_request_drops_parts_the_server_cannot_read() -> None:
+    """The serializer drops any part the evaluate endpoint has no payload to read.
+
+    The endpoint has no media kind, and its decoder would read a media part as an
+    empty text part, so sending one is worse than sending nothing. The same holds
+    for an empty text or thinking part and for a tool call or tool result without
+    its payload object. A message left with no parts serializes as `[]`.
+
+    Go drops the same six shapes; the JS `MessagePart` union has no media member,
+    so JS has none to drop. See conformance/hooks/README.md.
+    """
+
+    image = Media(kind="image", url="https://example.test/prompt.png", mime_type="image/png", name="prompt.png")
+    body = _serialize_request(
+        HookEvaluateRequest(
+            phase="preflight",
+            context=HookContext(model=HookModel(provider="anthropic", name="claude-sonnet-4")),
+            input=HookInput(
+                messages=[
+                    Message(
+                        role=MessageRole.USER,
+                        parts=[
+                            media_part(image),
+                            Part(kind=PartKind.TEXT, text=""),
+                            Part(kind=PartKind.THINKING, thinking=""),
+                            Part(kind=PartKind.TOOL_CALL, tool_call=None),
+                            Part(kind=PartKind.TOOL_RESULT, tool_result=None),
+                            Part(kind=PartKind.TEXT, text="describe this"),
+                        ],
+                    ),
+                    Message(role=MessageRole.USER, parts=[media_part(image)]),
+                ]
+            ),
+        )
+    )
+
+    messages = body["input"]["messages"]
+    assert messages[0]["parts"] == [{"kind": "text", "text": "describe this"}]
+    assert messages[1]["parts"] == []
+
+
 def test_hooks_response_empty_transformed_input_is_no_transform() -> None:
     """The server emits `transformed_input:{}` for a rule that returns an empty input.
 
@@ -459,6 +502,19 @@ _RESPONSE_PART_CASES = [
         {"tool_result": {"tool_call_id": "call-1", "content": "ok"}},
         Part(kind=PartKind.TOOL_RESULT, tool_result=ToolResult(tool_call_id="call-1", content="ok")),
         id="no-kind-tool-result",
+    ),
+    pytest.param(
+        {
+            "kind": "media",
+            "media": {
+                "kind": "image",
+                "url": "https://example.test/prompt.png",
+                "mime_type": "image/png",
+                "name": "prompt.png",
+            },
+        },
+        None,
+        id="media",
     ),
     pytest.param({}, None, id="empty-part"),
 ]
