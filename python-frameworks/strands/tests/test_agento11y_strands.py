@@ -527,6 +527,37 @@ def test_strands_agent_called_from_a_tool_runs_below_the_caller(sub_state: dict)
     _assert_no_state_left(hooks)
 
 
+def test_strands_agent_called_from_a_tool_joins_the_fallback_conversation_of_its_caller() -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        hooks = create_agento11y_strands_hook_provider(client=client, provider_resolver="auto")
+        outer_state = {}
+        sub_state = {}
+        outer_agent = _agent("outer")
+        sub_agent = _agent("sub")
+
+        hooks.before_invocation(SimpleNamespace(agent=outer_agent, invocation_state=outer_state))
+        _model_call(hooks, outer_agent, outer_state, "delegating")
+        hooks.before_tool_call(_tool_event(outer_agent, outer_state))
+        hooks.before_invocation(SimpleNamespace(agent=sub_agent, invocation_state=sub_state))
+        _model_call(hooks, sub_agent, sub_state, "done")
+        hooks.after_invocation(SimpleNamespace(agent=sub_agent, invocation_state=sub_state))
+        hooks.after_tool_call(_tool_ended(outer_agent, outer_state))
+        _model_call(hooks, outer_agent, outer_state, "final")
+        hooks.after_invocation(SimpleNamespace(agent=outer_agent, invocation_state=outer_state))
+        client.flush()
+    finally:
+        client.shutdown()
+
+    # Neither agent has a key. The invoked agent joins the caller's fallback conversation
+    # through its link to the caller.
+    conversations = {text: generation.conversation_id for text, generation in _generations_by_text(exporter).items()}
+    assert set(conversations) == {"delegating", "done", "final"}
+    assert len(set(conversations.values())) == 1
+    assert conversations["delegating"].startswith("agento11y:framework:strands:")
+
+
 def test_strands_node_agent_tool_invokes_an_agent_below_the_node() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)

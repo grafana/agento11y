@@ -202,9 +202,9 @@ root_agent("Delegate this request", invocation_state={"conversation_id": "custom
 ```
 
 The adapter finds the caller through the context that Strands gives the tool. Sync and async
-tools, `Agent.__call__`, `invoke_async` and `stream_async` keep that context. In these cases,
-the invoked agent is a top-level run with its own conversation. Pass the caller's
-`conversation_id` in its `invocation_state` to keep it in the same conversation:
+tools, `Agent.__call__`, `invoke_async` and `stream_async` keep that context. In the following
+cases, the invoked agent is a top-level run with its own conversation. Pass the same
+`conversation_id` in the `invocation_state` of both agents to keep them in one conversation:
 
 - An agent with its own hook provider.
 - A tool that runs the agent in its own thread pool without copying the context.
