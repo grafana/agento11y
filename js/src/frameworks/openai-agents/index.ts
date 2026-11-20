@@ -1,5 +1,12 @@
 import type { Agento11yClient } from '../../client.js';
-import { Agento11yFrameworkHandler, type FrameworkHandlerOptions } from '../shared.js';
+import type { Message, MessagePart, TokenUsage, ToolDefinition } from '../../types.js';
+import {
+  Agento11yFrameworkHandler,
+  type FrameworkHandlerOptions,
+  type MappedGenerationEnd,
+  type MappedGenerationStart,
+  splitProviderPrefix,
+} from '../shared.js';
 
 export type { FrameworkHandlerOptions };
 
@@ -46,6 +53,24 @@ export class Agento11yOpenAIAgentsHandler extends Agento11yFrameworkHandler {
     runName?: string,
   ): Promise<void> {
     this.onChatModelStart(serialized, messages, runId, parentRunId, extraParams, tags, metadata, runName);
+  }
+
+  /** Starts a generation for one model call (`Model.getResponse` / `getStreamedResponse`). */
+  handleModelCallStart(runId: string, start: MappedGenerationStart): void {
+    this.onMappedGenerationStart(runId, start);
+  }
+
+  /** Records a streamed text delta; the first one sets time to first token. */
+  handleModelCallDelta(runId: string, delta: string): void {
+    this.onLLMNewToken(delta, runId);
+  }
+
+  handleModelCallEnd(runId: string, end: MappedGenerationEnd): void {
+    this.onMappedGenerationEnd(runId, end);
+  }
+
+  handleModelCallError(error: unknown, runId: string): void {
+    this.onLLMError(error, runId);
   }
 
   async handleLLMNewToken(token: string, _idx: unknown, runId: string): Promise<void> {
@@ -185,11 +210,204 @@ export function withAgento11yOpenAIAgentsHooks(
     };
   };
 
-  const onAgentStart = async (context: unknown, agent: unknown, turnInput?: unknown): Promise<void> => {
+  // Model calls carry no run context, so each one is attributed to the run that
+  // emitted the latest hook event. Runs on one registration are expected to be
+  // sequential; a conversation id set with the SDK's context helpers still
+  // applies per call.
+  let lastContext: unknown;
+  let lastAgentName = '';
+  const noteContext = (context: unknown, agent?: unknown): void => {
+    lastContext = context;
+    if (agent !== undefined) {
+      lastAgentName = resolveAgentName(agent);
+    }
+  };
+
+  // Runs whose model calls are not intercepted keep one generation per agent,
+  // recorded from agent_start/agent_end.
+  const legacyRuns = new Set<string>();
+  const restorers: Array<() => void> = [];
+  const wrappedModels = new WeakMap<object, unknown>();
+  const modelProxies = new WeakSet<object>();
+
+  const recordStart = (runId: string, request: unknown, modelName: string, stream: boolean): void => {
+    const context = lastContext;
+    const stack = getStack(context);
+    try {
+      handler.handleModelCallStart(runId, {
+        ...mapModelRequest(request, modelName),
+        stream,
+        parentRunId: stack.length > 0 ? stack[stack.length - 1] : undefined,
+        runName: lastAgentName || undefined,
+        callbackMetadata: makeContextMetadata(context),
+      });
+    } catch {
+      // Recording must never break the model call.
+    }
+  };
+  const recordEnd = (runId: string, response: unknown): void => {
+    try {
+      handler.handleModelCallEnd(runId, mapModelResponse(response));
+    } catch {
+      // Recording must never break the model call.
+    }
+  };
+  const recordError = (runId: string, error: unknown): void => {
+    try {
+      handler.handleModelCallError(error, runId);
+    } catch {
+      // Recording must never break the model call.
+    }
+  };
+
+  const wrapModel = (model: unknown, requestedName: string): unknown => {
+    if (!isModel(model) || modelProxies.has(model)) {
+      return model;
+    }
+    const existing = wrappedModels.get(model);
+    if (existing !== undefined) {
+      return existing;
+    }
+    const modelName = requestedName.trim() || resolveModelObjectName(model);
+    const getResponse = async (request: unknown): Promise<unknown> => {
+      const runId = nextRunId('openai_generation');
+      recordStart(runId, request, modelName, false);
+      let response: unknown;
+      try {
+        response = await (model.getResponse as (request: unknown) => Promise<unknown>).call(model, request);
+      } catch (error) {
+        recordError(runId, error);
+        throw error;
+      }
+      recordEnd(runId, response);
+      return response;
+    };
+    const getStreamedResponse = async function* (request: unknown): AsyncGenerator<unknown> {
+      const runId = nextRunId('openai_generation');
+      recordStart(runId, request, modelName, true);
+      let finalResponse: unknown;
+      let settled = false;
+      try {
+        const events = (model.getStreamedResponse as (request: unknown) => AsyncIterable<unknown>).call(model, request);
+        for await (const event of events) {
+          const eventType = asString(read(event, 'type'));
+          if (eventType === 'output_text_delta') {
+            const delta = read(event, 'delta');
+            if (typeof delta === 'string' && delta.length > 0) {
+              try {
+                handler.handleModelCallDelta(runId, delta);
+              } catch {
+                // Recording must never break the model call.
+              }
+            }
+          } else if (eventType === 'response_done') {
+            finalResponse = read(event, 'response');
+          }
+          yield event;
+        }
+        settled = true;
+        recordEnd(runId, finalResponse);
+      } catch (error) {
+        settled = true;
+        recordError(runId, error);
+        throw error;
+      } finally {
+        if (!settled) {
+          // The consumer stopped reading before the stream finished.
+          recordError(runId, new Error('model stream closed before completion'));
+        }
+      }
+    };
+    const proxy = new Proxy(model, {
+      get(target, property) {
+        if (property === 'getResponse') {
+          return getResponse;
+        }
+        if (property === 'getStreamedResponse') {
+          return getStreamedResponse;
+        }
+        const value = Reflect.get(target, property, target);
+        // Bind to the real model so class private fields keep working.
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    wrappedModels.set(model, proxy);
+    modelProxies.add(proxy);
+    return proxy;
+  };
+
+  // A Runner resolves string model names through its model provider.
+  let runnerResolvesModels = false;
+  const runnerConfig = read(target, 'config');
+  if (isRecord(runnerConfig)) {
+    const provider = read(runnerConfig, 'modelProvider');
+    if (isRecord(provider) && typeof provider.getModel === 'function') {
+      const getModel = provider.getModel as (name?: string) => unknown;
+      const wrappedProvider = new Proxy(provider, {
+        get(providerTarget, property) {
+          if (property === 'getModel') {
+            return async (name?: string) => wrapModel(await getModel.call(providerTarget, name), name ?? '');
+          }
+          const value = Reflect.get(providerTarget, property, providerTarget);
+          return typeof value === 'function' ? value.bind(providerTarget) : value;
+        },
+      });
+      runnerConfig.modelProvider = wrappedProvider;
+      restorers.push(() => {
+        if (runnerConfig.modelProvider === wrappedProvider) {
+          runnerConfig.modelProvider = provider;
+        }
+      });
+      runnerResolvesModels = true;
+    }
+    const configModel = read(runnerConfig, 'model');
+    if (isModel(configModel)) {
+      const wrapped = wrapModel(configModel, '');
+      runnerConfig.model = wrapped;
+      restorers.push(() => {
+        if (runnerConfig.model === wrapped) {
+          runnerConfig.model = configModel;
+        }
+      });
+    }
+  }
+
+  // Runs synchronously inside the agent_start emit, before the runner resolves
+  // the agent's model for its first call.
+  const interceptAgentModel = (agent: unknown): boolean => {
+    if (!isRecord(agent)) {
+      return false;
+    }
+    const model = agent.model;
+    if (isModel(model)) {
+      if (!modelProxies.has(model)) {
+        const wrapped = wrapModel(model, '');
+        agent.model = wrapped;
+        restorers.push(() => {
+          if (agent.model === wrapped) {
+            agent.model = model;
+          }
+        });
+      }
+      return true;
+    }
+    return runnerResolvesModels;
+  };
+
+  const onAgentStart = async (
+    context: unknown,
+    agent: unknown,
+    turnInput: unknown,
+    intercepted: boolean,
+  ): Promise<void> => {
     const stack = getStack(context);
     const runId = nextRunId('openai_agent');
     const parentRunId = stack.length > 0 ? stack[stack.length - 1] : undefined;
     stack.push(runId);
+    if (intercepted) {
+      return;
+    }
+    legacyRuns.add(runId);
 
     const modelName = resolveModelName(agent);
     const agentName = resolveAgentName(agent);
@@ -219,6 +437,13 @@ export function withAgento11yOpenAIAgentsHooks(
     if (runId === undefined) {
       return;
     }
+    const contextId = getContextId(context);
+    if (contextId !== undefined) {
+      fallbackToolRunIds.delete(contextId);
+    }
+    if (!legacyRuns.delete(runId)) {
+      return;
+    }
 
     const modelName = resolveModelName(agent);
     const outputText = normalizeOutputText(output);
@@ -234,11 +459,6 @@ export function withAgento11yOpenAIAgentsHooks(
       },
       runId,
     );
-
-    const contextId = getContextId(context);
-    if (contextId !== undefined) {
-      fallbackToolRunIds.delete(contextId);
-    }
   };
 
   const onAgentError = async (context: unknown, error: unknown): Promise<void> => {
@@ -258,6 +478,9 @@ export function withAgento11yOpenAIAgentsHooks(
       fallbackToolRunIds.delete(contextId);
     }
 
+    if (!legacyRuns.delete(runId)) {
+      return;
+    }
     await handler.handleLLMError(error, runId);
   };
 
@@ -379,7 +602,9 @@ export function withAgento11yOpenAIAgentsHooks(
         if (args.length < 2) {
           return;
         }
-        safelyRun(onAgentStart(args[0], args[1], args[2]));
+        noteContext(args[0], args[1]);
+        const intercepted = interceptAgentModel(args[1]);
+        safelyRun(onAgentStart(args[0], args[1], args[2], intercepted));
       },
     ],
     [
@@ -419,6 +644,7 @@ export function withAgento11yOpenAIAgentsHooks(
           return;
         }
 
+        noteContext(args[0], args.length >= 3 ? args[2] : args[1]);
         if (args.length >= 3) {
           safelyRun(onAgentHandoff(args[0], args[1], args[2]));
           return;
@@ -434,6 +660,7 @@ export function withAgento11yOpenAIAgentsHooks(
           return;
         }
 
+        noteContext(args[0], args.length >= 4 ? args[1] : undefined);
         if (args.length >= 4) {
           safelyRun(onToolStart(args[0], args[1], args[2], args[3]));
           return;
@@ -449,6 +676,7 @@ export function withAgento11yOpenAIAgentsHooks(
           return;
         }
 
+        noteContext(args[0], args.length >= 5 ? args[1] : undefined);
         if (args.length >= 5) {
           safelyRun(onToolEnd(args[0], args[3], args[4]));
           return;
@@ -483,6 +711,9 @@ export function withAgento11yOpenAIAgentsHooks(
     detach: () => {
       for (const [event, listener] of listeners) {
         target.off(event, listener);
+      }
+      for (const restore of restorers.splice(0).reverse()) {
+        restore();
       }
     },
   };
@@ -680,6 +911,325 @@ function readUsage(context: unknown): AnyRecord | undefined {
     completion_tokens: completionTokens,
     total_tokens: totalTokens,
   };
+}
+
+function isModel(value: unknown): value is AnyRecord {
+  return isRecord(value) && typeof value.getResponse === 'function' && typeof value.getStreamedResponse === 'function';
+}
+
+// OpenAIResponsesModel keeps its model id on `_model`. Models that hide it
+// (the AI SDK adapter) record "unknown" until the response names the model.
+function resolveModelObjectName(model: AnyRecord): string {
+  return asString(model._model) || asString(model.modelId) || asString(model.model);
+}
+
+type MappedRequest = Omit<MappedGenerationStart, 'stream'>;
+
+function mapModelRequest(request: unknown, modelName: string): MappedRequest {
+  const [prefixProvider, name] = splitProviderPrefix(modelName.trim());
+  const systemChunks: string[] = [];
+  const instructions = asString(read(request, 'systemInstructions'));
+  if (instructions.length > 0) {
+    systemChunks.push(instructions);
+  }
+
+  const rawInput = read(request, 'input');
+  const items: unknown[] = typeof rawInput === 'string' ? [{ role: 'user', content: rawInput }] : asArray(rawInput);
+  const toolNames = new Map<string, string>();
+  for (const item of items) {
+    if (asString(read(item, 'type')) === 'function_call') {
+      toolNames.set(asString(read(item, 'callId')), asString(read(item, 'name')));
+    }
+  }
+  const input = mapResponseItems(items, 'user', toolNames, systemChunks);
+
+  const settings = read(request, 'modelSettings');
+  const toolChoice = read(settings, 'toolChoice');
+  return {
+    modelName: name,
+    provider: prefixProvider,
+    input,
+    systemPrompt: systemChunks.length > 0 ? systemChunks.join('\n\n') : undefined,
+    tools: mapToolDefinitions(read(request, 'tools')),
+    temperature: asNumber(read(settings, 'temperature')),
+    maxTokens: asNumber(read(settings, 'maxTokens')),
+    topP: asNumber(read(settings, 'topP')),
+    toolChoice: typeof toolChoice === 'string' ? toolChoice : undefined,
+  };
+}
+
+function mapModelResponse(response: unknown): MappedGenerationEnd {
+  const items = asArray(read(response, 'output'));
+  const responseId = asString(read(response, 'responseId')) || asString(read(response, 'id'));
+  const [responseProvider, responseModel] = resolveResponseModel(response, items);
+  return {
+    output: mapResponseItems(items, 'assistant', new Map(), []),
+    usage: mapAgentsUsage(read(response, 'usage')),
+    responseId: responseId === 'FAKE_ID' ? undefined : responseId,
+    responseModel,
+    responseProvider,
+    stopReason: stopReasonFromItems(items),
+  };
+}
+
+// AI SDK provider ids (`anthropic.messages`, `google.generative-ai`, ...) that
+// name a provider agento11y records directly.
+const AI_SDK_PROVIDERS: Record<string, string> = {
+  openai: 'openai',
+  anthropic: 'anthropic',
+  google: 'gemini',
+  'amazon-bedrock': 'bedrock',
+};
+
+// The provider's model: `providerData.model` from the Responses and Chat
+// Completions models, or the `<provider>.<api>:<modelId>` tag the AI SDK
+// adapter puts on each output item.
+function resolveResponseModel(response: unknown, items: unknown[]): [string, string] {
+  const providerData = read(response, 'providerData');
+  const direct = asString(read(providerData, 'model')) || asString(read(read(providerData, 'response'), 'modelId'));
+  for (const item of items) {
+    const tagged = asString(read(read(item, 'providerData'), 'model'));
+    const colon = tagged.indexOf(':');
+    if (colon > 0 && colon < tagged.length - 1) {
+      const vendor = (tagged.slice(0, colon).split('.')[0] ?? '').trim().toLowerCase();
+      return [AI_SDK_PROVIDERS[vendor] ?? '', direct || tagged.slice(colon + 1).trim()];
+    }
+  }
+  const [provider, name] = splitProviderPrefix(direct);
+  return [provider, name];
+}
+
+// Output items that end the turn so the runner can execute a client-side tool.
+const CLIENT_TOOL_CALL_TYPES = new Set([
+  'function_call',
+  'computer_call',
+  'shell_call',
+  'apply_patch_call',
+  'local_shell_call',
+  'custom_tool_call',
+]);
+
+// ModelResponse drops the provider's finish reason, but the SDK's models turn it
+// into output items: a tool call means `tool_calls`, a completed message `stop`.
+function stopReasonFromItems(items: unknown[]): string | undefined {
+  if (items.some((item) => CLIENT_TOOL_CALL_TYPES.has(asString(read(item, 'type'))))) {
+    return 'tool_calls';
+  }
+  const statuses = items
+    .filter((item) => asString(read(item, 'type')) === 'message' || asString(read(item, 'role')) === 'assistant')
+    .map((item) => asString(read(item, 'status')));
+  if (statuses.length > 0 && statuses.every((status) => status === '' || status === 'completed')) {
+    return 'stop';
+  }
+  return undefined;
+}
+
+// Maps Responses-style items (messages, function calls, call results).
+// Consecutive function calls share one assistant message, as the model
+// emitted them in one turn. System and developer messages go to systemChunks.
+function mapResponseItems(
+  items: unknown[],
+  defaultRole: 'user' | 'assistant',
+  toolNames: Map<string, string>,
+  systemChunks: string[],
+): Message[] {
+  const messages: Message[] = [];
+  for (const item of items) {
+    const itemType = asString(read(item, 'type'));
+    if (itemType === 'function_call') {
+      const name = asString(read(item, 'name'));
+      if (name.length === 0) {
+        continue;
+      }
+      const part: MessagePart = {
+        type: 'tool_call',
+        toolCall: {
+          id: asString(read(item, 'callId')) || undefined,
+          name,
+          inputJSON: toolArgumentsJSON(read(item, 'arguments')),
+        },
+      };
+      const last = messages[messages.length - 1];
+      if (
+        last !== undefined &&
+        last.role === 'assistant' &&
+        (last.parts ?? []).length > 0 &&
+        (last.parts ?? []).every((existing) => existing.type === 'tool_call')
+      ) {
+        last.parts?.push(part);
+      } else {
+        messages.push({ role: 'assistant', parts: [part] });
+      }
+      continue;
+    }
+    if (itemType === 'function_call_result') {
+      const callId = asString(read(item, 'callId'));
+      const name = asString(read(item, 'name')) || toolNames.get(callId) || '';
+      messages.push({
+        role: 'tool',
+        parts: [
+          {
+            type: 'tool_result',
+            toolResult: {
+              ...(callId.length > 0 ? { toolCallId: callId } : {}),
+              ...(name.length > 0 ? { name } : {}),
+              content: toolResultText(read(item, 'output')),
+            },
+          },
+        ],
+      });
+      continue;
+    }
+    if (itemType.length > 0 && itemType !== 'message') {
+      // Reasoning, hosted tool calls and other item kinds carry no chat text.
+      continue;
+    }
+    const role = asString(read(item, 'role')).toLowerCase();
+    const text = contentText(read(item, 'content'));
+    if (text.length === 0) {
+      continue;
+    }
+    if (role === 'system' || role === 'developer') {
+      systemChunks.push(text);
+      continue;
+    }
+    messages.push({
+      role: role === 'assistant' || role === 'user' ? role : defaultRole,
+      parts: [{ type: 'text', text }],
+    });
+  }
+  return messages;
+}
+
+function contentText(content: unknown): string {
+  if (typeof content === 'string') {
+    return content.trim();
+  }
+  const parts: string[] = [];
+  for (const entry of asArray(content)) {
+    const kind = asString(read(entry, 'type'));
+    const text =
+      kind === 'refusal'
+        ? asString(read(entry, 'refusal'))
+        : typeof entry === 'string'
+          ? entry.trim()
+          : asString(read(entry, 'text'));
+    if (text.length > 0) {
+      parts.push(text);
+    }
+  }
+  return parts.join(' ').trim();
+}
+
+function toolArgumentsJSON(raw: unknown): string | undefined {
+  if (typeof raw === 'string') {
+    return raw.length > 0 ? raw : undefined;
+  }
+  if (raw === undefined || raw === null) {
+    return undefined;
+  }
+  const encoded = safeStringify(raw);
+  return encoded.length > 0 ? encoded : undefined;
+}
+
+function toolResultText(output: unknown): string {
+  if (typeof output === 'string') {
+    return output;
+  }
+  if (Array.isArray(output)) {
+    const texts = output.map((entry) => toolResultText(entry)).filter((entry) => entry.length > 0);
+    return texts.join('\n');
+  }
+  if (isRecord(output)) {
+    const text = read(output, 'text');
+    if (typeof text === 'string') {
+      return text;
+    }
+  }
+  return output === undefined || output === null ? '' : safeStringify(output);
+}
+
+function mapToolDefinitions(raw: unknown): ToolDefinition[] {
+  const definitions: ToolDefinition[] = [];
+  for (const tool of asArray(raw)) {
+    const name = asString(read(tool, 'name'));
+    if (name.length === 0) {
+      continue;
+    }
+    const description = asString(read(tool, 'description'));
+    const parameters = read(tool, 'parameters');
+    const toolType = asString(read(tool, 'type'));
+    definitions.push({
+      name,
+      ...(description.length > 0 ? { description } : {}),
+      // Function tools carry a parameter schema. Hosted tools have none; their
+      // name is the API tool kind (web_search, file_search, ...).
+      type: isRecord(parameters) ? 'function' : toolType || name,
+      ...(isRecord(parameters) ? { inputSchemaJSON: sortedJSONString(parameters) } : {}),
+    });
+  }
+  return definitions;
+}
+
+// Agents SDK usage follows the OpenAI convention for every model it wraps:
+// input tokens include the cached ones, which are reported as details.
+function mapAgentsUsage(raw: unknown): TokenUsage | undefined {
+  if (!isRecord(raw)) {
+    return undefined;
+  }
+  const inputTokens = asNumber(read(raw, 'inputTokens')) ?? asNumber(read(raw, 'input_tokens')) ?? 0;
+  const outputTokens = asNumber(read(raw, 'outputTokens')) ?? asNumber(read(raw, 'output_tokens')) ?? 0;
+  const totalTokens =
+    asNumber(read(raw, 'totalTokens')) ?? asNumber(read(raw, 'total_tokens')) ?? inputTokens + outputTokens;
+  const inputDetails = read(raw, 'inputTokensDetails') ?? read(raw, 'input_tokens_details');
+  const outputDetails = read(raw, 'outputTokensDetails') ?? read(raw, 'output_tokens_details');
+  const cacheRead = sumDetail(inputDetails, 'cached_tokens');
+  const cacheWrite = sumDetail(inputDetails, 'cache_write_tokens');
+  const reasoning = sumDetail(outputDetails, 'reasoning_tokens');
+  if (inputTokens === 0 && outputTokens === 0 && totalTokens === 0) {
+    return undefined;
+  }
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens,
+    ...(cacheRead > 0 ? { cacheReadInputTokens: cacheRead } : {}),
+    ...(cacheWrite > 0 ? { cacheWriteInputTokens: cacheWrite } : {}),
+    ...(reasoning > 0 ? { reasoningTokens: reasoning } : {}),
+    inputSemantics: 'inclusive',
+  };
+}
+
+// `Usage` keeps one details record per request; a raw stream event has one object.
+function sumDetail(details: unknown, key: string): number {
+  const entries = Array.isArray(details) ? details : [details];
+  let total = 0;
+  for (const entry of entries) {
+    total += asNumber(read(entry, key)) ?? 0;
+  }
+  return total;
+}
+
+/** Key order is sorted so a schema encodes the same here and in the Python adapter. */
+function sortedJSONString(value: unknown): string | undefined {
+  try {
+    return JSON.stringify(value, (_key, entry: unknown) => {
+      if (isRecord(entry) && !Array.isArray(entry)) {
+        return Object.fromEntries(
+          Object.keys(entry)
+            .sort()
+            .map((key) => [key, entry[key]]),
+        );
+      }
+      return entry;
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
 }
 
 function safelyRun(task: Promise<unknown>): void {

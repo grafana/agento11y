@@ -70,6 +70,55 @@ export interface FrameworkHandlerOptions {
   extraMetadata?: Record<string, unknown>;
 }
 
+/** One model call's request, already mapped by the adapter. */
+export interface MappedGenerationStart {
+  modelName: string;
+  /** Provider the adapter identified. Inferred from the model name when empty. */
+  provider?: string;
+  stream: boolean;
+  input: Message[];
+  systemPrompt?: string;
+  tools?: ToolDefinition[];
+  temperature?: number;
+  maxTokens?: number;
+  topP?: number;
+  toolChoice?: string;
+  parentRunId?: string;
+  runName?: string;
+  callbackMetadata?: AnyRecord;
+}
+
+/** One model call's response, already mapped by the adapter. */
+export interface MappedGenerationEnd {
+  output: Message[];
+  usage?: TokenUsage;
+  responseId?: string;
+  responseModel?: string;
+  /** Provider for `responseModel`, used only when the request had none. */
+  responseProvider?: string;
+  stopReason?: string;
+}
+
+// Provider prefixes (`anthropic/claude-haiku-5-5`) that name a provider agento11y
+// records directly. Platforms that host several vendors' models (`openrouter`,
+// `vertex_ai`, `azure`, ...) are left alone so their generations are not
+// attributed to whichever vendor the stripped name resembles.
+const PREFIXED_MODEL_PROVIDERS = new Set(['openai', 'anthropic', 'gemini', 'bedrock']);
+
+/** Splits `provider/model` ids into `[provider, model]`; `provider` is '' when the prefix is not a known provider. */
+export function splitProviderPrefix(model: string): [string, string] {
+  const slash = model.indexOf('/');
+  if (slash < 0) {
+    return ['', model];
+  }
+  const prefix = model.slice(0, slash).trim().toLowerCase();
+  const rest = model.slice(slash + 1).trim();
+  if (!PREFIXED_MODEL_PROVIDERS.has(prefix) || rest.length === 0) {
+    return ['', model];
+  }
+  return [prefix, rest];
+}
+
 interface RunState {
   recorder: GenerationRecorder;
   input: Message[];
@@ -425,6 +474,115 @@ export class Agento11yFrameworkHandler {
     if (recorderError !== undefined) {
       throw recorderError;
     }
+  }
+
+  /**
+   * Starts a generation for one model call whose request the adapter already
+   * mapped to SDK messages. For frameworks that hand over structured items
+   * (tool calls, tool results) rather than LangChain-shaped callback payloads.
+   * End it with {@link onMappedGenerationEnd} or {@link onLLMError}.
+   */
+  protected onMappedGenerationStart(runId: string, start: MappedGenerationStart): void {
+    const runKey = String(runId);
+    if (runKey.length === 0 || this.runs.has(runKey)) {
+      return;
+    }
+
+    const modelName = start.modelName.trim().length > 0 ? start.modelName.trim() : 'unknown';
+    const provider = this.resolveMappedProvider(modelName, start.provider);
+    const context = this.buildFrameworkContext({
+      runId: runKey,
+      parentRunId: start.parentRunId,
+      runType: 'chat',
+      runName: start.runName,
+      serialized: { name: start.runName },
+      invocationParams: undefined,
+      extraParams: undefined,
+      callbackTags: undefined,
+      callbackMetadata: start.callbackMetadata,
+      invocationControls: false,
+    });
+    const payload = this.startPayload(runKey, provider, modelName, context, start.systemPrompt, {
+      tools: start.tools ?? [],
+      temperature: start.temperature,
+      maxTokens: start.maxTokens,
+      topP: start.topP,
+      toolChoice: start.toolChoice ?? '',
+      thinkingEnabled: undefined,
+    });
+    const recorder = start.stream
+      ? this.client.startStreamingGeneration(payload)
+      : this.client.startGeneration(payload);
+
+    this.runs.set(runKey, {
+      recorder,
+      input: this.captureInputs ? start.input : [],
+      captureOutputs: this.captureOutputs,
+      requestModel: modelName,
+      requestProvider: provider,
+      outputChunks: [],
+      firstTokenRecorded: false,
+    });
+  }
+
+  /** Ends a generation started with {@link onMappedGenerationStart}. */
+  protected onMappedGenerationEnd(runId: string, end: MappedGenerationEnd): void {
+    const runState = this.runs.get(String(runId));
+    if (runState === undefined) {
+      return;
+    }
+    this.runs.delete(String(runId));
+
+    try {
+      const responseModel = (end.responseModel ?? '').trim();
+      // Model objects such as the AI SDK adapter hide their model id, so the
+      // request records "unknown" and the real model only arrives on the response.
+      let backfillModel: ModelRef | undefined;
+      if (isUnknownModel(runState.requestModel) && responseModel.length > 0) {
+        const provider = isUnknownProvider(runState.requestProvider)
+          ? this.resolveMappedProvider(responseModel, end.responseProvider)
+          : runState.requestProvider;
+        backfillModel = { provider, name: responseModel };
+      }
+
+      let output: Message[] | undefined;
+      if (runState.captureOutputs) {
+        output = end.output;
+        if (output.length === 0 && runState.outputChunks.length > 0) {
+          output = [{ role: 'assistant', content: runState.outputChunks.join('') }];
+        }
+      }
+
+      runState.recorder.setResult({
+        input: runState.input,
+        output,
+        usage: end.usage,
+        model: backfillModel,
+        ...(responseModel.length > 0 ? { responseModel } : {}),
+        ...(notEmpty(end.responseId) ? { responseId: end.responseId } : {}),
+        ...(notEmpty(end.stopReason) ? { stopReason: end.stopReason } : {}),
+      });
+    } finally {
+      runState.recorder.end();
+    }
+
+    const recorderError = runState.recorder.getError();
+    if (recorderError !== undefined) {
+      throw recorderError;
+    }
+  }
+
+  // The configured provider or resolver wins, then the provider the adapter
+  // identified, then inference from the model name.
+  private resolveMappedProvider(modelName: string, adapterProvider: string | undefined): string {
+    if (normalizeProvider(this.provider).length > 0 || typeof this.providerResolver === 'function') {
+      return resolveProvider(this.provider, this.providerResolver, modelName, undefined, undefined);
+    }
+    const hint = (adapterProvider ?? '').trim().toLowerCase();
+    if (hint.length > 0 && hint !== 'custom') {
+      return hint;
+    }
+    return inferProviderFromModelName(modelName);
   }
 
   protected onToolStart(

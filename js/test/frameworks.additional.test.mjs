@@ -1103,3 +1103,332 @@ function extractFirstText(messages = []) {
   }
   return parts[0]?.text ?? '';
 }
+
+// Fake OpenAI Agents Runner: a hook emitter with a model provider, as `Runner`.
+class FakeRunner extends FakeHookEmitter {
+  constructor(models) {
+    super();
+    this.requestedModels = [];
+    this.config = {
+      modelProvider: {
+        getModel: async (name) => {
+          this.requestedModels.push(name);
+          return models[name];
+        },
+      },
+    };
+  }
+}
+
+// Mirrors AiSdkModel: the wrapped model lives in a private field.
+class PrivateFieldModel {
+  #responses;
+  constructor(responses) {
+    this.#responses = responses;
+  }
+  async getResponse(_request) {
+    return this.#responses.shift();
+  }
+  async *getStreamedResponse(_request) {
+    const response = this.#responses.shift();
+    yield { type: 'response_started' };
+    for (const delta of response.deltas ?? []) {
+      yield { type: 'output_text_delta', delta };
+    }
+    yield { type: 'response_done', response: response.done };
+  }
+}
+
+const oaWeatherTool = {
+  type: 'function',
+  name: 'get_weather',
+  description: 'Get the weather for a city',
+  parameters: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] },
+  strict: true,
+};
+const oaTimeTool = {
+  type: 'function',
+  name: 'get_time',
+  description: 'Get the local time for a city',
+  parameters: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] },
+  strict: true,
+};
+const oaToolCalls = [
+  { type: 'function_call', callId: 'call_w', name: 'get_weather', arguments: '{"city":"Paris"}', status: 'completed' },
+  { type: 'function_call', callId: 'call_t', name: 'get_time', arguments: '{"city":"Paris"}', status: 'completed' },
+];
+const oaToolResults = [
+  {
+    type: 'function_call_result',
+    callId: 'call_w',
+    name: 'get_weather',
+    status: 'completed',
+    output: { type: 'text', text: 'Sunny' },
+  },
+  { type: 'function_call_result', callId: 'call_t', name: 'get_time', status: 'completed', output: '14:05' },
+];
+const oaFinalMessage = {
+  type: 'message',
+  role: 'assistant',
+  status: 'completed',
+  content: [{ type: 'output_text', text: 'Sunny, 14:05.' }],
+};
+
+function oaRequest(input) {
+  return {
+    systemInstructions: 'Be concise.',
+    input,
+    modelSettings: { temperature: 0.2 },
+    tools: [oaWeatherTool, oaTimeTool],
+    handoffs: [],
+    outputType: 'text',
+    tracing: false,
+  };
+}
+
+// Drives a two-tool run the way Runner does: agent_start, one model call per
+// turn, tool hooks between them, agent_end.
+async function driveTwoToolRun(runner, agent, callModel) {
+  const context = { context: { conversationId: 'oa-two-tools' } };
+  const userTurn = [{ role: 'user', content: 'Weather and time in Paris?' }];
+  runner.emit('agent_start', context, agent, userTurn);
+  await callModel(oaRequest(userTurn));
+  for (const [index, call] of oaToolCalls.entries()) {
+    runner.emit('agent_tool_start', context, agent, { name: call.name }, { toolCall: call });
+    runner.emit('agent_tool_end', context, agent, { name: call.name }, oaToolResults[index].output, { toolCall: call });
+  }
+  await callModel(oaRequest([...userTurn, ...oaToolCalls, ...oaToolResults]));
+  runner.emit('agent_end', context, agent, 'Sunny, 14:05.');
+}
+
+test('withAgento11yOpenAIAgentsHooks records one generation per model call with tool calls and results', async () => {
+  const generations = [];
+  await captureGenerations(
+    async (client) => {
+      const model = new PrivateFieldModel([
+        {
+          responseId: 'resp_1',
+          output: oaToolCalls,
+          usage: { inputTokens: 80, outputTokens: 30, totalTokens: 110, inputTokensDetails: [{ cached_tokens: 0 }] },
+          providerData: { model: 'gpt-4o-mini-2024-07-18' },
+        },
+        {
+          responseId: 'resp_2',
+          output: [oaFinalMessage],
+          usage: { inputTokens: 150, outputTokens: 9, totalTokens: 159, inputTokensDetails: [{ cached_tokens: 64 }] },
+          providerData: { model: 'gpt-4o-mini-2024-07-18' },
+        },
+      ]);
+      const runner = new FakeRunner({ 'gpt-4o-mini': model });
+      const registration = withAgento11yOpenAIAgentsHooks(runner, client);
+      const agent = { name: 'assistant', model: 'gpt-4o-mini' };
+      await driveTwoToolRun(runner, agent, async (request) =>
+        (await runner.config.modelProvider.getModel('gpt-4o-mini')).getResponse(request),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      registration.detach();
+    },
+    (generation) => generations.push(generation),
+  );
+
+  assert.equal(generations.length, 2);
+  const [first, second] = generations;
+  for (const generation of generations) {
+    assert.equal(generation.mode, 'SYNC');
+    assert.equal(generation.conversationId, 'oa-two-tools');
+    assert.equal(generation.model.provider, 'openai');
+    assert.equal(generation.model.name, 'gpt-4o-mini');
+    assert.equal(generation.responseModel, 'gpt-4o-mini-2024-07-18');
+    assert.equal(generation.systemPrompt, 'Be concise.');
+    assert.deepEqual(
+      generation.tools.map((tool) => tool.name),
+      ['get_weather', 'get_time'],
+    );
+  }
+  assert.equal(
+    first.tools[0].inputSchemaJSON,
+    '{"properties":{"city":{"type":"string"}},"required":["city"],"type":"object"}',
+  );
+  assert.equal(first.responseId, 'resp_1');
+  assert.equal(first.stopReason, 'tool_calls');
+  assert.deepEqual(
+    first.output[0].parts.map((part) => [part.toolCall.id, part.toolCall.name, part.toolCall.inputJSON]),
+    [
+      ['call_w', 'get_weather', '{"city":"Paris"}'],
+      ['call_t', 'get_time', '{"city":"Paris"}'],
+    ],
+  );
+
+  assert.equal(second.stopReason, 'stop');
+  assert.equal(extractFirstText(second.output), 'Sunny, 14:05.');
+  assert.equal(second.usage.inputTokens, 150);
+  assert.equal(second.usage.cacheReadInputTokens, 64);
+  const toolResults = second.input
+    .flatMap((message) => message.parts ?? [])
+    .filter((part) => part.type === 'tool_result')
+    .map((part) => [part.toolResult.toolCallId, part.toolResult.name, part.toolResult.content]);
+  assert.deepEqual(toolResults, [
+    ['call_w', 'get_weather', 'Sunny'],
+    ['call_t', 'get_time', '14:05'],
+  ]);
+  const toolCalls = second.input.flatMap((message) => message.parts ?? []).filter((part) => part.type === 'tool_call');
+  assert.deepEqual(
+    toolCalls.map((part) => part.toolCall.id),
+    ['call_w', 'call_t'],
+  );
+});
+
+test('withAgento11yOpenAIAgentsHooks records streamed model calls as STREAM with time to first token', async () => {
+  const generations = [];
+  const firstTokens = [];
+  await captureGenerations(
+    async (client) => {
+      const startStreaming = client.startStreamingGeneration.bind(client);
+      client.startStreamingGeneration = (seed) => {
+        const recorder = startStreaming(seed);
+        const setFirstTokenAt = recorder.setFirstTokenAt.bind(recorder);
+        recorder.setFirstTokenAt = (at) => {
+          firstTokens.push(at);
+          setFirstTokenAt(at);
+        };
+        return recorder;
+      };
+      const model = new PrivateFieldModel([
+        {
+          done: {
+            id: 'resp_s1',
+            output: oaToolCalls,
+            usage: { inputTokens: 80, outputTokens: 30, totalTokens: 110 },
+            providerData: { model: 'gpt-4o-mini-2024-07-18' },
+          },
+        },
+        {
+          deltas: ['Sunny, ', '14:05.'],
+          done: {
+            id: 'resp_s2',
+            output: [oaFinalMessage],
+            usage: { inputTokens: 150, outputTokens: 9, totalTokens: 159 },
+            providerData: { model: 'gpt-4o-mini-2024-07-18' },
+          },
+        },
+      ]);
+      const runner = new FakeRunner({ 'gpt-4o-mini': model });
+      const registration = withAgento11yOpenAIAgentsHooks(runner, client);
+      const agent = { name: 'assistant', model: 'gpt-4o-mini' };
+      await driveTwoToolRun(runner, agent, async (request) => {
+        const resolved = await runner.config.modelProvider.getModel('gpt-4o-mini');
+        for await (const _event of resolved.getStreamedResponse(request)) {
+          // drain
+        }
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      registration.detach();
+    },
+    (generation) => generations.push(generation),
+  );
+
+  assert.equal(generations.length, 2);
+  const [first, second] = generations;
+  assert.deepEqual(
+    generations.map((generation) => generation.mode),
+    ['STREAM', 'STREAM'],
+  );
+  assert.equal(first.stopReason, 'tool_calls');
+  assert.equal(first.responseId, 'resp_s1');
+  assert.equal(first.output[0].parts.length, 2);
+  assert.equal(second.stopReason, 'stop');
+  assert.equal(second.responseModel, 'gpt-4o-mini-2024-07-18');
+  assert.equal(extractFirstText(second.output), 'Sunny, 14:05.');
+  // Only the final call streams text, so only it records time to first token.
+  assert.equal(firstTokens.length, 1);
+});
+
+test('withAgento11yOpenAIAgentsHooks resolves provider and model for AI SDK model objects', async () => {
+  const generations = [];
+  await captureGenerations(
+    async (client) => {
+      const tagged = (item) => ({ ...item, providerData: { model: 'anthropic.messages:claude-haiku-5-5' } });
+      const model = new PrivateFieldModel([
+        {
+          responseId: 'msg_1',
+          output: oaToolCalls.map(tagged),
+          usage: {
+            inputTokens: 12_500,
+            outputTokens: 60,
+            totalTokens: 12_560,
+            inputTokensDetails: [{ cached_tokens: 0, cache_write_tokens: 12_300 }],
+          },
+          providerData: { response: { modelId: 'claude-haiku-5-5' } },
+        },
+        {
+          responseId: 'msg_2',
+          output: [tagged(oaFinalMessage)],
+          usage: {
+            inputTokens: 12_700,
+            outputTokens: 20,
+            totalTokens: 12_720,
+            inputTokensDetails: [{ cached_tokens: 12_300, cache_write_tokens: 0 }],
+          },
+          providerData: { response: { modelId: 'claude-haiku-5-5' } },
+        },
+      ]);
+      // An Agent (not a Runner) whose model is a Model object, as aisdk(...) returns.
+      const hooks = new FakeHookEmitter();
+      const agent = { name: 'assistant', model };
+      const registration = withAgento11yOpenAIAgentsHooks(hooks, client);
+      await driveTwoToolRun(hooks, agent, async (request) => agent.model.getResponse(request));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      registration.detach();
+      assert.equal(agent.model, model, 'detach restores the original model');
+    },
+    (generation) => generations.push(generation),
+  );
+
+  assert.equal(generations.length, 2);
+  const [first, second] = generations;
+  for (const generation of generations) {
+    assert.equal(generation.model.provider, 'anthropic');
+    assert.equal(generation.model.name, 'claude-haiku-5-5');
+    assert.equal(generation.responseModel, 'claude-haiku-5-5');
+  }
+  assert.equal(first.stopReason, 'tool_calls');
+  assert.equal(first.usage.cacheWriteInputTokens, 12_300);
+  assert.equal(second.stopReason, 'stop');
+  assert.equal(second.usage.cacheReadInputTokens, 12_300);
+  assert.equal(second.usage.inputTokens, 12_700);
+});
+
+test('withAgento11yOpenAIAgentsHooks splits only known provider prefixes from model names', async () => {
+  const generations = [];
+  await captureGenerations(
+    async (client) => {
+      const response = () => ({
+        responseId: 'r',
+        output: [oaFinalMessage],
+        usage: { inputTokens: 1, outputTokens: 1 },
+      });
+      const runner = new FakeRunner({
+        'anthropic/claude-haiku-5-5': new PrivateFieldModel([response()]),
+        'openrouter/claude-haiku-5-5': new PrivateFieldModel([response()]),
+      });
+      const registration = withAgento11yOpenAIAgentsHooks(runner, client);
+      for (const name of ['anthropic/claude-haiku-5-5', 'openrouter/claude-haiku-5-5']) {
+        const context = { context: { conversationId: `oa-prefix-${name}` } };
+        const agent = { name: 'assistant', model: name };
+        runner.emit('agent_start', context, agent, []);
+        await (await runner.config.modelProvider.getModel(name)).getResponse(oaRequest('hi'));
+        runner.emit('agent_end', context, agent, 'done');
+      }
+      registration.detach();
+    },
+    (generation) => generations.push(generation),
+  );
+
+  assert.deepEqual(
+    generations.map((generation) => [generation.model.provider, generation.model.name]),
+    [
+      ['anthropic', 'claude-haiku-5-5'],
+      ['custom', 'openrouter/claude-haiku-5-5'],
+    ],
+  );
+});
