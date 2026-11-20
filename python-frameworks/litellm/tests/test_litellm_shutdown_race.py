@@ -234,3 +234,15 @@ def test_client_shutdown_waits_for_success_callback_that_lands_late(
     assert landed_after_shutdown == [True, True]
     assert _exported(exporter) == 2
     assert "client is shutting down" not in caplog.text
+
+
+def test_handler_shutdown_drains_once_with_caller_timeout(wired: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    from agento11y_litellm import handler as handler_mod
+
+    _, handler = wired
+    timeouts: list[float] = []
+    monkeypatch.setattr(handler_mod, "drain_litellm_callbacks", lambda timeout=10.0: timeouts.append(timeout))
+    monkeypatch.setattr(handler_mod, "_drain_sync_executor", lambda timeout: timeouts.append(timeout))
+    handler.flush(timeout=0.5)
+    handler.shutdown(timeout=0.25)
+    assert timeouts == [0.5, 0.25]

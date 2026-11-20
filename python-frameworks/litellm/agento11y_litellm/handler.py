@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import threading
 import time
@@ -956,12 +957,26 @@ async def adrain_litellm_callbacks(timeout: float = _DRAIN_TIMEOUT_SECONDS) -> N
     await asyncio.to_thread(_drain_sync_executor, timeout)
 
 
+# Set while the logger's own flush/shutdown calls the client, which has already drained.
+_ALREADY_DRAINED: contextvars.ContextVar[bool] = contextvars.ContextVar("agento11y_litellm_drained", default=False)
+
+
+def _call_drained(fn: Callable[[], None]) -> None:
+    token = _ALREADY_DRAINED.set(True)
+    try:
+        fn()
+    finally:
+        _ALREADY_DRAINED.reset(token)
+
+
 def _drain_before_client_flush() -> None:
     """Pre-flush hook, so ``client.flush()`` and ``client.shutdown()`` wait for LiteLLM too.
 
     Inside a running event loop the async queue cannot be drained without
     awaiting, so only the thread pool is waited for; use :meth:`aflush` there.
     """
+    if _ALREADY_DRAINED.get():
+        return
     try:
         asyncio.get_running_loop()
     except RuntimeError:
@@ -1019,7 +1034,7 @@ class Agento11yLiteLLMLogger(CustomLogger):
         try:
             drain_litellm_callbacks(timeout)
         finally:
-            self._client.flush()
+            _call_drained(self._client.flush)
 
     def shutdown(self, timeout: float = _DRAIN_TIMEOUT_SECONDS) -> None:
         """Waits for LiteLLM's pending callbacks, then shuts the client down.
@@ -1031,21 +1046,21 @@ class Agento11yLiteLLMLogger(CustomLogger):
         try:
             drain_litellm_callbacks(timeout)
         finally:
-            self._client.shutdown()
+            _call_drained(self._client.shutdown)
 
     async def aflush(self, timeout: float = _DRAIN_TIMEOUT_SECONDS) -> None:
         """Async form of :meth:`flush`, for use inside a running event loop."""
         try:
             await adrain_litellm_callbacks(timeout)
         finally:
-            self._client.flush()
+            _call_drained(self._client.flush)
 
     async def ashutdown(self, timeout: float = _DRAIN_TIMEOUT_SECONDS) -> None:
         """Async form of :meth:`shutdown`, for use inside a running event loop."""
         try:
             await adrain_litellm_callbacks(timeout)
         finally:
-            self._client.shutdown()
+            _call_drained(self._client.shutdown)
 
     def log_success_event(self, kwargs: dict, response_obj: Any, start_time: datetime, end_time: datetime) -> None:
         self._log_event(kwargs, response_obj, start_time, end_time, is_failure=False)
