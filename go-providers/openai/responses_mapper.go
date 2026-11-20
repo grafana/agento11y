@@ -171,7 +171,7 @@ func ResponsesFromStream(req responses.ResponseNewParams, summary ResponsesStrea
 			}
 		case "response.function_call_arguments.done":
 			call := ensureResponsesStreamToolCall(toolCalls, &toolCallOrder, event.ItemID, event.OutputIndex)
-			if name := strings.TrimSpace(event.Name); name != "" {
+			if name := responsesStreamEventName(event); name != "" {
 				call.name = name
 			}
 			if event.Arguments != "" {
@@ -590,6 +590,32 @@ func extractResponsesOutputMessageText(content []responses.ResponseOutputMessage
 	return strings.Join(parts, "\n")
 }
 
+// responsesStreamEventName reads the function name some
+// response.function_call_arguments.done payloads still carry. openai-go
+// v3.60.0 dropped the typed field, so it is read from the raw event JSON.
+func responsesStreamEventName(event responses.ResponseStreamEventUnion) string {
+	raw := event.RawJSON()
+	if raw == "" {
+		return ""
+	}
+	var payload struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(payload.Name)
+}
+
+// responsesOutputItemErrorMessage returns the error text of an output item,
+// which is either a plain string or an object with a message.
+func responsesOutputItemErrorMessage(itemErr responses.ResponseOutputItemUnionError) string {
+	if itemErr.OfString != "" {
+		return itemErr.OfString
+	}
+	return itemErr.Message
+}
+
 func extractResponsesOutputFallback(item responses.ResponseOutputItemUnion) string {
 	if item.Input != "" {
 		return item.Input
@@ -597,8 +623,8 @@ func extractResponsesOutputFallback(item responses.ResponseOutputItemUnion) stri
 	if item.Result != "" {
 		return item.Result
 	}
-	if item.Error != "" {
-		return item.Error
+	if message := responsesOutputItemErrorMessage(item.Error); message != "" {
+		return message
 	}
 	arguments := stringifyResponsesOutputArguments(item.Arguments)
 	if item.Name != "" && arguments != "" {

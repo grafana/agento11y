@@ -535,7 +535,6 @@ func TestResponsesFromStream(t *testing.T) {
 				Type:        "response.function_call_arguments.done",
 				ItemID:      "fc_1",
 				OutputIndex: 1,
-				Name:        "weather",
 				Arguments:   `{"city":"Paris"}`,
 			},
 			{

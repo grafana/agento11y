@@ -233,7 +233,7 @@ func openAIResponsesRequest() oresponses.ResponseNewParams {
 				},
 				{
 					OfFunctionCallOutput: &oresponses.ResponseInputItemFunctionCallOutputParam{
-						CallID: "call_weather",
+						CallID: param.NewOpt("call_weather"),
 						Output: oresponses.ResponseInputItemFunctionCallOutputOutputUnionParam{OfString: param.NewOpt(`{"temp_c":18}`)},
 					},
 				},
@@ -317,7 +317,6 @@ func openAIResponsesStreamSummary() ResponsesStreamSummary {
 				Type:        "response.function_call_arguments.done",
 				ItemID:      "fc_1",
 				OutputIndex: 1,
-				Name:        "weather",
 				Arguments:   `{"city":"Paris"}`,
 			},
 			{

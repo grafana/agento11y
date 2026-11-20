@@ -24,7 +24,7 @@ This module maps official OpenAI Go SDK request/response payloads into typed age
 
 ## SDK
 
-- Official SDK: `github.com/openai/openai-go/v3`
+- Official SDK: `github.com/openai/openai-go/v3`, v3.105.0 or later. Releases before v3.55.0 have different Responses types and do not compile with this module.
 
 ## Chat Completions Wrapper
 
