@@ -5,6 +5,7 @@ import type {
   GenerationResult,
   GenerationStart,
   Message,
+  MessagePart,
   ModelRef,
   TokenUsage,
   ToolDefinition,
@@ -282,22 +283,31 @@ export class Agento11yFrameworkHandler {
     });
   }
 
-  protected onLLMNewToken(token: string, runId: string): void {
+  protected onLLMNewToken(token: string, runId: string, chunk?: unknown): void {
     const runState = this.runs.get(String(runId));
     if (runState === undefined) {
       return;
     }
 
-    if (typeof token !== 'string' || token.trim().length === 0) {
+    const hasText = typeof token === 'string' && token.trim().length > 0;
+    // A chunk that carries only a tool-call delta (or a thinking block) streams
+    // with an empty token. It is still the first streamed output.
+    if (!hasText && !chunkHasDelta(chunk)) {
       return;
     }
 
-    if (runState.captureOutputs) {
+    if (hasText && runState.captureOutputs) {
       runState.outputChunks.push(token);
     }
 
     if (!runState.firstTokenRecorded) {
       runState.firstTokenRecorded = true;
+      if (this.frameworkName === 'langchain' || this.frameworkName === 'langgraph') {
+        // `.stream()` on a default chat model sets neither `stream` nor
+        // `streaming` in invocation_params, so the start callback reported
+        // SYNC. A streamed token is the reliable signal.
+        upgradeToStream(runState.recorder);
+      }
       runState.recorder.setFirstTokenAt(new Date());
     }
   }
@@ -318,22 +328,36 @@ export class Agento11yFrameworkHandler {
       // backfill below fires for the streaming path, mirroring the Python handler.
       const responseMessage = firstGenerationMessage(output);
       const responseMetadata = asRecord(read(responseMessage, 'response_metadata'));
-      const responseModel = asString(read(llmOutput, 'model_name')) || asString(read(responseMetadata, 'model_name'));
+      // ChatAnthropic reports `model`, not `model_name`, and on streams it keeps
+      // the model and stop reason on the message's `additional_kwargs`.
+      const additionalKwargs = asRecord(read(responseMessage, 'additional_kwargs'));
+      const responseModel =
+        asString(read(llmOutput, 'model_name')) ||
+        asString(read(responseMetadata, 'model_name')) ||
+        asString(read(llmOutput, 'model')) ||
+        asString(read(responseMetadata, 'model')) ||
+        asString(read(additionalKwargs, 'model'));
       const stopReason =
         asString(read(llmOutput, 'finish_reason')) ||
         asString(read(llmOutput, 'stop_reason')) ||
         asString(read(responseMetadata, 'finish_reason')) ||
-        asString(read(responseMetadata, 'stop_reason'));
+        asString(read(responseMetadata, 'stop_reason')) ||
+        asString(read(additionalKwargs, 'stop_reason'));
       // Streaming reports token counts on the message's `usage_metadata`, not on
       // `llm_output.token_usage`. Cost needs tokens, so fall back to the first source
       // that actually yields counts, otherwise a resolved model still yields $0 for
       // streams. `mapUsage` returns undefined for missing/all-zero input, so this also
       // steps past a present-but-empty `token_usage` (which JS treats as truthy),
       // matching the Python `or` chain that falls through an empty dict.
+      // `usage_metadata` comes first, as in the Python handler: LangChain
+      // normalizes it across providers (input includes cached tokens) and it is
+      // the only source with the cache and reasoning breakdowns. ChatAnthropic's
+      // `llm_output.usage` is the raw API usage, whose `input_tokens` excludes
+      // cached tokens.
       const usage =
+        mapUsage(read(responseMessage, 'usage_metadata')) ??
         mapUsage(read(llmOutput, 'token_usage')) ??
-        mapUsage(read(llmOutput, 'usage')) ??
-        mapUsage(read(responseMessage, 'usage_metadata'));
+        mapUsage(read(llmOutput, 'usage'));
 
       let mappedOutput: Message[] | undefined;
       if (runState.captureOutputs) {
@@ -1513,20 +1537,18 @@ function mapChatInputs(messages: unknown): { input: Message[]; systemPrompt: str
     }
 
     for (const message of batch) {
-      const text = extractMessageText(message);
-      if (text.length === 0) {
-        continue;
-      }
-
       if (isSystemRole(extractMessageRole(message))) {
-        systemChunks.push(text);
+        const text = extractMessageText(message);
+        if (text.length > 0) {
+          systemChunks.push(text);
+        }
         continue;
       }
 
-      output.push({
-        role: normalizeRole(extractMessageRole(message)),
-        content: text,
-      });
+      const mapped = mapFrameworkMessage(message);
+      if (mapped !== undefined) {
+        output.push(mapped);
+      }
     }
   }
 
@@ -1540,11 +1562,19 @@ function mapOutputMessages(output: unknown): Message[] {
   }
 
   const texts: string[] = [];
+  const structured: Message[] = [];
   for (const candidates of generations) {
     if (!Array.isArray(candidates)) {
       continue;
     }
     for (const candidate of candidates) {
+      // A message with tool calls (or thinking) keeps its typed parts; a plain
+      // text generation is joined with the others as before.
+      const mapped = mapFrameworkMessage(read(candidate, 'message'));
+      if (mapped?.parts !== undefined) {
+        structured.push({ ...mapped, role: 'assistant' });
+        continue;
+      }
       const text = extractGenerationText(candidate);
       if (text.length > 0) {
         texts.push(text);
@@ -1552,11 +1582,120 @@ function mapOutputMessages(output: unknown): Message[] {
     }
   }
 
-  if (texts.length === 0) {
-    return [];
+  if (texts.length > 0) {
+    structured.unshift({ role: 'assistant', content: texts.join('\n') });
+  }
+  return structured;
+}
+
+// Maps one LangChain message. A message with only text keeps the `content`
+// shorthand. Tool calls become tool_call parts with their ids, and a
+// ToolMessage becomes a tool_result part with its tool_call_id and name, the
+// way the Python handler records them.
+function mapFrameworkMessage(message: unknown): Message | undefined {
+  if (message === undefined || message === null) {
+    return undefined;
+  }
+  const role = normalizeRole(extractMessageRole(message));
+  const text = extractMessageText(message);
+
+  const toolCallId = asString(read(message, 'tool_call_id')) || asString(read(message, 'toolCallId'));
+  if (role === 'tool' && toolCallId.length > 0) {
+    const name = asString(read(message, 'name'));
+    const isError = asString(read(message, 'status')).trim().toLowerCase() === 'error';
+    return {
+      role: 'tool',
+      parts: [
+        {
+          type: 'tool_result',
+          toolResult: {
+            toolCallId,
+            ...(name.length > 0 ? { name } : {}),
+            content: text,
+            ...(isError ? { isError: true } : {}),
+          },
+        },
+      ],
+    };
   }
 
-  return [{ role: 'assistant', content: texts.join('\n') }];
+  const parts: MessagePart[] = [];
+  const content = read(message, 'content');
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      if (asString(read(block, 'type')) === 'thinking') {
+        const thinking = asString(read(block, 'thinking'));
+        if (thinking.length > 0) {
+          parts.push({ type: 'thinking', thinking });
+        }
+      }
+    }
+  }
+  if (text.length > 0) {
+    parts.push({ type: 'text', text });
+  }
+
+  // `tool_calls` holds parsed args; Anthropic `tool_use` content blocks are the
+  // fallback (on streams their `input` is still a JSON string).
+  const rawToolCalls = read(message, 'tool_calls');
+  let toolCalls: unknown[] = Array.isArray(rawToolCalls) ? rawToolCalls : [];
+  if (toolCalls.length === 0 && Array.isArray(content)) {
+    toolCalls = content.filter((block) => asString(read(block, 'type')) === 'tool_use');
+  }
+  let hasToolCall = false;
+  for (const call of toolCalls) {
+    const name = asString(read(call, 'name'));
+    if (name.length === 0) {
+      continue;
+    }
+    const id = asString(read(call, 'id'));
+    const args = read(call, 'args') ?? read(call, 'arguments') ?? read(call, 'input');
+    const inputJSON = typeof args === 'string' ? args : args === undefined ? undefined : stableJSONString(args);
+    parts.push({
+      type: 'tool_call',
+      toolCall: { ...(id.length > 0 ? { id } : {}), name, ...(inputJSON !== undefined ? { inputJSON } : {}) },
+    });
+    hasToolCall = true;
+  }
+
+  if (parts.length === 0) {
+    return undefined;
+  }
+  const messageRole = hasToolCall ? 'assistant' : role;
+  if (parts.length === 1 && parts[0]?.type === 'text') {
+    return { role: messageRole, content: text };
+  }
+  return { role: messageRole, parts };
+}
+
+const streamDeltaKeys = ['text', 'thinking', 'reasoning', 'partial_json', 'name', 'id', 'args', 'input'];
+
+// Mirrors the Python `_on_llm_new_token` check: a chunk counts as streamed
+// output when any text, thinking, or tool-call delta in it is non-empty.
+function chunkHasDelta(chunk: unknown): boolean {
+  const message = read(chunk, 'message');
+  const content = read(message, 'content');
+  const blocks: unknown[] = typeof content === 'string' ? [content] : Array.isArray(content) ? content : [];
+  const toolCallChunks = read(message, 'tool_call_chunks');
+  const deltas = [...blocks, ...(Array.isArray(toolCallChunks) ? toolCallChunks : [])];
+  return deltas.some((block) =>
+    typeof block === 'string'
+      ? block.trim().length > 0
+      : streamDeltaKeys.some((key) => {
+          const value = read(block, key);
+          if (value === undefined || value === null || value === '') {
+            return false;
+          }
+          return !(isRecord(value) && Object.keys(value).length === 0);
+        }),
+  );
+}
+
+function upgradeToStream(recorder: GenerationRecorder): void {
+  const upgrade = (recorder as { internalUpgradeToStream?: () => void }).internalUpgradeToStream;
+  if (typeof upgrade === 'function') {
+    upgrade.call(recorder);
+  }
 }
 
 // Returns the first generation's `message` object, mirroring the Python
@@ -1661,11 +1800,35 @@ function mapUsage(rawUsage: unknown): TokenUsage | undefined {
     return undefined;
   }
 
-  return {
+  const mapped: TokenUsage = {
     inputTokens,
     outputTokens,
     totalTokens,
   };
+
+  // LangChain `usage_metadata` details, read the way the Python
+  // `_map_framework_usage` reads them. Its `input_tokens` already include the
+  // cached tokens.
+  const inputDetails = asRecord(read(usage, 'input_token_details'));
+  const outputDetails = asRecord(read(usage, 'output_token_details'));
+  const cacheRead = asInt(read(inputDetails, 'cache_read'));
+  if (cacheRead > 0) {
+    mapped.cacheReadInputTokens = cacheRead;
+  }
+  const cacheWrite =
+    asInt(read(inputDetails, 'cache_creation')) ||
+    asInt(read(inputDetails, 'ephemeral_5m_input_tokens')) + asInt(read(inputDetails, 'ephemeral_1h_input_tokens'));
+  if (cacheWrite > 0) {
+    mapped.cacheWriteInputTokens = cacheWrite;
+  }
+  const reasoning = asInt(read(outputDetails, 'reasoning'));
+  if (reasoning > 0) {
+    mapped.reasoningTokens = reasoning;
+  }
+  if (inputDetails !== undefined) {
+    mapped.inputSemantics = 'inclusive';
+  }
+  return mapped;
 }
 
 function isUnknownModel(modelName: string): boolean {

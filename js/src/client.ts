@@ -1606,7 +1606,7 @@ export class Agento11yClient {
 class GenerationRecorderImpl implements GenerationRecorder {
   private readonly seed: GenerationStart;
   private readonly startedAt: Date;
-  private readonly mode: GenerationMode;
+  private mode: GenerationMode;
   private readonly span: Span;
   private readonly contentCaptureMode: ContentCaptureMode;
   private ended = false;
@@ -1695,6 +1695,24 @@ class GenerationRecorderImpl implements GenerationRecorder {
       return;
     }
     this.firstTokenAt = new Date(firstTokenAt);
+  }
+
+  /**
+   * Switches a generation started as SYNC to STREAM. Framework handlers call
+   * this on the first streamed token when the start callback did not say the
+   * call streams (e.g. LangChain `.stream()` on a default chat model).
+   */
+  internalUpgradeToStream(): void {
+    if (this.ended || this.mode === 'STREAM') {
+      return;
+    }
+    this.mode = 'STREAM';
+    this.seed.mode = 'STREAM';
+    if (this.seed.operationName === defaultOperationNameForMode('SYNC')) {
+      this.seed.operationName = defaultOperationNameForMode('STREAM');
+      this.span.updateName(generationSpanName(this.seed.operationName, this.seed.model.name));
+      this.span.setAttribute(spanAttrOperationName, this.seed.operationName);
+    }
   }
 
   setCacheDiagnostics(missReason: string, opts?: { missedInputTokens?: number; previousMessageId?: string }): void {

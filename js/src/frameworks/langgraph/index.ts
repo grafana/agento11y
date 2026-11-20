@@ -38,8 +38,15 @@ export class Agento11yLangGraphHandler extends Agento11yFrameworkHandler {
     this.onChatModelStart(serialized, messages, runId, parentRunId, extraParams, tags, metadata, runName);
   }
 
-  async handleLLMNewToken(token: string, _idx: unknown, runId: string): Promise<void> {
-    this.onLLMNewToken(token, runId);
+  async handleLLMNewToken(
+    token: string,
+    _idx: unknown,
+    runId: string,
+    _parentRunId?: string,
+    _tags?: string[],
+    fields?: { chunk?: unknown },
+  ): Promise<void> {
+    this.onLLMNewToken(token, runId, fields?.chunk);
   }
 
   async handleLLMEnd(output: unknown, runId: string): Promise<void> {

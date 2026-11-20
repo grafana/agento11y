@@ -5,6 +5,9 @@ import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '
 import { Agento11yLangChainHandler } from '../.test-dist/frameworks/langchain/index.js';
 import { Agento11yClient, createSecretRedactionSanitizer, defaultConfig } from '../.test-dist/index.js';
 
+// Drops the `undefined` fields the recorder's clone adds.
+const plain = (value) => JSON.parse(JSON.stringify(value));
+
 class CapturingExporter {
   requests = [];
 
@@ -774,6 +777,237 @@ test('langchain chain and retriever spans leave the error text off when content 
       }
     });
   }
+});
+
+test('langchain records tool_call parts with ids and tool_result parts with id and name', async () => {
+  const generations = [];
+  await captureGenerations(
+    async (client) => {
+      const handler = new Agento11yLangChainHandler(client);
+      const human = { type: 'human', content: 'What is the weather in Paris?' };
+      const toolCall = { name: 'get_weather', args: { city: 'Paris' }, id: 'call_1', type: 'tool_call' };
+      const ai = { type: 'ai', content: '', tool_calls: [toolCall] };
+
+      await handler.handleChatModelStart({ name: 'ChatOpenAI' }, [[human]], 'run-tool-1', undefined, {
+        invocation_params: { model: 'gpt-4o-mini' },
+      });
+      await handler.handleLLMEnd(
+        { generations: [[{ text: '', message: ai }]], llm_output: { model_name: 'gpt-4o-mini' } },
+        'run-tool-1',
+      );
+
+      const toolMessage = { type: 'tool', content: 'Sunny, 21C', tool_call_id: 'call_1', name: 'get_weather' };
+      await handler.handleChatModelStart({ name: 'ChatOpenAI' }, [[human, ai, toolMessage]], 'run-tool-2', undefined, {
+        invocation_params: { model: 'gpt-4o-mini' },
+      });
+      await handler.handleLLMEnd({ generations: [[{ text: 'It is sunny.' }]] }, 'run-tool-2');
+    },
+    (generation) => generations.push(generation),
+  );
+
+  assert.equal(generations.length, 2);
+  assert.deepEqual(plain(generations[0].output), [
+    {
+      role: 'assistant',
+      parts: [{ type: 'tool_call', toolCall: { id: 'call_1', name: 'get_weather', inputJSON: '{"city":"Paris"}' } }],
+    },
+  ]);
+  const input = plain(generations[1].input);
+  assert.equal(input.length, 3);
+  assert.deepEqual(input[1].parts, [
+    { type: 'tool_call', toolCall: { id: 'call_1', name: 'get_weather', inputJSON: '{"city":"Paris"}' } },
+  ]);
+  assert.deepEqual(input[2], {
+    role: 'tool',
+    parts: [{ type: 'tool_result', toolResult: { toolCallId: 'call_1', name: 'get_weather', content: 'Sunny, 21C' } }],
+  });
+});
+
+test('langchain maps Anthropic tool_use content blocks alongside text', async () => {
+  const generation = await captureSingleGeneration(async (client) => {
+    const handler = new Agento11yLangChainHandler(client);
+    await handler.handleChatModelStart(
+      { name: 'ChatAnthropic' },
+      [[{ type: 'human', content: 'weather?' }]],
+      'run-tu',
+      undefined,
+      { invocation_params: { model: 'claude-haiku-5-5' } },
+    );
+    const message = {
+      type: 'ai',
+      content: [
+        { type: 'text', text: 'Checking.' },
+        { type: 'tool_use', id: 'toolu_1', name: 'get_weather', input: '{"city": "Paris"}' },
+      ],
+      tool_calls: [{ name: 'get_weather', args: { city: 'Paris' }, id: 'toolu_1', type: 'tool_call' }],
+    };
+    await handler.handleLLMEnd({ generations: [[{ text: 'Checking.', message }]] }, 'run-tu');
+  });
+
+  assert.deepEqual(plain(generation.output), [
+    {
+      role: 'assistant',
+      parts: [
+        { type: 'text', text: 'Checking.' },
+        { type: 'tool_call', toolCall: { id: 'toolu_1', name: 'get_weather', inputJSON: '{"city":"Paris"}' } },
+      ],
+    },
+  ]);
+});
+
+test('langchain upgrades a .stream() run to STREAM on the first token', async () => {
+  const generation = await captureSingleGeneration(async (client) => {
+    const handler = new Agento11yLangChainHandler(client);
+    // `.stream()` on a default chat model leaves `stream` unset.
+    await handler.handleChatModelStart(
+      { name: 'ChatAnthropic' },
+      [[{ type: 'human', content: 'hi' }]],
+      'run-up',
+      undefined,
+      { invocation_params: { model: 'claude-haiku-5-5', stream: false } },
+    );
+    await handler.handleLLMNewToken('Hello', undefined, 'run-up');
+    await handler.handleLLMEnd(
+      {
+        generations: [
+          [
+            {
+              text: 'Hello',
+              message: {
+                type: 'ai',
+                content: 'Hello',
+                additional_kwargs: { model: 'claude-haiku-5-5', stop_reason: 'end_turn' },
+                response_metadata: { model_provider: 'anthropic' },
+              },
+            },
+          ],
+        ],
+      },
+      'run-up',
+    );
+  });
+
+  assert.equal(generation.mode, 'STREAM');
+  assert.equal(generation.operationName, 'streamText');
+  assert.equal(generation.responseModel, 'claude-haiku-5-5');
+  assert.equal(generation.stopReason, 'end_turn');
+});
+
+test('langchain counts a tool-call-only chunk as the first token', async () => {
+  const generation = await captureSingleGeneration(async (client) => {
+    const handler = new Agento11yLangChainHandler(client);
+    await handler.handleChatModelStart(
+      { name: 'ChatOpenAI' },
+      [[{ type: 'human', content: 'weather?' }]],
+      'run-tcc',
+      undefined,
+      { invocation_params: { model: 'gpt-4o-mini' } },
+    );
+    await handler.handleLLMNewToken('', undefined, 'run-tcc', undefined, undefined, {
+      chunk: { text: '', message: { content: '', tool_call_chunks: [] } },
+    });
+    assert.equal(handler.runs.get('run-tcc').firstTokenRecorded, false);
+    await handler.handleLLMNewToken('', undefined, 'run-tcc', undefined, undefined, {
+      chunk: {
+        text: '',
+        message: { content: '', tool_call_chunks: [{ name: 'get_weather', args: '', id: 'call_1' }] },
+      },
+    });
+    await handler.handleLLMEnd({ generations: [[{ text: '' }]] }, 'run-tcc');
+  });
+
+  assert.equal(generation.mode, 'STREAM');
+});
+
+test('langchain maps cache read/write and reasoning tokens from usage_metadata', async () => {
+  const generations = [];
+  await captureGenerations(
+    async (client) => {
+      const handler = new Agento11yLangChainHandler(client);
+      const runs = [
+        [
+          'run-cache-write',
+          {
+            input_tokens: 19022,
+            output_tokens: 13,
+            total_tokens: 19035,
+            input_token_details: { cache_creation: 19014, cache_read: 0 },
+          },
+          { input_tokens: 8, cache_creation_input_tokens: 19014, cache_read_input_tokens: 0, output_tokens: 13 },
+        ],
+        [
+          'run-cache-read',
+          {
+            input_tokens: 19022,
+            output_tokens: 13,
+            total_tokens: 19035,
+            input_token_details: { cache_creation: 0, cache_read: 19014 },
+          },
+          { input_tokens: 8, cache_creation_input_tokens: 0, cache_read_input_tokens: 19014, output_tokens: 13 },
+        ],
+        [
+          'run-openai',
+          {
+            input_tokens: 2000,
+            output_tokens: 300,
+            total_tokens: 2300,
+            input_token_details: { audio: 0, cache_read: 1536 },
+            output_token_details: { audio: 0, reasoning: 256 },
+          },
+          undefined,
+        ],
+      ];
+      for (const [runId, usageMetadata, rawUsage] of runs) {
+        await handler.handleChatModelStart(
+          { name: 'ChatAnthropic' },
+          [[{ type: 'human', content: 'hi' }]],
+          runId,
+          undefined,
+          { invocation_params: { model: 'claude-haiku-5-5' } },
+        );
+        await handler.handleLLMEnd(
+          {
+            generations: [[{ text: 'Hi', message: { type: 'ai', content: 'Hi', usage_metadata: usageMetadata } }]],
+            llm_output:
+              rawUsage === undefined
+                ? { tokenUsage: { promptTokens: 2000 } }
+                : { model: 'claude-haiku-5-5', usage: rawUsage },
+          },
+          runId,
+        );
+      }
+    },
+    (generation) => generations.push(generation),
+  );
+
+  assert.deepEqual(
+    generations.map((generation) => generation.usage),
+    [
+      {
+        inputTokens: 19022,
+        outputTokens: 13,
+        totalTokens: 19035,
+        cacheWriteInputTokens: 19014,
+        inputSemantics: 'inclusive',
+      },
+      {
+        inputTokens: 19022,
+        outputTokens: 13,
+        totalTokens: 19035,
+        cacheReadInputTokens: 19014,
+        inputSemantics: 'inclusive',
+      },
+      {
+        inputTokens: 2000,
+        outputTokens: 300,
+        totalTokens: 2300,
+        cacheReadInputTokens: 1536,
+        reasoningTokens: 256,
+        inputSemantics: 'inclusive',
+      },
+    ],
+  );
+  assert.equal(generations[0].responseModel, 'claude-haiku-5-5');
 });
 
 async function captureSingleGeneration(run) {
