@@ -91,14 +91,28 @@ A binary older than that command prints `agento11y: unknown agent "skills"` and 
 
 ## Fast path
 
-Install the `agento11y` binary (renamed from `sigil`; the old name still works but will be removed in a future release):
+Install the `agento11y` binary:
 
 - **Quick install (Linux/macOS):** `curl -fsSL https://raw.githubusercontent.com/grafana/agento11y/main/plugins/agento11y/scripts/install.sh | sh` (downloads the latest release, verifies the checksum, installs to `~/.local/bin`)
 - **Homebrew (macOS):** `brew install grafana/grafana/agento11y`
 - **mise:** `mise use -g aqua:grafana/agento11y@latest` (requires [mise shell activation](https://mise.jdx.dev/cli/activate.html) so `agento11y` is on your `PATH`)
-- **Go install (Windows, or any platform with Go 1.26.9+):** `go install github.com/grafana/agento11y/plugins/agento11y/cmd/agento11y@latest`
+- **Go install (any platform with Go 1.26.9+):** `go install github.com/grafana/agento11y/plugins/agento11y/cmd/agento11y@latest`
 
-The script installs to `~/.local/bin`; `go install` puts the binary in `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`.
+The Unix script installs to `~/.local/bin`; `go install` puts the binary in `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`.
+
+On Windows, use Windows PowerShell 5.1 or PowerShell 7:
+
+```powershell
+irm https://raw.githubusercontent.com/grafana/agento11y/main/plugins/agento11y/scripts/install.ps1 | iex
+```
+
+The Windows script downloads the native x64 or ARM64 ZIP and verifies its SHA-256 checksum. It installs `agento11y.exe` under `%LOCALAPPDATA%\agento11y\bin` for the current user and adds that directory to the session and persistent user `PATH`. No administrator rights or Go installation are needed. Execution policy stays unchanged. Re-run the command to upgrade.
+
+For overrides, set the `VERSION` and `INSTALL_DIR` environment variables before running the command. Alternatively, download the script and pass `-Version` and `-InstallDir` when running that file. Versions accept a leading `v`.
+
+See the [shared installation guide](https://github.com/grafana/agento11y/blob/main/plugins/agento11y/README.md#install) to download and inspect the script before running it. If corporate policy blocks scripts, download the `windows_amd64` or `windows_arm64` ZIP from the [releases page](https://github.com/grafana/agento11y/releases). Verify its SHA-256 against the release checksum file, extract `agento11y.exe`, and put it on `PATH`.
+
+The command was renamed from `sigil`. The Unix quick installer and Homebrew still add the old alias, which will be removed. The Windows installer adds only `agento11y.exe`.
 
 Launch your agent with `agento11y <agent>`, where `<agent>` is `claude`, `codex`, `copilot`, `opencode`, `pi`, `vibe`, or `kiro`. A first launch asks where sessions go, with two options: **Local only**, and **Grafana Cloud**. **Local only** needs no Cloud credentials, starts the local receiver, and does not forward sessions. **Grafana Cloud** continues to the credential questions. Its interactive preferences include **Local web UI**. The question starts on **Yes** by default and remembers an earlier answer. **Yes** keeps a full local copy and forwards a Cloud copy. **No** sends directly to Cloud without a local copy. The launcher asks nothing when local mode is already on (`--local` or `AGENTO11Y_LOCAL=true`) or when stdin is not a terminal. The same destination and local web UI choices are available on every supported platform.
 
