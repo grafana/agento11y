@@ -696,3 +696,167 @@ def test_async_wrappers_record_generation() -> None:
 
 async def _async_value(value):
     return value
+
+
+def _chunk(choices, usage=None):
+    return {
+        "id": "chatcmpl-stream",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "gpt-4o-mini-2024-07-18",
+        "choices": choices,
+        "usage": usage,
+    }
+
+
+_CHAT_STREAM_USAGE = {
+    "prompt_tokens": 40,
+    "completion_tokens": 12,
+    "total_tokens": 52,
+    "prompt_tokens_details": {"cached_tokens": 8},
+    "completion_tokens_details": {"reasoning_tokens": 4},
+}
+
+_CHAT_TOOL_STREAM_EVENTS = [
+    _chunk(
+        [
+            {
+                "index": 0,
+                "delta": {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "call_abc",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": ""},
+                        }
+                    ],
+                },
+            }
+        ]
+    ),
+    _chunk([{"index": 0, "delta": {"tool_calls": [{"index": 0, "function": {"arguments": '{"city":'}}]}}]),
+    _chunk([{"index": 0, "delta": {"tool_calls": [{"index": 0, "function": {"arguments": '"Paris"}'}}]}}]),
+    _chunk([{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]),
+    _chunk([], usage=_CHAT_STREAM_USAGE),
+]
+
+_CHAT_STREAM_REQUEST = {
+    "model": "gpt-4o-mini",
+    "stream": True,
+    "stream_options": {"include_usage": True},
+    "messages": [{"role": "user", "content": "weather in Paris?"}],
+    "tools": [
+        {
+            "type": "function",
+            "function": {"name": "get_weather", "parameters": {"type": "object"}},
+        }
+    ],
+}
+
+
+def _assert_tool_stream_generation(generation) -> None:
+    assert generation.mode.value == "STREAM"
+    assert generation.response_id == "chatcmpl-stream"
+    assert generation.response_model == "gpt-4o-mini-2024-07-18"
+    assert generation.usage.input_tokens == 40
+    assert generation.usage.output_tokens == 12
+    assert generation.usage.total_tokens == 52
+    assert generation.usage.cache_read_input_tokens == 8
+    assert generation.usage.reasoning_tokens == 4
+    assert generation.stop_reason == "tool_calls"
+    parts = generation.output[0].parts
+    assert [part.kind.value for part in parts] == ["tool_call"]
+    assert parts[0].tool_call.id == "call_abc"
+    assert parts[0].tool_call.name == "get_weather"
+    assert b"Paris" in parts[0].tool_call.input_json
+
+
+def test_chat_stream_events_only_rebuilds_usage_stop_reason_and_tool_calls() -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+
+    try:
+        chat.completions.stream(
+            client,
+            _CHAT_STREAM_REQUEST,
+            lambda _request: ChatCompletionsStreamSummary(events=list(_CHAT_TOOL_STREAM_EVENTS)),
+        )
+        client.flush()
+        _assert_tool_stream_generation(exporter.requests[0].generations[0])
+    finally:
+        client.shutdown()
+
+
+def test_chat_stream_async_events_only_rebuilds_usage_stop_reason_and_tool_calls() -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+
+    try:
+        asyncio.run(
+            chat.completions.stream_async(
+                client,
+                _CHAT_STREAM_REQUEST,
+                lambda _request: _async_value(ChatCompletionsStreamSummary(events=list(_CHAT_TOOL_STREAM_EVENTS))),
+            )
+        )
+        client.flush()
+        _assert_tool_stream_generation(exporter.requests[0].generations[0])
+    finally:
+        client.shutdown()
+
+
+def test_chat_stream_events_only_text_with_usage_and_without_usage() -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    text_events = [
+        _chunk([{"index": 0, "delta": {"role": "assistant", "content": "Hel"}}]),
+        _chunk([{"index": 0, "delta": {"content": "lo"}}]),
+        _chunk([{"index": 0, "delta": {}, "finish_reason": "stop"}]),
+    ]
+
+    try:
+        for events in (text_events + [_chunk([], usage=_CHAT_STREAM_USAGE)], text_events):
+            chat.completions.stream(
+                client,
+                {"model": "gpt-4o-mini", "stream": True, "messages": [{"role": "user", "content": "hi"}]},
+                lambda _request, events=events: ChatCompletionsStreamSummary(events=list(events)),
+            )
+        client.flush()
+        with_usage, without_usage = exporter.requests[0].generations
+        for generation in (with_usage, without_usage):
+            assert generation.stop_reason == "stop"
+            assert generation.output[0].parts[0].text == "Hello"
+        assert with_usage.usage.input_tokens == 40
+        assert with_usage.usage.output_tokens == 12
+        assert without_usage.usage.input_tokens == 0
+        assert without_usage.usage.output_tokens == 0
+    finally:
+        client.shutdown()
+
+
+def test_chat_stream_output_text_keeps_rebuilt_tool_calls() -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+
+    try:
+        chat.completions.stream(
+            client,
+            _CHAT_STREAM_REQUEST,
+            lambda _request: ChatCompletionsStreamSummary(output_text="note", events=list(_CHAT_TOOL_STREAM_EVENTS)),
+        )
+        chat.completions.stream(
+            client,
+            {"model": "gpt-4o-mini", "stream": True, "messages": []},
+            lambda _request: ChatCompletionsStreamSummary(
+                output_text="override",
+                events=[_chunk([{"index": 0, "delta": {"content": "chunk"}, "finish_reason": "stop"}])],
+            ),
+        )
+        client.flush()
+        tool_gen, text_gen = exporter.requests[0].generations
+        assert tool_gen.output[0].parts[0].tool_call.name == "get_weather"
+        assert text_gen.output[0].parts[0].text == "override"
+    finally:
+        client.shutdown()
