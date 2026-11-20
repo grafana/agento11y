@@ -85,8 +85,13 @@ Before deployment, replace the placeholder AWS account in
 ## 3. Start the local AgentCore runtime
 
 ```bash
-agentcore dev
+agentcore dev --no-traces
 ```
+
+`--no-traces` disables the CLI's local OTEL collector so the app can use the
+Grafana Cloud OTLP endpoint configured above. The app's own OpenTelemetry
+providers still export traces and metrics to Grafana Cloud. Local trace
+collection for the Agent Inspector is disabled.
 
 AgentCore creates a virtual environment, installs the dependencies from the
 application's `pyproject.toml`, and starts the runtime on port 8080. If that
@@ -105,7 +110,7 @@ agentcore invoke --runtime AgentCoreObsDemo --local \
 If port 8080 is occupied, start the server with another port:
 
 ```bash
-agentcore dev --port 8081
+agentcore dev --no-traces --port 8081
 ```
 
 Then invoke it with the same port:
@@ -134,9 +139,13 @@ In Grafana Cloud Agent Observability, look for:
 - Custom metrics `agentcore_demo.agent.requests`,
   `agentcore_demo.agent.duration`, and `agentcore_demo.tool.calls`
 
-AgentCore dev mode can also run its own local trace collection for the
-inspector. If local dev telemetry differs from a deployment, first verify the
-agent response, then validate export from the hosted runtime.
+If metrics fail with `Failed to export metrics batch code: 404, reason: Not Found`,
+stop the dev server and restart it with `agentcore dev --no-traces`.
+In AgentCore CLI 1.1.0, local trace collection overrides
+`OTEL_EXPORTER_OTLP_ENDPOINT` with `http://127.0.0.1:<port>`. That collector
+accepts traces and logs but has no `/v1/metrics` route. The
+`DISABLE_ADOT_OBSERVABILITY=true` setting controls ADOT and does not prevent
+this CLI override.
 
 ## 6. Deploy and invoke
 

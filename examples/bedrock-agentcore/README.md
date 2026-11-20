@@ -35,12 +35,15 @@ The local AgentCore workflow is:
 
 ```bash
 # Terminal 1
-agentcore dev
+agentcore dev --no-traces
 
 # Terminal 2
 agentcore invoke --runtime AgentCoreObsDemo --local \
   --payload '{"prompt":"Check inventory for ENV-100 and order DEMO-1007."}'
 ```
+
+`--no-traces` disables the CLI's local collector so the app's own instrumentation
+exports traces and metrics directly to Grafana Cloud.
 
 AgentCore loads local credentials from `agentcore/.env.local`, which is ignored
 by Git. No secret-manager-specific scripts are required.
