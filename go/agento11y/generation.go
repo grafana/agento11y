@@ -91,7 +91,7 @@ func cloneGeneration(in Generation) Generation {
 		ThinkingEnabled:     cloneBoolPtr(in.ThinkingEnabled),
 		ParentGenerationIDs: cloneStringSlice(in.ParentGenerationIDs),
 		EffectiveVersion:    in.EffectiveVersion,
-		Usage:               in.Usage,
+		Usage:               in.Usage.Clone(),
 		StopReason:          in.StopReason,
 		StartedAt:           in.StartedAt,
 		CompletedAt:         in.CompletedAt,

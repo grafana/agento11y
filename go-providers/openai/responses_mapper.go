@@ -501,7 +501,7 @@ func mapResponsesTools(value any) []agento11y.ToolDefinition {
 func mapResponsesUsage(usage responses.ResponseUsage) agento11y.TokenUsage {
 	// The Responses API input_tokens already includes cached tokens, which is
 	// the inclusive contract as-is.
-	return agento11y.TokenUsage{
+	mapped := agento11y.TokenUsage{
 		InputTokens:          usage.InputTokens,
 		OutputTokens:         usage.OutputTokens,
 		TotalTokens:          usage.TotalTokens,
@@ -509,8 +509,15 @@ func mapResponsesUsage(usage responses.ResponseUsage) agento11y.TokenUsage {
 		ReasoningTokens:      usage.OutputTokensDetails.ReasoningTokens,
 		InputSemantics:       agento11y.TokenInputSemanticsInclusive,
 	}
+	if raw := usage.RawJSON(); raw != "" {
+		return agento11y.ApplyModalityJSON(mapped, []byte(raw), "openai")
+	}
+	raw, err := json.Marshal(usage)
+	if err != nil {
+		return mapped
+	}
+	return agento11y.ApplyModalityJSON(mapped, raw, "openai")
 }
-
 func normalizeResponsesStopReason(resp *responses.Response) string {
 	if resp == nil {
 		return ""

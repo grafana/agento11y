@@ -23,6 +23,7 @@ import com.grafana.agento11y.sdk.ModelRef;
 import com.grafana.agento11y.sdk.PartMetadata;
 import com.grafana.agento11y.sdk.Agento11yClient;
 import com.grafana.agento11y.sdk.TokenUsage;
+import com.grafana.agento11y.sdk.ModalityTokenCounts;
 import com.grafana.agento11y.sdk.ToolCall;
 import com.grafana.agento11y.sdk.ToolDefinition;
 import com.grafana.agento11y.sdk.ToolResultPart;
@@ -537,15 +538,22 @@ public final class GeminiAdapter {
             total = input + output + toolUsePrompt + reasoning;
         }
 
-        // promptTokenCount already includes cachedContentTokenCount: inclusive
-        // as-is. tool_use_prompt handling stays unchanged pending the open
-        // contract decision (see the rollout plan).
+        ModalityTokenCounts inputDetails = ModalityTokenCounts.fromProvider(first(usagePayload, "promptTokensDetails", "prompt_tokens_details"), input, 0, false);
+        if (toolUsePrompt != 0) {
+            Map<String, Long> counts = new java.util.LinkedHashMap<>();
+            if (inputDetails != null) { counts.putAll(inputDetails.tokens()); }
+            counts.put("tool_use", toolUsePrompt);
+            inputDetails = new ModalityTokenCounts(counts, false);
+        }
         return new TokenUsage()
-                .setInputTokens(input)
-                .setOutputTokens(output)
+                .setInputTokens(input + toolUsePrompt)
+                .setOutputTokens(output + reasoning)
                 .setTotalTokens(total)
                 .setCacheReadInputTokens(cacheRead)
                 .setReasoningTokens(reasoning)
+                .setInputByModality(inputDetails)
+                .setOutputByModality(ModalityTokenCounts.fromProvider(first(usagePayload, "candidatesTokensDetails", "candidates_tokens_details"), output + reasoning, reasoning, false))
+                .setCacheReadByModality(ModalityTokenCounts.fromProvider(first(usagePayload, "cacheTokensDetails", "cache_tokens_details"), cacheRead, 0, false))
                 .setInputSemantics(TokenUsage.TokenInputSemantics.INCLUSIVE);
     }
 

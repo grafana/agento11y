@@ -105,8 +105,20 @@ public enum TokenInputSemantics
     Inclusive = 1,
 }
 
+public sealed class ModalityTokenCounts
+{
+    public Dictionary<string, long> Tokens { get; set; } = new();
+    public bool Complete { get; set; }
+    public ModalityTokenCounts Clone() => new() { Tokens = new(Tokens), Complete = Complete };
+}
+
 public sealed class TokenUsage
 {
+    public ModalityTokenCounts? InputByModality { get; set; }
+    public ModalityTokenCounts? OutputByModality { get; set; }
+    public ModalityTokenCounts? CacheReadByModality { get; set; }
+    public ModalityTokenCounts? CacheWriteByModality { get; set; }
+
     /// <summary>
     /// Prompt-side token count. Under <see cref="TokenInputSemantics.Inclusive" />
     /// it includes both cache buckets, per the OTel GenAI conventions.
@@ -152,6 +164,11 @@ public sealed class TokenUsage
             CacheWriteInputTokens = CacheWriteInputTokens,
             ReasoningTokens = ReasoningTokens,
             InputSemantics = InputSemantics,
+            InputByModality = InputByModality?.Clone(),
+            OutputByModality = OutputByModality?.Clone(),
+            CacheReadByModality = CacheReadByModality?.Clone(),
+            CacheWriteByModality = CacheWriteByModality?.Clone(),
+
         };
     }
 }
