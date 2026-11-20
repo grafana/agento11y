@@ -332,7 +332,12 @@ var (
 //go:fix inline
 func BoolPtr(b bool) *bool { return new(b) }
 
-// DefaultConfig returns a production-ready baseline configuration.
+// DefaultConfig returns the schema defaults with no env applied: gRPC export
+// to localhost:4317 with no auth.
+//
+// Every field it sets counts as explicit, so NewClient(DefaultConfig()) ignores
+// AGENTO11Y_* env vars. To read env, pass Config{} (or a Config with only the
+// fields you set) to NewClient, or start from ConfigFromEnv().
 func DefaultConfig() Config {
 	return Config{
 		GenerationExport: GenerationExportConfig{
@@ -483,7 +488,9 @@ type telemetryInstruments struct {
 // NewClient creates a Client, applying defaults for empty config values.
 //
 // Resolution order: explicit fields on the supplied Config win, then canonical
-// SIGIL_* env vars, then DefaultConfig values. Env reading is automatic.
+// AGENTO11Y_* env vars (SIGIL_* fallback), then DefaultConfig values. Env
+// fills only zero-valued fields, so pass Config{} rather than DefaultConfig()
+// when env should apply.
 //
 // Malformed env values are logged and skipped; other valid env values still
 // apply. Use ConfigFromEnv() if strict validation is required.

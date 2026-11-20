@@ -20,7 +20,7 @@ func Example_withAgento11yWrapper() {
 		return
 	}
 
-	client := agento11y.NewClient(agento11y.DefaultConfig())
+	client := agento11y.NewClient(agento11y.Config{})
 	providerClient := asdk.NewClient(asdkoption.WithAPIKey(apiKey))
 	req := exampleAnthropicRequest()
 
@@ -47,7 +47,7 @@ func Example_withAgento11yDefer() {
 		return
 	}
 
-	client := agento11y.NewClient(agento11y.DefaultConfig())
+	client := agento11y.NewClient(agento11y.Config{})
 	providerClient := asdk.NewClient(asdkoption.WithAPIKey(apiKey))
 	req := exampleAnthropicRequest()
 
@@ -84,7 +84,7 @@ func Example_withAgento11yStreamingWrapper() {
 		return
 	}
 
-	client := agento11y.NewClient(agento11y.DefaultConfig())
+	client := agento11y.NewClient(agento11y.Config{})
 	providerClient := asdk.NewClient(asdkoption.WithAPIKey(apiKey))
 	req := exampleAnthropicRequest()
 
@@ -109,7 +109,7 @@ func Example_withAgento11yStreamingDefer() {
 		return
 	}
 
-	client := agento11y.NewClient(agento11y.DefaultConfig())
+	client := agento11y.NewClient(agento11y.Config{})
 	providerClient := asdk.NewClient(asdkoption.WithAPIKey(apiKey))
 	req := exampleAnthropicRequest()
 

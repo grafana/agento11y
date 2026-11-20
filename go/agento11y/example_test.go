@@ -11,7 +11,7 @@ import (
 )
 
 func ExampleClient_StartGeneration() {
-	client := agento11y.NewClient(agento11y.DefaultConfig())
+	client := agento11y.NewClient(agento11y.Config{})
 
 	ctx, recorder := client.StartGeneration(context.Background(), agento11y.GenerationStart{
 		ConversationID: "conv-9b2f",
@@ -35,7 +35,7 @@ func ExampleClient_StartGeneration() {
 }
 
 func ExampleClient_StartStreamingGeneration() {
-	client := agento11y.NewClient(agento11y.DefaultConfig())
+	client := agento11y.NewClient(agento11y.Config{})
 
 	ctx, recorder := client.StartStreamingGeneration(context.Background(), agento11y.GenerationStart{
 		ConversationID: "conv-stream",
@@ -57,7 +57,7 @@ func ExampleClient_StartStreamingGeneration() {
 }
 
 func ExampleClient_StartToolExecution() {
-	client := agento11y.NewClient(agento11y.DefaultConfig())
+	client := agento11y.NewClient(agento11y.Config{})
 
 	ctx, recorder := client.StartToolExecution(context.Background(), agento11y.ToolExecutionStart{
 		ToolName:        "weather",

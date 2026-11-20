@@ -19,7 +19,7 @@ func Example_withAgento11yWrapper() {
 		return
 	}
 
-	client := agento11y.NewClient(agento11y.DefaultConfig())
+	client := agento11y.NewClient(agento11y.Config{})
 	model, contents, config := exampleGeminiRequest()
 
 	providerClient, err := genai.NewClient(context.Background(), &genai.ClientConfig{
@@ -53,7 +53,7 @@ func Example_withAgento11yDefer() {
 		return
 	}
 
-	client := agento11y.NewClient(agento11y.DefaultConfig())
+	client := agento11y.NewClient(agento11y.Config{})
 	model, contents, config := exampleGeminiRequest()
 
 	ctx, rec := client.StartGeneration(context.Background(), agento11y.GenerationStart{
@@ -98,7 +98,7 @@ func Example_withAgento11yStreamingDefer() {
 		return
 	}
 
-	client := agento11y.NewClient(agento11y.DefaultConfig())
+	client := agento11y.NewClient(agento11y.Config{})
 	model, contents, config := exampleGeminiRequest()
 
 	ctx, rec := client.StartStreamingGeneration(context.Background(), agento11y.GenerationStart{

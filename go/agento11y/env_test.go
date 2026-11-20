@@ -960,3 +960,46 @@ func TestNewClient_EnvHandling(t *testing.T) {
 		})
 	}
 }
+
+// The documented setup is NewClient(Config{}) or NewClient(ConfigFromEnv()):
+// both must pick up the export endpoint, protocol, and auth from AGENTO11Y_*.
+// NewClient(DefaultConfig()) does not, because every DefaultConfig field is an
+// explicit value that wins over env.
+func TestNewClientExportSettingsFromEnv(t *testing.T) {
+	t.Setenv("AGENTO11Y_ENDPOINT", "https://env-endpoint.example:4318")
+	t.Setenv("AGENTO11Y_PROTOCOL", "http")
+	t.Setenv("AGENTO11Y_AUTH_MODE", "basic")
+	t.Setenv("AGENTO11Y_AUTH_TENANT_ID", "4242")
+	t.Setenv("AGENTO11Y_AUTH_TOKEN", "env-token")
+	wantAuth := "Basic " + base64Encode("4242:env-token")
+
+	fromEnv, err := ConfigFromEnv()
+	if err != nil {
+		t.Fatalf("ConfigFromEnv: %v", err)
+	}
+	for name, cfg := range map[string]Config{"zero Config": {}, "ConfigFromEnv": fromEnv} {
+		t.Run(name, func(t *testing.T) {
+			c := NewClient(cfg)
+			defer func() { _ = c.Shutdown(context.Background()) }()
+			got := c.config.GenerationExport
+			if got.Endpoint != "https://env-endpoint.example:4318" {
+				t.Errorf("Endpoint=%q", got.Endpoint)
+			}
+			if got.Protocol != GenerationExportProtocolHTTP {
+				t.Errorf("Protocol=%q", got.Protocol)
+			}
+			if got.Headers[authorizationHeaderName] != wantAuth {
+				t.Errorf("Authorization header not derived from env auth")
+			}
+		})
+	}
+
+	t.Run("DefaultConfig pins localhost gRPC", func(t *testing.T) {
+		c := NewClient(DefaultConfig())
+		defer func() { _ = c.Shutdown(context.Background()) }()
+		got := c.config.GenerationExport
+		if got.Endpoint != "localhost:4317" || got.Protocol != GenerationExportProtocolGRPC {
+			t.Errorf("DefaultConfig export = %q/%q, want localhost:4317/grpc", got.Endpoint, got.Protocol)
+		}
+	})
+}
