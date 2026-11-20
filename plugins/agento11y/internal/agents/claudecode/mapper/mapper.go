@@ -620,25 +620,11 @@ func noteTitle(line transcript.Line, text string, uctx *userContext, st *state.S
 // example "/model opus" from <command-name>/model</command-name> and
 // <command-args>opus</command-args>.
 func slashCommandTitle(record string) string {
-	name := tagText(record, "command-name")
-	if args := tagText(record, "command-args"); name != "" && args != "" {
+	name := transcript.TagText(record, "command-name")
+	if args := transcript.TagText(record, "command-args"); name != "" && args != "" {
 		return name + " " + args
 	}
 	return name
-}
-
-// tagText returns the trimmed text between <tag> and </tag> in s, or "" when s
-// has no such element or it is not closed.
-func tagText(s, tag string) string {
-	_, rest, ok := strings.Cut(s, "<"+tag+">")
-	if !ok {
-		return ""
-	}
-	inner, _, ok := strings.Cut(rest, "</"+tag+">")
-	if !ok {
-		return ""
-	}
-	return strings.TrimSpace(inner)
 }
 
 // synthesiseSubagentGens creates a generation for each Agent tool result in
