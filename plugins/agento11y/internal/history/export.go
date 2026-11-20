@@ -6,10 +6,12 @@ import (
 	"log"
 	"maps"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/grafana/agento11y/go/agento11y"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/autotag"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/emit"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/otel"
@@ -91,6 +93,50 @@ type Exporter struct {
 	// endpoint. nil skips the confirmation, for a test stub that records into
 	// memory and has nothing to deliver.
 	Confirm func(ctx context.Context) error
+	// AutoTags returns the automatic tags for a turn whose session recorded
+	// workspace. NewExporter wires it to autoTagger; nil attaches none, which
+	// is also what autoTagger returns when the switch is off.
+	AutoTags func(workspace string) map[string]string
+}
+
+// AutoTagger resolves the import auto tags for a workspace, or returns nil when
+// AGENTO11Y_AUTO_CODING_AGENT_TAGS is off so an import that has not opted in
+// does no work at all. It is the value for [Exporter.AutoTags].
+//
+// look reads branded variables; nil uses the process environment, which is
+// right for the CLI because it applies config.env to its own environment before
+// building an exporter. The local daemon must pass a lookup over config.env
+// instead: its environment was merged when it started, so a switch written
+// since would not apply, and applying the file to its environment mid-run would
+// change what it forwards.
+//
+// The selection is read once per exporter: it cannot change mid-import, and
+// Select logs each misconfiguration, which would otherwise repeat per turn. The
+// logger is nil for that reason — every hook invocation and `agento11y doctor`
+// already report a bad switch or an unknown name.
+//
+// gitbranch.Repo reads .git on every call and a session's turns share one
+// workspace, so results are cached, including the empty one for a workspace
+// outside a checkout. Callers must treat a returned map as read-only: every
+// turn of a workspace gets the same one. The cache lives inside the closure, so
+// an Exporter stays read-only once built and safe to share.
+func AutoTagger(look envconfig.Lookup) func(string) map[string]string {
+	enabled := autotag.Select(look, nil).Enabled
+	if len(enabled) == 0 {
+		return nil
+	}
+	var mu sync.Mutex
+	cache := make(map[string]map[string]string)
+	return func(workspace string) map[string]string {
+		mu.Lock()
+		defer mu.Unlock()
+		if tags, ok := cache[workspace]; ok {
+			return tags
+		}
+		tags := autotag.ImportTags(enabled, workspace, look)
+		cache[workspace] = tags
+		return tags
+	}
 }
 
 // NewExporter builds an Exporter that records through client and confirms
@@ -104,7 +150,8 @@ func NewExporter(client *agento11y.Client) *Exporter {
 			// parts rather than in separate live tool spans.
 			return emit.Record(ctx, client, start, gen, callErr, nil)
 		},
-		Confirm: client.Flush,
+		Confirm:  client.Flush,
+		AutoTags: AutoTagger(nil),
 	}
 }
 
@@ -198,7 +245,9 @@ func NewTargetExporter(ctx context.Context, target Target, logger *log.Logger) (
 	// Spans and generations carry their own timestamps, but a metric point is
 	// stamped when it is exported, so recording an imported turn would count
 	// weeks of history as usage on the import day. An import records no
-	// metrics; dashboards read imported history from its generations.
+	// metrics; dashboards read imported history from its generations. This is
+	// also why the auto tags are attached per generation rather than as client
+	// tags: on the import path they label no metric.
 	client := agento11y.NewClient(emit.WithoutMetrics(cfg))
 	cleanup := func(ctx context.Context) error {
 		// A cancelled import must still drain the client before its providers.
@@ -296,7 +345,33 @@ func (e *Exporter) prepare(g *HistoricalGeneration) {
 	}
 
 	e.applyTimestamps(gen, q)
+	e.applyAutoTags(gen)
 	stampQuality(gen, *q)
+}
+
+// applyAutoTags attaches the opted-in automatic tags to one turn, keyed on the
+// workspace the source recorded as the `cwd` tag. Every importer-reachable
+// mapper writes that tag when its log carries a working directory, so the
+// workspace needs no separate channel; a turn without one gets no repo.
+//
+// The auto tags are the weak party in the merge. A tag the source recorded
+// wins, as built-ins win over extras in the live mappers, and a key set in
+// AGENTO11Y_TAGS wins too — Describe drops those for us, which matters here
+// because a generation tag would otherwise override the SDK's environment tags
+// rather than yield to them the way a client tag does.
+func (e *Exporter) applyAutoTags(gen *agento11y.Generation) {
+	if e.AutoTags == nil {
+		return
+	}
+	for key, value := range e.AutoTags(gen.Tags["cwd"]) {
+		if _, taken := gen.Tags[key]; taken {
+			continue
+		}
+		if gen.Tags == nil {
+			gen.Tags = make(map[string]string, 2)
+		}
+		gen.Tags[key] = value
+	}
 }
 
 // applyTimestamps anchors a turn with one missing timestamp and flags the gaps

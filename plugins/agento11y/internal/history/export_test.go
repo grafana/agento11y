@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -474,12 +475,13 @@ func TestLocalTargetNeedsNoCredentials(t *testing.T) {
 	_ = cleanup(ctx)
 }
 
-// TestNewTargetExporterIgnoresAutoTags pins the one client path that must not
-// take AGENTO11Y_AUTO_CODING_AGENT_TAGS. The importer replays sessions recorded earlier,
-// possibly in another checkout, so the machine running the import does not
-// describe them: stamping the current user, repository, or branch on a
-// replayed turn would be wrong.
-func TestNewTargetExporterIgnoresAutoTags(t *testing.T) {
+// TestNewTargetExporterTakesNoAutoTagsFromTheImportingMachine pins what the switch must never reach on
+// the import path. A turn whose source recorded no workspace takes no repo:
+// resolving one would describe the machine running the import rather than the
+// session, and the branch on disk is never taken for any turn. The tags an
+// opted-in import does attach are keyed on the recorded workspace instead, as
+// TestExporterAppliesAutoTags covers, and autotag.ImportTags resolves.
+func TestNewTargetExporterTakesNoAutoTagsFromTheImportingMachine(t *testing.T) {
 	envconfig.PinAliasEnvBlank(t)
 	t.Setenv("AGENTO11Y_AUTO_CODING_AGENT_TAGS", "true")
 
@@ -545,6 +547,149 @@ func TestNewTargetExporterIgnoresAutoTags(t *testing.T) {
 		if v, ok := gotTags[key]; ok {
 			t.Errorf("imported generation carries auto-tag %s=%q", key, v)
 		}
+	}
+}
+
+// TestExporterAppliesAutoTags covers the merge itself: the workspace comes from
+// the `cwd` tag the source recorded, anything the source already set wins, and
+// a turn with no workspace still receives the names that need none. AutoTags is
+// stubbed so this pins the merge rather than the resolution, which
+// autotag.TestImportTags owns.
+func TestExporterAppliesAutoTags(t *testing.T) {
+	cases := []struct {
+		name string
+		tags map[string]string
+		auto map[string]map[string]string
+		want map[string]string
+	}{
+		{
+			name: "the switch is off so nothing is attached",
+			tags: map[string]string{"cwd": "/w"},
+			want: map[string]string{"cwd": "/w"},
+		},
+		{
+			name: "tags are keyed on the recorded workspace",
+			tags: map[string]string{"cwd": "/w"},
+			auto: map[string]map[string]string{"/w": {"user": "bob", "repo": "grafana/agento11y"}},
+			want: map[string]string{"cwd": "/w", "user": "bob", "repo": "grafana/agento11y"},
+		},
+		{
+			name: "a recorded tag wins over the auto tag",
+			tags: map[string]string{"cwd": "/w", "repo": "recorded/repo"},
+			auto: map[string]map[string]string{"/w": {"repo": "grafana/agento11y"}},
+			want: map[string]string{"cwd": "/w", "repo": "recorded/repo"},
+		},
+		{
+			// git.branch is a per-generation built-in for the agents whose log
+			// records one, and the auto tags must not overwrite it.
+			name: "a recorded branch is never overwritten",
+			tags: map[string]string{"cwd": "/w", "git.branch": "recorded"},
+			auto: map[string]map[string]string{"/w": {"git.branch": "on-disk"}},
+			want: map[string]string{"cwd": "/w", "git.branch": "recorded"},
+		},
+		{
+			// A turn with no cwd tag asks for the empty workspace, where
+			// ImportTags leaves repo off and keeps user.
+			name: "a turn with no workspace still takes user",
+			auto: map[string]map[string]string{"": {"user": "bob"}},
+			want: map[string]string{"user": "bob"},
+		},
+		{
+			name: "a nil tag map stays nil when nothing resolves",
+			auto: map[string]map[string]string{"": nil},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got agento11y.Generation
+			exp := &Exporter{
+				Record: func(_ context.Context, _ agento11y.GenerationStart, gen agento11y.Generation, _ error) error {
+					got = gen
+					return nil
+				},
+			}
+			if tc.auto != nil {
+				exp.AutoTags = func(workspace string) map[string]string { return tc.auto[workspace] }
+			}
+
+			if err := exp.ExportHistoricalGeneration(context.Background(), HistoricalGeneration{
+				Source: SourceRef{Agent: AgentClaudeCode, SessionID: "s1", SourcePath: "/a.jsonl"},
+				Gen: agento11y.Generation{
+					ConversationID: "s1",
+					Model:          agento11y.ModelRef{Provider: "anthropic", Name: "claude"},
+					Input:          []agento11y.Message{agento11y.UserTextMessage("hello")},
+					Tags:           maps.Clone(tc.tags),
+					StartedAt:      time.Now().Add(-time.Minute),
+					CompletedAt:    time.Now(),
+				},
+			}); err != nil {
+				t.Fatalf("ExportHistoricalGeneration: %v", err)
+			}
+			if !maps.Equal(got.Tags, tc.want) {
+				t.Errorf("tags = %v, want %v", got.Tags, tc.want)
+			}
+			// maps.Equal cannot tell a nil map from an empty one, and not
+			// allocating is the whole point of the last case.
+			if tc.want == nil && got.Tags != nil {
+				t.Errorf("tags = %v, want a nil map rather than an allocated empty one", got.Tags)
+			}
+		})
+	}
+}
+
+// TestExporterTakesWorkspaceFromARealMapper closes the one seam the stubbed
+// tests above leave open: that the `cwd` tag a real importer writes is the
+// value the exporter resolves against. The tag is the only channel — a
+// HistoricalGeneration carries no workspace field — so a mapper that stopped
+// writing it would silently stop producing repo tags.
+func TestExporterTakesWorkspaceFromARealMapper(t *testing.T) {
+	envconfig.PinAliasEnvBlank(t)
+	root := t.TempDir()
+	path := writeClaudeSession(t, root, "-work-repo", "sess-a")
+	imp := claudeImporterAt(root)
+
+	preview, ok, err := imp.Preview(context.Background(), path)
+	if err != nil || !ok {
+		t.Fatalf("Preview: ok=%v err=%v", ok, err)
+	}
+	turns := collectTurns(t, imp, preview)
+	if len(turns) == 0 {
+		t.Fatal("no turns")
+	}
+
+	var asked []string
+	exp := &Exporter{
+		Record: func(context.Context, agento11y.GenerationStart, agento11y.Generation, error) error { return nil },
+		AutoTags: func(workspace string) map[string]string {
+			asked = append(asked, workspace)
+			return nil
+		},
+	}
+	if err := exp.ExportHistoricalGeneration(context.Background(), turns[0]); err != nil {
+		t.Fatalf("ExportHistoricalGeneration: %v", err)
+	}
+	// writeClaudeSession records /work/repo as the session's cwd.
+	if len(asked) != 1 || asked[0] != "/work/repo" {
+		t.Errorf("resolved against %v, want [/work/repo] from the mapper's cwd tag", asked)
+	}
+}
+
+// TestNewExporterWiresAutoTags pins that the production constructor every
+// import path reaches — the CLI and the viewer both build through
+// NewTargetExporter, which calls NewExporter — honours the switch. Without this
+// the feature would be wired in a constructor no caller uses.
+func TestNewExporterWiresAutoTags(t *testing.T) {
+	envconfig.PinAliasEnvBlank(t)
+	t.Setenv("AGENTO11Y_AUTO_CODING_AGENT_TAGS", "true")
+	t.Setenv("AGENTO11Y_USER_ID", "bob@example.com")
+
+	exp := NewExporter(agento11y.NewClient(agento11y.Config{}))
+	if exp.AutoTags == nil {
+		t.Fatal("NewExporter left AutoTags nil with the switch on")
+	}
+	if got := exp.AutoTags("")["user"]; got != "bob@example.com" {
+		t.Errorf("user tag = %q, want bob@example.com", got)
 	}
 }
 
