@@ -2,6 +2,8 @@ package mapper
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -11,6 +13,9 @@ import (
 	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/state"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/transcript"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/autotag"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/gitbranch"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/mapperutil"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/redact"
 )
@@ -2221,5 +2226,104 @@ func TestProcessBoundsToolResultContent(t *testing.T) {
 	}
 	if len(content) > mapperutil.MaxToolResultBytes+len(" [truncated]") {
 		t.Fatalf("tool result content is %d bytes, want at most %d plus the marker", len(content), mapperutil.MaxToolResultBytes)
+	}
+}
+
+// detachedRepo returns a checkout whose .git/HEAD names a commit, as a
+// detached HEAD does.
+func detachedRepo(t *testing.T) string {
+	t.Helper()
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".git", "HEAD"), []byte("4691bffb0123456789abcdef0123456789abcdef\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return repo
+}
+
+// On a detached HEAD, Claude Code writes "gitBranch":"HEAD" on every
+// transcript line, while the agento11y_tag_git_branch metric label comes from
+// .git/HEAD through autotag. With the HEAD the live hook resolved in Options,
+// the span tag and the metric label name the same commit, so a branch picked
+// from the Branch chart finds the session.
+func TestProcess_DetachedHeadBranchMatchesMetric(t *testing.T) {
+	envconfig.PinAliasEnvBlank(t)
+	t.Setenv("AGENTO11Y_AUTO_CODING_AGENT_TAGS", "true")
+	repo := detachedRepo(t)
+
+	line := makeAssistantLine("claude-sonnet-4-20250514", 10, []transcript.ContentBlock{{Type: "text", Text: "hi"}}, "end_turn")
+	line.GitBranch = "HEAD"
+	line.CWD = repo
+	gens, _ := Process([]transcript.Line{line}, &state.Session{}, Options{SessionID: "sess-1", ResolvedBranch: gitbranch.Resolve(repo), ResolvedCwd: repo}, nil)
+	if len(gens) != 1 {
+		t.Fatalf("got %d generations, want 1", len(gens))
+	}
+
+	span := gens[0].Tags["git.branch"]
+	metric := autotag.FromEnv(autotag.Inputs{Cwd: repo}, nil)["git.branch"]
+	if span != metric || span != "4691bffb0123" {
+		t.Fatalf("span git.branch=%q, metric git.branch=%q, want both %q", span, metric, "4691bffb0123")
+	}
+}
+
+// ResolvedBranch replaces only the literal "HEAD", on the assistant
+// generation, the synthesised subagent summary and the continuation alike. A
+// real branch on the line is the branch at the time of the turn and wins over
+// a later checkout. A line from another checkout keeps "HEAD", because the
+// resolved value describes ResolvedCwd, not the line's directory.
+func TestProcess_ResolvedBranchReplacesOnlyDetachedHead(t *testing.T) {
+	const hookCwd = "/projects/test"
+	tests := []struct {
+		name     string
+		line     string
+		resolved string
+		lineCwd  string // defaults to hookCwd
+		want     string // "" means no git.branch tag
+	}{
+		{name: "detached HEAD takes the resolved commit", line: "HEAD", resolved: "4691bffb0123", want: "4691bffb0123"},
+		{name: "detached HEAD takes a branch checked out since", line: "HEAD", resolved: "release", want: "release"},
+		{name: "detached HEAD with nothing resolved stays HEAD", line: "HEAD", want: "HEAD"},
+		{name: "real branch is kept when HEAD differs", line: "main", resolved: "release", want: "main"},
+		{name: "no branch on the line stays untagged", resolved: "release"},
+		{name: "line without a cwd takes the resolved commit", line: "HEAD", resolved: "4691bffb0123", lineCwd: "none", want: "4691bffb0123"},
+		{name: "same checkout spelled uncleaned takes the resolved commit", line: "HEAD", resolved: "4691bffb0123", lineCwd: "/projects/./test/", want: "4691bffb0123"},
+		{name: "line from another checkout keeps HEAD", line: "HEAD", resolved: "main", lineCwd: "/projects/other", want: "HEAD"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lines := []transcript.Line{
+				makeUserLine("research this"),
+				makeAssistantLine("claude-sonnet-4-20250514", 30, []transcript.ContentBlock{
+					{Type: "tool_use", ID: "agent_1", Name: "Agent", Input: json.RawMessage(`{"description":"test"}`)},
+				}, "tool_use"),
+				makeToolResultLine("agent_1", "agent result here"),
+				makeAssistantLine("claude-sonnet-4-20250514", 40, []transcript.ContentBlock{
+					{Type: "text", Text: "Based on the agent result..."},
+				}, "end_turn"),
+			}
+			lineCwd := tt.lineCwd
+			switch lineCwd {
+			case "":
+				lineCwd = hookCwd
+			case "none":
+				lineCwd = ""
+			}
+			for i := range lines {
+				lines[i].GitBranch = tt.line
+				lines[i].CWD = lineCwd
+			}
+			gens, _ := Process(lines, &state.Session{}, Options{SessionID: "sess-1", ResolvedBranch: tt.resolved, ResolvedCwd: hookCwd}, nil)
+			if len(gens) != 3 {
+				t.Fatalf("got %d generations, want 3 (parent, subagent summary, continuation)", len(gens))
+			}
+			for i, gen := range gens {
+				got, ok := gen.Tags["git.branch"]
+				if got != tt.want || ok != (tt.want != "") {
+					t.Errorf("gen %d (%s) git.branch = %q (set %v), want %q", i, gen.AgentName, got, ok, tt.want)
+				}
+			}
+		})
 	}
 }

@@ -2216,10 +2216,11 @@ func TestHook_ExportsSubagentTranscriptUsage(t *testing.T) {
 }
 
 type exportedGeneration struct {
-	ID                  string   `json:"id"`
-	AgentName           string   `json:"agent_name"`
-	ConversationID      string   `json:"conversation_id"`
-	ParentGenerationIDs []string `json:"parent_generation_ids"`
+	ID                  string            `json:"id"`
+	AgentName           string            `json:"agent_name"`
+	ConversationID      string            `json:"conversation_id"`
+	ParentGenerationIDs []string          `json:"parent_generation_ids"`
+	Tags                map[string]string `json:"tags"`
 	Usage               struct {
 		InputTokens  json.Number `json:"input_tokens"`
 		OutputTokens json.Number `json:"output_tokens"`
@@ -2976,5 +2977,198 @@ func TestHook_RedactsSubagentTranscriptSecrets(t *testing.T) {
 	}
 	if !sawPrompt || !sawTool || !sawReply {
 		t.Fatalf("redacted fields: prompt=%v tool=%v reply=%v (logs:\n%s\nbody:\n%s)", sawPrompt, sawTool, sawReply, logs, body)
+	}
+}
+
+// gitHeadStates are the .git/HEAD contents the git.branch corpus covers. A
+// missing entry means the cwd has no .git at all.
+var gitHeadStates = []struct{ name, head string }{
+	{name: "ref", head: "ref: refs/heads/release\n"},
+	{name: "hash", head: "4691bffb0123456789abcdef0123456789abcdef\n"},
+	{name: "missing"},
+}
+
+// checkoutWithHead returns a directory whose .git/HEAD holds head, or one with
+// no .git when head is empty.
+func checkoutWithHead(t *testing.T, head string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if head == "" {
+		return dir
+	}
+	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".git", "HEAD"), []byte(head), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// withBranch adds Claude Code's gitBranch and cwd fields to a fixture line.
+func withBranch(t *testing.T, line, branch, cwd string) string {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal([]byte(line), &m); err != nil {
+		t.Fatal(err)
+	}
+	if branch != "" {
+		m["gitBranch"] = branch
+	}
+	m["cwd"] = cwd
+	data, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+// TestHook_GitBranchTagCorpus runs the live hook over every transcript
+// gitBranch value against every .git/HEAD state of the hook's cwd, with the
+// line's cwd either the hook's or another checkout detached at a different
+// commit. Only a detached "HEAD" line from the hook's own checkout takes the
+// HEAD the hook resolved, which is the value the agento11y_tag_git_branch
+// metric label carries. A line from another checkout keeps "HEAD": the hook
+// read the wrong .git/HEAD for it. The history import half of the corpus is
+// TestClaudeImportGitBranchTagCorpus.
+func TestHook_GitBranchTagCorpus(t *testing.T) {
+	want := map[string]map[string]string{ // line gitBranch -> HEAD state -> tag, same cwd
+		"main":      {"ref": "main", "hash": "main", "missing": "main"},
+		"HEAD":      {"ref": "release", "hash": "4691bffb0123", "missing": "HEAD"},
+		"":          {"ref": "", "hash": "", "missing": ""},
+		"feature/x": {"ref": "feature/x", "hash": "feature/x", "missing": "feature/x"},
+	}
+	for _, branch := range []string{"main", "HEAD", "", "feature/x"} {
+		for _, head := range gitHeadStates {
+			for _, lineCwd := range []string{"same", "other"} {
+				t.Run(branch+"/"+head.name+"/"+lineCwd, func(t *testing.T) {
+					dir := t.TempDir()
+					envconfig.PinAliasEnvBlank(t)
+					t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+					var gotBody atomic.Value
+					gotBody.Store("")
+					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						body, _ := io.ReadAll(r.Body)
+						gotBody.Store(string(body))
+						r.Body = io.NopCloser(bytes.NewReader(body))
+						acceptGenerationExport(w, r)
+					}))
+					defer server.Close()
+					setHookExportEnv(t, server.URL)
+
+					cwd := checkoutWithHead(t, head.head)
+					transcriptCwd, wantTag := cwd, want[branch][head.name]
+					if lineCwd == "other" {
+						transcriptCwd, wantTag = checkoutWithHead(t, "0123456789abcdef0123456789abcdef01234567\n"), branch
+					}
+					sessionID := "branch-corpus-session"
+					transcriptPath := filepath.Join(dir, "transcript.jsonl")
+					content := withBranch(t, buildHookUserJSONL(sessionID, "hi"), branch, transcriptCwd) + "\n" +
+						withBranch(t, buildHookAssistantJSONL(sessionID, "req-1", "end_turn", "hello", 5), branch, transcriptCwd) + "\n"
+					if err := os.WriteFile(transcriptPath, []byte(content), 0o644); err != nil {
+						t.Fatal(err)
+					}
+					runHookForTest(t, hookInput{HookEventName: "Stop", SessionID: sessionID, TranscriptPath: transcriptPath, Cwd: cwd})
+
+					var req struct {
+						Generations []struct {
+							Tags map[string]string `json:"tags"`
+						} `json:"generations"`
+					}
+					if err := json.Unmarshal([]byte(gotBody.Load().(string)), &req); err != nil || len(req.Generations) != 1 {
+						t.Fatalf("export body: err=%v generations=%d", err, len(req.Generations))
+					}
+					got := req.Generations[0].Tags["git.branch"]
+					t.Logf("corpus live line=%q head=%s cwd=%s git.branch=%q", branch, head.name, lineCwd, got)
+					if got != wantTag {
+						t.Errorf("git.branch = %q, want %q", got, wantTag)
+					}
+				})
+			}
+		}
+	}
+}
+
+// TestHook_SubagentGitBranchFollowsLineCwd pins that a subagent transcript
+// gets the HEAD the hook resolved only when its lines come from the hook's own
+// checkout. A subagent working in another detached checkout keeps "HEAD"
+// rather than the hook directory's branch.
+func TestHook_SubagentGitBranchFollowsLineCwd(t *testing.T) {
+	const detached = "4691bffb0123456789abcdef0123456789abcdef\n"
+	tests := []struct {
+		name     string
+		hookHead string
+		otherCwd bool
+		want     string
+	}{
+		{name: "same checkout takes the resolved commit", hookHead: detached, want: "4691bffb0123"},
+		{name: "other checkout keeps HEAD", hookHead: "ref: refs/heads/main\n", otherCwd: true, want: "HEAD"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+			envconfig.PinAliasEnvBlank(t)
+			var exports []exportedGeneration
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				var req struct {
+					Generations []exportedGeneration `json:"generations"`
+				}
+				if err := json.Unmarshal(body, &req); err == nil {
+					exports = append(exports, req.Generations...)
+				}
+				r.Body = io.NopCloser(bytes.NewReader(body))
+				acceptGenerationExport(w, r)
+			}))
+			defer server.Close()
+			setHookExportEnv(t, server.URL)
+
+			hookCwd := checkoutWithHead(t, tt.hookHead)
+			subCwd := hookCwd
+			if tt.otherCwd {
+				subCwd = checkoutWithHead(t, detached)
+			}
+			sessionID := "084e2f13-b8e9-4971-801e-4b2d6334ceec"
+			agentID := "a18f9a9d9f1f3d28e"
+			transcriptPath := filepath.Join(dir, sessionID+".jsonl")
+			subDir := filepath.Join(dir, sessionID, "subagents")
+			if err := os.MkdirAll(subDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			parent := strings.Join([]string{
+				buildHookUserJSONL(sessionID, "investigate"),
+				buildHookAssistantLineAt(sessionID, "req-parent", "tool_use", hookFixtureTimestamp, []any{map[string]any{
+					"type": "tool_use", "id": "agent_1", "name": "Agent",
+					"input": map[string]any{"subagent_type": "general-purpose", "description": "look around"},
+				}}, 7),
+				buildHookToolResultJSONL(sessionID, "agent_1", "agentId: "+agentID+"\nTranscript dir: "+subDir+"\nfound it"),
+				buildHookAssistantJSONL(sessionID, "req-done", "end_turn", "done", 5),
+			}, "\n") + "\n"
+			if err := os.WriteFile(transcriptPath, []byte(parent), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			sub := withBranch(t, buildHookUserJSONL(sessionID, "look around"), "HEAD", subCwd) + "\n" +
+				withBranch(t, buildHookSidechainAssistantJSONL(sessionID, "req-side", agentID, "general-purpose", "found it", 40), "HEAD", subCwd) + "\n"
+			if err := os.WriteFile(filepath.Join(subDir, "agent-"+agentID+".jsonl"), []byte(sub), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			runHookForTest(t, hookInput{HookEventName: "Stop", SessionID: sessionID, TranscriptPath: transcriptPath, Cwd: hookCwd})
+
+			var found bool
+			for _, g := range exports {
+				if g.AgentName != "claude-code/general-purpose" {
+					continue
+				}
+				found = true
+				if got := g.Tags["git.branch"]; got != tt.want {
+					t.Errorf("subagent git.branch = %q, want %q (cwd tag %q)", got, tt.want, g.Tags["cwd"])
+				}
+			}
+			if !found {
+				t.Fatalf("no subagent generation exported; agents=%v", agentNames(exports))
+			}
+		})
 	}
 }
