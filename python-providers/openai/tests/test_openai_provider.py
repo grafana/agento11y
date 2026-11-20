@@ -860,3 +860,79 @@ def test_chat_stream_output_text_keeps_rebuilt_tool_calls() -> None:
         assert text_gen.output[0].parts[0].text == "override"
     finally:
         client.shutdown()
+
+
+def _responses_tool_loop_input(as_objects: bool) -> list[object]:
+    from openai.types.responses import ResponseFunctionToolCall, ResponseOutputMessage, ResponseReasoningItem
+
+    replayed: list[object] = [
+        ResponseReasoningItem(id="rs_1", type="reasoning", summary=[]),
+        ResponseOutputMessage(
+            id="msg_1",
+            type="message",
+            role="assistant",
+            status="completed",
+            content=[{"type": "output_text", "text": "Checking.", "annotations": []}],
+        ),
+        ResponseFunctionToolCall(
+            id="fc_1", type="function_call", call_id="call_weather", name="get_weather", arguments='{"city":"Paris"}'
+        ),
+        ResponseFunctionToolCall(
+            id="fc_2", type="function_call", call_id="call_time", name="get_time", arguments='{"city":"Paris"}'
+        ),
+    ]
+    if not as_objects:
+        replayed = [item.model_dump(exclude_none=True) for item in replayed]
+    return [
+        {"role": "user", "content": "weather and time in Paris?"},
+        *replayed,
+        {"type": "function_call_output", "call_id": "call_weather", "output": '{"temp_c":18}'},
+        {"type": "function_call_output", "call_id": "call_time", "output": '{"time":"14:00"}'},
+    ]
+
+
+def _assert_responses_tool_loop_input(messages) -> None:
+    assert [message.role.value for message in messages] == ["user", "assistant", "assistant", "tool", "tool"]
+    assert messages[1].parts[0].text == "Checking."
+    calls = messages[2].parts
+    assert [part.kind.value for part in calls] == ["tool_call", "tool_call"]
+    assert [(part.tool_call.id, part.tool_call.name) for part in calls] == [
+        ("call_weather", "get_weather"),
+        ("call_time", "get_time"),
+    ]
+    assert calls[0].tool_call.input_json == b'"{\\"city\\":\\"Paris\\"}"'
+    assert calls[0].metadata.provider_type == "tool_call"
+    assert [message.parts[0].tool_result.tool_call_id for message in messages[3:]] == ["call_weather", "call_time"]
+
+
+@pytest.mark.parametrize("as_objects", [False, True])
+def test_responses_mapper_maps_replayed_function_call_input_items(as_objects: bool) -> None:
+    mapped = responses.from_request_response(
+        {"model": "gpt-4o-mini", "input": _responses_tool_loop_input(as_objects)},
+        {"id": "resp-2", "model": "gpt-4o-mini", "output": []},
+    )
+    _assert_responses_tool_loop_input(mapped.input)
+
+
+def test_responses_wrappers_map_replayed_function_call_input_items() -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    request = {"model": "gpt-4o-mini", "input": _responses_tool_loop_input(True)}
+    response = {"id": "resp-2", "model": "gpt-4o-mini", "output": []}
+
+    try:
+        responses.create(client, request, lambda _request: response)
+        responses.stream(client, request, lambda _request: ResponsesStreamSummary(final_response=response))
+        asyncio.run(responses.create_async(client, request, lambda _request: _async_value(response)))
+        asyncio.run(
+            responses.stream_async(
+                client, request, lambda _request: _async_value(ResponsesStreamSummary(final_response=response))
+            )
+        )
+        client.flush()
+        generations = exporter.requests[0].generations
+        assert len(generations) == 4
+        for generation in generations:
+            _assert_responses_tool_loop_input(generation.input)
+    finally:
+        client.shutdown()

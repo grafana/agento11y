@@ -908,6 +908,7 @@ def _map_responses_request(request: ResponsesCreateRequest | ResponsesStreamRequ
     if isinstance(input_payload, str):
         input_messages.append(Message(role=MessageRole.USER, parts=[Part(kind=PartKind.TEXT, text=input_payload)]))
     else:
+        pending_calls: Message | None = None
         for item in _as_list(input_payload):
             role = _as_str(_read(item, "role")).lower()
             item_type = _as_str(_read(item, "type")).lower()
@@ -917,6 +918,18 @@ def _map_responses_request(request: ResponsesCreateRequest | ResponsesStreamRequ
                 if text:
                     system_chunks.append(text)
                 continue
+
+            if item_type == "function_call":
+                # Group consecutive calls into one assistant message, as Chat Completions records tool_calls.
+                part = _responses_function_call_part(item)
+                if part is None:
+                    continue
+                if pending_calls is None:
+                    pending_calls = Message(role=MessageRole.ASSISTANT, parts=[])
+                    input_messages.append(pending_calls)
+                pending_calls.parts.append(part)
+                continue
+            pending_calls = None
 
             if item_type == "function_call_output":
                 tool_message = _tool_result_message(
@@ -999,20 +1012,9 @@ def _map_responses_output_items(value: Any) -> list[Message]:
             continue
 
         if item_type == "function_call":
-            name = _as_str(_read(item, "name"))
-            if not name:
-                continue
-            arguments = _read(item, "arguments")
-            part = Part(
-                kind=PartKind.TOOL_CALL,
-                tool_call=ToolCall(
-                    id=_as_str(_read(item, "call_id")),
-                    name=name,
-                    input_json=_json_bytes(arguments),
-                ),
-            )
-            part.metadata.provider_type = "tool_call"
-            out.append(Message(role=MessageRole.ASSISTANT, parts=[part]))
+            part = _responses_function_call_part(item)
+            if part is not None:
+                out.append(Message(role=MessageRole.ASSISTANT, parts=[part]))
             continue
 
         if item_type == "function_call_output":
@@ -1031,6 +1033,22 @@ def _map_responses_output_items(value: Any) -> list[Message]:
             out.append(Message(role=MessageRole.ASSISTANT, parts=[Part(kind=PartKind.TEXT, text=fallback)]))
 
     return out
+
+
+def _responses_function_call_part(item: Any) -> Part | None:
+    name = _as_str(_read(item, "name"))
+    if not name:
+        return None
+    part = Part(
+        kind=PartKind.TOOL_CALL,
+        tool_call=ToolCall(
+            id=_as_str(_read(item, "call_id")),
+            name=name,
+            input_json=_json_bytes(_read(item, "arguments")),
+        ),
+    )
+    part.metadata.provider_type = "tool_call"
+    return part
 
 
 def _tool_result_message(value: Any, *, tool_call_id: str, name: str, is_error: Any) -> Message | None:
