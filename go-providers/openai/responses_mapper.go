@@ -608,12 +608,27 @@ func responsesStreamEventName(event responses.ResponseStreamEventUnion) string {
 }
 
 // responsesOutputItemErrorMessage returns the error text of an output item,
-// which is either a plain string or an object with a message.
+// which is a plain string, an object with a message, or (for MCP tool
+// execution errors) an object with content.
 func responsesOutputItemErrorMessage(itemErr responses.ResponseOutputItemUnionError) string {
 	if itemErr.OfString != "" {
 		return itemErr.OfString
 	}
-	return itemErr.Message
+	if itemErr.Message != "" {
+		return itemErr.Message
+	}
+	switch content := itemErr.Content.(type) {
+	case nil:
+		return ""
+	case string:
+		return content
+	default:
+		encoded, err := json.Marshal(content)
+		if err != nil {
+			return ""
+		}
+		return string(encoded)
+	}
 }
 
 func extractResponsesOutputFallback(item responses.ResponseOutputItemUnion) string {

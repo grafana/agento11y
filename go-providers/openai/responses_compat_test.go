@@ -31,8 +31,9 @@ func TestResponsesFromStreamReadsFunctionNameFromRawArgumentsDoneEvent(t *testin
 
 func TestResponsesFromRequestResponseMapsOutputItemError(t *testing.T) {
 	cases := map[string]string{
-		"object": `{"id":"mcp_1","type":"mcp_call","name":"lookup","server_label":"docs","arguments":"{}","error":{"type":"http_error","code":500,"message":"upstream failed"}}`,
-		"string": `{"id":"mcp_1","type":"mcp_call","name":"lookup","server_label":"docs","arguments":"{}","error":"upstream failed"}`,
+		"object":  `{"id":"mcp_1","type":"mcp_call","name":"lookup","server_label":"docs","arguments":"{}","error":{"type":"http_error","code":500,"message":"upstream failed"}}`,
+		"string":  `{"id":"mcp_1","type":"mcp_call","name":"lookup","server_label":"docs","arguments":"{}","error":"upstream failed"}`,
+		"content": `{"id":"mcp_1","type":"mcp_call","name":"lookup","server_label":"docs","arguments":"{}","error":{"type":"mcp_tool_execution_error","content":"upstream failed"}}`,
 	}
 	for name, rawItem := range cases {
 		t.Run(name, func(t *testing.T) {
