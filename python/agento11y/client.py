@@ -386,6 +386,8 @@ class Client:
 
         self._shutdown_lock = threading.Lock()
         self._shutting_down = False
+        self._pre_flush_hooks: list[Callable[[], None]] = []
+        self._pre_flush_hooks_lock = threading.Lock()
         self._closed = False
 
         self._otel_handler = None
@@ -968,15 +970,42 @@ class Client:
 
         if self._shutting_down:
             raise ClientShutdownError("agento11y: client is shutting down")
+        self._run_pre_flush_hooks()
         self._flush_internal(report_background_errors=True)
+
+    def add_pre_flush_hook(self, hook: Callable[[], None]) -> None:
+        """Registers a callable that :meth:`flush` and :meth:`shutdown` run first.
+
+        For adapters whose framework records generations later, on its own
+        threads or queues: the hook waits for that pending work, so a flush or
+        shutdown straight after a call still exports its generation. The client
+        stays open while hooks run. Registering the same hook twice has no
+        effect, and a hook that raises is logged and skipped.
+        """
+
+        with self._pre_flush_hooks_lock:
+            if hook not in self._pre_flush_hooks:
+                self._pre_flush_hooks.append(hook)
+
+    def _run_pre_flush_hooks(self) -> None:
+        with self._pre_flush_hooks_lock:
+            hooks = list(self._pre_flush_hooks)
+        for hook in hooks:
+            try:
+                hook()
+            except Exception as exc:  # noqa: BLE001
+                self._log_warn("agento11y pre-flush hook failed", exc)
 
     def shutdown(self) -> None:
         """Flushes pending data and shuts down exporters with native export.
 
-        OTel attempts a trace flush and closes the SDK client without flushing
-        metrics or shutting down application providers.
+        Hooks from :meth:`add_pre_flush_hook` run before the client stops
+        accepting generations. OTel attempts a trace flush and closes the SDK
+        client without flushing metrics or shutting down application providers.
         """
 
+        if not self._closed and not self._shutting_down:
+            self._run_pre_flush_hooks()
         with self._shutdown_lock:
             if self._closed:
                 return

@@ -190,3 +190,59 @@ def test_sync_shutdown_inside_event_loop_leaves_client_open(monkeypatch: pytest.
 
     asyncio.run(run())
     assert calls == []
+
+
+@pytest.mark.parametrize("flush_first", [False, True])
+def test_client_shutdown_after_sync_completions_exports_all(wired: Any, flush_first: bool) -> None:
+    exporter, handler = wired
+    for _ in range(2):
+        litellm.completion(model="gpt-4o-mini", messages=_MESSAGES, mock_response="ok")
+    if flush_first:
+        handler._client.flush()
+    handler._client.shutdown()
+    assert _exported(exporter) == 2
+
+
+def test_client_shutdown_waits_for_success_callback_that_lands_late(
+    wired: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    import threading
+    import time
+
+    exporter, handler = wired
+    original = handler.log_success_event
+    shutdown_called = threading.Event()
+    landed_after_shutdown: list[bool] = []
+
+    def late_success(*args: Any, **kwargs: Any) -> None:
+        shutdown_called.wait(2)
+        time.sleep(0.05)
+        landed_after_shutdown.append(shutdown_called.is_set())
+        original(*args, **kwargs)
+
+    monkeypatch.setattr(handler, "log_success_event", late_success)
+    client = handler._client
+    real_shutdown = client.shutdown
+
+    def shutdown() -> None:
+        shutdown_called.set()
+        real_shutdown()
+
+    for _ in range(2):
+        litellm.completion(model="gpt-4o-mini", messages=_MESSAGES, mock_response="ok")
+    shutdown()
+    assert landed_after_shutdown == [True, True]
+    assert _exported(exporter) == 2
+    assert "client is shutting down" not in caplog.text
+
+
+def test_handler_shutdown_drains_once_with_caller_timeout(wired: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    from agento11y_litellm import handler as handler_mod
+
+    _, handler = wired
+    timeouts: list[float] = []
+    monkeypatch.setattr(handler_mod, "drain_litellm_callbacks", lambda timeout=10.0: timeouts.append(timeout))
+    monkeypatch.setattr(handler_mod, "_drain_sync_executor", lambda timeout: timeouts.append(timeout))
+    handler.flush(timeout=0.5)
+    handler.shutdown(timeout=0.25)
+    assert timeouts == [0.5, 0.25]

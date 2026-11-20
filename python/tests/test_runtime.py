@@ -137,6 +137,33 @@ def test_shutdown_flushes_pending_generation() -> None:
     assert exporter.shutdown_calls == 1
 
 
+def test_pre_flush_hooks_record_generations_before_shutdown_closes_client() -> None:
+    exporter = CapturingGenerationExporter()
+    client = _new_client(exporter, batch_size=10)
+    calls: list[str] = []
+
+    def record_late_generation() -> None:
+        calls.append("hook")
+        rec = client.start_generation(_seed_generation(f"conv-hook-{len(calls)}"))
+        rec.set_result(output=_assistant_output("late"))
+        rec.end()
+        assert rec.err() is None
+
+    def failing_hook() -> None:
+        raise RuntimeError("boom")
+
+    client.add_pre_flush_hook(record_late_generation)
+    client.add_pre_flush_hook(record_late_generation)
+    client.add_pre_flush_hook(failing_hook)
+
+    client.flush()
+    client.shutdown()
+    client.shutdown()
+
+    assert calls == ["hook", "hook"]
+    assert sum(len(r.generations) for r in exporter.requests) == 2
+
+
 def test_builtin_noop_generation_exporter_supports_instrumentation_only_mode() -> None:
     provider = TracerProvider()
     tracer = provider.get_tracer("agento11y-test")
