@@ -8,8 +8,8 @@ import (
 	"time"
 )
 
-// fileSummary holds one conversation file's list, token, and tool projections
-// against the size and modification time they were decoded at.
+// fileSummary holds list, token, and tool projections validated by JSONL
+// size and modification time, or by the SQLite conversation revision.
 //
 // Conversation files are append-only: appendJSONL opens with O_APPEND and
 // never O_TRUNC, and nothing in the package rewrites or compacts them. So a
@@ -17,8 +17,9 @@ import (
 // recorded holds the bytes that entry was decoded from, and can be answered
 // without reopening the file.
 type fileSummary struct {
-	size    int64
-	modTime time.Time
+	size     int64
+	modTime  time.Time
+	revision string
 
 	// summary is the list projection. ok is false when the file held no
 	// decodable record, and the list skips such a file.
@@ -78,14 +79,14 @@ func (e *fileSummary) bounds(since, before time.Time) (first, last time.Time, ok
 	return first, last, ok
 }
 
-// summaryCache holds one fileSummary per conversation file path. An entry
-// is immutable once stored and is replaced whole, so a caller holding one
+// summaryCache holds one fileSummary per JSONL path or SQLite conversation ID.
+// An entry is immutable once stored and is replaced whole, so a caller holding one
 // keeps reading a consistent snapshot while another goroutine refreshes the
 // same path. The mutex guards the maps alone: decoding runs outside it, so
 // a large file cannot block a request that needs a different one.
 type summaryCache struct {
 	// decode reads one file into an entry. Tests replace it to observe
-	// which files a read decoded; a nil value uses decodeFileSummary.
+	// which files a read decoded; a nil value uses the caller's decoder.
 	decode func(conversationFile) (*fileSummary, error)
 
 	mu      sync.Mutex
@@ -106,7 +107,7 @@ type summaryDecode struct {
 
 // matches reports whether the entry was decoded from the bytes f names.
 func (e *fileSummary) matches(f conversationFile) bool {
-	return e != nil && e.size == f.size && e.modTime.Equal(f.modTime)
+	return e != nil && e.size == f.size && e.modTime.Equal(f.modTime) && e.revision == f.revision
 }
 
 // get returns the entry for f, decoding the file when no entry exists or
@@ -117,6 +118,10 @@ func (e *fileSummary) matches(f conversationFile) bool {
 // landing partway through a warm would catch up to the file the warm is on
 // and decode every remaining file a second time.
 func (c *summaryCache) get(f conversationFile) (*fileSummary, error) {
+	return c.getWithDecoder(f, decodeFileSummary)
+}
+
+func (c *summaryCache) getWithDecoder(f conversationFile, decode func(conversationFile) (*fileSummary, error)) (*fileSummary, error) {
 	for {
 		entry, flight, owned := c.claim(f)
 		if entry != nil {
@@ -134,7 +139,7 @@ func (c *summaryCache) get(f conversationFile) (*fileSummary, error) {
 			// caller stated. Take the next turn rather than answer from it.
 			continue
 		}
-		return c.fill(f, flight)
+		return c.fill(f, flight, decode)
 	}
 }
 
@@ -144,27 +149,27 @@ func (c *summaryCache) get(f conversationFile) (*fileSummary, error) {
 func (c *summaryCache) claim(f conversationFile) (entry *fileSummary, flight *summaryDecode, owned bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if held := c.entries[f.path]; held.matches(f) {
+	key := f.cacheKey()
+	if held := c.entries[key]; held.matches(f) {
 		return held, nil, false
 	}
-	if running, ok := c.inflight[f.path]; ok {
+	if running, ok := c.inflight[key]; ok {
 		return nil, running, false
 	}
 	flight = &summaryDecode{done: make(chan struct{})}
 	if c.inflight == nil {
 		c.inflight = map[string]*summaryDecode{}
 	}
-	c.inflight[f.path] = flight
+	c.inflight[key] = flight
 	return nil, flight, true
 }
 
 // fill runs the decode this caller claimed, stores it, and releases the
 // callers waiting on it. A failed decode is not cached, so the next read
 // retries the file and reports the failure itself.
-func (c *summaryCache) fill(f conversationFile, flight *summaryDecode) (*fileSummary, error) {
-	decode := c.decode
-	if decode == nil {
-		decode = decodeFileSummary
+func (c *summaryCache) fill(f conversationFile, flight *summaryDecode, decode func(conversationFile) (*fileSummary, error)) (*fileSummary, error) {
+	if c.decode != nil {
+		decode = c.decode
 	}
 	// The entry records the size and modification time observed before the
 	// decode, so a file appended to while it is being read is decoded again
@@ -176,9 +181,9 @@ func (c *summaryCache) fill(f conversationFile, flight *summaryDecode) (*fileSum
 		if c.entries == nil {
 			c.entries = map[string]*fileSummary{}
 		}
-		c.entries[f.path] = entry
+		c.entries[f.cacheKey()] = entry
 	}
-	delete(c.inflight, f.path)
+	delete(c.inflight, f.cacheKey())
 	c.mu.Unlock()
 
 	flight.entry, flight.err = entry, err
@@ -214,7 +219,7 @@ func (c *summaryCache) prune(files []conversationFile) {
 	}
 	live := make(map[string]struct{}, len(files))
 	for _, f := range files {
-		live[f.path] = struct{}{}
+		live[f.cacheKey()] = struct{}{}
 	}
 	for path := range c.entries {
 		if _, ok := live[path]; !ok {
@@ -416,14 +421,20 @@ func toolUsage(occurrences []toolOccurrence, since, before time.Time) []ToolUsag
 // decodeFileSummary reads one per-conversation JSONL file and fills the
 // list, token, and tool projections in a single pass.
 func decodeFileSummary(f conversationFile) (*fileSummary, error) {
-	entry := &fileSummary{size: f.size, modTime: f.modTime}
+	return decodeConversationSummary(f, func(visit func(summaryRecord)) (int, error) {
+		return scanLatestSummaryRecords(f.path, visit)
+	})
+}
+
+func decodeConversationSummary(f conversationFile, scan func(func(summaryRecord)) (int, error)) (*fileSummary, error) {
+	entry := &fileSummary{size: f.size, modTime: f.modTime, revision: f.revision}
 	agents := map[string]struct{}{}
 	models := map[string]struct{}{}
 	var sum ConversationSummary
 	var tools toolUsageCounter
 	var hasError, seen bool
 
-	skipped, err := scanLatestSummaryRecords(f.path, func(rec summaryRecord) {
+	skipped, err := scan(func(rec summaryRecord) {
 		r, gen := rec, rec.Generation
 		seen = true
 		if sum.ID == "" {
@@ -531,16 +542,35 @@ func decodeFileSummary(f conversationFile) (*fileSummary, error) {
 // reaches a file the warm is decoding waits for that one decode, see get.
 //
 // Warming is best effort. A file that fails to decode is left uncached for
-// a later request to retry and report.
-func (s *Storage) warmSummaries(ctx context.Context) {
-	files, err := s.conversationFiles()
-	if err != nil {
-		return
-	}
-	for _, f := range files {
-		if ctx.Err() != nil {
-			return
+// a later request to retry and report. sqlReads reports whether the warm
+// used SQLite, so the caller can warm again after the migration switches
+// reads to SQLite. A JSONL warm that sees that switch stops and warms the
+// SQL cache instead.
+func (s *Storage) warmSummaries(ctx context.Context) (sqlReads bool, err error) {
+	for {
+		sqlReads, err = s.sqliteReadsReady()
+		if err != nil {
+			return false, err
 		}
-		_, _ = s.summaries.get(f)
+		files, err := s.queryConversationFilesFrom(sqlReads)
+		if err != nil {
+			return false, err
+		}
+		switched := false
+		for _, f := range files {
+			if err := ctx.Err(); err != nil {
+				return sqlReads, err
+			}
+			if !sqlReads {
+				if ready, err := s.sqliteReadsReady(); err == nil && ready {
+					switched = true
+					break
+				}
+			}
+			_, _ = s.conversationSummary(f)
+		}
+		if !switched {
+			return sqlReads, nil
+		}
 	}
 }

@@ -81,6 +81,14 @@ func TestSummaryCache(t *testing.T) {
 			wantDecodes: 2,
 		},
 		{
+			name: "a changed source revision is decoded again",
+			change: func(_ *testing.T, _ *Storage, first conversationFile) conversationFile {
+				first.revision = "next"
+				return first
+			},
+			wantDecodes: 2,
+		},
+		{
 			name: "an invalidated entry is decoded again",
 			change: func(t *testing.T, s *Storage, first conversationFile) conversationFile {
 				s.summaries.invalidate(first.path)
@@ -339,7 +347,8 @@ func TestWarmSummaries(t *testing.T) {
 	}
 
 	decoded := recordDecodes(&s.summaries)
-	s.warmSummaries(context.Background())
+	_, err := s.warmSummaries(context.Background())
+	require.NoError(t, err)
 	assert.Equal(t, []string{"conv-new", "conv-old"}, *decoded,
 		"the newest conversation is warmed first: it is the page the viewer opens on")
 
@@ -385,9 +394,9 @@ func TestWarmStartsOnFirstViewerRead(t *testing.T) {
 	srv.WarmSummariesOnFirstRead(context.Background())
 	warm := srv.warmStore
 	var warms atomic.Int64
-	srv.warmStore = func() {
+	srv.warmStore = func() (bool, error) {
 		warms.Add(1)
-		warm()
+		return warm()
 	}
 
 	postDiscard(t, srv, "/api/v1/generations:export", "application/json",
@@ -410,6 +419,83 @@ func TestWarmStartsOnFirstViewerRead(t *testing.T) {
 		"the store is warmed once, not once per request")
 }
 
+func TestWarmSwitchesToSQLMidWalk(t *testing.T) {
+	storage := newStorage(t)
+	for _, id := range []string{"conv-A", "conv-B"} {
+		writeGen(t, storage, id, "g-"+id, agento11y.Generation{
+			Model:     agento11y.ModelRef{Name: "m"},
+			StartedAt: mustParse(t, "2026-08-03T10:00:00Z"),
+		}, "2026-08-03T10:00:01Z")
+	}
+	store, err := openSQLStore(storage.Dir(), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	storage.sql = store
+	runTestMigration(t, storage)
+	require.NoError(t, store.setMigrationComplete(false))
+
+	var jsonlDecodes int
+	storage.summaries.decode = func(f conversationFile) (*fileSummary, error) {
+		jsonlDecodes++
+		require.NoError(t, store.setMigrationComplete(true))
+		return decodeFileSummary(f)
+	}
+	sqlReads, err := storage.warmSummaries(context.Background())
+	require.NoError(t, err)
+	assert.True(t, sqlReads)
+	assert.Equal(t, 1, jsonlDecodes, "the JSONL walk stops at the switch")
+	assert.Equal(t, 2, cachedSummaryCount(&storage.sqlSummaries))
+	assert.Zero(t, cachedSummaryCount(&storage.summaries))
+}
+
+func TestWarmFollowsReadSource(t *testing.T) {
+	srv, storage, _ := newTestServerStorage(t)
+	writeGen(t, storage, "conv-A", "g-A", agento11y.Generation{
+		Model:     agento11y.ModelRef{Name: "m"},
+		StartedAt: mustParse(t, "2026-08-03T10:00:00Z"),
+		Usage:     agento11y.TokenUsage{InputTokens: 1},
+	}, "2026-08-03T10:00:01Z")
+	srv.WarmSummariesOnFirstRead(context.Background())
+	warm := srv.warmStore
+	var warms atomic.Int64
+	srv.warmStore = func() (bool, error) {
+		warms.Add(1)
+		return warm()
+	}
+	read := func() {
+		t.Helper()
+		rr := httptest.NewRecorder()
+		srv.ServeHTTP(rr, newLocalRequest(http.MethodGet, "/api/v1/conversations", nil))
+		require.Equal(t, http.StatusOK, rr.Code)
+	}
+	warmedFrom := func(source warmSource) func() bool {
+		return func() bool {
+			srv.warmMu.Lock()
+			defer srv.warmMu.Unlock()
+			return !srv.warming && srv.warmed == source
+		}
+	}
+
+	read()
+	require.Eventually(t, warmedFrom(warmJSONL), 2*time.Second, 5*time.Millisecond)
+	assert.Equal(t, 1, cachedSummaryCount(&storage.summaries))
+	read()
+	assert.Never(t, func() bool { return warms.Load() > 1 }, 50*time.Millisecond, 5*time.Millisecond,
+		"a second read from the same source does not warm again")
+
+	store, err := openSQLStore(storage.Dir(), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	storage.sql = store
+	runTestMigration(t, storage)
+	read()
+	require.Eventually(t, warmedFrom(warmSQL), 2*time.Second, 5*time.Millisecond,
+		"the switch to SQLite reads warms the SQL cache")
+	assert.EqualValues(t, 2, warms.Load())
+	assert.Equal(t, 1, cachedSummaryCount(&storage.sqlSummaries))
+	assert.Zero(t, cachedSummaryCount(&storage.summaries))
+}
+
 // TestWarmSummariesLeavesUndecodableFiles checks the warmer is best effort:
 // a file it cannot read stays uncached, so a later request decodes it and
 // reports the failure rather than inheriting a wrong answer.
@@ -423,9 +509,10 @@ func TestWarmSummariesLeavesUndecodableFiles(t *testing.T) {
 	}, "2026-08-03T10:00:01Z")
 	blockConversationFile(t, s, "conv-A")
 
-	s.warmSummaries(context.Background())
+	_, err := s.warmSummaries(context.Background())
+	require.NoError(t, err)
 	assert.Empty(t, s.summaries.entries)
 
-	_, _, err := s.ListConversations(ConversationListOptions{})
+	_, _, err = s.ListConversations(ConversationListOptions{})
 	assert.Error(t, err, "the unreadable file is reported, not served from a warm entry")
 }

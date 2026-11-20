@@ -71,11 +71,15 @@ type Server struct {
 	// uses the default.
 	eventPingInterval time.Duration
 
-	// warmStore fills the summary cache in the background. Serve sets it;
-	// a nil hook means no warming. warmOnce keeps the first viewer read the
-	// only trigger.
-	warmStore func()
-	warmOnce  sync.Once
+	// warmStore fills the summary cache of the active read source in the
+	// background and reports whether that source was SQLite. Serve sets it;
+	// a nil hook means no warming. A viewer read starts it unless a warm is
+	// running or the last successful warm used the current read source, so
+	// the migration's switch to SQLite warms once more.
+	warmStore func() (sqlReads bool, err error)
+	warmMu    sync.Mutex
+	warming   bool
+	warmed    warmSource
 
 	// importMu guards the history-import fields below. One import runs at a
 	// time: two would write the same ledger and race on it.
@@ -141,24 +145,57 @@ func (s *Server) SetShutdown(shutdown func()) {
 	s.shutdown = shutdown
 }
 
-// WarmSummariesOnFirstRead arms the background summary-cache warm. The warm
-// starts once the first viewer read has answered, and stops when ctx is
+// WarmSummariesOnFirstRead arms the background summary-cache warm. The first
+// warm starts once the first viewer read has answered, and stops when ctx is
 // done. Nothing warms before that read. Several commands start a daemon
 // without opening the viewer: an agent session in local mode, `local start`,
 // `local restart`, `history import`. Warming at startup would make each of
 // them decode the whole store and hold it resident until the daemon exits.
 func (s *Server) WarmSummariesOnFirstRead(ctx context.Context) {
-	s.warmStore = func() { s.storage.warmSummaries(ctx) }
+	s.warmStore = func() (bool, error) { return s.storage.warmSummaries(ctx) }
 }
 
-// warmSummariesInBackground starts the warm the first time a viewer read
-// finishes. It runs after the response so the request the user is waiting
-// on does not queue behind the rest of the store.
+type warmSource int
+
+const (
+	warmNone warmSource = iota
+	warmJSONL
+	warmSQL
+)
+
+func warmSourceFor(sqlReads bool) warmSource {
+	if sqlReads {
+		return warmSQL
+	}
+	return warmJSONL
+}
+
+// warmSummariesInBackground starts a warm after a viewer read finishes. It
+// runs after the response so the request the user is waiting on does not
+// queue behind the rest of the store.
 func (s *Server) warmSummariesInBackground() {
 	if s.warmStore == nil {
 		return
 	}
-	s.warmOnce.Do(func() { go s.warmStore() })
+	sqlReads, err := s.storage.sqliteReadsReady()
+	if err != nil {
+		return
+	}
+	s.warmMu.Lock()
+	defer s.warmMu.Unlock()
+	if s.warming || s.warmed == warmSourceFor(sqlReads) {
+		return
+	}
+	s.warming = true
+	go func() {
+		sqlReads, err := s.warmStore()
+		s.warmMu.Lock()
+		defer s.warmMu.Unlock()
+		s.warming = false
+		if err == nil {
+			s.warmed = warmSourceFor(sqlReads)
+		}
+	}()
 }
 
 func (s *Server) routes() *http.ServeMux {
@@ -523,7 +560,7 @@ func (s *Server) persistGenerations(generations []json.RawMessage) (generationsR
 			recs[i] = p.record
 			activities[i] = p.activity
 		}
-		written, err := s.storage.AppendGenerations(convID, recs, activities)
+		written, err := s.storage.AppendGenerations(convID, recs)
 		if err != nil {
 			s.logger.Printf("local: append generations: %v", err)
 		}

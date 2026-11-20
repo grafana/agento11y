@@ -4,13 +4,12 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -139,18 +138,6 @@ func TestAppendGeneration(t *testing.T) {
 	}
 }
 
-func assertConversationDirEmpty(t *testing.T, s *Storage) {
-	t.Helper()
-	convDir := filepath.Join(s.Dir(), ConversationsDir)
-	entries, err := os.ReadDir(convDir)
-	if err != nil {
-		t.Fatalf("read %s: %v", convDir, err)
-	}
-	if len(entries) != 0 {
-		t.Fatalf("%s not empty: %v", convDir, entries)
-	}
-}
-
 // TestAppendGenerations covers the batch append path the ingest handler
 // uses: every record for one conversation goes through a single file open
 // and close cycle, a mid-batch write failure keeps the records written
@@ -182,9 +169,9 @@ func TestAppendGenerations(t *testing.T) {
 			s.openAppend = opener.open
 
 			recs := make([]generationRecord, 0, tc.records)
-			activities := make([]time.Time, 0, tc.records)
 			for i := range tc.records {
 				rec := generationRecord{
+					ReceivedAt:     base.Add(time.Duration(i) * time.Minute).Format(time.RFC3339Nano),
 					ConversationID: "conv-batch",
 					GenerationID:   "gen-" + strconv.Itoa(i),
 					Generation:     json.RawMessage(`{"id":"gen-` + strconv.Itoa(i) + `"}`),
@@ -193,10 +180,9 @@ func TestAppendGenerations(t *testing.T) {
 					rec.ConversationID = "conv-other"
 				}
 				recs = append(recs, rec)
-				activities = append(activities, base.Add(time.Duration(i)*time.Minute))
 			}
 
-			written, err := s.AppendGenerations("conv-batch", recs, activities)
+			written, err := s.AppendGenerations("conv-batch", recs)
 			if tc.wantErr {
 				require.Error(t, err)
 			} else {
@@ -222,141 +208,6 @@ func TestAppendGenerations(t *testing.T) {
 	}
 }
 
-// TestAppendGenerations_StampsActivity covers the modification time an
-// append leaves on a conversation file, which is what the list orders and
-// bounds on. Offsets are relative to now so the rows read as "an hour of
-// activity ago" rather than as fixed dates.
-func TestAppendGenerations_StampsActivity(t *testing.T) {
-	now := time.Now().Truncate(time.Second)
-	cases := []struct {
-		name string
-		// pin rewrites the file's modification time after the first append,
-		// the way a history import into an existing file leaves it.
-		pin           time.Duration
-		pinAfterFirst bool
-		// batches are the activity stamps to append with, in order.
-		batches []time.Duration
-		// want is the modification time the file must end up with. When
-		// wantWriteTime is set the file must instead keep the time the
-		// append itself ran.
-		want          time.Duration
-		wantWriteTime bool
-	}{
-		{
-			name:    "the batch activity becomes the modification time",
-			batches: []time.Duration{-2 * time.Hour},
-			want:    -2 * time.Hour,
-		},
-		{
-			name:    "a backfilled append does not sink the file",
-			batches: []time.Duration{-time.Hour, -72 * time.Hour},
-			want:    -time.Hour,
-		},
-		{
-			name:          "an import-time modification time survives an older append",
-			pin:           0,
-			pinAfterFirst: true,
-			batches:       []time.Duration{-72 * time.Hour, -73 * time.Hour},
-			want:          0,
-		},
-		{
-			name:          "a future activity leaves the write time",
-			batches:       []time.Duration{48 * time.Hour},
-			wantWriteTime: true,
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			s := newStorage(t)
-			path := filepath.Join(s.Dir(), ConversationsDir, "conv-A.jsonl")
-			for i, offset := range tc.batches {
-				genID := "gen-" + strconv.Itoa(i)
-				rec := generationRecord{
-					ConversationID: "conv-A",
-					GenerationID:   genID,
-					Generation:     json.RawMessage(`{"id":"` + genID + `"}`),
-				}
-				written, err := s.AppendGenerations("conv-A", []generationRecord{rec}, []time.Time{now.Add(offset)})
-				require.NoError(t, err)
-				require.Equal(t, 1, written)
-				if i == 0 && tc.pinAfterFirst {
-					setConversationModTime(t, s, "conv-A", now.Add(tc.pin))
-				}
-			}
-
-			assert.Len(t, readLines(t, path), len(tc.batches), "every record reached the file")
-			info, err := os.Stat(path)
-			require.NoError(t, err)
-			if tc.wantWriteTime {
-				assert.WithinDuration(t, time.Now(), info.ModTime(), time.Minute)
-				return
-			}
-			assert.WithinDuration(t, now.Add(tc.want), info.ModTime(), time.Second)
-		})
-	}
-}
-
-// TestAppendGenerations_StampFailureKeepsRecords covers a filesystem that
-// refuses the stamp: the records are already written, so the append still
-// reports them and only the ordering degrades.
-func TestAppendGenerations_StampFailureKeepsRecords(t *testing.T) {
-	s := newStorage(t)
-	var logs strings.Builder
-	s.SetLogger(log.New(&logs, "", 0))
-	var stamps int
-	s.chtimes = func(string, time.Time, time.Time) error {
-		stamps++
-		return errors.New("read-only file system")
-	}
-
-	written, err := s.AppendGenerations("conv-A", []generationRecord{{
-		ConversationID: "conv-A",
-		GenerationID:   "gen-1",
-		Generation:     json.RawMessage(`{"id":"gen-1"}`),
-	}}, []time.Time{time.Now().Add(-time.Hour)})
-
-	require.NoError(t, err)
-	assert.Equal(t, 1, written)
-	assert.Len(t, readLines(t, filepath.Join(s.Dir(), ConversationsDir, "conv-A.jsonl")), 1)
-	assert.Equal(t, 1, stamps, "one append attempts one stamp")
-	assert.Contains(t, logs.String(), "read-only file system")
-}
-
-// TestAppendGenerations_FutureModTimeIsNotCarriedForward covers a file
-// whose modification time already runs ahead of the clock, which a restore
-// or a copy from a machine with a fast clock leaves behind. The append
-// folds that time in as now instead of skipping the stamp, so the file
-// stops claiming activity that has not happened yet.
-func TestAppendGenerations_FutureModTimeIsNotCarriedForward(t *testing.T) {
-	s := newStorage(t)
-	activity := time.Now().Add(-2 * time.Hour).Truncate(time.Second)
-	appendGen := func(genID string, when time.Time) {
-		t.Helper()
-		_, err := s.AppendGenerations("conv-A", []generationRecord{{
-			ConversationID: "conv-A",
-			GenerationID:   genID,
-			Generation:     json.RawMessage(`{"id":"` + genID + `"}`),
-		}}, []time.Time{when})
-		require.NoError(t, err)
-	}
-
-	appendGen("gen-1", activity)
-	setConversationModTime(t, s, "conv-A", time.Now().Add(72*time.Hour))
-
-	var stamps []time.Time
-	s.chtimes = func(path string, atime, mtime time.Time) error {
-		stamps = append(stamps, mtime)
-		return os.Chtimes(path, atime, mtime)
-	}
-	appendGen("gen-2", activity.Add(time.Hour))
-
-	require.Len(t, stamps, 1, "the append stamps the file rather than leaving it")
-	assert.False(t, stamps[0].After(time.Now()), "the stamp is not in the future")
-	info, err := os.Stat(filepath.Join(s.Dir(), ConversationsDir, "conv-A.jsonl"))
-	require.NoError(t, err)
-	assert.WithinDuration(t, time.Now(), info.ModTime(), time.Minute)
-}
-
 // TestAppendGenerations_ConcurrentStampKeepsNewest drives appends at one
 // conversation file from several goroutines. Whatever order they run in,
 // the file must end up stamped with the newest activity any of them
@@ -371,10 +222,11 @@ func TestAppendGenerations_ConcurrentStampKeepsNewest(t *testing.T) {
 		wg.Go(func() {
 			genID := "gen-" + strconv.Itoa(w)
 			_, err := s.AppendGenerations("conv-race", []generationRecord{{
+				ReceivedAt:     base.Add(time.Duration(w) * time.Minute).Format(time.RFC3339Nano),
 				ConversationID: "conv-race",
 				GenerationID:   genID,
 				Generation:     json.RawMessage(`{"id":"` + genID + `"}`),
-			}}, []time.Time{base.Add(time.Duration(w) * time.Minute)})
+			}})
 			if err != nil {
 				t.Errorf("writer %d append: %v", w, err)
 			}
@@ -387,9 +239,210 @@ func TestAppendGenerations_ConcurrentStampKeepsNewest(t *testing.T) {
 	assert.WithinDuration(t, base.Add((writers-1)*time.Minute), info.ModTime(), time.Second)
 }
 
-// countingOpener wraps the real appender, counting open and close cycles
-// so the batch tests can prove one request costs one open per
-// conversation. failWriteAfter > 0 fails every write past that count.
+func TestStorage_ConcurrentAppends(t *testing.T) {
+	s := newStorage(t)
+	const writers = 8
+	const each = 50
+
+	var wg sync.WaitGroup
+	for w := range writers {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for i := range each {
+				if err := s.Append("concurrent.jsonl", map[string]int{"w": id, "i": i}); err != nil {
+					t.Errorf("worker %d append: %v", id, err)
+					return
+				}
+			}
+		}(w)
+	}
+	wg.Wait()
+
+	lines := readLines(t, filepath.Join(s.Dir(), "concurrent.jsonl"))
+	if got, want := len(lines), writers*each; got != want {
+		t.Fatalf("lines = %d, want %d", got, want)
+	}
+	// Every line must be valid JSON — interleaved writes would corrupt
+	// at least one of them.
+	for i, line := range lines {
+		var m map[string]int
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("line %d not valid JSON: %v (%q)", i, err, line)
+		}
+	}
+}
+
+func TestAppendGenerationsStampsActivity(t *testing.T) {
+	latest := time.Now().UTC().Truncate(time.Second).Add(48 * time.Hour)
+	older := latest.Add(-time.Hour)
+	received := latest.Add(time.Hour)
+	latestJSON := latest.Format(time.RFC3339Nano)
+	olderJSON := older.Format(time.RFC3339Nano)
+
+	for _, tc := range []struct {
+		name        string
+		generations []string
+		previous    time.Time
+		want        time.Time
+		wantCalls   int
+	}{
+		{
+			name:        "malformed input keeps later started time",
+			generations: []string{fmt.Sprintf(`{"started_at":%q,"completed_at":%q,"input":42}`, latestJSON, olderJSON)},
+			want:        latest,
+			wantCalls:   1,
+		},
+		{
+			name:        "malformed output keeps completed time",
+			generations: []string{fmt.Sprintf(`{"completed_at":%q,"output":"not-a-message"}`, latestJSON)},
+			want:        latest,
+			wantCalls:   1,
+		},
+		{
+			name:        "no core times uses received time",
+			generations: []string{`{"input":42,"output":"not-a-message"}`},
+			want:        received,
+			wantCalls:   1,
+		},
+		{
+			name:        "invalid core time discards partial decoding and uses received time",
+			generations: []string{fmt.Sprintf(`{"started_at":%q,"completed_at":"invalid"}`, received.Add(time.Hour).Format(time.RFC3339Nano))},
+			want:        received,
+		},
+		{
+			name:        "invalid core field uses received time",
+			generations: []string{fmt.Sprintf(`{"started_at":%q,"tags":42}`, latestJSON)},
+			want:        received,
+		},
+		{
+			name:        "old malformed append preserves prior mtime",
+			generations: []string{fmt.Sprintf(`{"started_at":%q,"input":42}`, olderJSON)},
+			previous:    latest,
+			want:        latest,
+			wantCalls:   2,
+		},
+		{
+			name: "batch keeps newest activity rather than last record",
+			generations: []string{
+				fmt.Sprintf(`{"started_at":%q,"input":42}`, latestJSON),
+				fmt.Sprintf(`{"completed_at":%q}`, olderJSON),
+			},
+			want:      latest,
+			wantCalls: 2,
+		},
+		{
+			name: "batch compares received fallback with core times",
+			generations: []string{
+				fmt.Sprintf(`{"started_at":%q}`, latestJSON),
+				`{"output":"not-a-message"}`,
+				fmt.Sprintf(`{"completed_at":%q}`, olderJSON),
+			},
+			want:      received,
+			wantCalls: 3,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			storage := newStorage(t)
+			if !tc.previous.IsZero() {
+				written, err := storage.AppendGenerations("c1", []generationRecord{{
+					ConversationID: "c1", GenerationID: "previous",
+					Generation: json.RawMessage(fmt.Sprintf(`{"started_at":%q}`, tc.previous.Format(time.RFC3339Nano))),
+				}})
+				require.NoError(t, err)
+				require.Equal(t, 1, written)
+			}
+			records := make([]generationRecord, len(tc.generations))
+			for i, gen := range tc.generations {
+				records[i] = generationRecord{
+					ConversationID: "c1", GenerationID: strconv.Itoa(i),
+					ReceivedAt: received.Format(time.RFC3339Nano), Generation: json.RawMessage(gen),
+				}
+			}
+			written, err := storage.AppendGenerations("c1", records)
+			require.NoError(t, err)
+			assert.Equal(t, len(records), written)
+			info, err := os.Stat(storage.Path(filepath.Join(ConversationsDir, "c1.jsonl")))
+			require.NoError(t, err)
+			assert.True(t, tc.want.Equal(info.ModTime()), "mtime = %v, want %v", info.ModTime(), tc.want)
+
+			if tc.wantCalls > 0 {
+				rows, _, err := storage.ListConversations(ConversationListOptions{Since: tc.want, Exact: true})
+				require.NoError(t, err)
+				require.Len(t, rows, 1)
+				assert.Equal(t, "c1", rows[0].ID)
+				assert.Equal(t, tc.wantCalls, rows[0].Calls)
+				assert.True(t, tc.want.Equal(rows[0].LastActivity))
+			}
+		})
+	}
+}
+
+func TestAppendGenerationsSQLiteOnly(t *testing.T) {
+	store, dir := newTestSQLStore(t)
+	storage, err := NewStorage(dir)
+	require.NoError(t, err)
+	storage.sql = store
+	storage.setSQLiteOnly()
+
+	records := []generationRecord{
+		{ReceivedAt: "2026-08-20T08:00:00Z", GenerationID: "g1", ConversationID: "c1", Generation: json.RawMessage(`{"id":"g1","conversation_id":"c1"}`)},
+		{ReceivedAt: "2026-08-20T08:00:01Z", GenerationID: "g2", ConversationID: "c1", Generation: json.RawMessage(`{"id":"g2","conversation_id":"c1"}`)},
+	}
+	written, err := storage.AppendGenerations("c1", records)
+	require.NoError(t, err)
+	assert.Equal(t, len(records), written)
+
+	var generations int64
+	require.NoError(t, store.db.Model(&sqlGeneration{}).Where("conv_id = ?", "c1").Count(&generations).Error)
+	assert.EqualValues(t, 2, generations)
+	var conversation sqlConversation
+	require.NoError(t, store.db.Where("conv_id = ?", "c1").Take(&conversation).Error)
+	assert.Equal(t, 2, conversation.Calls)
+}
+
+func TestAppendGenerationsSQLiteOnlyFailureRejectsBatch(t *testing.T) {
+	store, dir := newTestSQLStore(t)
+	storage, err := NewStorage(dir)
+	require.NoError(t, err)
+	storage.sql = store
+	storage.setSQLiteOnly()
+	require.NoError(t, store.Close())
+
+	written, err := storage.AppendGenerations("c1", []generationRecord{{
+		ReceivedAt: "2026-08-20T08:00:00Z", GenerationID: "g1", ConversationID: "c1", Generation: json.RawMessage(`{"id":"g1","conversation_id":"c1"}`),
+	}})
+	assert.Zero(t, written)
+	require.Error(t, err)
+}
+
+func TestAppendGenerationsSQLiteOnlyConcurrent(t *testing.T) {
+	store, dir := newTestSQLStore(t)
+	storage, err := NewStorage(dir)
+	require.NoError(t, err)
+	storage.sql = store
+	storage.setSQLiteOnly()
+
+	const writers = 8
+	var wg sync.WaitGroup
+	for i := range writers {
+		wg.Go(func() {
+			id := "g" + strconv.Itoa(i)
+			written, err := storage.AppendGenerations("c1", []generationRecord{{
+				ReceivedAt: "2026-08-20T08:00:00Z", GenerationID: id, ConversationID: "c1",
+				Generation: json.RawMessage(`{"id":"` + id + `","conversation_id":"c1"}`),
+			}})
+			assert.NoError(t, err)
+			assert.Equal(t, 1, written)
+		})
+	}
+	wg.Wait()
+
+	var count int64
+	require.NoError(t, store.db.Model(&sqlGeneration{}).Where("conv_id = ?", "c1").Count(&count).Error)
+	assert.EqualValues(t, writers, count)
+}
+
 type countingOpener struct {
 	mu             sync.Mutex
 	opens          int
@@ -439,56 +492,10 @@ func (f *countingFile) Close() error {
 	return f.file.Close()
 }
 
-func TestStorage_ConcurrentAppends(t *testing.T) {
-	s := newStorage(t)
-	const writers = 8
-	const each = 50
-
-	var wg sync.WaitGroup
-	for w := range writers {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
-			for i := range each {
-				if err := s.Append("concurrent.jsonl", map[string]int{"w": id, "i": i}); err != nil {
-					t.Errorf("worker %d append: %v", id, err)
-					return
-				}
-			}
-		}(w)
-	}
-	wg.Wait()
-
-	lines := readLines(t, filepath.Join(s.Dir(), "concurrent.jsonl"))
-	if got, want := len(lines), writers*each; got != want {
-		t.Fatalf("lines = %d, want %d", got, want)
-	}
-	// Every line must be valid JSON — interleaved writes would corrupt
-	// at least one of them.
-	for i, line := range lines {
-		var m map[string]int
-		if err := json.Unmarshal([]byte(line), &m); err != nil {
-			t.Fatalf("line %d not valid JSON: %v (%q)", i, err, line)
-		}
-	}
-}
-
-func newStorage(t *testing.T) *Storage {
-	t.Helper()
-	dir := t.TempDir()
-	s, err := NewStorage(filepath.Join(dir, "local"))
-	if err != nil {
-		t.Fatalf("NewStorage: %v", err)
-	}
-	return s
-}
-
 func readLines(t *testing.T, path string) []string {
 	t.Helper()
 	f, err := os.Open(path)
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
+	require.NoError(t, err)
 	defer f.Close()
 	var out []string
 	sc := bufio.NewScanner(f)
@@ -496,8 +503,41 @@ func readLines(t *testing.T, path string) []string {
 	for sc.Scan() {
 		out = append(out, sc.Text())
 	}
-	if err := sc.Err(); err != nil {
-		t.Fatalf("scan: %v", err)
-	}
+	require.NoError(t, sc.Err())
 	return out
+}
+
+func assertConversationDirEmpty(t *testing.T, s *Storage) {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(s.Dir(), ConversationsDir))
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+}
+
+func setConversationModTime(t *testing.T, s *Storage, convID string, when time.Time) {
+	t.Helper()
+	path := filepath.Join(s.Dir(), ConversationsDir, convID+".jsonl")
+	require.NoError(t, os.Chtimes(path, when, when))
+}
+
+func blockConversationFile(t *testing.T, s *Storage, convID string) {
+	t.Helper()
+	path := filepath.Join(s.Dir(), ConversationsDir, convID+".jsonl")
+	require.NoError(t, os.Chmod(path, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+}
+
+func requireUnreadableFilesSupported(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("file permissions do not prevent reads")
+	}
+}
+
+func newStorage(t *testing.T) *Storage {
+	t.Helper()
+	dir := t.TempDir()
+	storage, err := NewStorage(filepath.Join(dir, "local"))
+	require.NoError(t, err)
+	return storage
 }

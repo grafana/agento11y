@@ -159,7 +159,7 @@ func executionAnalyticsFromObservations(observations []toolObservation, opts Too
 // sidecar without one still contributes to analytics but cannot create a
 // Sessions row.
 func (s *Storage) toolObservations() ([]toolObservation, error) {
-	conversationFiles, err := s.conversationFiles()
+	conversationFiles, err := s.queryConversationFiles()
 	if err != nil {
 		return nil, err
 	}
@@ -186,7 +186,7 @@ func (s *Storage) toolObservations() ([]toolObservation, error) {
 		s.logSkipped("skills-tools span metrics", skippedSpans)
 	}()
 	for _, file := range conversationFiles {
-		entry, err := s.summaries.get(file)
+		entry, err := s.conversationSummary(file)
 		if err != nil {
 			return nil, err
 		}

@@ -7,11 +7,9 @@ import (
 	"time"
 )
 
-// DefaultSinceWindow is how far back the CLI and the viewer look when the user
-// sets no lower bound. The development machine holds 277,625 turns across all
-// time but 60,882 in the last 90 days, and the store is a linear-scan JSONL
-// store, so an unbounded default would make the viewer unusable on the first
-// import.
+// DefaultSinceWindow is the CLI and viewer's default lower bound. On the
+// development machine, 90 days reduces a first import from 277,625 turns to
+// 60,882.
 const DefaultSinceWindow = 90 * 24 * time.Hour
 
 // SkipReason explains why a session was excluded from a selection.

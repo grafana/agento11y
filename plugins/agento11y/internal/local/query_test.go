@@ -5,7 +5,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -111,8 +110,7 @@ func TestListConversations_Aggregates(t *testing.T) {
 	// list should still surface it via the received_at fallback.
 	writeGen(t, s, "conv-C", "g5", agento11y.Generation{AgentName: "vistra"}, "2026-05-21T11:10:00Z")
 
-	// The order comes from the file modification time, which each append
-	// above stamped with the newest activity it carried.
+	// The list orders conversations by their decoded latest activity.
 	got, _, err := s.ListConversations(ConversationListOptions{})
 	if err != nil {
 		t.Fatalf("ListConversations: %v", err)
@@ -1088,37 +1086,7 @@ func TestListConversations_SkipsMessageTrees(t *testing.T) {
 	}
 }
 
-// setConversationModTime pins one conversation file's modification time.
-// The list and metrics endpoints order and filter on that timestamp.
-func setConversationModTime(t *testing.T, s *Storage, convID string, when time.Time) {
-	t.Helper()
-	path := filepath.Join(s.Dir(), ConversationsDir, convID+".jsonl")
-	require.NoError(t, os.Chtimes(path, when, when))
-}
-
-// blockConversationFile makes one conversation file unreadable, so any
-// request that opens it fails. Tests use it to prove a bounded request
-// never touches the files past its page.
-func blockConversationFile(t *testing.T, s *Storage, convID string) {
-	t.Helper()
-	path := filepath.Join(s.Dir(), ConversationsDir, convID+".jsonl")
-	require.NoError(t, os.Chmod(path, 0o000))
-	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
-}
-
-// requireUnreadableFilesSupported skips tests that rely on a file being
-// unreadable, which neither Windows ACLs nor a root user honour.
-func requireUnreadableFilesSupported(t *testing.T) {
-	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("posix-only permission check")
-	}
-	if os.Geteuid() == 0 {
-		t.Skip("root ignores file permissions")
-	}
-}
-
-func TestListAndDetailUseCacheAwareTotalFallback(t *testing.T) {
+func TestListAndDetailUseProviderAwareTotalFallback(t *testing.T) {
 	s := newStorage(t)
 
 	writeGen(t, s, "conv-cache", "g-cache", agento11y.Generation{
@@ -1930,30 +1898,39 @@ func TestTokenUsagePointsAgentUsesPeriodClippedSummary(t *testing.T) {
 	since := mustParse(t, "2026-05-21T10:00:00Z")
 	before := mustParse(t, "2026-05-21T11:00:00Z")
 
-	points, _, err := s.TokenUsagePoints(TokenUsageOptions{Since: since, Before: before, Agent: "codex", Interval: time.Hour})
-	require.NoError(t, err)
-	assert.Empty(t, points, "codex ran only before the window, so the facet excludes the conversation")
+	for _, backend := range []string{"JSONL", "SQLite"} {
+		t.Run(backend, func(t *testing.T) {
+			if backend == "SQLite" {
+				store, err := openSQLStore(s.Dir(), nil)
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = store.Close() })
+				s.sql = store
+				runTestMigration(t, s)
+				require.NoError(t, os.RemoveAll(filepath.Join(s.Dir(), ConversationsDir)))
+			}
+			points, _, err := s.TokenUsagePoints(TokenUsageOptions{Since: since, Before: before, Agent: "codex", Interval: time.Hour})
+			require.NoError(t, err)
+			assert.Empty(t, points, "codex ran only before the window, so the facet excludes the conversation")
 
-	points, _, err = s.TokenUsagePoints(TokenUsageOptions{Since: since, Before: before, Agent: "claude-code", Interval: time.Hour})
-	require.NoError(t, err)
-	require.Len(t, points, 1)
-	assert.Equal(t, int64(10), points[0].FreshInput)
+			points, _, err = s.TokenUsagePoints(TokenUsageOptions{Since: since, Before: before, Agent: "claude-code", Interval: time.Hour})
+			require.NoError(t, err)
+			require.Len(t, points, 1)
+			assert.Equal(t, int64(10), points[0].FreshInput)
 
-	points, _, err = s.TokenUsagePoints(TokenUsageOptions{Agent: "codex", Interval: time.Hour})
-	require.NoError(t, err)
-	var total int64
-	for _, p := range points {
-		total += p.FreshInput
+			points, _, err = s.TokenUsagePoints(TokenUsageOptions{Agent: "codex", Interval: time.Hour})
+			require.NoError(t, err)
+			var total int64
+			for _, p := range points {
+				total += p.FreshInput
+			}
+			assert.Equal(t, int64(110), total, "without a period the lifetime summary decides, as the list does")
+		})
 	}
-	assert.Equal(t, int64(110), total, "without a period the lifetime summary decides, as the list does")
 }
 
-// TestTokenUsagePoints_InvertedTimestampsStayInRange covers a generation
-// whose completed_at precedes its started_at, which a clock adjustment on
-// the exporting machine produces. Activity takes the later of the two, so a
-// file's modification time never sits below the point the chart places at
-// started_at, and the Since bound that skips whole files cannot drop a
-// point inside the range.
+// TestTokenUsagePoints_InvertedTimestampsStayInRange covers completed_at
+// preceding started_at. Metrics prefer started_at; list activity uses the
+// later of started_at and completed_at.
 func TestTokenUsagePoints_InvertedTimestampsStayInRange(t *testing.T) {
 	s := newStorage(t)
 	started := mustParse(t, "2026-05-21T10:00:00Z")
@@ -1963,10 +1940,6 @@ func TestTokenUsagePoints_InvertedTimestampsStayInRange(t *testing.T) {
 		CompletedAt: started.Add(-30 * time.Minute),
 		Usage:       agento11y.TokenUsage{InputTokens: 5, OutputTokens: 3},
 	}, started.Format(time.RFC3339Nano))
-
-	info, err := os.Stat(filepath.Join(s.Dir(), ConversationsDir, "conv-inverted.jsonl"))
-	require.NoError(t, err)
-	assert.WithinDuration(t, started, info.ModTime(), time.Second, "the stamp follows started_at")
 
 	points, _, err := s.TokenUsagePoints(TokenUsageOptions{
 		Since:    started.Add(-time.Minute),
@@ -2112,11 +2085,7 @@ func TestTokenUsagePoints_ScaleFollowsBucketsNotGenerations(t *testing.T) {
 				Generation:     raw,
 			})
 		}
-		activities := make([]time.Time, len(recs))
-		for i := range activities {
-			activities[i] = start
-		}
-		written, err := s.AppendGenerations(convID, recs, activities)
+		written, err := s.AppendGenerations(convID, recs)
 		require.NoError(t, err)
 		require.Equal(t, perConv, written)
 	}
@@ -2319,10 +2288,7 @@ func TestReadsReportSkippedLines(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, points, 1)
 
-	// The list and the token chart answer the second round from the cached
-	// summaries. The count describes the store, so a cache hit reports it
-	// again instead of reporting zero. The detail read has no cache, so it
-	// scans the file again and reports its own count twice.
+	// Each fallback read scans the legacy file and reports its skipped tail.
 	again, _, err := s.ListConversations(ConversationListOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, convs, again)
@@ -2384,9 +2350,8 @@ func TestReadsShareOneDecodePerFile(t *testing.T) {
 	}
 }
 
-// TestTokenUsagePointsFollowAppends checks that a conversation written
-// between two requests is the only one decoded again, and that its new
-// usage lands in the totals.
+// TestTokenUsagePointsFollowAppends checks that usage appended between two
+// requests lands in the totals.
 func TestTokenUsagePointsFollowAppends(t *testing.T) {
 	s := newStorage(t)
 	for _, id := range []string{"conv-A", "conv-B"} {
@@ -2401,7 +2366,6 @@ func TestTokenUsagePointsFollowAppends(t *testing.T) {
 	require.Len(t, before, 1)
 	assert.Equal(t, TokenBuckets{FreshInput: 8, Output: 2}, before[0].TokenBuckets)
 
-	decoded := recordDecodes(&s.summaries)
 	writeGen(t, s, "conv-A", "g-extra", agento11y.Generation{
 		Model:     agento11y.ModelRef{Name: "m"},
 		StartedAt: mustParse(t, "2026-08-03T10:30:00Z"),
@@ -2412,5 +2376,4 @@ func TestTokenUsagePointsFollowAppends(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, after, 1)
 	assert.Equal(t, TokenBuckets{FreshInput: 21, Output: 4}, after[0].TokenBuckets)
-	assert.Equal(t, []string{"conv-A"}, *decoded, "the untouched conversation stays cached")
 }

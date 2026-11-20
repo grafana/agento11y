@@ -341,6 +341,20 @@ func Serve(ctx context.Context, dir string, port int, logger *log.Logger) error 
 	if err != nil {
 		return err
 	}
+	sqlStore, err := openSQLStore(dir, logger)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = sqlStore.Close() }()
+	storage.sql = sqlStore
+	retired, err := sqlStore.jsonlRetired()
+	if err != nil {
+		return err
+	}
+	if retired {
+		storage.setSQLiteOnly()
+	}
+
 	listener, err := listenLocal(port)
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
@@ -377,19 +391,20 @@ func Serve(ctx context.Context, dir string, port int, logger *log.Logger) error 
 		logger.Printf("local: serving on %s (dir=%s)", status.Endpoint, dir)
 	}
 
-	// The pass starts only after the status file exists: the process that
-	// spawned this daemon waits 5 seconds for that file, and stamping a large
-	// store takes longer. On the way out the pass stops at the next file, so
-	// waiting for it costs one file scan.
-	repairCtx, cancelRepair := context.WithCancel(serveCtx)
-	repairDone := make(chan struct{})
+	// Migration starts after the status file exists so a large scan cannot delay
+	// readiness. The JSONL rollback copy is retired on a later start that reports
+	// no migration changes.
+	migrationCtx, cancelMigration := context.WithCancel(serveCtx)
+	migrationDone := make(chan struct{})
 	go func() {
-		defer close(repairDone)
-		repairStoreOnStartup(repairCtx, storage, srv.hub)
+		defer close(migrationDone)
+		if ReceiverSupported() {
+			migrateStoreOnStartup(migrationCtx, storage, srv.hub)
+		}
 	}()
 	defer func() {
-		cancelRepair()
-		<-repairDone
+		cancelMigration()
+		<-migrationDone
 	}()
 
 	serveErr := make(chan error, 1)
