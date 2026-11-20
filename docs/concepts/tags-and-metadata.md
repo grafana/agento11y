@@ -42,7 +42,7 @@ Set client tags with the `AGENTO11Y_TAGS` env var (CSV: `key=value,key=value`) a
 **Go**
 
 ```go
-cfg := agento11y.DefaultConfig()
+cfg := agento11y.Config{}
 cfg.Tags = map[string]string{"team": "checkout", "env": "prod"}
 cfg.UserID = "u-1234" // default; per-call UserID and context still win
 client := agento11y.NewClient(cfg)

@@ -161,6 +161,8 @@ client := agento11y.NewClient(agento11y.Config{})
 defer func() { _ = client.Shutdown(context.Background()) }()
 ```
 
+Start from `agento11y.Config{}` and set only the fields you need; unset fields fall back to env, then defaults. `agento11y.DefaultConfig()` sets every field explicitly (gRPC to `localhost:4317`), so a client built from it ignores `AGENTO11Y_*` env vars.
+
 For explicit configuration with custom auth or batch tuning:
 
 ```go
@@ -230,7 +232,7 @@ exporters, and which companion traces and client-metrics panels need them. Gener
 Use `GenerationExportProtocolNone` to keep generation and tool instrumentation active while disabling generation transport:
 
 ```go
-cfg := agento11y.DefaultConfig()
+cfg := agento11y.Config{}
 cfg.GenerationExport.Protocol = agento11y.GenerationExportProtocolNone
 
 client := agento11y.NewClient(cfg)
@@ -287,7 +289,7 @@ Use hooks when you want Agent Observability guard rules to run before an LLM cal
 Hooks are disabled by default. Enable them on the client and call `EvaluateHook(...)` before the provider request:
 
 ```go
-cfg := agento11y.DefaultConfig()
+cfg := agento11y.Config{}
 cfg.Hooks.Enabled = true
 cfg.Hooks.Phases = []agento11y.HookPhase{agento11y.HookPhasePreflight}
 
@@ -558,7 +560,7 @@ See the runnable [Go streaming example](../examples/experiments/go/) and the
 Client-level default:
 
 ```go
-cfg := agento11y.DefaultConfig()
+cfg := agento11y.Config{}
 cfg.ContentCapture = agento11y.ContentCaptureModeMetadataOnly
 
 client := agento11y.NewClient(cfg)
@@ -624,7 +626,7 @@ Use `GenerationSanitizer` when you want to redact substrings from normalized gen
 ```go
 redactEmails := true
 redactInputs := false
-cfg := agento11y.DefaultConfig()
+cfg := agento11y.Config{}
 cfg.GenerationSanitizer = agento11y.NewSecretRedactionSanitizer(agento11y.SecretRedactionOptions{
     RedactInputMessages:  &redactInputs, // nil falls back to AGENTO11Y_REDACT_INPUT_MESSAGES, then false
     RedactEmailAddresses: &redactEmails, // nil defaults to true; point to false to preserve
