@@ -59,12 +59,12 @@ To export generations, follow these steps:
    ```
 
 1. Flush buffered telemetry before your process exits.
-   Shut down through the logger, not the client:
-   LiteLLM runs callbacks in a background thread pool or async queue,
-   so `client.shutdown()` right after a call drops generations LiteLLM has not handed over yet.
+   LiteLLM runs callbacks in a background thread pool or async queue.
+   `client.shutdown()` waits for those callbacks before it stops accepting generations.
+   Inside a running event loop, it cannot wait for the async queue, so shut down through the logger there:
 
    ```python
-   handler.shutdown()  # handler is the Agento11yLiteLLMLogger; in async code: await handler.ashutdown()
+   await handler.ashutdown()  # handler is the Agento11yLiteLLMLogger; handler.shutdown() outside a loop
    ```
 
    `handler.flush()` and `await handler.aflush()` do the same without closing the client.

@@ -956,6 +956,20 @@ async def adrain_litellm_callbacks(timeout: float = _DRAIN_TIMEOUT_SECONDS) -> N
     await asyncio.to_thread(_drain_sync_executor, timeout)
 
 
+def _drain_before_client_flush() -> None:
+    """Pre-flush hook, so ``client.flush()`` and ``client.shutdown()`` wait for LiteLLM too.
+
+    Inside a running event loop the async queue cannot be drained without
+    awaiting, so only the thread pool is waited for; use :meth:`aflush` there.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        drain_litellm_callbacks()
+        return
+    _drain_sync_executor(_DRAIN_TIMEOUT_SECONDS)
+
+
 class Agento11yLiteLLMLogger(CustomLogger):
     """LiteLLM callback logger that exports generations to Agent Observability.
 
@@ -988,15 +1002,18 @@ class Agento11yLiteLLMLogger(CustomLogger):
         self._conversation_id = conversation_id
         self._extra_tags = dict(extra_tags) if extra_tags else {}
         self._extra_metadata = dict(extra_metadata) if extra_metadata else {}
+        add_pre_flush_hook = getattr(client, "add_pre_flush_hook", None)
+        if callable(add_pre_flush_hook):
+            add_pre_flush_hook(_drain_before_client_flush)
 
     def flush(self, timeout: float = _DRAIN_TIMEOUT_SECONDS) -> None:
         """Waits for LiteLLM's pending callbacks, then flushes the client.
 
         LiteLLM does not call loggers inline: ``completion`` hands the success
         callback to a thread pool and ``acompletion`` to a queue that drains on
-        the event loop or at exit. ``client.flush()`` called straight after a
-        request therefore runs before the generation is recorded. Call this
-        instead. Inside a running event loop, use :meth:`aflush`.
+        the event loop or at exit. ``client.flush()`` waits for them as well,
+        except LiteLLM's async queue inside a running event loop; there, use
+        :meth:`aflush`.
         """
         _reject_running_loop()  # wrong API: leave the client open for aflush/ashutdown
         try:
@@ -1007,9 +1024,8 @@ class Agento11yLiteLLMLogger(CustomLogger):
     def shutdown(self, timeout: float = _DRAIN_TIMEOUT_SECONDS) -> None:
         """Waits for LiteLLM's pending callbacks, then shuts the client down.
 
-        Use this instead of ``client.shutdown()``, which would drop the
-        generations LiteLLM has not handed to this logger yet. Inside a running
-        event loop, use :meth:`ashutdown`.
+        ``client.shutdown()`` waits for the same callbacks, except LiteLLM's
+        async queue inside a running event loop; there, use :meth:`ashutdown`.
         """
         _reject_running_loop()  # wrong API: leave the client open for aflush/ashutdown
         try:
