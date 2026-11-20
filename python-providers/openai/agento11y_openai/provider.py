@@ -258,10 +258,12 @@ def _chat_from_stream(
 ) -> Generation:
     opts = options or OpenAIOptions()
 
+    assembled: dict[str, Any] | None = None
     if summary.final_response is not None:
         generation = _chat_from_request_response(request, summary.final_response, opts)
         generation.mode = GenerationMode.STREAM
     else:
+        assembled = _assemble_chat_stream(summary.events)
         model_name = _as_str(_read(request, "model"))
         input_messages, system_prompt = _map_chat_request_messages(request)
         tools = _map_chat_tools(request)
@@ -272,7 +274,8 @@ def _chat_from_stream(
             agent_version=opts.agent_version,
             mode=GenerationMode.STREAM,
             model=ModelRef(provider=opts.provider_name, name=model_name),
-            response_model=model_name,
+            response_id=_as_str(assembled["id"]),
+            response_model=_as_str(assembled["model"]) or model_name,
             system_prompt=system_prompt,
             max_tokens=_chat_request_max_tokens(request),
             temperature=_as_float_or_none(_read(request, "temperature")),
@@ -280,8 +283,10 @@ def _chat_from_stream(
             tool_choice=_canonical_tool_choice(_read(request, "tool_choice")),
             thinking_enabled=True if _read(request, "reasoning") is not None else None,
             input=input_messages,
-            output=[],
+            output=_map_chat_response_output(assembled["response"]),
             tools=tools,
+            usage=from_openai_chat(assembled["usage"]),
+            stop_reason=_normalize_chat_stop_reason(_as_str(assembled["finish_reason"])),
             tags=dict(opts.tags),
             metadata=_metadata_with_thinking_budget(
                 opts.metadata,
@@ -289,8 +294,12 @@ def _chat_from_stream(
             ),
         )
 
-    output_text = summary.output_text.strip() or _extract_chat_stream_text(summary.events)
-    if output_text:
+    has_tool_calls = any(part.kind == PartKind.TOOL_CALL for message in generation.output for part in message.parts)
+    output_text = summary.output_text.strip()
+    if assembled is None:
+        output_text = output_text or _extract_chat_stream_text(summary.events)
+    # Explicit output_text replaces the text, but never drops tool calls rebuilt from the chunks.
+    if output_text and not (assembled is not None and has_tool_calls):
         generation.output = [Message(role=MessageRole.ASSISTANT, parts=[Part(kind=PartKind.TEXT, text=output_text)])]
 
     if opts.raw_artifacts:
@@ -799,6 +808,79 @@ def _first_chat_finish_reason(response: ChatCreateResponse) -> str:
 
 def _normalize_chat_stop_reason(value: str) -> str:
     return value
+
+
+def _assemble_chat_stream(events: list[ChatStreamEvent]) -> dict[str, Any]:
+    """Rebuild the final chat completion from raw stream chunks.
+
+    Takes id/model from the chunks, text and refusal deltas, tool_calls deltas
+    merged by index, the last finish_reason, and the usage chunk that
+    stream_options.include_usage adds at the end.
+    """
+    response_id = ""
+    model = ""
+    usage: Any = None
+    finish_reason = ""
+    content: list[str] = []
+    refusal: list[str] = []
+    tool_calls: dict[int, dict[str, Any]] = {}
+
+    for event in events:
+        event_id = _as_str(_read(event, "id"))
+        if event_id:
+            response_id = event_id
+        event_model = _as_str(_read(event, "model"))
+        if event_model:
+            model = event_model
+        event_usage = _read(event, "usage")
+        if event_usage is not None:
+            usage = event_usage
+        for choice in _as_list(_read(event, "choices")):
+            if (_read(choice, "index") or 0) != 0:
+                continue
+            choice_finish = _as_str(_read(choice, "finish_reason"))
+            if choice_finish:
+                finish_reason = choice_finish
+            delta = _read(choice, "delta")
+            if delta is None:
+                continue
+            piece = _read(delta, "content")
+            if isinstance(piece, str):
+                content.append(piece)
+            refusal_piece = _read(delta, "refusal")
+            if isinstance(refusal_piece, str):
+                refusal.append(refusal_piece)
+            for raw_call in _as_list(_read(delta, "tool_calls")):
+                index = _read(raw_call, "index")
+                if not isinstance(index, int):
+                    index = len(tool_calls)
+                call = tool_calls.setdefault(
+                    index, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}}
+                )
+                call_id = _as_str(_read(raw_call, "id"))
+                if call_id:
+                    call["id"] = call_id
+                fn = _read(raw_call, "function")
+                name = _read(fn, "name")
+                if isinstance(name, str) and name:
+                    call["function"]["name"] = name
+                arguments = _read(fn, "arguments")
+                if isinstance(arguments, str):
+                    call["function"]["arguments"] += arguments
+
+    message: dict[str, Any] = {"role": "assistant", "content": "".join(content) or None}
+    if refusal:
+        message["refusal"] = "".join(refusal)
+    if tool_calls:
+        message["tool_calls"] = [tool_calls[index] for index in sorted(tool_calls)]
+
+    return {
+        "id": response_id,
+        "model": model,
+        "usage": usage,
+        "finish_reason": finish_reason,
+        "response": {"choices": [{"index": 0, "message": message, "finish_reason": finish_reason}]},
+    }
 
 
 def _extract_chat_stream_text(events: list[ChatStreamEvent]) -> str:
