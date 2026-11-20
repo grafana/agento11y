@@ -29,6 +29,8 @@ agento11yHooks.detach();
 
 `withAgento11yOpenAIAgentsHooks(...)` attaches agento11y listeners directly to OpenAI Agents `RunHooks`/`AgentHooks` emitters (`Runner` or `Agent`).
 
+Each model call becomes one generation, with tool calls, tool results, tool definitions, usage (including cache tokens), response model, and stop reason. `run(..., { stream: true })` records `STREAM` generations with time to first token. Model calls are intercepted through the `Runner`'s model provider and through `Model` objects set on an agent (such as `aisdk(...)`). An `Agent` with a string model, hooked without its `Runner`, records one generation per agent run instead. Model calls carry no run context, so each one is attributed to the run that emitted the latest hook event; use a separate `Runner` and registration for runs that execute concurrently.
+
 ## Streaming snippet
 
 ```ts
