@@ -654,6 +654,57 @@ def test_concurrent_graph_roots_are_isolated() -> None:
         assert step.parent_step_ids == []
 
 
+def _thread_kwargs(thread_id: str | None) -> dict[str, Any] | None:
+    # LangGraph copies the thread_id into the metadata of every run, the root included.
+    return {"metadata": {"thread_id": thread_id}} if thread_id is not None else None
+
+
+@pytest.mark.parametrize(
+    ("second_thread_id", "handler_conversation_id", "expected"),
+    [
+        pytest.param("customer-b", "", "customer-b", id="own_thread_id"),
+        pytest.param(None, "", "synthetic", id="no_thread_id"),
+        pytest.param(None, "tenant-default", "tenant-default", id="handler_default"),
+    ],
+)
+def test_graph_root_does_not_take_the_conversation_of_another_active_root(
+    second_thread_id: str | None, handler_conversation_id: str, expected: str
+) -> None:
+    client = _CollectingClient()
+    handler = Agento11yFrameworkHandlerBase(
+        client=client,  # type: ignore[arg-type]
+        framework_name="langgraph",
+        capture_workflow_steps=True,
+        conversation_id=handler_conversation_id,
+    )
+    first_root, first_step, second_root, second_step = uuid4(), uuid4(), uuid4(), uuid4()
+
+    def start_step(name: str, run_id, root, thread_id: str | None) -> None:
+        handler._on_chain_start(
+            serialized={"name": name}, run_id=run_id, parent_run_id=root, callback_kwargs=_thread_kwargs(thread_id)
+        )
+
+    handler._on_chain_start(
+        serialized=None, run_id=first_root, parent_run_id=None, callback_kwargs=_thread_kwargs("customer-a")
+    )
+    start_step("first", first_step, first_root, "customer-a")
+    # The second root starts while the first one is inside its step. The handler cannot
+    # tell whether the first run started it, so it does not join that run.
+    handler._on_chain_start(
+        serialized=None, run_id=second_root, parent_run_id=None, callback_kwargs=_thread_kwargs(second_thread_id)
+    )
+    start_step("second", second_step, second_root, second_thread_id)
+    for run_id in (first_step, second_step, first_root, second_root):
+        handler._on_chain_end(run_id=run_id, outputs={})
+
+    conversations = {step.step_name: step.conversation_id for step in client.workflow_steps}
+    assert conversations["first"] == "customer-a"
+    if expected == "synthetic":
+        assert conversations["second"].startswith("agento11y:framework:langgraph:")
+    else:
+        assert conversations["second"] == expected
+
+
 def test_graph_state_is_cleaned_up_after_root_ends() -> None:
     handler, _client = _make_handler()
     root = uuid4()

@@ -773,16 +773,10 @@ class Agento11yFrameworkHandlerBase:
             # Tracking a set instead of a single value keeps concurrent graph
             # invocations on the same handler isolated.
             if parent_run_id is None:
-                # Nested graph invocation (e.g. sub-agent invoked inside a tool):
-                # inherit the conversation_id from the already-active graph root
-                # so all sub-graphs appear in the same Agent Observability conversation.
-                if self._graph_root_run_keys and self._graph_run_conversation_id:
-                    existing_root = next(
-                        (r for r in self._graph_root_run_keys if r in self._graph_run_conversation_id),
-                        None,
-                    )
-                    if existing_root is not None:
-                        self._graph_run_conversation_id[run_key] = self._graph_run_conversation_id[existing_root]
+                # A root never takes the conversation of another active root. The
+                # handler cannot tell a nested run from an unrelated run that
+                # overlaps with it. A nested run joins the outer conversation as a
+                # child run (parent_run_id) or with the same conversation key.
                 self._graph_root_run_keys.add(run_key)
                 return
             # Only promote direct children of a graph root to workflow steps.
