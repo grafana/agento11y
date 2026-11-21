@@ -36,6 +36,12 @@ synthetic operations tools, Agent Observability framework callbacks, custom
 OpenTelemetry spans and metrics, local AgentCore dev instructions, and an
 optional AWS deployment flow.
 
+## Amazon Bedrock AgentCore with OpenTelemetry only — [`bedrock-agentcore-otlp/`](bedrock-agentcore-otlp/)
+
+The same agent as the SDK example, instrumented with OpenTelemetry generative AI
+spans and no Agent Observability SDK. Use it as a reference for OpenTelemetry-native
+ingestion, or to compare the two approaches side by side.
+
 ## Credentials
 
 Every example needs your Grafana Cloud credentials (instance ID, API token,
