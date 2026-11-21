@@ -1269,6 +1269,15 @@ func TestServer_APIConversations(t *testing.T) {
 		CompletedAt: mustParse(t, "2026-05-21T11:00:01Z"),
 		Usage:       agento11y.TokenUsage{InputTokens: 10, OutputTokens: 5},
 	}, "2026-05-21T11:00:01Z")
+	// Older than both, so the limit and since cases still return only conv-B.
+	const piSession = "01a1b6bf-e6c8-7627-a64e-26fbc210f69f"
+	writeGen(t, storage, piSession, "g3", agento11y.Generation{
+		AgentName:   "pi",
+		Model:       agento11y.ModelRef{Name: "claude-opus-4-7"},
+		StartedAt:   mustParse(t, "2026-05-20T09:00:00Z"),
+		CompletedAt: mustParse(t, "2026-05-20T09:00:01Z"),
+		Tags:        map[string]string{"cwd": "/work/repo"},
+	}, "2026-05-20T09:00:01Z")
 
 	cases := []struct {
 		name          string
@@ -1279,7 +1288,7 @@ func TestServer_APIConversations(t *testing.T) {
 		wantBodyLacks []string // none of these may appear
 	}{
 		{
-			name:   "list returns both conversations newest first",
+			name:   "list returns conversations newest first",
 			method: http.MethodGet, path: "/api/v1/conversations",
 			want:        http.StatusOK,
 			wantBodyHas: []string{`"conversations"`, `"id":"conv-B"`, `"id":"conv-A"`, `"calls":1`, `"total_tokens":15`},
@@ -1311,7 +1320,7 @@ func TestServer_APIConversations(t *testing.T) {
 			name:   "a range holding nothing still counts the store",
 			method: http.MethodGet, path: "/api/v1/conversations?since=2027-01-01T00:00:00Z",
 			want:          http.StatusOK,
-			wantBodyHas:   []string{`"conversations":[]`, `"total_conversations":2`},
+			wantBodyHas:   []string{`"conversations":[]`, `"total_conversations":3`},
 			wantBodyLacks: []string{`"id":"conv-`},
 		},
 		{
@@ -1331,6 +1340,20 @@ func TestServer_APIConversations(t *testing.T) {
 			method: http.MethodGet, path: "/api/v1/conversations/conv-A",
 			want:        http.StatusOK,
 			wantBodyHas: []string{`"id":"conv-A"`, `"generation_id":"g1"`, `"total_tokens":150`},
+		},
+		{
+			name:   "detail offers a resume target without a list request",
+			method: http.MethodGet, path: "/api/v1/conversations/" + piSession,
+			want: http.StatusOK,
+			wantBodyHas: []string{
+				`"resume":{"status":"ready","agent":"pi","session_id":"` + piSession + `","cwd":"/work/repo"}`,
+			},
+		},
+		{
+			name:   "detail reports why a recognized session cannot resume",
+			method: http.MethodGet, path: "/api/v1/conversations/conv-B",
+			want:        http.StatusOK,
+			wantBodyHas: []string{`"resume":{"status":"unavailable","reason":"unsupported_id"}`},
 		},
 		{
 			name:   "detail 404s on unknown conversation",

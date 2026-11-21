@@ -159,6 +159,8 @@ type ConversationDetail struct {
 	ID          string           `json:"id"`
 	Title       string           `json:"title,omitempty"`
 	Generations []GenerationView `json:"generations"`
+	// Resume is nil for conversations no supported agent recorded.
+	Resume *ResumeInfo `json:"resume,omitempty"`
 }
 
 // ConversationListOptions selects rows for list and metrics queries. Limit
@@ -827,10 +829,12 @@ func (s *Storage) ConversationDetail(id string) (*ConversationDetail, error) {
 	}
 	path := filepath.Join(s.dir, ConversationsDir, id+".jsonl")
 	out := &ConversationDetail{ID: id}
+	resume := newResumeScan()
 	skipped, err := scanLatestGenerationRecords(path, func(_ generationRecord, gen storedGeneration) {
 		if out.Title == "" && gen.title() != "" {
 			out.Title = gen.title()
 		}
+		resume.add(gen)
 		usage := gen.Usage.toSDK()
 		input := gen.inputMessages()
 		output := gen.outputMessages()
@@ -866,6 +870,7 @@ func (s *Storage) ConversationDetail(id string) (*ConversationDetail, error) {
 	if len(out.Generations) == 0 {
 		return nil, nil
 	}
+	out.Resume = resume.result(id)
 	sort.SliceStable(out.Generations, func(i, j int) bool {
 		return out.Generations[i].StartedAt.Before(out.Generations[j].StartedAt)
 	})
