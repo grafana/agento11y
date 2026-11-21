@@ -8,7 +8,7 @@ The [Hermes plugin](hermes/README.md) is installed separately in Hermes's Python
 
 ## Install
 
-On macOS use Homebrew; on Linux and Windows (or any platform with Go 1.26.9+) use `go install`.
+Use Homebrew on macOS, PowerShell on Windows, or `go install` on any platform with Go 1.26.9+.
 
 **macOS** — Homebrew:
 
@@ -18,7 +18,15 @@ brew install grafana/grafana/agento11y
 
 Upgrade later with `brew upgrade grafana/grafana/agento11y`.
 
-**Linux and Windows** — `go install` (also works on macOS):
+**Windows (Windows PowerShell 5.1 or PowerShell 7):**
+
+```powershell
+irm https://raw.githubusercontent.com/grafana/agento11y/main/plugins/agento11y/scripts/install.ps1 | iex
+```
+
+The script installs per user and updates `PATH`. Re-run it to upgrade. See the [shared installation guide](agento11y/README.md#install) for options and the manual ZIP fallback if corporate policy blocks scripts.
+
+**Go install (any platform with Go 1.26.9+):**
 
 ```sh
 go install github.com/grafana/agento11y/plugins/agento11y/cmd/agento11y@latest
@@ -28,7 +36,7 @@ This installs `agento11y` to `go env GOPATH`/bin (or `GOBIN`); make sure that di
 
 Verify the install with `agento11y --version`.
 
-The command was renamed from `sigil`; the old name still works but will be removed in a future release.
+The command was renamed from `sigil`. The Unix quick installer and Homebrew still add that alias, but it will be removed. The Windows installer adds only `agento11y.exe`.
 
 ## Launch your agent
 

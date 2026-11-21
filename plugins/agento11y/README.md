@@ -25,6 +25,38 @@ curl -fsSL https://raw.githubusercontent.com/grafana/agento11y/main/plugins/agen
 
 Installs to `~/.local/bin`. Put that directory on your `PATH` if it is not already.
 
+**Quick install (Windows):**
+
+Use Windows PowerShell 5.1 or PowerShell 7:
+
+```powershell
+irm https://raw.githubusercontent.com/grafana/agento11y/main/plugins/agento11y/scripts/install.ps1 | iex
+```
+
+The script downloads the latest stable x64 or ARM64 ZIP for your Windows system and verifies its SHA-256 checksum. It installs `agento11y.exe` under `%LOCALAPPDATA%\agento11y\bin` for the current user and adds that directory to the session and persistent user `PATH`. No administrator rights or Go installation are needed. Execution policy stays unchanged. Re-run the command to upgrade.
+
+To inspect the script before running it, download it first:
+
+```powershell
+Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/grafana/agento11y/main/plugins/agento11y/scripts/install.ps1 -OutFile install-agento11y.ps1
+```
+
+Inspect `install-agento11y.ps1` in an editor before running it:
+
+```powershell
+.\install-agento11y.ps1 -Version 0.51.0 -InstallDir 'C:\Tools\agento11y\bin'
+```
+
+Both parameters are optional. `-Version` pins a stable release and accepts a leading `v`; `-InstallDir` selects a writable directory. As with the Unix installer, `VERSION` and `INSTALL_DIR` environment variables set the defaults. Explicit parameters take precedence.
+
+If the initial download fails with a TLS error in Windows PowerShell 5.1, enable TLS 1.2 for that session and retry:
+
+```powershell
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+```
+
+If corporate policy blocks scripts, use the manual ZIP option below instead of changing execution policy.
+
 **Homebrew (macOS):**
 
 ```sh
@@ -39,7 +71,7 @@ mise use -g aqua:grafana/agento11y@latest
 
 Make sure [mise is activated in your shell](https://mise.jdx.dev/cli/activate.html) so `agento11y` is on your `PATH`.
 
-**Go install (Windows, or any platform with Go 1.26.9+):**
+**Go install (any platform with Go 1.26.9+):**
 
 ```sh
 go install github.com/grafana/agento11y/plugins/agento11y/cmd/agento11y@latest
@@ -47,11 +79,11 @@ go install github.com/grafana/agento11y/plugins/agento11y/cmd/agento11y@latest
 
 Installs to `$(go env GOPATH)/bin` (or `GOBIN`). Put that directory on your `PATH`.
 
-**Windows (prebuilt binary):** download the `windows_amd64` or `windows_arm64` zip from the [releases page](https://github.com/grafana/agento11y/releases), extract `agento11y.exe`, and put it on your `PATH`.
+**Windows (manual ZIP):** Download the `windows_amd64` or `windows_arm64` ZIP from the [releases page](https://github.com/grafana/agento11y/releases). Verify its SHA-256 against the release checksum file, extract `agento11y.exe`, and put it on your `PATH`.
 
 Verify with `agento11y --version`.
 
-> **Note:** The command was renamed from `sigil`; the old name still works but will be removed.
+> **Note:** The command was renamed from `sigil`. The Unix quick installer and Homebrew still add that alias, but it will be removed. The Windows installer adds only `agento11y.exe`, with no `sigil` alias.
 
 ## Configure
 
