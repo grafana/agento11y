@@ -490,17 +490,25 @@ public static class GeminiGenerationMapper
         var reasoningTokens = usage.ThoughtsTokenCount ?? 0;
         var totalTokens = usage.TotalTokenCount ?? (inputTokens + outputTokens + toolUsePromptTokens + reasoningTokens);
 
-        // PromptTokenCount already includes CachedContentTokenCount: inclusive
-        // as-is. tool_use_prompt handling stays unchanged pending the open
-        // contract decision (see the rollout plan).
+        var raw = JsonSerializer.SerializeToElement(usage);
+        var inputDetails = ModalityUsage.Partition(ModalityUsage.Property(raw, "promptTokensDetails", "prompt_tokens_details"), inputTokens);
+        if (toolUsePromptTokens != 0)
+        {
+            inputDetails ??= new ModalityTokenCounts();
+            inputDetails.Tokens["tool_use"] = toolUsePromptTokens;
+            inputDetails.Complete = false;
+        }
         return new TokenUsage
         {
-            InputTokens = inputTokens,
-            OutputTokens = outputTokens,
+            InputTokens = inputTokens + toolUsePromptTokens,
+            OutputTokens = outputTokens + reasoningTokens,
             TotalTokens = totalTokens,
             CacheReadInputTokens = usage.CachedContentTokenCount ?? 0,
             ReasoningTokens = reasoningTokens,
             InputSemantics = TokenInputSemantics.Inclusive,
+            InputByModality = inputDetails,
+            OutputByModality = ModalityUsage.Partition(ModalityUsage.Property(raw, "candidatesTokensDetails", "candidates_tokens_details"), outputTokens + reasoningTokens, reasoningTokens),
+            CacheReadByModality = ModalityUsage.Partition(ModalityUsage.Property(raw, "cacheTokensDetails", "cache_tokens_details"), usage.CachedContentTokenCount ?? 0),
         };
     }
 

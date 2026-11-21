@@ -109,6 +109,20 @@ enum TokenInputSemantics {
   TOKEN_INPUT_SEMANTICS_INCLUSIVE = 1;
 }
 
+// A reported partition of a token bucket. Omitted entries are zero only
+// when complete is true. Input partitions include cached tokens.
+message ModalityTokenCounts {
+  map<string, int64> tokens = 1;
+  bool complete = 2;
+}
+
+// Server-computed, output-only pricing outcome. Ingest ignores client values.
+message GenerationPricing {
+  string status = 1;
+  string reason = 2;
+  optional int64 cost_usd_micros = 3;
+}
+
 message TokenUsage {
   // Input (prompt) tokens. When input_semantics is INCLUSIVE this covers all
   // input token types, including both cache buckets, per OTel GenAI semconv.
@@ -134,6 +148,10 @@ message TokenUsage {
   // identified the provider payload shape. Manual user-supplied usage and
   // guessed shapes leave it UNSPECIFIED.
   TokenInputSemantics input_semantics = 8;
+  ModalityTokenCounts input_by_modality = 9;
+  ModalityTokenCounts output_by_modality = 10;
+  ModalityTokenCounts cache_read_by_modality = 11;
+  ModalityTokenCounts cache_write_by_modality = 12;
 }
 
 enum ArtifactKind {
@@ -187,6 +205,7 @@ message Generation {
   // when set; ingest rejects any other shape. The backend falls back to a
   // server-computed sha256 of (system_prompt + sorted tools) when omitted.
   optional string effective_version = 30;
+  GenerationPricing pricing = 31;
 }
 
 // --- Workflow Step ingest (separate schema from Generation) ---
