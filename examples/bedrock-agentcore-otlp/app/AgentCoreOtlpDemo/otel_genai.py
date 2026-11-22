@@ -9,6 +9,10 @@ trace export:
 
 Chat spans carry ``agento11y.record=true`` so Agent Observability turns them into generations.
 Tool spans do not, because tool calls don't create standalone generations.
+
+Message attributes use the role/parts JSON format from the ``otel_example.py`` sample:
+https://grafana.com/docs/grafana-cloud/observe-and-act/agent-observability/get-started/opentelemetry/
+Inputs are available at span start; outputs are added to the same span when the model finishes.
 """
 
 from __future__ import annotations
@@ -98,21 +102,20 @@ class GenAISpanHandler(BaseCallbackHandler):
         model = str(params.get("model_id") or params.get("model") or params.get("model_name") or self._model)
         batch = messages[0] if messages else []
         span = self._tracer.start_span(f"chat {model}", kind=SpanKind.CLIENT)
-        span.set_attributes(
-            {
-                "agento11y.record": True,
-                "gen_ai.operation.name": "chat",
-                "gen_ai.provider.name": self._provider,
-                "gen_ai.request.model": model,
-                "gen_ai.agent.name": self._agent_name,
-                "gen_ai.conversation.id": self._conversation_id,
-            }
-        )
+        attributes: dict[str, Any] = {
+            "agento11y.record": True,
+            "gen_ai.operation.name": "chat",
+            "gen_ai.provider.name": self._provider,
+            "gen_ai.request.model": model,
+            "gen_ai.agent.name": self._agent_name,
+            "gen_ai.conversation.id": self._conversation_id,
+        }
         if self._mode != CAPTURE_NONE:
-            span.set_attribute("gen_ai.input.messages", _messages_json(batch, self._mode))
+            attributes["gen_ai.input.messages"] = _messages_json(batch, self._mode)
             system = _system_json(batch)
             if system != "[]":
-                span.set_attribute("gen_ai.system_instructions", system)
+                attributes["gen_ai.system_instructions"] = system
+        span.set_attributes(attributes)
         self._spans[run_id] = span
 
     def on_llm_end(self, response: Any, *, run_id: UUID, **kwargs: Any) -> None:
@@ -127,21 +130,20 @@ class GenAISpanHandler(BaseCallbackHandler):
     def _set_response(self, span: Span, message: BaseMessage) -> None:
         usage = getattr(message, "usage_metadata", None) or {}
         details = usage.get("input_token_details") or {}
-        span.set_attributes(
-            {
-                "gen_ai.usage.input_tokens": int(usage.get("input_tokens", 0)),
-                "gen_ai.usage.output_tokens": int(usage.get("output_tokens", 0)),
-                "gen_ai.usage.cache_read.input_tokens": int(details.get("cache_read", 0)),
-                "gen_ai.usage.cache_creation.input_tokens": int(details.get("cache_creation", 0)),
-            }
-        )
+        attributes: dict[str, Any] = {
+            "gen_ai.usage.input_tokens": int(usage.get("input_tokens", 0)),
+            "gen_ai.usage.output_tokens": int(usage.get("output_tokens", 0)),
+            "gen_ai.usage.cache_read.input_tokens": int(details.get("cache_read", 0)),
+            "gen_ai.usage.cache_creation.input_tokens": int(details.get("cache_creation", 0)),
+        }
         response_model = (getattr(message, "response_metadata", None) or {}).get("model_id") or (
             getattr(message, "response_metadata", None) or {}
         ).get("model_name")
         if response_model:
-            span.set_attribute("gen_ai.response.model", str(response_model))
+            attributes["gen_ai.response.model"] = str(response_model)
         if self._mode != CAPTURE_NONE:
-            span.set_attribute("gen_ai.output.messages", _messages_json([message], self._mode))
+            attributes["gen_ai.output.messages"] = _messages_json([message], self._mode)
+        span.set_attributes(attributes)
 
     def on_tool_start(self, serialized: dict[str, Any], input_str: str, *, run_id: UUID, **kwargs: Any) -> None:
         name = str(serialized.get("name") or kwargs.get("name") or "tool")
@@ -150,6 +152,7 @@ class GenAISpanHandler(BaseCallbackHandler):
             {
                 "gen_ai.operation.name": "execute_tool",
                 "gen_ai.tool.name": name,
+                "gen_ai.agent.name": self._agent_name,
                 "gen_ai.conversation.id": self._conversation_id,
             }
         )

@@ -74,13 +74,17 @@ by Git. No secret-manager-specific scripts are required.
 
 ## What the instrumentation records
 
+All spans created by this example carry `gen_ai.agent.name` from `AGENT_NAME`.
+If the setting is unset or blank, the agent name is `agentcore-otlp-demo`.
+
 - A `chat <model>` span for each model call, with the provider, model, token
   usage, conversation ID, agent name, and messages. These spans carry
   `agento11y.record=true`, which opts them in to Agent Observability.
-- An `execute_tool <name>` span for each tool call.
+- An `execute_tool <name>` span for each tool call, with the same agent name and
+  conversation ID as the chat spans.
 - An invocation span, `agentcore_demo.agent.invoke`, with the AgentCore session's
-  conversation ID. It has no `gen_ai.operation.name`, so it doesn't create a
-  duplicate generation.
+  conversation ID and the same agent name. It has no `gen_ai.operation.name`, so
+  it doesn't create a duplicate generation.
 - `agentcore_demo.agent.requests`
 - `agentcore_demo.agent.duration`
 - `agentcore_demo.tool.calls`

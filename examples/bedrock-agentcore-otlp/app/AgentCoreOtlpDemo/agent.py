@@ -10,7 +10,7 @@ from demo_data import get_order, get_support_cases, make_return, search_products
 from langchain.agents import create_agent
 from langchain_core.tools import tool
 from opentelemetry import metrics
-from opentelemetry.trace import Status, StatusCode
+from opentelemetry.trace import Span, Status, StatusCode
 from otel_genai import GenAISpanHandler
 from telemetry import Telemetry
 
@@ -155,57 +155,57 @@ def run_agent(
 ) -> dict[str, Any]:
     conversation_id = (conversation_id or "").strip() or f"conv-{uuid4().hex[:12]}"
     provider = os.getenv("AGENT_MODEL_PROVIDER", "bedrock").strip().lower()
-    metric_attributes = {
-        "gen_ai.provider.name": provider,
-    }
+    agent_name = os.getenv("AGENT_NAME", "").strip() or "agentcore-otlp-demo"
+    metric_attributes = {"gen_ai.provider.name": provider}
 
     started = time.perf_counter()
     with telemetry.tracer.start_as_current_span("agentcore_demo.agent.invoke") as span:
-        span.set_attribute("gen_ai.conversation.id", conversation_id)
-        span.set_attribute("account.id", account_id)
+        span.set_attributes(
+            {
+                "gen_ai.agent.name": agent_name,
+                "gen_ai.conversation.id": conversation_id,
+                "account.id": account_id,
+            }
+        )
+        callback = GenAISpanHandler(
+            telemetry.tracer,
+            provider=provider,
+            model=model_id(provider),
+            agent_name=agent_name,
+            conversation_id=conversation_id,
+        )
         try:
-            config = {
-                "callbacks": [
-                    GenAISpanHandler(
-                        telemetry.tracer,
-                        provider=provider,
-                        model=model_id(provider),
-                        agent_name=os.getenv("AGENT_NAME", "agentcore-otlp-demo"),
-                        conversation_id=conversation_id,
-                    )
-                ],
-                "metadata": {"conversation_id": conversation_id},
-            }
-            result = agent.invoke(
-                {"messages": [{"role": "user", "content": prompt}]},
-                config=config,
-            )
-            telemetry.requests.add(
-                1,
-                {**metric_attributes, "status": "ok"},
-            )
-            return {
-                "conversation_id": conversation_id,
-                "reply": _final_text(result),
-                "status": "ok",
-            }
-        except Exception as error:
-            span.record_exception(error)
-            span.set_status(Status(StatusCode.ERROR, str(error)))
-            telemetry.requests.add(
-                1,
-                {**metric_attributes, "status": "error"},
-            )
-            return {
-                "conversation_id": conversation_id,
-                "reply": "The agent hit an error while processing the request.",
-                "status": "error",
-            }
+            response = _invoke_agent(agent, callback, prompt, conversation_id, span)
+            telemetry.requests.add(1, {**metric_attributes, "status": response["status"]})
+            return response
         finally:
             telemetry.duration.record(
                 time.perf_counter() - started,
                 metric_attributes,
             )
+
+
+def _invoke_agent(
+    agent: Any,
+    callback: GenAISpanHandler,
+    prompt: str,
+    conversation_id: str,
+    span: Span,
+) -> dict[str, Any]:
+    try:
+        result = agent.invoke(
+            {"messages": [{"role": "user", "content": prompt}]},
+            config={"callbacks": [callback], "metadata": {"conversation_id": conversation_id}},
+        )
+        return {"conversation_id": conversation_id, "reply": _final_text(result), "status": "ok"}
+    except Exception as error:
+        span.record_exception(error)
+        span.set_status(Status(StatusCode.ERROR, str(error)))
+        return {
+            "conversation_id": conversation_id,
+            "reply": "The agent hit an error while processing the request.",
+            "status": "error",
+        }
 
 
 def _final_text(result: Any) -> str:
