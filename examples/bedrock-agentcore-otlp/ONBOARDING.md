@@ -44,11 +44,11 @@ BEDROCK_MODEL_ID=us.anthropic.claude-sonnet-4-5-20250929-v1:0
 BEDROCK_REGION=us-west-2
 ```
 
-Choose how much the spans record. `no_tool_content` keeps conversation messages
-and leaves tool arguments and results out:
+Choose how much the spans record. `full` captures conversation messages, tool
+arguments, and tool results:
 
 ```bash
-GENAI_CONTENT_CAPTURE_MODE=no_tool_content
+AGENTO11Y_CONTENT_CAPTURE_MODE=full
 ```
 
 Set Grafana Cloud OTLP traces and metrics:
@@ -58,6 +58,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana.net/otlp
 OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic <base64(OTLP_INSTANCE_ID:OTLP_TOKEN)>"
 OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
 OTEL_EXPORTER_OTLP_INSECURE=false
+OTEL_RESOURCE_ATTRIBUTES=service.namespace=agentcore,agento11y.record=true
 ```
 
 Keep this enabled so AgentCore's default ADOT CloudWatch configuration does not

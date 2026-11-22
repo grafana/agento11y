@@ -29,7 +29,7 @@ CAPTURE_NONE = "metadata_only"
 
 
 def capture_mode() -> str:
-    mode = os.getenv("GENAI_CONTENT_CAPTURE_MODE", CAPTURE_NO_TOOL_CONTENT).strip().lower()
+    mode = os.getenv("AGENTO11Y_CONTENT_CAPTURE_MODE", CAPTURE_NO_TOOL_CONTENT).strip().lower()
     return mode if mode in {CAPTURE_FULL, CAPTURE_NO_TOOL_CONTENT, CAPTURE_NONE} else CAPTURE_NO_TOOL_CONTENT
 
 

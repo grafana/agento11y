@@ -20,9 +20,13 @@ Bedrock or `anthropic` for direct Anthropic calls.
 | Generations | `agento11y-langchain` callbacks and the SDK client | Spans from `otel_genai.py` with `gen_ai.*` attributes, sent over OTLP |
 | Dependencies | `agento11y`, `agento11y-langchain`, OpenTelemetry | OpenTelemetry only |
 | Credentials | An SDK endpoint and token, plus an OTLP token | One OTLP endpoint and token |
-| Opt-in | None | `agento11y.record=true` on each chat span |
+| Opt-in | None | `agento11y.record=true` in `OTEL_RESOURCE_ATTRIBUTES` and on each chat span |
 | Tool calls | Recorded by the SDK callbacks | Recorded as `execute_tool` spans in the trace |
-| Content capture | `AGENTO11Y_CONTENT_CAPTURE_MODE` | `GENAI_CONTENT_CAPTURE_MODE`, same three modes |
+| Content capture | `AGENTO11Y_CONTENT_CAPTURE_MODE` | `AGENTO11Y_CONTENT_CAPTURE_MODE`, same three modes |
+
+The environment template sets `AGENTO11Y_CONTENT_CAPTURE_MODE=full` to capture
+conversation messages, tool arguments, and tool results. If the variable is
+unset, the handler uses `no_tool_content`, which omits tool arguments and results.
 
 Use this example if you already export OpenTelemetry traces, or if you can't add
 the SDK to your agent. Read
