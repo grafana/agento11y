@@ -44,11 +44,12 @@ BEDROCK_MODEL_ID=us.anthropic.claude-sonnet-4-5-20250929-v1:0
 BEDROCK_REGION=us-west-2
 ```
 
-Choose how much the spans record. `full` captures conversation messages, tool
-arguments, and tool results:
+Choose how much the spans record. `no_tool_content` captures conversation
+messages but omits tool arguments and results, which often carry customer data.
+`full` also captures tool arguments and results:
 
 ```bash
-AGENTO11Y_CONTENT_CAPTURE_MODE=full
+AGENTO11Y_CONTENT_CAPTURE_MODE=no_tool_content
 ```
 
 Set Grafana Cloud OTLP traces and metrics:

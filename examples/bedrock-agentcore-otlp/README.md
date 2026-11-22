@@ -24,9 +24,10 @@ Bedrock or `anthropic` for direct Anthropic calls.
 | Tool calls | Recorded by the SDK callbacks | Recorded as `execute_tool` spans in the trace |
 | Content capture | `AGENTO11Y_CONTENT_CAPTURE_MODE` | `AGENTO11Y_CONTENT_CAPTURE_MODE`, same three modes |
 
-The environment template sets `AGENTO11Y_CONTENT_CAPTURE_MODE=full` to capture
-conversation messages, tool arguments, and tool results. If the variable is
-unset, the handler uses `no_tool_content`, which omits tool arguments and results.
+The environment template sets `AGENTO11Y_CONTENT_CAPTURE_MODE=no_tool_content`,
+which captures conversation messages but omits tool arguments and results, since
+tool calls often carry customer data. If the variable is unset, the handler uses
+the same mode. Set it to `full` to also capture tool arguments and results.
 
 Use this example if you already export OpenTelemetry traces, or if you can't add
 the SDK to your agent. Read
