@@ -20,7 +20,7 @@ Bedrock or `anthropic` for direct Anthropic calls.
 | Generations | `agento11y-langchain` callbacks and the SDK client | Spans from `otel_genai.py` with `gen_ai.*` attributes, sent over OTLP |
 | Dependencies | `agento11y`, `agento11y-langchain`, OpenTelemetry | OpenTelemetry only |
 | Credentials | An SDK endpoint and token, plus an OTLP token | One OTLP endpoint and token |
-| Opt-in | None | `agento11y.record=true` in `OTEL_RESOURCE_ATTRIBUTES` and on each chat span |
+| Opt-in | None | `agento11y.record=true` in `OTEL_RESOURCE_ATTRIBUTES` and on each chat and tool span |
 | Tool calls | Recorded by the SDK callbacks | Recorded as `execute_tool` spans in the trace |
 | Content capture | `AGENTO11Y_CONTENT_CAPTURE_MODE` | `AGENTO11Y_CONTENT_CAPTURE_MODE`, same three modes |
 
@@ -81,7 +81,11 @@ If the setting is unset or blank, the agent name is `agentcore-otlp-demo`.
   usage, conversation ID, agent name, and messages. These spans carry
   `agento11y.record=true`, which opts them in to Agent Observability.
 - An `execute_tool <name>` span for each tool call, with the same agent name and
-  conversation ID as the chat spans.
+  conversation ID as the chat spans. It carries `agento11y.record=true` and
+  `gen_ai.tool.call.id` from LangChain's tool-call ID. In `full` mode, it also
+  records JSON-serialized `gen_ai.tool.call.arguments` and `gen_ai.tool.call.result`
+  before ending. The tool result is also included in the next chat generation's
+  input as a `tool_call_response` part with a `response` field and the same ID.
 - An invocation span, `agentcore_demo.agent.invoke`, with the AgentCore session's
   conversation ID and the same agent name. It has no `gen_ai.operation.name`, so
   it doesn't create a duplicate generation.

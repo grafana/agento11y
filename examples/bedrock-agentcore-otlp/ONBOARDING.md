@@ -144,6 +144,22 @@ If no conversation appears, check that the OTLP token has `traces:write`, that
 that the spans have `agento11y.record=true`. Spans dropped by sampling in a
 collector between the app and Grafana Cloud don't appear.
 
+For tool input/output, use `AGENTO11Y_CONTENT_CAPTURE_MODE=full`. Each tool span
+records `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result`, and the
+`gen_ai.tool.call.id` that links it to the model's request. The next chat span
+also includes the tool result in its input messages.
+
+The documented `--no-traces` setup exports directly to Grafana Cloud without a
+local Collector or Alloy. If you add one, check that its attribute or transform
+processors preserve `gen_ai.tool.call.*`. Check `OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT`
+and `OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT` too: a small string limit can truncate
+JSON. The example leaves these limits unset.
+
+Grafana Cloud forwards the content to Agent Observability and strips sensitive
+content attributes from the Tempo-bound copy. Inspect tool content in Agent
+Observability or before OTLP export; missing content in Tempo alone does not
+mean the instrumentation omitted it.
+
 If metrics fail with `Failed to export metrics batch code: 404, reason: Not Found`,
 stop the dev server and restart it with `agentcore dev --no-traces`.
 In AgentCore CLI 1.1.0, local trace collection overrides

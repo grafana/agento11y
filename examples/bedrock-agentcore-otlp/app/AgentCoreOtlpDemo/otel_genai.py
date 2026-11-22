@@ -7,8 +7,8 @@ trace export:
 - one ``chat <model>`` span per model call, with provider, model, token usage, and messages
 - one ``execute_tool <name>`` span per tool call
 
-Chat spans carry ``agento11y.record=true`` so Agent Observability turns them into generations.
-Tool spans do not, because tool calls don't create standalone generations.
+Chat and tool spans carry ``agento11y.record=true`` to opt in their telemetry.
+Tool spans keep the ``execute_tool`` operation and don't create standalone generations.
 
 Message attributes use the role/parts JSON format from the ``otel_example.py`` sample:
 https://grafana.com/docs/grafana-cloud/observe-and-act/agent-observability/get-started/opentelemetry/
@@ -45,6 +45,17 @@ def _text(content: Any) -> str:
     return ""
 
 
+def _tool_json(value: Any) -> str:
+    if isinstance(value, BaseMessage):
+        value = value.content
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            pass
+    return json.dumps(value, ensure_ascii=False, default=str)
+
+
 def _role(message: BaseMessage) -> str:
     return {"human": "user", "ai": "assistant", "tool": "tool", "system": "system"}.get(message.type, message.type)
 
@@ -57,7 +68,7 @@ def _parts(message: BaseMessage, mode: str) -> list[dict[str, Any]]:
     if message.type == "tool":
         part: dict[str, Any] = {"type": "tool_call_response", "id": getattr(message, "tool_call_id", "")}
         if keep_tool_content:
-            part["result"] = text
+            part["response"] = json.loads(_tool_json(message))
         return [part]
     if text:
         parts.append({"type": "text", "content": text})
@@ -145,27 +156,34 @@ class GenAISpanHandler(BaseCallbackHandler):
             attributes["gen_ai.output.messages"] = _messages_json([message], self._mode)
         span.set_attributes(attributes)
 
-    def on_tool_start(self, serialized: dict[str, Any], input_str: str, *, run_id: UUID, **kwargs: Any) -> None:
-        name = str(serialized.get("name") or kwargs.get("name") or "tool")
+    def on_tool_start(self, serialized: dict[str, Any] | None, input_str: str, *, run_id: UUID, **kwargs: Any) -> None:
+        name = str((serialized or {}).get("name") or kwargs.get("name") or "tool")
         span = self._tracer.start_span(f"execute_tool {name}", kind=SpanKind.INTERNAL)
-        span.set_attributes(
-            {
-                "gen_ai.operation.name": "execute_tool",
-                "gen_ai.tool.name": name,
-                "gen_ai.agent.name": self._agent_name,
-                "gen_ai.conversation.id": self._conversation_id,
-            }
-        )
+        attributes: dict[str, Any] = {
+            "agento11y.record": True,
+            "gen_ai.operation.name": "execute_tool",
+            "gen_ai.tool.name": name,
+            "gen_ai.agent.name": self._agent_name,
+            "gen_ai.conversation.id": self._conversation_id,
+        }
+        call_id = kwargs.get("tool_call_id")
+        if isinstance(call_id, str) and call_id.strip():
+            attributes["gen_ai.tool.call.id"] = call_id.strip()
         if self._mode == CAPTURE_FULL:
-            span.set_attribute("gen_ai.tool.call.arguments", input_str)
+            arguments = kwargs.get("inputs")
+            attributes["gen_ai.tool.call.arguments"] = _tool_json(input_str if arguments is None else arguments)
+        span.set_attributes(attributes)
         self._spans[run_id] = span
 
     def on_tool_end(self, output: Any, *, run_id: UUID, **kwargs: Any) -> None:
         span = self._spans.pop(run_id, None)
         if span is None:
             return
+        call_id = getattr(output, "tool_call_id", None)
+        if isinstance(call_id, str) and call_id.strip():
+            span.set_attribute("gen_ai.tool.call.id", call_id.strip())
         if self._mode == CAPTURE_FULL:
-            span.set_attribute("gen_ai.tool.call.result", _text(getattr(output, "content", output)) or str(output))
+            span.set_attribute("gen_ai.tool.call.result", _tool_json(output))
         span.end()
 
     def on_llm_error(self, error: BaseException, *, run_id: UUID, **kwargs: Any) -> None:
