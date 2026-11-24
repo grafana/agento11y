@@ -30,15 +30,19 @@ from agento11y import (
     ToolExecutionKind,
     ToolExecutionStart,
     ValidationError,
+    content_capture_mode_from_context,
     tool_call_part,
     with_agent_name,
     with_agent_version,
     with_conversation_id,
 )
 from conftest import CapturingGenerationExporter
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import StatusCode
 
 
 def _new_client(exporter: CapturingGenerationExporter, tracer=None, **overrides) -> Client:
@@ -976,3 +980,46 @@ def test_explicit_flush_failure_keeps_the_earlier_background_failure() -> None:
         assert "background failure" in str(earlier)
     finally:
         client.shutdown()
+
+
+def test_discarded_recorders_end_their_spans_without_export_content_or_metrics() -> None:
+    exporter = CapturingGenerationExporter()
+    span_exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    reader = InMemoryMetricReader()
+    meter_provider = MeterProvider(metric_readers=[reader])
+    client = Client(
+        ClientConfig(
+            tracer=provider.get_tracer("agento11y-discard"),
+            meter=meter_provider.get_meter("agento11y-discard"),
+            generation_export=GenerationExportConfig(batch_size=10, flush_interval=timedelta(seconds=60)),
+            generation_exporter=exporter,
+        )
+    )
+    capture_mode_before = content_capture_mode_from_context()
+
+    try:
+        generation = client.start_generation(_seed_generation("conv-discard"))
+        generation.set_result(output=_assistant_output("never sent"))
+        generation.discard()
+        generation.discard()
+        generation.end()
+        tool = client.start_tool_execution(ToolExecutionStart(tool_name="lookup", include_content=True))
+        tool.set_result(arguments={"city": "Paris"}, result="never ran")
+        tool.discard()
+        tool.end()
+        client.flush()
+        metrics = reader.get_metrics_data()
+    finally:
+        client.shutdown()
+        provider.shutdown()
+        meter_provider.shutdown()
+
+    assert exporter.requests == []
+    assert (generation.err(), generation.last_generation, tool.err()) == (None, None, None)
+    assert content_capture_mode_from_context() == capture_mode_before
+    assert metrics is None or not metrics.resource_metrics
+    spans = span_exporter.get_finished_spans()
+    assert [span.status.status_code for span in spans] == [StatusCode.OK, StatusCode.OK]
+    assert not any("gen_ai.tool.call" in key and key != "gen_ai.tool.call.id" for key in spans[1].attributes)

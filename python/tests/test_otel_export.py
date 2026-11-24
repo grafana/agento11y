@@ -426,3 +426,22 @@ def test_workflow_export_is_rejected(telemetry):
     assert exporter.get_finished_spans() == ()
     assert client._pending_workflow_steps == []
     client.shutdown()
+
+
+def test_discarded_generation_ends_its_span_unrecorded(telemetry):
+    provider, exporter = telemetry
+    client = new_client(provider)
+    rec = client.start_generation(seed(id="discarded"))
+    rec.set_result(Generation(output=[assistant_text_message("never sent")]))
+
+    rec.discard()
+    rec.discard()
+    rec.end()
+
+    assert rec.err() is None
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes["agento11y.record"] == "false"
+    assert span.status.status_code is not StatusCode.ERROR
+    assert not any(
+        key.startswith(("gen_ai.input", "gen_ai.output", "agento11y.generation.")) for key in span.attributes
+    )
