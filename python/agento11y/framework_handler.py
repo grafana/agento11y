@@ -609,6 +609,7 @@ class Agento11yFrameworkHandlerBase:
                     output=output_messages,
                     usage=usage,
                     model=backfill_model if backfill_model is not None else ModelRef(),
+                    response_id=_as_str(_read(llm_output, "response_id")),
                     response_model=response_model,
                     stop_reason=stop_reason,
                 )
