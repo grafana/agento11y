@@ -10,8 +10,8 @@ synthetic data, and metrics are the same, so you can run both and compare.
 
 The agent defaults to Claude through Amazon Bedrock and uses synthetic,
 company-neutral inventory, order, support-case, and return data.
-`AGENT_MODEL_PROVIDER` also sets the recorded provider: `bedrock` for Amazon
-Bedrock or `anthropic` for direct Anthropic calls.
+`AGENT_MODEL_PROVIDER=bedrock` records the standard OpenTelemetry provider
+`aws.bedrock`; `anthropic` records `anthropic` for direct Anthropic calls.
 
 ## How it differs from the SDK example
 
@@ -20,7 +20,7 @@ Bedrock or `anthropic` for direct Anthropic calls.
 | Generations | `agento11y-langchain` callbacks and the SDK client | Spans from `otel_genai.py` with `gen_ai.*` attributes, sent over OTLP |
 | Dependencies | `agento11y`, `agento11y-langchain`, OpenTelemetry | OpenTelemetry only |
 | Credentials | An SDK endpoint and token, plus an OTLP token | One OTLP endpoint and token |
-| Opt-in | None | `agento11y.record=true` in `OTEL_RESOURCE_ATTRIBUTES` and on each chat and tool span |
+| Opt-in | None | `agento11y.record=true` on each chat and tool span |
 | Tool calls | Recorded by the SDK callbacks | Recorded as `execute_tool` spans in the trace |
 | Content capture | `AGENTO11Y_CONTENT_CAPTURE_MODE` | `AGENTO11Y_CONTENT_CAPTURE_MODE`, same three modes |
 
@@ -33,6 +33,15 @@ Use this example if you already export OpenTelemetry traces, or if you can't add
 the SDK to your agent. Read
 [Instrument agents with OpenTelemetry](https://grafana.com/docs/grafana-cloud/observe-and-act/agent-observability/get-started/opentelemetry/)
 for what Agent Observability needs from your spans.
+
+This custom callback illustrates the required span attributes and message
+format. Existing applications can instead use framework instrumentation or an
+existing instrumentor such as
+[OpenTelemetry's botocore instrumentation](https://opentelemetry-python-contrib.readthedocs.io/en/latest/instrumentation/botocore/botocore.html),
+provided its spans satisfy those requirements. Choose one source of generation
+spans. This example opts in only its callback spans; a resource-wide
+`agento11y.record=true` would also opt in other GenAI instrumentation and can
+create duplicate generations.
 
 ## Project layout
 
@@ -79,8 +88,8 @@ All spans created by this example carry `gen_ai.agent.name` from `AGENT_NAME`.
 If the setting is unset or blank, the agent name is `agentcore-otlp-demo`.
 
 - A `chat <model>` span for each model call, with the provider, model, token
-  usage, conversation ID, agent name, and messages. These spans carry
-  `agento11y.record=true`, which opts them in to Agent Observability.
+  usage, finish reason when available, conversation ID, agent name, and messages.
+  These spans carry `agento11y.record=true`, which opts them in to Agent Observability.
 - An `execute_tool <name>` span for each tool call, with the same agent name and
   conversation ID as the chat spans. It carries `agento11y.record=true` and
   `gen_ai.tool.call.id` from LangChain's tool-call ID. In `full` mode, it also
@@ -98,3 +107,14 @@ Account IDs appear only on the invocation span, not as metric labels.
 
 Don't run this example and `bedrock-agentcore` against the same stack at the same
 time with the same agent name, or you will see both in one view.
+
+## Run the tests
+
+From this example directory, run the offline tests with an in-memory exporter:
+
+```bash
+uv run --project app/AgentCoreOtlpDemo python -m unittest discover -s tests -v
+```
+
+These tests don't call a model provider or Grafana Cloud. Repository CI doesn't
+currently run the example tests.

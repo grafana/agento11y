@@ -116,7 +116,7 @@ class GenAISpanHandler(BaseCallbackHandler):
         attributes: dict[str, Any] = {
             "agento11y.record": True,
             "gen_ai.operation.name": "chat",
-            "gen_ai.provider.name": self._provider,
+            "gen_ai.provider.name": {"bedrock": "aws.bedrock"}.get(self._provider, self._provider),
             "gen_ai.request.model": model,
             "gen_ai.agent.name": self._agent_name,
             "gen_ai.conversation.id": self._conversation_id,
@@ -152,6 +152,10 @@ class GenAISpanHandler(BaseCallbackHandler):
         ).get("model_name")
         if response_model:
             attributes["gen_ai.response.model"] = str(response_model)
+        metadata = getattr(message, "response_metadata", None) or {}
+        finish_reason = metadata.get("stopReason") or metadata.get("stop_reason")
+        if finish_reason:
+            attributes["gen_ai.response.finish_reasons"] = [str(finish_reason)]
         if self._mode != CAPTURE_NONE:
             attributes["gen_ai.output.messages"] = _messages_json([message], self._mode)
         span.set_attributes(attributes)

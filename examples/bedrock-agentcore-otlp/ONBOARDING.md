@@ -59,8 +59,12 @@ OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana.net/otlp
 OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic <base64(OTLP_INSTANCE_ID:OTLP_TOKEN)>"
 OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
 OTEL_EXPORTER_OTLP_INSECURE=false
-OTEL_RESOURCE_ATTRIBUTES=service.namespace=agentcore,agento11y.record=true
+OTEL_RESOURCE_ATTRIBUTES=service.namespace=agentcore
 ```
+
+The callback opts in its chat and tool spans individually. Don't add
+`agento11y.record=true` to the resource: it can also opt in spans from other
+instrumentors and create duplicate generations for the same model call.
 
 Keep this enabled so AgentCore's default ADOT CloudWatch configuration does not
 replace the explicit Grafana Cloud OTLP settings:
