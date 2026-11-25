@@ -64,7 +64,7 @@ def _parts(message: BaseMessage, mode: str) -> list[dict[str, Any]]:
     """Convert one LangChain message to GenAI message parts."""
     parts: list[dict[str, Any]] = []
     text = _text(message.content)
-    keep_tool_content = mode == CAPTURE_FULL
+    keep_tool_content = mode in (CAPTURE_FULL, CAPTURE_NO_TOOL_CONTENT)
     if message.type == "tool":
         part: dict[str, Any] = {"type": "tool_call_response", "id": getattr(message, "tool_call_id", "")}
         if keep_tool_content:

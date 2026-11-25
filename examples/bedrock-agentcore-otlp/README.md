@@ -25,9 +25,11 @@ company-neutral inventory, order, support-case, and return data.
 | Content capture | `AGENTO11Y_CONTENT_CAPTURE_MODE` | `AGENTO11Y_CONTENT_CAPTURE_MODE`, same three modes |
 
 The environment template sets `AGENTO11Y_CONTENT_CAPTURE_MODE=no_tool_content`,
-which captures conversation messages but omits tool arguments and results, since
-tool calls often carry customer data. If the variable is unset, the handler uses
-the same mode. Set it to `full` to also capture tool arguments and results.
+which is also the handler's default when the variable is unset. Both `full` and
+`no_tool_content` retain complete generation messages, including tool-call
+arguments and results. `no_tool_content` omits those payloads only from separate
+`execute_tool` spans; `full` includes them there too. `metadata_only` omits
+message content and tool-span payloads.
 
 Use this example if you already export OpenTelemetry traces, or if you can't add
 the SDK to your agent. Read
@@ -90,12 +92,14 @@ If the setting is unset or blank, the agent name is `agentcore-otlp-demo`.
 - A `chat <model>` span for each model call, with the provider, model, token
   usage, finish reason when available, conversation ID, agent name, and messages.
   These spans carry `agento11y.record=true`, which opts them in to Agent Observability.
+  In `full` and `no_tool_content`, messages include tool-call arguments and tool
+  results as `tool_call_response` parts with `response` fields and matching IDs.
 - An `execute_tool <name>` span for each tool call, with the same agent name and
   conversation ID as the chat spans. It carries `agento11y.record=true` and
   `gen_ai.tool.call.id` from LangChain's tool-call ID. In `full` mode, it also
   records JSON-serialized `gen_ai.tool.call.arguments` and `gen_ai.tool.call.result`
-  before ending. The tool result is also included in the next chat generation's
-  input as a `tool_call_response` part with a `response` field and the same ID.
+  before ending. These two payload attributes are omitted in `no_tool_content`
+  and `metadata_only`.
 - An invocation span, `agentcore_demo.agent.invoke`, with the AgentCore session's
   conversation ID and the same agent name. It has no `gen_ai.operation.name`, so
   it doesn't create a duplicate generation.

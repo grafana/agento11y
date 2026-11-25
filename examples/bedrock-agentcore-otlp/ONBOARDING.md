@@ -45,8 +45,9 @@ BEDROCK_REGION=us-west-2
 ```
 
 Choose how much the spans record. `no_tool_content` captures conversation
-messages but omits tool arguments and results, which often carry customer data.
-`full` also captures tool arguments and results:
+messages, including tool-call arguments and results, but omits those payloads
+from separate `execute_tool` spans. `full` also includes them on tool spans.
+Use `metadata_only` to omit message content and tool-span payloads:
 
 ```bash
 AGENTO11Y_CONTENT_CAPTURE_MODE=no_tool_content
@@ -149,10 +150,15 @@ If no conversation appears, check that the OTLP token has `traces:write`, that
 that the spans have `agento11y.record=true`. Spans dropped by sampling in a
 collector between the app and Grafana Cloud don't appear.
 
-For tool input/output, use `AGENTO11Y_CONTENT_CAPTURE_MODE=full`. Each tool span
-records `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result`, and the
-`gen_ai.tool.call.id` that links it to the model's request. The next chat span
-also includes the tool result in its input messages.
+With `no_tool_content` or `full`, expand tool calls in the conversation view to
+inspect their arguments and results from the generation messages. The next chat
+span includes the tool result in its input messages.
+
+For arguments and results on separate tool spans too, use
+`AGENTO11Y_CONTENT_CAPTURE_MODE=full`. Each tool span then records
+`gen_ai.tool.call.arguments` and `gen_ai.tool.call.result`. Under `no_tool_content`,
+those payload attributes are absent, while `gen_ai.tool.call.id` still links the
+span to the model's request.
 
 The documented `--no-traces` setup exports directly to Grafana Cloud without a
 local Collector or Alloy. If you add one, check that its attribute or transform

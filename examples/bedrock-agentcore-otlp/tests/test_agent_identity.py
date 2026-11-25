@@ -118,6 +118,42 @@ class AgentIdentityTests(unittest.TestCase):
         self.assertEqual(attributes.get("gen_ai.agent.name"), "logical-agent")
         self.assertEqual(attributes.get("gen_ai.conversation.id"), "failed-conversation")
 
+    def test_no_tool_content_keeps_generation_payloads_only(self) -> None:
+        with patch.dict(os.environ, {"AGENTO11Y_CONTENT_CAPTURE_MODE": "no_tool_content"}, clear=True):
+            response = run_agent(
+                agent=self._tool_calling_agent(),
+                telemetry=self.telemetry,
+                prompt="Check synthetic inventory.",
+                conversation_id="tool-conversation",
+            )
+        self.assertEqual(response["status"], "ok")
+        spans = self.exporter.get_finished_spans()
+        tool = next(span for span in spans if span.name == "execute_tool lookup_inventory")
+        attributes = tool.attributes or {}
+        self.assertEqual(attributes["gen_ai.tool.call.id"], "call-inventory")
+        self.assertNotIn("gen_ai.tool.call.arguments", attributes)
+        self.assertNotIn("gen_ai.tool.call.result", attributes)
+        chats = [span for span in spans if span.name.startswith("chat ")]
+        first_output_json = (chats[0].attributes or {})["gen_ai.output.messages"]
+        second_input_json = (chats[1].attributes or {})["gen_ai.input.messages"]
+        assert isinstance(first_output_json, str)
+        assert isinstance(second_input_json, str)
+        expected_call = {
+            "type": "tool_call",
+            "id": "call-inventory",
+            "name": "lookup_inventory",
+            "arguments": {"query": "ENV-100"},
+        }
+        self.assertEqual(json.loads(first_output_json)[0]["parts"], [expected_call])
+        second_input = json.loads(second_input_json)
+        assistant = next(message for message in second_input if message["role"] == "assistant")
+        self.assertEqual(assistant["parts"], [expected_call])
+        results = next(message["parts"] for message in second_input if message["role"] == "tool")
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["type"], "tool_call_response")
+        self.assertEqual(results[0]["id"], "call-inventory")
+        self.assertTrue(results[0]["response"]["matches"])
+
     def _tool_calling_agent(self) -> Any:
         model = ToolCallingModel(
             responses=[
