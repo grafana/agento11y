@@ -24,7 +24,7 @@ overrides:
   mysql2: 3.23.1
   nanoid: 3.3.18
   postcss: 8.5.29
-  'brace-expansion@1': 1.1.21
+  'brace-expansion@1': 1.1.22
   '@opentelemetry/core': 2.8.0
   'body-parser@2': 2.4.0
 
