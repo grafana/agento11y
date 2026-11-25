@@ -159,11 +159,16 @@ runtime settings through the runtime's `envVars` configuration. Never put
 tokens or authorization headers in the tracked `agentcore.json`.
 
 ```bash
-agentcore deploy --dry-run
+agentcore build
 agentcore deploy
-agentcore invoke --session-id agentcore-demo-session-0000000000000001 \
-  "Check inventory for ENV-100 and order DEMO-1007."
+agentcore invoke --runtime AgentCoreObsDemo \
+  --session-id agentcore-demo-session-0000000000000001 \
+  --payload '{"prompt":"Check inventory for ENV-100 and order DEMO-1007."}'
 ```
+
+A hosted Runtime invoke takes the request body as JSON in `--payload`. The
+session ID becomes the conversation ID in Agent Observability and must have at
+least 33 characters.
 
 If the AWS account has not been bootstrapped for CDK, an AWS administrator may
 need to perform that one-time setup before deployment succeeds.
