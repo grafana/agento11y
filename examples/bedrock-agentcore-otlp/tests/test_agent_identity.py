@@ -1,0 +1,167 @@
+from __future__ import annotations
+
+import json
+import os
+import sys
+import unittest
+from pathlib import Path
+from typing import Any
+from unittest.mock import Mock, patch
+
+APP = Path(__file__).resolve().parents[1] / "app" / "AgentCoreOtlpDemo"
+sys.path.insert(0, str(APP))
+
+from agent import TOOLS, run_agent  # noqa: E402
+from langchain.agents import create_agent  # noqa: E402
+from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel  # noqa: E402
+from langchain_core.messages import AIMessage  # noqa: E402
+from opentelemetry.sdk.metrics import MeterProvider  # noqa: E402
+from opentelemetry.sdk.resources import Resource  # noqa: E402
+from opentelemetry.sdk.trace import TracerProvider  # noqa: E402
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor  # noqa: E402
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter  # noqa: E402
+from telemetry import Telemetry  # noqa: E402
+
+
+class ToolCallingModel(FakeMessagesListChatModel):
+    def bind_tools(self, tools: Any, **kwargs: Any) -> ToolCallingModel:
+        return self
+
+
+class AgentIdentityTests(unittest.TestCase):
+    def setUp(self) -> None:
+        resource = Resource({"service.name": "distinct-service-name"})
+        self.exporter = InMemorySpanExporter()
+        traces = TracerProvider(resource=resource)
+        traces.add_span_processor(SimpleSpanProcessor(self.exporter))
+        metrics = MeterProvider(resource=resource)
+        meter = metrics.get_meter("agent-identity-test")
+        self.telemetry = Telemetry(
+            tracer_provider=traces,
+            meter_provider=metrics,
+            tracer=traces.get_tracer("agent-identity-test"),
+            requests=meter.create_counter("test.requests"),
+            duration=meter.create_histogram("test.duration"),
+        )
+        self.addCleanup(self.telemetry.shutdown)
+
+    def test_all_span_types_keep_agent_identity_across_capture_modes(self) -> None:
+        for mode in ["full", "no_tool_content", "metadata_only"]:
+            for name in ["logical-agent", " logical-agent ", "", None]:
+                with self.subTest(mode=mode, name=name):
+                    self.exporter.clear()
+                    settings = {"AGENTO11Y_CONTENT_CAPTURE_MODE": mode}
+                    if name is not None:
+                        settings["AGENT_NAME"] = name
+                    with patch.dict(os.environ, settings, clear=True):
+                        response = run_agent(
+                            agent=self._tool_calling_agent(),
+                            telemetry=self.telemetry,
+                            prompt="Check synthetic inventory.",
+                            conversation_id="identity-conversation",
+                        )
+                    self.assertEqual(response["status"], "ok")
+                    spans = self.exporter.get_finished_spans()
+                    self.assertEqual(len(spans), 4)
+                    self.assertEqual(sum(span.name.startswith("chat ") for span in spans), 2)
+                    self.assertIn("execute_tool lookup_inventory", {span.name for span in spans})
+                    for span in spans:
+                        attributes = span.attributes or {}
+                        expected_name = (name or "").strip() or "agentcore-otlp-demo"
+                        self.assertEqual(attributes.get("gen_ai.agent.name"), expected_name)
+                        self.assertEqual(attributes.get("gen_ai.conversation.id"), "identity-conversation")
+                        self.assertNotEqual(attributes["gen_ai.agent.name"], span.resource.attributes["service.name"])
+
+    def test_tool_results_link_chat_generations_to_tool_spans(self) -> None:
+        with patch.dict(os.environ, {"AGENTO11Y_CONTENT_CAPTURE_MODE": "full"}, clear=True):
+            response = run_agent(
+                agent=self._tool_calling_agent(),
+                telemetry=self.telemetry,
+                prompt="Check synthetic inventory.",
+                conversation_id="tool-conversation",
+            )
+        self.assertEqual(response["status"], "ok")
+        spans = self.exporter.get_finished_spans()
+        tool = next(span for span in spans if span.name == "execute_tool lookup_inventory")
+        attributes = tool.attributes or {}
+        self.assertIs(attributes.get("agento11y.record"), True)
+        self.assertEqual(attributes["gen_ai.tool.call.id"], "call-inventory")
+        arguments_json = attributes["gen_ai.tool.call.arguments"]
+        result_json = attributes["gen_ai.tool.call.result"]
+        assert isinstance(arguments_json, str)
+        assert isinstance(result_json, str)
+        self.assertEqual(json.loads(arguments_json), {"query": "ENV-100"})
+        result = json.loads(result_json)
+        self.assertTrue(result["matches"])
+        chats = [span for span in spans if span.name.startswith("chat ")]
+        first_output_json = (chats[0].attributes or {})["gen_ai.output.messages"]
+        assert isinstance(first_output_json, str)
+        first_output = json.loads(first_output_json)
+        self.assertEqual(first_output[0]["parts"][0]["id"], attributes["gen_ai.tool.call.id"])
+        second_input_json = (chats[1].attributes or {})["gen_ai.input.messages"]
+        assert isinstance(second_input_json, str)
+        second_input = json.loads(second_input_json)
+        results = [part for message in second_input if message["role"] == "tool" for part in message["parts"]]
+        self.assertEqual(results, [{"type": "tool_call_response", "id": "call-inventory", "response": result}])
+
+    def test_failed_invocation_keeps_agent_identity(self) -> None:
+        with patch.dict(os.environ, {"AGENT_NAME": "logical-agent"}, clear=True):
+            response = run_agent(
+                agent=Mock(invoke=Mock(side_effect=RuntimeError("synthetic failure"))),
+                telemetry=self.telemetry,
+                prompt="Synthetic error case.",
+                conversation_id="failed-conversation",
+            )
+        self.assertEqual(response["status"], "error")
+        span = self.exporter.get_finished_spans()[0]
+        attributes = span.attributes or {}
+        self.assertEqual(attributes.get("gen_ai.agent.name"), "logical-agent")
+        self.assertEqual(attributes.get("gen_ai.conversation.id"), "failed-conversation")
+
+    def test_no_tool_content_keeps_generation_payloads_only(self) -> None:
+        with patch.dict(os.environ, {"AGENTO11Y_CONTENT_CAPTURE_MODE": "no_tool_content"}, clear=True):
+            response = run_agent(
+                agent=self._tool_calling_agent(),
+                telemetry=self.telemetry,
+                prompt="Check synthetic inventory.",
+                conversation_id="tool-conversation",
+            )
+        self.assertEqual(response["status"], "ok")
+        spans = self.exporter.get_finished_spans()
+        tool = next(span for span in spans if span.name == "execute_tool lookup_inventory")
+        attributes = tool.attributes or {}
+        self.assertEqual(attributes["gen_ai.tool.call.id"], "call-inventory")
+        self.assertNotIn("gen_ai.tool.call.arguments", attributes)
+        self.assertNotIn("gen_ai.tool.call.result", attributes)
+        chats = [span for span in spans if span.name.startswith("chat ")]
+        first_output_json = (chats[0].attributes or {})["gen_ai.output.messages"]
+        second_input_json = (chats[1].attributes or {})["gen_ai.input.messages"]
+        assert isinstance(first_output_json, str)
+        assert isinstance(second_input_json, str)
+        expected_call = {
+            "type": "tool_call",
+            "id": "call-inventory",
+            "name": "lookup_inventory",
+            "arguments": {"query": "ENV-100"},
+        }
+        self.assertEqual(json.loads(first_output_json)[0]["parts"], [expected_call])
+        second_input = json.loads(second_input_json)
+        assistant = next(message for message in second_input if message["role"] == "assistant")
+        self.assertEqual(assistant["parts"], [expected_call])
+        results = next(message["parts"] for message in second_input if message["role"] == "tool")
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["type"], "tool_call_response")
+        self.assertEqual(results[0]["id"], "call-inventory")
+        self.assertTrue(results[0]["response"]["matches"])
+
+    def _tool_calling_agent(self) -> Any:
+        model = ToolCallingModel(
+            responses=[
+                AIMessage(
+                    content="",
+                    tool_calls=[{"name": "lookup_inventory", "args": {"query": "ENV-100"}, "id": "call-inventory"}],
+                ),
+                AIMessage(content="Synthetic inventory checked."),
+            ]
+        )
+        return create_agent(model=model, tools=TOOLS)
