@@ -78,7 +78,9 @@ handler = Agento11yLangChainHandler(
 )
 ```
 
-Without any of these, each run becomes its own conversation.
+Without any of these, each run becomes its own conversation. Runs that overlap on one handler
+keep their own conversations, also with `capture_workflow_steps=True`. Pass the same conversation
+key to runs that belong to one conversation.
 
 With the default callback span capture, model and tool spans follow the chain's
 callback parent IDs, including when there is no active application span. Separate
