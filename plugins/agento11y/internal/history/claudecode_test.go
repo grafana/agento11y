@@ -1167,3 +1167,57 @@ func TestClaudeReimportAfterMergeSendsNoNewTurns(t *testing.T) {
 			len(exp.got), result.Imported, result.Skipped)
 	}
 }
+
+// TestClaudeImportGitBranchTagCorpus is the import half of the git.branch
+// corpus in claudecode.TestHook_GitBranchTagCorpus. An import keeps the
+// branch each line recorded, "HEAD" included, whatever .git/HEAD says today,
+// because resolving at import time would stamp today's checkout on old turns.
+func TestClaudeImportGitBranchTagCorpus(t *testing.T) {
+	heads := []struct{ name, head string }{
+		{name: "ref", head: "ref: refs/heads/release\n"},
+		{name: "hash", head: "4691bffb0123456789abcdef0123456789abcdef\n"},
+		{name: "missing"},
+	}
+	for _, branch := range []string{"main", "HEAD", "", "feature/x"} {
+		for _, head := range heads {
+			t.Run(branch+"/"+head.name, func(t *testing.T) {
+				cwd := t.TempDir()
+				if head.head != "" {
+					writeFile(t, filepath.Join(cwd, ".git", "HEAD"), head.head)
+				}
+				root := t.TempDir()
+				sessionID := "sess-branch"
+				var body strings.Builder
+				for _, line := range []string{
+					claudeUserLine(sessionID, cwd, "2026-01-10T12:00:00Z", "hi"),
+					claudeAssistantLine(sessionID, cwd, "2026-01-10T12:00:10Z", "req-1", "hello", nil),
+				} {
+					var m map[string]any
+					if err := json.Unmarshal([]byte(line), &m); err != nil {
+						t.Fatal(err)
+					}
+					if branch != "" {
+						m["gitBranch"] = branch
+					}
+					body.WriteString(claudeLine(m))
+				}
+				path := writeFile(t, filepath.Join(root, "-work-repo", sessionID+".jsonl"), body.String())
+
+				imp := claudeImporterAt(root)
+				preview, ok, err := imp.Preview(context.Background(), path)
+				if err != nil || !ok {
+					t.Fatalf("Preview: ok=%v err=%v", ok, err)
+				}
+				turns := collectTurns(t, imp, preview)
+				if len(turns) != 1 {
+					t.Fatalf("got %d turns, want 1", len(turns))
+				}
+				got := turns[0].Gen.Tags["git.branch"]
+				t.Logf("corpus import line=%q head=%s git.branch=%q", branch, head.name, got)
+				if got != branch {
+					t.Errorf("git.branch = %q, want the line's %q", got, branch)
+				}
+			})
+		}
+	}
+}
