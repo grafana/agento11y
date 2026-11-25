@@ -31,26 +31,32 @@ type Payload struct {
 	// beforeSubmitPrompt
 	Prompt string `json:"prompt"`
 
-	// afterAgentResponse / stop / common schema
-	Text             string `json:"text"`
-	Model            string `json:"model"`
-	ModelID          string `json:"model_id"`
-	Provider         string `json:"provider"`
-	InputTokens      *int64 `json:"input_tokens"`
-	OutputTokens     *int64 `json:"output_tokens"`
-	CacheReadTokens  *int64 `json:"cache_read_tokens"`
-	CacheWriteTokens *int64 `json:"cache_write_tokens"`
+	// afterAgentResponse / afterAgentThought / stop / common schema
+	Text             string          `json:"text"`
+	Model            string          `json:"model"`
+	ModelID          string          `json:"model_id"`
+	Provider         string          `json:"provider"`
+	ModelParams      json.RawMessage `json:"model_params,omitempty"`
+	InputTokens      *int64          `json:"input_tokens"`
+	OutputTokens     *int64          `json:"output_tokens"`
+	CacheReadTokens  *int64          `json:"cache_read_tokens"`
+	CacheWriteTokens *int64          `json:"cache_write_tokens"`
+	// DurationMs is afterAgentThought's thinking-block duration. Tool events
+	// use Duration (seconds are not the unit; Cursor sends milliseconds).
+	DurationMs *float64 `json:"duration_ms"`
 
 	// postToolUse(Failure)
-	ToolName   string          `json:"tool_name"`
-	ToolUseID  string          `json:"tool_use_id"`
-	ToolInput  json.RawMessage `json:"tool_input"`
-	ToolOutput json.RawMessage `json:"tool_output"`
-	Duration   *float64        `json:"duration"`
-	Cwd        string          `json:"cwd"`
-	Status     string          `json:"status"`
+	ToolName     string          `json:"tool_name"`
+	ToolUseID    string          `json:"tool_use_id"`
+	ToolInput    json.RawMessage `json:"tool_input"`
+	ToolOutput   json.RawMessage `json:"tool_output"`
+	Duration     *float64        `json:"duration"`
+	Cwd          string          `json:"cwd"`
+	Status       string          `json:"status"`
+	ErrorMessage string          `json:"error_message"`
+	FailureType  string          `json:"failure_type"`
 
-	// stop / postToolUseFailure: error is `string | {message,code}`
+	// stop / older postToolUseFailure payloads: error is `string | {message,code}`
 	Error json.RawMessage `json:"error"`
 }
 
