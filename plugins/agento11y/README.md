@@ -328,6 +328,8 @@ Imported sessions are thinner than live capture — host logs omit fields that l
   A stored v2 message or accumulated input over 4 MiB stops importing that session with a warning.
   Importing both a fork and its original session counts copied turns twice. Importing turns already captured live can also count them twice.
 
+- **claude-code**: reads `$CLAUDE_CONFIG_DIR/projects` (default `~/.claude/projects`). A fork (`--fork-session`, `/branch`, `/fork`) starts with copies of its original's turns; live capture exports only the fork's own turns, but importing both a fork and its original counts the copied turns twice. Importing turns already captured live can also count them twice.
+
 An import sends each turn as a generation and a trace span dated when the turn ran, but records no metrics. A metric point is dated when it is sent, so recording an import would count weeks of history as today's usage. Dashboards and alerts built on the `gen_ai.client.*` metrics leave imported history out; the Sessions view includes it.
 
 Without `--since`, an import covers the last 90 days. Pass `--since 365d` (or a timestamp) to widen the window, and `--until` to bound the other end. Other useful flags: `--workspace`, `--max-sessions`, `--max-turns`, `--all`, `--yes`, `--force`. Without a terminal, pass `--all --yes` to import from a script.
