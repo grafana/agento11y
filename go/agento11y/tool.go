@@ -32,7 +32,16 @@ type ToolExecutionStart struct {
 	IncludeContent bool
 	// ContentCapture overrides the parent generation's content capture mode for
 	// this tool execution. Default (zero value) inherits from context.
-	ContentCapture        ContentCaptureMode
+	ContentCapture ContentCaptureMode
+	// Tags are dimensions of this one tool execution. They are emitted on the
+	// tool span and on its execute_tool metrics as agento11y.tag.<key>, next to
+	// the static Config.Tags, and win over a static tag with the same key.
+	//
+	// Context tags (WithTag, WithTags) are not applied to tool executions:
+	// every tag here becomes a label on a histogram that is already split by
+	// tool name, so a caller names the few dimensions it wants explicitly.
+	// Keep the values low-cardinality.
+	Tags                  map[string]string
 	ExecutionKind         ToolExecutionKind
 	SkillName             string
 	SkillDescription      string

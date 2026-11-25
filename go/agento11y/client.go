@@ -964,6 +964,9 @@ func (c *Client) StartToolExecution(ctx context.Context, start ToolExecutionStar
 		startedAt = startedAt.UTC()
 	}
 	seed.StartedAt = startedAt
+	// Merged once, from a copy: the recorder keeps the seed until End, and the
+	// caller may reuse its map.
+	seed.Tags = mergeTags(c.config.Tags, seed.Tags)
 
 	// Resolve content capture before the span starts so MetadataOnly never
 	// attaches sensitive content to live span attributes.
@@ -1000,7 +1003,7 @@ func (c *Client) StartToolExecution(ctx context.Context, start ToolExecutionStar
 		trace.WithAttributes(toolSpanAttributes(seed)...),
 	)
 	span.SetAttributes(toolPrivateSpanAttributes(seed, toolMode)...)
-	setSpanTagAttributes(span, c.config.Tags)
+	setSpanTagAttributes(span, seed.Tags)
 
 	return callCtx, &ToolExecutionRecorder{
 		client:             c,
@@ -2416,7 +2419,8 @@ func (c *Client) recordToolExecutionMetrics(ctx context.Context, seed ToolExecut
 			attrs = append(attrs, metricStringAttribute("gen_ai.skill.name", skill))
 		}
 	}
-	attrs = append(attrs, c.clientTagMetricAttributes()...)
+	// seed.Tags already holds the static client tags (see StartToolExecution).
+	attrs = append(attrs, metricTagAttributes(seed.Tags)...)
 	attrs = append(attrs,
 		metricStringAttribute(spanAttrErrorType, errorType),
 		metricStringAttribute(spanAttrErrorCategory, errorCategory),

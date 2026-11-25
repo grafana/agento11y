@@ -2,11 +2,13 @@ package agento11y
 
 import (
 	"context"
+	"maps"
 	"testing"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/exemplar"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
@@ -74,6 +76,48 @@ func TestClientTagsOnEmbeddingAndToolSpans(t *testing.T) {
 	if got := spanAttributeMap(toolSpan)[clientTagProjectKey].AsString(); got != "embed-tools" {
 		t.Fatalf("expected %s on tool span, got %q", clientTagProjectKey, got)
 	}
+}
+
+func TestToolExecutionTagsOnSpanAndMetrics(t *testing.T) {
+	recorder, tp, reader, mp := newExemplarTestHarness(t, exemplar.AlwaysOffFilter)
+	client := NewClient(Config{
+		TracerProvider: tp, MeterProvider: mp,
+		Tags:                   map[string]string{"project": "checkout-svc", "skills": "static"},
+		testGenerationExporter: &capturingGenerationExporter{},
+	})
+	t.Cleanup(func() { _ = client.Shutdown(context.Background()) })
+
+	// A context tag stays off tool executions: only the explicit Tags are dimensions.
+	ctx := WithTag(context.Background(), "stack_id", "12345")
+	tags := map[string]string{"skills": "dashboard-authoring"}
+	_, rec := client.StartToolExecution(ctx, ToolExecutionStart{
+		ToolName: "create_dashboard", Tags: tags, StartedAt: time.Unix(1, 0),
+	})
+	tags["skills"] = "mutated after start"
+	rec.SetResult(ToolExecutionEnd{CompletedAt: time.Unix(2, 0)})
+	rec.End()
+
+	wantTags := map[string]string{
+		spanAttrTagPrefix + "project": "checkout-svc",
+		spanAttrTagPrefix + "skills":  "dashboard-authoring",
+	}
+	attrs := spanAttributeMap(onlyToolSpan(t, recorder.Ended()))
+	for key, want := range wantTags {
+		if got := attrs[key].AsString(); got != want {
+			t.Errorf("tool span %s = %q, want %q", key, got, want)
+		}
+	}
+	if _, ok := attrs[spanAttrTagPrefix+"stack_id"]; ok {
+		t.Errorf("context tag stack_id must not reach the tool span")
+	}
+
+	histogram := collectToolDuration(t, reader)
+	if len(histogram.DataPoints) != 1 {
+		t.Fatalf("duration points = %d, want 1", len(histogram.DataPoints))
+	}
+	want := toolMetricBaseline("create_dashboard")
+	maps.Copy(want, wantTags)
+	assertToolMetricAttributes(t, histogram.DataPoints[0].Attributes, want)
 }
 
 func TestClientTagsEmptyIsNoOpOnSpan(t *testing.T) {
