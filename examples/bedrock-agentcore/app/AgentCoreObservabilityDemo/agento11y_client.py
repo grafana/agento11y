@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 
 from agento11y import Client, ClientConfig
+from content_capture import DemoClient, omit_tool_content, without_tool_payloads
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
 
@@ -21,4 +22,6 @@ def setup_agento11y(
         ),
         agent_version=os.getenv("AGENTO11Y_AGENT_VERSION", "0.1.0"),
     )
-    return Client(config)
+    if omit_tool_content():
+        config.generation_sanitizer = without_tool_payloads
+    return DemoClient(config)

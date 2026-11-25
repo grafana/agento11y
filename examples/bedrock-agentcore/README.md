@@ -20,6 +20,7 @@ app/AgentCoreObservabilityDemo/
   agent.py             # LangChain agent and tools
   demo_data.py         # Synthetic demo data
   agento11y_client.py  # Agent Observability SDK bootstrap
+  content_capture.py   # Tool-specific content capture policy
   telemetry.py         # OpenTelemetry bootstrap
   pyproject.toml       # Runtime dependencies
 .env.example           # Environment variable template
@@ -58,3 +59,21 @@ by Git. No secret-manager-specific scripts are required.
 - `agentcore_demo.tool.calls`
 
 Account IDs appear only on spans and generation metadata, not as metric labels.
+
+The default `AGENTO11Y_CONTENT_CAPTURE_MODE=no_tool_content` preserves prompts
+and replies, plus tool names and call IDs. This example overrides the adapter's
+legacy tool-content opt-in and removes tool arguments and results from both
+tool spans and generation messages. Tool calls therefore have no JSON payload
+to expand in the conversation view, matching the OTLP-only example.
+
+Set the mode to `full` to inspect tool JSON, or `metadata_only` to omit prompts
+and replies as well.
+
+## Offline verification
+
+From this example directory, run the capture-policy tests without AWS or
+Grafana Cloud credentials:
+
+```bash
+uv run --project app/AgentCoreObservabilityDemo python -m unittest discover -s tests -v
+```
