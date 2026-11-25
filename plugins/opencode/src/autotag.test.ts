@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   type AutoTag,
@@ -472,3 +473,145 @@ describe("resolveGitRepo", () => {
     expect(resolveGitRepo("")).toBeUndefined();
   });
 });
+
+// conformance/git-remotes/remotes.tsv is shared with the Go plugins and
+// Hermes, so every agent gives one repository the same repo tag.
+describe("repoFromRemoteUrl conformance", () => {
+  const realPlatform = process.platform;
+
+  beforeEach(() => {
+    // The corpus is read on POSIX, where `C:/repos/x.git` is an scp remote.
+    Object.defineProperty(process, "platform", {
+      value: "linux",
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", {
+      value: realPlatform,
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  const corpus = readFileSync(
+    join(
+      dirname(fileURLToPath(import.meta.url)),
+      "../../../conformance/git-remotes/remotes.tsv",
+    ),
+    "utf8",
+  )
+    .trimEnd()
+    .split("\n");
+
+  it("has the url, release and want columns", () => {
+    expect(corpus[0]).toBe("url\trelease\twant");
+  });
+
+  for (const line of corpus.slice(1)) {
+    const [url = "", , want = ""] = line.split("\t");
+    it(`gives ${url} the tag ${want}`, () => {
+      expect(repoFromRemoteUrl(url) ?? "").toBe(want);
+    });
+  }
+
+  // A host outside the known case-insensitive list can be case-sensitive, so
+  // it keeps the tag the released plugin gave it. The one exception is a
+  // three-segment http(s) path under `scm/` on a host other than gitlab.com,
+  // which loses that prefix.
+  it("keeps the released tag for hosts outside the known list", () => {
+    const hosts = [
+      "gitlab.com",
+      "GitLab.com",
+      "github.example.com",
+      "github.com.example.net",
+      "notgithub.com",
+      "bitbucket.org.example",
+      "dev.azure.com.example",
+      "notdev.azure.com",
+      "visualstudio.com",
+      "ssh.dev.azure.com.example",
+      "git.example.com",
+      "gh",
+    ];
+    const segments = [
+      "v3",
+      "_git",
+      "_ssh",
+      "DefaultCollection",
+      "scm",
+      "Org",
+      "proj",
+      "Repo",
+      "a.git",
+      "My%20Project",
+      "",
+    ];
+    const users = ["", "git@", "org@", "user:pass@"];
+    const ports = ["", ":22", ":7999"];
+    // A fixed-seed linear congruential generator keeps failures reproducible.
+    let seed = 1;
+    const next = (n: number): number => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed % n;
+    };
+    const pick = (list: string[]): string => list[next(list.length)] ?? "";
+    for (let i = 0; i < 5000; i++) {
+      const host = pick(hosts);
+      const parts = Array.from({ length: 1 + next(5) }, () => pick(segments));
+      let path = parts.join("/");
+      if (next(4) === 0) path += ".git/";
+      const url =
+        [
+          `${pick(users)}${host}:${path}`,
+          `ssh://${pick(users)}${host}${pick(ports)}/${path}`,
+          `git://${host}${pick(ports)}/${path}`,
+          `http://${pick(users)}${host}${pick(ports)}/${path}`,
+          `https://${pick(users)}${host}${pick(ports)}/${path}`,
+        ][next(5)] ?? "";
+      let want = releaseRepoFromRemoteUrl(url) ?? "";
+      const rest = want.startsWith("scm/") ? want.slice(4) : "";
+      if (
+        url.startsWith("http") &&
+        host.toLowerCase() !== "gitlab.com" &&
+        rest.split("/").length === 2
+      ) {
+        want = rest;
+      }
+      expect(repoFromRemoteUrl(url) ?? "", url).toBe(want);
+    }
+  });
+});
+
+/**
+ * `repoFromRemoteUrl` as released, kept as the oracle for the unknown-host
+ * property.
+ */
+function releaseRepoFromRemoteUrl(raw: string): string | undefined {
+  const url = raw.trim();
+  if (!url) return undefined;
+  const trim = (s: string) => s.replace(/\.git$/, "");
+  const strip = (s: string) => s.replace(/\/+$/, "");
+  if (url.startsWith("file://")) {
+    return trim(basename(strip(url.slice("file://".length))));
+  }
+  let path: string;
+  const scheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.exec(url);
+  const colon = url.indexOf(":");
+  const slash = url.indexOf("/");
+  if (scheme) {
+    const rest = url.slice(scheme[0].length);
+    const at = rest.indexOf("/");
+    if (at === -1) return undefined;
+    path = rest.slice(at + 1);
+  } else if (colon > 0 && (slash === -1 || colon < slash)) {
+    path = url.slice(colon + 1);
+  } else {
+    return trim(basename(strip(url)));
+  }
+  path = strip(path).replace(/^\/+/, "");
+  if (!path) return undefined;
+  return trim(path);
+}

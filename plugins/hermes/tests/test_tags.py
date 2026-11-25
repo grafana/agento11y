@@ -4,10 +4,17 @@ from __future__ import annotations
 
 import os
 import pathlib
+import random
+import re
+from urllib.parse import urlsplit
 
 import pytest
 
 from agento11y_hermes import _tags
+
+# Shared with the Go, pi and opencode plugins, so every agent gives one
+# repository the same repo tag.
+_REMOTES_CORPUS = pathlib.Path(__file__).resolve().parents[3] / "conformance" / "git-remotes" / "remotes.tsv"
 
 
 @pytest.fixture(autouse=True)
@@ -382,3 +389,78 @@ def test_invalid_utf8_is_ignored(filename, tmp_path):
 def test_invalid_utf8_git_pointer_is_ignored(tmp_path):
     (tmp_path / ".git").write_bytes(b"\xff")
     assert _tags._find_git_dir(str(tmp_path)) == ""
+
+
+def _corpus_rows() -> list[tuple[str, str]]:
+    """(url, want) pairs; the release column is Go's v0.57.0 output, for review."""
+    lines = _REMOTES_CORPUS.read_text(encoding="utf-8").splitlines()
+    assert lines[0] == "url\trelease\twant"
+    return [(url, want) for url, _release, want in (line.split("\t") for line in lines[1:])]
+
+
+@pytest.mark.parametrize(("remote", "want"), _corpus_rows())
+def test_remote_corpus(remote, want):
+    assert _tags._repo_from_remote(remote) == want
+
+
+def _release_repo_from_remote(raw: str) -> str:
+    """``_repo_from_remote`` as released in 0.11.0, the unknown-host oracle."""
+    url = raw.strip()
+    if not url:
+        return ""
+    if "://" in url:
+        try:
+            parsed = urlsplit(url)
+        except ValueError:
+            return ""
+        path = parsed.path.rstrip("/")
+        if parsed.scheme == "file":
+            path = os.path.basename(path)
+    elif re.match(r"^[^/:]+:", url):
+        path = url.split(":", 1)[1].rstrip("/")
+    else:
+        path = os.path.basename(url.rstrip("/"))
+    return path.lstrip("/").removesuffix(".git")
+
+
+def test_unknown_hosts_keep_the_released_repo():
+    """A host outside the known list may be case-sensitive, so it keeps the
+    released tag. A three-segment http(s) path under ``scm/`` on a host other
+    than gitlab.com loses that prefix."""
+    hosts = [
+        "gitlab.com",
+        "GitLab.com",
+        "github.example.com",
+        "github.com.example.net",
+        "notgithub.com",
+        "bitbucket.org.example",
+        "dev.azure.com.example",
+        "notdev.azure.com",
+        "visualstudio.com",
+        "ssh.dev.azure.com.example",
+        "git.example.com",
+        "gh",
+    ]
+    segments = ["v3", "_git", "_ssh", "DefaultCollection", "scm", "Org", "proj", "Repo", "a.git", "My%20Project", ""]
+    users = ["", "git@", "org@", "user:pass@"]
+    ports = ["", ":22", ":7999"]
+    rng = random.Random(1)
+    for _ in range(5000):
+        host = rng.choice(hosts)
+        path = "/".join(rng.choice(segments) for _ in range(rng.randint(1, 5)))
+        if rng.randrange(4) == 0:
+            path += ".git/"
+        url = rng.choice(
+            [
+                f"{rng.choice(users)}{host}:{path}",
+                f"ssh://{rng.choice(users)}{host}{rng.choice(ports)}/{path}",
+                f"git://{host}{rng.choice(ports)}/{path}",
+                f"http://{rng.choice(users)}{host}{rng.choice(ports)}/{path}",
+                f"https://{rng.choice(users)}{host}{rng.choice(ports)}/{path}",
+            ]
+        )
+        want = _release_repo_from_remote(url)
+        rest = want.removeprefix("scm/")
+        if url.startswith("http") and host.lower() != "gitlab.com" and rest != want and rest.count("/") == 1:
+            want = rest
+        assert _tags._repo_from_remote(url) == want, url
