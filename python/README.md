@@ -785,6 +785,7 @@ client = Client(cfg)
 - Always call `shutdown()` during process teardown to avoid dropped telemetry.
 - `recorder.set_call_error(exc)` marks provider-call failures on the generation payload and span status.
 - `recorder.err()` is for local SDK runtime errors only (validation, queue full, payload too large, shutdown).
+- `recorder.discard()` ends a generation or tool recorder without recording it: nothing is exported and no metric is recorded. Use it instead of `end()` for a call that turned out not to happen, such as a model request a framework skipped.
 
 ## SDK metrics
 

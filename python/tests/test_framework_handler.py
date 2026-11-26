@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 from uuid import uuid4
 
 import pytest
+from agento11y import Client, ClientConfig, GenerationExportConfig
 from agento11y.framework_handler import (
     Agento11yFrameworkHandlerBase,
     _extract_tool_output,
@@ -16,6 +18,7 @@ from agento11y.framework_handler import (
     _resolve_provider,
 )
 from agento11y.models import Message, MessageRole, Part, PartKind, ToolCall, ToolResult
+from conftest import CapturingGenerationExporter
 
 
 @pytest.mark.parametrize("provider", ["bedrock", "amazon_bedrock", "aws.bedrock"])
@@ -198,3 +201,31 @@ def test_map_framework_usage_reads_langchain_cache_read_and_cache_creation() -> 
     )
     assert usage.cache_read_input_tokens == 8796
     assert usage.cache_write_input_tokens == 51
+
+
+@pytest.mark.parametrize(("llm_output", "response_id"), [({"response_id": "resp_1"}, "resp_1"), ({}, "")])
+def test_llm_end_records_the_response_id_an_integration_passes(llm_output: dict[str, str], response_id: str) -> None:
+    exporter = CapturingGenerationExporter()
+    client = Client(
+        ClientConfig(
+            generation_export=GenerationExportConfig(batch_size=10, flush_interval=timedelta(seconds=60)),
+            generation_exporter=exporter,
+        )
+    )
+    handler = Agento11yFrameworkHandlerBase(client=client, framework_name="test")
+    run_id = uuid4()
+
+    try:
+        handler._on_chat_model_start(
+            serialized=None,
+            messages=[[{"type": "human", "content": "hello"}]],
+            run_id=run_id,
+            parent_run_id=None,
+            invocation_params={"model": "gpt-5"},
+        )
+        handler._on_llm_end(response={"generations": [[{"text": "world"}]], "llm_output": llm_output}, run_id=run_id)
+        client.flush()
+    finally:
+        client.shutdown()
+
+    assert exporter.requests[0].generations[0].response_id == response_id

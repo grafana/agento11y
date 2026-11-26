@@ -1966,6 +1966,30 @@ class GenerationRecorder:
         finally:
             _pop_capture_mode(id(self))
 
+    def discard(self) -> None:
+        """Ends the recorder without recording a generation.
+
+        For a call that turned out not to be one, such as a model request a framework skipped:
+        no generation is exported or validated and no metric is recorded. The span ends with OK
+        status; with OTel export it carries ``agento11y.record`` ``false``. Safe to call multiple
+        times, and `end()` does nothing after it.
+        """
+
+        with self._lock:
+            if self._ended:
+                return
+            self._ended = True
+
+        try:
+            if self._otel_invocation is not None:
+                self._otel_invocation.attributes["agento11y.record"] = "false"
+                self._finish_otel_invocation()
+            else:
+                self.span.set_status(Status(StatusCode.OK))
+                self.span.end(end_time=_datetime_to_ns(_to_utc(self.client._now())))
+        finally:
+            _pop_capture_mode(id(self))
+
     def _finish_otel_invocation(self, error_type: str = "", message: str = "") -> None:
         if self._otel_finished:
             return
@@ -2468,6 +2492,22 @@ class ToolExecutionRecorder:
         with self._lock:
             self._final_error = final_error
 
+    def discard(self) -> None:
+        """Ends the execute_tool span without recording the execution.
+
+        For a tool call that did not run to a result, such as one a framework skipped or deferred:
+        no arguments, result, error, or metric is recorded. The span ends with OK status. Safe to
+        call multiple times, and `end()` does nothing after it.
+        """
+
+        with self._lock:
+            if self._ended:
+                return
+            self._ended = True
+
+        self.span.set_status(Status(StatusCode.OK))
+        self.span.end(end_time=_datetime_to_ns(_to_utc(self.client._now())))
+
     def err(self) -> Exception | None:
         """Returns execute_tool finalization error after `end()`."""
 
@@ -2491,6 +2531,9 @@ class NoopToolExecutionRecorder:
         return
 
     def end(self) -> None:
+        return
+
+    def discard(self) -> None:
         return
 
     def err(self) -> Exception | None:

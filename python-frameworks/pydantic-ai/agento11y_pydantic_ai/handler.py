@@ -7,42 +7,11 @@ from uuid import UUID
 
 from agento11y import Client
 from agento11y.framework_handler import Agento11yFrameworkHandlerBase, ProviderResolver, merge_framework_callback_kwargs
-from opentelemetry.trace import Status, StatusCode
-
-try:
-    from agento11y.context import _pop_capture_mode
-except ImportError:
-
-    def _pop_capture_mode(recorder_id: int) -> None:
-        return
-
 
 _framework_name = "pydantic-ai"
 _framework_source = "handler"
 _framework_language = "python"
 _framework_instrumentation_name = "github.com/grafana/sigil/sdks/python-frameworks/pydantic-ai"
-
-
-def _discard_recorder(recorder: Any, *, pop_capture_mode: bool = False) -> None:
-    lock = getattr(recorder, "_lock", None)
-    if lock is not None:
-        with lock:
-            if getattr(recorder, "_ended", False):
-                return
-            recorder._ended = True
-    elif getattr(recorder, "_ended", False):
-        return
-    else:
-        recorder._ended = True
-
-    try:
-        span = getattr(recorder, "span", None)
-        if span is not None:
-            span.set_status(Status(StatusCode.OK))
-            span.end()
-    finally:
-        if pop_capture_mode:
-            _pop_capture_mode(id(recorder))
 
 
 class Agento11yPydanticAIHandler(Agento11yFrameworkHandlerBase):
@@ -184,16 +153,19 @@ class Agento11yPydanticAIHandler(Agento11yFrameworkHandlerBase):
         self._on_chain_error(error=error, run_id=run_id)
 
     def _discard_llm_run(self, *, run_id: UUID) -> None:
-        run_state = self._runs.pop(str(run_id), None)
+        run_key = str(run_id)
+        run_state = self._runs.pop(run_key, None)
+        self._run_to_graph_key.pop(run_key, None)
         if run_state is None:
             return
-        _discard_recorder(run_state.recorder, pop_capture_mode=True)
+        run_state.recorder.discard()
 
     def _discard_tool_run(self, *, run_id: UUID) -> None:
         run_state = self._tool_runs.pop(str(run_id), None)
         if run_state is None:
             return
-        _discard_recorder(run_state.recorder)
+        run_state.recorder.discard()
 
     def _discard_chain_run(self, *, run_id: UUID) -> None:
+        self._run_to_graph_key.pop(str(run_id), None)
         self._end_framework_span(self._chain_spans, run_id=run_id, error=None)

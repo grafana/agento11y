@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from datetime import timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
+import pydantic_ai
 import pytest
 from agento11y import (
     Client,
@@ -34,8 +35,11 @@ from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import StatusCode
+from packaging.version import Version
 from pydantic import BaseModel
 from pydantic_ai import Agent, ModelRetry, ToolOutput
+from pydantic_ai.capabilities import Thinking
 from pydantic_ai.messages import (
     ImageUrl,
     ModelMessage,
@@ -46,10 +50,12 @@ from pydantic_ai.messages import (
     ToolCallPart,
     UserPromptPart,
 )
-from pydantic_ai.models import ModelRequestParameters
+from pydantic_ai.models import ModelRequestContext, ModelRequestParameters
 from pydantic_ai.models.function import AgentInfo, DeltaThinkingPart, FunctionModel
+from pydantic_ai.models.test import TestModel
+from pydantic_ai.tools import RunContext
 from pydantic_ai.tools import ToolDefinition as PydanticToolDefinition
-from pydantic_ai.usage import RequestUsage
+from pydantic_ai.usage import RequestUsage, RunUsage
 
 
 class _CapturingExporter:
@@ -76,6 +82,24 @@ def _new_client(exporter: _CapturingExporter, tracer=None) -> Client:
             generation_exporter=exporter,
         )
     )
+
+
+def _run_context(run_id: str, *, agent: Agent[Any, Any] | None = None) -> RunContext[Any]:
+    return RunContext(deps=None, model=TestModel(model_name="gpt-5"), usage=RunUsage(), run_id=run_id, agent=agent)
+
+
+def _request_context(parameters: ModelRequestParameters | None = None) -> ModelRequestContext:
+    return ModelRequestContext(
+        model=TestModel(model_name="gpt-5"),
+        messages=[ModelRequest(parts=[UserPromptPart(content="hello")])],
+        model_settings=None,
+        model_request_parameters=parameters or ModelRequestParameters(),
+    )
+
+
+def _weather_tool_call() -> tuple[ToolCallPart, PydanticToolDefinition]:
+    call = ToolCallPart(tool_name="weather_tool", args={"city": "Paris"}, tool_call_id="call-1")
+    return call, PydanticToolDefinition(name="weather_tool", description="Get weather info")
 
 
 def test_agento11y_pydantic_ai_sync_lifecycle_sets_framework_metadata() -> None:
@@ -282,34 +306,22 @@ def test_agento11y_pydantic_ai_capability_wrap_model_request() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
 
-    class _RunContext:
-        run_id = "pydantic-run-42"
-        deps = None
-        metadata = None
-        model = None
-
-    class _RequestContext:
-        model = "gpt-5"
-        messages = [ModelRequest(parts=[UserPromptPart(content="hello")])]
-
     try:
         capability = create_agento11y_pydantic_ai_capability(client=client, provider_resolver="auto")
 
-        async def _run() -> None:
-            ctx = _RunContext()
-            request_context = _RequestContext()
+        async def handler(rc: ModelRequestContext) -> ModelResponse:
+            return ModelResponse(
+                parts=[TextPart(content="world")],
+                model_name="gpt-5",
+                finish_reason="stop",
+                usage=RequestUsage(input_tokens=10, output_tokens=5, cache_read_tokens=3, cache_write_tokens=2),
+            )
 
-            async def handler(rc: Any) -> Any:
-                return ModelResponse(
-                    parts=[TextPart(content="world")],
-                    model_name="gpt-5",
-                    finish_reason="stop",
-                    usage=RequestUsage(input_tokens=10, output_tokens=5, cache_read_tokens=3, cache_write_tokens=2),
-                )
-
-            await capability.wrap_model_request(ctx, request_context=request_context, handler=handler)
-
-        asyncio.run(_run())
+        asyncio.run(
+            capability.wrap_model_request(
+                _run_context("pydantic-run-42"), request_context=_request_context(), handler=handler
+            )
+        )
         client.flush()
         generation = exporter.requests[0].generations[0]
         assert generation.tags["agento11y.framework.name"] == "pydantic-ai"
@@ -328,110 +340,26 @@ def test_agento11y_pydantic_ai_capability_wrap_model_request() -> None:
         client.shutdown()
 
 
-def test_agento11y_pydantic_ai_capability_wrap_model_request_propagates_settings_and_tools() -> None:
-    exporter = _CapturingExporter()
-    client = _new_client(exporter)
+def test_agento11y_pydantic_ai_agent_run_records_model_settings_and_function_tools() -> None:
+    def lookup_city(city: str) -> str:
+        """Lookup a city."""
+        return city
 
-    class _RunContext:
-        run_id = "pydantic-settings-42"
-        deps = None
-        metadata = None
-        model = None
-        agent = None
+    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[TextPart(content="Done.")])
 
-    class _ModelResponse:
-        parts: list[Any] = []
-        model_name = "gpt-5"
-        finish_reason = "stop"
-        usage = None
+    generations, _ = _record_agent_run(
+        model,
+        "Go.",
+        tools=[lookup_city],
+        model_settings={"temperature": 0.2, "max_tokens": 256, "top_p": 0.9},
+    )
 
-    class _ToolDef:
-        name = "lookup_city"
-        description = "Lookup a city"
-        parameters_json_schema = {
-            "type": "object",
-            "properties": {"city": {"type": "string"}},
-            "required": ["city"],
-        }
-
-    class _RequestParams:
-        function_tools = [_ToolDef()]
-        instruction_parts = [
-            type("_IP", (), {"content": "You are a concise weather assistant."})(),
-            type("_IP", (), {"content": "Always answer in English."})(),
-        ]
-
-    class _RequestContext:
-        model = "gpt-5"
-        messages: list[Any] = []
-        model_settings = {"temperature": 0.2, "max_tokens": 256, "top_p": 0.9}
-        model_request_parameters = _RequestParams()
-
-    try:
-        capability = create_agento11y_pydantic_ai_capability(client=client, provider_resolver="auto")
-
-        async def _run() -> None:
-            async def handler(rc: Any) -> Any:
-                return _ModelResponse()
-
-            await capability.wrap_model_request(_RunContext(), request_context=_RequestContext(), handler=handler)
-
-        asyncio.run(_run())
-        client.flush()
-        generation = exporter.requests[0].generations[0]
-        assert generation.temperature == 0.2
-        assert generation.max_tokens == 256
-        assert generation.top_p == 0.9
-        assert generation.system_prompt == "You are a concise weather assistant.\n\nAlways answer in English."
-        assert len(generation.tools) == 1
-        assert generation.tools[0].name == "lookup_city"
-        assert generation.tools[0].description == "Lookup a city"
-        assert generation.tools[0].type == "function"
-        assert b'"city"' in generation.tools[0].input_schema_json
-    finally:
-        client.shutdown()
-
-
-def test_agento11y_pydantic_ai_capability_wrap_model_request_marks_streaming_handler() -> None:
-    exporter = _CapturingExporter()
-    client = _new_client(exporter)
-
-    class _RunContext:
-        run_id = "pydantic-stream-42"
-        deps = None
-        metadata = None
-        model = None
-        agent = None
-
-    class _ModelResponse:
-        parts: list[Any] = []
-        model_name = "gpt-5"
-        finish_reason = "stop"
-        usage = None
-
-    class _RequestContext:
-        model = "gpt-5"
-        messages: list[Any] = []
-        model_settings = None
-        model_request_parameters = None
-
-    async def _streaming_handler(rc: Any) -> Any:
-        return _ModelResponse()
-
-    try:
-        capability = create_agento11y_pydantic_ai_capability(client=client, provider_resolver="auto")
-
-        async def _run() -> None:
-            await capability.wrap_model_request(
-                _RunContext(), request_context=_RequestContext(), handler=_streaming_handler
-            )
-
-        asyncio.run(_run())
-        client.flush()
-        generation = exporter.requests[0].generations[0]
-        assert generation.mode.value == "STREAM"
-    finally:
-        client.shutdown()
+    (generation,) = generations
+    assert (generation.temperature, generation.max_tokens, generation.top_p) == (0.2, 256, 0.9)
+    (tool,) = generation.tools
+    assert (tool.name, tool.description, tool.type) == ("lookup_city", "Lookup a city.", "function")
+    assert json.loads(tool.input_schema_json)["required"] == ["city"]
 
 
 def test_agento11y_pydantic_ai_capability_wrap_tool_execute() -> None:
@@ -452,37 +380,18 @@ def test_agento11y_pydantic_ai_capability_wrap_tool_execute() -> None:
             if isinstance(run_id, UUID):
                 self.ended.append(run_id)
 
-    class _RunContext:
-        run_id = "pydantic-tool-run-42"
-        deps = None
-        metadata = None
-        model = None
-
-    class _ToolCall:
-        tool_name = "weather_tool"
-
-    class _ToolDef:
-        name = "weather_tool"
-        description = "Get weather info"
-
     capture = _CapturingHandler()
     capability = Agento11yPydanticAICapability(capture)  # type: ignore[arg-type]
+    call, tool_def = _weather_tool_call()
 
-    async def _run() -> None:
-        ctx = _RunContext()
+    async def handler(args: Any) -> Any:
+        return {"temperature": 22}
 
-        async def handler(args: Any) -> Any:
-            return {"temperature": 22}
-
-        await capability.wrap_tool_execute(
-            ctx,
-            call=_ToolCall(),
-            tool_def=_ToolDef(),
-            args={"city": "Paris"},
-            handler=handler,
+    asyncio.run(
+        capability.wrap_tool_execute(
+            _run_context("pydantic-tool-run-42"), call=call, tool_def=tool_def, args={"city": "Paris"}, handler=handler
         )
-
-    asyncio.run(_run())
+    )
 
     assert len(capture.started) == 1
     assert len(capture.ended) == 1
@@ -496,37 +405,23 @@ def test_agento11y_pydantic_ai_capability_wrap_tool_execute_records_arguments() 
     provider.add_span_processor(SimpleSpanProcessor(span_exporter))
     tracer = provider.get_tracer("agento11y-pydantic-ai-tool-args")
     client = _new_client(exporter, tracer=tracer)
-
-    class _RunContext:
-        run_id = "pydantic-tool-args-42"
-        deps = None
-        metadata = None
-        model = None
-        agent = None
-
-    class _ToolCall:
-        tool_name = "weather_tool"
-
-    class _ToolDef:
-        name = "weather_tool"
-        description = "Get weather info"
+    call, tool_def = _weather_tool_call()
 
     try:
         capability = create_agento11y_pydantic_ai_capability(client=client)
 
-        async def _run() -> None:
-            async def handler(args: Any) -> Any:
-                return {"temperature": 22}
+        async def handler(args: Any) -> Any:
+            return {"temperature": 22}
 
-            await capability.wrap_tool_execute(
-                ctx=_RunContext(),
-                call=_ToolCall(),
-                tool_def=_ToolDef(),
+        asyncio.run(
+            capability.wrap_tool_execute(
+                _run_context("pydantic-tool-args-42"),
+                call=call,
+                tool_def=tool_def,
                 args={"city": "Paris"},
                 handler=handler,
             )
-
-        asyncio.run(_run())
+        )
         client.flush()
 
         spans = span_exporter.get_finished_spans()
@@ -553,33 +448,20 @@ def test_agento11y_pydantic_ai_capability_wrap_run_chain_spans() -> None:
         def on_chain_end(self, *args, **kwargs) -> None:
             self.ends.append({"args": args, "kwargs": kwargs})
 
-    class _RunContext:
-        run_id = "pydantic-chain-run-42"
-        deps = None
-        metadata = None
-        model = None
-
-    class _Result:
-        data = "ok"
-
     capture = _CapturingHandler()
     capability = Agento11yPydanticAICapability(capture)  # type: ignore[arg-type]
 
-    async def _run() -> None:
-        ctx = _RunContext()
+    async def handler() -> Any:
+        return "ok"
 
-        async def handler() -> Any:
-            return _Result()
-
-        await capability.wrap_run(ctx, handler=handler)
-
-    asyncio.run(_run())
+    asyncio.run(capability.wrap_run(_run_context("pydantic-chain-run-42"), handler=handler))
 
     assert len(capture.starts) == 1
     assert len(capture.ends) == 1
     start_kwargs = capture.starts[0]["kwargs"]
     assert start_kwargs["run_type"] == "agent"
-    assert start_kwargs["run_name"] == "pydantic_ai_agent"
+    # A run of an agent without a name is recorded under its model's.
+    assert start_kwargs["run_name"] == "gpt-5"
 
 
 def test_agento11y_pydantic_ai_factory_function_return_types() -> None:
@@ -632,66 +514,43 @@ def test_agento11y_pydantic_ai_capability_control_flow_exceptions_do_not_record_
     from pydantic_ai.exceptions import ModelRetry, SkipModelRequest, SkipToolExecution
 
     exporter = _CapturingExporter()
-    client = _new_client(exporter)
-
-    class _RunContext:
-        run_id = "pydantic-control-flow-42"
-        deps = None
-        metadata = None
-        model = None
-        agent = None
-
-    class _RequestContext:
-        model = "gpt-5"
-        messages = []
-
-    class _ToolCall:
-        tool_name = "cached_tool"
-
-    class _ToolDef:
-        name = "cached_tool"
-        description = "Can be skipped"
+    span_exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    client = _new_client(exporter, tracer=provider.get_tracer("agento11y-pydantic-ai-control-flow"))
+    ctx = _run_context("pydantic-control-flow-42")
+    call, tool_def = _weather_tool_call()
 
     try:
         handler = Agento11yPydanticAIHandler(client=client)
         capability = Agento11yPydanticAICapability(handler)
 
-        async def _run() -> None:
-            ctx = _RunContext()
+        async def model_handler(rc: ModelRequestContext) -> ModelResponse:
+            raise SkipModelRequest(ModelResponse(parts=[TextPart(content="cached")]))
 
-            async def run_handler() -> Any:
-                raise ModelRetry("retry the agent")
+        async def tool_handler(args: Any) -> Any:
+            raise SkipToolExecution("cached")
 
-            with pytest.raises(ModelRetry):
-                await capability.wrap_run(ctx, handler=run_handler)
-
-            async def model_handler(rc: Any) -> Any:
-                raise SkipModelRequest(object())
-
+        async def run_handler() -> Any:
             with pytest.raises(SkipModelRequest):
-                await capability.wrap_model_request(ctx, request_context=_RequestContext(), handler=model_handler)
-
-            async def tool_handler(args: Any) -> Any:
-                raise SkipToolExecution("cached")
-
+                await capability.wrap_model_request(ctx, request_context=_request_context(), handler=model_handler)
             with pytest.raises(SkipToolExecution):
-                await capability.wrap_tool_execute(
-                    ctx,
-                    call=_ToolCall(),
-                    tool_def=_ToolDef(),
-                    args={},
-                    handler=tool_handler,
-                )
+                await capability.wrap_tool_execute(ctx, call=call, tool_def=tool_def, args={}, handler=tool_handler)
+            raise ModelRetry("retry the agent")
 
-        asyncio.run(_run())
+        with pytest.raises(ModelRetry):
+            asyncio.run(capability.wrap_run(ctx, handler=run_handler))
         client.flush()
 
         assert handler._chain_spans == {}
         assert handler._runs == {}
         assert handler._tool_runs == {}
+        assert handler._run_to_graph_key == {}
         assert exporter.requests == []
+        assert [span.status.status_code for span in span_exporter.get_finished_spans()] == [StatusCode.OK] * 3
     finally:
         client.shutdown()
+        provider.shutdown()
 
 
 def test_agento11y_pydantic_ai_capability_wrap_model_request_error_records_llm_error() -> None:
@@ -716,31 +575,18 @@ def test_agento11y_pydantic_ai_capability_wrap_model_request_error_records_llm_e
             if isinstance(run_id, UUID):
                 self.errors.append((run_id, error))
 
-    class _RunContext:
-        run_id = "pydantic-error-run-42"
-        deps = None
-        metadata = None
-        model = None
-        agent = None
-
-    class _RequestContext:
-        model = "gpt-5"
-        messages = []
-
     capture = _CapturingHandler()
     capability = Agento11yPydanticAICapability(capture)  # type: ignore[arg-type]
 
-    async def _run() -> None:
-        ctx = _RunContext()
-        request_context = _RequestContext()
+    async def handler(rc: ModelRequestContext) -> ModelResponse:
+        raise ValueError("model failed")
 
-        async def handler(rc: Any) -> Any:
-            raise ValueError("model failed")
-
-        with pytest.raises(ValueError, match="model failed"):
-            await capability.wrap_model_request(ctx, request_context=request_context, handler=handler)
-
-    asyncio.run(_run())
+    with pytest.raises(ValueError, match="model failed"):
+        asyncio.run(
+            capability.wrap_model_request(
+                _run_context("pydantic-error-run-42"), request_context=_request_context(), handler=handler
+            )
+        )
 
     assert len(capture.started) == 1
     assert len(capture.errors) == 1
@@ -771,39 +617,19 @@ def test_agento11y_pydantic_ai_capability_wrap_tool_execute_error_records_tool_e
             if isinstance(run_id, UUID):
                 self.errors.append((run_id, error))
 
-    class _RunContext:
-        run_id = "pydantic-tool-error-42"
-        deps = None
-        metadata = None
-        model = None
-        agent = None
-
-    class _ToolCall:
-        tool_name = "broken_tool"
-
-    class _ToolDef:
-        name = "broken_tool"
-        description = "A tool that fails"
-
     capture = _CapturingHandler()
     capability = Agento11yPydanticAICapability(capture)  # type: ignore[arg-type]
+    call, tool_def = _weather_tool_call()
 
-    async def _run() -> None:
-        ctx = _RunContext()
+    async def handler(args: Any) -> Any:
+        raise RuntimeError("tool exploded")
 
-        async def handler(args: Any) -> Any:
-            raise RuntimeError("tool exploded")
-
-        with pytest.raises(RuntimeError, match="tool exploded"):
-            await capability.wrap_tool_execute(
-                ctx,
-                call=_ToolCall(),
-                tool_def=_ToolDef(),
-                args={"x": 1},
-                handler=handler,
+    with pytest.raises(RuntimeError, match="tool exploded"):
+        asyncio.run(
+            capability.wrap_tool_execute(
+                _run_context("pydantic-tool-error-42"), call=call, tool_def=tool_def, args={"x": 1}, handler=handler
             )
-
-    asyncio.run(_run())
+        )
 
     assert len(capture.started) == 1
     assert len(capture.errors) == 1
@@ -834,72 +660,20 @@ def test_agento11y_pydantic_ai_capability_wrap_run_error_records_chain_error() -
             if isinstance(run_id, UUID):
                 self.errors.append((run_id, error))
 
-    class _RunContext:
-        run_id = "pydantic-chain-error-42"
-        deps = None
-        metadata = None
-        model = None
-        agent = None
-
     capture = _CapturingHandler()
     capability = Agento11yPydanticAICapability(capture)  # type: ignore[arg-type]
 
-    async def _run() -> None:
-        ctx = _RunContext()
+    async def handler() -> Any:
+        raise RuntimeError("agent crashed")
 
-        async def handler() -> Any:
-            raise RuntimeError("agent crashed")
-
-        with pytest.raises(RuntimeError, match="agent crashed"):
-            await capability.wrap_run(ctx, handler=handler)
-
-    asyncio.run(_run())
+    with pytest.raises(RuntimeError, match="agent crashed"):
+        asyncio.run(capability.wrap_run(_run_context("pydantic-chain-error-42"), handler=handler))
 
     assert len(capture.starts) == 1
     assert len(capture.errors) == 1
     assert len(capture.ends) == 0
     assert capture.starts[0] == capture.errors[0][0]
     assert str(capture.errors[0][1]) == "agent crashed"
-
-
-def test_agento11y_pydantic_ai_capability_agent_name_from_agent_attribute() -> None:
-    class _Agent:
-        name = "my_custom_agent"
-
-    class _RunContext:
-        run_id = "pydantic-agent-name-42"
-        deps = None
-        metadata = None
-        model = None
-        agent = _Agent()
-
-    class _CapturingHandler:
-        def __init__(self) -> None:
-            self.run_names: list[str] = []
-
-        def on_chain_start(self, *args, **kwargs) -> None:
-            run_name = kwargs.get("run_name")
-            if run_name:
-                self.run_names.append(run_name)
-
-        def on_chain_end(self, *args, **kwargs) -> None:
-            pass
-
-    capture = _CapturingHandler()
-    capability = Agento11yPydanticAICapability(capture)  # type: ignore[arg-type]
-
-    async def _run() -> None:
-        ctx = _RunContext()
-
-        async def handler() -> Any:
-            return "ok"
-
-        await capability.wrap_run(ctx, handler=handler)
-
-    asyncio.run(_run())
-
-    assert len(capture.run_names) == 1
-    assert capture.run_names[0] == "my_custom_agent"
 
 
 def test_agento11y_pydantic_ai_handler_explicitly_has_no_embedding_lifecycle() -> None:
@@ -914,8 +688,19 @@ def test_agento11y_pydantic_ai_handler_explicitly_has_no_embedding_lifecycle() -
         client.shutdown()
 
 
-def _record_agent_run(model_function: Any, prompt: Any, **agent_kwargs: Any) -> tuple[list[Any], list[Any]]:
-    """Run a real agent on a FunctionModel; return its exported generations and finished spans."""
+def _record_agent_run(
+    model_function: Any,
+    prompt: Any,
+    *,
+    capabilities: Sequence[Any] = (),
+    run: dict[str, Any] | None = None,
+    **agent_kwargs: Any,
+) -> tuple[list[Any], list[Any]]:
+    """Run a real agent on a FunctionModel; return its exported generations and finished spans.
+
+    ``capabilities`` come ahead of the agento11y one, and ``run`` holds keyword arguments of the
+    run itself, such as its ``conversation_id``.
+    """
     exporter = _CapturingExporter()
     span_exporter = InMemorySpanExporter()
     provider = TracerProvider()
@@ -924,10 +709,10 @@ def _record_agent_run(model_function: Any, prompt: Any, **agent_kwargs: Any) -> 
     try:
         agent = Agent(
             FunctionModel(model_function),
-            capabilities=[create_agento11y_pydantic_ai_capability(client=client)],
+            capabilities=[*capabilities, create_agento11y_pydantic_ai_capability(client=client)],
             **agent_kwargs,
         )
-        agent.run_sync(prompt)
+        agent.run_sync(prompt, **(run or {}))
         client.flush()
     finally:
         client.shutdown()
@@ -1067,32 +852,26 @@ def test_agento11y_pydantic_ai_agent_run_records_output_tools_beside_function_to
 def test_agento11y_pydantic_ai_capability_records_no_tool_withheld_from_the_request() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
-
-    class _RunContext:
-        run_id = "pydantic-withheld-1"
-        deps = None
-        metadata = None
-        model = None
-        agent = None
-
-    class _RequestContext:
-        model = "gpt-5"
-        messages: list[Any] = []
-        model_settings = None
-        model_request_parameters = ModelRequestParameters(
+    request_context = _request_context(
+        ModelRequestParameters(
             function_tools=[
                 PydanticToolDefinition(name="lookup_city"),
                 PydanticToolDefinition(name="archive_city", defer_loading=True),
             ]
         )
+    )
 
     try:
         capability = create_agento11y_pydantic_ai_capability(client=client)
 
-        async def handler(rc: Any) -> ModelResponse:
+        async def handler(rc: ModelRequestContext) -> ModelResponse:
             return ModelResponse(parts=[TextPart(content="Done.")])
 
-        asyncio.run(capability.wrap_model_request(_RunContext(), request_context=_RequestContext(), handler=handler))
+        asyncio.run(
+            capability.wrap_model_request(
+                _run_context("pydantic-withheld-1"), request_context=request_context, handler=handler
+            )
+        )
         client.flush()
         assert [tool.name for tool in exporter.requests[0].generations[0].tools] == ["lookup_city"]
     finally:
@@ -1193,3 +972,237 @@ def test_agento11y_pydantic_ai_failed_stream_keeps_the_text_it_streamed() -> Non
         client.shutdown()
 
     assert exporter.requests[0].generations[0].output == [_text(MessageRole.ASSISTANT, "Hello world")]
+
+
+def _done(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    return ModelResponse(parts=[TextPart(content="Done.")])
+
+
+@pytest.mark.parametrize(
+    ("thinking", "enabled", "level"),
+    [(True, True, None), ("high", True, "high"), (False, False, None)],
+)
+def test_agento11y_pydantic_ai_agent_run_records_the_thinking_setting(
+    thinking: bool | str, enabled: bool, level: str | None
+) -> None:
+    generations, _ = _record_agent_run(_done, "Go.", capabilities=[Thinking(thinking)])
+
+    (generation,) = generations
+    assert generation.thinking_enabled is enabled
+    assert generation.metadata.get("agento11y.gen_ai.request.thinking.level") == level
+
+
+def test_agento11y_pydantic_ai_agent_run_leaves_thinking_unset_without_the_setting() -> None:
+    generations, _ = _record_agent_run(_done, "Go.")
+
+    assert generations[0].thinking_enabled is None
+
+
+@pytest.mark.parametrize(("agent_name", "run_name"), [("my_custom_agent", "my_custom_agent"), ("  ", "gpt-5")])
+def test_agento11y_pydantic_ai_capability_names_a_run_after_its_agent_else_its_model(
+    agent_name: str, run_name: str
+) -> None:
+    run_names: list[str] = []
+
+    class _CapturingHandler:
+        def on_chain_start(self, *args, **kwargs) -> None:
+            run_names.append(kwargs["run_name"])
+
+        def on_chain_end(self, *args, **kwargs) -> None:
+            pass
+
+    capability = Agento11yPydanticAICapability(_CapturingHandler())  # type: ignore[arg-type]
+    ctx = _run_context("pydantic-agent-name-42", agent=Agent(TestModel(), name=agent_name))
+
+    async def handler() -> Any:
+        return "ok"
+
+    asyncio.run(capability.wrap_run(ctx, handler=handler))
+
+    assert run_names == [run_name]
+
+
+class _Deps(BaseModel):
+    conversation_id: str | None = None
+    threadId: str | None = None
+
+
+@pytest.mark.parametrize(
+    ("deps", "metadata", "conversation_id", "thread_id"),
+    [
+        pytest.param(_Deps(conversation_id="deps-conversation"), None, "deps-conversation", None, id="deps attribute"),
+        pytest.param({"sessionId": "deps-session"}, None, "deps-session", None, id="deps mapping, camel case"),
+        pytest.param(None, {"session_id": "metadata-session"}, "metadata-session", None, id="run metadata"),
+        pytest.param(
+            _Deps(conversation_id="deps-conversation"),
+            {"conversation_id": "metadata-conversation"},
+            "deps-conversation",
+            None,
+            id="deps win over run metadata",
+        ),
+        pytest.param(_Deps(threadId="deps-thread"), None, "deps-thread", "deps-thread", id="thread alone"),
+    ],
+)
+def test_agento11y_pydantic_ai_agent_run_takes_its_conversation_from_deps_then_run_metadata(
+    deps: Any, metadata: dict[str, str] | None, conversation_id: str, thread_id: str | None
+) -> None:
+    generations, _ = _record_agent_run(_done, "Go.", run={"deps": deps, "metadata": metadata})
+
+    (generation,) = generations
+    assert generation.conversation_id == conversation_id
+    assert generation.metadata.get("agento11y.framework.thread_id") == thread_id
+
+
+@pytest.mark.skipif(
+    "conversation_id" not in RunContext.__dataclass_fields__,
+    reason="a run of this pydantic-ai has no conversation id",
+)
+@pytest.mark.parametrize(
+    ("metadata", "recorded"),
+    [
+        pytest.param(None, "run-conversation", id="the run's own conversation id"),
+        pytest.param({"conversation_id": "caller-conversation"}, "caller-conversation", id="the caller's id wins"),
+    ],
+)
+def test_agento11y_pydantic_ai_agent_run_falls_back_to_its_own_conversation_id(
+    metadata: dict[str, str] | None, recorded: str
+) -> None:
+    generations, spans = _record_agent_run(
+        _done, "Go.", run={"conversation_id": "run-conversation", "metadata": metadata}
+    )
+
+    assert [generation.conversation_id for generation in generations] == [recorded]
+    run_span = next(span for span in spans if span.attributes.get("agento11y.framework.run_type") == "agent")
+    assert run_span.attributes.get("gen_ai.conversation.id") == recorded
+
+
+def test_agento11y_pydantic_ai_agent_run_records_the_providers_response_id() -> None:
+    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[TextPart(content="Done.")], provider_response_id="resp_42")
+
+    generations, _ = _record_agent_run(model, "Go.")
+
+    assert generations[0].response_id == "resp_42"
+
+
+def test_agento11y_pydantic_ai_agent_run_parents_model_requests_and_tools_on_the_run() -> None:
+    def get_weather(city: str) -> str:
+        return f"Sunny in {city}"
+
+    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if len(messages) == 1:
+            return ModelResponse(parts=[ToolCallPart(tool_name="get_weather", args={"city": "Paris"})])
+        return ModelResponse(parts=[TextPart(content="Sunny.")])
+
+    generations, spans = _record_agent_run(model, "Weather in Paris?", tools=[get_weather])
+
+    run_span = next(span for span in spans if span.attributes.get("agento11y.framework.run_type") == "agent")
+    run_id = run_span.attributes["agento11y.framework.run_id"]
+    assert [generation.metadata["agento11y.framework.parent_run_id"] for generation in generations] == [run_id] * 2
+    children = [span for span in spans if span is not run_span]
+    assert len(children) == 3
+    assert {span.parent.span_id for span in children} == {run_span.context.span_id}
+
+
+def test_agento11y_pydantic_ai_agent_run_survives_a_response_that_cannot_be_recorded(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class _FailsToRecordResponses(Agento11yPydanticAIHandler):
+        def on_llm_end(self, response: Any, *, run_id: UUID, **kwargs: Any) -> None:
+            raise RuntimeError("export queue rejected the generation")
+
+    client = _new_client(_CapturingExporter())
+    agent = Agent(
+        FunctionModel(_done), capabilities=[Agento11yPydanticAICapability(_FailsToRecordResponses(client=client))]
+    )
+
+    try:
+        with caplog.at_level("WARNING", logger="agento11y_pydantic_ai.capability"):
+            assert agent.run_sync("Go.").output == "Done."
+    finally:
+        client.shutdown()
+
+    assert [record.getMessage() for record in caplog.records] == ["agento11y: model response not recorded"]
+
+
+# Pydantic AI 2.x has a field for reasoning tokens; 1.x model classes leave the count in `details`.
+_REASONING_USAGE: list[dict[str, Any]] = (
+    [{"output_reasoning_tokens": 7}]
+    if "output_reasoning_tokens" in RequestUsage.__dataclass_fields__
+    else [{"details": {"reasoning_tokens": 7}}, {"details": {"thoughts_tokens": 7}}]
+)
+
+
+@pytest.mark.parametrize("reasoning", _REASONING_USAGE, ids=lambda usage: next(iter(usage.get("details", usage))))
+def test_agento11y_pydantic_ai_agent_run_records_reasoning_tokens(reasoning: dict[str, Any]) -> None:
+    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        return ModelResponse(
+            parts=[TextPart(content="Done.")], usage=RequestUsage(input_tokens=10, output_tokens=20, **reasoning)
+        )
+
+    generations, _ = _record_agent_run(model, "Go.")
+
+    usage = generations[0].usage
+    assert (usage.input_tokens, usage.output_tokens, usage.reasoning_tokens) == (10, 20, 7)
+
+
+def _record_streamed_run(stream_function: Any, drive: Any) -> list[Any]:
+    """Drive a streamed run of a real agent with ``drive``; return its exported generations."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    agent = Agent(
+        FunctionModel(stream_function=stream_function),
+        capabilities=[create_agento11y_pydantic_ai_capability(client=client)],
+    )
+    try:
+        asyncio.run(drive(agent))
+        client.flush()
+    finally:
+        client.shutdown()
+    return [generation for request in exporter.requests for generation in request.generations]
+
+
+async def _stream_that_fails_to_open(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:
+    raise RuntimeError("open failed")
+    yield ""
+
+
+async def _run_stream_expecting_open_failure(agent: Agent[Any, Any]) -> None:
+    with pytest.raises(RuntimeError, match="open failed"):
+        async with agent.run_stream("Hi") as result:
+            await result.get_output()
+
+
+def test_agento11y_pydantic_ai_agent_run_records_a_stream_that_fails_to_open_as_a_stream() -> None:
+    (generation,) = _record_streamed_run(_stream_that_fails_to_open, _run_stream_expecting_open_failure)
+
+    assert generation.mode.value == "STREAM"
+
+
+@pytest.mark.skipif(
+    Version("2.0.0") < Version(pydantic_ai.__version__) < Version("2.64.0"),
+    reason="Pydantic AI 2.x before 2.64 (2.54, 2.62, 2.63 checked) cancels a request whose stream fails to open",
+)
+def test_agento11y_pydantic_ai_agent_run_records_the_error_of_a_stream_that_fails_to_open() -> None:
+    (generation,) = _record_streamed_run(_stream_that_fails_to_open, _run_stream_expecting_open_failure)
+
+    assert generation.call_error == "open failed"
+
+
+def test_agento11y_pydantic_ai_agent_run_records_a_node_streamed_by_its_caller_as_a_stream() -> None:
+    async def stream_model(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:
+        yield "Hel"
+        yield "lo."
+
+    async def drive(agent: Agent[Any, Any]) -> None:
+        async with agent.iter("Hi") as run:
+            async for node in run:
+                if Agent.is_model_request_node(node):
+                    async with node.stream(run.ctx) as events:
+                        async for _ in events:
+                            pass
+
+    (generation,) = _record_streamed_run(stream_model, drive)
+
+    assert generation.mode.value == "STREAM"
+    assert generation.output == [_text(MessageRole.ASSISTANT, "Hello.")]
