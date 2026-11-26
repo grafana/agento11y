@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.58.0] - 2026-11-26
+
+### Features
+
+- **claude-code**: report slash-invoked skills like Skill tool loads (#1124)
+
+### Bug Fixes
+
+- **ci**: remove orphaned codex child processes in flaky test (#1120)
+- **plugins/agento11y**: keep Codex turn usage past an oversized line (#1027)
+
 ## [0.57.0] - 2026-11-04
 
 ### Features
