@@ -73,9 +73,12 @@ function buildTelemetryProviders(
     }),
   );
 
+  // proxyEnv keeps the keep-alive agent inside the runtime's proxy settings.
+  const httpAgentOptions = { keepAlive: true, proxyEnv: process.env };
   const metricExporter = new OTLPMetricExporter({
     url: `${base}/v1/metrics`,
     headers: otlp.headers,
+    httpAgentOptions,
   });
   own("metrics", metricExporter);
   const metricReader = new PeriodicExportingMetricReader({
@@ -93,6 +96,7 @@ function buildTelemetryProviders(
   const traceExporter = new OTLPTraceExporter({
     url: `${base}/v1/traces`,
     headers: otlp.headers,
+    httpAgentOptions,
   });
   own("traces", traceExporter);
   const processor = new BatchSpanProcessor(traceExporter);
